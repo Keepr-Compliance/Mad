@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
 import { ContactCompareSources } from "../../shared/ContactCompareSources";
 import type { ContactReviewCluster, ContactReviewItem } from "@/types/contactProvenance";
@@ -20,27 +20,44 @@ import type { ContactReviewCluster, ContactReviewItem } from "@/types/contactPro
  * That only works if we ask.
  *
  * ===========================================================================
- * TWO AXES, IN WORDS
+ * THE TUCKED REVIEW CARD (BACKLOG-2502 R2)
  * ===========================================================================
- * Every item states its reading on two separate axes, never a score and never a
- * single blended scale:
+ * Founder design, 7 Aug. The contact is a card; the question is an amber card
+ * tucked directly under it, always open, no strip and no caret. THE REASON IS
+ * THE HEADING — "Possible duplicate 1" named the row without telling anyone what
+ * to weigh, and at five candidates it was five labels and no information.
  *
- *   identity      the same person · possibly the same person · different people
- *   relationship  connected · possibly connected · no known connection
+ * The list therefore groups by CONTACT, not by cluster. A cluster is a fact
+ * about the linker's reasoning (which records competed for which name); a card
+ * is a question put to a person, and the person is answering about one contact
+ * at a time. Every candidate under a card answers INDEPENDENTLY — accepting the
+ * Outlook record must not decide the Mac one, because with two records that
+ * could both be him, they usually both are.
  *
- * A buyer and a seller on one deal are CONNECTED and DEFINITELY NOT THE SAME
- * PERSON. A single 0..1 "match confidence" cannot say that, and every product
- * that tries ends up reading "strongly related" as "probably the same" — which
- * is the false-merge generator this whole feature exists to avoid.
+ * ===========================================================================
+ * WHY THE CORRECTION IS HERE AND NOT AT THE SOURCE
+ * ===========================================================================
+ * Four of the six prose blocks this card replaces are frozen into
+ * `contact_link_proposals.evidence_json` when the proposal is written, and that
+ * freeze is deliberate — `databaseService.ts:3150`: *"a verdict is a labelled
+ * training/regression example and a label is only usable with the features AS
+ * THEY WERE WHEN THE HUMAN SAW THEM"*. Recomputing a proposal's evidence would
+ * relabel history, and rows already sitting in the founder's queue carry the old
+ * strings either way. So every correction across 2502 lands in what this screen
+ * RENDERS. NOTHING in this file may write back to an evidence producer.
+ *
+ * The frozen prose is not deleted: it is still reachable behind the compare
+ * screen's "How we decided this", which is where a reader who wants the full
+ * argument goes.
  *
  * ===========================================================================
  * AMBER, LIKE THE OTHER REVIEW SURFACE
  * ===========================================================================
- * Matches the palette and count-in-header idiom of `NeedsReviewSection`
- * (BACKLOG-2319) so the two review surfaces read as one system, while staying
- * strictly separate: that one is emails↔transaction, this one is
- * contacts↔source records. Its `needs-review-*` test ids are deliberately not
- * reused.
+ * Matches the palette and icon grammar of `NeedsReviewSection` (BACKLOG-2319) so
+ * the two review surfaces read as one system — `text-gray-400` icon buttons
+ * going green on accept and red on reject — while staying strictly separate:
+ * that one is emails↔transaction, this one is contacts↔source records. Its
+ * `needs-review-*` test ids are deliberately not reused.
  */
 
 interface ReviewDuplicatesModalProps {
@@ -48,6 +65,22 @@ interface ReviewDuplicatesModalProps {
   onClose: () => void;
   /** Fired after any answer, so the caller can refresh the count and the list. */
   onResolved?: () => void;
+}
+
+/**
+ * One contact card and everything still to answer about it.
+ *
+ * `exclusive` is carried down from the CLUSTER because grouping by contact would
+ * otherwise drop it: a `record:` cluster is one source record several contacts
+ * are competing for, so after regrouping its members land on different cards and
+ * the fact that answering one settles the rest has nowhere else to live.
+ */
+interface ContactGroup {
+  contactId: string;
+  contactName: string;
+  contactCompany: string | null;
+  items: ContactReviewItem[];
+  exclusive: boolean;
 }
 
 export function ReviewDuplicatesModal({
@@ -61,9 +94,9 @@ export function ReviewDuplicatesModal({
   /**
    * BACKLOG-2502 — the candidate whose compare screen is open, if any.
    *
-   * The row settles what it can; this is where the rest goes. The compare screen
-   * is the SHIPPED component (BACKLOG-2471), given the candidate as one more
-   * column — not a second detail view built here.
+   * The card settles what it can; this is where the rest goes. The compare
+   * screen is the SHIPPED component (BACKLOG-2471), given the candidate as one
+   * more column — not a second detail view built here.
    */
   const [comparing, setComparing] = useState<ContactReviewItem | null>(null);
   /**
@@ -119,7 +152,7 @@ export function ReviewDuplicatesModal({
             scope across this whole epic — but a caller that reads `success`
             alone tells the user two records were joined when they were not.
 
-            The row still leaves the queue (the proposal IS resolved), so the
+            The card still leaves the queue (the proposal IS resolved), so the
             list reloads; the sentence is what stops it being a silent no-op.
           */
           setNotice(
@@ -144,6 +177,36 @@ export function ReviewDuplicatesModal({
     },
     [userId, onResolved, load],
   );
+
+  /**
+   * Clusters in, contact cards out.
+   *
+   * Insertion order is preserved (a `Map` keyed by contact id) so the list does
+   * not reshuffle under the user between reloads — the queue's own ORDER BY is
+   * stable, and re-sorting here would undo it.
+   */
+  const groups = useMemo<ContactGroup[]>(() => {
+    const byContact = new Map<string, ContactGroup>();
+    for (const cluster of clusters ?? []) {
+      const clusterIsExclusive = cluster.exclusive && cluster.items.length > 1;
+      for (const item of cluster.items) {
+        let group = byContact.get(item.contactId);
+        if (!group) {
+          group = {
+            contactId: item.contactId,
+            contactName: item.contactName,
+            contactCompany: item.contactCompany ?? null,
+            items: [],
+            exclusive: false,
+          };
+          byContact.set(item.contactId, group);
+        }
+        group.items.push(item);
+        group.exclusive = group.exclusive || clusterIsExclusive;
+      }
+    }
+    return [...byContact.values()];
+  }, [clusters]);
 
   const total = (clusters ?? []).reduce((sum, c) => sum + c.items.length, 0);
 
@@ -173,9 +236,9 @@ export function ReviewDuplicatesModal({
 
       {/*
         BACKLOG-2502 — the compare screen, over the list, for the candidate the
-        row could not settle. `proposalId` present routes its Confirm to the
+        card could not settle. `proposalId` present routes its Confirm to the
         SHIPPED `contacts:confirm-link`, and its `Different people` to
-        `contacts:reject-link` — the same two channels the rows use, so there is
+        `contacts:reject-link` — the same two channels the cards use, so there is
         one resolution path and not three.
       */}
       {comparing && (
@@ -220,85 +283,52 @@ export function ReviewDuplicatesModal({
       )}
 
       {!comparing && (
-      <div className="px-6 py-4 overflow-y-auto">
-        {notice && (
-          <div
-            className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900"
-            data-testid="review-duplicates-notice"
-          >
-            {notice}
-          </div>
-        )}
-        {error && (
-          <div
-            className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800"
-            data-testid="review-duplicates-error"
-          >
-            {error}
-          </div>
-        )}
-
-        {clusters === null && (
-          <div className="text-center py-8" data-testid="review-duplicates-loading">
-            <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto" />
-          </div>
-        )}
-
-        {clusters !== null && total === 0 && (
-          <div className="text-center py-8 text-sm text-gray-500" data-testid="review-duplicates-empty">
-            Nothing to review. Every contact link we made was one we were sure about.
-          </div>
-        )}
-
-        <div className="space-y-5">
-          {(clusters ?? []).map((cluster) => (
+        <div className="px-6 py-4 overflow-y-auto">
+          {notice && (
             <div
-              key={cluster.clusterKey}
-              className="rounded-xl border border-amber-200 bg-amber-50/50"
-              data-testid={`review-cluster-${cluster.clusterKey}`}
+              className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900"
+              data-testid="review-duplicates-notice"
             >
-              <div className="px-4 pt-3 pb-2 flex items-center gap-2">
-                {/*
-                  BACKLOG-2502 — THE HEADING IS GONE. Founder: *"espically this
-                  seems redundant 'Is \"Romina\" the same person as Romina?'"*.
-                  When both names are identical it says nothing, and the row
-                  below already shows both. `cluster.question` is still produced
-                  by `clusterQuestion()` for any other caller; it is simply not
-                  what this screen leads with.
-                */}
-                <h3 className="text-sm font-semibold text-amber-900">
-                  {cluster.items.length === 1 ? "Possible duplicate" : "Possible duplicates"}
-                </h3>
-                <span
-                  className="text-xs font-semibold text-amber-900 bg-amber-100 rounded-full px-2 py-0.5"
-                  style={{ fontVariantNumeric: "tabular-nums" }}
-                  data-testid={`review-cluster-count-${cluster.clusterKey}`}
-                >
-                  {cluster.items.length}
-                </span>
-                {cluster.exclusive && cluster.items.length > 1 && (
-                  <span className="ml-auto text-xs text-amber-800">
-                    Only one of these can be right
-                  </span>
-                )}
-              </div>
-
-              <div className="px-4 pb-4 space-y-3">
-                {cluster.items.map((item) => (
-                  <ReviewRow
-                    key={item.proposalId}
-                    item={item}
-                    busy={busyId === item.proposalId}
-                    onSame={() => void answer(item, "same")}
-                    onDifferent={() => void answer(item, "different")}
-                    onCompare={() => setComparing(item)}
-                  />
-                ))}
-              </div>
+              {notice}
             </div>
-          ))}
+          )}
+          {error && (
+            <div
+              className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800"
+              data-testid="review-duplicates-error"
+            >
+              {error}
+            </div>
+          )}
+
+          {clusters === null && (
+            <div className="text-center py-8" data-testid="review-duplicates-loading">
+              <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto" />
+            </div>
+          )}
+
+          {clusters !== null && total === 0 && (
+            <div
+              className="text-center py-8 text-sm text-gray-500"
+              data-testid="review-duplicates-empty"
+            >
+              Nothing to review. Every contact link we made was one we were sure about.
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {groups.map((group) => (
+              <ContactReviewCard
+                key={group.contactId}
+                group={group}
+                busyId={busyId}
+                onCompare={setComparing}
+                onSame={(item) => void answer(item, "same")}
+                onDifferent={(item) => void answer(item, "different")}
+              />
+            ))}
+          </div>
         </div>
-      </div>
       )}
 
       <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end">
@@ -315,111 +345,315 @@ export function ReviewDuplicatesModal({
   );
 }
 
+/** The letter in the avatar. Empty names fall back rather than render a blank circle. */
+function initialOf(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? trimmed.charAt(0).toUpperCase() : "?";
+}
+
+/** "Paul Dorian" → "Paul", for "Accept the ones that are this Paul." */
+function firstNameOf(name: string): string {
+  const first = name.trim().split(/\s+/)[0];
+  return first || name.trim();
+}
+
+const NUMBER_WORDS = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+
 /**
- * `matched_on` in the user's words. BACKLOG-2502: the field that matched used to
- * reach the screen only inside a sentence; now it is a value, so it needs a
- * label. Unknown values pass through rather than being swallowed — a rule that
- * grows a new `matched_on` should read oddly, not invisibly.
+ * THE REASON, WHICH IS THE HEADING.
+ *
+ * Written ONLY from what the queue can prove — the number of candidates and
+ * `matched_on`, the field the rule actually compared. The founder's design reads
+ * *"Your Outlook has a Jane Seller with an email address you don't have for this
+ * contact"*; the queue does not project the contact's own addresses, so that
+ * exact claim is not checkable here and is not made. `matched_on === "name"`
+ * does prove the narrower statement these sentences make: the name is the field
+ * that matched.
+ *
+ * A sentence that overstates is the failure mode this whole epic exists to
+ * avoid — the review queue's credibility is the only thing that makes a user
+ * answer it a second time.
  */
-function matchedOnLabel(matchedOn: string): string {
-  switch (matchedOn) {
+function reasonFor(group: ContactGroup): string {
+  const items = group.items;
+  const nameOnly = (m: string | null): boolean => m === "name" || m === "unique_name";
+
+  if (items.length > 1) {
+    const count = NUMBER_WORDS[items.length] ?? String(items.length);
+    if (items.every((i) => nameOnly(i.matchedOn))) {
+      return `${count} records share this name. Accept the ones that are this ${firstNameOf(group.contactName)}.`;
+    }
+    return `${count} records could be this contact. Answer each one on its own.`;
+  }
+
+  const first = items[0];
+  const who = first.sourceName ? `a ${first.sourceName}` : "an entry";
+  switch (first.matchedOn) {
     case "email":
-      return "the same email address";
+      return `Your ${first.sourceLabel} has ${who} with the same email address as this contact.`;
     case "phone":
-      return "the same phone number";
+      return `Your ${first.sourceLabel} has ${who} with the same phone number as this contact.`;
     case "name":
     case "unique_name":
-      return "the same full name";
+      return `Your ${first.sourceLabel} has ${who} with the same full name as this contact. The name is all that matched.`;
     default:
-      return matchedOn;
+      return `Your ${first.sourceLabel} has ${who} that could be this contact.`;
   }
 }
 
-function ReviewRow({
-  item,
-  busy,
+/**
+ * The value under the source label — an email or a phone, in the user's own
+ * data rather than a description of it.
+ *
+ * When the rule compared a specific identifier, that identifier is what the user
+ * is being asked to judge, so it wins. On a name match neither list matched, and
+ * the record's first address is simply what tells one candidate from another —
+ * which is exactly the job this line does on a card with two of them.
+ */
+function candidateValue(item: ContactReviewItem): string | null {
+  const emails = item.recordEmails ?? [];
+  const phones = item.recordPhones ?? [];
+  if (item.matchedOn === "email" && emails.length > 0) return emails[0];
+  if (item.matchedOn === "phone" && phones.length > 0) return phones[0];
+  return emails[0] ?? phones[0] ?? item.sourceName ?? null;
+}
+
+function ContactReviewCard({
+  group,
+  busyId,
+  onCompare,
   onSame,
   onDifferent,
-  onCompare,
 }: {
-  item: ContactReviewItem;
-  busy: boolean;
-  onSame: () => void;
-  onDifferent: () => void;
-  onCompare: () => void;
+  group: ContactGroup;
+  busyId: string | null;
+  onCompare: (item: ContactReviewItem) => void;
+  onSame: (item: ContactReviewItem) => void;
+  onDifferent: (item: ContactReviewItem) => void;
 }): React.ReactElement {
   return (
-    <div
-      className="rounded-lg bg-white border border-amber-200 px-4 py-3"
-      data-testid={`review-item-${item.proposalId}`}
-    >
-      <div className="text-sm font-semibold text-gray-900">
-        {item.contactName}
-        <span className="font-normal text-gray-500"> · {item.sourceLabel}</span>
-        {item.sourceName && <span className="font-normal text-gray-500"> — {item.sourceName}</span>}
-      </div>
-
-      {/*
-        BACKLOG-2502 — SIX BLOCKS OF PROSE BECAME ONE LINE.
-
-        What was here: the proposal's frozen `evidence.summary`, its
-        `evidence.details` list (the source-record sentence, the matched-field
-        sentence, and "Nothing has been linked…"), and two separately labelled
-        axes — `Identity: possibly the same person` / `Relationship: possibly
-        connected`. Six blocks per candidate, thirty at five candidates. The
-        founder could not find the decision in it.
-
-        THE PROSE IS NOT DELETED AND NOT REWRITTEN. It is frozen in
-        `contact_link_proposals.evidence_json` and now renders behind the compare
-        screen's "How we decided this". That freeze is deliberate —
-        `databaseService.ts:3150`: *"a verdict is a labelled training/regression
-        example and a label is only usable with the features AS THEY WERE WHEN
-        THE HUMAN SAW THEM"* — which is why the fix is here, in what this screen
-        RENDERS, and never in the generator. Editing the generator would leave
-        every row already in the queue untouched AND relabel history.
-
-        The two axes collapse to ONE statement: they are near-synonyms that both
-        hedge, and side by side they read as two findings when there is one.
-      */}
-      <div className="text-sm text-gray-600 mt-1" data-testid={`review-summary-${item.proposalId}`}>
-        {item.identityPhrase}
-        {item.matchedOn ? ` — matched on ${matchedOnLabel(item.matchedOn)}` : ""}
-      </div>
-
-      <div className="mt-3 flex gap-2">
-        <button
-          type="button"
-          onClick={onSame}
-          disabled={busy}
-          className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-sm disabled:opacity-50"
-          data-testid={`review-confirm-${item.proposalId}`}
-        >
-          The same person
-        </button>
-        <button
-          type="button"
-          onClick={onDifferent}
-          disabled={busy}
-          className="px-3 py-1.5 text-sm font-semibold text-orange-700 hover:bg-orange-50 rounded-lg transition-colors disabled:opacity-50"
-          data-testid={`review-reject-${item.proposalId}`}
-        >
-          Different people
-        </button>
+    // `relative` on the wrapper gives the two children one stacking context, so
+    // the negative margin below reads as "tucked under" rather than "overlapped
+    // by".
+    <div className="relative" data-testid={`review-contact-${group.contactId}`}>
+      <div className="relative z-10 flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-3">
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-pink-600 text-sm font-bold text-white">
+          {initialOf(group.contactName)}
+        </div>
+        <div className="min-w-0 flex-1">
+          {/*
+            The contact name opens the comparison, as it does today. The card
+            answers what it can; the whole record is one click away and the
+            reject is permanent, which is why the way in stays on the card.
+          */}
+          <button
+            type="button"
+            onClick={() => onCompare(group.items[0])}
+            className="block truncate text-left text-sm font-medium text-gray-900 hover:text-purple-700"
+            data-testid={`review-contact-name-${group.contactId}`}
+          >
+            {group.contactName}
+          </button>
+          {group.contactCompany && (
+            <div
+              className="truncate text-xs text-gray-400"
+              data-testid={`review-contact-company-${group.contactId}`}
+            >
+              {group.contactCompany}
+            </div>
+          )}
+        </div>
         {/*
-          BACKLOG-2502 — "perhaps we need to just list them all with the option
-          to see the same compare window". The row settles what it can; anything
-          it cannot goes to the compare screen, which is the detail surface for
-          this decision and is not reinvented here.
+          COMPARE LIVES ON THE WHITE CONTACT ROW, outside the amber area — the
+          founder's rule. It opens the contact's side-by-side view; the eye on
+          each candidate below opens that same screen for THAT record, which is
+          the only way to reach the second and third candidates' comparison.
         */}
         <button
           type="button"
-          onClick={onCompare}
-          disabled={busy}
-          className="ml-auto px-3 py-1.5 text-sm font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors disabled:opacity-50"
-          data-testid={`review-compare-${item.proposalId}`}
+          onClick={() => onCompare(group.items[0])}
+          className="flex-shrink-0 rounded-lg px-3 py-1.5 text-sm font-semibold text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+          data-testid={`review-compare-${group.contactId}`}
         >
           Compare
         </button>
+      </div>
+
+      {/*
+        THE TUCK. `-mt-2` pulls the amber card under the white one, which is
+        below it in z-order, so the question reads as belonging to the contact
+        above rather than as the next item in a list.
+      */}
+      <div
+        className="relative z-0 -mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 pb-2.5 pt-2"
+        data-testid={`review-tuck-${group.contactId}`}
+      >
+        <p
+          className="mb-2 mt-1.5 text-[0.82rem] leading-snug text-amber-900"
+          data-testid={`review-reason-${group.contactId}`}
+        >
+          {reasonFor(group)}
+        </p>
+
+        {group.exclusive && (
+          <p
+            className="mb-2 text-xs text-amber-800"
+            data-testid={`review-exclusive-${group.contactId}`}
+          >
+            Only one contact can be this record — answering here answers the others.
+          </p>
+        )}
+
+        {group.items.map((item) => (
+          <CandidateRow
+            key={item.proposalId}
+            item={item}
+            busy={busyId === item.proposalId}
+            onView={() => onCompare(item)}
+            onSame={() => onSame(item)}
+            onDifferent={() => onDifferent(item)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Shared shell for the three icon buttons, so hover/focus/disabled are stated once. */
+function IconButton({
+  title,
+  ariaLabel,
+  onClick,
+  disabled,
+  hoverClass,
+  testId,
+  children,
+}: {
+  title: string;
+  ariaLabel: string;
+  onClick: () => void;
+  disabled: boolean;
+  hoverClass: string;
+  testId: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={ariaLabel}
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex items-center justify-center rounded p-1 text-gray-400 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-amber-500 disabled:opacity-50 ${hoverClass}`}
+      data-testid={testId}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        {children}
+      </svg>
+    </button>
+  );
+}
+
+/**
+ * One candidate record, answered on its own.
+ *
+ * The three buttons are icon-only and share the email needs-review card's
+ * grammar — `text-gray-400` at rest, green on accept, red on reject — so a user
+ * who has answered one review surface already knows this one. Words instead of
+ * icons would double the height of a two-candidate card, which is exactly the
+ * case where a wall of choices is worst.
+ *
+ * "Same person" and "Not this person", never "approve": approve reads like
+ * sign-off on a document, and "Not this person" is already the phrase the
+ * contact card uses to detach a source. One phrase for one concept.
+ */
+function CandidateRow({
+  item,
+  busy,
+  onView,
+  onSame,
+  onDifferent,
+}: {
+  item: ContactReviewItem;
+  busy: boolean;
+  onView: () => void;
+  onSame: () => void;
+  onDifferent: () => void;
+}): React.ReactElement {
+  const value = candidateValue(item);
+  return (
+    <div
+      className="mb-1.5 flex items-center gap-2.5 rounded-md border border-amber-300 bg-white px-2 py-2 last:mb-0"
+      data-testid={`review-item-${item.proposalId}`}
+    >
+      <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-xs font-bold text-white">
+        {initialOf(item.sourceName ?? item.contactName)}
+      </div>
+      <div className="min-w-0 flex-1">
+        {/*
+          `sourceLabel` verbatim, even where the design draws the shorter
+          "Outlook" and the shipped vocabulary says "Outlook contacts". ONE
+          VOCABULARY BEATS A DRAWING — the Sources panel two clicks away already
+          uses these words, and a second set of names is how two screens start
+          disagreeing about what the user's address book is called.
+        */}
+        <div
+          className="font-mono text-[0.64rem] uppercase tracking-[0.05em] text-gray-400"
+          data-testid={`review-source-${item.proposalId}`}
+        >
+          {item.sourceLabel}
+        </div>
+        {value && (
+          <div
+            className="break-all font-mono text-[0.73rem] text-gray-600"
+            data-testid={`review-value-${item.proposalId}`}
+          >
+            {value}
+          </div>
+        )}
+      </div>
+      <div className="flex flex-shrink-0 gap-0.5">
+        <IconButton
+          title="View this record in full"
+          ariaLabel="View this record in full"
+          onClick={onView}
+          disabled={busy}
+          hoverClass="hover:bg-purple-50 hover:text-purple-600"
+          testId={`review-view-${item.proposalId}`}
+        >
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+          <circle cx="12" cy="12" r="3" />
+        </IconButton>
+        <IconButton
+          title="Same person — link them"
+          ariaLabel="Same person, link them"
+          onClick={onSame}
+          disabled={busy}
+          hoverClass="hover:bg-green-50 hover:text-green-600"
+          testId={`review-confirm-${item.proposalId}`}
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </IconButton>
+        <IconButton
+          title="Not this person"
+          ariaLabel="Not this person"
+          onClick={onDifferent}
+          disabled={busy}
+          hoverClass="hover:bg-red-50 hover:text-red-600"
+          testId={`review-reject-${item.proposalId}`}
+        >
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </IconButton>
       </div>
     </div>
   );

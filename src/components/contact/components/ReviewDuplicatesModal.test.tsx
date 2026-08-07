@@ -1,12 +1,13 @@
 /**
  * BACKLOG-2410 — the review surface.
+ * BACKLOG-2502 R2 — the tucked review card.
  *
- * Pins the two things the founder was specific about: the evidence is shown in
- * WORDS and never as a score, and the two axes are reported SEPARATELY so a
- * pair can read "connected" and "possibly the same person" at once.
+ * Pins the things the founder was specific about: the evidence is shown in
+ * WORDS and never as a score, the reason IS the heading, and every candidate
+ * answers on its own.
  *
- * Assertions name exact proposal ids. A count assertion would pass while
- * rendering the wrong question.
+ * Assertions name exact proposal ids, exact contact ids and exact strings. A
+ * count assertion would pass while rendering the wrong question.
  */
 
 import React from "react";
@@ -16,15 +17,27 @@ import type { ContactReviewCluster } from "@/types/contactProvenance";
 
 const USER = "u1";
 
+/**
+ * The shape `getReviewQueue` really returns, TRANSCRIBED from the producer.
+ *
+ * `recordPhones`/`recordEmails`/`contactCompany` are asserted against the real
+ * linker in `electron/services/__tests__/contactLinkReview.test.ts` ("carries
+ * the candidate's own values and the contact's company"); the phone below is the
+ * same value that test observes, so this fixture cannot drift into describing a
+ * state the producer never emits.
+ */
 function item(overrides: Record<string, unknown> = {}) {
   return {
     proposalId: "p-1",
     contactId: "c-daniel",
     contactName: "Daniel Haim",
+    contactCompany: null,
     sourceType: "macos",
     sourceRecordId: "mac-lilly",
     sourceLabel: "Mac address book",
     sourceName: "Nina Stone",
+    recordEmails: [],
+    recordPhones: ["+14155550134"],
     reason: "identifier_reassigned",
     // BACKLOG-2502: `matched_on` as the producer writes it — the crosswalk's own
     // vocabulary (`email` | `phone` | `name` | `unique_name`), copied onto the
@@ -63,7 +76,7 @@ beforeEach(() => {
 
 describe("ReviewDuplicatesModal", () => {
   /**
-   * BACKLOG-2502 — THE ROW NO LONGER PRINTS THE EVIDENCE, AND THAT IS THE POINT.
+   * BACKLOG-2502 — THE CARD NO LONGER PRINTS THE EVIDENCE, AND THAT IS THE POINT.
    *
    * The founder opened this at five candidates and got roughly 500 words:
    * *"the window that pops up is very verbos"*. Six blocks per candidate — a
@@ -75,10 +88,10 @@ describe("ReviewDuplicatesModal", () => {
    * why in a button on the compare screens"*.
    *
    * The no-score guarantee did not move with it — it is asserted here, on what
-   * the row DOES show, because a screen that reintroduced a percentage would do
-   * it in the summary line rather than in a panel nobody opened.
+   * the card DOES show, because a screen that reintroduced a percentage would do
+   * it in the heading rather than in a panel nobody opened.
    */
-  it("summarises in words, with no score and no paragraph", async () => {
+  it("leads with the reason, in words, with no score and no paragraph", async () => {
     jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
       clusters: [cluster()],
@@ -86,8 +99,11 @@ describe("ReviewDuplicatesModal", () => {
 
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
 
-    const summary = await screen.findByTestId("review-summary-p-1");
-    expect(summary.textContent).toBe("possibly the same person — matched on the same phone number");
+    // THE REASON IS THE HEADING. Exact sentence, not a substring: a heading that
+    // drifted into hedging again would still contain these words.
+    expect((await screen.findByTestId("review-reason-c-daniel")).textContent).toBe(
+      "Your Mac address book has a Nina Stone with the same phone number as this contact.",
+    );
 
     // CONTROL: restore the evidence block and this goes red.
     expect(screen.queryByTestId("review-evidence-p-1")).not.toBeInTheDocument();
@@ -98,22 +114,14 @@ describe("ReviewDuplicatesModal", () => {
   });
 
   /**
-   * THE TWO AXES WERE COLLAPSED ON PURPOSE — this test is the inversion of the
-   * one it replaces, and it is not an eroded guarantee.
+   * "POSSIBLE DUPLICATE N" IS GONE, AND SO IS THE HEDGE THAT REPLACED IT.
    *
-   * The old rule was "identity and relationship are reported separately", and it
-   * existed to stop them becoming a single confidence score. That concern is
-   * still live and is still pinned — by the `no score` assertion above, and by
-   * the fact both values remain distinct COLUMNS with distinct vocabularies in
-   * `contact_link_verdicts` (`databaseService.ts:3140-3148`).
-   *
-   * What the founder rejected was printing both as labels, side by side, on
-   * every row: *"Identity: possibly the same person"* beside *"Relationship:
-   * possibly connected"* reads as two findings when there is one decision to
-   * make. The row now leads with identity — the axis the buttons answer — and
-   * relationship stays on the record, reachable through the compare screen.
+   * Founder, on the design: *"'Possibly the same person' said nothing you could
+   * act on; the reason tells you what to weigh"*. The wrapper label and the
+   * identity phrase both told the user what they already knew — that this is the
+   * duplicates list — while the thing they had to weigh stayed off screen.
    */
-  it("leads with the identity phrase and does not label two axes", async () => {
+  it("labels neither the card nor the axes", async () => {
     jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
       clusters: [
@@ -124,14 +132,145 @@ describe("ReviewDuplicatesModal", () => {
     });
 
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    await screen.findByTestId("review-item-p-1");
 
-    expect((await screen.findByTestId("review-summary-p-1")).textContent).toContain(
-      "possibly the same person",
-    );
-    // CONTROL: restore either label and this goes red.
+    const modal = screen.getByTestId("review-duplicates-modal");
+    // CONTROL: restore the "Possible duplicate" wrapper heading, or either axis
+    // label, and this goes red. The modal's own <h2> is "Possible duplicates" —
+    // plural, once, in the header — so the singular is what pins the wrapper.
+    expect(screen.queryByText(/Possible duplicate \d/)).not.toBeInTheDocument();
+    expect(modal.textContent).not.toContain("possibly the same person");
+    expect(modal.textContent).not.toContain("possibly connected");
+    expect(modal.textContent).not.toContain("Identity:");
+    expect(modal.textContent).not.toContain("Relationship:");
     expect(screen.queryByTestId("review-identity-p-1")).not.toBeInTheDocument();
     expect(screen.queryByTestId("review-relationship-p-1")).not.toBeInTheDocument();
-    expect(screen.getByTestId("review-duplicates-modal").textContent).not.toContain("Identity:");
+  });
+
+  /**
+   * THE CANDIDATE ROW SHOWS A VALUE, NOT A DESCRIPTION OF ONE.
+   *
+   * The old row said "matched on the same phone number". With two candidates
+   * that sentence is identical on both, and the user cannot tell them apart —
+   * which is the case the founder's design puts the value there for.
+   */
+  it("shows each candidate's source and its own value", async () => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [cluster()],
+    });
+
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+
+    expect((await screen.findByTestId("review-source-p-1")).textContent).toBe("Mac address book");
+    // The value itself — the evidence prose masks it to "…0134", the card does
+    // not, because this is the thing being judged.
+    expect(screen.getByTestId("review-value-p-1").textContent).toBe("+14155550134");
+  });
+
+  /**
+   * THE CONTACT CARD, AND THE SUBLINE THAT IS HONEST ABOUT WHAT IT KNOWS.
+   *
+   * The design draws a transaction role ("Client (Buyer/Seller)"). This queue is
+   * not scoped to a transaction, so the company stands in, and an absent company
+   * renders NOTHING rather than a placeholder.
+   */
+  it("renders the contact card with its company, or with no subline at all", async () => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [cluster({ items: [item({ contactCompany: "Blue Spaces LLC" })] })],
+    });
+
+    const { unmount } = render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+
+    expect((await screen.findByTestId("review-contact-name-c-daniel")).textContent).toBe(
+      "Daniel Haim",
+    );
+    expect(screen.getByTestId("review-contact-company-c-daniel").textContent).toBe(
+      "Blue Spaces LLC",
+    );
+    unmount();
+
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [cluster()],
+    });
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    await screen.findByTestId("review-contact-name-c-daniel");
+    // CONTROL: render a placeholder subline and this goes red.
+    expect(screen.queryByTestId("review-contact-company-c-daniel")).not.toBeInTheDocument();
+  });
+
+  /**
+   * MULTIPLE CANDIDATES STACK UNDER ONE CONTACT, AND ANSWER INDEPENDENTLY.
+   *
+   * Founder: *"Accepting Outlook does not decide the Mac record. With two
+   * records that could both be him, they usually both are."*
+   *
+   * The two candidates arrive in SEPARATE clusters — the linker clusters by its
+   * own reasoning, and two independent name matches on one contact are two
+   * clusters — which is precisely why the card groups by CONTACT and not by
+   * cluster. CONTROL: group by `clusterKey` again and this renders two cards.
+   */
+  it("stacks two candidates on one card and answers only the one clicked", async () => {
+    jest
+      .mocked(window.api.contacts.getReviewQueue)
+      .mockResolvedValueOnce({
+        success: true,
+        clusters: [
+          cluster({
+            clusterKey: "name:daniel-haim",
+            items: [
+              item({
+                proposalId: "p-out",
+                sourceType: "outlook",
+                sourceRecordId: "out-1",
+                sourceLabel: "Outlook contacts",
+                matchedOn: "name",
+                recordEmails: ["dorian@example.com"],
+                recordPhones: [],
+              }),
+            ],
+          }),
+          cluster({
+            clusterKey: "name:daniel-haim-2",
+            items: [
+              item({
+                proposalId: "p-mac",
+                sourceRecordId: "mac-2",
+                matchedOn: "name",
+                recordEmails: [],
+                recordPhones: ["+14155550188"],
+              }),
+            ],
+          }),
+        ],
+      })
+      .mockResolvedValueOnce({ success: true, clusters: [] });
+    jest.mocked(window.api.contacts.confirmLink).mockResolvedValue({ success: true, linked: true });
+
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+
+    // ONE card, both candidates, each with its OWN source and value.
+    await screen.findByTestId("review-contact-c-daniel");
+    expect(screen.getAllByTestId(/^review-contact-c-/)).toHaveLength(1);
+    expect(screen.getByTestId("review-source-p-out").textContent).toBe("Outlook contacts");
+    expect(screen.getByTestId("review-value-p-out").textContent).toBe("dorian@example.com");
+    expect(screen.getByTestId("review-source-p-mac").textContent).toBe("Mac address book");
+    expect(screen.getByTestId("review-value-p-mac").textContent).toBe("+14155550188");
+
+    // The reason counts the candidates rather than labelling them.
+    expect(screen.getByTestId("review-reason-c-daniel").textContent).toBe(
+      "Two records share this name. Accept the ones that are this Daniel.",
+    );
+
+    // Answering the Outlook record must not decide the Mac one.
+    fireEvent.click(screen.getByTestId("review-confirm-p-out"));
+    await waitFor(() =>
+      expect(window.api.contacts.confirmLink).toHaveBeenCalledWith(USER, "p-out"),
+    );
+    expect(window.api.contacts.confirmLink).toHaveBeenCalledTimes(1);
+    expect(window.api.contacts.rejectLink).not.toHaveBeenCalled();
   });
 
   it("confirms the exact proposal clicked and refreshes", async () => {
@@ -171,7 +310,48 @@ describe("ReviewDuplicatesModal", () => {
     expect(window.api.contacts.confirmLink).not.toHaveBeenCalled();
   });
 
-  it("marks a one-record cluster as a multiple choice", async () => {
+  /**
+   * "SAME PERSON" AND "NOT THIS PERSON", NEVER "APPROVE".
+   *
+   * Founder: *"approve reads like sign-off on a document. This is you saying two
+   * records are one person."* — and "Not this person" is already the exact
+   * phrase the contact card uses to detach a source. One phrase for one concept,
+   * in both places. The buttons are icon-only, so the words live in the
+   * accessible name and there is nowhere else for them to be right.
+   */
+  it("names the three actions the way the rest of the app does", async () => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [cluster()],
+    });
+
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+
+    const view = await screen.findByTestId("review-view-p-1");
+    expect(view.getAttribute("title")).toBe("View this record in full");
+    expect(view.getAttribute("aria-label")).toBe("View this record in full");
+
+    const same = screen.getByTestId("review-confirm-p-1");
+    expect(same.getAttribute("title")).toBe("Same person — link them");
+    expect(same.getAttribute("aria-label")).toBe("Same person, link them");
+
+    const not = screen.getByTestId("review-reject-p-1");
+    expect(not.getAttribute("title")).toBe("Not this person");
+    expect(not.getAttribute("aria-label")).toBe("Not this person");
+
+    // CONTROL: reintroduce "approve" anywhere and this goes red.
+    expect(screen.getByTestId("review-duplicates-modal").textContent).not.toMatch(/approve/i);
+  });
+
+  /**
+   * The exclusivity fact survives the regroup.
+   *
+   * A `record:` cluster is ONE source record several CONTACTS are competing for,
+   * so its members land on different cards once the list groups by contact. The
+   * warning is the one thing the old cluster header said that a candidate row
+   * cannot, so it moves onto every card the cluster touched.
+   */
+  it("keeps the multiple-choice warning after grouping by contact", async () => {
     jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
       clusters: [
@@ -179,25 +359,39 @@ describe("ReviewDuplicatesModal", () => {
           clusterKey: "record:macos:mac-x",
           question: 'Which of these is "A. Stone"?',
           exclusive: true,
-          items: [item({ proposalId: "p-a" }), item({ proposalId: "p-b" })],
+          items: [
+            item({ proposalId: "p-a" }),
+            item({ proposalId: "p-b", contactId: "c-other", contactName: "Nina Stone" }),
+          ],
         }),
       ],
     });
 
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
 
-    // BACKLOG-2502 — the heading is GONE. Founder: *"espically this seems
-    // redundant 'Is \"Romina\" the same person as Romina?'"*. `cluster.question`
-    // is still produced for any other caller; this screen no longer leads with
-    // it, because the rows below already show both names.
+    // The cluster question is GONE. Founder: *"espically this seems redundant
+    // 'Is \"Romina\" the same person as Romina?'"*. `cluster.question` is still
+    // produced for any other caller; this screen no longer leads with it.
     // CONTROL: render `cluster.question` again and this goes red.
     expect(await screen.findByTestId("review-item-p-a")).toBeInTheDocument();
     expect(screen.queryByText('Which of these is "A. Stone"?')).not.toBeInTheDocument();
-    // The exclusivity warning stays — it is the one thing the cluster header
-    // says that the rows cannot.
-    expect(screen.getByText("Only one of these can be right")).toBeInTheDocument();
-    expect(screen.getByTestId("review-item-p-a")).toBeInTheDocument();
+
+    // One card per CONTACT, and the warning on both.
     expect(screen.getByTestId("review-item-p-b")).toBeInTheDocument();
+    expect(screen.getByTestId("review-exclusive-c-daniel").textContent).toBe(
+      "Only one contact can be this record — answering here answers the others.",
+    );
+    expect(screen.getByTestId("review-exclusive-c-other")).toBeInTheDocument();
+  });
+
+  it("shows no multiple-choice warning when the cluster is not exclusive", async () => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [cluster()],
+    });
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    await screen.findByTestId("review-item-p-1");
+    expect(screen.queryByTestId("review-exclusive-c-daniel")).not.toBeInTheDocument();
   });
 
   it("says so plainly when there is nothing to review", async () => {
@@ -226,7 +420,7 @@ describe("ReviewDuplicatesModal", () => {
 });
 
 // ===========================================================================
-// BACKLOG-2502 — THE ROW SETTLES WHAT IT CAN; THE COMPARE SCREEN TAKES THE REST
+// BACKLOG-2502 — THE CARD SETTLES WHAT IT CAN; THE COMPARE SCREEN TAKES THE REST
 // ===========================================================================
 
 describe("the way into the compare screen", () => {
@@ -242,7 +436,7 @@ describe("the way into the compare screen", () => {
         contactId: "c-daniel",
         isConfirmed: false,
         title: "Is this the same Daniel Haim?",
-        reason: "Both records list the phone number +1 (206) 555-0134.",
+        reason: "Both records list the phone number +1 (415) 555-0134.",
         namesMatch: false,
         columns: [
           {
@@ -276,10 +470,16 @@ describe("the way into the compare screen", () => {
     });
   });
 
-  it("opens the SHIPPED compare screen for the row's candidate", async () => {
+  /**
+   * COMPARE SITS ON THE WHITE CONTACT ROW, OUTSIDE THE AMBER AREA — the
+   * founder's rule, so the contact-level action is not repeated per candidate.
+   * It is keyed by CONTACT id now, not by proposal id.
+   */
+  it("opens the SHIPPED compare screen from the contact row", async () => {
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
 
-    fireEvent.click(await screen.findByTestId("review-compare-p-1"));
+    // CONTROL: put Compare back on the candidate row and this id does not exist.
+    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
 
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
     // The candidate travels as the PROPOSED SOURCE — it has no crosswalk row, so
@@ -292,13 +492,46 @@ describe("the way into the compare screen", () => {
     });
   });
 
+  /**
+   * THE EYE OPENS THE SAME SCREEN FOR ITS OWN RECORD.
+   *
+   * Founder: *"You cannot judge 'same person' from one email address — you need
+   * to see the whole record, and the reject is permanent."* On a card with two
+   * candidates this is the ONLY way to reach the second one's comparison, which
+   * is why it is per-candidate while Compare is per-contact.
+   */
+  it("opens it from a candidate's eye, for THAT candidate", async () => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [
+        cluster({
+          items: [
+            item(),
+            item({ proposalId: "p-2", sourceType: "outlook", sourceRecordId: "out-9" }),
+          ],
+        }),
+      ],
+    });
+
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    fireEvent.click(await screen.findByTestId("review-view-p-2"));
+
+    await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
+    // CONTROL: pass `group.items[0]` here and the SECOND candidate can never be
+    // compared — the exact dead end the eye exists to remove.
+    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(USER, "c-daniel", {
+      sourceType: "outlook",
+      sourceRecordId: "out-9",
+    });
+  });
+
   it("keeps `Different people` on the queue route, and routes Confirm to the PROPOSAL", async () => {
     jest.mocked(window.api.contacts.confirmLink).mockResolvedValue({ success: true, linked: true });
     const api = window.api.contacts as unknown as Record<string, jest.Mock>;
     api.confirmSources = jest.fn();
 
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
-    fireEvent.click(await screen.findByTestId("review-compare-p-1"));
+    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
     // The two surfaces are NOT harmonised: nothing is linked yet here, so the
@@ -317,7 +550,7 @@ describe("the way into the compare screen", () => {
 
   it("holds the moved prose behind `How we decided this`", async () => {
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
-    fireEvent.click(await screen.findByTestId("review-compare-p-1"));
+    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
     // Absent until asked for — the founder's whole complaint.
