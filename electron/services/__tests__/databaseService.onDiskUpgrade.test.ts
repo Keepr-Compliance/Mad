@@ -752,7 +752,23 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
     // Clipped to 61 first so the comparison isolates v62. Running the whole
     // chain in one go would fold in v57's idx_contact_source_links_contact and
     // make this a statement about the chain rather than about v62.
-    await runChainThrough(service, HEAD_VERSION - 1);
+    //
+    // Pinned to BULK_MAIL_HEADERS_VERSION - 1, NOT HEAD_VERSION - 1: the offset
+    // form silently changes meaning when the head moves (see the header block
+    // above — it has already bitten this file twice). At v63 it would resolve to
+    // 62, running v62 BEFORE the snapshot, so `before` and `after` would both
+    // include whatever v62 did and the assertion would compare a set to itself
+    // forever — retiring the 2298/2300 index guard without failing once.
+    await runChainThrough(service, BULK_MAIL_HEADERS_VERSION - 1);
+
+    // Same reason as the test above: the fixture is built from the CURRENT
+    // schema.sql, so `bulk_mail_headers` is already present and v62's guarded
+    // body would no-op — an index created INSIDE that guard would never run and
+    // this assertion would pass no matter what v62 did. Verified by control:
+    // adding a CREATE INDEX to the migration did NOT redden this test until the
+    // column was dropped here. Drop it so the migration body genuinely executes.
+    db.exec("ALTER TABLE emails DROP COLUMN bulk_mail_headers");
+
     const before = indexNames(db);
     expect(before.length).toBeGreaterThan(0);
 
