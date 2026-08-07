@@ -97,6 +97,24 @@ export interface ContactSearchListProps {
   /** Callback to import an external contact - returns the imported contact */
   onImportContact?: (contact: ExtendedContact) => Promise<ExtendedContact>;
   /**
+   * Select an external row WITHOUT importing it (BACKLOG-2591).
+   *
+   * In "add" mode an external row today MEANS import: `handleExternalSelect` ->
+   * `handleImport` -> `onImportContact`, which CREATES a contact. Manual linking
+   * must attach the record to an EXISTING contact and must never create one — a
+   * reachable import here would manufacture exactly the duplicates the feature
+   * removes.
+   *
+   * Omitting `onImportContact` is NOT a way to get that: without it the row
+   * becomes a silent no-op rather than a link. So this is a genuine third path,
+   * not a flag.
+   *
+   * PRECEDENCE: this WINS over `onImportContact` where both are somehow
+   * supplied, and it forces the per-row import button off — so a caller cannot
+   * half-configure linking and leave an import reachable.
+   */
+  onExternalSelect?: (contact: ExtendedContact) => void;
+  /**
    * Whether to show add/import button for already-imported contacts.
    * - true: Show button for ALL contacts (use in transaction flows to add to transaction)
    * - false: Only show button for external contacts (use in Contacts screen for import only)
@@ -145,6 +163,13 @@ export interface ContactSearchListProps {
    * per-row import button off (import happens via the detail pane instead).
    */
   compact?: boolean;
+  /**
+   * Forwarded verbatim to every `ContactRow` (BACKLOG-2591). Default `false`,
+   * so both transaction pickers and Clients & Contacts render name-only exactly
+   * as BACKLOG-2356 decided. See `ContactRowProps.showDetailLine` for why the
+   * link picker is the one surface that turns it on.
+   */
+  showDetailLine?: boolean;
   /**
    * Called with the number of rows actually rendered (post filter, post search)
    * whenever that count changes (BACKLOG-2141). Derived from the
@@ -307,6 +332,8 @@ export function ContactSearchList({
   selectedIds,
   onSelectionChange,
   onImportContact,
+  onExternalSelect,
+  showDetailLine = false,
   showAddButtonForImported = false,
   onContactClick,
   activeContactId,
@@ -533,12 +560,18 @@ export function ContactSearchList({
     [onImportContact, importingIds, selectedIds, onSelectionChange],
   );
 
-  // Selecting an external contact auto-imports it.
+  // Selecting an external contact auto-imports it — UNLESS the caller wants it
+  // selected by identity instead (BACKLOG-2591). `onExternalSelect` WINS: see
+  // its docblock for why an import path must be unreachable in linking mode.
   const handleExternalSelect = useCallback(
     async (contact: ExtendedContact) => {
+      if (onExternalSelect) {
+        onExternalSelect(contact);
+        return;
+      }
       if (onImportContact) await handleImport(contact, true);
     },
-    [onImportContact, handleImport],
+    [onExternalSelect, onImportContact, handleImport],
   );
 
   /**
@@ -605,13 +638,28 @@ export function ContactSearchList({
         onContactClick(contact);
         return;
       }
-      if (isExternal && onImportContact && !selectedIds.includes(contact.id)) {
+      // BACKLOG-2591: `onExternalSelect` opens this branch too — without it a
+      // link picker's external rows would fall through to plain `handleSelect`
+      // and never reach the caller at all.
+      if (
+        isExternal &&
+        (onImportContact || onExternalSelect) &&
+        !selectedIds.includes(contact.id)
+      ) {
         handleExternalSelect(contact);
       } else {
         handleSelect(contact.id);
       }
     },
-    [handleSelect, handleExternalSelect, onContactClick, onImportContact, selectedIds, captureAnchor],
+    [
+      handleSelect,
+      handleExternalSelect,
+      onContactClick,
+      onImportContact,
+      onExternalSelect,
+      selectedIds,
+      captureAnchor,
+    ],
   );
 
   const handleImportButtonClick = useCallback(
@@ -906,9 +954,15 @@ export function ContactSearchList({
                 showCheckbox={isAddMode ? false : isSelectionMode}
                 showAddButton={isAddMode}
                 showImportButton={
-                  !isAddMode && !compact && !isSelectionMode && !!onImportContact && (isExternal || showAddButtonForImported)
+                  // BACKLOG-2591: `!onExternalSelect` is the fence. In linking
+                  // mode an import would CREATE a contact — the one thing this
+                  // surface must never do — so the button is suppressed on the
+                  // prop that declares linking, not left to the caller to also
+                  // remember to omit `onImportContact`.
+                  !isAddMode && !compact && !isSelectionMode && !onExternalSelect && !!onImportContact && (isExternal || showAddButtonForImported)
                 }
                 compact={compact}
+                showDetailLine={showDetailLine}
                 // BACKLOG-2459: the records the MAIN PROCESS folded into this
                 // row, which since BACKLOG-2370 is the only place a collapse is
                 // decided — and the only place one is stored.

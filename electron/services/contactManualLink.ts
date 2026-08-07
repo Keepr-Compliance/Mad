@@ -169,17 +169,29 @@ function toLinkable(record: ExternalContact): LinkableSourceRecord {
  * not filter removed contacts. Such a record is invisible here and cannot be
  * attached to the live contact the user actually wants. Releasing claims on
  * removal is a founder question, not an implementation detail.
+ *
+ * ===========================================================================
+ * NO QUERY, NO LIMIT — AND WHAT THAT COSTS (BACKLOG-2591)
+ * ===========================================================================
+ * This used to take `(query, limit = 25)` and run a SQL `LIKE` per keystroke.
+ * The renderer now filters in memory through `ContactSearchList`, exactly like
+ * the transaction pickers, so this returns the WHOLE unclaimed set ONCE per
+ * panel open. That kills the per-keystroke IPC and a second search dialect.
+ *
+ * THE COST IS REAL AND IS STATED RATHER THAN ABSORBED. `getAllForUser` is a
+ * plain synchronous `dbAll` with no LIMIT, on the main process, and its own
+ * comment cites ~1000 contacts as the working scale. The transaction pickers
+ * move the same volume through a WORKER (TASK-1956; `contacts:get-available`
+ * was measured at ~3.7s at 1000+ contacts) — this path does not.
+ *
+ * MEASURED, not assumed: see `contactManualLink.scale.test.ts`, which seeds a
+ * realistic address book and records the wall time of one call. If that number
+ * ever approaches the worker path's, the mitigation is to move this read behind
+ * the same worker rather than to reinstate a limit — a limit would silently
+ * hide linkable records, which is the one thing this function may never do.
  */
-export function findLinkableSourceRecords(
-  userId: string,
-  query: string,
-  limit = 25,
-): LinkableSourceRecord[] {
-  const trimmed = query.trim();
-  const candidates = trimmed
-    ? searchExternalContacts(userId, trimmed, limit * 4)
-    : getAllForUser(userId);
-
+export function findLinkableSourceRecords(userId: string): LinkableSourceRecord[] {
+  const candidates = getAllForUser(userId);
   const claimed = getLinkedSourceKeys(userId);
 
   const out: LinkableSourceRecord[] = [];
@@ -188,7 +200,6 @@ export function findLinkableSourceRecords(
     if (!record.source || !EXTERNAL_SOURCE_TYPES.has(record.source)) continue;
     if (claimed.has(sourceKey(record.source, record.external_record_id))) continue;
     out.push(toLinkable(record));
-    if (out.length >= limit) break;
   }
   return out;
 }
@@ -304,4 +315,64 @@ export function linkSourceRecordToContact(
 
     return { ok: true, linkId: link.id ?? "" };
   });
+}
+
+/** One record's identity, as the batch receives it. */
+export interface SourceRecordRef {
+  sourceType: string;
+  sourceRecordId: string;
+}
+
+/**
+ * Attach SEVERAL source records to one contact (BACKLOG-2591).
+ *
+ * ===========================================================================
+ * A LOOP OF N TRANSACTIONS — NEVER ONE TRANSACTION OVER N RECORDS
+ * ===========================================================================
+ * Each record goes through `linkSourceRecordToContact`, which opens its OWN
+ * `dbTransaction` and keeps its own all-or-nothing guarantee.
+ *
+ * BE PRECISE ABOUT WHAT THIS BUYS, because the obvious rationale is wrong. A
+ * REFUSAL — claimed, tombstoned, prior_rejection — is RETURNED, never thrown,
+ * so an outer transaction would commit exactly the same rows. Refusals are not
+ * what separates the two shapes, and a control built on one shows no difference
+ * (measured: it does not go red).
+ *
+ * What separates them is a THROW mid-batch: a disk error, a constraint
+ * violation, anything genuinely exceptional on record 3 of 5.
+ *
+ *   - LOOP (this): records 1-2 are already committed and SURVIVE; the throw
+ *     propagates and the caller reports a partial result honestly.
+ *   - ONE TRANSACTION: records 1-2 are rolled back too. The user picked five
+ *     people, four were fine, and they get nothing because the fifth hit a
+ *     disk error.
+ *
+ * `outcomes[i]` corresponds to `records[i]`, SAME ORDER, so the caller can name
+ * which record did what without matching on identity.
+ *
+ * The prior-rejection disclosure is BATCHED by the same property: the first
+ * pass returns `prior_rejection` for the affected records and writes nothing
+ * for them, while the others link normally. The caller lists them once, asks
+ * once, and re-calls with those pairs acknowledged — instead of interrupting
+ * the user record by record.
+ */
+export function linkSourceRecordsToContact(
+  userId: string,
+  contactId: string,
+  records: SourceRecordRef[],
+  options: { acknowledgedPriorRejections?: SourceRecordRef[] } = {},
+): LinkSourceOutcome[] {
+  const acknowledged = new Set(
+    (options.acknowledgedPriorRejections ?? []).map(
+      (r) => `${r.sourceType} ${r.sourceRecordId}`,
+    ),
+  );
+
+  return records.map((record) =>
+    linkSourceRecordToContact(userId, contactId, record.sourceType, record.sourceRecordId, {
+      acknowledgedPriorRejection: acknowledged.has(
+        `${record.sourceType} ${record.sourceRecordId}`,
+      ),
+    }),
+  );
 }

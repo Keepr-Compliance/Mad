@@ -1,29 +1,53 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useContactManualLink } from "../contact/hooks/useContactManualLink";
-import type { LinkableSourceRecord, LinkSourceOutcome } from "@/types/contactProvenance";
+import { ContactSearchList } from "./ContactSearchList";
+import type { ExtendedContact } from "../../types/components";
+import type {
+  LinkableSourceRecord,
+  LinkSourceOutcome,
+  SourceRecordRef,
+} from "@/types/contactProvenance";
 
 /**
- * "These two ARE the same person" — the joining action (BACKLOG-2426).
+ * "These two ARE the same person" — the joining action (BACKLOG-2426),
+ * rebuilt on the shared picker (BACKLOG-2591).
  *
  * ===========================================================================
- * WHAT THIS SEARCHES, AND WHAT IT DOES NOT
+ * WHY THIS RENDERS `ContactSearchList` BUT NOT ITS DATA
  * ===========================================================================
- * UNCLAIMED SOURCE RECORDS ONLY — address-book entries no contact holds yet.
- * It does NOT search saved contacts, because joining two saved contacts is a
- * MERGE: both are real, both may carry transaction history, and both may appear
- * on exported audits. There is no merge implementation and no design for one.
- * The service refuses a claimed record and names the incumbent; this panel
- * never offers one.
+ * The founder asked why linking did not simply reuse the transaction picker.
+ * It now does — for the LIST. It deliberately does NOT reuse the picker's DATA,
+ * and that distinction is the whole correctness of this screen:
+ *
+ * `contacts:get-available` applies THREE exclusions — the crosswalk, then
+ * `emailClaimedByImported`, then `phoneClaimedByImported`. The last two are
+ * right for an import picker ("you already have this person") and WRONG here: a
+ * record unclaimed in the crosswalk whose email merely resembles a saved contact
+ * is precisely what manual linking exists to attach, and `get-available` hides
+ * it. So the rows come from `findLinkableSourceRecords`, which filters on the
+ * crosswalk and nothing else.
+ *
+ * Reusing `externalContacts` would have looked obviously right and removed the
+ * feature's purpose while every existing test stayed green.
+ *
+ * ===========================================================================
+ * WHAT IT OFFERS, AND WHAT IT MAY NEVER OFFER
+ * ===========================================================================
+ * UNCLAIMED SOURCE RECORDS ONLY. `contacts={[]}` is load-bearing, not
+ * incidental: `ContactSearchList` renders saved contacts by default, and
+ * offering one here would invite the merge this epic forbids. `onExternalSelect`
+ * (rather than `onImportContact`) is the other half — it selects a record by
+ * identity and leaves no import path reachable, so this surface cannot create a
+ * contact.
  *
  * ===========================================================================
  * THE SECOND CONFIRMATION IS THE FEATURE, NOT A RETRY
  * ===========================================================================
- * If the user previously pressed `Unlink` on this exact pair, a
- * `different_people` verdict blocks it in both the crosswalk and the name rule.
- * A manual link must be able to overturn that — otherwise a mistaken unlink is
- * permanent and unexplained — but it must SAY SO FIRST. So the first attempt
- * returns `prior_rejection` and renders a disclosure; only the second call
- * carries `acknowledgedPriorRejection`. The founder hit this case himself.
+ * If the user previously pressed `Unlink` on a pair, a `different_people`
+ * verdict blocks it. Linking must be able to overturn that — otherwise a
+ * mistaken unlink is permanent and unexplained — but it must SAY SO FIRST. The
+ * first call returns `prior_rejection` for those records and writes nothing for
+ * them; the disclosure lists them and asks ONCE for the whole batch.
  */
 
 interface LinkSourceSearchProps {
@@ -31,15 +55,39 @@ interface LinkSourceSearchProps {
   contactId: string;
   contactName: string;
   onClose: () => void;
-  /** Fired after a link is written, so the caller can refresh its own views. */
+  /** Fired after at least one link is written, so the caller can refresh. */
   onLinked?: () => void;
 }
 
-function describeRecord(record: LinkableSourceRecord): string {
-  const bits = [record.emails[0], record.phones[0], record.company].filter(
-    (b): b is string => typeof b === "string" && b.length > 0,
-  );
-  return bits.join(" · ");
+/** The synthetic row id — unique per record, and reversible back to the pair. */
+function rowId(record: SourceRecordRef): string {
+  return `${record.sourceType}:${record.sourceRecordId}`;
+}
+
+/**
+ * A linkable record as the shared picker expects to receive it.
+ *
+ * `is_message_derived: true` is what marks a row EXTERNAL to `ContactSearchList`
+ * — the same stamp `useContactList` applies to `get-available`'s rows — so these
+ * render through the identical path as the transaction pickers' address-book
+ * rows. `last_communication_at` carries the recency the picker sorts on by
+ * default, which the old bespoke list never used.
+ */
+function toPickerRow(record: LinkableSourceRecord): ExtendedContact {
+  return {
+    id: rowId(record),
+    name: record.name ?? "",
+    display_name: record.name ?? "",
+    email: record.emails[0] ?? null,
+    phone: record.phones[0] ?? null,
+    allEmails: record.emails,
+    allPhones: record.phones,
+    company: record.company,
+    source: record.sourceType,
+    last_communication_at: record.lastMessageAt,
+    is_message_derived: true,
+    isFromDatabase: false,
+  } as unknown as ExtendedContact;
 }
 
 export const LinkSourceSearch: React.FC<LinkSourceSearchProps> = ({
@@ -49,67 +97,91 @@ export const LinkSourceSearch: React.FC<LinkSourceSearchProps> = ({
   onClose,
   onLinked,
 }) => {
-  const { records, loading, searchFailed, search, link } = useContactManualLink(userId);
-  const [query, setQuery] = useState("");
-  const [pendingRejection, setPendingRejection] = useState<LinkableSourceRecord | null>(null);
+  const { records, loading, loadFailed, load, link } = useContactManualLink(userId);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [pendingRejections, setPendingRejections] = useState<LinkableSourceRecord[]>([]);
   const [failure, setFailure] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // One read per open — see the hook's docblock.
   useEffect(() => {
-    search(query);
-  }, [query, search]);
+    load();
+  }, [load]);
 
-  const applyOutcome = (record: LinkableSourceRecord, outcome: LinkSourceOutcome | null): void => {
-    if (outcome === null) {
-      setFailure("That link could not be saved. Nothing was changed.");
+  const byId = useMemo(() => {
+    const map = new Map<string, LinkableSourceRecord>();
+    for (const r of records) map.set(rowId(r), r);
+    return map;
+  }, [records]);
+
+  const pickerRows = useMemo(() => records.map(toPickerRow), [records]);
+  const selectedRecords = useMemo(
+    () => selectedIds.map((id) => byId.get(id)).filter((r): r is LinkableSourceRecord => !!r),
+    [selectedIds, byId],
+  );
+
+  const handleExternalSelect = useCallback((contact: ExtendedContact) => {
+    setSelectedIds((prev) => (prev.includes(contact.id) ? prev : [...prev, contact.id]));
+  }, []);
+
+  const applyOutcomes = (
+    attempted: LinkableSourceRecord[],
+    outcomes: LinkSourceOutcome[] | null,
+  ): void => {
+    if (outcomes === null) {
+      setFailure("Those links could not be saved. Nothing was changed.");
       return;
     }
-    if (outcome.ok) {
-      setPendingRejection(null);
+
+    const rejected = attempted.filter(
+      (_r, i) => outcomes[i] && !outcomes[i].ok && outcomes[i].reason === "prior_rejection",
+    );
+    const linked = outcomes.filter((o) => o.ok).length;
+    const claimed = outcomes.filter((o) => !o.ok && o.reason === "claimed").length;
+
+    if (linked > 0) onLinked?.();
+
+    if (rejected.length > 0) {
+      // Not an error — the disclosure this feature exists to make. Anything that
+      // DID link above is already written; only these are still outstanding.
+      setPendingRejections(rejected);
+      setSelectedIds(rejected.map(rowId));
       setFailure(null);
-      onLinked?.();
-      onClose();
       return;
     }
-    switch (outcome.reason) {
-      case "prior_rejection":
-        // Not an error — the disclosure this feature exists to make.
-        setPendingRejection(record);
-        setFailure(null);
-        break;
-      case "claimed":
-        setFailure(
-          "That record already belongs to another contact. Joining two saved contacts is not something Keepr can do yet.",
-        );
-        break;
-      case "contact_removed":
-        setFailure("This contact has been removed, so nothing can be linked to it.");
-        break;
-      case "record_not_found":
-        setFailure("That record is no longer in your address book.");
-        break;
-      default:
-        setFailure("That link could not be saved. Nothing was changed.");
-        break;
+
+    if (claimed > 0 && linked === 0) {
+      setFailure(
+        "Those records already belong to another contact. Joining two saved contacts is not something Keepr can do yet.",
+      );
+      setSelectedIds([]);
+      return;
     }
+
+    onClose();
   };
 
-  const attemptLink = async (record: LinkableSourceRecord, acknowledged: boolean): Promise<void> => {
+  const commit = async (toLink: LinkableSourceRecord[], acknowledged: boolean): Promise<void> => {
+    if (toLink.length === 0) return;
     setBusy(true);
     try {
-      applyOutcome(record, await link(contactId, record, acknowledged));
+      const refs: SourceRecordRef[] = toLink.map((r) => ({
+        sourceType: r.sourceType,
+        sourceRecordId: r.sourceRecordId,
+      }));
+      applyOutcomes(toLink, await link(contactId, refs, acknowledged ? refs : undefined));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="p-4 space-y-3" data-testid="link-source-search">
+    <div className="flex flex-col min-h-0 p-4 gap-3" data-testid="link-source-search">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-gray-900">Link a record to {contactName}</h3>
+          <h3 className="text-sm font-semibold text-gray-900">Link records to {contactName}</h3>
           <p className="text-xs text-gray-600 mt-0.5">
-            Search your address books for another entry that is the same person.
+            Pick any address-book entries that are the same person. You can choose more than one.
           </p>
         </div>
         <button
@@ -121,57 +193,19 @@ export const LinkSourceSearch: React.FC<LinkSourceSearchProps> = ({
         </button>
       </div>
 
-      {/*
-        Styled to match `ContactSearchList`'s search input DELIBERATELY, not
-        approximately — founder QA raised the risk of two search UIs drifting
-        apart. Carried across verbatim: the purple focus ring, `min-h-[44px]`
-        (this repo's touch target), the responsive `text-sm sm:text-base`, and
-        the leading magnifier with `pl-10` to clear it.
-
-        They remain SEPARATE COMPONENTS on purpose (see the header comment —
-        different table, different row, different selection semantics), and that
-        is precisely why this duplicated styling is a liability: the next person
-        to restyle one has no way to know the other exists. BACKLOG-2591 tracks
-        extracting the shared search-shell.
-      */}
-      <div className="relative">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by name, email, phone or company"
-          aria-label="Search for a record to link"
-          className="w-full pl-10 pr-4 py-2.5 sm:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:outline-none text-gray-900 bg-white text-sm sm:text-base min-h-[44px]"
-          data-testid="link-source-input"
-        />
-        <svg
-          className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-          />
-        </svg>
-      </div>
-
-      {pendingRejection && (
+      {pendingRejections.length > 0 && (
         <div
           className="p-3 rounded-lg border border-amber-300 bg-amber-50 space-y-2"
           data-testid="link-prior-rejection-warning"
         >
           <p className="text-sm text-gray-900">
-            You previously said {pendingRejection.name ?? "this record"} was a different person.
-            Linking it now replaces that answer.
+            You previously said {pendingRejections.length === 1 ? "this record was" : "these records were"}{" "}
+            a different person: {pendingRejections.map((r) => r.name ?? "an unnamed record").join(", ")}.
+            Linking now replaces that answer.
           </p>
           <div className="flex gap-2">
             <button
-              onClick={() => void attemptLink(pendingRejection, true)}
+              onClick={() => void commit(pendingRejections, true)}
               disabled={busy}
               className="px-3 py-1.5 text-sm font-semibold text-white bg-amber-600 rounded-lg hover:bg-amber-700 disabled:opacity-60"
               data-testid="link-prior-rejection-confirm"
@@ -179,7 +213,10 @@ export const LinkSourceSearch: React.FC<LinkSourceSearchProps> = ({
               Link them anyway
             </button>
             <button
-              onClick={() => setPendingRejection(null)}
+              onClick={() => {
+                setPendingRejections([]);
+                setSelectedIds([]);
+              }}
               className="px-3 py-1.5 text-sm text-gray-700 rounded-lg hover:bg-gray-100"
               data-testid="link-prior-rejection-cancel"
             >
@@ -195,53 +232,62 @@ export const LinkSourceSearch: React.FC<LinkSourceSearchProps> = ({
         </p>
       )}
 
-      {loading && (
-        <p className="text-sm text-gray-500" data-testid="link-source-loading">
-          Searching…
-        </p>
-      )}
+      {/*
+        `contacts={[]}` — see the header comment. A saved contact must never be
+        offered here. `onExternalSelect` (never `onImportContact`) is what makes
+        a row a LINK rather than an import.
 
-      {/* A failed search is not an empty one, and must not say "nothing found". */}
-      {!loading && searchFailed && (
-        <p className="text-sm text-red-700" data-testid="link-source-search-failed">
-          Your address books could not be searched just now.
-        </p>
-      )}
+        `error` is passed so a failed load stays distinguishable from an empty
+        address book: without it this swap would inherit the conflation the
+        transaction pickers still have (BACKLOG-2592).
+      */}
+      <div className="flex-1 min-h-0 border border-gray-200 rounded-lg overflow-hidden">
+        <ContactSearchList
+          contacts={[]}
+          externalContacts={pickerRows}
+          selectedIds={selectedIds}
+          onSelectionChange={setSelectedIds}
+          onExternalSelect={handleExternalSelect}
+          selectionMode="add"
+          showDetailLine
+          isLoading={loading}
+          error={loadFailed ? "Your address books could not be searched just now." : null}
+          searchPlaceholder="Search by name, email, phone or company"
+          className="h-full"
+        />
+      </div>
 
-      {!loading && !searchFailed && records.length === 0 && (
-        <p className="text-sm text-gray-500" data-testid="link-source-empty">
-          No unlinked records match that search.
-        </p>
-      )}
-
-      {!loading && !searchFailed && records.length > 0 && (
-        <ul className="space-y-1" data-testid="link-source-results">
-          {records.map((record) => (
-            <li
-              key={`${record.sourceType}:${record.sourceRecordId}`}
-              data-testid={`link-source-result-${record.sourceType}-${record.sourceRecordId}`}
-              className="flex items-center justify-between gap-3 p-2 rounded-lg hover:bg-gray-50"
-            >
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-gray-900 truncate">
-                  {record.name ?? "Unnamed record"}
-                </div>
-                <div className="text-xs text-gray-600 truncate">
-                  {record.sourceLabel}
-                  {describeRecord(record) ? ` — ${describeRecord(record)}` : ""}
-                </div>
-              </div>
-              <button
-                onClick={() => void attemptLink(record, false)}
-                disabled={busy}
-                className="flex-shrink-0 px-3 py-1.5 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-60"
-                data-testid={`link-source-confirm-${record.sourceType}-${record.sourceRecordId}`}
+      {selectedRecords.length > 0 && (
+        <div className="space-y-2" data-testid="link-source-selected">
+          <div className="flex flex-wrap gap-1.5">
+            {selectedRecords.map((record) => (
+              <span
+                key={rowId(record)}
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-purple-700 bg-purple-100 rounded-full"
+                data-testid={`link-source-chip-${record.sourceType}-${record.sourceRecordId}`}
               >
-                Link
-              </button>
-            </li>
-          ))}
-        </ul>
+                {record.name ?? "Unnamed record"}
+                <button
+                  onClick={() => setSelectedIds((prev) => prev.filter((id) => id !== rowId(record)))}
+                  aria-label={`Remove ${record.name ?? "record"}`}
+                  className="text-purple-500 hover:text-purple-800"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+          <button
+            onClick={() => void commit(selectedRecords, false)}
+            disabled={busy}
+            className="px-3.5 py-1.5 text-sm font-semibold text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-60"
+            data-testid="link-source-commit"
+          >
+            {busy
+              ? "Linking…"
+              : `Link ${selectedRecords.length} record${selectedRecords.length === 1 ? "" : "s"}`}
+          </button>
+        </div>
       )}
     </div>
   );

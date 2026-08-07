@@ -21,6 +21,7 @@ import type { RemovedContactRow } from "../../services/db/contactDbService";
 import type {
   LinkableSourceRecord,
   LinkSourceOutcome,
+  SourceRecordRef,
 } from "../../services/contactManualLink";
 
 // BACKLOG-2471 PR C — same type-only rule. The compare view is produced by
@@ -37,7 +38,7 @@ import type {
 export type ContactReviewCluster = ReviewQueueCluster;
 export type ContactReviewItem = ReviewQueueItem;
 export type { ContactSourceProvenance, RemovedContactRow };
-export type { LinkableSourceRecord, LinkSourceOutcome };
+export type { LinkableSourceRecord, LinkSourceOutcome, SourceRecordRef };
 export type {
   ContactCompareColumn,
   ContactCompareView,
@@ -331,10 +332,7 @@ export interface WindowApiContacts {
    * Source records the user could attach by hand — UNCLAIMED ones only.
    * Empty query lists everything available; otherwise it is a text search.
    */
-  findLinkableSources: (
-    userId: string,
-    query: string,
-  ) => Promise<FindLinkableSourcesResponse>;
+  findLinkableSources: (userId: string) => Promise<FindLinkableSourcesResponse>;
   /**
    * Attach one source record to one saved contact, because a human said so.
    *
@@ -345,9 +343,8 @@ export interface WindowApiContacts {
   linkSource: (
     userId: string,
     contactId: string,
-    sourceType: string,
-    sourceRecordId: string,
-    acknowledgedPriorRejection?: boolean,
+    records: SourceRecordRef[],
+    acknowledgedPriorRejections?: SourceRecordRef[],
   ) => Promise<LinkSourceResponse>;
 }
 
@@ -395,6 +392,15 @@ export interface FindLinkableSourcesResponse {
  */
 export interface LinkSourceResponse {
   success: boolean;
-  outcome?: LinkSourceOutcome;
+  /**
+   * ONE OUTCOME PER INPUT RECORD, IN THE SAME ORDER (BACKLOG-2591).
+   *
+   * Plural because linking is a batch: `outcomes[i]` describes `records[i]`, so
+   * the caller can say WHICH record was skipped without matching on identity.
+   * A refusal is per-record and local — one claimed record does not spoil the
+   * others, which is exactly why the service loops transactions instead of
+   * wrapping them.
+   */
+  outcomes?: LinkSourceOutcome[];
   error?: string;
 }

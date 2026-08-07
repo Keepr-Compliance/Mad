@@ -86,6 +86,26 @@ const SIZE_STYLES: Record<"sm" | "md", string> = {
 };
 
 /**
+ * The PILL'S OWN WORDS, as plain text (BACKLOG-2591).
+ *
+ * `ContactRow`'s opt-in detail line names where a record came from, and it must
+ * say it in the SAME words the pill does — "Outlook", not "outlook", and
+ * "Contacts App", not "macos". Reading the label off `VARIANT_STYLES` rather
+ * than writing a second map is the point: a third vocabulary for the same five
+ * sources is how the pill and the row come to disagree about what a record is.
+ *
+ * Returns `null` for a source with no variant, so a caller renders nothing
+ * rather than the string "undefined".
+ */
+export function sourceDisplayLabel(
+  source: ModelContactSource | string | undefined,
+  isExternal: boolean,
+): string | null {
+  const variant = mapToSourcePillSource(source, isExternal);
+  return VARIANT_STYLES[variant as Variant]?.label ?? null;
+}
+
+/**
  * Maps a contact source to its display variant (origin).
  * Import status is shown separately by ImportStatusPill.
  * - manual -> 'manual' (green)
