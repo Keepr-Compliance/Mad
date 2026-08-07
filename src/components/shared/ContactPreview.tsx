@@ -272,6 +272,16 @@ export interface ContactPreviewProps {
    * nothing to link TO, and its action is `Import`.
    */
   onLinkSource?: () => void;
+  /**
+   * Open the compare screen for this contact (BACKLOG-2471 PR C).
+   *
+   * The button appears under EXACTLY the condition that opens the Sources panel
+   * — `showSourcesPanel(sourceList)` — because both answer the same question:
+   * is there a record here that could be wrong? One threshold, not two. Optional
+   * for the same reason as `onLinkSource`: the four other surfaces that render
+   * this card are unaffected until they pass it (PR G).
+   */
+  onCompareSources?: () => void;
   /** Callback to remove the contact */
   onRemove?: () => void;
   /** Callback to import the contact (external only) */
@@ -480,6 +490,7 @@ export function ContactPreview({
   unlinkNotice = null,
   onEdit,
   onLinkSource,
+  onCompareSources,
   onRemove,
   onImport,
   isImporting = false,
@@ -604,6 +615,18 @@ export function ContactPreview({
   // panel exists for. See utils/contactSourceAffordances for the full rule and
   // for the one case left open.
   const showSourcesSection = !isExternal && showSourcesPanel(sourceList);
+
+  /**
+   * BACKLOG-2471 PR C — ONE boolean, read in two places.
+   *
+   * The button lives inside the header's action cluster, and that cluster is
+   * itself conditional, so the visibility rule would otherwise be spelled twice:
+   * once to decide whether to render the cluster, once for the button. Two
+   * spellings of one rule drift, and the drift hides: a control that weakened
+   * the inner condition stayed GREEN because the outer one was still doing the
+   * work. Found by running that control rather than by reading.
+   */
+  const showCompareButton = !!onCompareSources && showSourcesSection;
 
   // BACKLOG-1944: per-section "Show all N" / "Show less" expand state. Plain
   // useState is safe here — StrictMode is ON app-wide, but this is local UI
@@ -758,7 +781,7 @@ export function ContactPreview({
                     {isImporting ? "Importing…" : "Import"}
                   </button>
                 )
-              : (onEdit || onLinkSource) && (
+              : (onEdit || onLinkSource || showCompareButton) && (
                   /*
                     BACKLOG-2426 — `Link` immediately LEFT of `Edit`, on SAVED
                     contacts only. The `isExternal` arm above renders `Import`
@@ -780,6 +803,29 @@ export function ContactPreview({
                     className="flex items-center gap-2 flex-shrink-0"
                     data-testid="contact-preview-actions"
                   >
+                    {/*
+                      BACKLOG-2471 PR C — `Compare sources` leftmost, because it
+                      is the only one of the three that changes nothing: it opens
+                      a read-only screen, while `Link` writes a link and `Edit`
+                      opens the form. Weight increases left to right.
+
+                      GATED ON `showSourcesSection`, WHICH IS `showSourcesPanel`.
+                      The button and the Sources panel answer the same question —
+                      "is there a record here that could be wrong?" — so they
+                      share one threshold. Gating on `sourceList.length > 0`
+                      instead would offer a comparison on a freshly imported
+                      contact whose only record is the one it was made from,
+                      which is the case the founder rejected for `Unlink`.
+                    */}
+                    {showCompareButton && (
+                      <button
+                        onClick={onCompareSources}
+                        className="flex-shrink-0 px-3.5 py-1.5 border border-gray-300 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition-all"
+                        data-testid="contact-compare-open"
+                      >
+                        Compare sources
+                      </button>
+                    )}
                     {onLinkSource && (
                       <button
                         onClick={onLinkSource}

@@ -2,7 +2,7 @@
   "$comment": "Pre-existing consumer-domain addresses and non-reserved phone numbers, recorded so scripts/ci/check-fixture-pii.mjs fails only on NEW ones. Entries here are believed to be invented but have not all been audited. Adding an entry is a review decision: it asserts the value is not a real person's. Never add one to silence a genuine finding — replace the value with example.com / +1 555 01xx instead.",
   "generatedBy": "node scripts/ci/check-fixture-pii.mjs --update-baseline",
   "backlog": "BACKLOG-2485",
-  "entryCount": 471,
+  "entryCount": 472,
   "entries": [
     {
       "file": "admin-portal/app/dashboard/support/components/CreateTicketDialog.tsx",
@@ -378,6 +378,11 @@
       "file": "electron/services/__tests__/connectionStatusService.lastSyncAt.test.ts",
       "rule": "consumer-email",
       "match": "user@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/contactCompare.test.ts",
+      "rule": "personal-name",
+      "match": "Paul Dorian"
     },
     {
       "file": "electron/services/__tests__/contactLinkReview.test.ts",

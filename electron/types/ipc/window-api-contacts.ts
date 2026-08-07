@@ -23,10 +23,27 @@ import type {
   LinkSourceOutcome,
 } from "../../services/contactManualLink";
 
+// BACKLOG-2471 PR C — same type-only rule. The compare view is produced by
+// `contactCompare`; a hand-copied mirror here is how a column would start
+// reading `undefined` on the one screen whose job is to be trusted about what a
+// contact is made of.
+import type {
+  ContactCompareColumn,
+  ContactCompareView,
+  CompareCommItem,
+  CompareValue,
+} from "../../services/contactCompare";
+
 export type ContactReviewCluster = ReviewQueueCluster;
 export type ContactReviewItem = ReviewQueueItem;
 export type { ContactSourceProvenance, RemovedContactRow };
 export type { LinkableSourceRecord, LinkSourceOutcome };
+export type {
+  ContactCompareColumn,
+  ContactCompareView,
+  CompareCommItem,
+  CompareValue,
+};
 
 /**
  * Transaction shape returned by `checkCanDelete` (databaseService.getTransactionsByContact).
@@ -297,6 +314,17 @@ export interface WindowApiContacts {
     contactId: string,
     linkId: string,
   ) => Promise<UnlinkSourceResponse>;
+
+  // ---- BACKLOG-2471 PR C: the compare screen, read-only ------------------
+  /**
+   * Every record this contact is assembled from, as columns. `view` is absent
+   * when there is nothing to compare — a contact whose only source is the one
+   * it was created from.
+   */
+  getCompareColumns: (
+    userId: string,
+    contactId: string,
+  ) => Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }>;
 
   // ---- BACKLOG-2426: manual linking ---------------------------------------
   /**

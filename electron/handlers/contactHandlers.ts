@@ -84,6 +84,10 @@ import {
   findLinkableSourceRecords,
   linkSourceRecordToContact,
 } from "../services/contactManualLink";
+import {
+  getContactCompareColumns,
+  type ContactCompareView,
+} from "../services/contactCompare";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbRun } from "../services/db/core/dbConnection";
 import type { Contact, Transaction, ContactSource, Communication } from "../types/models";
@@ -4143,6 +4147,47 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         };
       } catch (error) {
         logService.error("Unlink contact source failed", "Contacts", {
+          contactId,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        if (error instanceof ValidationError) {
+          return { success: false, error: `Validation error: ${error.message}` };
+        }
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  // =========================================================================
+  // BACKLOG-2471 PR C — THE COMPARE SCREEN, READ-ONLY
+  // =========================================================================
+  //
+  // One channel, one SELECT-side service, no writes. The per-column `Unlink`
+  // and the footer `Confirm` are PR D; the first reaches the EXISTING
+  // `contacts:unlink-source` above. Nothing here decides anything about
+  // identity.
+  ipcMain.handle(
+    "contacts:get-compare-columns",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      contactId: string,
+    ): Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        const validatedContactId = validateContactId(contactId);
+        if (!validatedContactId) {
+          throw new ValidationError("Contact ID validation failed", "contactId");
+        }
+        // No local user yet is not an error — it is "nothing to compare", the
+        // same shape the sources channel above returns.
+        if (!validatedUserId) return { success: true, view: null };
+        return {
+          success: true,
+          view: await getContactCompareColumns(validatedUserId, validatedContactId),
+        };
+      } catch (error) {
+        logService.error("Get contact compare columns failed", "Contacts", {
           contactId,
           error: error instanceof Error ? error.message : "Unknown error",
         });

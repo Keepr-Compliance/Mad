@@ -24,6 +24,7 @@ import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
 import { RemovedContactsSection } from "./contact/components/RemovedContactsSection";
 import { LinkSourceSearch } from "./shared/LinkSourceSearch";
+import { ContactCompareSources } from "./shared/ContactCompareSources";
 import { NotificationContext } from "../contexts/NotificationContext";
 
 interface ContactsProps {
@@ -117,6 +118,16 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    */
   const [linkSearchOpen, setLinkSearchOpen] = useState(false);
 
+  /**
+   * Is the compare screen open for the previewed contact? (BACKLOG-2471 PR C)
+   *
+   * A boolean rather than an id, and closed in the wrapper below for exactly the
+   * reason `linkSearchOpen` is: it belongs to whoever was on screen when it
+   * opened, so no route can leave a comparison of one person standing over
+   * another. Declared ABOVE the wrapper because the wrapper writes it.
+   */
+  const [compareOpen, setCompareOpen] = useState(false);
+
   const showPreviewContact = useCallback((contact: ExtendedContact | null) => {
     previewContactIdRef.current = contact?.id ?? null;
     // BACKLOG-2426: the manual-link panel belongs to the contact that was on
@@ -124,6 +135,8 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     // means no route can leave it open over a DIFFERENT person, which would
     // offer to attach a record to whoever is showing now.
     setLinkSearchOpen(false);
+    // BACKLOG-2471 PR C: the compare screen, same rule and the same reason.
+    setCompareOpen(false);
     setPreviewContactState(contact);
   }, []);
   const [previewTransactions, setPreviewTransactions] = useState<
@@ -849,6 +862,28 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   const renderDetailPane = () => {
     if (!previewContact) return null;
     const external = isExternal(previewContact);
+
+    /*
+      BACKLOG-2471 PR C — the compare screen REPLACES the card while it is open,
+      and it is returned from here rather than from either layout branch. Both
+      the wide two-pane layout and the narrow full-screen card call this one
+      function, so one return serves both viewports and neither branch of the
+      layout ternary below changes.
+
+      `×` sets this back to false and the card returns. Nothing is decided by
+      opening or closing it — PR C is read-only, and the row-click routing that
+      makes this screen the default way in is PR F.
+    */
+    if (compareOpen && !external) {
+      return (
+        <ContactCompareSources
+          userId={userId}
+          contactId={previewContact.id}
+          onClose={() => setCompareOpen(false)}
+        />
+      );
+    }
+
     return (
       <>
         {/*
@@ -903,6 +938,10 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         // external record is not a saved contact, so there is nothing to link
         // it TO — its action is Import.
         onLinkSource={external ? undefined : () => setLinkSearchOpen(true)}
+        // BACKLOG-2471 PR C: gated exactly like the props above. The button
+        // itself only appears when the card's own Sources panel does — one
+        // threshold, decided inside ContactPreview.
+        onCompareSources={external ? undefined : () => setCompareOpen(true)}
         onImport={external ? handlePreviewImport : undefined}
         // BACKLOG-2525: the card's own row, not "an import is happening
         // somewhere". Compared by id so a background import of a different
