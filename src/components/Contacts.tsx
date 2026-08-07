@@ -396,15 +396,21 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    * question about that same pair, and a button still advertising it would be
    * asking about something the user has just answered.
    */
+  // BACKLOG-2471 PR D: takes the LINK ID rather than the whole provenance row,
+  // because that is all it ever used (the two lines below) and because the
+  // compare screen holds a column, not a `ContactSourceProvenance`. ONE unlink
+  // function serves both surfaces — the Sources panel and the compare screen
+  // reach the same shipped `contacts:unlink-source`, so there is no second
+  // unlink behaviour for PR E to have to change twice.
   const handleUnlinkSource = useCallback(
-    async (link: ContactSourceProvenance) => {
+    async (linkId: string) => {
       if (!provenanceContactId) return;
-      setUnlinkingLinkId(link.linkId);
+      setUnlinkingLinkId(linkId);
       try {
         const result = await window.api.contacts.unlinkSource(
           userId,
           provenanceContactId,
-          link.linkId,
+          linkId,
         );
         if (!result.success) {
           logger.warn(`[Contacts] unlink source failed: ${result.error}`);
@@ -880,6 +886,25 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           userId={userId}
           contactId={previewContact.id}
           onClose={() => setCompareOpen(false)}
+          // BACKLOG-2471 PR D — the SAME function the Sources panel calls. The
+          // compare screen adds no unlink of its own.
+          onUnlinkSource={(linkId) => void handleUnlinkSource(linkId)}
+          unlinkingLinkId={unlinkingLinkId}
+          // Confirm returns to the card, and the list behind it never
+          // unmounted, so its filter and search are still there.
+          onConfirmed={() => {
+            setCompareOpen(false);
+            refreshPreviewSources();
+            refreshReviewQueueCount();
+            silentLoadContacts();
+          }}
+          onConfirmedAndEdit={() => {
+            setCompareOpen(false);
+            refreshPreviewSources();
+            refreshReviewQueueCount();
+            silentLoadContacts();
+            handlePreviewEdit();
+          }}
         />
       );
     }
@@ -929,7 +954,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         // all below two sources — so the single-source common case shows no
         // badge and no empty state.
         sources={external ? undefined : previewSources}
-        onUnlinkSource={external ? undefined : (link) => void handleUnlinkSource(link)}
+        onUnlinkSource={external ? undefined : (link) => void handleUnlinkSource(link.linkId)}
         unlinkingLinkId={unlinkingLinkId}
         unlinkNotice={external ? undefined : unlinkNotice}
         variant="pane"

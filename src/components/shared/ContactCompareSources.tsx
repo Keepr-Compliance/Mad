@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useContactCompare } from "../contact/hooks/useContactCompare";
 import type {
   ContactCompareColumn,
@@ -56,6 +56,21 @@ interface ContactCompareSourcesProps {
   userId: string;
   contactId: string;
   onClose: () => void;
+  /**
+   * Detach ONE source record (BACKLOG-2471 PR D).
+   *
+   * This is `Contacts.tsx`'s OWN `handleUnlinkSource` — the same function the
+   * Sources panel calls, reaching the same shipped `contacts:unlink-source`.
+   * The compare screen adds no unlink behaviour of its own, which is what keeps
+   * PR E's reattach work a single line to change instead of two.
+   */
+  onUnlinkSource?: (linkId: string) => void;
+  /** The link currently being detached, so its button can say so. */
+  unlinkingLinkId?: string | null;
+  /** Confirm succeeded — the caller closes, and refreshes what it owns. */
+  onConfirmed?: () => void;
+  /** `Confirm & edit`: same write, then open the contact's form. */
+  onConfirmedAndEdit?: () => void;
   /**
    * BACKLOG-2502 seam, declared from this PR onward so that item is purely
    * additive and needs no new backend: the candidate that is NOT yet linked,
@@ -140,7 +155,11 @@ const CommRow: React.FC<{ item: CompareCommItem }> = ({ item }) => (
   </div>
 );
 
-const Column: React.FC<{ column: ContactCompareColumn }> = ({ column }) => {
+const Column: React.FC<{
+  column: ContactCompareColumn;
+  onUnlinkSource?: (linkId: string) => void;
+  unlinkingLinkId?: string | null;
+}> = ({ column, onUnlinkSource, unlinkingLinkId }) => {
   const isSource = column.kind === "source";
 
   return (
@@ -225,6 +244,32 @@ const Column: React.FC<{ column: ContactCompareColumn }> = ({ column }) => {
           )}
         </div>
       </div>
+
+      {/*
+        UNLINK SITS ON THE RECORD IT REMOVES, and never on the contact's own
+        column. Founder, 2026-08-05: "we can't unlink a contact from itself if
+        that's what you are asking so we should hide the button." The same
+        sentence is why there is no footer reject — one control, on the thing it
+        acts on, rather than two controls doing one job.
+
+        EVERY source column is detachable BY CONSTRUCTION, so this is not gated
+        on `canUnlinkSource`: PR C's column rule absorbs the one record a contact
+        was created from into column 1, which leaves either an attached record
+        (detachable by `isAttachedSource`) or one of two-or-more links
+        (detachable by length). Re-spelling the predicate here would hide a
+        future break in that rule; `ContactCompareSources.test.tsx` asserts the
+        invariant over every link shape instead.
+      */}
+      {isSource && onUnlinkSource && (
+        <button
+          onClick={() => onUnlinkSource(column.linkId)}
+          disabled={unlinkingLinkId === column.linkId}
+          data-testid={`compare-unlink-${column.linkId}`}
+          className="mt-3 w-full text-[13px] font-semibold py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-60 disabled:cursor-wait"
+        >
+          {unlinkingLinkId === column.linkId ? "Unlinking…" : "Unlink"}
+        </button>
+      )}
     </div>
   );
 };
@@ -233,8 +278,75 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
   userId,
   contactId,
   onClose,
+  onUnlinkSource,
+  unlinkingLinkId,
+  onConfirmed,
+  onConfirmedAndEdit,
 }) => {
-  const { view, loading, failed } = useContactCompare(userId, contactId);
+  const { view, loading, failed, reload, confirm } = useContactCompare(userId, contactId);
+  /**
+   * A press is in flight. Plain `useState` — this is local UI state, not a
+   * didMount guard, so StrictMode's double-invoke just re-runs the initialiser.
+   *
+   * It stops the double CLICK, which is the one that happens. It is not the
+   * durable guard: `confirmContactSources` skips links that already carry the
+   * verdict, so a second press cannot write a duplicate even if this flag were
+   * removed.
+   */
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const columnCount = view?.columns.length ?? 0;
+
+  const handleConfirm = async (thenEdit: boolean) => {
+    if (busy) return;
+    setBusy(true);
+    setFailure(null);
+    try {
+      const outcome = await confirm();
+      if (!outcome?.ok) {
+        // A failed write must not read as a successful one that changed
+        // nothing: the screen stays open and says so.
+        setFailure(outcome?.error ?? "That could not be saved just now.");
+        return;
+      }
+      if (thenEdit) onConfirmedAndEdit?.();
+      else onConfirmed?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Detach, then look again.
+   *
+   * The reload is what decides whether the screen survives: unlinking the last
+   * source column leaves nothing to compare, and the mock's own footer says so
+   * — "unlink them all and the contact stands alone". Rather than predicting
+   * that in the renderer, we ask the service and close if it says there is
+   * nothing left.
+   */
+  const handleUnlink = (linkId: string) => {
+    onUnlinkSource?.(linkId);
+  };
+
+  useEffect(() => {
+    if (!unlinkingLinkId && !loading) reload();
+    // Re-reads when an unlink FINISHES (the id goes back to null). Value
+    // comparison on the prop, not a skip-first-run guard — StrictMode is on
+    // app-wide and a didMount guard here would silently skip the real first
+    // render in production. The dependency is deliberately just the id: adding
+    // `reload` would re-fire on every render of the parent.
+  }, [unlinkingLinkId]);
+
+  useEffect(() => {
+    if (!loading && !failed && view === null && onUnlinkSource) onClose();
+    // Nothing left to compare -> return to the card. Gated on `onUnlinkSource`
+    // so a read-only mount (PR G's callers, tests) still renders the empty
+    // state rather than closing itself. Deps are the three values the condition
+    // reads; `onClose` is deliberately absent so a caller passing a fresh arrow
+    // each render cannot re-fire it.
+  }, [loading, failed, view]);
 
   return (
     <div
@@ -286,8 +398,55 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(15rem,1fr))]"
         >
           {view.columns.map((column) => (
-            <Column key={column.linkId} column={column} />
+            <Column
+              key={column.linkId}
+              column={column}
+              onUnlinkSource={onUnlinkSource ? handleUnlink : undefined}
+              unlinkingLinkId={unlinkingLinkId}
+            />
           ))}
+        </div>
+      )}
+
+      {!loading && !failed && view && (onConfirmed || onConfirmedAndEdit) && (
+        <div
+          data-testid="compare-footer"
+          className="flex items-center gap-2 flex-wrap p-3 border-t border-gray-200 bg-gray-50"
+        >
+          {failure && (
+            <span className="text-[13px] text-red-600 w-full" data-testid="compare-confirm-error">
+              {failure}
+            </span>
+          )}
+          {view.isConfirmed ? (
+            <span className="text-[13px] text-gray-500" data-testid="compare-already-confirmed">
+              You have confirmed these records are the same person.
+            </span>
+          ) : (
+            <>
+              <span className="flex-1" />
+              <button
+                onClick={() => void handleConfirm(true)}
+                disabled={busy}
+                data-testid="compare-confirm-edit"
+                className="text-[13px] font-semibold px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:border-gray-400 hover:text-gray-900 transition-colors disabled:opacity-60"
+              >
+                Confirm &amp; edit
+              </button>
+              <button
+                onClick={() => void handleConfirm(false)}
+                disabled={busy}
+                data-testid="compare-confirm"
+                className="text-[13px] font-semibold px-3 py-1.5 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-60"
+              >
+                {busy ? "Saving…" : columnCount > 2 ? "Confirm all" : "Confirm"}
+              </button>
+              <span className="text-[12px] text-gray-400 w-full" data-testid="compare-foothint">
+                Unlink sits on the record it removes. Confirming returns you to the list,
+                keeping your filter and search.
+              </span>
+            </>
+          )}
         </div>
       )}
     </div>

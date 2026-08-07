@@ -24,12 +24,19 @@
  * this file, that is the bug.
  */
 
-import { dbAll, dbGet } from "./db/core/dbConnection";
+import { dbAll, dbGet, dbTransaction } from "./db/core/dbConnection";
 import {
   getContactEmailEntries,
   getContactPhoneEntries,
   getTransactionsByContact,
 } from "./db/contactDbService";
+import {
+  hasMustLink,
+  listPendingProposals,
+  recordVerdict,
+  resolveProposal,
+} from "./db/contactLinkReviewDbService";
+import type { ExternalContactSource } from "./db/externalContactDbService";
 import type {
   ContactLinkSourceType,
   ContactMatchMethod,
@@ -40,6 +47,7 @@ import { dedupeEmailValues, dedupePhoneValues } from "../utils/contactValueDedup
 import { toLookupKey } from "../utils/phoneNormalization";
 import { phonesMatch } from "./messageMatchingService";
 import { isReactionRow } from "../utils/reactionUtils";
+import logService from "./logService";
 
 /** How many communications each column shows. The mock draws two and one. */
 const RECENT_COMMUNICATION_LIMIT = 3;
@@ -110,6 +118,42 @@ export interface ContactCompareView {
    * sentence does not claim the names match.
    */
   namesMatch: boolean;
+  /**
+   * Has the user said, in as many words, that these records are one person?
+   * (BACKLOG-2471 PR D)
+   *
+   * True when EVERY non-origin link carries a latest `same_person` verdict —
+   * links, not columns. The `source_id` row column 1 absorbed has no column of
+   * its own and still counts, because absorption is a RENDERING decision about
+   * where a row appears, not a statement that the row is not a link. Confirming
+   * only what is on screen would leave this permanently false.
+   *
+   * PR F routes on this. NOTE FOR PR F: this is a single-contact field, and a
+   * list needs a SET. Reading it per row would be one pass over the crosswalk
+   * per contact per render; the shape to add there is a set-based reader beside
+   * `getRejectedSourceKeys`, which already windows latest-verdict-per-pair in
+   * one query.
+   */
+  isConfirmed: boolean;
+}
+
+/** What a `Confirm` press actually did. (BACKLOG-2471 PR D) */
+export interface ConfirmSourcesOutcome {
+  ok: boolean;
+  error?: string;
+  /** Links given a fresh `same_person` verdict by this call. */
+  confirmed: number;
+  /** Links that already carried one — skipped, so the call is idempotent. */
+  alreadyConfirmed: number;
+  /**
+   * Pending review-queue proposals retired by this call.
+   *
+   * Counted from `resolveProposal`'s RETURN VALUE, never from the number of
+   * rows we intended to touch: a proposal answered from the queue in another
+   * window between the read and the write must not be reported as resolved
+   * here. `confirmProposal` gates its own side effects the same way.
+   */
+  proposalsResolved: number;
 }
 
 interface LinkRow {
@@ -572,8 +616,16 @@ export async function getContactCompareColumns(
     ? { method: sourceRows[0].match_method, source: sourceRows[0].source_type }
     : null;
 
+  // Over LINKS, not columns — `nonOrigin`, which includes the row column 1
+  // absorbed. See the field's docblock; confirming only the rendered columns
+  // would make this unreachable.
+  const isConfirmed = nonOrigin.every((l) =>
+    hasMustLink(userId, contactId, l.source_type as ExternalContactSource, l.source_record_id),
+  );
+
   return {
     contactId,
+    isConfirmed,
     title: `Is this the same ${contact.display_name?.trim() || "person"}?`,
     reason: buildReason(
       columns,
@@ -585,4 +637,157 @@ export async function getContactCompareColumns(
     columns,
     namesMatch,
   };
+}
+
+/**
+ * "Yes — these records are all this person." (BACKLOG-2471 PR D)
+ *
+ * ===========================================================================
+ * ONE VERDICT PER NON-ORIGIN LINK, NOT PER COLUMN
+ * ===========================================================================
+ * PR C's column rule absorbs one `source_id` row into the contact's own column,
+ * so that row has NO column of its own. Confirming only what is on screen is the
+ * intuitive reading and it is wrong: `isConfirmed` quantifies over LINKS, so the
+ * absorbed row would never carry a verdict, the contact would read unconfirmed
+ * forever, and once PR F lands the screen would re-open on every click. The user
+ * would press this button and nothing would change.
+ *
+ * The set written is exactly the set `getContactProvenance` returns.
+ *
+ * ORIGIN ROWS NEVER GET A VERDICT. `contact_link_verdicts.source_type` admits
+ * only the five external sources, and `RecordVerdictInput.sourceType` is typed
+ * `ExternalContactSource`, so the compiler refuses the origin vocabulary
+ * (`manual | email | sms | inferred`) before SQLite's CHECK does.
+ *
+ * ===========================================================================
+ * A VERDICT ALONE DOES NOT TAKE THE QUESTION OFF THE QUEUE
+ * ===========================================================================
+ * THIS IS THE PART THAT LOOKS FINISHED WHEN IT IS NOT.
+ *
+ * `PENDING_JOIN` (contactLinkReview.ts) selects on `p.status = 'pending'` and
+ * nothing else — it reads neither `contact_link_verdicts` nor
+ * `contact_source_links`. So writing `same_person` leaves any pending proposal
+ * for that pair exactly where it was, and "Review N possible duplicates" does
+ * not move. Every unit test about verdicts would still pass.
+ *
+ * So this also RESOLVES the pending proposals for the pairs it confirms. Only
+ * `resolveProposal` — the link already exists, so `confirmProposal`'s other work
+ * (create the link, apply the source values) would be a no-op and must not run.
+ *
+ * A pending proposal CAN exist for an already-linked pair, by ordering alone:
+ * `resolveSourceRecord` step 1 resolves by existing link and will not propose
+ * for one, but a proposal written on an earlier sync survives a link made
+ * afterwards. That is the case this button meets.
+ *
+ * Matching is BY PAIR, never by producer or cluster key — `proposeLink` has two
+ * production callers, `resolveSourceRecord` AND `fileNameQuestion` (the
+ * unique-exact-name rule, which writes `cluster_key: name:<name>`). Filtering to
+ * `record:%` would silently leave every name-rule question standing.
+ *
+ * ===========================================================================
+ * TRANSACTIONAL, AND CI CANNOT TELL YOU SO
+ * ===========================================================================
+ * `writeAtomicity.guard.test.ts` (BACKLOG-2530) scans `DB_DIR =
+ * electron/services/db`. This is a COMPOSITION service, alongside
+ * `contactLinkReview.ts` and `contactProvenance.ts`, and sits outside that scan
+ * by the same deliberate layering — a guard's directory constant must not
+ * dictate architecture (SR ruling, BACKLOG-2426; the standing gap is
+ * BACKLOG-2584).
+ *
+ * `contactCompare.rollback.test.ts` is therefore the ONLY check that this
+ * transaction is here. It covers removal of `dbTransaction` FROM THIS FUNCTION
+ * AS WRITTEN; it does NOT cover a new multi-write added to this file later
+ * without its own crash test.
+ *
+ * Without it, a crash between the verdicts and the resolutions leaves a contact
+ * half-confirmed: some links carrying `same_person` and the rest not, so the
+ * contact still reads unconfirmed and re-opens this screen — while the queue has
+ * already been told the question is settled.
+ */
+export function confirmContactSources(
+  userId: string,
+  contactId: string,
+): ConfirmSourcesOutcome {
+  const contact = dbGet<{ user_id: string; removed_at: string | null }>(
+    `SELECT user_id, removed_at FROM contacts WHERE id = ?`,
+    [contactId],
+  );
+  // Stated here, not inherited from the reader. A writer that trusts a sibling's
+  // guard is one refactor away from having none.
+  if (!contact || contact.user_id !== userId || contact.removed_at) {
+    return {
+      ok: false,
+      error: "That contact is no longer available.",
+      confirmed: 0,
+      alreadyConfirmed: 0,
+      proposalsResolved: 0,
+    };
+  }
+
+  const links = dbAll<{
+    source_type: ContactLinkSourceType;
+    source_record_id: string;
+    match_method: ContactMatchMethod;
+  }>(
+    `SELECT source_type, source_record_id, match_method
+       FROM contact_source_links
+      WHERE user_id = ? AND contact_id = ? AND match_method <> ?
+      ORDER BY source_type, source_record_id`,
+    [userId, contactId, ORIGIN_MATCH_METHOD],
+  );
+
+  if (links.length === 0) {
+    return { ok: true, confirmed: 0, alreadyConfirmed: 0, proposalsResolved: 0 };
+  }
+
+  return dbTransaction<ConfirmSourcesOutcome>(() => {
+    let confirmed = 0;
+    let alreadyConfirmed = 0;
+
+    for (const link of links) {
+      const sourceType = link.source_type as ExternalContactSource;
+      // IDEMPOTENT IN THE SERVICE, not only behind a disabled button.
+      // `recordVerdict` appends, so a second press would add duplicate
+      // `same_person` rows — harmless to behaviour (latest wins) but they enter
+      // `listVerdicts`, which exists to be a calibration set. Two identical
+      // unprompted confirmations would read as two decisions.
+      if (hasMustLink(userId, contactId, sourceType, link.source_record_id)) {
+        alreadyConfirmed += 1;
+        continue;
+      }
+      recordVerdict({
+        userId,
+        contactId,
+        sourceType,
+        sourceRecordId: link.source_record_id,
+        identityVerdict: "same_person",
+        reason: "compare_confirm",
+        matchedOn: link.match_method,
+        // A THIRD ROUTE TO THE SAME CONCLUSION, and `decidedBy` exists to keep
+        // the three apart: `provenance_unlink` is a correction, `manual_link` is
+        // a search-and-attach, and this is a human reading the columns and
+        // agreeing. A calibration set that cannot tell them apart reads an
+        // unprompted confirmation as a prompted one.
+        decidedBy: "compare_confirm",
+      });
+      confirmed += 1;
+    }
+
+    const pairs = new Set(links.map((l) => `${l.source_type}:${l.source_record_id}`));
+    let proposalsResolved = 0;
+    for (const proposal of listPendingProposals(userId)) {
+      if (proposal.contact_id !== contactId) continue;
+      if (!pairs.has(`${proposal.source_type}:${proposal.source_record_id}`)) continue;
+      if (resolveProposal(proposal.id, "confirmed")) proposalsResolved += 1;
+    }
+
+    logService.info(
+      `[Contacts] a contact's sources were confirmed from the compare screen; ` +
+        `${confirmed} verdict(s) written, ${alreadyConfirmed} already stood, and ` +
+        `${proposalsResolved} pending question(s) retired`,
+      "Contacts",
+    );
+
+    return { ok: true, confirmed, alreadyConfirmed, proposalsResolved };
+  });
 }

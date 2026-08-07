@@ -86,7 +86,9 @@ import {
 } from "../services/contactManualLink";
 import {
   getContactCompareColumns,
+  confirmContactSources,
   type ContactCompareView,
+  type ConfirmSourcesOutcome,
 } from "../services/contactCompare";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbRun } from "../services/db/core/dbConnection";
@@ -4159,13 +4161,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
   );
 
   // =========================================================================
-  // BACKLOG-2471 PR C — THE COMPARE SCREEN, READ-ONLY
+  // BACKLOG-2471 — THE COMPARE SCREEN
   // =========================================================================
   //
-  // One channel, one SELECT-side service, no writes. The per-column `Unlink`
-  // and the footer `Confirm` are PR D; the first reaches the EXISTING
-  // `contacts:unlink-source` above. Nothing here decides anything about
-  // identity.
+  // PR C shipped the reader below: one SELECT-side service, no writes.
+  // PR D adds `contacts:confirm-sources` after it. The per-column `Unlink`
+  // needs no channel of its own — it reaches the EXISTING
+  // `contacts:unlink-source` above, unchanged, which is the line PR E owns.
   ipcMain.handle(
     "contacts:get-compare-columns",
     async (
@@ -4195,6 +4197,55 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           return { success: false, error: `Validation error: ${error.message}` };
         }
         return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  // BACKLOG-2471 PR D — "yes, these records are all this person".
+  //
+  // The ONLY route by which a compare-screen confirmation is written. It writes
+  // one verdict per non-origin link AND retires the pending questions for those
+  // pairs — see the service docblock for why a verdict alone is not enough.
+  ipcMain.handle(
+    "contacts:confirm-sources",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      contactId: string,
+    ): Promise<ConfirmSourcesOutcome> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        const validatedContactId = validateContactId(contactId);
+        if (!validatedContactId) {
+          throw new ValidationError("Contact ID validation failed", "contactId");
+        }
+        if (!validatedUserId) {
+          return {
+            ok: false,
+            error: "No local user.",
+            confirmed: 0,
+            alreadyConfirmed: 0,
+            proposalsResolved: 0,
+          };
+        }
+        return confirmContactSources(validatedUserId, validatedContactId);
+      } catch (error) {
+        logService.error("Confirm contact sources failed", "Contacts", {
+          contactId,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        return {
+          ok: false,
+          error:
+            error instanceof ValidationError
+              ? `Validation error: ${error.message}`
+              : error instanceof Error
+                ? error.message
+                : "Unknown error",
+          confirmed: 0,
+          alreadyConfirmed: 0,
+          proposalsResolved: 0,
+        };
       }
     },
   );
