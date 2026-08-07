@@ -502,3 +502,118 @@ describe("removal is scoped to a single transaction", () => {
     expect(await isContactAssignedToTransaction(TXN_B, JANE)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2568 — the CONTACT tombstone reaches the renderer.
+//
+// The founder removed a contact from Clients & Contacts and he still appeared
+// under a transaction's Key Contacts with nothing explaining why. The behaviour
+// is correct (an audit record must not change retroactively) but the UI could
+// not SAY so, because `contacts.removed_at` was never projected: every SELECT in
+// this file aliased seven `c.` columns and that was not one of them.
+//
+// These cases pin the projection. They use `removeContact` — the real Clients &
+// Contacts removal path — rather than an UPDATE typed here, so the fixture is
+// the producer's actual output and not a shape someone remembered.
+// ---------------------------------------------------------------------------
+describe("BACKLOG-2568: contacts.removed_at reaches the renderer", () => {
+  /** The real Clients & Contacts removal writer. */
+  async function deleteFromAddressBook(contactId: string): Promise<void> {
+    const { removeContact } = await import("../contactDbService");
+    await removeContact(contactId);
+  }
+
+  it("carries contact_removed_at on a LIVE assignment whose contact was deleted", async () => {
+    await assignContactToTransaction(TXN_A, {
+      contact_id: JANE,
+      specific_role: "Buyer Agent",
+    });
+
+    await deleteFromAddressBook(JANE);
+
+    const rows = await getTransactionContactsWithRoles(TXN_A);
+
+    // The junction row is STILL LIVE — this is the whole point. Removing a
+    // person from the address book does not take them off a deal they were
+    // party to, so they remain in Key Contacts and need a label.
+    expect(rows.map((r) => r.contact_id)).toEqual([JANE]);
+    expect(rows[0].removed_at).toBeNull(); // junction: on the deal
+    // NOT `not.toBeNull()`: a MISSING column yields undefined, and
+    // expect(undefined).not.toBeNull() passes — so that assertion cannot tell a
+    // dropped alias from a live one. Checking the shape can. (Caught by the
+    // C-SQL2 control, which stayed green against the weaker form.)
+    expect(typeof rows[0].contact_removed_at).toBe("string");
+
+    // FIXTURE FORMAT, transcribed from the producer rather than assumed:
+    // contactDbService.removeContact writes datetime('now') → "YYYY-MM-DD HH:MM:SS".
+    // Renderer fixtures must use THIS shape, not ISO-8601 with T/Z.
+    expect(rows[0].contact_removed_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(rows[0].contact_removed_at).not.toContain("T");
+    expect(rows[0].contact_removed_at).not.toContain("Z");
+  });
+
+  it("carries NULL contact_removed_at for a contact who is still in the address book", async () => {
+    // The negative case. Without it, a projection that hard-coded a non-null
+    // value — or a pill rendered unconditionally — would pass the case above.
+    await assignContactToTransaction(TXN_A, {
+      contact_id: OMAR,
+      specific_role: "Lender",
+    });
+
+    const rows = await getTransactionContactsWithRoles(TXN_A);
+    expect(rows.map((r) => r.contact_id)).toEqual([OMAR]);
+    expect(rows[0].contact_removed_at).toBeNull();
+  });
+
+  it("carries BOTH tombstones on a party removed from the deal AND deleted", async () => {
+    // The co-occurrence case that drives the two-pill precedence rule in
+    // RemovedTransactionContactsSection. Both are reachable because the two
+    // tombstones are independent.
+    await assignContactToTransaction(TXN_A, {
+      contact_id: JANE,
+      specific_role: "Buyer Agent",
+    });
+
+    await unlinkContactFromTransaction(TXN_A, JANE, "Off this deal");
+    await deleteFromAddressBook(JANE);
+
+    const removed = await getRemovedTransactionContacts(TXN_A);
+    expect(removed.map((r) => r.contact_id)).toEqual([JANE]);
+    expect(typeof removed[0].removed_at).toBe("string"); // off this deal
+    expect(typeof removed[0].contact_removed_at).toBe("string"); // and deleted
+
+    // Independent: a party off the deal whose contact record is INTACT carries
+    // only the junction tombstone. If these two ever collapsed into one value,
+    // the two-label design would be unimplementable.
+    await assignContactToTransaction(TXN_A, {
+      contact_id: OMAR,
+      specific_role: "Lender",
+    });
+    await unlinkContactFromTransaction(TXN_A, OMAR, "Off this deal");
+
+    const both = await getRemovedTransactionContacts(TXN_A);
+    const omarRow = both.find((r) => r.contact_id === OMAR)!;
+    expect(typeof omarRow.removed_at).toBe("string");
+    expect(omarRow.contact_removed_at).toBeNull();
+  });
+
+  it("aliases contact_removed_at on the by-role projection too", async () => {
+    // getTransactionContactsByRole has no reader of this field today and is not
+    // IPC-exposed. It is aliased anyway because all three SELECTs return the
+    // same TransactionContactResult and the field is optional: a future caller
+    // reading it off a by-role result would get `undefined` with tsc green and a
+    // pill that silently never renders. This case is what keeps that true.
+    await assignContactToTransaction(TXN_A, {
+      contact_id: JANE,
+      specific_role: "Buyer Agent",
+    });
+    await deleteFromAddressBook(JANE);
+
+    const rows = await getTransactionContactsByRole(TXN_A, "Buyer Agent");
+    expect(rows.map((r) => r.contact_id)).toEqual([JANE]);
+    // Shape, not `not.toBeNull()` — see the note in the LIVE case above.
+    expect(rows[0].contact_removed_at).toMatch(
+      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    );
+  });
+});

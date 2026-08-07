@@ -670,6 +670,66 @@ describe("ContactPreview", () => {
       );
     });
 
+    /**
+     * BACKLOG-2579 — the contact detail card offered two ways out.
+     *
+     * Founder, QA of the combined branch: "what [we have] feels fine i just
+     * think we need to get rid of the x since we have a back button" — and, when
+     * asked how far it should go, "in all width of view ports".
+     *
+     * `Contacts.tsx` is the ONLY caller that passes variant="pane", and it uses
+     * that variant for BOTH its layouts (the narrow full-screen detail card,
+     * which has the Back button, and the wide >=1200px detail pane). So gating
+     * on the variant covers every viewport width of the contact detail card,
+     * which is what he asked for.
+     *
+     * FOUNDER DECISION, recorded on BACKLOG-2579: remove it everywhere,
+     * knowingly accepting that the wide pane — which has no Back button — loses
+     * its explicit close. The pane is persistent there by design; the user moves
+     * on by picking another contact.
+     *
+     * The modal case below is not symmetry for its own sake. The four modal
+     * consumers have no Back button, and below the `sm` breakpoint
+     * ResponsiveModal is full-screen with no backdrop to click, so the X is the
+     * only way out. A global removal would trap those users; this pins that it
+     * did not happen.
+     *
+     * ESCAPE: there is no Escape handling on this card, in either variant, and
+     * this change neither adds nor removes any — ResponsiveModal, ContactPreview
+     * and Contacts.tsx contain no keydown handler for it. Stated rather than
+     * asserted as "unchanged", which would imply something exists to preserve.
+     * The narrow layout's Back button is a native <button>, so Tab + Enter still
+     * dismisses there.
+     */
+    it("pane variant renders NO close X", () => {
+      // C6. Restore the X unconditionally and this goes red.
+      renderContactPreview({ variant: "pane" });
+      expect(
+        screen.queryByTestId("contact-preview-close")
+      ).not.toBeInTheDocument();
+    });
+
+    it("modal variant STILL renders the close X", () => {
+      // C7. Hide the X unconditionally and this goes red. Guards the four modal
+      // consumers, where the X is the only dismissal affordance on mobile.
+      const onClose = jest.fn();
+      renderContactPreview({ onClose });
+      const close = screen.getByTestId("contact-preview-close");
+      expect(close).toBeInTheDocument();
+      expect(close).toHaveAttribute("aria-label", "Close preview");
+      fireEvent.click(close);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("pane variant keeps the rest of the card intact without the X", () => {
+      // Removing a header element must not take the card's content with it.
+      renderContactPreview({ variant: "pane" });
+      expect(screen.getByTestId("contact-preview-name")).toHaveTextContent(
+        "John Smith"
+      );
+      expect(screen.getByTestId("contact-preview-avatar")).toBeInTheDocument();
+    });
+
     it("pane variant still renders transaction rows and fires onTransactionClick", () => {
       const onTransactionClick = jest.fn();
       renderContactPreview({ variant: "pane", onTransactionClick });

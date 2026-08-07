@@ -150,9 +150,12 @@ export function EditContactsModal({
     ContactAssignment[]
   >([]);
 
-  // BACKLOG-1355: Auto-fill role state
+  // BACKLOG-1355: Auto-fill role state.
+  // BACKLOG-2567: `autoFilledContactIds` is gone with ContactRoleRow's "(Auto)"
+  // badge — it was its only reader, so keeping it would leave state that is
+  // written and never read (which eslint does not flag). `autoRoleEnabled`
+  // stays: it gates the auto-assignment itself, which the founder kept.
   const [autoRoleEnabled, setAutoRoleEnabled] = useState(false);
-  const [autoFilledContactIds, setAutoFilledContactIds] = useState<Set<string>>(new Set());
 
   // Load auto-role setting on mount
   useEffect(() => {
@@ -244,18 +247,10 @@ export function EditContactsModal({
       updated[role] = [...(updated[role] || []), contactId];
       return updated;
     });
-    setAutoFilledContactIds((prev) => new Set(prev).add(contactId));
+    // BACKLOG-2567: the badge bookkeeping that used to follow this
+    // `setRoleAssignments` call is gone. The auto-assignment above is the
+    // behaviour the founder kept and must not go with it.
   }, [autoRoleEnabled, validRoles, transactionType]);
-
-  // BACKLOG-1355: Clear auto-filled status when user manually changes role
-  const handleClearAutoFilled = useCallback((contactId: string) => {
-    setAutoFilledContactIds((prev) => {
-      if (!prev.has(contactId)) return prev;
-      const next = new Set(prev);
-      next.delete(contactId);
-      return next;
-    });
-  }, []);
 
   // Remove a contact from the transaction
   const handleRemoveContact = useCallback((contactId: string) => {
@@ -272,14 +267,6 @@ export function EditContactsModal({
         }
       }
       return updated;
-    });
-
-    // BACKLOG-1355: Clear auto-filled status
-    setAutoFilledContactIds((prev) => {
-      if (!prev.has(contactId)) return prev;
-      const next = new Set(prev);
-      next.delete(contactId);
-      return next;
     });
   }, []);
 
@@ -484,8 +471,6 @@ export function EditContactsModal({
                   setShowEditModal(true);
                 }}
                 contactsWithoutRoles={contactsWithoutRoles}
-                autoFilledContactIds={autoFilledContactIds}
-                onClearAutoFilled={handleClearAutoFilled}
               />
             )}
 
@@ -570,10 +555,10 @@ interface Screen1ContentProps {
   onEditContact?: (contact: ExtendedContact) => void;
   /** Contacts that are missing roles (for validation highlighting) */
   contactsWithoutRoles?: Set<string>;
-  /** BACKLOG-1355: Set of contact IDs whose roles were auto-filled */
-  autoFilledContactIds?: Set<string>;
-  /** BACKLOG-1355: Callback to clear auto-filled status when user manually changes role */
-  onClearAutoFilled?: (contactId: string) => void;
+  /*
+   * BACKLOG-2567: `autoFilledContactIds` / `onClearAutoFilled` are gone. Both
+   * existed solely to drive and clear ContactRoleRow's "(Auto)" badge.
+   */
 }
 
 /**
@@ -588,8 +573,6 @@ function Screen1Content({
   onRemoveContact,
   onEditContact,
   contactsWithoutRoles = new Set(),
-  autoFilledContactIds = new Set(),
-  onClearAutoFilled,
 }: Screen1ContentProps): React.ReactElement {
   const { contacts, loading: contactsLoading, error: contactsError } = useContacts();
 
@@ -667,14 +650,12 @@ function Screen1Content({
         }
       });
 
+      // BACKLOG-2567: this is the LIVE half of this handler — it is what makes
+      // a manual role change stick. The clear-the-badge call that used to
+      // follow it is gone with the badge; control C2b covers this line.
       onRoleAssignmentsChange(newAssignments);
-
-      // BACKLOG-1355: Clear auto-filled status when user manually changes role
-      if (onClearAutoFilled) {
-        onClearAutoFilled(contactId);
-      }
     },
-    [roleAssignments, onRoleAssignmentsChange, onClearAutoFilled]
+    [roleAssignments, onRoleAssignmentsChange]
   );
 
   if (contactsLoading) {
@@ -772,7 +753,6 @@ function Screen1Content({
             onRemove={() => onRemoveContact(contact.id)}
             onClick={() => setPreviewContact(contact)}
             hasError={contactsWithoutRoles.has(contact.id)}
-            isAutoFilled={autoFilledContactIds.has(contact.id)}
           />
         ))}
       </div>

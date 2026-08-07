@@ -594,7 +594,29 @@ export function ContactPreview({
           : "flex flex-col max-h-[80vh] overflow-y-auto"
       }
     >
-        {/* Header with close button */}
+        {/*
+          Header with close button.
+
+          BACKLOG-2579 — the X is rendered ONLY in the "modal" variant.
+
+          In the "pane" variant this card is the Clients & Contacts detail, and
+          `Contacts.tsx` is the only caller that passes `variant="pane"`. There
+          the X was a SECOND dismissal affordance beside the screen's own Back
+          button, which is what the founder asked us to drop — at every viewport
+          width, not just the narrow layout. FOUNDER DECISION (2026-08-06,
+          recorded on BACKLOG-2579): remove it everywhere, knowingly accepting
+          that the wide (>=1200px) two-pane layout has no Back button and so
+          loses its explicit close; the pane is persistent there by design and
+          the user moves on by selecting another contact.
+
+          The X STAYS in the modal variant. The four modal consumers
+          (ContactSelectModal, ContactAssignmentStep, EditContactsModal,
+          TransactionDetailsTab) have no Back button, and below the `sm`
+          breakpoint ResponsiveModal is full-screen with no backdrop to click —
+          so there the X is the only way out. Removing it globally would trap
+          those users. Both directions are controlled: C6 and C7.
+        */}
+        {variant !== "pane" && (
         <div className="flex justify-end p-3 sm:p-4">
           <button
             onClick={onClose}
@@ -617,6 +639,7 @@ export function ContactPreview({
             </svg>
           </button>
         </div>
+        )}
 
         {/* Card Head (BACKLOG-1944, matches the artifact's .card-head): left-aligned
             avatar + name/pills column, replacing the prior centered layout. The

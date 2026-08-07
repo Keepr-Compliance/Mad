@@ -27,6 +27,7 @@ import { labelForTransactionContact } from "@/utils/contactDisplayLabel";
 // dependency, which is how `src/types/contactProvenance.ts` already reads this
 // same module.
 import type { RemovedTransactionContact } from "@electron/types/ipc/window-api-transactions";
+import { ContactTombstonePill } from "@/components/shared/ContactTombstonePill";
 import { RemovedItemsSection } from "./RemovedItemsSection";
 import { useRemovedSection, type RemovedRestoreResult } from "../hooks/useRemovedSection";
 
@@ -211,7 +212,33 @@ export function RemovedTransactionContactsSection({
 
             <div className="flex-1 min-w-0 space-y-0.5">
               <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold text-gray-900 truncate">{name}</span>
+                {/*
+                  BACKLOG-2568 — the labels sit in a LEFT group beside the name,
+                  mirroring ContactSummaryCard, and NOT in the right cluster
+                  below: that cluster is `flex-shrink-0` and already carries the
+                  role badge plus the Restore button, so two more pills would
+                  crowd it off a narrow card. `flex-wrap` lets them drop to a
+                  second line instead of squeezing the name.
+
+                  PRECEDENCE, when a party was removed from this deal AND
+                  deleted from the address book (both are reachable — the two
+                  tombstones are independent): show BOTH, deal-removal FIRST.
+                  The deal fact explains why this row is in this section; the
+                  address-book fact must be seen BEFORE clicking Restore,
+                  because restoring the role returns someone to the deal who is
+                  still absent from Clients & Contacts and from the picker.
+                  Asserted by name and by document order in
+                  TransactionDetailsTab.tombstonePills-2568.test.tsx (C4).
+                */}
+                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                  <span className="font-semibold text-gray-900 truncate">{name}</span>
+                  <ContactTombstonePill variant="deal-removed" className="flex-shrink-0" />
+                  {/* Truthiness, not `!= null` — see the matching guard in
+                      ContactSummaryCard: an empty string is not a timestamp. */}
+                  {Boolean(group.contact_removed_at) && (
+                    <ContactTombstonePill variant="contact-removed" className="flex-shrink-0" />
+                  )}
+                </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <span className="inline-block px-3 py-1 bg-gray-200 text-gray-700 text-xs font-semibold rounded-full">
                     {getRoleDisplayName(role, transactionType)}

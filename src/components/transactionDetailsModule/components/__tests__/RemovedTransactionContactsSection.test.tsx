@@ -69,6 +69,15 @@ function makeRemovedTransactionContact(o: {
   contact_name: string;
   specific_role?: string;
   removed_reason?: string;
+  /**
+   * BACKLOG-2568 — the CONTACT tombstone (`contacts.removed_at`), added to this
+   * projection by that task. Defaults to null: the person is still in the
+   * address book, which is the common case and the state every pre-existing
+   * test in this file was implicitly assuming. Format verified against the real
+   * driver in transactionContactDbService.tombstone.test.ts — "YYYY-MM-DD
+   * HH:MM:SS", the same SQLite shape as `removed_at`, NOT ISO-8601.
+   */
+  contact_removed_at?: string | null;
 }) {
   return {
     id: o.id,
@@ -83,6 +92,7 @@ function makeRemovedTransactionContact(o: {
     updated_at: "2026-08-05 03:08:06",
     removed_at: "2026-08-05 03:08:06",
     removed_reason: o.removed_reason ?? "Removed from transaction by user",
+    contact_removed_at: o.contact_removed_at ?? null,
     contact_name: o.contact_name,
     contact_email: "dana@example.com",
     contact_phone: "+15550100",
@@ -379,5 +389,137 @@ describe("RemovedTransactionContactsSection", () => {
       expect(renderedNames()).toEqual(["Omar Example"]);
     });
     expect(onRestoreComplete).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2568 — the two removal labels, and which comes first.
+//
+// The founder removed a contact and found him still on a transaction with
+// nothing explaining why. The behaviour is correct; the explanation was
+// missing. FOUNDER DECISION (2026-08-06): TWO DISTINCT LABELS. One pill
+// covering both states was explicitly rejected — it would tell the user the
+// wrong thing half the time, because the states are independent:
+//
+//   "removed from this deal"  -> transaction_contacts.removed_at  (this list)
+//   "deleted contact"         -> contacts.removed_at              (address book)
+//
+// Every row in THIS section is deal-removed by construction (the query filters
+// `tc.removed_at IS NOT NULL`), so the deal pill is unconditional here and the
+// contact pill is the conditional one.
+// ---------------------------------------------------------------------------
+describe("BACKLOG-2568: removal labels", () => {
+  const DEAL_PILL = "contact-tombstone-pill-deal-removed";
+  const CONTACT_PILL = "contact-tombstone-pill-contact-removed";
+
+  it("labels every row as removed from this deal", async () => {
+    (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
+      success: true,
+      removedContacts: [JANE, OMAR],
+    });
+
+    renderSection();
+    await openSection();
+
+    expect(screen.getAllByTestId(DEAL_PILL)).toHaveLength(2);
+  });
+
+  it("shows NO deleted-contact pill for a party who is still in the address book", async () => {
+    // The negative case. Without it, a pill rendered unconditionally would pass
+    // the co-occurrence test below — presence alone cannot separate "correct"
+    // from "always on".
+    (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
+      success: true,
+      removedContacts: [JANE],
+    });
+
+    renderSection();
+    await openSection();
+
+    expect(screen.getByTestId(DEAL_PILL)).toBeInTheDocument();
+    expect(screen.queryByTestId(CONTACT_PILL)).not.toBeInTheDocument();
+  });
+
+  it("shows BOTH pills, deal-removal FIRST, when the party was also deleted", async () => {
+    // C4 — the co-occurrence case and the precedence rule.
+    //
+    // ORDER IS THE ASSERTION, not just presence. The deal fact explains why the
+    // row is in this section; the address-book fact has to be seen BEFORE
+    // clicking Restore, because restoring the role returns someone to the deal
+    // who is still absent from Clients & Contacts and from the Edit Contacts
+    // picker. Swap the two elements in renderGroup and this goes red.
+    const deletedToo = makeRemovedTransactionContact({
+      id: "tc-pete",
+      contact_id: "contact-pete",
+      contact_name: "Pete Example",
+      specific_role: "lender",
+      contact_removed_at: "2026-08-06 14:22:41",
+    });
+    (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
+      success: true,
+      removedContacts: [deletedToo],
+    });
+
+    renderSection();
+    await openSection();
+
+    const dealPill = screen.getByTestId(DEAL_PILL);
+    const contactPill = screen.getByTestId(CONTACT_PILL);
+    expect(dealPill).toBeInTheDocument();
+    expect(contactPill).toBeInTheDocument();
+
+    // DOCUMENT_POSITION_FOLLOWING === the contact pill comes AFTER the deal pill.
+    expect(
+      dealPill.compareDocumentPosition(contactPill) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // The two labels say different things — the whole point of the founder's
+    // decision. Asserted verbatim so a future edit cannot quietly merge them.
+    expect(dealPill).toHaveTextContent("Removed from this deal");
+    expect(contactPill).toHaveTextContent("Deleted contact");
+  });
+
+  it("keeps the party's name and restore button intact alongside the pills", async () => {
+    // The pills sit in the same row as the name and next to the restore
+    // cluster. This pins that adding them did not displace either.
+    const deletedToo = makeRemovedTransactionContact({
+      id: "tc-pete",
+      contact_id: "contact-pete",
+      contact_name: "Pete Example",
+      contact_removed_at: "2026-08-06 14:22:41",
+    });
+    (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
+      success: true,
+      removedContacts: [deletedToo],
+    });
+
+    renderSection();
+    await openSection();
+
+    expect(screen.getByText("Pete Example")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("restore-transaction-contact-button"),
+    ).toBeInTheDocument();
+  });
+  it("treats an empty-string contact tombstone as no tombstone", async () => {
+    // Boundary, matching ContactSummaryCard's guard. A `!= null` check lights
+    // the pill on "" — that is how this defect was caught on the other site.
+    const emptyTombstone = makeRemovedTransactionContact({
+      id: "tc-dana",
+      contact_id: "contact-dana",
+      contact_name: "Dana Example",
+      contact_removed_at: "",
+    });
+    (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
+      success: true,
+      removedContacts: [emptyTombstone],
+    });
+
+    renderSection();
+    await openSection();
+
+    expect(screen.getByTestId(DEAL_PILL)).toBeInTheDocument();
+    expect(screen.queryByTestId(CONTACT_PILL)).not.toBeInTheDocument();
   });
 });

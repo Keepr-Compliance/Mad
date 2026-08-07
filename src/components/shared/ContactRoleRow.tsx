@@ -26,8 +26,19 @@ export interface ContactRoleRowProps {
   onClick?: () => void;
   /** Whether this row has a validation error (missing role) */
   hasError?: boolean;
-  /** Whether the current role was auto-filled from contact default_role (BACKLOG-1355) */
-  isAutoFilled?: boolean;
+  /*
+   * BACKLOG-2567: `isAutoFilled` and its "(Auto)" badge are GONE, in both
+   * layouts. The role is still filled in automatically from the contact's
+   * default_role (BACKLOG-1355) — that behaviour is untouched and lives in the
+   * parents (`ContactAssignmentStep.applyAutoRole` /
+   * `EditContactsModal.applyAutoRole`). The label just stopped announcing it.
+   *
+   * "Auto" described how the software works, not what the user is looking at:
+   * they see a role, and whether the app filled it in is the app's business.
+   * The role still READS as editable without the badge — it is a native
+   * <select> with a visible chevron in both layouts, and the badge always sat
+   * beside that control, never inside it.
+   */
   /** Additional CSS classes */
   className?: string;
 }
@@ -99,7 +110,6 @@ export function ContactRoleRow({
   onRemove,
   onClick,
   hasError = false,
-  isAutoFilled = false,
   className = "",
 }: ContactRoleRowProps): React.ReactElement {
   const displayName = getDisplayName(contact);
@@ -175,11 +185,6 @@ export function ContactRoleRow({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
           </div>
-          {isAutoFilled && (
-            <span className="text-xs text-purple-500 ml-1 font-medium" data-testid={`auto-filled-badge-${contact.id}`}>
-              (Auto)
-            </span>
-          )}
         </div>
       </div>
 
@@ -244,11 +249,6 @@ export function ContactRoleRow({
                 </option>
               ))}
             </select>
-            {isAutoFilled && (
-              <span className="text-xs text-purple-500 ml-1 font-medium" data-testid={`auto-filled-badge-${contact.id}`}>
-                (Auto)
-              </span>
-            )}
           </div>
           {onRemove && (
             <button
