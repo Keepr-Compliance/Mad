@@ -47,7 +47,7 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       expect(screen.getByText("iPhone Sync")).toBeInTheDocument();
@@ -63,7 +63,7 @@ describe("ImportSourceSettings", () => {
         expect(screen.getByText("iPhone Sync")).toBeInTheDocument();
       });
 
-      expect(screen.queryByText("macOS Messages + Contacts")).not.toBeInTheDocument();
+      expect(screen.queryByText("macOS Messages")).not.toBeInTheDocument();
       expect(screen.getByText("Android Companion")).toBeInTheDocument();
     });
 
@@ -72,9 +72,35 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText("Choose where to import your messages and contacts from.")
+          screen.getByText("Choose where to import your text messages from.")
         ).toBeInTheDocument();
       });
+    });
+
+    /**
+     * BACKLOG-2523 regression guard.
+     *
+     * This panel writes `messages.source` and NOTHING else. Contact sources are
+     * the independent `contactSources.direct.*` checkboxes under
+     * Settings > Contacts (BACKLOG-2477 decoupled them; see the comment on
+     * SyncOrchestratorService.getContactsSyncPreferences). Any copy here that
+     * mentions contacts is therefore a false claim about the user's own data —
+     * it either promises a contacts effect this screen does not have, or scares
+     * a user off switching message sources for fear of disturbing contacts.
+     *
+     * This asserts the ABSENCE of the whole class, not the presence of the
+     * three strings that happened to be wrong on 2026-08-05. It is deliberately
+     * the strong form (/contact/i, unqualified): the panel renders no such word
+     * today, so any reintroduction reddens this immediately.
+     */
+    it("never claims the Import Source panel governs contacts", async () => {
+      const { container } = render(<ImportSourceSettings userId={mockUserId} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
+      });
+
+      expect(container.textContent).not.toMatch(/contact/i);
     });
   });
 
@@ -119,7 +145,7 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         const macosRadio = screen.getByRole("radio", {
-          name: /macos messages \+ contacts/i,
+          name: /macos messages/i,
         });
         expect(macosRadio).toBeChecked();
       });
@@ -137,7 +163,7 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         const macosRadio = screen.getByRole("radio", {
-          name: /macos messages \+ contacts/i,
+          name: /macos messages/i,
         });
         expect(macosRadio).toBeChecked();
       });
@@ -187,7 +213,7 @@ describe("ImportSourceSettings", () => {
       // Should still render with default (macos-native)
       await waitFor(() => {
         const macosRadio = screen.getByRole("radio", {
-          name: /macos messages \+ contacts/i,
+          name: /macos messages/i,
         });
         expect(macosRadio).toBeChecked();
       });
@@ -200,7 +226,7 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText("macOS Messages + Contacts")
+          screen.getByText("macOS Messages")
         ).toBeInTheDocument();
         expect(screen.getByText("iPhone Sync")).toBeInTheDocument();
         expect(screen.getByText("Android Companion")).toBeInTheDocument();
@@ -252,11 +278,11 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       const macosRadio = screen.getByRole("radio", {
-        name: /macos messages \+ contacts/i,
+        name: /macos messages/i,
       });
       await user.click(macosRadio);
 
@@ -315,12 +341,12 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText("macOS Messages + Contacts")
+          screen.getByText("macOS Messages")
         ).toBeInTheDocument();
       });
 
       const macosRadio = screen.getByRole("radio", {
-        name: /macos messages \+ contacts/i,
+        name: /macos messages/i,
       });
       await user.click(macosRadio);
 
@@ -349,7 +375,7 @@ describe("ImportSourceSettings", () => {
       // Wait for revert
       await waitFor(() => {
         const macosRadio = screen.getByRole("radio", {
-          name: /macos messages \+ contacts/i,
+          name: /macos messages/i,
         });
         expect(macosRadio).toBeChecked();
       });
@@ -362,7 +388,7 @@ describe("ImportSourceSettings", () => {
 
       // Wait for loading to complete (radio buttons visible)
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       expect(screen.queryByText("To use iPhone Sync:")).not.toBeInTheDocument();
@@ -546,7 +572,7 @@ describe("ImportSourceSettings", () => {
 
       // Wait for loading to complete (radio buttons visible)
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       // The Android device-management block (and its connect CTA) only
@@ -599,11 +625,11 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       // The selected option's label should have the blue border styling
-      const macosLabel = screen.getByText("macOS Messages + Contacts").closest("label");
+      const macosLabel = screen.getByText("macOS Messages").closest("label");
       expect(macosLabel).toHaveClass("border-blue-500");
     });
 
@@ -625,7 +651,7 @@ describe("ImportSourceSettings", () => {
       expect(iphoneLabel).toHaveClass("border-blue-500");
 
       // macOS label should not have blue border
-      const macosLabel = screen.getByText("macOS Messages + Contacts").closest("label");
+      const macosLabel = screen.getByText("macOS Messages").closest("label");
       expect(macosLabel).not.toHaveClass("border-blue-500");
     });
 
