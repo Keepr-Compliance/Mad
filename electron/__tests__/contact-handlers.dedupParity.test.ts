@@ -403,23 +403,28 @@ describe("BACKLOG-2370 — the name-only question, answered", () => {
     await assertOneRuleDecides(records, ["nm-mac", "nm-out"]);
   });
 
-  it("is NOT reachable from the import surface, which applies no renderer dedup", async () => {
-    // ImportContactsModal — the only component that reaches `contacts:import` —
-    // does not use `contactPickerList` at all; it filters `availableContacts`
-    // inline on the search string.
-    //
-    // This assertion predates BACKLOG-2370 and is kept: wiring the picker list
-    // into the import path is still a reasonable future tidy-up, and it must
-    // still be a deliberate one rather than something that happens by accident.
-    const modal = require("fs").readFileSync(
-      require("path").join(
-        __dirname,
-        "../../src/components/contact/components/ImportContactsModal.tsx",
-      ),
-      "utf8",
-    );
-    expect(modal).not.toContain("contactPickerList");
-    expect(modal).not.toContain("assembleDedupedContacts");
-    expect(modal).not.toContain("assembleContacts");
-  });
+  /**
+   * REMOVED by BACKLOG-2515 — its subject was deleted, and re-pointing it would
+   * assert something false.
+   *
+   * It read `ImportContactsModal.tsx` off disk and asserted the file did not
+   * mention `contactPickerList`, on the grounds that "the only component that
+   * reaches `contacts:import`" applied no renderer dedup. That component is
+   * gone: it was rendered only by `ContactSelectModal`, which no user could
+   * reach.
+   *
+   * The live import surface is now `Contacts.tsx`, and it DOES use
+   * `contactPickerList` — legitimately, for display. So the old assertion is
+   * not merely orphaned, it is now WRONG about the surface it would be
+   * re-pointed at, and a mechanical re-point would have produced a green test
+   * making a false claim.
+   *
+   * What it was protecting — that wiring the picker list into the import path
+   * stays a deliberate choice — is not lost: BACKLOG-2370 deleted the renderer
+   * dedup outright, so there is no longer a second rule to accidentally apply.
+   *
+   * Note also that a `readFileSync` on a source path is invisible to `tsc` and
+   * to every import-graph check. This one only surfaced because the suite was
+   * RUN. It is the deletion-sweep case that no static gate can catch.
+   */
 });

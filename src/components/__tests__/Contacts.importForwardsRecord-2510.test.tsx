@@ -1,29 +1,37 @@
 /**
- * The two Import buttons send the SAME payload (BACKLOG-2510).
+ * The Clients & Contacts Import button forwards the WHOLE record (BACKLOG-2510).
  *
  * Founder, on finding that importing from Clients & Contacts recorded nothing
  * about where the contact came from while importing the same person from a
  * transaction did: *"shouldn't they be the same?"*
  *
  * ===========================================================================
- * WHAT THIS FILE IS FOR
+ * THIS WAS A PARITY TEST. IT IS NOW A SINGLE-PATH TEST. READ WHY.
  * ===========================================================================
- * Both screens offer an Import button over the same address-book records:
+ * It used to import the same record from BOTH screens and assert the two
+ * payloads were deep-equal:
  *
- *   - Clients & Contacts   -> `Contacts.tsx` `handleImportContact`
- *   - the transaction flow -> `ImportContactsModal` `handleImportSelected`
+ *   - Clients & Contacts   -> `Contacts.tsx` `handleImportContact`   (LIVE)
+ *   - the transaction flow -> `ImportContactsModal`                  (DELETED)
  *
- * They disagreed because only one of them FORWARDED the row. The other rebuilt
- * a payload field by field, and the fields it did not name — `externalRecordId`,
+ * `ImportContactsModal` was rendered only by `ContactSelectModal`, which no
+ * user could reach, and BACKLOG-2515 deleted both. **A parity test with one
+ * side gone is not a weaker parity test — it is a test of nothing**, so it has
+ * been re-pointed rather than left half-asserting.
+ *
+ * WHAT SURVIVES IS THE PART THAT MATTERED. The defect was never "the two
+ * disagree" in the abstract; it was that the Clients & Contacts path REBUILT a
+ * payload field by field and the fields it did not name — `externalRecordId`,
  * `externalSourceType`, `externalUuid`, `collapsedSources` — were the identity
  * of the actual address-book card. Dropping them meant no `contact_source_links`
  * row, so the record was never suppressed from the picker and nothing could ever
- * attach to that contact later.
+ * attach to that contact later. That path is the live one, and it is the one
+ * pinned below.
  *
- * The equivalence itself is the requirement. Asserting only that the fields are
- * present would pass while the two paths drifted apart in some other field, and
- * drift is what produced this defect. So: same record in, deep-equal payload out
- * of both, or this test fails.
+ * The deep-equal against `externalAddressBookRecord` is what replaces the
+ * cross-screen comparison: the live path must forward THE WHOLE RECORD, not a
+ * hand-built subset that happens to carry today's four fields. A future
+ * reconstruction that drifts in some other field still fails.
  *
  * ===========================================================================
  * THE FIXTURE IS TRANSCRIBED, NOT INVENTED
@@ -43,7 +51,6 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Contacts from "../Contacts";
-import ImportContactsModal from "../contact/components/ImportContactsModal";
 import type { Contact } from "../../../electron/types/models";
 
 jest.mock("../../appCore", () => ({
@@ -161,42 +168,14 @@ async function importFromClientsAndContacts(): Promise<unknown> {
   return soleImportPayload();
 }
 
-/** Import the same record from the transaction flow's modal. */
-async function importFromTransactionModal(): Promise<unknown> {
-  render(
-    <ImportContactsModal
-      userId={USER_ID}
-      onClose={jest.fn()}
-      onSuccess={jest.fn()}
-      onAddManually={jest.fn()}
-    />,
-  );
-  await waitFor(() => expect(screen.getByText("Tam Wexford")).toBeInTheDocument());
-  await userEvent.click(screen.getByText("Tam Wexford"));
-  await userEvent.click(screen.getByRole("button", { name: /import selected \(1\)/i }));
-  await waitFor(() => expect(window.api.contacts.import).toHaveBeenCalled());
-  return soleImportPayload();
-}
-
-describe("BACKLOG-2510 — the two Import buttons agree", () => {
-  it("sends a byte-for-byte identical payload from both screens", async () => {
+describe("BACKLOG-2510 — the live Import button forwards the whole record", () => {
+  it("sends the address-book record itself, not a rebuilt subset", async () => {
     const fromClientsAndContacts = await importFromClientsAndContacts();
 
-    // Unmount the first screen before rendering the second. Both render the
-    // same person, and RTL only auto-cleans between TESTS — leaving the first
-    // mounted makes "Tam Wexford" ambiguous and the query throws.
-    cleanup();
-    jest.mocked(window.api.contacts.import).mockClear();
-
-    const fromTransactionModal = await importFromTransactionModal();
-
-    // THE assertion. Not "both carry externalRecordId" — that would stay green
-    // while the two drifted in some other field, and drift is the defect.
-    expect(fromClientsAndContacts).toEqual(fromTransactionModal);
-
-    // And what they agree ON is the whole record, identity included. Pinned
-    // explicitly so a future change that makes both paths equally WRONG — two
-    // hand-built payloads that happen to match — cannot pass the line above.
+    // What the deleted cross-screen comparison was really protecting: the live
+    // path must forward THE RECORD. Two hand-built payloads that happened to
+    // match each other would have satisfied the old equality; only this can
+    // catch a reconstruction that drifts in a field nobody thought to name.
     expect(fromClientsAndContacts).toEqual(externalAddressBookRecord);
   });
 
