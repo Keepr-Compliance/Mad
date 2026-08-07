@@ -193,8 +193,8 @@ export interface ContactPreviewProps {
    * Emails involving this contact, aggregated across all transactions
    * (BACKLOG-1934, imported only). OPTIONAL and gated: when omitted the Emails
    * section is not rendered at all, so the other ContactPreview consumers
-   * (ContactSelectModal, ContactAssignmentStep, TransactionDetailsTab,
-   * EditContactsModal) are unaffected. Only the Contacts card passes this.
+   * (ContactAssignmentStep, TransactionDetailsTab, EditContactsModal) are
+   * unaffected. Only the Contacts card passes this.
    */
   emails?: Communication[];
   /** Loading state for the emails section (BACKLOG-1934). */
@@ -209,8 +209,8 @@ export interface ContactPreviewProps {
    * Text-message threads involving this contact, aggregated across all
    * transactions (BACKLOG-1935, imported only). OPTIONAL and gated exactly like
    * `emails`: when omitted the Texts section is not rendered at all, so the other
-   * ContactPreview consumers (ContactSelectModal, ContactAssignmentStep,
-   * TransactionDetailsTab, EditContactsModal) are unaffected. Only the Contacts
+   * ContactPreview consumers (ContactAssignmentStep, TransactionDetailsTab,
+   * EditContactsModal) are unaffected. Only the Contacts
    * card passes this. Each thread carries the required `phoneNumber` and its own
    * `messages` (passed straight to ConversationViewModal — no client-side
    * grouping).
@@ -670,9 +670,9 @@ export function ContactPreview({
           loses its explicit close; the pane is persistent there by design and
           the user moves on by selecting another contact.
 
-          The X STAYS in the modal variant. The four modal consumers
-          (ContactSelectModal, ContactAssignmentStep, EditContactsModal,
-          TransactionDetailsTab) have no Back button, and below the `sm`
+          The X STAYS in the modal variant. The three modal consumers
+          (ContactAssignmentStep, EditContactsModal, TransactionDetailsTab)
+          have no Back button, and below the `sm`
           breakpoint ResponsiveModal is full-screen with no backdrop to click —
           so there the X is the only way out. Removing it globally would trap
           those users. Both directions are controlled: C6 and C7.
@@ -756,8 +756,8 @@ export function ContactPreview({
               </div>
             </div>
             {/* SR polish (BACKLOG-1944): guard each button on its OWN handler,
-                not just isExternal — ContactSelectModal and EditContactsModal
-                compute isExternal but never pass onImport, so an unguarded
+                not just isExternal — EditContactsModal computes isExternal
+                but never passes onImport, so an unguarded
                 render put a dead no-op Import button in their header. Now
                 neither button renders unless its handler is actually wired. */}
             {isExternal

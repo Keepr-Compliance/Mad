@@ -54,8 +54,8 @@ export interface ContactRowProps {
   collapsedRecords?: FoldedRecord[];
   /**
    * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default `false`
-   * so shared consumers (ContactSelectModal, transaction add-contact flows)
-   * are unaffected. When `true`:
+   * so shared consumers (the transaction add-contact flows) are unaffected.
+   * When `true`:
    * - The avatar circle is not rendered.
    * - The per-row "+ Add Contact" button is never rendered (import happens via
    *   the detail pane's Import button instead).

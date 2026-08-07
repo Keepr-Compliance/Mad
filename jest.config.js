@@ -142,7 +142,6 @@ module.exports = {
     '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/worktrees/',
     '/tests/integration/', // Runs separately via jest.integration.config.js
-    'ContactSelectModal.test.tsx', // Hangs in CI during loading
     // TASK-2254: Re-enabled tests that now pass:
     // - iosMessagesParser.test.ts (NODE_MODULE_VERSION issue resolved)
     // - autoLinkService.test.ts (test expectations updated to match current code)
