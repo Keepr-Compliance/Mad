@@ -18,6 +18,7 @@ import type { AutoLinkResult } from "./autoLinkService";
 // granted a support window covering the email-sync scope.
 import { supportTrace } from "./supportAccess/trace";
 import { countEmailsByUser, getEmailByExternalId } from "./db/emailDbService";
+import type { BulkMailHeaders } from "../utils/bulkMailHeaders";
 import { dbGet, dbAll, getRawDatabase } from "./db/core/dbConnection";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
@@ -271,6 +272,14 @@ export interface StoreableEmail {
   contentHash?: string | null;
   /** Gmail labels / Outlook categories; JSON-encoded into `emails.labels`. */
   labels?: string[];
+  /**
+   * BACKLOG-2513: retained bulk-mail headers (List-Unsubscribe, Precedence,
+   * Auto-Submitted, Authentication-Results), JSON-encoded into
+   * `emails.bulk_mail_headers`. These are the negative-filter input for the
+   * auto-detection design (BACKLOG-2500 §4.2). Raw facts only — nothing is
+   * classified at ingest.
+   */
+  bulkMailHeaders?: BulkMailHeaders | null;
 }
 
 /**
@@ -586,9 +595,10 @@ async function fetchStoreAndDedup(params: {
           sent_at, received_at,
           has_attachments, attachment_count,
           message_id_header, content_hash, labels,
+          bulk_mail_headers,
           ingest_source, validated_at,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
@@ -703,6 +713,20 @@ async function fetchStoreAndDedup(params: {
               // Empty array → NULL so untagged mailboxes add no noise.
               email.labels && email.labels.length > 0
                 ? JSON.stringify(email.labels)
+                : null,
+              // BACKLOG-2513: retained bulk-mail headers as JSON. These are the
+              // negative-filter input for auto-detection (BACKLOG-2500 §4.2) —
+              // the stage that exists because auto-detect manufactured
+              // transactions from newsletters and bank mail (BACKLOG-2499).
+              // Raw values only; NOTHING is classified here. No column reads
+              // this yet, by design: interpreting the headers is a later,
+              // revisable choice, and a classifier written now would freeze a
+              // decision before scoring has measured anything (BACKLOG-2273).
+              // No headers → NULL, so ordinary person-to-person mail adds no
+              // noise (same shape as the labels rule above).
+              email.bulkMailHeaders &&
+              Object.keys(email.bulkMailHeaders).length > 0
+                ? JSON.stringify(email.bulkMailHeaders)
                 : null,
               rowIngestSource, // BACKLOG-1802: ingest_source provenance
               validatedAt, // BACKLOG-1802: set when ingest_source='search_validated'

@@ -4,6 +4,10 @@ import databaseService from "./databaseService";
 import logService from "./logService";
 import { OAuthToken, ParsedParticipant } from "../types/models";
 import { computeEmailHash } from "../utils/emailHash";
+import {
+  buildBulkMailHeaders,
+  type BulkMailHeaders,
+} from "../utils/bulkMailHeaders";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the email-sync scope.
 import { supportTrace } from "./supportAccess/trace";
@@ -63,6 +67,12 @@ interface ParsedEmail {
    * pre-existing mis-mapping this task deliberately does not change.
    */
   receivedAt: Date | null;
+  /**
+   * BACKLOG-2513: retained bulk-mail headers (List-Unsubscribe, Precedence,
+   * Auto-Submitted, Authentication-Results). Null when the message carried
+   * none. Raw values only — nothing is classified at ingest.
+   */
+  bulkMailHeaders: BulkMailHeaders | null;
   /**
    * SHA-256 content hash for fallback deduplication (TASK-918).
    * BACKLOG-2572: NOT comparable across providers — this hash is computed over
@@ -470,6 +480,21 @@ class GmailFetchService {
       );
       return header ? header.value || null : null;
     };
+    /**
+     * BACKLOG-2513: EVERY occurrence of a header, in wire order.
+     *
+     * `getHeader` above takes the first match only, which is right for
+     * single-instance headers. `Authentication-Results` legitimately repeats —
+     * one instance per authenticating hop (per `authserv-id`) — and keeping
+     * only the first would discard the hop that may be the failing one.
+     */
+    const getAllHeaders = (name: string): string[] => {
+      const target = name.toLowerCase();
+      return headers
+        .filter((h) => h.name?.toLowerCase() === target)
+        .map((h) => h.value)
+        .filter((v): v is string => typeof v === "string" && v.length > 0);
+    };
 
     // Extract body
     let body = "";
@@ -602,6 +627,10 @@ class GmailFetchService {
       // BACKLOG-2512: `sentDate` here is parsed from `message.internalDate`,
       // which is Gmail's RECEIVE timestamp — the correct source for received_at.
       receivedAt: sentDate,
+      // BACKLOG-2513: bulk-mail headers, captured HERE — before `parsed.raw` is
+      // zeroed below. Built through the shared builder so Gmail and Graph
+      // cannot drift in which headers are kept or what the JSON keys are named.
+      bulkMailHeaders: buildBulkMailHeaders(getHeader, getAllHeaders),
       contentHash,
       participants,
     };

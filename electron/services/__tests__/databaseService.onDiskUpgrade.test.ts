@@ -233,9 +233,15 @@ const PRE_UPGRADE_VERSION = 55;
  * themselves to 56 locally via runChainThrough(), so they keep their original
  * meaning as the head moves on.
  */
-const HEAD_VERSION = 61;
+const HEAD_VERSION = 62;
 /** The version whose isolated effects the BACKLOG-2364 assertions describe. */
 const TOMBSTONE_VERSION = 56;
+/**
+ * BACKLOG-2513's `emails.bulk_mail_headers` ADD COLUMN. Pinned to a literal for
+ * the same reason as TOMBSTONE_VERSION: written as `HEAD_VERSION` these
+ * assertions would silently change meaning the moment v63 lands.
+ */
+const BULK_MAIL_HEADERS_VERSION = 62;
 /**
  * BACKLOG-2473's vocabulary rebuild. Pinned for the same reason
  * TOMBSTONE_VERSION and REVIEW_QUEUE_VERSION are: its test asserts the state
@@ -273,6 +279,8 @@ const TXN_ID = "txn-ondisk-2364";
 /** Fixed ids — the exact SETS asserted before and after the upgrade. */
 const CONTACT_IDS = ["c-ondisk-alpha", "c-ondisk-beta", "c-ondisk-gamma"];
 const TC_IDS = ["tc-ondisk-alpha", "tc-ondisk-beta"];
+/** BACKLOG-2513: pre-existing email rows that must survive the v62 ADD COLUMN. */
+const EMAIL_IDS = ["e-ondisk-alpha", "e-ondisk-beta"];
 
 const TOMBSTONE_COLUMNS = ["removed_at", "removed_reason"];
 const TOMBSTONE_TABLES = ["contacts", "transaction_contacts"];
@@ -299,6 +307,13 @@ function indexNames(d: DatabaseType): string[] {
       .prepare("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
       .all() as Array<{ name: string }>
   ).map((r) => r.name);
+}
+
+/** BACKLOG-2513: column names on `emails`, for the v62 ADD COLUMN assertions. */
+function emailColumns(d: DatabaseType): string[] {
+  return (d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>).map(
+    (c) => c.name,
+  );
 }
 
 function idsIn(d: DatabaseType, table: string): string[] {
@@ -659,6 +674,96 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
     await runChainThrough(service, TOMBSTONE_VERSION);
 
     expect(schemaVersionOf(db)).toBe(TOMBSTONE_VERSION);
+    expect(indexNames(db)).toEqual(before);
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-2513 — emails.bulk_mail_headers, over the SAME real file
+  //
+  // This is the assertion the item body asked for by name: "start from an actual
+  // prior-version database file, run the migration, assert the column exists and
+  // existing rows survive intact." Every other migration test in the repo runs
+  // against :memory:, so this suite is the only place that claim can be made.
+  // -------------------------------------------------------------------------
+
+  it("v62 adds emails.bulk_mail_headers on the real file, NULL for every pre-existing row", async () => {
+    assertRealOnDiskTarget();
+
+    // The fixture builds its "v55" file by exec'ing the CURRENT schema.sql and
+    // then forcing schema_version back to 55 — so a column that schema.sql
+    // declares is already present, and the file does not represent a database
+    // that predates it. Drop it to get a genuinely pre-v62 shape.
+    //
+    // This is safe and faithful to what a real upgrade sees: runMigrations()
+    // re-execs schema.sql, but `CREATE TABLE IF NOT EXISTS emails` is a no-op on
+    // an existing table, so on a real user's database the column can ONLY come
+    // from the v62 ALTER. Dropping here makes the fixture express that.
+    //
+    // Without this drop the test would pass whether or not the migration did
+    // anything — a green that carries no information, and precisely the
+    // BACKLOG-2298/2300 confusion this suite exists to separate.
+    db.exec("ALTER TABLE emails DROP COLUMN bulk_mail_headers");
+
+    const colsBefore = emailColumns(db);
+    expect(colsBefore).not.toContain("bulk_mail_headers");
+
+    // Seed pre-existing email rows with fixed ids. The fixture's beforeEach
+    // seeds contacts/transactions but no emails, so this test owns its own
+    // population — the rows whose survival is the point.
+    for (const id of EMAIL_IDS) {
+      db.prepare(
+        `INSERT INTO emails (id, user_id, external_id, source, subject)
+         VALUES (?, ?, ?, 'gmail', ?)`,
+      ).run(id, USER_ID, `ext-${id}`, `Subject ${id}`);
+    }
+    expect(idsIn(db, "emails")).toEqual([...EMAIL_IDS].sort());
+
+    await service.runMigrations();
+
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // 1. The column is live on a REAL upgraded file.
+    expect(emailColumns(db)).toContain("bulk_mail_headers");
+
+    // 2. The exact id set survives — identity, not counts. A count assertion
+    //    cannot tell a dropped row from a row swapped for a different one.
+    expect(idsIn(db, "emails")).toEqual([...EMAIL_IDS].sort());
+
+    // 3. Every pre-existing row reads NULL: additive, no backfill, nothing a
+    //    user would see change on upgrade.
+    const rows = db
+      .prepare("SELECT id, bulk_mail_headers FROM emails ORDER BY id")
+      .all() as Array<{ id: string; bulk_mail_headers: string | null }>;
+    expect(rows.map((r) => r.bulk_mail_headers)).toEqual(EMAIL_IDS.map(() => null));
+
+    // 4. The rest of the row is untouched, not merely present.
+    expect(
+      (
+        db.prepare("SELECT subject FROM emails WHERE id = ?").get(EMAIL_IDS[0]) as {
+          subject: string;
+        }
+      ).subject,
+    ).toBe(`Subject ${EMAIL_IDS[0]}`);
+  });
+
+  it("v62 creates NO index — the index-name set is identical before and after", async () => {
+    assertRealOnDiskTarget();
+
+    // Clipped to 61 first so the comparison isolates v62. Running the whole
+    // chain in one go would fold in v57's idx_contact_source_links_contact and
+    // make this a statement about the chain rather than about v62.
+    await runChainThrough(service, HEAD_VERSION - 1);
+    const before = indexNames(db);
+    expect(before.length).toBeGreaterThan(0);
+
+    await runChainThrough(service, BULK_MAIL_HEADERS_VERSION);
+
+    expect(schemaVersionOf(db)).toBe(BULK_MAIL_HEADERS_VERSION);
+    // A standalone CREATE INDEX on bulk_mail_headers added to schema.sql would
+    // surface here — and would also throw "no such column" on a real upgrade,
+    // because runMigrations() re-execs schema.sql BEFORE the chain. That is the
+    // BACKLOG-2298/2300 failure class, shipped in July and caught only by
+    // founder live QA.
     expect(indexNames(db)).toEqual(before);
   });
 

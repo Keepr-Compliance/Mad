@@ -401,6 +401,23 @@ CREATE TABLE IF NOT EXISTS emails (
   -- Metadata
   labels TEXT,                         -- JSON: Gmail labels, Outlook categories
   classification TEXT,                 -- BACKLOG-1722: nullable JSON landing zone for future AI classifier output (no consumer today)
+  -- BACKLOG-2513: retained bulk-mail headers as JSON (List-Unsubscribe,
+  -- List-Unsubscribe-Post, Precedence, Auto-Submitted, Authentication-Results).
+  -- Negative-filter input for auto-detection (BACKLOG-2500 s4.2). No reader
+  -- today, by design: raw facts are stored, classification is deferred.
+  --
+  -- Kept in sync with migration v62 (ALTER TABLE ... ADD COLUMN), which is the
+  -- ONLY source of this column on an existing install. This declaration is a
+  -- READABILITY convention (matching validated_at/ingest_source below), NOT a
+  -- parity requirement: schema-parity exec's schema.sql on BOTH of its paths,
+  -- so the migration alone would satisfy it (cf. v56's tombstone columns, which
+  -- are declared on neither table and still converge). It is safe here only
+  -- because `emails` is never positionally copied by any migration.
+  --
+  -- NEVER add a standalone CREATE INDEX on this column to this file: schema.sql
+  -- is exec'd BEFORE the migration chain, so an index on a not-yet-added column
+  -- throws "no such column" on every real upgrade (BACKLOG-2298/2300).
+  bulk_mail_headers TEXT,
 
   -- Lifecycle provenance (BACKLOG-1801, Phase 2 "Validated Evidence Cache").
   -- Kept byte-for-byte in sync with migration v46 (ALTER TABLE ... ADD COLUMN).

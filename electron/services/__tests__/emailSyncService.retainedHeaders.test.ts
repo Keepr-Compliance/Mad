@@ -61,10 +61,12 @@ const COL = {
   MESSAGE_ID_HEADER: 20,
   CONTENT_HASH: 21,
   LABELS: 22,
+  // BACKLOG-2513: appended directly after `labels`, so no index above shifts.
+  BULK_MAIL_HEADERS: 23,
 } as const;
 
 /** The emails INSERT binds exactly this many parameters. */
-const INSERT_ARITY = 25;
+const INSERT_ARITY = 26;
 
 /** A fake prepared-statement DB whose INSERTs always succeed and are recorded. */
 function makeFakeDb() {
@@ -312,5 +314,104 @@ describe("BACKLOG-2512 sync retains the five previously-discarded fields", () =>
     expect(insertRuns).toHaveLength(1);
     // Empty array → NULL, so untagged mailboxes add no noise.
     expect(insertRuns[0][COL.LABELS]).toBeNull();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BACKLOG-2513: bulk_mail_headers reaches the INSERT
+  //
+  // Same species of defect as the five above: the providers had the values and
+  // the writer discarded them. Asserted here at the INSERT boundary; the
+  // producer suites assert that _parseMessage actually emits them.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it("Gmail: writes bulk_mail_headers as JSON with the declared key set", async () => {
+    const { db, insertRuns } = makeFakeDb();
+    mockGetRawDatabase.mockReturnValue(db);
+
+    const bulkMailHeaders = {
+      list_unsubscribe: "<mailto:unsub@example.com>",
+      precedence: "bulk",
+      authentication_results: [
+        "mx.example.com; dkim=pass header.i=@example.net",
+        "mx2.example.com; spf=pass",
+      ],
+    };
+
+    await storeParsedEmailsForAccount({
+      userId: "u-1",
+      provider: "gmail",
+      emails: [mkGmailEmail({ bulkMailHeaders })],
+      getAttachmentsFn: jest.fn(),
+    });
+
+    expect(insertRuns).toHaveLength(1);
+    const row = insertRuns[0];
+    expect(row).toHaveLength(INSERT_ARITY);
+    expect(row[COL.BULK_MAIL_HEADERS]).toBe(JSON.stringify(bulkMailHeaders));
+
+    // Round-trips, and the multi-hop array survives as an array — a JSON blob
+    // that stringified the array into one string would still be "non-null".
+    const parsed = JSON.parse(row[COL.BULK_MAIL_HEADERS] as string);
+    expect(parsed.authentication_results).toEqual([
+      "mx.example.com; dkim=pass header.i=@example.net",
+      "mx2.example.com; spf=pass",
+    ]);
+    // The 2512 columns are undisturbed by the new one.
+    expect(row[COL.LABELS]).toBe(JSON.stringify(["INBOX", "IMPORTANT"]));
+    expect(row[COL.IN_REPLY_TO]).toBe("<CAF-parent-000@mail.example.com>");
+  });
+
+  it("Outlook: writes bulk_mail_headers as JSON", async () => {
+    const { db, insertRuns } = makeFakeDb();
+    mockGetRawDatabase.mockReturnValue(db);
+
+    const bulkMailHeaders = {
+      list_unsubscribe: "<https://example.net/unsubscribe/abc>",
+      auto_submitted: "auto-generated",
+    };
+
+    await storeParsedEmailsForAccount({
+      userId: "u-1",
+      provider: "outlook",
+      emails: [mkOutlookEmail({ bulkMailHeaders })],
+      getAttachmentsFn: jest.fn().mockResolvedValue([]),
+    });
+
+    expect(insertRuns).toHaveLength(1);
+    const row = insertRuns[0];
+    expect(row).toHaveLength(INSERT_ARITY);
+    expect(row[COL.BULK_MAIL_HEADERS]).toBe(JSON.stringify(bulkMailHeaders));
+    expect(row[COL.CONTENT_HASH]).toBe("b".repeat(64));
+  });
+
+  it("writes null when the message carried no bulk-mail headers (ordinary person-to-person mail)", async () => {
+    const { db, insertRuns } = makeFakeDb();
+    mockGetRawDatabase.mockReturnValue(db);
+
+    await storeParsedEmailsForAccount({
+      userId: "u-1",
+      provider: "gmail",
+      emails: [mkGmailEmail({ bulkMailHeaders: null })],
+      getAttachmentsFn: jest.fn(),
+    });
+
+    expect(insertRuns).toHaveLength(1);
+    // NULL, not "{}" and not the string "null" — an ordinary email adds no noise.
+    expect(insertRuns[0][COL.BULK_MAIL_HEADERS]).toBeNull();
+  });
+
+  it("writes null for an empty header object (not '{}')", async () => {
+    const { db, insertRuns } = makeFakeDb();
+    mockGetRawDatabase.mockReturnValue(db);
+
+    await storeParsedEmailsForAccount({
+      userId: "u-1",
+      provider: "outlook",
+      emails: [mkOutlookEmail({ bulkMailHeaders: {} })],
+      getAttachmentsFn: jest.fn().mockResolvedValue([]),
+    });
+
+    expect(insertRuns).toHaveLength(1);
+    expect(insertRuns[0][COL.BULK_MAIL_HEADERS]).toBeNull();
   });
 });
