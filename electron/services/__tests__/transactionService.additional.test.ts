@@ -482,52 +482,6 @@ describe("TransactionService - Additional Coverage", () => {
     });
   });
 
-  describe("updateContactRole", () => {
-    it("should update contact role with provided updates", async () => {
-      const updates = {
-        role: "listing_agent",
-        role_category: "agent",
-        is_primary: true,
-        notes: "Updated role",
-      };
-
-      (databaseService.updateContactRole as jest.Mock).mockResolvedValue({});
-
-      await transactionService.updateContactRole(
-        mockTransactionId,
-        mockContactId,
-        updates,
-      );
-
-      expect(databaseService.updateContactRole).toHaveBeenCalledWith(
-        mockTransactionId,
-        mockContactId,
-        expect.objectContaining(updates),
-      );
-    });
-
-    it("should handle partial updates", async () => {
-      const updates = { is_primary: false };
-
-      (databaseService.updateContactRole as jest.Mock).mockResolvedValue({});
-
-      await transactionService.updateContactRole(
-        mockTransactionId,
-        mockContactId,
-        updates,
-      );
-
-      expect(databaseService.updateContactRole).toHaveBeenCalledWith(
-        mockTransactionId,
-        mockContactId,
-        expect.objectContaining({
-          is_primary: false,
-          role: undefined,
-        }),
-      );
-    });
-  });
-
   describe("reanalyzeProperty", () => {
     const mockEmails = [
       {

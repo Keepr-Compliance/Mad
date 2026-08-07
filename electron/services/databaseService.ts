@@ -3964,10 +3964,6 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return transactionContactDb.getTransactionContactsByRole(transactionId, role);
   }
 
-  async updateContactRole(transactionId: string, contactId: string, updates: Partial<transactionContactDb.TransactionContactData>): Promise<void> {
-    return transactionContactDb.updateContactRole(transactionId, contactId, updates);
-  }
-
   async unlinkContactFromTransaction(transactionId: string, contactId: string, reason?: string): Promise<void> {
     return transactionContactDb.unlinkContactFromTransaction(transactionId, contactId, reason);
   }
