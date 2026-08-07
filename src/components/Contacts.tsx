@@ -65,10 +65,52 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     ExtendedContact | undefined
   >(undefined);
 
-  // ContactPreview state (for external contacts)
-  const [previewContact, setPreviewContact] = useState<ExtendedContact | null>(
+  /**
+   * ==========================================================================
+   * BACKLOG-2527 — THE CARD THE USER IS ON, READABLE FROM AN ASYNC CONTINUATION
+   * ==========================================================================
+   * The founder pressed Import, pressed Back while it was still running, and
+   * the app took the screen back from him seconds later. An async completion
+   * may update what the user is looking at. It may NOT decide what the user is
+   * looking at.
+   *
+   * To leave him where he went, the import's continuation has to know where he
+   * IS when it lands — and `previewContact` cannot tell it. `handlePreviewImport`
+   * is re-created every render and closes over the value as it was AT CLICK
+   * TIME, so a post-await `if (!previewContact) return` reads a stale non-null
+   * value and never fires. That is the guard someone will reach for first, and
+   * it does nothing.
+   *
+   * So the id is mirrored into a ref written SYNCHRONOUSLY, in the same tick as
+   * the state update, by `showPreviewContact`. Not a `useEffect` mirror: a
+   * passive effect is flushed on a scheduler callback, and the IPC promise
+   * resolves on a microtask that can run first. This file already carries the
+   * same shape for the same reason — `inFlightImports` is a ref because
+   * `setState` is async and a second click would otherwise read a stale flag.
+   *
+   * THE RAW `useState` SETTER IS RENAMED ON PURPOSE. The ref is only true if it
+   * is written at EVERY write site, and a plain `setPreviewContact(...)` added
+   * later would look completely ordinary while silently disarming the guard.
+   * The rename makes a direct write a conspicuous, deliberate act.
+   *
+   * MERGE INVARIANT, checkable without a test — which matters, because no suite
+   * covers a lane that has not been written yet: grepping this file for the raw
+   * setter's name must return EXACTLY TWO lines, the declaration immediately
+   * below and the single call inside `showPreviewContact`. A third line is a new
+   * raw write, and a new raw write silently disarms BACKLOG-2527 while every
+   * suite stays green. The name is spelled nowhere else in this file — not even
+   * in this comment — so that the grep stays a signal and not a headcount of
+   * documentation. The exact command is in the PR body.
+   */
+  const [previewContact, setPreviewContactState] = useState<ExtendedContact | null>(
     null
   );
+  const previewContactIdRef = useRef<string | null>(null);
+
+  const showPreviewContact = useCallback((contact: ExtendedContact | null) => {
+    previewContactIdRef.current = contact?.id ?? null;
+    setPreviewContactState(contact);
+  }, []);
   const [previewTransactions, setPreviewTransactions] = useState<
     ContactTransaction[]
   >([]);
@@ -238,7 +280,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     // External contacts (from macOS Contacts app, etc.)
     externalContacts,
     externalContactsLoading,
-    reloadExternalContacts,
+    refreshAfterImport,
   } = useContactList(userId, { onContactDeleted: handleContactDeleted });
 
   /**
@@ -404,7 +446,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   // Handle clicking on a contact to view details
   const handleContactClick = useCallback((contact: ExtendedContact) => {
     // Open the detail view (pane on wide viewports, full-screen card on narrow)
-    setPreviewContact(contact);
+    showPreviewContact(contact);
     setPreviewTransactions([]);
     selectContact(contact.id);
 
@@ -415,7 +457,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       // Imported contact - load associated transactions
       loadContactTransactions(contact.id);
     }
-  }, [loadContactTransactions, selectContact]);
+  }, [loadContactTransactions, selectContact, showPreviewContact]);
 
   /**
    * Close/clear the detail view (narrow Back button, wide pane close, modal X).
@@ -428,11 +470,11 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    * list, and an offset restored into a shorter list points at a stranger.
    */
   const handleCloseDetail = useCallback(() => {
-    setPreviewContact(null);
+    showPreviewContact(null);
     closeViewers();
     clearSelection();
     if (anchorRef.current) setPendingAnchor(anchorRef.current);
-  }, [clearSelection, closeViewers]);
+  }, [clearSelection, closeViewers, showPreviewContact]);
 
   /**
    * Import ONE address-book record from Clients & Contacts.
@@ -517,9 +559,6 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         const importedContact = result.contacts?.[0];
 
         if (result.success && importedContact) {
-          // Mark as imported for visual feedback
-          setImportedContactIds((prev) => new Set(prev).add(contact.id));
-
           /**
            * ==================================================================
            * BACKLOG-2511 — REFRESH BOTH LISTS, BECAUSE THIS SCREEN IS BOTH.
@@ -558,11 +597,47 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
            * trips, and sequencing them would leave the list showing the imported
            * person twice for the width of the second call — a flash of exactly
            * the bug being fixed.
+           *
+           * ==================================================================
+           * BACKLOG-2526 — AWAITING THEM TOGETHER WAS NOT THE SAME AS
+           * COMMITTING THEM TOGETHER, AND THE FOUNDER SAW THE DIFFERENCE.
+           * ==================================================================
+           * This was `Promise.all([silentLoadContacts(), reloadExternalContacts()])`.
+           * `Promise.all` gates the code AFTER it; it does not gate the two
+           * state writes INSIDE it. Each function committed the moment its own
+           * IPC returned, in a separate React continuation — so the flash the
+           * comment above says was avoided was still there, just narrower: the
+           * saved-contact fetch is the fast one, so for the width of the
+           * address-book read (~3.7s at 1000+ contacts) the list held BOTH rows.
+           *
+           * `refreshAfterImport` fetches both in parallel and commits both in
+           * ONE render. The whole rationale, including why it replaced
+           * `reloadExternalContacts` outright rather than sitting beside it,
+           * is on its declaration in `useContactList.ts`.
            */
-          const [refreshed] = await Promise.all([
-            silentLoadContacts(),
-            reloadExternalContacts(),
-          ]);
+          const refreshed = await refreshAfterImport();
+
+          /**
+           * BACKLOG-2526 — the "Added" pill lands WITH the new list, not before
+           * it.
+           *
+           * This ran before the refresh, and it is keyed on the EXTERNAL id
+           * (`ContactSearchList.tsx` → `ContactRow.tsx`), so it painted "Added"
+           * on the address-book row — the row that was about to disappear. The
+           * founder: *"one has the added green pill on it which is on the
+           * external contact being added … then it resolves and that line with
+           * the added disappears"*. The badge meaning "you just added this" sat
+           * on the one row that vanished, which reads as the app undoing what he
+           * had just done.
+           *
+           * Moved after the refresh, it is invisible in the ordinary case,
+           * because by then the main process no longer offers that record. It is
+           * KEPT rather than deleted for the case where it is the truth: if the
+           * address-book refetch failed, the row is still on screen, and the
+           * pill is then the only honest signal that the import worked.
+           */
+          setImportedContactIds((prev) => new Set(prev).add(contact.id));
+
           const created = importedContact as ExtendedContact;
 
           /**
@@ -618,7 +693,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
 
       return run;
     },
-    [userId, silentLoadContacts, reloadExternalContacts]
+    [userId, refreshAfterImport]
   );
 
   /**
@@ -636,6 +711,30 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    * simply switch to it. That also flips the card from external to imported,
    * which is what lights up its Emails, Texts and provenance sections — the
    * sections that answer the question the import was asked to settle.
+   *
+   * ==========================================================================
+   * BACKLOG-2527 — …AND ONLY IF HE IS STILL ON IT.
+   * ==========================================================================
+   * Founder: *"if i click back before it's done importing … once the import is
+   * done it forces me back to the contact details screen"*. He pressed Import,
+   * went back to the list while it was still running, and the app took the
+   * screen back from him when it finished.
+   *
+   * That is worse than a wrong-looking render: it is the app overriding a
+   * navigation he performed, seconds after he performed it, on behalf of an
+   * operation he had already left behind. And it is unbounded in the bad
+   * direction — the slower the import, the longer the window.
+   *
+   * The BACKLOG-2459 behaviour above is not withdrawn, it is made conditional.
+   * The rule: AN ASYNC COMPLETION MAY UPDATE WHAT THE USER IS LOOKING AT. IT
+   * MAY NOT DECIDE WHAT THE USER IS LOOKING AT. Still on the card → it updates
+   * in place, exactly as he tested and passed. Moved → the list refresh still
+   * lands (that is an update), and the three navigation writes do not.
+   *
+   * The check compares CONTACT IDS, not null-ness, so it covers the second way
+   * he can move: opening a DIFFERENT contact while the import runs. A
+   * `!== null` test would leave that case yanking him off the person he chose
+   * and onto the one he imported.
    */
   const handlePreviewImport = async () => {
     if (!previewContact) return;
@@ -659,9 +758,18 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       return;
     }
 
+    // Read BEFORE the await. `previewContact` in this closure is frozen at the
+    // moment of the click; `previewContactIdRef` is not, which is the whole
+    // reason it exists.
+    const startedOn = previewContact.id;
+
     try {
       const imported = await handleImportContact(previewContact);
-      setPreviewContact(imported);
+
+      // He moved. Leave him where he went.
+      if (previewContactIdRef.current !== startedOn) return;
+
+      showPreviewContact(imported);
       selectContact(imported.id);
       loadContactTransactions(imported.id);
     } catch (err) {
@@ -990,10 +1098,29 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               // path where the user most needs the record in front of them.
               // Stale values beat an empty screen.
               //
+              // BACKLOG-2527: this write goes through `showPreviewContact` and
+              // is NOT guarded, and both halves of that are deliberate.
+              //
+              // THE WRAPPER IS MANDATORY. A raw `useState` write here would
+              // leave `previewContactIdRef` holding whatever the card was
+              // before the form opened. The user would then edit a contact and
+              // press Import on that same card, and the guard in
+              // `handlePreviewImport` would compare the card's id against a
+              // stale ref, fail to match, and silently switch OFF the
+              // BACKLOG-2459/2566 stay-on-the-contact behaviour — dropping him
+              // on the list after an ordinary import, with every suite green.
+              // The wrapper is load-bearing for the guard's correctness, not
+              // hygiene.
+              //
+              // NO GUARD, THOUGH. Where this flow lands is a founder decision,
+              // recorded immediately below, and changing it is not this item's
+              // to do. It has the same async-completion shape as the import, so
+              // it is filed as an observation for him rather than fixed here.
+              //
               // ONE RULE FOR ALL THREE FLOWS — founder decision, 2026-08-06.
               // Edit-from-pane, complete-an-incomplete-record, and plain Add
               // Contact all land the pane on the contact that was just saved.
-              setPreviewContact(found ?? paneContact);
+              showPreviewContact(found ?? paneContact);
 
               // The CREATE paths (plain Add, and completing an incomplete
               // address-book record) produce a new id. Without this,
