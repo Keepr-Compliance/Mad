@@ -77,6 +77,8 @@ const isMain = path.resolve(mainRoot) === path.resolve(worktreeRoot);
 if (SEED) {
   const from = path.join(mainRoot, ".husky", "_");
   const to = path.join(worktreeRoot, ".husky", "_");
+  // A failed seed must still be loud — this is the ACTION failing, which is the
+  // one thing --seed's exit code reports (see the exit-code contract below).
   if (!fs.existsSync(from)) {
     console.error(red(`hooks-doctor --seed: ${from} does not exist.`));
     console.error(`Run 'npm install' (or 'npx husky') in ${mainRoot} first — it regenerates .husky/_.`);
@@ -179,7 +181,29 @@ for (const { msg, detail } of problems) {
 console.log(
   "\n" +
     yellow("A hookless worktree loses LOCAL FAST FEEDBACK, not correctness — CI\n") +
-    yellow("remains the gate, so nothing bad merges because of this. Fix it anyway:\n") +
-    "\n  npm run hooks:doctor -- --seed\n"
+    yellow("remains the gate, so nothing bad merges because of this.\n")
 );
-process.exit(1);
+if (!SEED) {
+  console.log("Fix:\n\n  npm run hooks:doctor -- --seed\n");
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Exit-code contract (--seed): the ACTION's result, not the diagnosis's.
+//
+// `npm run hooks:doctor -- --seed` is the MANDATORY step in the canonical
+// worktree-creation snippet (CLAUDE.md, git-branching.md). Until core.hooksPath
+// is switched to a relative path, WRONG HOOK is the CORRECT verdict for every
+// worktree — so exiting non-zero here would fail that snippet every time, abort
+// `set -e` flows, and train readers to ignore a non-zero exit from this script.
+// That would destroy the exact signal the script exists to create.
+//
+// So: --seed reports whether the SEED worked. The bare `hooks:doctor` keeps
+// strict semantics and is the diagnostic.
+// ---------------------------------------------------------------------------
+console.log(
+  bold("--seed reports the SEED, not the diagnosis above — the copy succeeded, so this exits 0.\n") +
+    "Until core.hooksPath becomes relative, WRONG HOOK is the correct verdict for\n" +
+    "every worktree. For the strict check, run:\n\n  npm run hooks:doctor\n"
+);
+process.exit(0);
