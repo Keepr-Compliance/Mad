@@ -63,6 +63,7 @@ import { getContactProvenance } from "../contactProvenance";
 import { proposeLink } from "../db/contactLinkReviewDbService";
 import { countReviewQueue, getReviewQueue } from "../contactLinkReview";
 import { canUnlinkSource } from "../../../src/utils/contactSourceAffordances";
+import { getReviewStateByContact } from "../db/contactSourceSets";
 
 const USER = "user-compare-2471";
 const OTHER_USER = "user-other-2471";
@@ -966,5 +967,164 @@ describe("every source column is detachable, by construction", () => {
       expect(link).toBeTruthy();
       expect(canUnlinkSource(sourceList, link!)).toBe(true);
     }
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2471 PR F — WHICH CONTACTS THE LIST FLAGS AND INTERCEPTS
+// ===========================================================================
+
+describe("the review-state set", () => {
+  /**
+   * THE RULE THIS BLOCK EXISTS FOR.
+   *
+   * The set decides which rows are flagged AND which clicks open the compare
+   * screen, so it must equal the set the compare screen actually opens for. If
+   * it does not, one of two lies ships: a flagged row that opens an ordinary
+   * card, or an intercepted click landing on "there is nothing to compare".
+   *
+   * Every case below is built through the REAL producers and then checked
+   * against the REAL shipped functions — `getContactCompareColumns` and its
+   * `isConfirmed` — rather than against a re-derived predicate. A test that
+   * re-implemented the rule would only ever agree with itself.
+   */
+  const shapes: { id: string; name: string; build: () => void }[] = [
+    {
+      id: "rA",
+      name: "imported, nothing attached — compare cannot open",
+      build: () => {
+        addContact("rA", "Tad Brooks");
+        origin("rA", "contacts_app");
+        addExternal("mac-rA", "Tad Brooks", "macos");
+        link("rA", "macos", "mac-rA", "source_id");
+      },
+    },
+    {
+      id: "rB",
+      name: "imported plus one attached, unjudged",
+      build: () => twoColumnContact("rB"),
+    },
+    {
+      id: "rC",
+      name: "imported plus one attached, fully confirmed",
+      build: () => {
+        twoColumnContact("rC");
+        confirmContactSources(USER, "rC");
+      },
+    },
+    {
+      id: "rD",
+      name: "collapsed import, two source_id rows",
+      build: () => {
+        addContact("rD", "Casey Lane");
+        origin("rD", "contacts_app");
+        addExternal("mac-rD", "Casey Lane", "macos");
+        addExternal("out-rD", "Casey Lane", "outlook");
+        link("rD", "macos", "mac-rD", "source_id");
+        link("rD", "outlook", "out-rD", "source_id");
+      },
+    },
+    {
+      id: "rE",
+      name: "two attached links, only ONE confirmed",
+      build: () => {
+        addContact("rE", "Alan Turing", { source: "manual" });
+        origin("rE", "manual");
+        addExternal("out-rE", "Alan Turing", "outlook");
+        addExternal("and-rE", "Alan Turing", "android_sync");
+        link("rE", "outlook", "out-rE", "manual");
+        link("rE", "android_sync", "and-rE", "email");
+        // One of the two answered, by hand, so the contact is PARTLY decided.
+        mockDb!
+          .prepare(
+            `INSERT INTO contact_link_verdicts
+               (id, user_id, contact_id, source_type, source_record_id, identity_verdict, decided_by)
+             VALUES ('v-rE', ?, 'rE', 'outlook', 'out-rE', 'same_person', 'compare_confirm')`,
+          )
+          .run(USER);
+      },
+    },
+  ];
+
+  it("membership equals what the compare screen does, on every shape", async () => {
+    for (const shape of shapes) shape.build();
+
+    const set = getReviewStateByContact(USER);
+
+    for (const shape of shapes) {
+      const view = await getContactCompareColumns(USER, shape.id);
+      const state = set.get(shape.id);
+
+      // CONTROL: drop the `COUNT(*) > 1 OR MIN(...) <> 'source_id'` clause and
+      // rA joins the set — a flagged row whose click opens nothing.
+      expect({ shape: shape.name, inSet: state !== undefined }).toEqual({
+        shape: shape.name,
+        inSet: view !== null,
+      });
+
+      if (view && state) {
+        // CONTROL: write the HAVING as "has no confirmed link" and rE flips —
+        // partial confirmation is not confirmation.
+        expect({ shape: shape.name, needsReview: state.needsReview }).toEqual({
+          shape: shape.name,
+          needsReview: !view.isConfirmed,
+        });
+        // CONTROL: count links instead of columns and every imported contact
+        // over-promises by one.
+        expect({ shape: shape.name, columns: state.columns }).toEqual({
+          shape: shape.name,
+          columns: view.columns.length,
+        });
+      }
+    }
+  });
+
+  it("excludes a contact with nothing to compare", () => {
+    shapes[0].build();
+    expect(getReviewStateByContact(USER).has("rA")).toBe(false);
+  });
+
+  it("a partly confirmed contact still needs review", () => {
+    shapes[4].build();
+    expect(getReviewStateByContact(USER).get("rE")).toEqual({
+      columns: 3,
+      needsReview: true,
+    });
+  });
+
+  it("resolves 'latest' the same way the screen does, inside one second", async () => {
+    twoColumnContact("rT");
+    confirmContactSources(USER, "rT");
+    expect(getReviewStateByContact(USER).get("rT")!.needsReview).toBe(false);
+
+    // A reversal written with the SAME `decided_at` as the confirmation. Only
+    // the insertion order (rowid) separates them — which is why both readers
+    // must break the tie on rowid, not on the random uuid `id`.
+    const decidedAt = (
+      mockDb!
+        .prepare("SELECT decided_at FROM contact_link_verdicts WHERE source_record_id = 'out-rT'")
+        .get() as { decided_at: string }
+    ).decided_at;
+    mockDb!
+      .prepare(
+        `INSERT INTO contact_link_verdicts
+           (id, user_id, contact_id, source_type, source_record_id, identity_verdict, decided_at, decided_by)
+         VALUES ('aaaaaaaa-0000-0000-0000-000000000000', ?, 'rT', 'outlook', 'out-rT',
+                 'different_people', ?, 'provenance_unlink')`,
+      )
+      .run(USER, decidedAt);
+
+    const view = await getContactCompareColumns(USER, "rT");
+    // CONTROL: order the window by `id DESC` and these two disagree — the id
+    // above sorts FIRST among uuids, so the list would keep reading "confirmed"
+    // while the screen reads the reversal.
+    expect(getReviewStateByContact(USER).get("rT")!.needsReview).toBe(true);
+    expect(view!.isConfirmed).toBe(false);
+  });
+
+  it("is empty when nothing is linked at all", () => {
+    addContact("rZ", "Ada Lovelace", { source: "manual" });
+    origin("rZ", "manual");
+    expect(getReviewStateByContact(USER).size).toBe(0);
   });
 });

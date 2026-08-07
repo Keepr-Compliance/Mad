@@ -47,9 +47,10 @@
  * as first-import provenance and is still the only source a manual contact has.
  */
 
-import type { Contact, ContactSource } from "../../types/models";
+import type { Contact, ContactReviewState, ContactSource } from "../../types/models";
 import { toPersistedContactSource } from "../../utils/contactSourceVocabulary";
 import { dbAll, dbGet } from "./core/dbConnection";
+import { ORIGIN_MATCH_METHOD } from "./contactIdentitySchemaSql";
 
 /**
  * Whether the crosswalk table exists yet.
@@ -146,5 +147,131 @@ export function attachLiveSources<T extends Contact>(userId: string, contacts: T
   return contacts.map((contact) => {
     const sources = byContact.get(contact.id);
     return sources ? ({ ...contact, source_types: sources } as T) : contact;
+  });
+}
+
+// ===========================================================================
+// BACKLOG-2471 PR F — WHICH CONTACTS STILL OWE THE USER A DECISION
+// ===========================================================================
+
+/**
+ * What the list needs to know about one combined contact.
+ *
+ * Present ONLY for contacts the compare screen would actually open for. A
+ * contact absent from the map is one with nothing to compare — no flag, no
+ * interception. That is the same three-state discipline as `source_types`
+ * above, and it matters more here: `undefined` must never be read as
+ * "reviewed", or a path that forgot to stamp would silently mark the whole
+ * address book settled.
+ */
+// `ContactReviewState` is declared in `types/models.ts` — see the note there.
+
+function verdictsExist(): boolean {
+  const row = dbGet<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'contact_link_verdicts'`,
+  );
+  return !!row;
+}
+
+/**
+ * Every combined contact for one user, with its column count and whether it is
+ * still awaiting a decision. ONE query for the whole list, for the reason
+ * stated at the top of this file.
+ *
+ * ===========================================================================
+ * THE MEMBERSHIP RULE, AND WHY IT IS NOT NEGOTIABLE
+ * ===========================================================================
+ * The set this produces decides which rows are flagged AND which clicks open
+ * the compare screen. So it must equal the set the compare screen actually
+ * opens for. If it does not, one of two lies ships: a flagged row that opens an
+ * ordinary card, or an intercepted click landing on "there is nothing to
+ * compare". Both are worse than no flag at all.
+ *
+ * `showSourcesPanel`, expressed in SQL:
+ *   - more than one non-origin link, OR
+ *   - exactly one, attached after the fact (`match_method <> 'source_id'`).
+ * With one link `MIN(match_method)` IS that link's method, so the second clause
+ * reads "the single link was attached"; with more, the first short-circuits.
+ *
+ * ===========================================================================
+ * `rn = 1` BELONGS IN THE JOIN, NOT THE WHERE
+ * ===========================================================================
+ * Moving it to `WHERE` silently converts the LEFT JOIN into an inner one and
+ * drops every link nobody has judged — which is precisely the set of contacts
+ * that need review. The bug would look like "review works, but only for
+ * contacts already partly reviewed".
+ *
+ * A NULL verdict falls to `ELSE 1`, so an unjudged link counts as unconfirmed.
+ *
+ * TIE-BREAK: `decided_at DESC, rowid DESC`, matching `getLatestVerdict`'s SQL —
+ * NOT its docblock, which names `id`. `recordVerdict` assigns a `uuidv4()`, so
+ * ordering by `id` would be random while `rowid` is insertion order. The list
+ * and the screen must resolve "latest" the same way or they will disagree about
+ * the same contact.
+ */
+export function getReviewStateByContact(userId: string): Map<string, ContactReviewState> {
+  if (!crosswalkExists() || !verdictsExist()) return new Map();
+
+  const rows = dbAll<{
+    contact_id: string;
+    link_count: number;
+    source_id_count: number;
+    unconfirmed: number;
+  }>(
+    `SELECT l.contact_id                                              AS contact_id,
+            COUNT(*)                                                  AS link_count,
+            SUM(CASE WHEN l.match_method = 'source_id' THEN 1 ELSE 0 END) AS source_id_count,
+            SUM(CASE WHEN v.identity_verdict = 'same_person' THEN 0 ELSE 1 END) AS unconfirmed
+       FROM contact_source_links l
+       LEFT JOIN (
+         SELECT contact_id, source_type, source_record_id, identity_verdict,
+                ROW_NUMBER() OVER (
+                  PARTITION BY contact_id, source_type, source_record_id
+                  ORDER BY decided_at DESC, rowid DESC
+                ) AS rn
+           FROM contact_link_verdicts
+          WHERE user_id = ?
+       ) v ON v.rn = 1
+          AND v.contact_id = l.contact_id
+          AND v.source_type = l.source_type
+          AND v.source_record_id = l.source_record_id
+      WHERE l.user_id = ? AND l.match_method <> ?
+      GROUP BY l.contact_id
+     HAVING COUNT(*) > 1 OR MIN(l.match_method) <> 'source_id'`,
+    [userId, userId, ORIGIN_MATCH_METHOD],
+  );
+
+  return new Map(
+    rows.map((r) => [
+      r.contact_id,
+      {
+        // The contact's own column, plus every non-origin link EXCEPT the one
+        // that column absorbs — at most one `source_id` row.
+        columns: 1 + r.link_count - (r.source_id_count > 0 ? 1 : 0),
+        needsReview: r.unconfirmed > 0,
+      },
+    ]),
+  );
+}
+
+/**
+ * Stamp `review_state` onto a list of contacts with ONE query.
+ *
+ * Contacts with nothing to compare are returned untouched — `review_state`
+ * stays `undefined`, which every consumer must read as "no flag, no
+ * interception", never as "reviewed".
+ *
+ * Applied wherever `attachLiveSources` is, and for the same reason: a contact
+ * reached through a path that stamps one and not the other carries half its
+ * state, and the half it is missing is the half this feature is about.
+ */
+export function attachReviewState<T extends Contact>(userId: string, contacts: T[]): T[] {
+  if (contacts.length === 0) return contacts;
+  const byContact = getReviewStateByContact(userId);
+  if (byContact.size === 0) return contacts;
+
+  return contacts.map((contact) => {
+    const state = byContact.get(contact.id);
+    return state ? ({ ...contact, review_state: state } as T) : contact;
   });
 }
