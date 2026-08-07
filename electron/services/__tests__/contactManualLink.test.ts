@@ -30,6 +30,7 @@
  * `scripts/ci/check-fixture-pii.mjs` (`/^\d{3}55501\d{2}$/`).
  */
 
+import fs from "fs";
 import path from "path";
 import type { Database as DatabaseType } from "better-sqlite3";
 import { CONTACT_IDENTITY_SCHEMA } from "./helpers/contactIdentitySchema";
@@ -743,6 +744,94 @@ describe("linking several records at once", () => {
     );
     expect(second.map((o) => o.ok)).toEqual([true]);
     expect(hasCannotLink(USER, PAT, "outlook", OUTLOOK_RECORD)).toBe(false);
+  });
+
+  /**
+   * THE ACKNOWLEDGEMENT IS KEYED ON THE PAIR, NOT ON EITHER HALF.
+   *
+   * `acknowledgedPriorRejections` is matched through a `Set` of
+   * `sourceType` + delimiter + `sourceRecordId`. Both halves have to be in the
+   * key: acknowledging a record in ONE address book must not silently
+   * acknowledge a same-named record in another, because a prior rejection is
+   * the user having said "not this person" and re-asking is the whole point.
+   *
+   * CONTROL: build the key from `sourceRecordId` alone and the first assertion
+   * flips to `ok`; from `sourceType` alone and the second does.
+   */
+  it("does not treat a half-matching pair as acknowledged", () => {
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
+    recordVerdict({
+      userId: USER,
+      contactId: PAT,
+      sourceType: "outlook",
+      sourceRecordId: OUTLOOK_RECORD,
+      identityVerdict: "different_people",
+      decidedBy: "provenance_unlink",
+    });
+
+    // Right record id, WRONG source type.
+    const wrongType = linkSourceRecordsToContact(
+      USER,
+      PAT,
+      [{ sourceType: "outlook", sourceRecordId: OUTLOOK_RECORD }],
+      { acknowledgedPriorRejections: [{ sourceType: "macos", sourceRecordId: OUTLOOK_RECORD }] },
+    );
+    expect(wrongType.map((o) => (o.ok ? "ok" : o.reason))).toEqual(["prior_rejection"]);
+
+    // Right source type, WRONG record id.
+    const wrongId = linkSourceRecordsToContact(
+      USER,
+      PAT,
+      [{ sourceType: "outlook", sourceRecordId: OUTLOOK_RECORD }],
+      { acknowledgedPriorRejections: [{ sourceType: "outlook", sourceRecordId: MACOS_RECORD }] },
+    );
+    expect(wrongId.map((o) => (o.ok ? "ok" : o.reason))).toEqual(["prior_rejection"]);
+
+    // And nothing was written on either refusal.
+    expect(linkSet(PAT)).toEqual([]);
+  });
+
+  /**
+   * THE DELIMITER IS A NUL, AND IT IS WRITTEN AS AN ESCAPE.
+   *
+   * The composite key above used a LITERAL 0x00 byte in the source. The
+   * delimiter itself is right — NUL cannot occur in a source type or a record
+   * id, so the key is unambiguous — but as a raw byte it made the ENTIRE FILE
+   * read as binary: `file` reported `data`, and grep / ripgrep / git grep
+   * silently skipped it. Every codebase-wide sweep of the form "who else writes
+   * this table" or "find every caller" had been excluding manual linking
+   * without saying so.
+   *
+   * This asserts BOTH halves of the fix, because they can fail apart: the file
+   * must contain no raw NUL, AND the escape that replaced it must still denote
+   * char code 0 — swapping the delimiter would silently re-key the set.
+   *
+   * CONTROL: paste a raw 0x00 back into the template literal and the first
+   * assertion goes red; change the escape to any other character and the last
+   * one does.
+   */
+  it("writes the key delimiter as an escape, never as a raw NUL byte", () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, "..", "contactManualLink.ts"),
+      "utf8",
+    );
+
+    // `String.fromCharCode(0)` rather than an escape sequence, so that no raw
+    // control character can ever be typed into THIS file either.
+    expect(source.includes(String.fromCharCode(0))).toBe(false);
+
+    // Both occurrences, and both still denoting NUL. The captured text is what
+    // the shipped source actually contains; decoding THAT is what makes this an
+    // assertion about the code rather than about JSON.
+    const escapes = [
+      ...source.matchAll(
+        /\$\{\w+\.sourceType\}(\\u[0-9a-fA-F]{4})\$\{\w+\.sourceRecordId\}/g,
+      ),
+    ];
+    expect(escapes).toHaveLength(2);
+    for (const [, escape] of escapes) {
+      expect((JSON.parse(`"${escape}"`) as string).charCodeAt(0)).toBe(0);
+    }
   });
 
   /**

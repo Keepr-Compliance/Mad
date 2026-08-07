@@ -364,14 +364,14 @@ export function linkSourceRecordsToContact(
 ): LinkSourceOutcome[] {
   const acknowledged = new Set(
     (options.acknowledgedPriorRejections ?? []).map(
-      (r) => `${r.sourceType} ${r.sourceRecordId}`,
+      (r) => `${r.sourceType}\u0000${r.sourceRecordId}`,
     ),
   );
 
   return records.map((record) =>
     linkSourceRecordToContact(userId, contactId, record.sourceType, record.sourceRecordId, {
       acknowledgedPriorRejection: acknowledged.has(
-        `${record.sourceType} ${record.sourceRecordId}`,
+        `${record.sourceType}\u0000${record.sourceRecordId}`,
       ),
     }),
   );
