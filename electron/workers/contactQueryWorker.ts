@@ -20,14 +20,13 @@ import { parentPort } from "worker_threads";
 import Database from "better-sqlite3-multiple-ciphers";
 import type { Database as DatabaseType } from "better-sqlite3";
 import {
-  IMPORTED_CONTACT_LAST_COMMUNICATION_SQL,
   EXTERNAL_CONTACTS_GET_ALL_SQL,
 } from "../services/db/contactRecencySql";
 import {
   CONTACT_SOURCE_RECORDS_SQL,
   type ContactSourceRecordRow,
 } from "../services/db/contactSourceLinkSql";
-import { ACTIVE_CONTACTS_CLAUSE_C } from "../services/db/contactTombstoneSql";
+import { IMPORTED_CONTACTS_SELECT_SQL } from "../services/db/contactProjectionSql";
 
 type QueryType = "external" | "imported" | "backfill";
 
@@ -77,28 +76,10 @@ function openDatabase(dbPath: string, encryptionKey: string): void {
 
 function runImportedQuery(userId: string): unknown[] {
   if (!db) throw new Error("Database not initialized");
-  const sql = `
-    SELECT
-      c.*,
-      c.display_name as name,
-      COALESCE(
-        (SELECT email FROM contact_emails WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
-        (SELECT email FROM contact_emails WHERE contact_id = c.id LIMIT 1)
-      ) as email,
-      COALESCE(
-        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
-        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id LIMIT 1)
-      ) as phone,
-      (SELECT json_group_array(email) FROM contact_emails WHERE contact_id = c.id) as all_emails_json,
-      (SELECT json_group_array(phone_e164) FROM contact_phones WHERE contact_id = c.id) as all_phones_json,
-      0 as is_message_derived,
-      -- BACKLOG-2354: recency for the get-all list path (shared with the sync
-      -- fallback in contactDbService — keep both copies identical).
-      ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL}
-    FROM contacts c
-    WHERE c.user_id = ? AND c.is_imported = 1${ACTIVE_CONTACTS_CLAUSE_C}
-    ORDER BY c.display_name ASC
-  `;
+  // BACKLOG-2514: the SAME constant the main-thread producer runs. This was a
+  // hand-kept copy that a comment required to stay byte-identical with
+  // contactDbService's; sharing the string is what that comment was asking for.
+  const sql = IMPORTED_CONTACTS_SELECT_SQL;
   return db.prepare(sql).all(userId);
 }
 
