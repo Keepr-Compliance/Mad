@@ -539,7 +539,45 @@ export async function getContactCompareColumns(
   const labelRow = originRow ?? absorbedSourceId;
 
   const sourceRows = nonOrigin.filter((l) => l.id !== absorbedSourceId?.id);
-  if (sourceRows.length === 0) return null;
+
+  /*
+    BACKLOG-2502 R1 — THE CANDIDATE IS READ BEFORE THE GUARD, BECAUSE THE GUARD
+    COUNTS COLUMNS THE VIEW WILL RENDER.
+
+    Founder, 7 Aug: clicking Compare on a Possible-duplicates row landed on
+    "this contact has only one record, so there is nothing to compare" — and it
+    landed there for exactly the contacts the review queue is about. A contact
+    proposed as a duplicate usually has ONE source record; that is WHY an
+    unlinked external record looked like a match. Counting `sourceRows` alone
+    discarded the candidate before it was ever appended (~60 lines below), so
+    Compare worked only on contacts that already had two or more linked records
+    — never on the ones being reviewed.
+
+    The lookup therefore moves ABOVE the guard rather than the guard moving
+    below the append: the guard must know whether the candidate column will
+    actually RENDER, and it renders only if the record still exists. A
+    `proposedSource` pointing at a vanished record is still a one-column view
+    and must still return null — which is why this counts `proposedRecord`, not
+    `proposedSource`.
+  */
+  const proposedRecord = proposedSource
+    ? dbGet<{
+        name: string | null;
+        emails_json: string | null;
+        phones_json: string | null;
+        company: string | null;
+      }>(
+        `SELECT name, emails_json, phones_json, company
+           FROM external_contacts
+          WHERE user_id = ? AND source = ? AND external_record_id = ?`,
+        [userId, proposedSource.sourceType, proposedSource.sourceRecordId],
+      ) ?? null
+    : null;
+
+  // Column 1 is the contact itself and always renders, so a comparison needs
+  // exactly one more: an attached source row, or the queue's candidate. Zero
+  // means a genuinely empty view, and that still returns null.
+  if (sourceRows.length + (proposedRecord ? 1 : 0) === 0) return null;
 
   const contactEmails = getContactEmailEntries(contactId).map((e) => e.email);
   const contactPhones = getContactPhoneEntries(contactId).map((p) => p.phone);
@@ -600,31 +638,18 @@ export async function getContactCompareColumns(
     miss here means a stale renderer, and an empty column would invite a
     decision about a record that is not there.
   */
-  if (proposedSource) {
-    const ec = dbGet<{
-      name: string | null;
-      emails_json: string | null;
-      phones_json: string | null;
-      company: string | null;
-    }>(
-      `SELECT name, emails_json, phones_json, company
-         FROM external_contacts
-        WHERE user_id = ? AND source = ? AND external_record_id = ?`,
-      [userId, proposedSource.sourceType, proposedSource.sourceRecordId],
-    );
-    if (ec) {
-      raw.push({
-        linkId: `proposed:${proposedSource.sourceType}:${proposedSource.sourceRecordId}`,
-        kind: "proposed" as const,
-        columnLabel: sourceLabel(proposedSource.sourceType as ContactLinkSourceType),
-        displayName: ec.name?.trim() || null,
-        emails: dedupeEmailValues(parseValueArray(ec.emails_json)),
-        phones: dedupePhoneValues(parseValueArray(ec.phones_json)),
-        company: ec.company?.trim() || null,
-        transactions: [] as string[],
-        sourceRecordPresent: true,
-      });
-    }
+  if (proposedSource && proposedRecord) {
+    raw.push({
+      linkId: `proposed:${proposedSource.sourceType}:${proposedSource.sourceRecordId}`,
+      kind: "proposed" as const,
+      columnLabel: sourceLabel(proposedSource.sourceType as ContactLinkSourceType),
+      displayName: proposedRecord.name?.trim() || null,
+      emails: dedupeEmailValues(parseValueArray(proposedRecord.emails_json)),
+      phones: dedupePhoneValues(parseValueArray(proposedRecord.phones_json)),
+      company: proposedRecord.company?.trim() || null,
+      transactions: [] as string[],
+      sourceRecordPresent: true,
+    });
   }
 
   // A value is MARKED when it appears on two or more columns, by the same keys

@@ -1044,6 +1044,99 @@ describe("the proposed column", () => {
 });
 
 // ===========================================================================
+// BACKLOG-2502 R1 — COMPARE, FROM A CONTACT THAT HAS ONLY ONE RECORD
+// ===========================================================================
+
+/**
+ * THE FOUNDER-OBSERVED DEFECT, 7 Aug.
+ *
+ * "When I click Compare on a Possible-duplicates row, on some I see: Compare
+ * sources / This contact has only one record, so there is nothing to compare."
+ *
+ * The guard counted `sourceRows` — links, minus the absorbed one — and returned
+ * before the candidate was appended. So it failed on precisely the shape the
+ * review queue is made of: a contact assembled from ONE record, which is why an
+ * unlinked record looked like a match in the first place.
+ *
+ * Every case below builds that one-record shape through the REAL writers and
+ * asks the REAL shipped function, so the assertions cannot agree with a
+ * re-derived rule.
+ */
+describe("the one-record contact the review queue asks about", () => {
+  /** The `rA` shape: imported, its origin row plus the `source_id` row that
+   *  column 1 absorbs. Nothing left to be a second column. */
+  /** Returns the ORIGIN row id, which is what keys column 1 — so the assertions
+   *  below can name both columns exactly without hard-coding a uuid. */
+  const oneRecordContact = (id: string, name: string): string => {
+    addContact(id, name, { phones: [SHARED_PHONE] });
+    const originId = origin(id, "contacts_app");
+    addExternal(`mac-${id}`, name, "macos", { phones: [SHARED_PHONE] });
+    link(id, "macos", `mac-${id}`, "source_id");
+    return originId;
+  };
+
+  it("still has nothing to compare with no candidate — the guard is not deleted", async () => {
+    oneRecordContact("g1", "Tad Brooks");
+    expect(await getContactCompareColumns(USER, "g1")).toBeNull();
+  });
+
+  /**
+   * CONTROL C1. Revert the guard to `if (sourceRows.length === 0) return null;`
+   * and this returns null — the exact dead Compare the founder hit.
+   */
+  it("renders TWO columns once the queue's candidate is passed", async () => {
+    const originId = oneRecordContact("g2", "Paul Dorian");
+    addExternal("out-g2", "Paul Dorian", "outlook", {
+      emails: [SHARED_EMAIL],
+      phones: [SHARED_PHONE],
+    });
+
+    const view = await getContactCompareColumns(USER, "g2", {
+      sourceType: "outlook",
+      sourceRecordId: "out-g2",
+    });
+
+    expect(view).not.toBeNull();
+    // Identity, not count: WHICH two columns, in which order.
+    expect(columnIds(view)).toEqual([originId, "proposed:outlook:out-g2"]);
+    expect(view!.columns.map((c) => c.kind)).toEqual(["contact", "proposed"]);
+    // The candidate joins the cross-column marking, which is the whole point of
+    // opening this screen: the shared phone is what the user is judging.
+    expect(view!.columns[1].phones).toEqual([{ value: SHARED_PHONE, matched: true }]);
+  });
+
+  /**
+   * The guard counts the record, NOT the request. A `proposedSource` naming a
+   * record that is gone renders no second column, so the view is still a single
+   * column and must still be null — otherwise the fix would trade a dead button
+   * for a one-column "comparison".
+   */
+  it("stays null when the candidate record does not exist", async () => {
+    oneRecordContact("g3", "Ada Lovelace");
+    const view = await getContactCompareColumns(USER, "g3", {
+      sourceType: "outlook",
+      sourceRecordId: "gone",
+    });
+    expect(view).toBeNull();
+  });
+
+  /** A removed contact is out regardless — the tombstone guard is upstream of
+   *  this one and a candidate must not reopen it. */
+  it("stays null for a removed contact even with a candidate", async () => {
+    oneRecordContact("g4", "Grace Hopper");
+    addExternal("out-g4", "Grace Hopper", "outlook", { emails: [SHARED_EMAIL] });
+    mockDb!.prepare("UPDATE contacts SET removed_at = datetime('now') WHERE id = 'g4'").run();
+
+    expect(
+      await getContactCompareColumns(USER, "g4", {
+        sourceType: "outlook",
+        sourceRecordId: "out-g4",
+      }),
+    ).toBeNull();
+  });
+});
+
+// ===========================================================================
 // BACKLOG-2471 PR F — WHICH CONTACTS THE LIST FLAGS AND INTERCEPTS
 // ===========================================================================
 
