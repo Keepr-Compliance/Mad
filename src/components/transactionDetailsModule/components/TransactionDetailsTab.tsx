@@ -240,15 +240,37 @@ export function TransactionDetailsTab({
     setPreviewTransactions([]);
     void loadContactTransactions(assignment.contact_id);
 
-    // Fetch full email/phone entries to populate allEmails/allPhones
+    // Fetch full email/phone entries to populate allEmails/allPhones, and the
+    // live source set (BACKLOG-2493 — see below).
     try {
       const editData = await window.api.contacts.getEditData(assignment.contact_id);
       if (editData.success) {
         const allEmails = (editData.emails || []).map((e: { email: string }) => e.email);
         const allPhones = (editData.phones || []).map((p: { phone: string }) => p.phone);
+        /**
+         * BACKLOG-2493: the contact object above is built by hand from the
+         * transaction assignment, so its `source` is the stale INSERT-time
+         * scalar — the field that made the founder's Paul Dorian read "Outlook"
+         * after his Outlook link was removed. This pane mounts the SAME
+         * `ContactPreview` as the Clients & Contacts card, so without the live
+         * set the two would name different sources for the same person on the
+         * same screen.
+         *
+         * Spread conditionally: the handler OMITS `source_types` when the
+         * contact has no links, and an unconditional spread would write
+         * `source_types: undefined` — which is the same value, but writing it
+         * explicitly invites the next reader to "tidy" it into `[]`, the one
+         * value this field must never hold. Absent stays absent, and
+         * `mapToSourcePillSources` falls back to the scalar.
+         */
         setPreviewContact((prev) =>
           prev && prev.id === assignment.contact_id
-            ? { ...prev, allEmails, allPhones }
+            ? {
+                ...prev,
+                allEmails,
+                allPhones,
+                ...(editData.source_types ? { source_types: editData.source_types } : {}),
+              }
             : prev,
         );
       }

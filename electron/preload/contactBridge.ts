@@ -4,7 +4,13 @@
  */
 
 import { ipcRenderer } from "electron";
-import type { NewContact, Contact, Communication, ContactMessageThread } from "../types/models";
+import type {
+  NewContact,
+  Contact,
+  ContactSource,
+  Communication,
+  ContactMessageThread,
+} from "../types/models";
 import type {
   ContactReviewCluster,
   ContactSourceProvenance,
@@ -76,6 +82,13 @@ export const contactBridge = {
     success: boolean;
     emails?: { id: string; email: string; is_primary: boolean }[];
     phones?: { id: string; phone: string; is_primary: boolean }[];
+    /**
+     * BACKLOG-2493: the contact's LIVE crosswalk sources, so a hand-built
+     * contact object (the transaction "Key Contacts" pane) shows the same
+     * source pills as the Clients & Contacts card instead of the stale
+     * INSERT-time scalar. OMITTED, never `[]`, when there are no links.
+     */
+    source_types?: ContactSource[];
     error?: string;
   }> => ipcRenderer.invoke("contacts:get-edit-data", contactId),
 

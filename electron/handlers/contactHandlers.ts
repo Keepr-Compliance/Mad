@@ -25,6 +25,7 @@ import {
 } from "../services/db/contactDbService";
 import type { RemovedContactRow } from "../services/db/contactDbService";
 import { dbTransaction } from "../services/db/core/dbConnection";
+import { getLiveSourcesForContact } from "../services/db/contactSourceSets";
 import { getContactNames } from "../services/contactsService";
 import type { ContactInfo, PhoneToContactInfo } from "../services/contactsService";
 import { resolveHandles } from "../services/contactResolutionService";
@@ -2706,7 +2707,8 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
     },
   );
 
-  // Get contact edit data (emails/phones with row IDs for multi-entry editing)
+  // Get contact edit data (emails/phones with row IDs for multi-entry editing,
+  // plus the live source set — see the BACKLOG-2493 note inside).
   ipcMain.handle(
     "contacts:get-edit-data",
     async (
@@ -2716,6 +2718,11 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       success: boolean;
       emails?: { id: string; email: string; is_primary: boolean }[];
       phones?: { id: string; phone: string; is_primary: boolean }[];
+      /**
+       * The contact's LIVE crosswalk sources (BACKLOG-2493). OMITTED, never
+       * `[]`, when the contact has no links — see the handler body.
+       */
+      source_types?: ContactSource[];
       error?: string;
     }> => {
       try {
@@ -2727,7 +2734,35 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         const emails = getContactEmailEntries(validatedContactId);
         const phones = getContactPhoneEntries(validatedContactId);
 
-        return { success: true, emails, phones };
+        /**
+         * BACKLOG-2493 — the transaction "Key Contacts" pane mounts the SAME
+         * `ContactPreview` as the Clients & Contacts card, but builds its
+         * contact object by hand from the transaction assignment
+         * (`TransactionDetailsTab`), so it carries `contact_source` — the stale
+         * INSERT-time scalar — and no live set. Without this field that pane
+         * would keep saying "Outlook" for a person the Clients & Contacts card
+         * now correctly calls "Contacts App": the same component, the same
+         * person, two different answers on screen at once.
+         *
+         * OMITTED WHEN EMPTY, NOT `[]`. `getLiveSourcesForContact` returns `[]`
+         * both for a contact with no links and for a database whose crosswalk
+         * table does not exist yet — but `undefined` and `[]` are NOT
+         * interchangeable on this field (see the `source_types` contract on the
+         * `Contact` interface), and nothing on any write path emits `[]`.
+         * `getContactById` honours the same rule with the same conditional
+         * spread. Shipping `[]` would be invisible today, because every current
+         * consumer tests `.length` — and would surface the first time one tests
+         * `=== undefined`, reading "this person has no sources" and hiding them
+         * from every source filter.
+         */
+        const liveSources = getLiveSourcesForContact(validatedContactId);
+
+        return {
+          success: true,
+          emails,
+          phones,
+          ...(liveSources.length > 0 ? { source_types: liveSources } : {}),
+        };
       } catch (error) {
         logService.error("Get contact edit data failed", "Contacts", {
           contactId,
