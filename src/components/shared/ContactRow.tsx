@@ -6,6 +6,7 @@ import {
   collapsedRecordSummary,
   describeIdentifier,
 } from "../../utils/contactCollapseVocabulary";
+import { sourceDisplayLabel } from "./SourcePill";
 
 export interface ContactRowProps {
   /** The contact to display */
@@ -63,6 +64,32 @@ export interface ContactRowProps {
    * longer changes pill visibility (pills were removed entirely).
    */
   compact?: boolean;
+  /**
+   * Render a second line under the name: source, email, phone, company
+   * (BACKLOG-2591).
+   *
+   * DEFAULT FALSE, AND THE DEFAULT IS THE WHOLE POINT. BACKLOG-2356 removed the
+   * secondary line from every picker row deliberately — "full details live in
+   * the contact detail/preview pane" — and that decision STANDS everywhere
+   * except one surface.
+   *
+   * It comes back ONLY where the row is itself the surface on which an IDENTITY
+   * DECISION is made: manual linking (BACKLOG-2426), where the user must tell
+   *
+   *   - two RECORDS of one person (link them), from
+   *   - two DIFFERENT PEOPLE who share a name (never link them).
+   *
+   * Same-name-different-person is the exact failure this epic exists to prevent
+   * — it is why `contact_link_proposals` carries `name_not_unique` and
+   * `name_generational_suffix` reasons at all. Two rows both reading "Robin
+   * Marsh" cannot express that difference, so a name-only row makes the decision
+   * unanswerable.
+   *
+   * Every other caller — both transaction pickers and Clients & Contacts —
+   * omits this and renders EXACTLY as before. That is asserted against the real
+   * `ContactAssignmentStep`, not against this default.
+   */
+  showDetailLine?: boolean;
   /** Called when the row is selected (clicked or keyboard) */
   onSelect?: () => void;
   /** Called when the import button is clicked */
@@ -91,6 +118,38 @@ function getInitial(name: string | undefined): string {
  */
 function getDisplayName(contact: ExtendedContact): string {
   return labelForContact(contact);
+}
+
+/**
+ * The opt-in second line: where this record came from, and how to tell it apart
+ * from someone with the same name (BACKLOG-2591).
+ *
+ * Order is deliberate — SOURCE FIRST. On a link picker the commonest question is
+ * "which address book is this one?", and two records of one person differ by
+ * source before they differ by anything else.
+ *
+ * Empty parts are dropped rather than rendered as gaps, and an all-empty result
+ * returns `null` so the caller renders no line at all instead of an empty one.
+ * A nameless record already puts its email or phone in the NAME slot
+ * (`labelForContact`), so repeating it here would read as a duplicate — hence
+ * the identifier is skipped when it already IS the display name.
+ */
+function buildDetailLine(contact: ExtendedContact): string | null {
+  const isExternal =
+    contact.is_message_derived === 1 || contact.is_message_derived === true;
+  const displayName = getDisplayName(contact);
+
+  const email = contact.email ?? contact.allEmails?.[0] ?? null;
+  const phone = contact.phone ?? contact.allPhones?.[0] ?? null;
+
+  const parts = [
+    sourceDisplayLabel(contact.source, isExternal),
+    email && email !== displayName ? email : null,
+    phone && phone !== displayName ? phone : null,
+    contact.company || null,
+  ].filter((p): p is string => typeof p === "string" && p.trim().length > 0);
+
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 /**
@@ -129,12 +188,14 @@ export function ContactRow({
   showAddButton = false,
   collapsedRecords,
   compact = false,
+  showDetailLine = false,
   onSelect,
   onImport,
   className = "",
 }: ContactRowProps): React.ReactElement {
   const displayName = getDisplayName(contact);
   const initial = getInitial(displayName);
+  const detailLine = showDetailLine ? buildDetailLine(contact) : null;
 
   // BACKLOG-2459 — the folded records, and whether the user has asked to see
   // which ones. Collapsed by default: the disclosure has to be quiet enough to
@@ -240,6 +301,17 @@ export function ContactRow({
         >
           {displayName}
         </p>
+
+        {/* BACKLOG-2591 — opt-in ONLY. See `showDetailLine`'s docblock: 2356's
+            name-only rule stands for every caller that does not ask for this. */}
+        {detailLine && (
+          <p
+            className="text-xs text-gray-600 truncate"
+            data-testid="contact-row-detail"
+          >
+            {detailLine}
+          </p>
+        )}
 
         {/* BACKLOG-2459 — say that a collapse happened, and let it be inspected.
             The count is a count of records the user owns, written out next to
