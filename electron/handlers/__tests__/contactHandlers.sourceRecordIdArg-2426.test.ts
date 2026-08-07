@@ -163,7 +163,7 @@ jest.mock("../../services/providers/googleContactProvider", () => ({
 jest.mock("../../services/contactManualLink", () => ({
   __esModule: true,
   findLinkableSourceRecords: jest.fn(() => []),
-  linkSourceRecordToContact: jest.fn(() => ({ ok: true, linkId: "link-1" })),
+  linkSourceRecordsToContact: jest.fn(() => [{ ok: true, linkId: "link-1" }]),
 }));
 
 const mockGetValidUserId = jest.fn();
@@ -174,17 +174,24 @@ jest.mock("../../utils/userIdHelper", () => ({
 }));
 
 import { registerContactHandlers } from "../contactHandlers";
-import { linkSourceRecordToContact } from "../../services/contactManualLink";
+import { linkSourceRecordsToContact } from "../../services/contactManualLink";
 
 const USER_ID = "22222222-2222-4222-8222-222222222222";
 const CONTACT_ID = "11111111-1111-4111-8111-111111111111";
 
 type LinkResponse = { success: boolean; outcome?: unknown; error?: string };
 
+/**
+  * BACKLOG-2591: the channel takes a LIST now. The guarantee under test is
+  * unchanged — each member is validated with the same two checks — so this
+  * wraps the single id rather than weakening the assertions.
+  */
 async function invokeLinkSource(sourceRecordId: unknown): Promise<LinkResponse> {
   const handler = handlers.get("contacts:link-source");
   if (!handler) throw new Error("contacts:link-source was never registered");
-  return (await handler({}, USER_ID, CONTACT_ID, "outlook", sourceRecordId)) as LinkResponse;
+  return (await handler({}, USER_ID, CONTACT_ID, [
+    { sourceType: "outlook", sourceRecordId },
+  ])) as LinkResponse;
 }
 
 describe("requireSourceRecordIdArg — a refusal must name its own cause (M1)", () => {
@@ -201,7 +208,7 @@ describe("requireSourceRecordIdArg — a refusal must name its own cause (M1)", 
     const res = await invokeLinkSource("");
     expect(res.success).toBe(false);
     expect(res.error).toBe("Validation error: sourceRecordId is missing or empty");
-    expect(linkSourceRecordToContact).not.toHaveBeenCalled();
+    expect(linkSourceRecordsToContact).not.toHaveBeenCalled();
   });
 
   it("says TOO LONG when the id exceeds the bound, and links nothing", async () => {
@@ -210,7 +217,7 @@ describe("requireSourceRecordIdArg — a refusal must name its own cause (M1)", 
     expect(res.error).toBe(
       "Validation error: sourceRecordId is longer than the 512-character limit",
     );
-    expect(linkSourceRecordToContact).not.toHaveBeenCalled();
+    expect(linkSourceRecordsToContact).not.toHaveBeenCalled();
   });
 
   /**
@@ -222,12 +229,11 @@ describe("requireSourceRecordIdArg — a refusal must name its own cause (M1)", 
     const graphish = "AAMkAG" + "a".repeat(194);
     const res = await invokeLinkSource(graphish);
     expect(res.success).toBe(true);
-    expect(linkSourceRecordToContact).toHaveBeenCalledWith(
+    expect(linkSourceRecordsToContact).toHaveBeenCalledWith(
       USER_ID,
       CONTACT_ID,
-      "outlook",
-      graphish,
-      { acknowledgedPriorRejection: false },
+      [{ sourceType: "outlook", sourceRecordId: graphish }],
+      { acknowledgedPriorRejections: [] },
     );
   });
 });
