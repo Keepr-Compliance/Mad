@@ -17,6 +17,7 @@ import type {
   UnlinkSourceResponse,
   FindLinkableSourcesResponse,
   LinkSourceResponse,
+  ContactCompareView,
 } from "../types/ipc/window-api-contacts";
 
 export const contactBridge = {
@@ -403,6 +404,17 @@ export const contactBridge = {
     linkId: string,
   ): Promise<UnlinkSourceResponse> =>
     ipcRenderer.invoke("contacts:unlink-source", userId, contactId, linkId),
+
+  /**
+   * BACKLOG-2471 PR C — the compare screen's columns. READ-ONLY: this call
+   * writes nothing, and `Unlink` on a column goes through `unlinkSource` above
+   * when PR D adds it.
+   */
+  getCompareColumns: (
+    userId: string,
+    contactId: string,
+  ): Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }> =>
+    ipcRenderer.invoke("contacts:get-compare-columns", userId, contactId),
 
   /**
    * BACKLOG-2426 — source records the user could attach by hand.

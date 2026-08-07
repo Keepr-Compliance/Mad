@@ -119,6 +119,17 @@ const SURROUNDING_TABLES = `
     id TEXT PRIMARY KEY,
     user_id TEXT,
     property_address TEXT,
+    -- BACKLOG-2471 PR C: the compare screen's Transactions row calls the SHIPPED
+    -- reader getTransactionsByContact rather than writing a second query. That
+    -- reader also walks a transaction's other_contacts JSON, so a hand-rolled
+    -- junction join would silently show FEWER transactions than the contact card
+    -- two clicks away. These three columns are named in its SELECT
+    -- (contactDbService.ts:1436-1441) and are copied from schema.sql. Their
+    -- absence surfaced as an immediate "no such column", exactly as the note at
+    -- the top of this file predicts, rather than as a silent wrong answer.
+    closing_deadline DATETIME,
+    transaction_type TEXT,
+    status TEXT,
     first_exported_at DATETIME,
     buyer_agent_id TEXT,
     seller_agent_id TEXT,
@@ -132,6 +143,11 @@ const SURROUNDING_TABLES = `
     transaction_id TEXT NOT NULL,
     contact_id TEXT NOT NULL,
     role TEXT,
+    -- BACKLOG-2471 PR C, same reason as the transactions columns above: named by
+    -- getTransactionsByContact's junction query (contactDbService.ts:1509-1516),
+    -- copied from schema.sql:722-723.
+    role_category TEXT,
+    specific_role TEXT,
     -- Migration v56 tombstone columns. Reads of this junction now add
     -- "AND tc.removed_at IS NULL" so a role that has been removed stops
     -- counting as current (BACKLOG-2365/2366). Fixture rows leave them NULL =
