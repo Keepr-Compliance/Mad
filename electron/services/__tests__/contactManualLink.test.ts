@@ -220,6 +220,95 @@ describe("findLinkableSourceRecords", () => {
     expect(found.map((r) => r.sourceRecordId)).toEqual([OUTLOOK_RECORD]);
     expect(found[0].sourceLabel).toBe("Outlook contacts");
   });
+
+  /**
+   * =========================================================================
+   * FOUNDER QA, PR #2254: *"does the search allow for circular linking — does
+   * it filter out the contact I'm on from the list?"*
+   * =========================================================================
+   *
+   * TWO INDEPENDENT REASONS THE ANSWER IS NO, and the first is structural.
+   *
+   * 1. **The list is a different KIND of thing from the contact.** Candidates
+   *    come from `external_contacts` — address-book records — through
+   *    `externalContactDbService.search` / `getAllForUser`. A saved `contacts`
+   *    row can never appear in it, so "link this contact to itself" is not an
+   *    expressible request rather than a filtered-out one.
+   *    `findLinkableSourceRecords` is not even GIVEN a `contactId`.
+   *
+   * 2. **Its own source records are already excluded** by the third filter,
+   *    `claimed.has(sourceKey(record.source, record.external_record_id))`,
+   *    where `claimed` is `getLinkedSourceKeys(userId)` — EVERY crosswalk row
+   *    for the user. Anything the current contact holds is in that set. It is
+   *    the same set `contacts:get-available` uses for the import picker, so a
+   *    record cannot be offered here and hidden there.
+   */
+  it("never offers a record the CURRENT contact already holds", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
+    // PAT's own imported record — exactly what "the contact I'm on" means.
+    createLink({
+      userId: USER,
+      contactId: PAT,
+      sourceType: "macos",
+      sourceRecordId: MACOS_RECORD,
+      matchMethod: "source_id",
+    });
+
+    const keys = findLinkableSourceRecords(USER, "").map(
+      (r) => `${r.sourceType}|${r.sourceRecordId}`,
+    );
+    expect(keys).toEqual([`outlook|${OUTLOOK_RECORD}`]);
+  });
+
+  /**
+   * The contact's ORIGIN row points at a synthetic `source_record_id`
+   * (`origin:<contactId>`) whose source type is outside the five external ones.
+   * It JOINs no `external_contacts` row, so it cannot reach the candidate list
+   * at all — and the source-type filter would reject it even if it could.
+   */
+  it("never offers the contact's own origin row", () => {
+    mockDb!
+      .prepare(
+        `INSERT INTO contact_source_links
+           (id, user_id, contact_id, source_type, source_record_id, match_method)
+         VALUES ('link-origin', ?, ?, 'manual', ?, 'origin')`,
+      )
+      .run(USER, PAT, `origin:${PAT}`);
+
+    expect(findLinkableSourceRecords(USER, "")).toEqual([]);
+    expect(findLinkableSourceRecords(USER, "Pat")).toEqual([]);
+  });
+
+  /**
+   * THE CASE A NAIVE CIRCULARITY FIX WOULD BREAK, pinned so nobody adds one.
+   *
+   * Filtering the list by the contact's NAME looks like a reasonable "don't
+   * show me myself" guard and would destroy the feature: attaching an
+   * address-book record for the SAME PERSON is the entire point. Only the
+   * crosswalk decides what is already claimed — never the name.
+   */
+  it("STILL offers an unclaimed record that shares the contact's name", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+
+    const found = findLinkableSourceRecords(USER, "Pat Riverton");
+    expect(found.map((r) => r.sourceRecordId)).toEqual([MACOS_RECORD]);
+  });
+
+  /**
+   * The round trip: once linked, the record leaves the list — so the same pair
+   * cannot be offered twice and no second crosswalk row can be attempted.
+   */
+  it("drops a record from the list once it has been linked", () => {
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
+    expect(findLinkableSourceRecords(USER, "").map((r) => r.sourceRecordId)).toEqual([
+      OUTLOOK_RECORD,
+    ]);
+
+    linkSourceRecordToContact(USER, PAT, "outlook", OUTLOOK_RECORD);
+
+    expect(findLinkableSourceRecords(USER, "")).toEqual([]);
+  });
 });
 
 // ===========================================================================
