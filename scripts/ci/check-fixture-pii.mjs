@@ -240,6 +240,12 @@ const FICTIONAL_NAMES = new Set([
   // see `contact-handlers.importLinking.test.ts`, where the surrounding
   // `mac-paul` / `out-paul` variables still carry the pre-scrub spelling.
   "casey lane",
+  // BACKLOG-2514 — the message-derived person in the projection-parity fixture.
+  // Invented. It must be a PLAIN NAME (not an email, not a number) because that
+  // is exactly what `getMessageDerivedContacts` filters `participants.$.from`
+  // down to — a fixture that did not look like a name would not reach the
+  // producer at all, and the control it feeds could not fail.
+  "sam rivers",
 ]);
 
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));

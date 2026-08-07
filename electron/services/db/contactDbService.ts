@@ -22,6 +22,10 @@ import { queryContacts, isPoolReady } from "../../workers/contactWorkerPool";
 import { ContactSchema, validateResponse } from "../../schemas";
 import { IMPORTED_CONTACT_LAST_COMMUNICATION_SQL } from "./contactRecencySql";
 import {
+  IMPORTED_CONTACT_ADDRESSES_SQL,
+  IMPORTED_CONTACTS_SELECT_SQL,
+} from "./contactProjectionSql";
+import {
   ACTIVE_CONTACTS_CLAUSE_C,
   ACTIVE_CONTACTS_CLAUSE_UNALIASED,
 } from "./contactTombstoneSql";
@@ -584,33 +588,48 @@ export async function getContacts(filters?: ContactFilters): Promise<Contact[]> 
  * Returns contacts with display_name aliased as 'name' for backwards compatibility
  * Also includes primary email and phone from child tables
  */
+/**
+ * Message-derived people, shaped as `Contact` rows (BACKLOG-2514).
+ *
+ * ONE mapper, because there were two and they had already disagreed. The sync
+ * producer merged these people and the worker producer did not, so Clients &
+ * Contacts showed a DIFFERENT SET depending on whether the worker pool happened
+ * to be warm — same user, same data, same screen. The pool is cold whenever its
+ * init timeout fires, which is exactly what CPU starvation does (BACKLOG-2576),
+ * so this was reachable in the field and silent when it happened.
+ *
+ * BACKLOG-2472: these are NOT stamped with live sources. They are synthesised
+ * from message participants rather than address-book records, so they have no
+ * crosswalk rows by construction and must keep answering to their `source`
+ * scalar — which is what the Inferred filter reads.
+ */
+function messageDerivedAsContacts(userId: string): Contact[] {
+  return getMessageDerivedContacts(userId).map(
+    (mc) =>
+      ({
+        id: mc.id,
+        user_id: userId,
+        display_name: mc.display_name,
+        name: mc.name,
+        email: mc.email,
+        phone: mc.phone,
+        company: mc.company,
+        source: mc.source,
+        is_imported: mc.is_imported,
+        is_message_derived: mc.is_message_derived,
+        last_communication_at: mc.last_communication_at,
+      }) as Contact,
+  );
+}
+
 export async function getImportedContactsByUserId(
   userId: string,
 ): Promise<Contact[]> {
-  // Get explicitly imported contacts from contacts table
-  // Include all emails/phones as JSON arrays for display in contact details
-  const sql = `
-    SELECT
-      c.*,
-      c.display_name as name,
-      COALESCE(
-        (SELECT email FROM contact_emails WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
-        (SELECT email FROM contact_emails WHERE contact_id = c.id LIMIT 1)
-      ) as email,
-      COALESCE(
-        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
-        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id LIMIT 1)
-      ) as phone,
-      (SELECT json_group_array(email) FROM contact_emails WHERE contact_id = c.id) as all_emails_json,
-      (SELECT json_group_array(phone_e164) FROM contact_phones WHERE contact_id = c.id) as all_phones_json,
-      0 as is_message_derived,
-      -- BACKLOG-2354: populate recency so the Clients & Contacts screen's
-      -- "Recent" sort has data instead of degenerating to the email tiebreaker.
-      ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL}
-    FROM contacts c
-    WHERE c.user_id = ? AND c.is_imported = 1${ACTIVE_CONTACTS_CLAUSE_C}
-    ORDER BY c.display_name ASC
-  `;
+  // BACKLOG-2514: THE imported-contacts statement, shared with the worker's
+  // `runImportedQuery` rather than duplicated beside it. It used to be two
+  // copies required to stay byte-identical — they had not yet drifted, and now
+  // they cannot.
+  const sql = IMPORTED_CONTACTS_SELECT_SQL;
   const importedContacts = dbAll<Contact & { all_emails_json?: string; all_phones_json?: string }>(sql, [userId]);
 
   // Parse JSON arrays into allEmails/allPhones fields
@@ -630,31 +649,13 @@ export async function getImportedContactsByUserId(
     } as Contact;
   });
 
-  // Get message-derived contacts (unique senders from messages, excluding already-imported)
-  const messageDerivedContacts = getMessageDerivedContacts(userId);
-
-  // Merge both lists - imported contacts first (with allEmails/allPhones), then message-derived
-  // Cast message-derived to Contact type (they have compatible fields)
-  //
-  // BACKLOG-2472: only the IMPORTED bucket is stamped. Message-derived contacts
-  // are synthesised from message participants, not from address-book records, so
-  // they have no crosswalk rows by construction and must keep answering to their
-  // `source` scalar — which is what the Inferred filter leaves read.
+  // Merge both lists — imported contacts first (with allEmails/allPhones), then
+  // message-derived. The mapper lives in `messageDerivedAsContacts` so this path
+  // and the worker path cannot disagree about who appears (BACKLOG-2514); the
+  // BACKLOG-2472 reasoning about stamping is recorded there.
   const allContacts = [
     ...attachLiveSources(userId, contactsWithArrays),
-    ...messageDerivedContacts.map(mc => ({
-      id: mc.id,
-      user_id: userId,
-      display_name: mc.display_name,
-      name: mc.name,
-      email: mc.email,
-      phone: mc.phone,
-      company: mc.company,
-      source: mc.source,
-      is_imported: mc.is_imported,
-      is_message_derived: mc.is_message_derived,
-      last_communication_at: mc.last_communication_at,
-    } as Contact)),
+    ...messageDerivedAsContacts(userId),
   ];
 
   // Sort alphabetically by display_name/name
@@ -701,17 +702,24 @@ export async function getImportedContactsByUserIdAsync(
   });
 
   // BACKLOG-2472: the crosswalk read stays on the MAIN thread rather than being
-  // folded into the worker's SQL, because that SQL exists as two copies that are
-  // required to stay byte-identical (here and contactQueryWorker.runImportedQuery)
-  // and adding a column to one is exactly how they drift. This is ONE indexed
+  // folded into the worker's SQL. BACKLOG-2514 made that SQL ONE shared constant
+  // (IMPORTED_CONTACTS_SELECT_SQL) rather than two copies required to stay
+  // byte-identical, so the drift hazard is gone — but the read still belongs
+  // here: it needs the main thread's database handle. This is ONE indexed
   // statement over a result smaller than the contact list the worker just
   // returned; the work the pool exists to move off the main thread — the
   // per-contact email/phone/recency subqueries — is untouched.
-  return attachLiveSources(userId, contactsWithArrays).sort((a, b) => {
-    const nameA = (a.display_name || a.name || '').toLowerCase();
-    const nameB = (b.display_name || b.name || '').toLowerCase();
-    return nameA.localeCompare(nameB);
-  });
+  // BACKLOG-2514: merge message-derived people, exactly as the sync producer
+  // does. Without this the SAME SCREEN showed a different set of people
+  // depending on whether the worker pool was warm — the fallback above is the
+  // only difference between the two paths, and it must not change WHO appears.
+  return [...attachLiveSources(userId, contactsWithArrays), ...messageDerivedAsContacts(userId)].sort(
+    (a, b) => {
+      const nameA = (a.display_name || a.name || '').toLowerCase();
+      const nameB = (b.display_name || b.name || '').toLowerCase();
+      return nameA.localeCompare(nameB);
+    },
+  );
 }
 
 /**
@@ -1022,8 +1030,17 @@ export async function getContactsSortedByActivity(
     SELECT
       c.*,
       c.display_name as name,
-      ce_primary.email as email,
-      cp_primary.phone_e164 as phone,
+      -- BACKLOG-2514: the SAME projection the get-all path uses. This query
+      -- previously returned only the PRIMARY email and phone, so the picker's
+      -- matcher received empty allEmails / allPhones on the transaction wizard
+      -- and add-to-existing: a second address was unsearchable exactly where a
+      -- user is building a deal.
+      --
+      -- It also read its primary through LEFT JOIN ... AND is_primary = 1,
+      -- which returned NULL for a contact with no primary flag and MULTIPLIED
+      -- the row for a contact with two. The correlated LIMIT 1 form cannot do
+      -- either. The two JOINs are gone with it.
+${IMPORTED_CONTACT_ADDRESSES_SQL},
       0 as is_message_derived,
       -- BACKLOG-2357: use the SHARED phone+email recency fragment (was the
       -- phone-only COALESCE(c.last_inbound_at, c.last_outbound_at)) so the
@@ -1040,8 +1057,6 @@ export async function getContactsSortedByActivity(
       CASE WHEN c.last_inbound_at IS NOT NULL OR c.last_outbound_at IS NOT NULL THEN 1 ELSE 0 END as communication_count,
       0 as address_mention_count
     FROM contacts c
-    LEFT JOIN contact_emails ce_primary ON c.id = ce_primary.contact_id AND ce_primary.is_primary = 1
-    LEFT JOIN contact_phones cp_primary ON c.id = cp_primary.contact_id AND cp_primary.is_primary = 1
     WHERE c.user_id = ? AND c.is_imported = 1${ACTIVE_CONTACTS_CLAUSE_C}
     ORDER BY
       COALESCE(c.last_inbound_at, c.last_outbound_at) DESC,
