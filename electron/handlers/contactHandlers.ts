@@ -622,10 +622,24 @@ function requireUuidArg(value: unknown, fieldName: string): string {
  *
  * So this is a shape check with a bound generous enough for provider ids and
  * still bounded. Ownership is re-checked against the row in the service.
+ *
+ * THE TWO REFUSALS SAY DIFFERENT THINGS ON PURPOSE (M1). 512 is headroom over
+ * the longest identifier any supported source is known to mint — a sanity bound
+ * on an opaque third-party token, NOT a measured format. If it ever turns out
+ * to be wrong, the symptom is an Outlook record silently refusing to link: the
+ * same bug class this feature exists to fix. One shared message would leave the
+ * log unable to distinguish "too long" from "empty", which is the difference
+ * between a five-minute diagnosis and an hour.
  */
 function requireSourceRecordIdArg(value: unknown): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.length > 512) {
-    throw new ValidationError("sourceRecordId is missing or malformed", "sourceRecordId");
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ValidationError("sourceRecordId is missing or empty", "sourceRecordId");
+  }
+  if (value.length > 512) {
+    throw new ValidationError(
+      "sourceRecordId is longer than the 512-character limit",
+      "sourceRecordId",
+    );
   }
   return value.trim();
 }
