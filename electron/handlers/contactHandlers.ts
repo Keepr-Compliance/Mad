@@ -75,7 +75,15 @@ import {
   unlinkContactSource,
   type ContactSourceProvenance,
 } from "../services/contactProvenance";
-import type { UnlinkSourceResponse } from "../types/ipc/window-api-contacts";
+import type {
+  UnlinkSourceResponse,
+  FindLinkableSourcesResponse,
+  LinkSourceResponse,
+} from "../types/ipc/window-api-contacts";
+import {
+  findLinkableSourceRecords,
+  linkSourceRecordToContact,
+} from "../services/contactManualLink";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbRun } from "../services/db/core/dbConnection";
 import type { Contact, Transaction, ContactSource, Communication } from "../types/models";
@@ -394,6 +402,11 @@ function linkImportedContact(
   let created = 0;
   try {
     for (const identity of identities) {
+      // `assertMethod` because the USER PICKED THIS EXACT RECORD — the original
+      // BACKLOG-2419 case. Latent in practice since BACKLOG-2458: the import
+      // now writes before any sync runs, and the picker hides records the
+      // matcher has already claimed, so there is normally no weaker incumbent
+      // to upgrade. Correct if that ever stops being true.
       const result = createLink({
         userId,
         contactId,
@@ -401,6 +414,7 @@ function linkImportedContact(
         sourceRecordId: identity.sourceRecordId,
         matchMethod: "source_id",
         externalUuid: identity.externalUuid,
+        assertMethod: true,
       });
       if (result.created) created++;
     }
@@ -591,6 +605,41 @@ async function runLinkingPassWithBackfill(userId: string): Promise<void> {
 function requireUuidArg(value: unknown, fieldName: string): string {
   if (typeof value !== "string" || value.trim().length === 0 || value.length > 64) {
     throw new ValidationError(`${fieldName} is missing or malformed`, fieldName);
+  }
+  return value.trim();
+}
+
+/**
+ * A SOURCE RECORD id arriving from the renderer — and deliberately NOT
+ * `requireUuidArg` (BACKLOG-2426).
+ *
+ * `requireUuidArg`'s 64-character cap is correct for ids THIS PROCESS MINTED.
+ * An `external_contacts.external_record_id` is minted by the address book:
+ * `outlookFetchService.ts` stores the Microsoft Graph contact id verbatim
+ * (`external_record_id: contact.id`), and a Graph id is a long opaque token,
+ * not a UUID. Validating it as one would refuse to link exactly the record the
+ * founder asked for — an Outlook contact the matcher never proposed.
+ *
+ * So this is a shape check with a bound generous enough for provider ids and
+ * still bounded. Ownership is re-checked against the row in the service.
+ *
+ * THE TWO REFUSALS SAY DIFFERENT THINGS ON PURPOSE (M1). 512 is headroom over
+ * the longest identifier any supported source is known to mint — a sanity bound
+ * on an opaque third-party token, NOT a measured format. If it ever turns out
+ * to be wrong, the symptom is an Outlook record silently refusing to link: the
+ * same bug class this feature exists to fix. One shared message would leave the
+ * log unable to distinguish "too long" from "empty", which is the difference
+ * between a five-minute diagnosis and an hour.
+ */
+function requireSourceRecordIdArg(value: unknown): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new ValidationError("sourceRecordId is missing or empty", "sourceRecordId");
+  }
+  if (value.length > 512) {
+    throw new ValidationError(
+      "sourceRecordId is longer than the 512-character limit",
+      "sourceRecordId",
+    );
   }
   return value.trim();
 }
@@ -4094,6 +4143,82 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         };
       } catch (error) {
         logService.error("Unlink contact source failed", "Contacts", {
+          contactId,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        if (error instanceof ValidationError) {
+          return { success: false, error: `Validation error: ${error.message}` };
+        }
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  // =========================================================================
+  // BACKLOG-2426 — MANUAL LINKING ("these two ARE the same person")
+  //
+  // UNGATED, deliberately. Founder: "if a user wants to manually link contact
+  // one by one they can on any version, no gate protects." No entitlement
+  // check belongs in either handler.
+  // =========================================================================
+
+  ipcMain.handle(
+    "contacts:find-linkable-sources",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      query: string,
+    ): Promise<FindLinkableSourcesResponse> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        if (!validatedUserId) return { success: true, records: [] };
+        const safeQuery = typeof query === "string" ? query.slice(0, 200) : "";
+        return {
+          success: true,
+          records: findLinkableSourceRecords(validatedUserId, safeQuery),
+        };
+      } catch (error) {
+        logService.error("Find linkable sources failed", "Contacts", {
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        if (error instanceof ValidationError) {
+          return { success: false, error: `Validation error: ${error.message}` };
+        }
+        return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "contacts:link-source",
+    async (
+      _event: IpcMainInvokeEvent,
+      userId: string,
+      contactId: string,
+      sourceType: string,
+      sourceRecordId: string,
+      acknowledgedPriorRejection?: boolean,
+    ): Promise<LinkSourceResponse> => {
+      try {
+        const validatedUserId = await getValidUserId(userId, "Contacts");
+        const validatedContactId = validateContactId(contactId);
+        if (!validatedContactId) {
+          throw new ValidationError("Contact ID validation failed", "contactId");
+        }
+        if (!validatedUserId) return { success: false, error: "No local user." };
+        const outcome = linkSourceRecordToContact(
+          validatedUserId,
+          validatedContactId,
+          typeof sourceType === "string" ? sourceType : "",
+          requireSourceRecordIdArg(sourceRecordId),
+          { acknowledgedPriorRejection: acknowledgedPriorRejection === true },
+        );
+        // The refusals are ORDINARY outcomes, not errors: they cross the
+        // boundary as data so the renderer can disclose a prior unlink and ask
+        // again, rather than parsing a message string.
+        return { success: true, outcome };
+      } catch (error) {
+        logService.error("Link contact source failed", "Contacts", {
           contactId,
           error: error instanceof Error ? error.message : "Unknown error",
         });

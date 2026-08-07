@@ -23,6 +23,7 @@ import { useContactCommViewers } from "../hooks/useContactCommViewers";
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
 import { RemovedContactsSection } from "./contact/components/RemovedContactsSection";
+import { LinkSourceSearch } from "./shared/LinkSourceSearch";
 import { NotificationContext } from "../contexts/NotificationContext";
 
 interface ContactsProps {
@@ -107,8 +108,22 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   );
   const previewContactIdRef = useRef<string | null>(null);
 
+  /**
+   * Is the manual-link search open for the previewed contact? (BACKLOG-2426)
+   *
+   * Deliberately NOT keyed by contact id: `showPreviewContact` closes it on
+   * every pane change, so a boolean cannot outlive the contact it belongs to.
+   * Declared ABOVE that wrapper because the wrapper reads it.
+   */
+  const [linkSearchOpen, setLinkSearchOpen] = useState(false);
+
   const showPreviewContact = useCallback((contact: ExtendedContact | null) => {
     previewContactIdRef.current = contact?.id ?? null;
+    // BACKLOG-2426: the manual-link panel belongs to the contact that was on
+    // screen when it opened. Closing it here — rather than in each caller —
+    // means no route can leave it open over a DIFFERENT person, which would
+    // offer to attach a record to whoever is showing now.
+    setLinkSearchOpen(false);
     setPreviewContactState(contact);
   }, []);
   const [previewTransactions, setPreviewTransactions] = useState<
@@ -810,6 +825,28 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     if (!previewContact) return null;
     const external = isExternal(previewContact);
     return (
+      <>
+        {/*
+          BACKLOG-2426 — manual linking. Above the card so the search and the
+          contact it attaches to are on screen together.
+
+          `onLinked` refreshes BOTH: the sources panel gains the new row, and the
+          contact list carries the emails and phones the link just copied across
+          — the same pair `handleUnlinkSource` refreshes for the same reason, in
+          the opposite direction.
+        */}
+        {linkSearchOpen && !external && (
+          <LinkSourceSearch
+            userId={userId}
+            contactId={previewContact.id}
+            contactName={previewContact.display_name || previewContact.name || "this contact"}
+            onClose={() => setLinkSearchOpen(false)}
+            onLinked={() => {
+              refreshPreviewSources();
+              silentLoadContacts();
+            }}
+          />
+        )}
       <ContactPreview
         contact={previewContact}
         isExternal={external}
@@ -837,6 +874,10 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         unlinkNotice={external ? undefined : unlinkNotice}
         variant="pane"
         onEdit={handlePreviewEdit}
+        // BACKLOG-2426: gated exactly like the provenance props above. An
+        // external record is not a saved contact, so there is nothing to link
+        // it TO — its action is Import.
+        onLinkSource={external ? undefined : () => setLinkSearchOpen(true)}
         onImport={external ? handlePreviewImport : undefined}
         // BACKLOG-2525: the card's own row, not "an import is happening
         // somewhere". Compared by id so a background import of a different
@@ -853,6 +894,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         onClose={handleCloseDetail}
         onTransactionClick={onOpenTransaction}
       />
+      </>
     );
   };
 

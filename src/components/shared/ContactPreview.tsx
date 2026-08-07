@@ -259,6 +259,19 @@ export interface ContactPreviewProps {
   unlinkNotice?: string | null;
   /** Callback to edit the contact (imported only) */
   onEdit?: () => void;
+  /**
+   * Open the manual-link search — "these two ARE the same person"
+   * (BACKLOG-2426).
+   *
+   * Sits beside `Edit Contact`, per the founder: *"next to the edit there
+   * should be link, so the user can search for other contacts to link it
+   * with"*. Optional, so the four other surfaces that render this card are
+   * unaffected until they choose to pass it.
+   *
+   * NEVER offered on an external record: an unimported address-book row has
+   * nothing to link TO, and its action is `Import`.
+   */
+  onLinkSource?: () => void;
   /** Callback to remove the contact */
   onRemove?: () => void;
   /** Callback to import the contact (external only) */
@@ -466,6 +479,7 @@ export function ContactPreview({
   unlinkingLinkId = null,
   unlinkNotice = null,
   onEdit,
+  onLinkSource,
   onRemove,
   onImport,
   isImporting = false,
@@ -744,14 +758,47 @@ export function ContactPreview({
                     {isImporting ? "Importing…" : "Import"}
                   </button>
                 )
-              : onEdit && (
-                  <button
-                    onClick={onEdit}
-                    className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
-                    data-testid="contact-preview-edit"
+              : (onEdit || onLinkSource) && (
+                  /*
+                    BACKLOG-2426 — `Link` immediately LEFT of `Edit`, on SAVED
+                    contacts only. The `isExternal` arm above renders `Import`
+                    instead: an unimported address-book row has nothing to
+                    link TO.
+
+                    THE WRAPPER IS LOAD-BEARING, NOT COSMETIC. The row above is
+                    `justify-between` and had exactly two children for its whole
+                    life — the name block, and ONE button. Returning the two
+                    buttons as bare siblings makes THREE children, and
+                    `justify-between` then spreads them: `Link` lands stranded in
+                    the MIDDLE of the header instead of beside `Edit`. That is
+                    what the founder saw in QA ("can we move the link button to
+                    be near the edit, to its left?"). Keeping them in one flex
+                    child restores the two-child contract and puts the pair
+                    together at the right, in DOM order Link -> Edit.
+                  */
+                  <div
+                    className="flex items-center gap-2 flex-shrink-0"
+                    data-testid="contact-preview-actions"
                   >
-                    Edit Contact
-                  </button>
+                    {onLinkSource && (
+                      <button
+                        onClick={onLinkSource}
+                        className="flex-shrink-0 px-3.5 py-1.5 border border-purple-300 text-purple-700 text-sm font-semibold rounded-lg hover:bg-purple-50 transition-all"
+                        data-testid="contact-preview-link"
+                      >
+                        Link
+                      </button>
+                    )}
+                    {onEdit && (
+                      <button
+                        onClick={onEdit}
+                        className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
+                        data-testid="contact-preview-edit"
+                      >
+                        Edit Contact
+                      </button>
+                    )}
+                  </div>
                 )}
           </div>
         </div>

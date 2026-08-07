@@ -15,6 +15,8 @@ import type {
   ContactReviewCluster,
   ContactSourceProvenance,
   UnlinkSourceResponse,
+  FindLinkableSourcesResponse,
+  LinkSourceResponse,
 } from "../types/ipc/window-api-contacts";
 
 export const contactBridge = {
@@ -401,6 +403,41 @@ export const contactBridge = {
     linkId: string,
   ): Promise<UnlinkSourceResponse> =>
     ipcRenderer.invoke("contacts:unlink-source", userId, contactId, linkId),
+
+  /**
+   * BACKLOG-2426 — source records the user could attach by hand.
+   *
+   * UNCLAIMED only, by the same definition the import picker uses. An empty
+   * query lists what is available rather than nothing.
+   */
+  findLinkableSources: (
+    userId: string,
+    query: string,
+  ): Promise<FindLinkableSourcesResponse> =>
+    ipcRenderer.invoke("contacts:find-linkable-sources", userId, query),
+
+  /**
+   * Attach one source record to one saved contact, because the user said so.
+   *
+   * The first call returns `prior_rejection` when the user previously unlinked
+   * this exact pair; pass `acknowledgedPriorRejection` on the second call to
+   * overturn it. That two-step is the feature, not a retry.
+   */
+  linkSource: (
+    userId: string,
+    contactId: string,
+    sourceType: string,
+    sourceRecordId: string,
+    acknowledgedPriorRejection?: boolean,
+  ): Promise<LinkSourceResponse> =>
+    ipcRenderer.invoke(
+      "contacts:link-source",
+      userId,
+      contactId,
+      sourceType,
+      sourceRecordId,
+      acknowledgedPriorRejection,
+    ),
 };
 
 /**

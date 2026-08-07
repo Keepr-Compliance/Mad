@@ -256,12 +256,21 @@ export function confirmProposal(userId: string, proposalId: string): ReviewDecis
 
     // `manual` is the honest match_method: a human asserted this, and the
     // provenance panel will say so in exactly those words.
+    //
+    // BACKLOG-2419: until `assertMethod` existed, that comment described
+    // behaviour THE CODE DID NOT HAVE. The pair is usually ALREADY linked by
+    // the opportunistic matcher, and `createLink` discarded the incoming method
+    // and returned the incumbent — so confirming a question left the panel
+    // still reading "Matched by an email address you already had for this
+    // person" after a human had agreed it was the same person. Asserting the
+    // method is what makes the sentence true.
     const link = createLink({
       userId,
       contactId: proposal.contact_id,
       sourceType: proposal.source_type,
       sourceRecordId: proposal.source_record_id,
       matchMethod: "manual",
+      assertMethod: true,
     });
 
     const linkedElsewhere = !link.created && link.contactId !== proposal.contact_id;
