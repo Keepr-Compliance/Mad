@@ -721,6 +721,25 @@ describe("ContactPreview", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
 
+    it("pane variant pads the card head where the X row used to sit", () => {
+      // BACKLOG-2579 follow-up, founder QA of PR #2249: with the X hidden,
+      // nothing separated the avatar from the top of the card on the wide
+      // two-pane layout — the head container is `px-6 pb-4` and has never had
+      // top padding of its own. Remove the `pt-6` and this goes red.
+      renderContactPreview({ variant: "pane" });
+      expect(screen.getByTestId("contact-preview-head")).toHaveClass("pt-6");
+    });
+
+    it("modal variant does NOT pad the card head (the X row already does)", () => {
+      // The other direction: the modal still renders the X row (`p-3 sm:p-4`),
+      // so padding the head unconditionally would double the gap there. Make
+      // the padding unconditional and this goes red.
+      renderContactPreview();
+      expect(screen.getByTestId("contact-preview-head")).not.toHaveClass("pt-6");
+      // ...and the row that supplies the modal's spacing is still present.
+      expect(screen.getByTestId("contact-preview-close")).toBeInTheDocument();
+    });
+
     it("pane variant keeps the rest of the card intact without the X", () => {
       // Removing a header element must not take the card's content with it.
       renderContactPreview({ variant: "pane" });

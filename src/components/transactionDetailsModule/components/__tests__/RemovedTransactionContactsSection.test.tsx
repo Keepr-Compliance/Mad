@@ -523,3 +523,63 @@ describe("BACKLOG-2568: removal labels", () => {
     expect(screen.queryByTestId(CONTACT_PILL)).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2579 follow-up — the "Show removed contacts" toggle is CENTRED.
+//
+// Founder QA of PR #2249: "can we move this to be centred - Show removed
+// contacts." The toggle lives in the SHARED RemovedItemsSection shell, used by
+// four sections, so the centring is opt-in per consumer: the emails and
+// conversations toggles must keep their left alignment. Both directions are
+// asserted — here, and in RemovedEmailsSection.test.tsx for the default.
+// ---------------------------------------------------------------------------
+describe("BACKLOG-2579: centred toggle", () => {
+  const ROW = "show-removed-transaction-contacts-toggle-row";
+
+  it("centres the toggle row", () => {
+    (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
+      success: true,
+      removedContacts: [],
+    });
+
+    renderSection();
+
+    const row = screen.getByTestId(ROW);
+    expect(row).toHaveClass("justify-center");
+    expect(row).not.toHaveClass("justify-between");
+  });
+
+  it("keeps the toggle centred on the full row width when Select appears", async () => {
+    // The reason "Select" is taken out of the flow: with justify-center and
+    // Select still in it, the toggle would shift left when the section opens.
+    // Absolute positioning keeps the toggle centred on the row's full width.
+    (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
+      success: true,
+      removedContacts: [JANE, OMAR],
+    });
+
+    renderSection();
+    await openSection();
+
+    const row = screen.getByTestId(ROW);
+    expect(row).toHaveClass("relative");
+    expect(row).toHaveClass("justify-center");
+
+    const select = screen.getByTestId("select-removed-transaction-contacts");
+    expect(select).toHaveClass("absolute");
+    expect(select).toHaveClass("right-0");
+  });
+
+  it("still toggles the section open and closed", async () => {
+    // Behaviour and testid are unchanged — only the alignment moved.
+    (window.api.transactions.getRemovedContacts as jest.Mock).mockResolvedValue({
+      success: true,
+      removedContacts: [JANE],
+    });
+
+    renderSection();
+    await openSection();
+
+    expect(screen.getByText("Jane Example")).toBeInTheDocument();
+  });
+});

@@ -645,8 +645,27 @@ export function ContactPreview({
             avatar + name/pills column, replacing the prior centered layout. The
             contextual primary action (Import / Edit) sits top-right, across
             from the name — moved out of the footer per Daniel's refinement.
-            Remove stays a secondary action in the footer. */}
-        <div className="px-6 pb-4">
+            Remove stays a secondary action in the footer.
+
+            BACKLOG-2579 follow-up (founder QA of PR #2249): this container has
+            never carried top padding, and never needed any — the close-X row
+            above it (`p-3 sm:p-4`) supplied the gap. Hiding the X in the pane
+            variant took that gap with it and left the avatar flush against the
+            top of the card on the wide (>=1200px) two-pane layout, which has
+            nothing above it at all.
+
+            So the padding is added for the PANE VARIANT ONLY, gated exactly the
+            way the X is hidden. The modal variant still renders the X row and
+            an unconditional value would double-pad it.
+
+            `pt-6` rather than the X row's `p-3 sm:p-4`: it makes the top inset
+            equal to this container's own `px-6`, so the card head sits on a
+            consistent 24px inset instead of inheriting a leftover measurement
+            from a row that no longer exists. */}
+        <div
+          className={`px-6 pb-4${variant === "pane" ? " pt-6" : ""}`}
+          data-testid="contact-preview-head"
+        >
           <div className="flex gap-3.5 items-center justify-between">
             <div className="flex gap-3.5 items-center min-w-0">
               <div

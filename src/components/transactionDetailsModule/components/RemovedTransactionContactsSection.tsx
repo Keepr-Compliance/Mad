@@ -309,6 +309,10 @@ export function RemovedTransactionContactsSection({
       loading={loading}
       groups={groups}
       totalCount={totalCount}
+      // BACKLOG-2579 follow-up (founder QA of PR #2249): "can we move this
+      // to be centred". Opt-in per section — the shared shell still
+      // left-aligns the emails and conversations toggles.
+      centerToggle
       emptyToggleLabel="Show removed contacts"
       loadingLabel="Loading removed contacts..."
       emptyMessage="No removed contacts found."
