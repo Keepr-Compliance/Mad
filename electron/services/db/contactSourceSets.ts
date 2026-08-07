@@ -106,7 +106,20 @@ export function getLiveSourcesByContact(userId: string): Map<string, ContactSour
   return result;
 }
 
-/** The live source set for ONE contact. Used by the single-contact read path. */
+/**
+ * The live source set for ONE contact. Used by the single-contact read path.
+ *
+ * RETURNS `[]` FOR "NO LINKS" — THE OPPOSITE OF `attachLiveSources`, which
+ * leaves `source_types` `undefined` (noted for BACKLOG-2493). The asymmetry is
+ * fine here: a bare array return has nowhere to put "absent". But every caller
+ * that puts this value ONTO a contact or a DTO owes the field its contract —
+ * `undefined` and `[]` are NOT interchangeable, and `[]` asserts "this person
+ * has no sources", which hides them from every source leaf. Callers therefore
+ * spread it conditionally: `getContactById` and the `contacts:get-edit-data`
+ * handler both do `...(liveSources.length > 0 ? { source_types } : {})`.
+ * Getting that wrong is invisible in tests, because every consumer today reads
+ * `.length` rather than `=== undefined`.
+ */
 export function getLiveSourcesForContact(contactId: string): ContactSource[] {
   if (!crosswalkExists()) return [];
   const rows = dbAll<{ source_type: string }>(

@@ -3,7 +3,7 @@
  * Contact management methods exposed to renderer process
  */
 
-import type { Contact, NewContact, Transaction, Communication, ContactMessageThread } from "../models";
+import type { Contact, ContactSource, NewContact, Transaction, Communication, ContactMessageThread } from "../models";
 // BACKLOG-2410. TYPE-ONLY imports, fully erased at build time — the renderer
 // gains the shapes without gaining a dependency on main-process code. One
 // definition rather than a hand-copied mirror, which drifts the first time a
@@ -67,6 +67,14 @@ export interface WindowApiContacts {
     success: boolean;
     emails?: { id: string; email: string; is_primary: boolean }[];
     phones?: { id: string; phone: string; is_primary: boolean }[];
+    /**
+     * BACKLOG-2493: the contact's LIVE crosswalk sources, so a hand-built
+     * contact object (the transaction "Key Contacts" pane) shows the same
+     * source pills as the Clients & Contacts card instead of the stale
+     * INSERT-time scalar. OMITTED, never `[]`, when there are no links —
+     * `undefined` and `[]` are not interchangeable on this field.
+     */
+    source_types?: ContactSource[];
     error?: string;
   }>;
   delete: (

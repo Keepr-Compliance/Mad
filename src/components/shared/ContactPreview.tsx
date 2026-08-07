@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ResponsiveModal } from "../common/ResponsiveModal";
-import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePill";
+import { SourcePill, ImportStatusPill, mapToSourcePillSources } from "./SourcePill";
 import { formatRoleLabel } from "../../utils/transactionRoleUtils";
 import type { ExtendedContact } from "../../types/components";
 import type { Communication, ContactMessageThread, Message } from "@/types";
@@ -475,7 +475,31 @@ export function ContactPreview({
 }: ContactPreviewProps): React.ReactElement {
   const displayName = getDisplayName(contact);
   const initial = getInitial(displayName);
-  const sourcePillSource = mapToSourcePillSource(contact.source, isExternal);
+  /**
+   * BACKLOG-2493 — one pill per LIVE crosswalk source, not one per contact.
+   *
+   * This line used to call the singular `mapToSourcePillSource(contact.source,
+   * …)`. `contacts.source` is the scalar written once at INSERT that no unlink
+   * revises, so the card asserted an origin it could not support: the founder's
+   * Paul Dorian read "Outlook" while every address and number on the card had
+   * come from the Mac address book, because Outlook merely imported him first
+   * and the label never moved when the Outlook link was removed. The list filter
+   * had already been moved onto the live links (BACKLOG-2472) — so the filter
+   * and the card disagreed, and the card was the one that was wrong.
+   *
+   * `mapToSourcePillSources` is the SAME call `ContactRoleRow.tsx` and
+   * `ContactCard.tsx` already make. The live set REPLACES the scalar; the two
+   * are never unioned, or the removed source would be displayed forever, which
+   * is the defect (see SourcePill.tsx). A contact with no links — manual, or
+   * created before the crosswalk existed — keeps its scalar-derived pill,
+   * because `source_types` is left `undefined` for those and the mapper falls
+   * back. Nothing disappears.
+   */
+  const sourcePillSources = mapToSourcePillSources(
+    contact.source,
+    contact.source_types,
+    isExternal,
+  );
   const addedLabel = formatAddedDate(contact.created_at);
 
   // Collect emails and phones
@@ -683,7 +707,12 @@ export function ContactPreview({
                   {displayName}
                 </h2>
                 <div className="flex items-center gap-2 flex-wrap mt-1 text-xs text-gray-500">
-                  <SourcePill source={sourcePillSource} size="sm" />
+                  {/* BACKLOG-2493: one pill per live source — two sources show
+                      two pills, and unlinking one drops its pill on the next
+                      list load. */}
+                  {sourcePillSources.map((pillSource) => (
+                    <SourcePill key={pillSource} source={pillSource} size="sm" />
+                  ))}
                   <ImportStatusPill isImported={!isExternal} size="sm" />
                   {!isExternal && addedLabel && <span>· {addedLabel}</span>}
                 </div>

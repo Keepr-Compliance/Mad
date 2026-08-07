@@ -234,9 +234,27 @@ export function mapToSourcePillSource(
  *
  * Order is preserved from `sourceTypes` (the read path sorts it) and duplicates
  * are collapsed, since two distinct source types can map to one pill variant.
- * The singular function is kept and unchanged: `ContactPreview` and the external
- * (not-yet-imported) picker rows describe ONE source record each and have no
- * crosswalk set to read.
+ *
+ * BACKLOG-2493 — THIS FUNCTION IS NOW THE ONLY PRODUCTION ENTRY POINT.
+ *
+ * The sentence here used to read: *"The singular function is kept and unchanged:
+ * `ContactPreview` and the external (not-yet-imported) picker rows describe ONE
+ * source record each and have no crosswalk set to read."* Both halves of that
+ * are false, and leaving either standing is what let the card keep its stale
+ * label for a whole release:
+ *
+ *   - `ContactPreview` was the ONE production caller of the singular still
+ *     left after BACKLOG-2472 moved the row and the filter. That is exactly the
+ *     defect BACKLOG-2493 fixed; it now calls this function.
+ *   - The "picker rows" are not separate callers at all. `ContactSelectModal`,
+ *     `ContactAssignmentStep` and `EditContactsModal` all mount `ContactPreview`
+ *     itself, so they reach THIS function too and fall back inside it. Having no
+ *     crosswalk set is not a reason to call a different function — it is the
+ *     `!sourceTypes` branch below, which returns exactly the singular answer.
+ *
+ * `mapToSourcePillSource` is retained as the internal fallback implementation,
+ * called at the two sites below and unit-tested directly across the whole source
+ * vocabulary in `SourcePill.test.tsx`. It has no caller outside this file.
  */
 export function mapToSourcePillSources(
   source: ModelContactSource | string | undefined,
