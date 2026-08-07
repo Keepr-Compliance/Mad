@@ -47,7 +47,28 @@ interface ParsedEmail {
   raw: gmail_v1.Schema$Message;
   /** RFC 5322 Message-ID header for deduplication */
   messageIdHeader: string | null;
-  /** SHA-256 content hash for fallback deduplication (TASK-918) */
+  /**
+   * BACKLOG-2512: RFC 5322 In-Reply-To header — the Message-ID of the parent
+   * message. This is the only source of a reply edge; nothing else the app
+   * retains can reconstruct it, so it must be captured at ingest.
+   */
+  inReplyTo: string | null;
+  /** BACKLOG-2512: RFC 5322 References header (full ancestor chain). */
+  references: string | null;
+  /**
+   * BACKLOG-2512: when the recipient's server accepted the message.
+   * Gmail's `internalDate` IS the receive timestamp (not the sender-asserted
+   * `Date:` header), so this is the same value currently assigned to `date`.
+   * See BACKLOG-2571: `date` is presently written to `sent_at`, which is the
+   * pre-existing mis-mapping this task deliberately does not change.
+   */
+  receivedAt: Date | null;
+  /**
+   * SHA-256 content hash for fallback deduplication (TASK-918).
+   * BACKLOG-2572: NOT comparable across providers — this hash is computed over
+   * Gmail's `internalDate` (received time) while outlookFetchService hashes over
+   * `sentDateTime` (send time). Do not use it for cross-provider dedup.
+   */
   contentHash: string;
   /** ID of the original message if this is a duplicate (TASK-919) */
   duplicateOf?: string;
@@ -573,6 +594,14 @@ class GmailFetchService {
       labels: message.labelIds || [],
       raw: message,
       messageIdHeader: extractMessageIdHeader(headers),
+      // BACKLOG-2512: threading headers. `format: "full"` (see searchEmails)
+      // returns the complete header array, so these need no extra API call and
+      // no additional OAuth scope.
+      inReplyTo: getHeader("In-Reply-To"),
+      references: getHeader("References"),
+      // BACKLOG-2512: `sentDate` here is parsed from `message.internalDate`,
+      // which is Gmail's RECEIVE timestamp — the correct source for received_at.
+      receivedAt: sentDate,
       contentHash,
       participants,
     };

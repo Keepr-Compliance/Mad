@@ -8,6 +8,7 @@
 
 import gmailFetchService from "../gmailFetchService";
 import databaseService from "../databaseService";
+import type { StoreableEmail } from "../emailSyncService";
 import type { OAuthToken } from "../../types/models";
 import { google } from "googleapis";
 import {
@@ -791,6 +792,165 @@ describe("GmailFetchService", () => {
       const results = await gmailFetchService.searchEmails({});
 
       expect(results[0].messageIdHeader).toBe(specialMessageId);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BACKLOG-2512: threading headers + received timestamp
+  //
+  // These fields were never extracted. They are per-message facts that cannot
+  // be reconstructed from anything the app stores, so if the parser drops them
+  // the only recovery is re-reading every mailbox.
+  //
+  // Fixture provenance: the `Schema$Message` shape below (id / threadId /
+  // internalDate / payload.headers[] / payload.body.data base64) is transcribed
+  // from the fixtures already used throughout this suite, which mirror what
+  // `users.messages.get({ format: "full" })` returns. Addresses use RFC 2606
+  // reserved domains.
+  // ─────────────────────────────────────────────────────────────────────────
+  describe("BACKLOG-2512 threading headers and received timestamp", () => {
+    const mockTokenRecord = {
+      id: "token-id",
+      user_id: mockUserId,
+      provider: "google" as const,
+      purpose: "mailbox" as const,
+      access_token: mockAccessToken,
+      refresh_token: mockRefreshToken,
+      token_expires_at: new Date(Date.now() + 3600000).toISOString(),
+      connected_email_address: "test@example.com",
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as OAuthToken;
+
+    beforeEach(async () => {
+      mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
+      mockMessagesList.mockResolvedValue({
+        data: { messages: [{ id: "msg-1" }] },
+      });
+      await gmailFetchService.initialize(mockUserId);
+    });
+
+    /** A reply carrying the full threading header set. */
+    function mockReplyMessage(): void {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          labelIds: ["INBOX", "IMPORTANT"],
+          payload: {
+            headers: [
+              { name: "Subject", value: "RE: Closing docs" },
+              { name: "From", value: "agent@example.com" },
+              { name: "To", value: "me@example.com" },
+              { name: "Message-ID", value: "<child-001@mail.example.com>" },
+              { name: "In-Reply-To", value: "<parent-000@mail.example.com>" },
+              {
+                name: "References",
+                value:
+                  "<root-000@mail.example.com> <parent-000@mail.example.com>",
+              },
+            ],
+            mimeType: "text/plain",
+            body: { data: Buffer.from("Body").toString("base64") },
+          },
+        },
+      });
+    }
+
+    it("extracts In-Reply-To — the parent pointer that makes a reply edge computable", async () => {
+      mockReplyMessage();
+
+      const results = await gmailFetchService.searchEmails({});
+
+      expect(results[0].inReplyTo).toBe("<parent-000@mail.example.com>");
+    });
+
+    it("extracts the References ancestor chain verbatim", async () => {
+      mockReplyMessage();
+
+      const results = await gmailFetchService.searchEmails({});
+
+      expect(results[0].references).toBe(
+        "<root-000@mail.example.com> <parent-000@mail.example.com>",
+      );
+    });
+
+    it("matches threading header names case-insensitively (Gmail does not normalize casing)", async () => {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: {
+            headers: [
+              { name: "in-reply-to", value: "<lower-parent@example.com>" },
+              { name: "REFERENCES", value: "<lower-root@example.com>" },
+            ],
+            mimeType: "text/plain",
+            body: { data: Buffer.from("Body").toString("base64") },
+          },
+        },
+      });
+
+      const results = await gmailFetchService.searchEmails({});
+
+      expect(results[0].inReplyTo).toBe("<lower-parent@example.com>");
+      expect(results[0].references).toBe("<lower-root@example.com>");
+    });
+
+    it("returns null threading headers for a thread-root message (not undefined)", async () => {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: {
+            headers: [{ name: "Subject", value: "New listing" }],
+            mimeType: "text/plain",
+            body: { data: Buffer.from("Body").toString("base64") },
+          },
+        },
+      });
+
+      const results = await gmailFetchService.searchEmails({});
+
+      expect(results[0].inReplyTo).toBeNull();
+      expect(results[0].references).toBeNull();
+    });
+
+    it("sets receivedAt from internalDate, which is Gmail's receive timestamp", async () => {
+      mockReplyMessage();
+
+      const results = await gmailFetchService.searchEmails({});
+
+      // 1700000000000 ms → 2023-11-14T22:13:20.000Z
+      expect(results[0].receivedAt).toEqual(new Date(1700000000000));
+      expect(results[0].receivedAt?.toISOString()).toBe(
+        "2023-11-14T22:13:20.000Z",
+      );
+    });
+
+    it("is structurally assignable to the writer's StoreableEmail (guards against a producer-side rename)", async () => {
+      mockReplyMessage();
+
+      const results = await gmailFetchService.searchEmails({});
+      const parsed = results[0];
+
+      // Compile-time assertion. The writer test builds its own StoreableEmail
+      // fixture, so renaming a property here (e.g. inReplyTo → replyTo) would
+      // otherwise leave BOTH suites green while the column silently went NULL
+      // again — exactly how `labels` and `contentHash` were lost originally.
+      const _wireCheck: StoreableEmail = parsed;
+      expect(_wireCheck.inReplyTo).toBe("<parent-000@mail.example.com>");
+      expect(_wireCheck.references).toBe(
+        "<root-000@mail.example.com> <parent-000@mail.example.com>",
+      );
+      expect(_wireCheck.receivedAt).toEqual(new Date(1700000000000));
+      // Already produced before this task, but only now visible to the writer.
+      expect(_wireCheck.labels).toEqual(["INBOX", "IMPORTANT"]);
+      expect(_wireCheck.contentHash).toMatch(/^[0-9a-f]{64}$/);
     });
   });
 });
