@@ -73,7 +73,11 @@ jest.mock("../contactSourceValues", () => {
   };
 });
 
-import { findLinkableSourceRecords, linkSourceRecordToContact } from "../contactManualLink";
+import {
+  findLinkableSourceRecords,
+  linkSourceRecordToContact,
+  linkSourceRecordsToContact,
+} from "../contactManualLink";
 import { resolveSourceRecord } from "../contactSourceLinker";
 import { confirmProposal } from "../contactLinkReview";
 import { getContactProvenance } from "../contactProvenance";
@@ -193,6 +197,46 @@ afterEach(() => {
 // 1. THE SEARCH — unclaimed records only
 // ===========================================================================
 describe("findLinkableSourceRecords", () => {
+  /**
+   * =========================================================================
+   * R-A — THE CONTROL THIS SWAP CANNOT SHIP WITHOUT (BACKLOG-2591)
+   * =========================================================================
+   * Rendering through `ContactSearchList` makes it tempting to also feed the
+   * link panel the `externalContacts` the transaction pickers already hold —
+   * the data "is right there". IT IS NOT THE SAME SET, and the difference is
+   * the whole feature.
+   *
+   * `contacts:get-available` applies THREE exclusions:
+   *
+   *   1. `linkedSourceKeys.has(sourceKey(...))`        — the crosswalk
+   *   2. `emailClaimedByImported(primaryEmail, name)`  — a heuristic
+   *   3. `phoneClaimedByImported(normalized, name)`    — a heuristic
+   *
+   * `findLinkableSourceRecords` applies ONLY the crosswalk. So a record no
+   * crosswalk row claims but whose EMAIL matches a saved contact is linkable
+   * here and INVISIBLE there — and that is the single most common duplicate
+   * shape the founder reported: an address-book entry for someone he has
+   * already saved, never linked.
+   *
+   * Reusing the picker's data would have removed the feature's purpose while
+   * every other test in this repo stayed green.
+   *
+   * CONTROL: add an email-claimed exclusion here, i.e. make this behave like
+   * `get-available`.
+   */
+  it("offers a record whose EMAIL matches a saved contact but which no crosswalk row claims", () => {
+    mockDb!
+      .prepare("INSERT INTO contact_emails (id, contact_id, email, is_primary) VALUES (?, ?, ?, 1)")
+      .run("pat-e0", PAT, "pat@example.com");
+
+    // An address-book record for the SAME person, sharing that email, with NO
+    // crosswalk row. `get-available` suppresses this as "already imported";
+    // linking must still offer it, because attaching it IS the feature.
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+
+    expect(findLinkableSourceRecords(USER).map((r) => r.sourceRecordId)).toEqual([MACOS_RECORD]);
+  });
+
   /**
    * CONTROL: drop the `claimed.has(...)` filter.
    * OBSERVED: 1 failed / 12 passed — the claimed record joins the results.
@@ -615,5 +659,139 @@ describe("a sync pass must not withdraw the Unlink button (§A1)", () => {
     // Corroboration, after the fact: the same state, read from the crosswalk.
     expect(sourceList.map((s) => s.matchMethod)).toEqual(["email"]);
     expect(linkSet(PAT)).toEqual([`macos|${MACOS_RECORD}|email`]);
+  });
+});
+
+// ===========================================================================
+// 7. MULTI-RECORD LINKING (BACKLOG-2591)
+// ===========================================================================
+describe("linking several records at once", () => {
+  const SECOND_RECORD = "macos-pat-2";
+
+  /**
+   * THE ATOMICITY SHAPE, AND WHY IT IS A LOOP.
+   *
+   * Each record gets its OWN transaction. Wrapping the batch in one would let a
+   * single already-claimed record — a refusal, not an error — discard every
+   * good link beside it: the user picks three, one belongs to someone else, and
+   * they get nothing, with no message that could honestly explain why.
+   *
+   * CONTROL: wrap the loop body in a single `dbTransaction`.
+   */
+  it("links the good records even when one is claimed by another contact", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
+    addExternal(SECOND_RECORD, "Pat Riverton work", { emails: ["p.riverton@example.net"] });
+
+    // The middle record already belongs to JANE.
+    createLink({
+      userId: USER,
+      contactId: JANE,
+      sourceType: "outlook",
+      sourceRecordId: OUTLOOK_RECORD,
+      matchMethod: "email",
+    });
+
+    const outcomes = linkSourceRecordsToContact(USER, PAT, [
+      { sourceType: "macos", sourceRecordId: MACOS_RECORD },
+      { sourceType: "outlook", sourceRecordId: OUTLOOK_RECORD },
+      { sourceType: "macos", sourceRecordId: SECOND_RECORD },
+    ]);
+
+    // One outcome per input, SAME ORDER — so the caller can name which record
+    // did what without matching on identity.
+    expect(outcomes.map((o) => (o.ok ? "ok" : o.reason))).toEqual(["ok", "claimed", "ok"]);
+
+    // Both good links exist; the incumbent's link is untouched.
+    expect(linkSet(PAT)).toEqual([
+      `macos|${MACOS_RECORD}|manual`,
+      `macos|${SECOND_RECORD}|manual`,
+    ]);
+    expect(linkSet(JANE)).toEqual([`outlook|${OUTLOOK_RECORD}|email`]);
+  });
+
+  /**
+   * The batch disclosure: records the user previously unlinked come back
+   * `prior_rejection` and write NOTHING, while the others link normally — so
+   * the question is asked once for the batch rather than per record.
+   *
+   * CONTROL: skip the `getLatestVerdict` read in `linkSourceRecordToContact`.
+   */
+  it("discloses prior rejections once, without blocking the others", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
+    recordVerdict({
+      userId: USER,
+      contactId: PAT,
+      sourceType: "outlook",
+      sourceRecordId: OUTLOOK_RECORD,
+      identityVerdict: "different_people",
+      decidedBy: "provenance_unlink",
+    });
+
+    const first = linkSourceRecordsToContact(USER, PAT, [
+      { sourceType: "macos", sourceRecordId: MACOS_RECORD },
+      { sourceType: "outlook", sourceRecordId: OUTLOOK_RECORD },
+    ]);
+    expect(first.map((o) => (o.ok ? "ok" : o.reason))).toEqual(["ok", "prior_rejection"]);
+    expect(linkSet(PAT)).toEqual([`macos|${MACOS_RECORD}|manual`]);
+
+    // Asked once, answered once.
+    const second = linkSourceRecordsToContact(
+      USER,
+      PAT,
+      [{ sourceType: "outlook", sourceRecordId: OUTLOOK_RECORD }],
+      { acknowledgedPriorRejections: [{ sourceType: "outlook", sourceRecordId: OUTLOOK_RECORD }] },
+    );
+    expect(second.map((o) => o.ok)).toEqual([true]);
+    expect(hasCannotLink(USER, PAT, "outlook", OUTLOOK_RECORD)).toBe(false);
+  });
+
+  /**
+   * BACKLOG-2591 — THE COST OF DROPPING THE LIMIT, MEASURED RATHER THAN ASSUMED.
+   *
+   * `findLinkableSourceRecords` now returns the WHOLE unclaimed set through
+   * `getAllForUser` — a synchronous `dbAll` with no LIMIT, on the main process,
+   * once per panel open. The transaction pickers move the same volume through a
+   * WORKER (TASK-1956; `get-available` measured at ~3.7s at 1000+ contacts).
+   * This path does not, so the number is recorded rather than guessed.
+   *
+   * MEASURED at 1200 records: **3 ms** — three orders of magnitude below the
+   * worker path, because that path's cost is the per-row funnel work, not the
+   * read. The ceiling below is deliberately loose: it exists to catch an
+   * order-of-magnitude regression (an accidental N+1, a per-row subquery), not
+   * to pin a machine-specific timing.
+   */
+  it("returns a realistic address book in a bounded time", () => {
+    const N = 1200;
+    const insert = mockDb!.prepare(
+      `INSERT INTO external_contacts
+        (id, user_id, name, phones_json, phones_normalized_json, emails_json,
+         external_record_id, source, synced_at, external_uuid)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'macos', ?, NULL)`,
+    );
+    const seed = mockDb!.transaction(() => {
+      for (let i = 0; i < N; i++) {
+        const exchange = String(i % 100).padStart(2, "0");
+        insert.run(
+          `ext-bulk-${i}`,
+          USER,
+          `Pat Riverton ${i}`,
+          JSON.stringify([`+1 206 555-01${exchange}`]),
+          JSON.stringify([`206555 01${exchange}`.replace(/\s/g, "")]),
+          JSON.stringify([`pat${i}@example.com`]),
+          `macos-bulk-${i}`,
+          "2026-08-07T00:00:00.000Z",
+        );
+      }
+    });
+    seed();
+
+    const started = Date.now();
+    const found = findLinkableSourceRecords(USER);
+    const elapsedMs = Date.now() - started;
+
+    expect(found).toHaveLength(N);
+    expect(elapsedMs).toBeLessThan(2000);
   });
 });
