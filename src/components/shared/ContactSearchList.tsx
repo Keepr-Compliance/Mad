@@ -381,6 +381,19 @@ export function ContactSearchList({
     () => (filterMode === "persistent" ? loadContactFilters() : trueSelectAll()),
     [filterMode],
   );
+  /**
+   * BACKLOG-2471 PR F — the "Needs review" filter.
+   *
+   * DELIBERATELY NOT PERSISTED, unlike Source and Role. Founder decision D4 made
+   * `searchQuery` session-only for the same reason, and this is the stronger
+   * case: an empty search box is VISIBLY empty, while an active filter reads as
+   * "this is the whole list". A forgotten Needs-review filter would hide the
+   * rest of the address book with nothing on screen admitting it.
+   *
+   * So it is plain state — not in `ContactFilters`, not in the
+   * `contactModal.filterModel.v1` payload, and no migration of either.
+   */
+  const [needsReviewOnly, setNeedsReviewOnly] = useState(false);
   const [selectedSources, setSelectedSources] = useState<Set<string>>(initialFilters.sources);
   const [selectedRoles, setSelectedRoles] = useState<Set<string>>(initialFilters.roles);
 
@@ -488,8 +501,26 @@ export function ContactSearchList({
       orderKeys,
       sortOrder,
     );
-    return isAddMode ? projected.filter((c) => !selectedSet.has(c.id)) : projected;
-  }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys, isAddMode, selectedSet]);
+    const afterAdd = isAddMode ? projected.filter((c) => !selectedSet.has(c.id)) : projected;
+    // BACKLOG-2471 PR F: applied LAST, on the same list the rows render from, so
+    // the chip's count and the rows it reveals cannot come from two predicates.
+    return needsReviewOnly
+      ? afterAdd.filter((c) => c.review_state?.needsReview === true)
+      : afterAdd;
+  }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys, isAddMode, selectedSet, needsReviewOnly]);
+
+  /**
+   * How many contacts still owe a decision — counted from the SAME array the
+   * filter above narrows, before it is narrowed.
+   *
+   * Not a second query and not a prop: "Review 12" opening onto 9 is the kind of
+   * small lie that costs a feature its credibility, and the only way it cannot
+   * happen is for the number and the rows to have one source.
+   */
+  const needsReviewCount = useMemo(
+    () => contacts.filter((c) => c.review_state?.needsReview === true).length,
+    [contacts],
+  );
 
   // Count of contacts hidden by the Source/Role FILTERS only (not search).
   // Zero when the filter UI is off. Drives the "N hidden" escape hatches.
@@ -796,6 +827,29 @@ export function ContactSearchList({
               Alphabetical
             </button>
           </div>
+
+          {/*
+            BACKLOG-2471 PR F — the "Needs review" chip, from the mock's list
+            section. Hidden at zero, like the header's review button: a filter
+            offering an empty result is a dead control.
+
+            It is a FILTER, not a mode — pressing it again returns the full list.
+          */}
+          {needsReviewCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setNeedsReviewOnly((on) => !on)}
+              aria-pressed={needsReviewOnly}
+              className={`flex-shrink-0 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                needsReviewOnly
+                  ? "bg-amber-50 border-amber-300 text-amber-800 font-semibold"
+                  : "bg-white border-gray-300 text-gray-600 hover:border-gray-400"
+              }`}
+              data-testid="needs-review-chip"
+            >
+              Needs review · {needsReviewCount}
+            </button>
+          )}
 
           {showFilterUI && (
             <>

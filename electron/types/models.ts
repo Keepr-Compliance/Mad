@@ -264,6 +264,24 @@ export interface UserLicense {
 // CONTACT MODELS
 // ============================================
 
+/**
+ * What the contact LIST knows about one combined contact (BACKLOG-2471 PR F).
+ *
+ * Declared here rather than in `db/contactSourceSets` because `models.ts` is the
+ * shared vocabulary both the main process and the renderer read, and a type that
+ * rides on `Contact` cannot live below it.
+ */
+export interface ContactReviewState {
+  /**
+   * How many COLUMNS the compare screen will show — not how many links exist.
+   * The screen folds the record a contact was created from into the contact's
+   * own column, so two crosswalk rows show two columns, not three.
+   */
+  columns: number;
+  /** False once every non-origin link carries a `same_person` verdict. */
+  needsReview: boolean;
+}
+
 export interface Contact {
   id: string;
   user_id: string;
@@ -294,6 +312,15 @@ export interface Contact {
    * NOT interchangeable, and nothing on the write path emits `[]`.
    */
   source_types?: ContactSource[];
+  /**
+   * Does this combined contact still owe the user a decision? (BACKLOG-2471 PR F)
+   *
+   * Stamped by `attachReviewState` beside `source_types`, and PRESENT ONLY for
+   * contacts the compare screen would open for. `undefined` means "nothing to
+   * compare, or not computed" — it must never be read as "reviewed", or a path
+   * that forgot to stamp would mark the whole address book settled.
+   */
+  review_state?: ContactReviewState;
 
   // Engagement Metrics (for CRM/Relationship Agent)
   last_inbound_at?: string;

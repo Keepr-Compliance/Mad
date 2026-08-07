@@ -357,10 +357,23 @@ export function recordVerdict(input: RecordVerdictInput): string {
  *
  * LATEST WINS, resolved here rather than by a UNIQUE constraint, because a user
  * is allowed to change their mind and the earlier answer is still history worth
- * keeping. `decided_at` has second granularity in SQLite, so `id` breaks ties on
- * two decisions inside the same second — without it the tie-break is rowid order
- * by accident rather than by intent, and "by accident" is how a reversal
- * silently fails to take effect.
+ * keeping.
+ *
+ * `decided_at` has second granularity in SQLite, so `rowid` breaks ties between
+ * two decisions inside the same second. THAT IS DELIBERATE AND IT IS THE ONLY
+ * CORRECT CHOICE HERE: `rowid` is insertion order, so it is chronological, while
+ * `recordVerdict` assigns a `uuidv4()` — ordering by `id` would be RANDOM, and a
+ * reversal made inside the same second as the answer it reverses would take
+ * effect or not by chance.
+ *
+ * This comment used to say the opposite — that `id` broke the tie and that rowid
+ * order was "by accident" — while the SQL below has always read `rowid`. It is
+ * corrected rather than deleted (BACKLOG-2471 PR F) because the danger is not
+ * the stale sentence: it is the next reader making the SQL match the prose.
+ *
+ * Anything that resolves "latest verdict" elsewhere MUST order the same way, or
+ * two surfaces will disagree about the same pair. `getRejectedSourceKeys` below
+ * and `getReviewStateByContact` in `contactSourceSets.ts` both do.
  */
 export function getLatestVerdict(
   userId: string,
