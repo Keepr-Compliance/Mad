@@ -3375,6 +3375,77 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 62,
+      description:
+        "Add emails.bulk_mail_headers to retain List-Unsubscribe/Precedence/Auto-Submitted/Authentication-Results (BACKLOG-2513)",
+      migrate: (d) => {
+        // BACKLOG-2513 — SUBSTRATE ONLY. Nothing reads this column yet, by
+        // design: it holds the raw bulk-mail headers that both providers send
+        // on every message and that were previously discarded at parse time.
+        //
+        // These are the negative-filter stage of the auto-detection design
+        // (BACKLOG-2500 §4.2) — the stage that exists because auto-detect
+        // manufactured transactions from commercial newsletters and bank mail
+        // and had to be switched off (BACKLOG-2499). Marketing mail announces
+        // itself in its headers; without them the only way to tell a newsletter
+        // from a person is to guess from content, which is what failed.
+        //
+        // Storing raw and deciding later is deliberate: a classifier written now
+        // would freeze a decision before scoring has measured anything
+        // (BACKLOG-2273). Do not add an is_bulk column here.
+        //
+        // NO BACKFILL — additive only. These are per-message facts that were
+        // never stored, so there is nothing on disk to derive them from; the
+        // only recovery would be re-reading every mailbox. Existing rows keep
+        // bulk_mail_headers NULL and no user sees anything change on upgrade.
+        //
+        // NO INDEX — deliberate, and load-bearing. Nothing reads the column, so
+        // an index would open no access path while costing a B-tree on every
+        // write to a hot table. Just as important, it must NEVER be added as a
+        // standalone CREATE INDEX in schema.sql: that file is exec'd BEFORE this
+        // chain, so an index on a not-yet-added column throws "no such column"
+        // on every real upgrade (BACKLOG-2298/2300, shipped broken in July and
+        // caught only by founder live QA). Ship the index with the query.
+        //
+        // schema.sql ALSO declares this column, matching the v46
+        // validated_at/ingest_source convention. That is readability, not
+        // necessity — schema-parity exec's schema.sql on both of its paths, so
+        // this ALTER alone would satisfy it (cf. v56, declared in neither
+        // table). It is safe only because `emails` is never positionally copied:
+        // the v36-era positional copies touched `contacts` and `audit_logs`
+        // only, and both were converted to explicit column lists by
+        // BACKLOG-2371.
+        //
+        // Consequence worth knowing: a fresh install gets the column mid-table
+        // (where schema.sql declares it) while a genuine upgrade appends it
+        // last, so physical column ordinals differ between the two. Harmless
+        // here — the emails INSERT binds named columns, EMAIL_COLUMNS in
+        // emailDbService is explicit, and the encryption rebuild is name-based —
+        // and pre-existing: v46's validated_at/ingest_source already do this.
+        //
+        // The table guard mirrors v48/v52/v53/v54/v55/v56 (a real install always
+        // has `emails`, but a minimal partial-schema fixture may not); the
+        // column guard gives re-run idempotency and lets a future schema
+        // re-baseline declare the column without this ALTER throwing
+        // "duplicate column name".
+        const hasTable = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'emails'")
+          .get();
+        if (!hasTable) return;
+
+        const cols = (
+          d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+
+        if (!cols.includes("bulk_mail_headers")) {
+          d.exec("ALTER TABLE emails ADD COLUMN bulk_mail_headers TEXT");
+          console.log(
+            "[migration v62] added emails.bulk_mail_headers column (BACKLOG-2513)",
+          );
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

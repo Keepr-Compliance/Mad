@@ -8,6 +8,10 @@ import microsoftAuthService from "./microsoftAuthService";
 import { supportTrace } from "./supportAccess/trace";
 import { OAuthToken, ParsedParticipant } from "../types/models";
 import { computeEmailHash } from "../utils/emailHash";
+import {
+  buildBulkMailHeaders,
+  type BulkMailHeaders,
+} from "../utils/bulkMailHeaders";
 import { normalizeEmailAddress } from "../utils/emailAddress";
 import { EmailDeduplicationService } from "./emailDeduplicationService";
 import {
@@ -170,6 +174,13 @@ interface ParsedEmail {
    */
   receivedAt: Date | null;
   /**
+   * BACKLOG-2513: retained bulk-mail headers (List-Unsubscribe, Precedence,
+   * Auto-Submitted, Authentication-Results) from `internetMessageHeaders`,
+   * which is already in every `$select`. Null when the message carried none.
+   * Raw values only — nothing is classified at ingest.
+   */
+  bulkMailHeaders: BulkMailHeaders | null;
+  /**
    * BACKLOG-2512: Outlook categories, stored in the shared `emails.labels`
    * column ("JSON: Gmail labels, Outlook categories", schema.sql).
    */
@@ -248,6 +259,30 @@ function getInternetHeader(message: GraphMessage, name: string): string | null {
     (h) => h.name?.toLowerCase() === target,
   );
   return header?.value || null;
+}
+
+/**
+ * BACKLOG-2513: EVERY occurrence of a header from `internetMessageHeaders`, in
+ * wire order.
+ *
+ * `getInternetHeader` above takes the first match only, which is right for
+ * single-instance headers. `Authentication-Results` legitimately repeats — one
+ * instance per authenticating hop (per `authserv-id`) — and keeping only the
+ * first would discard the hop that may be the failing one.
+ *
+ * @param message - Graph API message object
+ * @param name - Header name to find (matched case-insensitively)
+ * @returns every matching non-empty header value; empty array when absent
+ */
+function getAllInternetHeaders(message: GraphMessage, name: string): string[] {
+  if (!message.internetMessageHeaders?.length) {
+    return [];
+  }
+  const target = name.toLowerCase();
+  return message.internetMessageHeaders
+    .filter((h) => h.name?.toLowerCase() === target)
+    .map((h) => h.value)
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
 }
 
 function extractMessageIdHeader(message: GraphMessage): string | null {
@@ -1242,6 +1277,13 @@ class OutlookFetchService {
       receivedAt: new Date(message.receivedDateTime),
       // BACKLOG-2512: Outlook categories → the shared `labels` column.
       labels: message.categories ?? [],
+      // BACKLOG-2513: bulk-mail headers, captured HERE — before `parsed.raw` is
+      // zeroed below. Same shared builder as Gmail, so the two providers cannot
+      // drift in which headers are kept or what the JSON keys are named.
+      bulkMailHeaders: buildBulkMailHeaders(
+        (name) => getInternetHeader(message, name),
+        (name) => getAllInternetHeaders(message, name),
+      ),
       // TASK-918: Content hash for fallback deduplication.
       // BACKLOG-2572: hashed over sentDateTime here vs internalDate in Gmail —
       // not cross-provider comparable.

@@ -9,6 +9,7 @@
 import gmailFetchService from "../gmailFetchService";
 import databaseService from "../databaseService";
 import type { StoreableEmail } from "../emailSyncService";
+import { BULK_MAIL_HEADER_JSON_KEYS } from "../../utils/bulkMailHeaders";
 import type { OAuthToken } from "../../types/models";
 import { google } from "googleapis";
 import {
@@ -951,6 +952,196 @@ describe("GmailFetchService", () => {
       // Already produced before this task, but only now visible to the writer.
       expect(_wireCheck.labels).toEqual(["INBOX", "IMPORTANT"]);
       expect(_wireCheck.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BACKLOG-2513: bulk-mail headers
+  //
+  // These are the negative-filter stage of auto-detection (BACKLOG-2500 §4.2).
+  // Marketing mail announces itself in its headers; without them the only way
+  // to tell a newsletter from a person is to guess from content, which is what
+  // produced transactions from newsletters and bank mail (BACKLOG-2499).
+  //
+  // Fixture provenance: the `payload.headers[{name,value}]` container is the
+  // same shape used throughout this suite, mirroring
+  // `users.messages.get({ format: "full" })`. The Authentication-Results VALUE
+  // follows the real header grammar (`authserv-id; method=result
+  // reason.property=value`) with every identifier replaced by RFC 2606
+  // reserved domains. Values are lowercase, as the real header is.
+  // ─────────────────────────────────────────────────────────────────────────
+  describe("BACKLOG-2513 bulk-mail header retention", () => {
+    const mockTokenRecord = {
+      id: "token-id",
+      user_id: mockUserId,
+      provider: "google" as const,
+      purpose: "mailbox" as const,
+      access_token: mockAccessToken,
+      refresh_token: mockRefreshToken,
+      token_expires_at: new Date(Date.now() + 3600000).toISOString(),
+      connected_email_address: "test@example.com",
+      is_active: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } as OAuthToken;
+
+    beforeEach(async () => {
+      mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
+      mockMessagesList.mockResolvedValue({
+        data: { messages: [{ id: "msg-1" }] },
+      });
+      await gmailFetchService.initialize(mockUserId);
+    });
+
+    /**
+     * A commercial newsletter carrying the full bulk-mail header set.
+     *
+     * TWO Authentication-Results instances, deliberately: a single-instance
+     * fixture cannot distinguish `.find()` from `.filter()`, so it could not
+     * prove the multi-hop fold does anything.
+     */
+    function mockBulkMessage(): void {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: {
+            headers: [
+              { name: "Subject", value: "This week at Example" },
+              { name: "From", value: "news@example.com" },
+              {
+                name: "List-Unsubscribe",
+                value:
+                  "<mailto:unsub@example.com>, <https://example.com/u/abc123>",
+              },
+              {
+                name: "List-Unsubscribe-Post",
+                value: "List-Unsubscribe=One-Click",
+              },
+              { name: "Precedence", value: "bulk" },
+              { name: "Auto-Submitted", value: "auto-generated" },
+              {
+                name: "Authentication-Results",
+                value:
+                  "mx.example.com; dkim=pass header.i=@example.com; spf=pass smtp.mailfrom=example.com",
+              },
+              {
+                name: "Authentication-Results",
+                value: "relay.example.net; dmarc=fail header.from=example.com",
+              },
+            ],
+            mimeType: "text/plain",
+            body: { data: Buffer.from("Newsletter body").toString("base64") },
+          },
+        },
+      });
+    }
+
+    it("retains List-Unsubscribe, List-Unsubscribe-Post, Precedence and Auto-Submitted", async () => {
+      mockBulkMessage();
+
+      const results = await gmailFetchService.searchEmails({});
+      const headers = results[0].bulkMailHeaders;
+
+      expect(headers).not.toBeNull();
+      expect(headers?.list_unsubscribe).toBe(
+        "<mailto:unsub@example.com>, <https://example.com/u/abc123>",
+      );
+      expect(headers?.list_unsubscribe_post).toBe("List-Unsubscribe=One-Click");
+      expect(headers?.precedence).toBe("bulk");
+      expect(headers?.auto_submitted).toBe("auto-generated");
+    });
+
+    it("keeps EVERY Authentication-Results hop, in wire order (not just the first)", async () => {
+      mockBulkMessage();
+
+      const results = await gmailFetchService.searchEmails({});
+
+      // The second hop is the one that FAILS dmarc. Keeping only the first would
+      // store a pass verdict for a message that failed downstream — worse than
+      // storing nothing, because it still looks authoritative.
+      expect(results[0].bulkMailHeaders?.authentication_results).toEqual([
+        "mx.example.com; dkim=pass header.i=@example.com; spf=pass smtp.mailfrom=example.com",
+        "relay.example.net; dmarc=fail header.from=example.com",
+      ]);
+    });
+
+    it("emits only keys from the declared contract (no ad-hoc key names)", async () => {
+      mockBulkMessage();
+
+      const results = await gmailFetchService.searchEmails({});
+      const keys = Object.keys(results[0].bulkMailHeaders ?? {});
+
+      // The key set is declared once in electron/utils/bulkMailHeaders.ts. This
+      // asserts against that declaration rather than literals repeated here, so
+      // a typo'd key cannot be emitted by the builder and then faithfully
+      // re-asserted by the test.
+      for (const key of keys) {
+        expect(BULK_MAIL_HEADER_JSON_KEYS).toContain(key);
+      }
+      // This fixture carries every header, so the full declared set is expected.
+      expect(keys.sort()).toEqual([...BULK_MAIL_HEADER_JSON_KEYS].sort());
+    });
+
+    it("returns null for ordinary person-to-person mail carrying none of these headers", async () => {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: {
+            headers: [
+              { name: "Subject", value: "Closing on Thursday?" },
+              { name: "From", value: "agent@example.com" },
+            ],
+            mimeType: "text/plain",
+            body: { data: Buffer.from("Body").toString("base64") },
+          },
+        },
+      });
+
+      const results = await gmailFetchService.searchEmails({});
+
+      // null, not {} — the column stays NULL for the common case.
+      expect(results[0].bulkMailHeaders).toBeNull();
+    });
+
+    it("matches header names case-insensitively, and captures before raw is zeroed", async () => {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: {
+            headers: [
+              { name: "list-unsubscribe", value: "<mailto:u@example.com>" },
+              { name: "PRECEDENCE", value: "list" },
+            ],
+            mimeType: "text/plain",
+            body: { data: Buffer.from("Body").toString("base64") },
+          },
+        },
+      });
+
+      const results = await gmailFetchService.searchEmails({});
+
+      expect(results[0].bulkMailHeaders?.list_unsubscribe).toBe(
+        "<mailto:u@example.com>",
+      );
+      expect(results[0].bulkMailHeaders?.precedence).toBe("list");
+      // _parseMessage sets parsed.raw = {} after building the literal, so
+      // headers surviving here proves extraction happened before that zeroing.
+      expect(results[0].raw).toEqual({});
+    });
+
+    it("is structurally assignable to the writer's StoreableEmail", async () => {
+      mockBulkMessage();
+
+      const results = await gmailFetchService.searchEmails({});
+      const _wireCheck: StoreableEmail = results[0];
+
+      expect(_wireCheck.bulkMailHeaders?.precedence).toBe("bulk");
     });
   });
 });

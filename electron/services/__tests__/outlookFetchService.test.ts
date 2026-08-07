@@ -11,6 +11,7 @@ import databaseService from "../databaseService";
 import microsoftAuthService from "../microsoftAuthService";
 import axios from "axios";
 import type { StoreableEmail } from "../emailSyncService";
+import { BULK_MAIL_HEADER_JSON_KEYS } from "../../utils/bulkMailHeaders";
 import type { OAuthToken } from "../../types/models";
 
 // Mock dependencies
@@ -1250,6 +1251,176 @@ describe("OutlookFetchService", () => {
       expect(_wireCheck.receivedAt).toEqual(new Date("2024-01-15T10:00:00Z"));
       expect(_wireCheck.labels).toEqual(["Closing", "Urgent"]);
       expect(_wireCheck.contentHash).toMatch(/^[0-9a-f]{64}$/);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // BACKLOG-2513: bulk-mail headers
+  //
+  // Mirrors the Gmail block — a test covering one provider proves nothing about
+  // the other. Graph supplies these through `internetMessageHeaders`, already in
+  // every $select, so no request or scope change is involved.
+  //
+  // Fixture provenance: the `internetMessageHeaders[{name,value}]` container is
+  // the same shape used in the TASK-917 Message-ID block above. The
+  // Authentication-Results VALUE follows the real header grammar with every
+  // identifier replaced by RFC 2606 reserved domains; values are lowercase, as
+  // the real header is.
+  // ─────────────────────────────────────────────────────────────────────────
+  describe("BACKLOG-2513 bulk-mail header retention", () => {
+    beforeEach(async () => {
+      mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
+      await outlookFetchService.initialize(mockUserId);
+    });
+
+    /**
+     * A commercial newsletter with the full header set. TWO
+     * Authentication-Results instances, so the fixture can distinguish
+     * `.find()` from `.filter()`.
+     */
+    function mockBulkMessage() {
+      return {
+        id: "msg-1",
+        conversationId: "conv-1",
+        subject: "This week at Example",
+        // Address-only sender: the PII guard flags two capitalised words on a
+        // line that also carries an address (the identity-row shape from
+        // BACKLOG-2542), and this fixture needs no display name to make its
+        // point. Fixed by removing the value, not by baselining it.
+        from: { emailAddress: { address: "news@example.net" } },
+        receivedDateTime: "2024-01-15T10:00:00Z",
+        sentDateTime: "2024-01-15T09:59:00Z",
+        hasAttachments: false,
+        bodyPreview: "Newsletter body",
+        internetMessageId: "<bulk-001@example.net>",
+        internetMessageHeaders: [
+          { name: "Message-ID", value: "<bulk-001@example.net>" },
+          {
+            name: "List-Unsubscribe",
+            value: "<mailto:unsub@example.net>, <https://example.net/u/xyz789>",
+          },
+          {
+            name: "List-Unsubscribe-Post",
+            value: "List-Unsubscribe=One-Click",
+          },
+          { name: "Precedence", value: "bulk" },
+          { name: "Auto-Submitted", value: "auto-generated" },
+          {
+            name: "Authentication-Results",
+            value:
+              "mx.example.net; dkim=pass header.i=@example.net; spf=pass smtp.mailfrom=example.net",
+          },
+          {
+            name: "Authentication-Results",
+            value: "relay.example.com; dmarc=fail header.from=example.net",
+          },
+        ],
+      };
+    }
+
+    it("retains List-Unsubscribe, List-Unsubscribe-Post, Precedence and Auto-Submitted", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockBulkMessage()] } });
+
+      const results = await outlookFetchService.searchEmails({});
+      const headers = results[0].bulkMailHeaders;
+
+      expect(headers).not.toBeNull();
+      expect(headers?.list_unsubscribe).toBe(
+        "<mailto:unsub@example.net>, <https://example.net/u/xyz789>",
+      );
+      expect(headers?.list_unsubscribe_post).toBe("List-Unsubscribe=One-Click");
+      expect(headers?.precedence).toBe("bulk");
+      expect(headers?.auto_submitted).toBe("auto-generated");
+    });
+
+    it("keeps EVERY Authentication-Results hop, in wire order (not just the first)", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockBulkMessage()] } });
+
+      const results = await outlookFetchService.searchEmails({});
+
+      // The second hop FAILS dmarc — the one a first-match fold would discard.
+      expect(results[0].bulkMailHeaders?.authentication_results).toEqual([
+        "mx.example.net; dkim=pass header.i=@example.net; spf=pass smtp.mailfrom=example.net",
+        "relay.example.com; dmarc=fail header.from=example.net",
+      ]);
+    });
+
+    it("emits only keys from the declared contract, identical to Gmail's", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockBulkMessage()] } });
+
+      const results = await outlookFetchService.searchEmails({});
+      const keys = Object.keys(results[0].bulkMailHeaders ?? {});
+
+      for (const key of keys) {
+        expect(BULK_MAIL_HEADER_JSON_KEYS).toContain(key);
+      }
+      // Same declared set the Gmail suite asserts — the shared builder is what
+      // keeps the two providers from drifting in key naming.
+      expect(keys.sort()).toEqual([...BULK_MAIL_HEADER_JSON_KEYS].sort());
+    });
+
+    it("returns null when internetMessageHeaders carries none of these headers", async () => {
+      const msg = {
+        id: "msg-1",
+        conversationId: "conv-1",
+        subject: "Closing on Thursday?",
+        receivedDateTime: "2024-01-15T10:00:00Z",
+        sentDateTime: "2024-01-15T09:59:00Z",
+        hasAttachments: false,
+        internetMessageHeaders: [
+          { name: "Message-ID", value: "<person-001@example.net>" },
+        ],
+      };
+      mockAxios.mockResolvedValue({ data: { value: [msg] } });
+
+      const results = await outlookFetchService.searchEmails({});
+
+      expect(results[0].bulkMailHeaders).toBeNull();
+    });
+
+    it("returns null when internetMessageHeaders is absent entirely", async () => {
+      const msg = {
+        id: "msg-1",
+        conversationId: "conv-1",
+        subject: "No headers projected",
+        receivedDateTime: "2024-01-15T10:00:00Z",
+        sentDateTime: "2024-01-15T09:59:00Z",
+        hasAttachments: false,
+      };
+      mockAxios.mockResolvedValue({ data: { value: [msg] } });
+
+      const results = await outlookFetchService.searchEmails({});
+
+      expect(results[0].bulkMailHeaders).toBeNull();
+    });
+
+    it("matches header names case-insensitively, and captures before raw is zeroed", async () => {
+      const msg = {
+        ...mockBulkMessage(),
+        internetMessageHeaders: [
+          { name: "list-unsubscribe", value: "<mailto:u@example.net>" },
+          { name: "PRECEDENCE", value: "list" },
+        ],
+      };
+      mockAxios.mockResolvedValue({ data: { value: [msg] } });
+
+      const results = await outlookFetchService.searchEmails({});
+
+      expect(results[0].bulkMailHeaders?.list_unsubscribe).toBe(
+        "<mailto:u@example.net>",
+      );
+      expect(results[0].bulkMailHeaders?.precedence).toBe("list");
+      // Proves capture preceded `parsed.raw = {}`.
+      expect(results[0].raw).toEqual({});
+    });
+
+    it("is structurally assignable to the writer's StoreableEmail", async () => {
+      mockAxios.mockResolvedValue({ data: { value: [mockBulkMessage()] } });
+
+      const results = await outlookFetchService.searchEmails({});
+      const _wireCheck: StoreableEmail = results[0];
+
+      expect(_wireCheck.bulkMailHeaders?.precedence).toBe("bulk");
     });
   });
 });

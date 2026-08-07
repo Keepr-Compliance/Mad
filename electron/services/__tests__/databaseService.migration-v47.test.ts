@@ -261,13 +261,14 @@ describe("databaseService migration v47 (BACKLOG-1861 — legacy email dedup)", 
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
     expect(row.version).toBe(latestVersion(harness));
-    // Latest migration is now v60: BACKLOG-2427's hand-typed contact value
-    // provenance recovery sits on top of v59's contact link review queue,
+    // Latest migration is now v62: BACKLOG-2513's emails.bulk_mail_headers sits
+    // on top of v61's crosswalk origin vocabulary, v60's hand-typed contact
+    // value provenance recovery, v59's contact link review queue,
     // v58's external_contacts.source_identity_json, v57's contact_source_links
     // crosswalk, v56 tombstone columns (contacts / transaction_contacts
     // removed_at + removed_reason), v55 match_reason, v54 sync_session_id
     // indexes, and v53 message_import_state.
-    expect(row.version).toBe(61);
+    expect(row.version).toBe(62);
   });
 
   it("collapses a legacy+new pair: legacy deleted, comms link moved to new", async () => {
