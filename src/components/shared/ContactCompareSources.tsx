@@ -64,6 +64,21 @@ interface ContactCompareSourcesProps {
   contactId: string;
   onClose: () => void;
   /**
+   * BACKLOG-2502 — THE HOST OWNS THE DISMISSAL, so this screen renders none.
+   *
+   * Founder ruling, 2026-08-09. Inside the duplicates modal this is a screen
+   * within a screen, and it carried three ways out at once: the modal's `Done`,
+   * a `← Back to the list` above the card, and this card's own `×`. He asked
+   * for ONE, in the place the eye already goes for a modal — the top right of
+   * the modal header, above its divider. The other two are gone; this flag is
+   * how the third one stands down without the contact route losing its `×`,
+   * where the card IS the host and its `×` is the only exit there is.
+   *
+   * A flag rather than a second component: the two routes differ in exactly one
+   * control, and a fork would let the rest of the screen drift apart.
+   */
+  hideClose?: boolean;
+  /**
    * Detach ONE source record (BACKLOG-2471 PR D).
    *
    * This is `Contacts.tsx`'s OWN `handleUnlinkSource` — the same function the
@@ -311,6 +326,7 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
   userId,
   contactId,
   onClose,
+  hideClose,
   onUnlinkSource,
   unlinkingLinkId,
   onConfirmed,
@@ -438,14 +454,16 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
             </p>
           )}
         </div>
-        <button
-          onClick={onClose}
-          aria-label="Close compare"
-          data-testid="compare-close"
-          className="ml-auto flex-shrink-0 text-gray-400 hover:text-gray-900 rounded px-1.5 leading-none text-xl"
-        >
-          ×
-        </button>
+        {!hideClose && (
+          <button
+            onClick={onClose}
+            aria-label="Close compare"
+            data-testid="compare-close"
+            className="ml-auto flex-shrink-0 text-gray-400 hover:text-gray-900 rounded px-1.5 leading-none text-xl"
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {loading && (

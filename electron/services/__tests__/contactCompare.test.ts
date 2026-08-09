@@ -64,6 +64,10 @@ import { proposeLink } from "../db/contactLinkReviewDbService";
 import { countReviewQueue, getReviewQueue } from "../contactLinkReview";
 import { canUnlinkSource } from "../../../src/utils/contactSourceAffordances";
 import { getReviewStateByContact } from "../db/contactSourceSets";
+// BACKLOG-2502 — the REAL constant the service filters origin rows by, so the
+// "no non-origin links" premise below is transcribed from the producer instead
+// of re-spelled as a source-type list that would drift away from it.
+import { ORIGIN_MATCH_METHOD } from "../db/contactIdentitySchemaSql";
 
 const USER = "user-compare-2471";
 const OTHER_USER = "user-other-2471";
@@ -1002,14 +1006,26 @@ describe("the proposed column", () => {
   });
 
   /**
-   * THE ONE THAT MATTERS.
+   * THE ONE THAT MATTERS — AND IT WAS INVERTED. Founder blocker, 2026-08-09.
    *
-   * `isConfirmed` quantifies over non-origin LINKS. A proposal is not a link, so
-   * a proposed column must not make a settled contact read unsettled — that
-   * would re-open PR D's screen on contacts the user has already decided, and no
-   * test about the review list would catch it.
+   * This test used to assert `isConfirmed` STAYED TRUE with a candidate on
+   * screen, on the reasoning that a proposal is not a link and must not re-open
+   * PR D's screen on contacts the user has already decided. The first half of
+   * that is still true and the conclusion was still wrong: `isConfirmed` is what
+   * `ContactCompareSources` renders "You have confirmed these records are the
+   * same person" from, INSTEAD of the decision buttons. So a settled contact
+   * with a new question against it showed the founder a screen that asserted a
+   * decision he had never made and gave him no way to make one.
+   *
+   * The original worry does not materialise, and the reason is structural: only
+   * the review-queue route passes a `proposedSource`. From the contact list none
+   * is passed, `kind: "proposed"` is absent, and the expression is unchanged —
+   * which is what the second half of this test pins.
+   *
+   * CONTROL (run, red): drop `!proposedColumnPresent` from `isConfirmed` and the
+   * first assertion goes red — `Expected: false, Received: true`.
    */
-  it("does NOT change whether the contact reads confirmed", async () => {
+  it("re-opens the decision — a settled contact with a NEW question is not settled", async () => {
     confirmContactSources(USER, "pc");
     const without = await getContactCompareColumns(USER, "pc");
     expect(without!.isConfirmed).toBe(true);
@@ -1019,10 +1035,14 @@ describe("the proposed column", () => {
       sourceRecordId: "and-pc",
     });
 
-    // CONTROL: count the proposed column as a link — for instance by deriving
-    // `isConfirmed` from `columns` instead of from `nonOrigin` — and this flips.
-    expect(withProposal!.isConfirmed).toBe(true);
+    expect(withProposal!.isConfirmed).toBe(false);
     expect(withProposal!.columns.some((c) => c.kind === "proposed")).toBe(true);
+
+    // AND THE CONTACT ROUTE IS UNTOUCHED. Asked again without a candidate — the
+    // shape the contact list produces — it still reads confirmed. This is the
+    // regression guard for what PR D added, and it is asserted AFTER the flip
+    // above so a fix that simply stopped confirming anything cannot pass.
+    expect((await getContactCompareColumns(USER, "pc"))!.isConfirmed).toBe(true);
   });
 
   it("omits the column rather than rendering a blank one when the record is gone", async () => {
@@ -1133,6 +1153,99 @@ describe("the one-record contact the review queue asks about", () => {
         sourceRecordId: "out-g4",
       }),
     ).toBeNull();
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2502 — THE VACUOUS TRUTH ON THE EMPTY LINK SET
+// ===========================================================================
+
+/**
+ * FOUNDER BLOCKER, 2026-08-09, on his own data: "Test contact Blue Spaces" plus
+ * an Outlook record sharing an address. The compare screen opened, both columns
+ * rendered — and the footer read *"You have confirmed these records are the same
+ * person"* with no buttons under it.
+ *
+ * `[].every(...)` IS `true`. A contact with NO non-origin links reads confirmed
+ * unconditionally, and a contact with no non-origin links is exactly what the
+ * review queue is made of: one record, which is why an unrelated record looked
+ * like it might be a second one.
+ *
+ * The empty set is pinned BY NAME here rather than left to fall out of the
+ * proposal guard, because the two guards overlap on this shape and the emptiness
+ * is the older and less obvious of the two faults.
+ */
+describe("a contact with no non-origin links at all", () => {
+  /**
+   * The set `isConfirmed` quantifies over, read back through the SAME predicate
+   * the service filters by. Asserted as a PREMISE below: a test about the empty
+   * set that ran against a non-empty one would prove nothing, and nothing else
+   * in the fixture makes the emptiness visible.
+   */
+  const nonOriginLinks = (contactId: string): string[] =>
+    (
+      mockDb!
+        .prepare(
+          `SELECT source_type, source_record_id FROM contact_source_links
+            WHERE user_id = ? AND contact_id = ? AND match_method != ?
+            ORDER BY source_type, source_record_id`,
+        )
+        .all(USER, contactId, ORIGIN_MATCH_METHOD) as {
+        source_type: string;
+        source_record_id: string;
+      }[]
+    ).map((r) => `${r.source_type}|${r.source_record_id}`);
+
+  /**
+   * CONTROL 1 — THE FOUNDER'S EXACT CASE, and the primary test on this fix.
+   *
+   * Restore `const isConfirmed = nonOrigin.every(...)` and this goes red with
+   * `Expected: false, Received: true` — the screen that cannot be answered.
+   *
+   * Note for the reviewer: reverting EITHER guard alone leaves this green,
+   * because on this shape they overlap — `nonOrigin` is empty AND a proposed
+   * column is present. The guard that bites alone for the proposal is the
+   * settled-contact test above; the length guard is defence in depth for a shape
+   * the column rules do not currently produce without a candidate.
+   */
+  it("does not read confirmed just because it has nothing to be confirmed", async () => {
+    addContact("vt1", "Test contact Blue Spaces", { source: "manual" });
+    origin("vt1", "manual");
+    addExternal("out-vt1", "Test contact Blue Spaces", "outlook", { emails: [SHARED_EMAIL] });
+    propose("vt1", "outlook", "out-vt1", "record:out-vt1");
+
+    // THE PREMISE. This is the empty set the vacuous truth lives on.
+    expect(nonOriginLinks("vt1")).toEqual([]);
+
+    const view = await getContactCompareColumns(USER, "vt1", {
+      sourceType: "outlook",
+      sourceRecordId: "out-vt1",
+    });
+
+    // The screen the founder was looking at: two columns, one of them the
+    // candidate, and NOTHING confirmed about either of them.
+    expect(view).not.toBeNull();
+    expect(view!.columns.map((c) => c.kind)).toEqual(["contact", "proposed"]);
+    expect(view!.isConfirmed).toBe(false);
+  });
+
+  /**
+   * The same contact once the answer is in. `confirmProposal` creates the link,
+   * so the set this quantifies over stops being empty by the ordinary route —
+   * which is what makes the guard above a guard rather than a permanent `false`.
+   */
+  it("reads confirmed once the candidate has actually been linked and judged", async () => {
+    addContact("vt2", "Ada Lovelace", { source: "manual" });
+    origin("vt2", "manual");
+    addExternal("out-vt2", "Ada Lovelace", "outlook", { emails: [SHARED_EMAIL] });
+    link("vt2", "outlook", "out-vt2", "email");
+    confirmContactSources(USER, "vt2");
+
+    expect(nonOriginLinks("vt2")).toEqual(["outlook|out-vt2"]);
+    // No candidate is passed: this is the contact route, after the queue is done
+    // with it. CONTROL: keep `nonOrigin.length > 0` but move it AFTER a `!`, or
+    // leave `!proposedColumnPresent` permanently false, and this goes red.
+    expect((await getContactCompareColumns(USER, "vt2"))!.isConfirmed).toBe(true);
   });
 });
 

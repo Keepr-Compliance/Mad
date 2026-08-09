@@ -875,6 +875,40 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     }
   };
 
+  /**
+   * BACKLOG-2502 — WHERE `Confirm & edit` LANDS. ONE FUNCTION, BOTH ENTRY PATHS.
+   *
+   * Founder ruling, 2026-08-09: from the duplicates queue, confirm-and-edit must
+   * open the contact card *"exactly as confirm-and-edit does when a contact is
+   * opened from the main list. Same destination, same behaviour — not a
+   * variant."*
+   *
+   * Sameness is enforced by CONSTRUCTION rather than by two call sites agreeing:
+   * the compare screen mounted from the detail pane and the one mounted inside
+   * `ReviewDuplicatesModal` are handed this same function, so a change to the
+   * destination cannot reach one route and miss the other. `Contacts.compareWayIn`
+   * then walks both paths and compares what is on screen at the end, which is
+   * what would catch a future fork.
+   *
+   * `showPreviewContact` rather than a bare `setCompareOpen(false)`: on the queue
+   * route the contact being confirmed is usually NOT the one the pane is showing,
+   * so the card has to be pointed at it. On the main-list route it is already
+   * that contact and the call is a no-op beyond closing the compare screen —
+   * which is exactly what this used to do there.
+   *
+   * The pane is left MOUNTED under the form (BACKLOG-2566): the form is `z-[70]`
+   * and covers it, and clearing it is what used to drop the user on the list when
+   * they saved.
+   */
+  const openContactCardForEdit = (contact: ExtendedContact) => {
+    showPreviewContact(contact);
+    refreshPreviewSources();
+    refreshReviewQueueCount();
+    silentLoadContacts();
+    setSelectedContact(contact);
+    setShowAddEdit(true);
+  };
+
   // Handle adding a new contact manually
   const handleAddManually = () => {
     setSelectedContact(undefined);
@@ -917,13 +951,9 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             refreshReviewQueueCount();
             silentLoadContacts();
           }}
-          onConfirmedAndEdit={() => {
-            setCompareOpen(false);
-            refreshPreviewSources();
-            refreshReviewQueueCount();
-            silentLoadContacts();
-            handlePreviewEdit();
-          }}
+          // BACKLOG-2502 — the SHARED destination. The queue route below hands
+          // the same function the contact it just confirmed.
+          onConfirmedAndEdit={() => openContactCardForEdit(previewContact)}
         />
       );
     }
@@ -1327,6 +1357,23 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             refreshReviewQueueCount();
             refreshPreviewSources();
             silentLoadContacts();
+          }}
+          /*
+            BACKLOG-2502 — `Confirm & edit` from the queue leaves for the card.
+
+            The modal closes first (it is above the card and would cover it), and
+            the destination is `openContactCardForEdit` — the SAME function the
+            detail pane's compare screen uses, not a second version of it.
+
+            A contact that is not in the loaded list has no `ExtendedContact` to
+            open a form over, so the queue simply closes: the confirm itself has
+            already been written and `onResolved` has already refreshed the list.
+            That is a stale-list case, not a lost answer.
+          */
+          onConfirmedAndEdit={(contactId) => {
+            setShowReviewDuplicates(false);
+            const contact = contacts.find((c) => c.id === contactId);
+            if (contact) openContactCardForEdit(contact as ExtendedContact);
           }}
         />
       )}

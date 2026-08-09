@@ -718,12 +718,45 @@ export async function getContactCompareColumns(
     ? { method: sourceRows[0].match_method, source: sourceRows[0].source_type }
     : null;
 
-  // Over LINKS, not columns — `nonOrigin`, which includes the row column 1
-  // absorbed. See the field's docblock; confirming only the rendered columns
-  // would make this unreachable.
-  const isConfirmed = nonOrigin.every((l) =>
-    hasMustLink(userId, contactId, l.source_type as ExternalContactSource, l.source_record_id),
-  );
+  /*
+    Over LINKS, not columns — `nonOrigin`, which includes the row column 1
+    absorbed. See the field's docblock; confirming only the rendered columns
+    would make this unreachable.
+
+    BACKLOG-2502 — TWO GUARDS IN FRONT OF THE QUANTIFIER, NOT A NEW QUANTIFIER.
+
+    `every` over the existing links answers "is everything already linked also
+    already confirmed". That is the right question on the contact route, and it
+    is the wrong answer to "is there anything left to decide" in two ways the
+    review-queue route hits immediately:
+
+      1. AN OPEN PROPOSAL IS NOT A LINK. The candidate column is by definition
+         unlinked, so it cannot make the predicate false. A contact whose
+         existing links are all confirmed therefore reads confirmed while an
+         unanswered question stands against it, and `ContactCompareSources`
+         renders "You have confirmed these records are the same person" in
+         place of the decision buttons — asserting a decision the user never
+         made, and offering no way to make one.
+      2. `[].every(...)` IS `true`. A SINGLE-RECORD contact has no non-origin
+         links at all, so it reads confirmed unconditionally — and a
+         single-record contact with one candidate is precisely what the review
+         queue is made of. This is the founder's case, 2026-08-09.
+
+    Both guards sit IN FRONT of the quantifier, so the absorbed-row case the
+    docblock below protects is untouched: with links present and no proposal,
+    this is the same expression it has always been.
+
+    `proposedColumnPresent` is read off the columns actually built rather than
+    re-deriving it from `proposedSource`/`proposedRecord`, so it cannot come to
+    disagree with whether the candidate is on screen.
+  */
+  const proposedColumnPresent = columns.some((c) => c.kind === "proposed");
+  const isConfirmed =
+    !proposedColumnPresent &&
+    nonOrigin.length > 0 &&
+    nonOrigin.every((l) =>
+      hasMustLink(userId, contactId, l.source_type as ExternalContactSource, l.source_record_id),
+    );
 
   return {
     contactId,

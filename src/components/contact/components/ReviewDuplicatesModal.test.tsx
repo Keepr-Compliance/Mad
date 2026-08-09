@@ -423,6 +423,56 @@ describe("ReviewDuplicatesModal", () => {
 // BACKLOG-2502 — THE CARD SETTLES WHAT IT CAN; THE COMPARE SCREEN TAKES THE REST
 // ===========================================================================
 
+/**
+ * The compare view the QUEUE route produces: the contact, and the candidate as
+ * `kind: "proposed"`.
+ *
+ * `isConfirmed: false` is what the service now returns for this shape — a
+ * contact with an open proposal against it. Before the BACKLOG-2502 blocker fix
+ * it returned `true` here (`[].every(...)` on a contact with no non-origin
+ * links), which is what replaced the decision buttons with "You have confirmed
+ * these records are the same person". `contactCompare.test.ts` pins the producer
+ * on that shape, so this fixture is not describing a state it cannot emit.
+ */
+function compareView(overrides: Record<string, unknown> = {}) {
+  return {
+    contactId: "c-daniel",
+    isConfirmed: false,
+    title: "Is this the same Daniel Haim?",
+    reason: "Both records list the phone number +1 (415) 555-0134.",
+    namesMatch: false,
+    columns: [
+      {
+        linkId: "l-origin",
+        kind: "contact",
+        columnLabel: "Mac address book",
+        displayName: "Daniel Haim",
+        name: { value: "Daniel Haim", matched: false },
+        emails: [],
+        phones: [],
+        company: null,
+        transactions: [],
+        recentCommunication: [],
+        sourceRecordPresent: true,
+      },
+      {
+        linkId: "proposed:macos:mac-lilly",
+        kind: "proposed",
+        columnLabel: "Mac address book",
+        displayName: "Nina Stone",
+        name: { value: "Nina Stone", matched: false },
+        emails: [],
+        phones: [],
+        company: null,
+        transactions: [],
+        recentCommunication: [],
+        sourceRecordPresent: true,
+      },
+    ],
+    ...overrides,
+  };
+}
+
 describe("the way into the compare screen", () => {
   beforeEach(() => {
     jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
@@ -430,44 +480,7 @@ describe("the way into the compare screen", () => {
       clusters: [cluster()],
     });
     const api = window.api.contacts as unknown as Record<string, jest.Mock>;
-    api.getCompareColumns = jest.fn().mockResolvedValue({
-      success: true,
-      view: {
-        contactId: "c-daniel",
-        isConfirmed: false,
-        title: "Is this the same Daniel Haim?",
-        reason: "Both records list the phone number +1 (415) 555-0134.",
-        namesMatch: false,
-        columns: [
-          {
-            linkId: "l-origin",
-            kind: "contact",
-            columnLabel: "Mac address book",
-            displayName: "Daniel Haim",
-            name: { value: "Daniel Haim", matched: false },
-            emails: [],
-            phones: [],
-            company: null,
-            transactions: [],
-            recentCommunication: [],
-            sourceRecordPresent: true,
-          },
-          {
-            linkId: "proposed:macos:mac-lilly",
-            kind: "proposed",
-            columnLabel: "Mac address book",
-            displayName: "Nina Stone",
-            name: { value: "Nina Stone", matched: false },
-            emails: [],
-            phones: [],
-            company: null,
-            transactions: [],
-            recentCommunication: [],
-            sourceRecordPresent: true,
-          },
-        ],
-      },
-    });
+    api.getCompareColumns = jest.fn().mockResolvedValue({ success: true, view: compareView() });
   });
 
   /**
@@ -590,6 +603,181 @@ describe("a confirm that linked nothing", () => {
     // wipes is a message nobody reads.
     expect(await screen.findByTestId("review-duplicates-notice")).toHaveTextContent(
       "That record is already saved to a different contact, so it was not joined here.",
+    );
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2502 — ONE WAY OUT
+// ===========================================================================
+
+/**
+ * FOUNDER RULING, 2026-08-09, after seeing the compare screen nested inside this
+ * modal: three dismissals were on screen at once — `Done` in this modal's
+ * footer, `← Back to the list` above the compare card, and the compare card's
+ * own `×`. He kept the `×`, moved to the top right of THIS modal's header, above
+ * the divider and opposite the "Possible duplicates" heading.
+ *
+ * The count is asserted, not the presence: a test that only found the `×` would
+ * stay green with `Done` sitting next to it, which is the state being fixed.
+ */
+describe("one way out", () => {
+  beforeEach(() => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [cluster()],
+    });
+    const api = window.api.contacts as unknown as Record<string, jest.Mock>;
+    api.getCompareColumns = jest.fn().mockResolvedValue({ success: true, view: compareView() });
+  });
+
+  /**
+   * Every control that dismisses SOMETHING, by accessible name — the three the
+   * founder counted plus anything else that would read as an exit. Named rather
+   * than fetched by test id so a future exit with a new id is still counted.
+   */
+  const exits = (): string[] =>
+    screen
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") ?? b.textContent ?? "")
+      .filter((name) => /close|done|back to the list|←/i.test(name));
+
+  it("offers exactly ONE dismissal on the list, and it is the ×", async () => {
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    await screen.findByTestId("review-contact-c-daniel");
+
+    // CONTROL: put the `Done` footer back and this reads 2.
+    expect(exits()).toEqual(["Close possible duplicates"]);
+    expect(screen.getByTestId("review-duplicates-close")).toHaveTextContent("×");
+    expect(screen.queryByText("Done")).not.toBeInTheDocument();
+  });
+
+  it("still offers exactly ONE with the compare screen open over it", async () => {
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
+
+    // THE SCREEN THE FOUNDER WAS LOOKING AT. CONTROL: drop `hideClose` on the
+    // nested `ContactCompareSources` and this reads 2 — its own `×` returns.
+    expect(exits()).toEqual(["Close possible duplicates"]);
+    // CONTROL: restore `← Back to the list` and this id exists again.
+    expect(screen.queryByTestId("review-compare-back")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("compare-close")).not.toBeInTheDocument();
+
+    // AND THE DECISION BUTTONS SURVIVED IT. The footer that was deleted held
+    // `Done` and nothing else; these live in the compare screen's own footer and
+    // did not move. CONTROL: delete that footer instead of this modal's and all
+    // three of these vanish — the screen would be dismissible and unanswerable.
+    expect(screen.getByTestId("compare-confirm")).toBeInTheDocument();
+    expect(screen.getByTestId("compare-confirm-edit")).toBeInTheDocument();
+    expect(screen.getByTestId("compare-reject-proposal")).toBeInTheDocument();
+    expect(screen.queryByTestId("compare-already-confirmed")).not.toBeInTheDocument();
+  });
+
+  it("puts the × above the divider, opposite the heading", async () => {
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    await screen.findByTestId("review-contact-c-daniel");
+
+    const close = screen.getByTestId("review-duplicates-close");
+    const header = close.parentElement!;
+
+    // Same row as the heading and its subtext…
+    expect(header).toContainElement(screen.getByText("Possible duplicates"));
+    // …and that row is the one carrying the divider, so the × is ABOVE it.
+    // CONTROL: move the × into the scrolling body and `border-b` is gone from
+    // its parent.
+    expect(header.className).toContain("border-b");
+  });
+
+  it("the × closes the modal — it does not merely leave the compare screen", async () => {
+    const onClose = jest.fn();
+    render(<ReviewDuplicatesModal userId={USER} onClose={onClose} />);
+    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("review-duplicates-close"));
+
+    // CONTROL: wire it to `setComparing(null)` and this never fires — the user
+    // would be stuck one screen short of the way out.
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2502 — WHERE EACH ANSWER LANDS, BY ENTRY PATH
+// ===========================================================================
+
+/**
+ * FOUNDER RULING, 2026-08-09: the compare screen is reached two ways and must
+ * return the user to where they came from. From the queue, `Confirm` keeps them
+ * in the queue; `Confirm & edit` leaves for the contact card. (The main-list
+ * path is unchanged, and `Contacts.compareWayIn-2471` walks both and compares
+ * the destinations.)
+ */
+describe("where a decision lands, entering from the duplicates list", () => {
+  beforeEach(() => {
+    const api = window.api.contacts as unknown as Record<string, jest.Mock>;
+    api.getCompareColumns = jest.fn().mockResolvedValue({ success: true, view: compareView() });
+    jest.mocked(window.api.contacts.confirmLink).mockResolvedValue({ success: true, linked: true });
+  });
+
+  it("Confirm returns to the duplicates screen, with the answered row GONE", async () => {
+    // The queue as it stands, then as it stands after the answer. The row leaves
+    // because the LIST RELOADS — never because the renderer spliced it out, which
+    // would leave an exclusive cluster's siblings on screen already settled.
+    jest
+      .mocked(window.api.contacts.getReviewQueue)
+      .mockResolvedValueOnce({ success: true, clusters: [cluster()] })
+      .mockResolvedValue({ success: true, clusters: [] });
+
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("compare-confirm"));
+
+    // BACK ON THE QUEUE — not on the compare screen, and not on a closed modal.
+    // CONTROL: drop `setComparing(null)` from `onConfirmed` and the compare
+    // screen is still up with the question already answered.
+    await waitFor(() =>
+      expect(screen.queryByTestId("contact-compare-screen")).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByTestId("review-duplicates-empty")).toBeInTheDocument();
+    // The ANSWERED ROW specifically, by id. CONTROL: drop `load()` and the row
+    // is still sitting there, already decided.
+    expect(screen.queryByTestId("review-item-p-1")).not.toBeInTheDocument();
+    expect(window.api.contacts.confirmLink).toHaveBeenCalledWith(USER, "p-1");
+  });
+
+  it("Confirm & edit leaves the queue and names the contact to open", async () => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [cluster()],
+    });
+    const onConfirmedAndEdit = jest.fn();
+
+    render(
+      <ReviewDuplicatesModal
+        userId={USER}
+        onClose={jest.fn()}
+        onConfirmedAndEdit={onConfirmedAndEdit}
+      />,
+    );
+    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId("compare-confirm-edit"));
+
+    // The WRITE happens first and is the same one Confirm makes — this button is
+    // not a second channel.
+    await waitFor(() => expect(window.api.contacts.confirmLink).toHaveBeenCalledWith(USER, "p-1"));
+    // CONTROL: leave `onConfirmedAndEdit` unpassed on the nested compare screen —
+    // the state this shipped in — and this never fires: the button wrote the
+    // answer and then sat there, going nowhere.
+    expect(onConfirmedAndEdit).toHaveBeenCalledWith("c-daniel");
+    // …and the queue is not what the user is left looking at.
+    await waitFor(() =>
+      expect(screen.queryByTestId("contact-compare-screen")).not.toBeInTheDocument(),
     );
   });
 });

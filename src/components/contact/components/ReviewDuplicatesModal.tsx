@@ -65,6 +65,20 @@ interface ReviewDuplicatesModalProps {
   onClose: () => void;
   /** Fired after any answer, so the caller can refresh the count and the list. */
   onResolved?: () => void;
+  /**
+   * BACKLOG-2502 — `Confirm & edit`, which LEAVES this screen.
+   *
+   * Founder ruling, 2026-08-09: the two entry paths land in different places on
+   * purpose. `Confirm` keeps the user in the queue (the answered row is gone
+   * when the list reloads); `Confirm & edit` opens the contact card and its
+   * form, *"exactly as confirm-and-edit does when a contact is opened from the
+   * main list. Same destination, same behaviour — not a variant."*
+   *
+   * Which is why this is a callback and not a destination built here: the owner
+   * of the card is `Contacts.tsx`, and it hands BOTH routes the same function,
+   * so there is no second implementation to drift from the first.
+   */
+  onConfirmedAndEdit?: (contactId: string) => void;
 }
 
 /**
@@ -87,6 +101,7 @@ export function ReviewDuplicatesModal({
   userId,
   onClose,
   onResolved,
+  onConfirmedAndEdit,
 }: ReviewDuplicatesModalProps): React.ReactElement {
   const [clusters, setClusters] = useState<ContactReviewCluster[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -216,22 +231,49 @@ export function ReviewDuplicatesModal({
       panelClassName="max-w-2xl max-h-[80vh]"
       testId="review-duplicates-modal"
     >
-      <div className="px-6 py-4 border-b border-gray-200">
-        <h2 className="text-lg font-bold text-gray-900">Possible duplicates</h2>
-        {/*
-          BACKLOG-2502 — THE PROMISE IS MADE ONCE, HERE.
+      {/*
+        BACKLOG-2502 — ONE EXIT, ABOVE THE DIVIDER, OPPOSITE THE HEADING.
 
-          The founder got it per candidate: a frozen-audit sentence repeated
-          verbatim on every row, plus a "nothing has been linked" sentence the
-          header already made. At five candidates that is ten sentences saying
-          what these two say. Both still exist, frozen in each proposal's
-          evidence, and both are reachable from the compare screen's
-          "How we decided this" — they are no longer the default view.
-        */}
-        <p className="text-sm text-gray-600 mt-1">
-          These were <span className="font-semibold">not</span> linked automatically because we
-          could not tell. Nothing changes until you answer.
-        </p>
+        Founder ruling, 2026-08-09, after seeing the nesting: the compare screen
+        renders INSIDE this modal, and between them they offered three ways out
+        at once — `Done` in a footer, `← Back to the list` above the compare
+        card, and the compare card's own `×`. All three are dismissals of
+        something, which is the problem: the user has to work out which screen
+        each one closes.
+
+        What is left is the `×` on this row, where the eye already goes to
+        dismiss a modal. The footer is gone entirely (it held nothing else —
+        the decision buttons live in the compare screen's own footer and in each
+        candidate row, and none of them moved), the back control is gone, and
+        the compare card stands its `×` down via `hideClose`.
+      */}
+      <div className="px-6 py-4 border-b border-gray-200 flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-lg font-bold text-gray-900">Possible duplicates</h2>
+          {/*
+            BACKLOG-2502 — THE PROMISE IS MADE ONCE, HERE.
+
+            The founder got it per candidate: a frozen-audit sentence repeated
+            verbatim on every row, plus a "nothing has been linked" sentence the
+            header already made. At five candidates that is ten sentences saying
+            what these two say. Both still exist, frozen in each proposal's
+            evidence, and both are reachable from the compare screen's
+            "How we decided this" — they are no longer the default view.
+          */}
+          <p className="text-sm text-gray-600 mt-1">
+            These were <span className="font-semibold">not</span> linked automatically because we
+            could not tell. Nothing changes until you answer.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close possible duplicates"
+          data-testid="review-duplicates-close"
+          className="flex-shrink-0 rounded px-1.5 text-xl leading-none text-gray-400 transition-colors hover:text-gray-900"
+        >
+          ×
+        </button>
       </div>
 
       {/*
@@ -243,17 +285,11 @@ export function ReviewDuplicatesModal({
       */}
       {comparing && (
         <div className="px-6 py-4 overflow-y-auto" data-testid="review-compare-pane">
-          <button
-            type="button"
-            onClick={() => setComparing(null)}
-            className="mb-3 text-sm font-semibold text-gray-600 hover:text-gray-900"
-            data-testid="review-compare-back"
-          >
-            ← Back to the list
-          </button>
           <ContactCompareSources
             userId={userId}
             contactId={comparing.contactId}
+            // The modal header's `×` is the only dismissal on this route.
+            hideClose
             proposedSource={{
               sourceType: comparing.sourceType,
               sourceRecordId: comparing.sourceRecordId,
@@ -268,10 +304,30 @@ export function ReviewDuplicatesModal({
                 : undefined
             }
             onClose={() => setComparing(null)}
+            /*
+              BACKLOG-2502 — CONFIRM RETURNS TO THE QUEUE, and the answered row
+              is gone from it.
+
+              `setComparing(null)` puts the list back on screen and `load()`
+              re-reads it, which is what removes the row — deliberately not a
+              local splice: confirming one option in an exclusive cluster also
+              answers its siblings, and only the main process knows which.
+            */
             onConfirmed={() => {
               setComparing(null);
               onResolved?.();
               void load();
+            }}
+            /*
+              `Confirm & edit` LEAVES the queue for the contact card. The write
+              has already happened by the time this fires, so the caller is only
+              being told where to go; it owns closing this modal.
+            */
+            onConfirmedAndEdit={() => {
+              const { contactId } = comparing;
+              setComparing(null);
+              onResolved?.();
+              onConfirmedAndEdit?.(contactId);
             }}
             onRejected={() => {
               setComparing(null);
@@ -331,16 +387,6 @@ export function ReviewDuplicatesModal({
         </div>
       )}
 
-      <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex justify-end">
-        <button
-          type="button"
-          onClick={onClose}
-          className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg font-medium"
-          data-testid="review-duplicates-close"
-        >
-          Done
-        </button>
-      </div>
     </ResponsiveModal>
   );
 }

@@ -339,3 +339,114 @@ describe("the list's flags and the Needs review chip", () => {
     expect(screen.getByTestId("contact-row-confirmed-flag")).toBeInTheDocument();
   });
 });
+
+// ===========================================================================
+// BACKLOG-2502 — `Confirm & edit` LANDS IN THE SAME PLACE FROM BOTH WAYS IN
+// ===========================================================================
+
+/**
+ * FOUNDER RULING, 2026-08-09. The compare screen is reached two ways, and the
+ * two entry paths deliberately differ on `Confirm` — from the duplicates queue
+ * it returns to the queue, from the contact list it returns to the card. They
+ * must NOT differ on `Confirm & edit`: *"open the contact card, exactly as
+ * confirm-and-edit does when a contact is opened from the main list. Same
+ * destination, same behaviour — not a variant."*
+ *
+ * So the destination is compared rather than described. Both paths are walked in
+ * ONE test and their end states are asserted EQUAL, which is what makes a future
+ * fork fail here instead of shipping: `Contacts.tsx` hands both routes the same
+ * `openContactCardForEdit`, and a second implementation added to either side
+ * would have to reproduce every field below to stay green.
+ */
+describe("Confirm & edit, from both entry paths", () => {
+  const REVIEW_ITEM = {
+    proposalId: "p-paul",
+    contactId: "c-paul",
+    contactName: "Paul Dorian",
+    contactCompany: null,
+    sourceType: "outlook",
+    sourceRecordId: "out-paul",
+    sourceLabel: "Outlook contacts",
+    sourceName: "Paul Dorian",
+    recordEmails: ["paul@example.com"],
+    recordPhones: [],
+    reason: "ambiguous_identifier",
+    matchedOn: "email",
+    identity: "possibly_same_person",
+    identityPhrase: "possibly the same person",
+    relationship: "possibly_connected",
+    relationshipPhrase: "possibly connected",
+    evidence: { summary: "Shared email address.", details: [] },
+  };
+
+  beforeEach(() => {
+    const api = window.api.contacts as unknown as Record<string, jest.Mock>;
+    api.confirmLink = jest.fn().mockResolvedValue({ success: true, linked: true });
+    api.getReviewQueueCount = jest.fn().mockResolvedValue({ success: true, count: 1 });
+    api.getReviewQueue = jest.fn().mockResolvedValue({
+      success: true,
+      clusters: [
+        {
+          clusterKey: "contact:c-paul",
+          question: "Is this the same Paul Dorian?",
+          exclusive: false,
+          items: [REVIEW_ITEM],
+        },
+      ],
+    });
+  });
+
+  /**
+   * WHERE THE USER ENDED UP, as facts on the screen rather than as a spy on a
+   * handler. A spy would pass while the two routes called the same function with
+   * different arguments, or wired it to a different pane.
+   */
+  const destination = () => ({
+    editFormOpen: screen.queryAllByText("Edit Contact").length > 0,
+    editingWho: (screen.queryByPlaceholderText("John Doe") as HTMLInputElement | null)?.value,
+    cardStillMountedUnderIt: screen.queryByTestId("contact-preview-modal") !== null,
+    compareScreenClosed: screen.queryByTestId("contact-compare-screen") === null,
+    queueClosed: screen.queryByTestId("review-duplicates-modal") === null,
+  });
+
+  it("lands on the same screen, in the same state, from the list and from the queue", async () => {
+    // ---- PATH A: the main contacts list. UNCHANGED BEHAVIOUR, and the guard.
+    const listPath = render(<Contacts userId={USER} onClose={jest.fn()} />);
+    installMatchMedia(false);
+    await waitFor(() => expect(screen.getByText("Paul Dorian")).toBeInTheDocument());
+    await userEvent.click(screen.getByText("Paul Dorian"));
+    await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId("compare-confirm-edit"));
+    await waitFor(() => expect(screen.queryAllByText("Edit Contact").length).toBeGreaterThan(0));
+    const fromTheList = destination();
+    listPath.unmount();
+
+    // ---- PATH B: the duplicates queue, via the compare screen inside it.
+    render(<Contacts userId={USER} onClose={jest.fn()} />);
+    await waitFor(() => expect(screen.getByText("Paul Dorian")).toBeInTheDocument());
+    await userEvent.click(await screen.findByTestId("review-duplicates-button"));
+    await userEvent.click(await screen.findByTestId("review-compare-c-paul"));
+    await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId("compare-confirm-edit"));
+    await waitFor(() => expect(screen.queryAllByText("Edit Contact").length).toBeGreaterThan(0));
+    const fromTheQueue = destination();
+
+    // The answer went through the PROPOSAL channel on the queue route — it is a
+    // different write from the list route's `confirmSources`, and only the
+    // destination is shared.
+    expect(window.api.contacts.confirmLink).toHaveBeenCalledWith(USER, "p-paul");
+
+    // THE ASSERTION THIS BLOCK EXISTS FOR.
+    // CONTROL: give the queue route its own destination — for instance drop
+    // `showPreviewContact` from `openContactCardForEdit`, or have `Contacts.tsx`
+    // handle `onConfirmedAndEdit` by only closing the modal — and these diverge.
+    expect(fromTheQueue).toEqual(fromTheList);
+    expect(fromTheList).toEqual({
+      editFormOpen: true,
+      editingWho: "Paul Dorian",
+      cardStillMountedUnderIt: true,
+      compareScreenClosed: true,
+      queueClosed: true,
+    });
+  });
+});
