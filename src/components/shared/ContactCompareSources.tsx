@@ -62,22 +62,19 @@ const NOT_LINKED_YET = "not linked yet";
 interface ContactCompareSourcesProps {
   userId: string;
   contactId: string;
-  onClose: () => void;
   /**
-   * BACKLOG-2502 — THE HOST OWNS THE DISMISSAL, so this screen renders none.
+   * BACKLOG-2502 — THIS SCREEN'S `×` POPS THIS SCREEN, wherever it is mounted.
    *
-   * Founder ruling, 2026-08-09. Inside the duplicates modal this is a screen
-   * within a screen, and it carried three ways out at once: the modal's `Done`,
-   * a `← Back to the list` above the card, and this card's own `×`. He asked
-   * for ONE, in the place the eye already goes for a modal — the top right of
-   * the modal header, above its divider. The other two are gone; this flag is
-   * how the third one stands down without the contact route losing its `×`,
-   * where the card IS the host and its `×` is the only exit there is.
-   *
-   * A flag rather than a second component: the two routes differ in exactly one
-   * control, and a fork would let the rest of the screen drift apart.
+   * Founder model, 2026-08-09, by his own analogy to the texts preview on
+   * transaction details: the surface is a LIFO stack, and the `×` on the TOP
+   * layer takes that layer off. Inside the duplicates modal this screen IS the
+   * top layer, so its `×` returns the user to the list with the list intact;
+   * from a contact card it is the only layer, so its `×` returns the card.
+   * Same control, same meaning, no flag deciding which — `useContactCommViewers`
+   * makes the same promise for the email and text viewers it mounts over the
+   * card, and this is that promise, not a second mechanism.
    */
-  hideClose?: boolean;
+  onClose: () => void;
   /**
    * Detach ONE source record (BACKLOG-2471 PR D).
    *
@@ -326,7 +323,6 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
   userId,
   contactId,
   onClose,
-  hideClose,
   onUnlinkSource,
   unlinkingLinkId,
   onConfirmed,
@@ -454,16 +450,14 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
             </p>
           )}
         </div>
-        {!hideClose && (
-          <button
-            onClick={onClose}
-            aria-label="Close compare"
-            data-testid="compare-close"
-            className="ml-auto flex-shrink-0 text-gray-400 hover:text-gray-900 rounded px-1.5 leading-none text-xl"
-          >
-            ×
-          </button>
-        )}
+        <button
+          onClick={onClose}
+          aria-label="Close compare"
+          data-testid="compare-close"
+          className="ml-auto flex-shrink-0 text-gray-400 hover:text-gray-900 rounded px-1.5 leading-none text-xl"
+        >
+          ×
+        </button>
       </div>
 
       {loading && (

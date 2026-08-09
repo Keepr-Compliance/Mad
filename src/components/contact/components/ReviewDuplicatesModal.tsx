@@ -232,20 +232,33 @@ export function ReviewDuplicatesModal({
       testId="review-duplicates-modal"
     >
       {/*
-        BACKLOG-2502 — ONE EXIT, ABOVE THE DIVIDER, OPPOSITE THE HEADING.
+        BACKLOG-2502 — A LIFO STACK OF LAYERS, AND THE `×` POPS ONE OF THEM.
 
-        Founder ruling, 2026-08-09, after seeing the nesting: the compare screen
-        renders INSIDE this modal, and between them they offered three ways out
-        at once — `Done` in a footer, `← Back to the list` above the compare
-        card, and the compare card's own `×`. All three are dismissals of
-        something, which is the problem: the user has to work out which screen
-        each one closes.
+        Founder model, 2026-08-09, in his own words: *"just like the texts
+        preview on transaction details"*. Last in, first out. The compare screen
+        renders INSIDE this modal, so these two are a stack of two, and the `×`
+        belonging to the TOP layer is the one that acts:
 
-        What is left is the `×` on this row, where the eye already goes to
-        dismiss a modal. The footer is gone entirely (it held nothing else —
+          list only         -> this `×` closes the list
+          compare, over it  -> COMPARE's `×` closes compare, and the list is
+                               still underneath, exactly as the user left it
+
+        Which is why this one is gated on `!comparing`: it is the LIST's control,
+        not the modal's. Rendering it under an open compare screen would put two
+        dismissals on screen meaning two different things — the confusion that
+        made him ask for one in the first place. There is still exactly one `×`
+        at any moment; it just belongs to whichever layer is on top.
+
+        `useContactCommViewers` already makes this promise on the transaction
+        card: the viewer mounted over the card owns its own close, and closing it
+        returns the card rather than dismissing everything. This is that rule,
+        not a second mechanism — the layer that renders the control is the layer
+        the control pops.
+
+        What is NOT here any more: the `Done` footer (it held nothing but `Done`;
         the decision buttons live in the compare screen's own footer and in each
-        candidate row, and none of them moved), the back control is gone, and
-        the compare card stands its `×` down via `hideClose`.
+        candidate row, and none of them moved) and `← Back to the list`, whose
+        behaviour this rule restores without needing a second control.
       */}
       <div className="px-6 py-4 border-b border-gray-200 flex items-start gap-3">
         <div className="min-w-0 flex-1">
@@ -265,15 +278,17 @@ export function ReviewDuplicatesModal({
             could not tell. Nothing changes until you answer.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close possible duplicates"
-          data-testid="review-duplicates-close"
-          className="flex-shrink-0 rounded px-1.5 text-xl leading-none text-gray-400 transition-colors hover:text-gray-900"
-        >
-          ×
-        </button>
+        {!comparing && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close possible duplicates"
+            data-testid="review-duplicates-close"
+            className="flex-shrink-0 rounded px-1.5 text-xl leading-none text-gray-400 transition-colors hover:text-gray-900"
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {/*
@@ -288,8 +303,6 @@ export function ReviewDuplicatesModal({
           <ContactCompareSources
             userId={userId}
             contactId={comparing.contactId}
-            // The modal header's `×` is the only dismissal on this route.
-            hideClose
             proposedSource={{
               sourceType: comparing.sourceType,
               sourceRecordId: comparing.sourceRecordId,
@@ -303,6 +316,14 @@ export function ReviewDuplicatesModal({
                   }
                 : undefined
             }
+            /*
+              POPS ONE LAYER, NOT THE STACK. This is the compare screen's own
+              `×`, and it is the top layer's, so it puts the user back on the
+              list — which is still mounted with its clusters in state and is
+              deliberately NOT re-read: nothing was answered, so there is nothing
+              to re-read, and a reload here would reshuffle a queue the user is
+              part-way through.
+            */
             onClose={() => setComparing(null)}
             /*
               BACKLOG-2502 — CONFIRM RETURNS TO THE QUEUE, and the answered row

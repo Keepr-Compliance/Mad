@@ -405,6 +405,11 @@ describe("Confirm & edit, from both entry paths", () => {
     editFormOpen: screen.queryAllByText("Edit Contact").length > 0,
     editingWho: (screen.queryByPlaceholderText("John Doe") as HTMLInputElement | null)?.value,
     cardStillMountedUnderIt: screen.queryByTestId("contact-preview-modal") !== null,
+    // BOTH LAYERS OF THE STACK, POPPED. `Confirm & edit` is the one action that
+    // takes the whole stack down — unlike `×`, which pops exactly one, and
+    // `Confirm`, which pops compare and leaves the list up. On the main-list
+    // path there is only ever one layer and `queueClosed` is vacuously true,
+    // which is why it is COMPARED against that path rather than asserted alone.
     compareScreenClosed: screen.queryByTestId("contact-compare-screen") === null,
     queueClosed: screen.queryByTestId("review-duplicates-modal") === null,
   });

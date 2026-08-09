@@ -608,20 +608,24 @@ describe("a confirm that linked nothing", () => {
 });
 
 // ===========================================================================
-// BACKLOG-2502 — ONE WAY OUT
+// BACKLOG-2502 — ONE `×`, AND IT POPS ONE LAYER
 // ===========================================================================
 
 /**
- * FOUNDER RULING, 2026-08-09, after seeing the compare screen nested inside this
- * modal: three dismissals were on screen at once — `Done` in this modal's
- * footer, `← Back to the list` above the compare card, and the compare card's
- * own `×`. He kept the `×`, moved to the top right of THIS modal's header, above
- * the divider and opposite the "Possible duplicates" heading.
+ * FOUNDER MODEL, 2026-08-09: *"just like the texts preview on transaction
+ * details"* — the duplicates surface is a LIFO stack, and the `×` on the TOP
+ * layer takes that layer off.
  *
- * The count is asserted, not the presence: a test that only found the `×` would
- * stay green with `Done` sitting next to it, which is the state being fixed.
+ *   list only         -> `×` closes the list
+ *   compare, over it  -> `×` closes COMPARE, and the list is still there
+ *
+ * Two things are asserted together throughout, because either alone passes in a
+ * broken state: the COUNT (exactly one `×` at any moment — a test that merely
+ * found one would stay green with `Done` beside it) and WHICH LAYER IT POPS (a
+ * count test alone would stay green with the one remaining `×` dismissing the
+ * whole stack, which is the state at `5dc615b8` that this revision replaces).
  */
-describe("one way out", () => {
+describe("one ×, popping one layer", () => {
   beforeEach(() => {
     jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
@@ -642,7 +646,8 @@ describe("one way out", () => {
       .map((b) => b.getAttribute("aria-label") ?? b.textContent ?? "")
       .filter((name) => /close|done|back to the list|←/i.test(name));
 
-  it("offers exactly ONE dismissal on the list, and it is the ×", async () => {
+  /** CONTROL 5, half one: the list alone. */
+  it("shows exactly ONE × with only the list open, and it is the list's", async () => {
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
     await screen.findByTestId("review-contact-c-daniel");
 
@@ -652,17 +657,22 @@ describe("one way out", () => {
     expect(screen.queryByText("Done")).not.toBeInTheDocument();
   });
 
-  it("still offers exactly ONE with the compare screen open over it", async () => {
+  /** CONTROL 5, half two: the stack of two. */
+  it("shows exactly ONE × with compare open, and it is COMPARE's", async () => {
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
     fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
-    // THE SCREEN THE FOUNDER WAS LOOKING AT. CONTROL: drop `hideClose` on the
-    // nested `ContactCompareSources` and this reads 2 — its own `×` returns.
-    expect(exits()).toEqual(["Close possible duplicates"]);
-    // CONTROL: restore `← Back to the list` and this id exists again.
+    // THE SCREEN THE FOUNDER WAS LOOKING AT. One `×`, and it belongs to the top
+    // layer. CONTROL: drop the `!comparing` gate on the list's `×` and this
+    // reads 2 — two dismissals meaning two different things.
+    expect(exits()).toEqual(["Close compare"]);
+    expect(screen.getByTestId("compare-close")).toBeInTheDocument();
+    // The layer underneath does NOT keep its control while it is covered.
+    expect(screen.queryByTestId("review-duplicates-close")).not.toBeInTheDocument();
+    // CONTROL: restore `← Back to the list` and this id exists again — the
+    // second control this rule exists to make unnecessary.
     expect(screen.queryByTestId("review-compare-back")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("compare-close")).not.toBeInTheDocument();
 
     // AND THE DECISION BUTTONS SURVIVED IT. The footer that was deleted held
     // `Done` and nothing else; these live in the compare screen's own footer and
@@ -674,7 +684,7 @@ describe("one way out", () => {
     expect(screen.queryByTestId("compare-already-confirmed")).not.toBeInTheDocument();
   });
 
-  it("puts the × above the divider, opposite the heading", async () => {
+  it("puts the list's × above the divider, opposite the heading", async () => {
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
     await screen.findByTestId("review-contact-c-daniel");
 
@@ -689,16 +699,47 @@ describe("one way out", () => {
     expect(header.className).toContain("border-b");
   });
 
-  it("the × closes the modal — it does not merely leave the compare screen", async () => {
+  /**
+   * CONTROL 1 — THE ONE THAT MATTERS, and the founder's correction to
+   * `5dc615b8`, where this same press dismissed the whole modal.
+   *
+   * The list must be THERE afterwards, not merely re-fetched into existence:
+   * nothing was answered, so the queue the user is part-way through is the same
+   * queue. Asserted by candidate identity AND by the loader not having run a
+   * second time.
+   */
+  it("× on compare pops ONE layer — the list is still there underneath", async () => {
     const onClose = jest.fn();
     render(<ReviewDuplicatesModal userId={USER} onClose={onClose} />);
     fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
+    fireEvent.click(screen.getByTestId("compare-close"));
+
+    // Back on the list, BY IDENTITY — the same candidate, still unanswered.
+    expect(await screen.findByTestId("review-item-p-1")).toBeInTheDocument();
+    expect(screen.getByTestId("review-contact-c-daniel")).toBeInTheDocument();
+    expect(screen.queryByTestId("contact-compare-screen")).not.toBeInTheDocument();
+    // CONTROL: wire compare's `onClose` to the modal's `onClose` — the
+    // `5dc615b8` behaviour — and this fires, taking the whole stack with it.
+    expect(onClose).not.toHaveBeenCalled();
+    // STILL THERE, not rebuilt: no reload was needed because nothing was
+    // answered. CONTROL: add `void load()` to that handler and this reads 2.
+    expect(window.api.contacts.getReviewQueue).toHaveBeenCalledTimes(1);
+    // The way back in is unchanged — the popped layer can be pushed again.
+    expect(screen.getByTestId("review-compare-c-daniel")).toBeInTheDocument();
+  });
+
+  /** CONTROL 2 — the regression guard for the rule above. */
+  it("× on the list closes the list — the bottom layer is the last one out", async () => {
+    const onClose = jest.fn();
+    render(<ReviewDuplicatesModal userId={USER} onClose={onClose} />);
+    await screen.findByTestId("review-contact-c-daniel");
+
     fireEvent.click(screen.getByTestId("review-duplicates-close"));
 
-    // CONTROL: wire it to `setComparing(null)` and this never fires — the user
-    // would be stuck one screen short of the way out.
+    // CONTROL: gate this `×` on `comparing` instead of `!comparing` and it is
+    // not on screen to press — the queue would have no way out at all.
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
