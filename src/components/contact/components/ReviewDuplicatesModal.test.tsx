@@ -822,3 +822,132 @@ describe("where a decision lands, entering from the duplicates list", () => {
     );
   });
 });
+
+// ===========================================================================
+// BACKLOG-2502 ROUND 4 — COMPARE IS ITS OWN POPUP, NOT A PANE IN THIS ONE
+// ===========================================================================
+
+/**
+ * FOUNDER, 2026-08-09, testing `223be9fb`: *"I still see the compare screen
+ * within the 'Possible duplicates / These were not linked automatically because
+ * we could not tell. Nothing changes until you answer.' screen, rather than its
+ * own popup."*
+ *
+ * Round 3's layer BEHAVIOUR was right and is untouched. What was wrong was the
+ * RENDERING: compare sat in the list modal's body, beneath the list's heading,
+ * so it read as one window whose contents had changed.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THESE ARE CONTAINMENT ASSERTIONS AND NOT `queryByText(...)`
+ * ---------------------------------------------------------------------------
+ * The list stays MOUNTED underneath — that is the requirement, not an accident —
+ * so its heading is legitimately in the document while compare is open. An
+ * absence assertion would therefore be asserting the opposite of the spec, and
+ * would have to be satisfied by unmounting the layer that is supposed to stay.
+ * The real question is WHICH SUBTREE the heading is in, so that is what is
+ * asked: not "is it on the page" but "is it above the compare content".
+ */
+describe("compare is its own popup", () => {
+  beforeEach(() => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [cluster()],
+    });
+    const api = window.api.contacts as unknown as Record<string, jest.Mock>;
+    api.getCompareColumns = jest.fn().mockResolvedValue({ success: true, view: compareView() });
+  });
+
+  const openCompare = async () => {
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
+  };
+
+  /**
+   * CONTROL 1 — THE ONE THAT IS EASY TO FAKE.
+   *
+   * Both directions are asserted, because either alone passes in a broken state:
+   * the heading must be OUT of compare's subtree (or nothing changed) and IN the
+   * list's (or the list was unmounted to pass the first half).
+   */
+  it("does not render the list's heading above the compare content", async () => {
+    await openCompare();
+
+    const compareLayer = screen.getByTestId("review-compare-overlay");
+    const listLayer = screen.getByTestId("review-duplicates-modal");
+    const heading = screen.getByText("Possible duplicates");
+    const subtext = screen.getByTestId("review-duplicates-subtext");
+
+    // CONTROL: put the compare pane back inside the list modal's body — the
+    // `223be9fb` structure — and all four of these go red at once.
+    expect(compareLayer).not.toContainElement(heading);
+    expect(compareLayer).not.toContainElement(subtext);
+    // …and they are still on screen, in the layer they belong to. This half is
+    // what stops the assertion above being satisfied by deleting the list.
+    expect(listLayer).toContainElement(heading);
+    expect(listLayer).toContainElement(subtext);
+    expect(subtext).toHaveTextContent(
+      "These were not linked automatically because we could not tell.",
+    );
+  });
+
+  it("renders the compare layer OUTSIDE the list modal, not nested in it", async () => {
+    await openCompare();
+
+    const compareLayer = screen.getByTestId("review-compare-overlay");
+    const listLayer = screen.getByTestId("review-duplicates-modal");
+
+    // THE STRUCTURAL CLAIM, stated directly: two sibling overlays, not one
+    // inside the other. CONTROL: nest compare back in the list modal's children
+    // and this is the assertion that names the mistake.
+    expect(listLayer).not.toContainElement(compareLayer);
+    expect(compareLayer).not.toContainElement(listLayer);
+    // Compare's frame is its own, and the compare screen lives in it.
+    expect(compareLayer).toContainElement(screen.getByTestId("contact-compare-screen"));
+    // Its × belongs to that frame too — the Round 3 rule, now at the right depth.
+    expect(compareLayer).toContainElement(screen.getByTestId("compare-close"));
+  });
+
+  /**
+   * CONTROL 4 — stacking order, by the app's own convention.
+   *
+   * Parsed as a NUMBER rather than matched as a string, so this fails if the
+   * class is dropped, if a local value is used that happens not to win, or if
+   * the list is ever raised above compare.
+   */
+  it("stacks the compare layer above the list layer", async () => {
+    const zOf = (el: HTMLElement): number => {
+      const m = el.className.match(/(?:^|\s)z-(?:\[(\d+)\]|(\d+))(?:\s|$)/);
+      if (!m) throw new Error(`no z-index class on ${el.dataset.testid}: ${el.className}`);
+      return Number(m[1] ?? m[2]);
+    };
+
+    await openCompare();
+
+    const compareZ = zOf(screen.getByTestId("review-compare-overlay"));
+    const listZ = zOf(screen.getByTestId("review-duplicates-modal"));
+
+    // CONTROL: drop `zIndex="z-[60]"` and compare falls back to ResponsiveModal's
+    // default `z-50` — equal to the list's, so the DOM order decides and the
+    // guarantee is gone. This reads 50 > 50 and goes red.
+    expect(compareZ).toBeGreaterThan(listZ);
+    // The value itself is the shared convention, not a local invention: above the
+    // list, below ContactFormModal's `z-[70]`, which `Confirm & edit` opens once
+    // both of these layers are down.
+    expect(compareZ).toBe(60);
+    expect(compareZ).toBeLessThan(70);
+  });
+
+  /** The list is not merely mounted — it is VISIBLE behind the overlay. */
+  it("leaves the queue on screen underneath, not hidden", async () => {
+    await openCompare();
+
+    // CONTROL: restore the `{!comparing && …}` gate on the list body and the
+    // rows vanish while compare is open — a stack of one, wearing two frames.
+    expect(screen.getByTestId("review-contact-c-daniel")).toBeInTheDocument();
+    expect(screen.getByTestId("review-item-p-1")).toBeInTheDocument();
+    expect(screen.getByTestId("review-duplicates-modal")).toContainElement(
+      screen.getByTestId("review-item-p-1"),
+    );
+  });
+});

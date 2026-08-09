@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
 import { ContactCompareSources } from "../../shared/ContactCompareSources";
-import type { ContactReviewCluster, ContactReviewItem } from "@/types/contactProvenance";
+import type {
+  ContactReviewCluster,
+  ContactReviewItem,
+} from "@/types/contactProvenance";
 
 /**
  * Review possible duplicates (BACKLOG-2410)
@@ -153,7 +156,13 @@ export function ReviewDuplicatesModal({
         const result =
           verdict === "same"
             ? await window.api.contacts.confirmLink(userId, item.proposalId)
-            : { ...(await window.api.contacts.rejectLink(userId, item.proposalId)), linked: true };
+            : {
+                ...(await window.api.contacts.rejectLink(
+                  userId,
+                  item.proposalId,
+                )),
+                linked: true,
+              };
         if (!result.success) {
           setError(result.error ?? "That answer could not be saved.");
         } else if (verdict === "same" && result.linked === false) {
@@ -226,12 +235,13 @@ export function ReviewDuplicatesModal({
   const total = (clusters ?? []).reduce((sum, c) => sum + c.items.length, 0);
 
   return (
-    <ResponsiveModal
-      onClose={onClose}
-      panelClassName="max-w-2xl max-h-[80vh]"
-      testId="review-duplicates-modal"
-    >
-      {/*
+    <>
+      <ResponsiveModal
+        onClose={onClose}
+        panelClassName="max-w-2xl max-h-[80vh]"
+        testId="review-duplicates-modal"
+      >
+        {/*
         BACKLOG-2502 — A LIFO STACK OF LAYERS, AND THE `×` POPS ONE OF THEM.
 
         Founder model, 2026-08-09, in his own words: *"just like the texts
@@ -260,10 +270,12 @@ export function ReviewDuplicatesModal({
         candidate row, and none of them moved) and `← Back to the list`, whose
         behaviour this rule restores without needing a second control.
       */}
-      <div className="px-6 py-4 border-b border-gray-200 flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <h2 className="text-lg font-bold text-gray-900">Possible duplicates</h2>
-          {/*
+        <div className="px-6 py-4 border-b border-gray-200 flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg font-bold text-gray-900">
+              Possible duplicates
+            </h2>
+            {/*
             BACKLOG-2502 — THE PROMISE IS MADE ONCE, HERE.
 
             The founder got it per candidate: a frozen-audit sentence repeated
@@ -273,93 +285,34 @@ export function ReviewDuplicatesModal({
             evidence, and both are reachable from the compare screen's
             "How we decided this" — they are no longer the default view.
           */}
-          <p className="text-sm text-gray-600 mt-1">
-            These were <span className="font-semibold">not</span> linked automatically because we
-            could not tell. Nothing changes until you answer.
-          </p>
+            <p
+              className="text-sm text-gray-600 mt-1"
+              data-testid="review-duplicates-subtext"
+            >
+              These were <span className="font-semibold">not</span> linked
+              automatically because we could not tell. Nothing changes until you
+              answer.
+            </p>
+          </div>
+          {!comparing && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close possible duplicates"
+              data-testid="review-duplicates-close"
+              className="flex-shrink-0 rounded px-1.5 text-xl leading-none text-gray-400 transition-colors hover:text-gray-900"
+            >
+              ×
+            </button>
+          )}
         </div>
-        {!comparing && (
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close possible duplicates"
-            data-testid="review-duplicates-close"
-            className="flex-shrink-0 rounded px-1.5 text-xl leading-none text-gray-400 transition-colors hover:text-gray-900"
-          >
-            ×
-          </button>
-        )}
-      </div>
 
-      {/*
-        BACKLOG-2502 — the compare screen, over the list, for the candidate the
-        card could not settle. `proposalId` present routes its Confirm to the
-        SHIPPED `contacts:confirm-link`, and its `Different people` to
-        `contacts:reject-link` — the same two channels the cards use, so there is
-        one resolution path and not three.
+        {/*
+        THE LIST BODY IS NOT HIDDEN WHILE COMPARE IS OPEN. Compare is a separate
+        overlay now (below, outside this modal), so the queue stays visible and
+        dimmed behind it — which is what makes the two-layer model readable
+        rather than looking like one window whose contents changed.
       */}
-      {comparing && (
-        <div className="px-6 py-4 overflow-y-auto" data-testid="review-compare-pane">
-          <ContactCompareSources
-            userId={userId}
-            contactId={comparing.contactId}
-            proposedSource={{
-              sourceType: comparing.sourceType,
-              sourceRecordId: comparing.sourceRecordId,
-            }}
-            proposalId={comparing.proposalId}
-            why={
-              comparing.evidence
-                ? {
-                    summary: comparing.evidence.summary,
-                    details: comparing.evidence.details ?? [],
-                  }
-                : undefined
-            }
-            /*
-              POPS ONE LAYER, NOT THE STACK. This is the compare screen's own
-              `×`, and it is the top layer's, so it puts the user back on the
-              list — which is still mounted with its clusters in state and is
-              deliberately NOT re-read: nothing was answered, so there is nothing
-              to re-read, and a reload here would reshuffle a queue the user is
-              part-way through.
-            */
-            onClose={() => setComparing(null)}
-            /*
-              BACKLOG-2502 — CONFIRM RETURNS TO THE QUEUE, and the answered row
-              is gone from it.
-
-              `setComparing(null)` puts the list back on screen and `load()`
-              re-reads it, which is what removes the row — deliberately not a
-              local splice: confirming one option in an exclusive cluster also
-              answers its siblings, and only the main process knows which.
-            */
-            onConfirmed={() => {
-              setComparing(null);
-              onResolved?.();
-              void load();
-            }}
-            /*
-              `Confirm & edit` LEAVES the queue for the contact card. The write
-              has already happened by the time this fires, so the caller is only
-              being told where to go; it owns closing this modal.
-            */
-            onConfirmedAndEdit={() => {
-              const { contactId } = comparing;
-              setComparing(null);
-              onResolved?.();
-              onConfirmedAndEdit?.(contactId);
-            }}
-            onRejected={() => {
-              setComparing(null);
-              onResolved?.();
-              void load();
-            }}
-          />
-        </div>
-      )}
-
-      {!comparing && (
         <div className="px-6 py-4 overflow-y-auto">
           {notice && (
             <div
@@ -379,7 +332,10 @@ export function ReviewDuplicatesModal({
           )}
 
           {clusters === null && (
-            <div className="text-center py-8" data-testid="review-duplicates-loading">
+            <div
+              className="text-center py-8"
+              data-testid="review-duplicates-loading"
+            >
               <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto" />
             </div>
           )}
@@ -389,7 +345,8 @@ export function ReviewDuplicatesModal({
               className="text-center py-8 text-sm text-gray-500"
               data-testid="review-duplicates-empty"
             >
-              Nothing to review. Every contact link we made was one we were sure about.
+              Nothing to review. Every contact link we made was one we were sure
+              about.
             </div>
           )}
 
@@ -406,9 +363,108 @@ export function ReviewDuplicatesModal({
             ))}
           </div>
         </div>
-      )}
+      </ResponsiveModal>
 
-    </ResponsiveModal>
+      {/*
+        BACKLOG-2502 ROUND 4 — COMPARE IS ITS OWN POPUP, ABOVE THE LIST.
+
+        Founder, 2026-08-09, testing `223be9fb`: *"I still see the compare screen
+        within the 'Possible duplicates / These were not linked automatically…'
+        screen, rather than its own popup."* The layer BEHAVIOUR was right; the
+        rendering was not. It sat in the list modal's body, under the list's
+        heading, so it read as one window whose contents had changed.
+
+        It is now a SIBLING overlay at `z-[60]`, which is how every other stacked
+        layer in this app is built — `ResponsiveModal` with a `zIndex`, rendered
+        beside the layer it covers, not inside it. It is the same construction
+        `useContactCommViewers` uses for the email and text viewers it mounts
+        over the contact card (`z-[90]` / `z-[80]`), which is the surface the
+        founder named as the reference.
+
+        `z-[60]` places it above the list (`z-50`, ResponsiveModal's default) and
+        below `ContactFormModal` (`z-[70]`), which `Confirm & edit` opens once
+        BOTH of these layers are gone.
+
+        `panelBg="bg-transparent"` because `ContactCompareSources` draws its own
+        white rounded frame — a white panel around it would be a card inside a
+        card. `panelClassName` is WIDTH-ONLY on purpose: it keeps
+        `ResponsiveModal`'s centred-card defaults (`sm:h-auto sm:max-h-[90vh]
+        sm:overflow-y-auto`), which a `max-h-` of our own would suppress and
+        leave the panel stretched full height (the BACKLOG-2292 trap).
+
+        `proposalId` present routes its Confirm to the SHIPPED
+        `contacts:confirm-link`, and its `Different people` to
+        `contacts:reject-link` — the same two channels the cards use, so there is
+        one resolution path and not three.
+      */}
+      {comparing && (
+        <ResponsiveModal
+          /*
+            POPS ONE LAYER, NOT THE STACK — the backdrop click and the compare
+            screen's own `×` are the same action, and both land back on the list,
+            which is still mounted with its clusters in state and is deliberately
+            NOT re-read: nothing was answered, so there is nothing to re-read, and
+            a reload here would reshuffle a queue the user is part-way through.
+          */
+          onClose={() => setComparing(null)}
+          zIndex="z-[60]"
+          panelBg="bg-transparent"
+          panelClassName="max-w-4xl"
+          testId="review-compare-overlay"
+        >
+          <div data-testid="review-compare-pane">
+            <ContactCompareSources
+              userId={userId}
+              contactId={comparing.contactId}
+              proposedSource={{
+                sourceType: comparing.sourceType,
+                sourceRecordId: comparing.sourceRecordId,
+              }}
+              proposalId={comparing.proposalId}
+              why={
+                comparing.evidence
+                  ? {
+                      summary: comparing.evidence.summary,
+                      details: comparing.evidence.details ?? [],
+                    }
+                  : undefined
+              }
+              onClose={() => setComparing(null)}
+              /*
+                BACKLOG-2502 — CONFIRM RETURNS TO THE QUEUE, and the answered row
+                is gone from it.
+
+                `setComparing(null)` takes this overlay down and `load()` re-reads
+                the list underneath, which is what removes the row — deliberately
+                not a local splice: confirming one option in an exclusive cluster
+                also answers its siblings, and only the main process knows which.
+              */
+              onConfirmed={() => {
+                setComparing(null);
+                onResolved?.();
+                void load();
+              }}
+              /*
+                `Confirm & edit` LEAVES the queue for the contact card. The write
+                has already happened by the time this fires, so the caller is only
+                being told where to go; it owns closing this modal.
+              */
+              onConfirmedAndEdit={() => {
+                const { contactId } = comparing;
+                setComparing(null);
+                onResolved?.();
+                onConfirmedAndEdit?.(contactId);
+              }}
+              onRejected={() => {
+                setComparing(null);
+                onResolved?.();
+                void load();
+              }}
+            />
+          </div>
+        </ResponsiveModal>
+      )}
+    </>
   );
 }
 
@@ -424,7 +480,18 @@ function firstNameOf(name: string): string {
   return first || name.trim();
 }
 
-const NUMBER_WORDS = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+const NUMBER_WORDS = [
+  "",
+  "One",
+  "Two",
+  "Three",
+  "Four",
+  "Five",
+  "Six",
+  "Seven",
+  "Eight",
+  "Nine",
+];
 
 /**
  * THE REASON, WHICH IS THE HEADING.
@@ -443,7 +510,8 @@ const NUMBER_WORDS = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven",
  */
 function reasonFor(group: ContactGroup): string {
   const items = group.items;
-  const nameOnly = (m: string | null): boolean => m === "name" || m === "unique_name";
+  const nameOnly = (m: string | null): boolean =>
+    m === "name" || m === "unique_name";
 
   if (items.length > 1) {
     const count = NUMBER_WORDS[items.length] ?? String(items.length);
@@ -567,7 +635,8 @@ function ContactReviewCard({
             className="mb-2 text-xs text-amber-800"
             data-testid={`review-exclusive-${group.contactId}`}
           >
-            Only one contact can be this record — answering here answers the others.
+            Only one contact can be this record — answering here answers the
+            others.
           </p>
         )}
 
