@@ -6,8 +6,14 @@
  * BACKLOG-2467 — `searchContactsForSelection` must find a contact by phone
  * number, in the formats people type, across EVERY number they have.
  *
- * This is the query behind the picker `EditTransactionModal` opens to attach a
- * party to a deal under audit. Before this fix its phone clause was
+ * BACKLOG-2515 deleted the picker this query was written for. The SQL is
+ * deliberately NOT deleted with it — see BACKLOG-2599, which owns deciding
+ * whether `searchContactsForSelection` gets a live caller again or goes. Until
+ * that is settled these assertions stay: they pin the phone-matching behaviour
+ * itself, which is what any future caller would need, and deleting them would
+ * throw away the BACKLOG-2467 evidence along with the dead consumer.
+ *
+ * Before that fix the phone clause was
  *
  *     LEFT JOIN contact_phones cp_primary ON ... AND cp_primary.is_primary = 1
  *     ... OR cp_primary.phone_e164 LIKE '%<raw query>%'

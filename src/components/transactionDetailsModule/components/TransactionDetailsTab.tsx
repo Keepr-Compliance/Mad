@@ -726,8 +726,8 @@ export function TransactionDetailsTab({
         sections and the same in-place viewers. Key Contacts are always imported
         contacts (they're assigned to this transaction), so isExternal={false} and
         the comms props are always supplied — matching the Contacts card. The
-        other ContactPreview consumers (ContactSelectModal, ContactAssignmentStep,
-        EditContactsModal) still omit these props, so their sections stay hidden.
+        other ContactPreview consumers (ContactAssignmentStep, EditContactsModal)
+        still omit these props, so their sections stay hidden.
       */}
       {previewContact && (
         <ContactPreview

@@ -8,7 +8,6 @@
  * Extracted components:
  * - DetectionBadges (DetectionSourceBadge, ConfidencePill, PendingReviewBadge)
  * - TransactionDetails (modal for viewing/editing transaction details)
- * - EditTransactionModal (modal for editing transactions)
  *
  * State management via custom hooks:
  * - useTransactionList: transactions, loading, error, filtering

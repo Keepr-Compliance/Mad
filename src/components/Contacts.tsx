@@ -586,7 +586,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    * a second rule answering a question `contacts:import` already answers, and
    * this codebase has paid for that shape once already (BACKLOG-2370, deleted).
    * It is to stop rebuilding the payload and hand the ROW over, exactly as
-   * `ImportContactsModal` does. `contacts:import` then does what it already
+   * the transaction flow's import modal used to. `contacts:import` then does what it already
    * does correctly: `toSourceIdentities` reads every record the row stands for,
    * `linkImportedContact` writes a `source_id` crosswalk row for each, and
    * `runContactLinkingNow` runs the duplicate pass while the user is watching.

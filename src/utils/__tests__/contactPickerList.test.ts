@@ -380,7 +380,7 @@ describe("buildVisibleContacts — assembly: BACKLOG-2370 removed the dedup stag
   it("still drops an EXACTLY repeated id — the same record twice is not a judgement", () => {
     // The one thing `assembleContacts` removes. It decides nothing about who
     // anyone is; it notices one row arriving twice, which is what keeps React
-    // keys unique and what de-overlaps ContactSelectModal's union of its prop
+    // keys unique and what de-overlapped the deleted picker's union of its prop
     // with `searchContactsForSelection` (both project real `contacts.id`).
     const a = contact({ id: "same", display_name: "One Row", email: "one@example.test" });
     const alsoA = contact({ id: "same", display_name: "One Row", email: "one@example.test" });
