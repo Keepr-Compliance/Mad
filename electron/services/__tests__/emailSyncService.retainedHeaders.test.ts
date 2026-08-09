@@ -58,21 +58,22 @@ const COL = {
   REFERENCES_HEADER: 15,
   SENT_AT: 16,
   RECEIVED_AT: 17,
-  // BACKLOG-2571: inserted directly after `received_at`, so every index below
-  // shifted by one. That shift is why this map is asserted positionally — a
-  // column added in the middle of the list rewires every bind after it, and
-  // nine tests in this file went red at once rather than silently binding the
-  // wrong values.
-  SENT_AT_SOURCE: 18,
-  MESSAGE_ID_HEADER: 21,
-  CONTENT_HASH: 22,
-  LABELS: 23,
+  // BACKLOG-2571: `sent_at_source` briefly sat here, between `received_at` and
+  // `has_attachments`, and every index below was one higher for it. It was
+  // removed again (founder decision, 2026-08-09) and they shifted back. That
+  // round trip is exactly why this map is asserted POSITIONALLY: a column added
+  // or dropped in the middle of the list rewires every bind after it, and nine
+  // tests in this file go red at once instead of silently binding the wrong
+  // values into the wrong columns.
+  MESSAGE_ID_HEADER: 20,
+  CONTENT_HASH: 21,
+  LABELS: 22,
   // BACKLOG-2513: appended directly after `labels`.
-  BULK_MAIL_HEADERS: 24,
+  BULK_MAIL_HEADERS: 23,
 } as const;
 
 /** The emails INSERT binds exactly this many parameters. */
-const INSERT_ARITY = 27;
+const INSERT_ARITY = 26;
 
 /** A fake prepared-statement DB whose INSERTs always succeed and are recorded. */
 function makeFakeDb() {
@@ -444,7 +445,7 @@ describe("BACKLOG-2571: sent_at binds the send time, received_at the receive tim
     mockDbAll.mockReturnValue([]); // nothing pre-existing → all inserts are new
   });
 
-  it("binds sent_at from sentDate and received_at from receivedAt, with the source marker", async () => {
+  it("binds sent_at from sentDate and received_at from receivedAt", async () => {
     const { db, insertRuns } = makeFakeDb();
     mockGetRawDatabase.mockReturnValue(db as never);
 
@@ -456,7 +457,6 @@ describe("BACKLOG-2571: sent_at binds the send time, received_at the receive tim
           date: RECEIVE,
           sentDate: SEND,
           receivedAt: RECEIVE,
-          sentAtSource: "sender",
         }),
       ],
       getAttachmentsFn: jest.fn().mockResolvedValue([]),
@@ -466,18 +466,18 @@ describe("BACKLOG-2571: sent_at binds the send time, received_at the receive tim
     expect(insertRuns[0]).toHaveLength(INSERT_ARITY);
     expect(insertRuns[0][COL.SENT_AT]).toBe(SEND.toISOString());
     expect(insertRuns[0][COL.RECEIVED_AT]).toBe(RECEIVE.toISOString());
-    expect(insertRuns[0][COL.SENT_AT_SOURCE]).toBe("sender");
     // The whole point: the two columns are no longer the same value.
     expect(insertRuns[0][COL.SENT_AT]).not.toBe(insertRuns[0][COL.RECEIVED_AT]);
   });
 
-  it("records 'received' when the provider had no usable send time", async () => {
+  it("binds the substituted receive time when the provider had no usable send time", async () => {
     const { db, insertRuns } = makeFakeDb();
     mockGetRawDatabase.mockReturnValue(db as never);
 
     // Gmail with no usable Date: header — the parser substitutes the receive
-    // time and says so. The substitution is legitimate; leaving it unlabelled
-    // would not be.
+    // time. Nothing records that it did: the marker column was dropped by
+    // founder decision (2026-08-09), so such a row is indistinguishable from one
+    // whose sender stamped send and receive identically. Accepted cost.
     await storeParsedEmailsForAccount({
       userId: "u-1",
       provider: "gmail",
@@ -486,26 +486,24 @@ describe("BACKLOG-2571: sent_at binds the send time, received_at the receive tim
           date: RECEIVE,
           sentDate: RECEIVE,
           receivedAt: RECEIVE,
-          sentAtSource: "received",
         }),
       ],
       getAttachmentsFn: jest.fn().mockResolvedValue([]),
     });
 
     expect(insertRuns[0][COL.SENT_AT]).toBe(RECEIVE.toISOString());
-    expect(insertRuns[0][COL.SENT_AT_SOURCE]).toBe("received");
+    expect(insertRuns[0][COL.RECEIVED_AT]).toBe(RECEIVE.toISOString());
   });
 
-  it("falls back to `date` and writes a NULL marker when a caller supplies no sentDate", async () => {
+  it("falls back to `date` when a caller supplies no sentDate", async () => {
     const { db, insertRuns } = makeFakeDb();
     mockGetRawDatabase.mockReturnValue(db as never);
 
     // An un-migrated producer degrades to the OLD behaviour rather than writing
-    // NULL into a column eleven consumers read. NULL in the marker then says
-    // "unrecorded", which is the honest answer for such a row.
+    // NULL into a column eleven consumers read. `sentDate` is optional for
+    // exactly this reason.
     const email = mkGmailEmail({ date: RECEIVE, receivedAt: RECEIVE });
     delete (email as { sentDate?: Date | null }).sentDate;
-    delete (email as { sentAtSource?: string | null }).sentAtSource;
 
     await storeParsedEmailsForAccount({
       userId: "u-1",
@@ -515,6 +513,5 @@ describe("BACKLOG-2571: sent_at binds the send time, received_at the receive tim
     });
 
     expect(insertRuns[0][COL.SENT_AT]).toBe(RECEIVE.toISOString());
-    expect(insertRuns[0][COL.SENT_AT_SOURCE]).toBeNull();
   });
 });

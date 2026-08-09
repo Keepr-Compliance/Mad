@@ -278,13 +278,6 @@ export interface StoreableEmail {
    */
   sentDate?: Date | null;
   /**
-   * BACKLOG-2571: provenance of `sentDate`, persisted to
-   * `emails.sent_at_source`. `"sender"` = a real send time; `"received"` = the
-   * provider had none usable and the receive time was substituted; absent =
-   * this writer could not say, which is stored as NULL and read as "legacy".
-   */
-  sentAtSource?: "sender" | "received" | null;
-  /**
    * SHA-256 content hash. BACKLOG-2572: NOT cross-provider comparable — Gmail
    * hashes over internalDate, Outlook over sentDateTime.
    */
@@ -611,13 +604,13 @@ async function fetchStoreAndDedup(params: {
           subject, body_plain, body_html,
           sender, recipients, cc, bcc,
           thread_id, in_reply_to, references_header,
-          sent_at, received_at, sent_at_source,
+          sent_at, received_at,
           has_attachments, attachment_count,
           message_id_header, content_hash, labels,
           bulk_mail_headers,
           ingest_source, validated_at,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
@@ -726,24 +719,17 @@ async function fetchStoreAndDedup(params: {
                * every new row, because both derived from `email.date`. It is
                * now genuinely distinct, and a difference between the two
                * columns IS meaningful — it is the send↔receive delta. Rows
-               * written before this task still carry identical values; use
-               * `sent_at_source` to tell those apart, not the equality.
+               * written before this task still carry identical values in both,
+               * and nothing on disk marks them as legacy: a re-sync is what
+               * corrects them (founder decision, 2026-08-09 — the only rows
+               * affected were his own test data, so a permanent marker column
+               * would have outlived its cause).
                *
                * Parsed via toIsoStringOrNull so an unparseable provider
                * timestamp nulls one field instead of throwing into the
                * per-email catch below and discarding the whole email.
                */
               toIsoStringOrNull(email.receivedAt),
-              /**
-               * BACKLOG-2571: provenance of the value in `sent_at`.
-               *
-               * NULL when the writer cannot say — which is how every row
-               * written before this task reads, and why the column is nullable
-               * with no DEFAULT. A `DEFAULT 'received'` would assert a fact
-               * about legacy rows that nothing verified; absent means
-               * unrecorded, and unrecorded is the truth about them.
-               */
-              email.sentAtSource ?? null,
               email.hasAttachments ? 1 : 0,
               email.attachmentCount || 0,
               // BACKLOG-1769: persist the RFC Message-ID (was dropped as null) so

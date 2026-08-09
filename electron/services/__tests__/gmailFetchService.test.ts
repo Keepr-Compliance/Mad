@@ -1216,8 +1216,11 @@ describe("GmailFetchService", () => {
 
       expect(parsed.sentDate.toISOString()).toBe(SENT_ISO);
       expect(parsed.receivedAt?.toISOString()).toBe(RECEIVED_ISO);
-      expect(parsed.sentAtSource).toBe("sender");
       // The two must genuinely differ, or none of the above discriminates.
+      // THIS IS THE DISCRIMINATOR for the whole `Date:`-header read: T3 and T4
+      // below assert the FALLBACK value, which equals the receive time, so a
+      // parser that never read the header at all would keep them green. Only
+      // this test separates "read the header" from "never looked".
       expect(SENT_ISO).not.toBe(RECEIVED_ISO);
     });
 
@@ -1239,7 +1242,7 @@ describe("GmailFetchService", () => {
       expect(parsed.date.toISOString()).not.toBe(SENT_ISO);
     });
 
-    it("T3: falls back to the receive time when there is NO Date: header, and records that it did", async () => {
+    it("T3: falls back to the receive time when there is NO Date: header", async () => {
       respondWith([
         { name: "Subject", value: "Closing docs" },
         { name: "From", value: "agent@example.com" },
@@ -1247,10 +1250,11 @@ describe("GmailFetchService", () => {
 
       const parsed = (await gmailFetchService.searchEmails({}))[0];
 
+      // The fallback is NOT recorded anywhere — the marker column was dropped
+      // by founder decision (2026-08-09). So this row is indistinguishable from
+      // one whose sender stamped send and receive identically, and this test
+      // pins the fallback VALUE rather than any claim about its provenance.
       expect(parsed.sentDate.toISOString()).toBe(RECEIVED_ISO);
-      // Recorded, not silent. A receive time sitting in sent_at with nothing to
-      // say so is the exact defect this task exists to end.
-      expect(parsed.sentAtSource).toBe("received");
     });
 
     it("T4: a malformed Date: header falls back too, rather than producing an Invalid Date", async () => {
@@ -1266,7 +1270,6 @@ describe("GmailFetchService", () => {
       // guard this line does not merely fail — the whole email is discarded by
       // the per-email catch in the sync writer.
       expect(parsed.sentDate.toISOString()).toBe(RECEIVED_ISO);
-      expect(parsed.sentAtSource).toBe("received");
       expect(Number.isNaN(parsed.sentDate.getTime())).toBe(false);
     });
 

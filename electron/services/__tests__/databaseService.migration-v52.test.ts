@@ -133,7 +133,7 @@ describe("databaseService migration v52 (BACKLOG-2280 — reactions/tapbacks)", 
     // (external_contacts.source_identity_json), BACKLOG-2410 v59 (the contact
     // link review queue) and BACKLOG-2427 v60 (hand-typed contact value
     // provenance recovery, data-only), so the chain terminates at 60.
-    expect(row.version).toBe(63);
+    expect(row.version).toBe(62);
   });
 
   it("lets a reaction row be written after the migration", async () => {

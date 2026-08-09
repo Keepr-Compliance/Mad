@@ -1429,8 +1429,9 @@ describe("OutlookFetchService", () => {
    *
    * Graph has supplied `sentDateTime` all along and the parser has parsed it all
    * along — it just never reached a column, because `sent_at` was bound from
-   * `receivedDateTime`. Unlike Gmail there is no header to be missing and so no
-   * fallback: `sentAtSource` is always 'sender'.
+   * `receivedDateTime`. Unlike Gmail there is no header to be missing, so this
+   * side has no fallback path at all: `sent_at` is a real send time on every row
+   * Graph produces.
    *
    * Fixture provenance: ISO-8601 with `Z`, the shape Graph returns and the
    * parser hands to `new Date(...)`. RFC 2606 domains.
@@ -1471,7 +1472,6 @@ describe("OutlookFetchService", () => {
 
       expect(parsed.sentDate.toISOString()).toBe(new Date(SENT).toISOString());
       expect(parsed.receivedAt?.toISOString()).toBe(new Date(RECEIVED).toISOString());
-      expect(parsed.sentAtSource).toBe("sender");
       // They must genuinely differ, or nothing above discriminates.
       expect(new Date(SENT).toISOString()).not.toBe(new Date(RECEIVED).toISOString());
     });

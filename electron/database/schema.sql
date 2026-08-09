@@ -388,20 +388,19 @@ CREATE TABLE IF NOT EXISTS emails (
 
   -- Timestamps
   -- BACKLOG-2571: sent_at is the SENDER-ASSERTED send time (Gmail `Date:`
-  -- header, Outlook `sentDateTime`). Before v63 it held the RECEIVE time for
-  -- both providers, so rows written earlier mean something different from rows
-  -- written later — read sent_at_source below before comparing them.
+  -- header, Outlook `sentDateTime`); received_at is when the server took
+  -- delivery. They were the same value on every row until BACKLOG-2571, because
+  -- both derived from the provider's receive timestamp. A difference between
+  -- them is now meaningful — it is the send↔receive delta.
+  --
+  -- Rows written BEFORE that fix still hold a receive time in sent_at, and
+  -- nothing on disk distinguishes them: the send time was never stored (Outlook's
+  -- sentDateTime reached only the content hash; Gmail's `Date:` header was not
+  -- read at all), so there is nothing to backfill from. A provider re-sync
+  -- rewrites them; no marker column records the difference, by founder decision
+  -- 2026-08-09 — the only rows affected were one developer's test data.
   sent_at DATETIME,
   received_at DATETIME,
-  -- BACKLOG-2571: what sent_at above actually contains.
-  --   'sender'   - a real send time
-  --   'received' - the provider had no usable send time (Gmail with a missing
-  --                or malformed `Date:` header) and the receive time was used
-  --   NULL       - legacy row, written before v63. Provenance unrecorded;
-  --                treat the value as a RECEIVE time.
-  -- Deliberately nullable with NO DEFAULT: a default would assert a fact about
-  -- pre-v63 rows that the migration cannot verify. Absent means unrecorded.
-  sent_at_source TEXT CHECK (sent_at_source IN ('sender', 'received')),
 
   -- Attachments
   has_attachments INTEGER DEFAULT 0,

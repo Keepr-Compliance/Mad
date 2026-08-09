@@ -51,17 +51,10 @@ interface ParsedEmail {
   /**
    * BACKLOG-2571: the sender-asserted send time, from the RFC 5322 `Date:`
    * header. This is what `emails.sent_at` now stores. Falls back to the receive
-   * time when the header is missing or unparseable, in which case
-   * `sentAtSource` is `"received"`.
+   * time when the header is missing or unparseable — the fallback is the only
+   * way `sent_at` can still hold a receive time on a row written from here.
    */
   sentDate: Date;
-  /**
-   * BACKLOG-2571: provenance of `sentDate` — `"sender"` when it came from the
-   * `Date:` header, `"received"` when the header was unusable and the receive
-   * time was substituted. Persisted to `emails.sent_at_source` so a reader can
-   * tell which rows carry a real send time.
-   */
-  sentAtSource: "sender" | "received";
   body: string;
   bodyPlain: string;
   snippet: string;
@@ -592,19 +585,18 @@ class GmailFetchService {
      * whose `toISOString()` throws, so the guard is not defensive dressing — it
      * is what stops one malformed header from discarding a whole email.
      *
-     * When the header is unusable we fall back to the receive time, and we
-     * RECORD that we did, via `sentAtSource`. A silent fallback would put a
-     * receive timestamp in `sent_at` with nothing to say so — which is the
-     * exact defect this task exists to end, reintroduced one level down.
+     * When the header is unusable we fall back to the receive time. That
+     * fallback is not recorded anywhere: the marker column that would have said
+     * so was dropped by founder decision (2026-08-09) as cruft outliving its
+     * cause. A row that took the fallback is indistinguishable from one whose
+     * sender happened to stamp the send and receive times identically — which
+     * is the accepted cost, not an oversight.
      */
     const dateHeader = getHeader("Date");
     const parsedSentDate = dateHeader ? new Date(dateHeader) : null;
     const sentDateIsUsable =
       parsedSentDate !== null && !Number.isNaN(parsedSentDate.getTime());
     const sentDate = sentDateIsUsable ? parsedSentDate : receivedDate;
-    const sentAtSource: "sender" | "received" = sentDateIsUsable
-      ? "sender"
-      : "received";
 
     /**
      * Compute content hash for deduplication fallback (TASK-918).
@@ -686,10 +678,9 @@ class GmailFetchService {
       /**
        * BACKLOG-2571: the sender-asserted send time, and what now lands in
        * `emails.sent_at`. Falls back to the receive time when the `Date:`
-       * header is missing or unparseable — `sentAtSource` records which.
+       * header is missing or unparseable.
        */
       sentDate,
-      sentAtSource,
       body: body,
       bodyPlain: bodyPlainForHash,
       snippet: message.snippet || "",

@@ -158,14 +158,6 @@ interface ParsedEmail {
    * this what `emails.sent_at` stores; it previously fed only the content hash.
    */
   sentDate: Date;
-  /**
-   * BACKLOG-2571: provenance of `sentDate`, persisted to
-   * `emails.sent_at_source`. Always `"sender"` here — Graph supplies
-   * `sentDateTime` on every message. The union keeps the shape identical to
-   * Gmail's, where the `Date:` header can be missing and the value can be
-   * `"received"`.
-   */
-  sentAtSource: "sender" | "received";
   body: string;
   bodyPlain: string;
   snippet: string;
@@ -1296,12 +1288,6 @@ class OutlookFetchService {
       date: new Date(message.receivedDateTime),
       /** BACKLOG-2571: the send time, and what `emails.sent_at` now stores. */
       sentDate: sentDate,
-      /**
-       * BACKLOG-2571: always `"sender"` for Graph — `sentDateTime` is present
-       * on every message, so unlike Gmail there is no header to be missing and
-       * no fallback to record.
-       */
-      sentAtSource: "sender" as const,
       body: body,
       bodyPlain: bodyPlain,
       snippet: message.bodyPreview || "",
