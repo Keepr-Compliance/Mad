@@ -1175,38 +1175,21 @@ export async function searchContacts(
   return dbAll<Contact>(sql, [userId, searchPattern, searchPattern]);
 }
 
-/**
- * Look up contact by phone number.
- * Normalizes the phone number and searches across all contact phones.
- * Returns the contact with display_name if found.
+/*
+ * BACKLOG-2621 — `getContactByPhone` DELETED. It had no callers beyond a
+ * one-line pass-through on `databaseService`, which is deleted with it.
+ *
+ * It is removed rather than fixed because leaving it invited someone to wire it
+ * up: it read like the phone lookup, sat next to the real one, and was wrong in
+ * a way that would not show up in a test written against a single user's data.
+ * It carried NO `user_id` predicate at all, so it would happily return another
+ * account's contact, and it matched with
+ * `REPLACE(...) LIKE '%<key>'` — a trailing-wildcard pattern, which is both
+ * unindexable and a suffix match rather than an equality one.
+ *
+ * The lookup to use is `findContactByNormalizedPhone` below: scoped by user,
+ * compares `contact_phones.phone_normalized`, served by an index.
  */
-export async function getContactByPhone(
-  phone: string
-): Promise<{ id: string; display_name: string; phone: string } | null> {
-  // Normalize phone to last 10 digits for matching
-  const digits = phone.replace(/\D/g, '');
-  const normalized = digits.length >= 10 ? digits.slice(-10) : digits;
-
-  if (!normalized || normalized.length < 7) {
-    return null;
-  }
-
-  const sql = `
-    SELECT
-      c.id,
-      c.display_name,
-      cp.phone_e164 as phone
-    FROM contacts c
-    JOIN contact_phones cp ON c.id = cp.contact_id
-    WHERE REPLACE(REPLACE(REPLACE(REPLACE(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', '') LIKE ?
-    LIMIT 1
-  `;
-
-  // Match on last 10 digits
-  const pattern = `%${normalized}`;
-  const result = dbGet<{ id: string; display_name: string; phone: string }>(sql, [pattern]);
-  return result || null;
-}
 
 /**
  * Synchronous phone lookup scoped by user_id.
