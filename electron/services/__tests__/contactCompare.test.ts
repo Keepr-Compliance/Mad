@@ -1536,23 +1536,28 @@ describe("the review-state set", () => {
           columns: view.columns.length,
         });
         /*
-          BACKLOG-2626 — AND THE OTHER NUMBER, WHICH IS DELIBERATELY DIFFERENT.
+          BACKLOG-2626 — THE OTHER NUMBER, ASSERTED AGAINST THE SOURCES PANEL.
 
-          `records` counts the contact's own record plus EVERY non-origin link,
-          including the `source_id` one the compare screen absorbs into column 1.
-          So on any imported contact the two numbers differ by exactly one, and
-          this asserts the RELATIONSHIP rather than a literal — a literal would
-          have to be restated per shape and could be quietly made equal.
+          CORRECTED after founder QA on `b64da8c8`. This used to assert
+          `records === view.columns.length + (imported ? 1 : 0)` — that the two
+          numbers differ by one on any imported contact. **That was the
+          off-by-one itself, written down a second time.** The expectation and
+          the code came from the same wrong idea, so every shape agreed and the
+          suite proved nothing. The founder found it by comparing the row against
+          his own contact card: `Sources 4`, row said 5.
 
-          CONTROL: set `records: 1 + link_count - (source_id_count > 0 ? 1 : 0)`
-          — i.e. make it a second name for `columns` — and rB, rC, rD go red
-          while rE (no `source_id` row) stays green. That asymmetry is what
-          proves the absorbed record is being counted.
+          So it is asserted against the PANEL, derived from `getContactProvenance`
+          — the shipped reader the card renders from, not a re-spelled predicate.
+          An imported contact's own record IS in that panel (its `source_id`
+          row), so the two are equal; a hand-made contact's own record is not
+          (its `origin` row is synthetic and dropped in SQL), so `records` is one
+          MORE. Both directions, per shape, in one expectation.
         */
-        const absorbed = shape.id === "rE" ? 0 : 1;
+        const panel = getContactProvenance(USER, shape.id);
+        const ownRecordIsInThePanel = panel.some((s) => s.matchMethod === "source_id");
         expect({ shape: shape.name, records: state.records }).toEqual({
           shape: shape.name,
-          records: view.columns.length + absorbed,
+          records: panel.length + (ownRecordIsInThePanel ? 0 : 1),
         });
       }
     }
@@ -1561,6 +1566,118 @@ describe("the review-state set", () => {
   it("excludes a contact with nothing to compare", () => {
     shapes[0].build();
     expect(getReviewStateByContact(USER).has("rA")).toBe(false);
+  });
+
+  // =========================================================================
+  // BACKLOG-2626 — THE RECORD COUNT, AFTER FOUNDER QA ON `b64da8c8`
+  // =========================================================================
+
+  /**
+   * HIS EXACT SHAPE, AND HIS EXACT COMPARISON.
+   *
+   *   Sources 4
+   *     Mac address book — Rosalind Vance       Recognised by its own entry ...
+   *     Mac address book — Roz Vance            You confirmed this yourself
+   *     Mac address book — Rosalind Vance-Hale  You confirmed this yourself
+   *     Mac address book — Rosalind Hale        You confirmed this yourself
+   *
+   * The row read **"5 records combined"**. The first entry is the `source_id`
+   * row written at import — the contact's OWN record — and `1 + link_count`
+   * counted him twice.
+   *
+   * The badge and the panel are asserted in ONE test because comparing them is
+   * how he found it. Split across two tests, each could stay green while
+   * disagreeing with the other, which is exactly what happened: the old
+   * expectation restated the bug and agreed with the code.
+   *
+   * OBSERVED RED: restore `records: 1 + r.link_count` and this reads 5 against a
+   * panel of 4.
+   */
+  it("counts an imported contact's own record ONCE, matching its Sources panel", () => {
+    addContact("rQ", "Rosalind Vance", { phones: [SHARED_PHONE] });
+    origin("rQ", "contacts_app");
+    // The record she was imported FROM — "recognised by its own entry".
+    addExternal("mac-rQ", "Rosalind Vance", "macos", { phones: [SHARED_PHONE] });
+    link("rQ", "macos", "mac-rQ", "source_id");
+    // Three further records he confirmed himself.
+    for (const [id, name] of [
+      ["roz-rQ", "Roz Vance"],
+      ["hale-rQ", "Rosalind Vance-Hale"],
+      ["rh-rQ", "Rosalind Hale"],
+    ] as const) {
+      addExternal(id, name, "macos", { phones: [SHARED_PHONE] });
+      link("rQ", "macos", id, "manual");
+    }
+
+    const state = getReviewStateByContact(USER).get("rQ")!;
+    const panel = getContactProvenance(USER, "rQ");
+
+    expect(panel).toHaveLength(4);
+    expect(state.records).toBe(4);
+    // THE COMPARISON HE MADE, as one assertion.
+    expect(state.records).toBe(panel.length);
+  });
+
+  /**
+   * THE OTHER DIRECTION — the case the broken expression got RIGHT, which must
+   * stay right.
+   *
+   * A hand-made contact carries only a synthetic `origin:${contactId}` row. It
+   * stands for no address-book record and is dropped in SQL, so her own record
+   * is genuinely NOT among the links and the `+ 1` belongs.
+   *
+   * OBSERVED RED: make the expression a bare `r.link_count` — the obvious
+   * over-correction — and this reads 2 where three records came together, while
+   * the imported test above stays green. Without this half, "fix the off-by-one"
+   * could be satisfied by subtracting one everywhere.
+   */
+  it("still counts a hand-made contact's own record, which no link stands for", () => {
+    addContact("rH", "Alan Turing", { source: "manual" });
+    origin("rH", "manual");
+    addExternal("out-rH", "Alan Turing", "outlook");
+    addExternal("and-rH", "Alan Turing", "android_sync");
+    link("rH", "outlook", "out-rH", "manual");
+    link("rH", "android_sync", "and-rH", "email");
+
+    const state = getReviewStateByContact(USER).get("rH")!;
+    const panel = getContactProvenance(USER, "rH");
+
+    expect(panel).toHaveLength(2);
+    expect(panel.some((s) => s.matchMethod === "source_id")).toBe(false);
+    // Her own record plus the two linked ones.
+    expect(state.records).toBe(3);
+    expect(state.records).toBe(panel.length + 1);
+  });
+
+  /**
+   * A contact assembled from exactly ONE record shows no count — the `> 1` gate
+   * in `ContactRow`. Nothing is COMBINED at one, so the phrase would be a false
+   * statement and not merely an ungrammatical one.
+   *
+   * The shape: imported from one record, with one further record ATTACHED and
+   * then unlinked — leaving a single `source_id` row, which is the only way a
+   * crosswalk member reaches `records: 1`. Built through the real producers, so
+   * this is a state the app can actually emit rather than one hand-typed to make
+   * the assertion convenient.
+   */
+  it("reports a single-record contact as one, so the row shows no count", () => {
+    addContact("rS", "Tad Brooks");
+    origin("rS", "contacts_app");
+    addExternal("mac-rS", "Tad Brooks", "macos");
+    link("rS", "macos", "mac-rS", "source_id");
+    // A second, ATTACHED record — without it the HAVING clause excludes her.
+    addExternal("out-rS", "Tad Brooks", "outlook");
+    link("rS", "outlook", "out-rS", "email");
+
+    expect(getReviewStateByContact(USER).get("rS")!.records).toBe(2);
+
+    // Now detach it, leaving only the record she was made from.
+    mockDb!.prepare(`DELETE FROM contact_source_links WHERE source_record_id = 'out-rS'`).run();
+
+    // She leaves the crosswalk population entirely — one record, nothing
+    // combined, no badge and no count. `undefined` is the no-badge state.
+    expect(getReviewStateByContact(USER).get("rS")).toBeUndefined();
+    expect(getContactProvenance(USER, "rS")).toHaveLength(1);
   });
 
   it("a partly confirmed contact still needs review", () => {

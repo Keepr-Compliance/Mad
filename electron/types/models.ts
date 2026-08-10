@@ -301,15 +301,25 @@ export interface ContactReviewState {
    */
   columns: number;
   /**
-   * How many RECORDS the contact is assembled from: its own, plus every
-   * non-origin crosswalk row it did not absorb into that own column.
+   * How many REAL RECORDS the contact is assembled from, counted once each.
+   *
+   * Every non-origin crosswalk row is a real record; the contact's OWN record is
+   * added on top only when no link already stands for it. An imported contact's
+   * `source_id` row IS its own record, so it must not be counted twice — the
+   * founder saw `Sources 4` beside a row reading "5 records combined" on
+   * `b64da8c8`. A hand-made contact holds only a synthetic `origin:${contactId}`
+   * row, which stands for no address-book record, so there its own record IS the
+   * extra one and the `+ 1` is right.
    *
    * BACKLOG-2626, folding in `14617008`. The badge used to render `columns` while
-   * the sentence beside it counted records, so a two-record contact whose second
-   * record was matched by stable id read **"1 records combined"** — accurate
-   * about columns, meaningless to the person reading it, and ungrammatical. The
-   * count the user sees is a RECORD count; `columns` stays because the compare
-   * screen genuinely draws that many columns.
+   * the sentence beside it counted records, so a contact whose second record was
+   * matched by stable id read **"1 records combined"** — accurate about columns,
+   * meaningless to the person reading it, and ungrammatical.
+   *
+   * Equal to `columns` on every shape TODAY, which is a coincidence of the
+   * compare screen folding exactly the record this declines to double-count —
+   * not a definition. Assert it against the Sources panel, never against
+   * `columns`.
    */
   records: number;
   /** False once every non-origin link carries a `same_person` verdict. */

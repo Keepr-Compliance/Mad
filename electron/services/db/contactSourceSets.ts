@@ -300,19 +300,51 @@ export function getReviewStateByContact(userId: string): Map<string, ContactRevi
       // that column absorbs — at most one `source_id` row.
       columns: 1 + r.link_count - (r.source_id_count > 0 ? 1 : 0),
       /*
-        RECORDS, NOT COLUMNS — BACKLOG-2626, folding in `14617008`.
+        REAL RECORDS, ONCE EACH — BACKLOG-2626, folding in `14617008`, corrected
+        after founder QA on `b64da8c8`.
 
-        The contact's own record plus every non-origin link. The record a contact
-        was created FROM is a real, separate record that came together with the
-        contact; the compare screen ABSORBS it into the contact's column, which
-        is why `columns` subtracts it and why this must not.
+        Every non-origin link IS a real record, so `link_count` is the base. The
+        `+ 1` stands for the CONTACT'S OWN record, and is added only when that
+        record is not already among the links.
 
-        The founder's case was a two-record contact whose second record matched by
-        stable id. It read "1 records combined" — right about columns, wrong about
-        what he was being told, and ungrammatical on top. It now reads "2 records
-        combined", which is what the sentence beside it always said.
+        ===================================================================
+        THE OFF-BY-ONE THIS REPLACED, AND WHY IT SURVIVED A ROUND OF QA
+        ===================================================================
+        It was `1 + r.link_count`. The founder pasted his contact card beside the
+        row: `Sources 4`, and the row read **"5 records combined"**. His first
+        source is `Recognised by its own entry in your Mac address book` — the
+        `source_id` row written at import. That row IS the contact's own record;
+        it is non-origin, so it sits inside `link_count`, and the unconditional
+        `+ 1` counted him twice.
+
+        It was CORRECT for a hand-made contact, which carries only a synthetic
+        `origin:${contactId}` row — excluded by `match_method <> ?` below — and
+        so genuinely has a record of its own that no link represents. Right for
+        one population and wrong for the other is why it survived: every shape
+        anyone thought to check was a hand-made one.
+
+        `origin` rows stand for no address-book record; `source_id` rows stand
+        for a real one. That distinction is the whole fix.
+
+        ===================================================================
+        THIS CURRENTLY EQUALS `columns` — A COINCIDENCE TO WATCH, NOT A
+        DUPLICATE TO COLLAPSE
+        ===================================================================
+        `columns` is `1 + link_count - (source_id_count > 0 ? 1 : 0)`, which is
+        the same number on every shape. Established by RUNNING both over the
+        shape table in `contactCompare.test.ts`, not by algebra alone.
+
+        They are not the same question. `columns` is a UI fact: the compare
+        screen chooses to FOLD the contact's own record into the contact's
+        column. `records` is a data fact about how many real records came
+        together. They agree today because the screen folds exactly the record
+        this declines to double-count; a design that drew that record as its own
+        column beside the contact would move `columns` and must not move this.
+
+        So it is asserted against the SOURCES PANEL — the thing the founder
+        actually compared it to — and deliberately never against `columns`.
       */
-      records: 1 + r.link_count,
+      records: r.link_count + (r.source_id_count > 0 ? 0 : 1),
       needsReview,
       openQuestions: open,
       badge: open > 0 ? "suggestion" : needsReview ? "autolinked" : "user_linked",

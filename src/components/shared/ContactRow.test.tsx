@@ -650,27 +650,56 @@ describe("ContactRow", () => {
     });
 
     /**
-     * CONTROL 7 — the badge and its sentence, asserted TOGETHER.
+     * CONTROL 7 — the badge and its count, asserted TOGETHER.
      *
      * `14617008`: the badge counted COLUMNS while the sentence beside it counted
      * RECORDS, so a two-record contact read "1 records combined". Both numbers
      * were right about different things and the user read them as one
-     * contradictory statement. Asserting them in one test is what stops them
+     * contradictory statement. Asserting them in one render is what stops them
      * drifting apart again — separate tests would each stay green while
      * disagreeing with each other.
      *
-     * The shape below is the founder's own: a contact assembled from three
-     * records where one is absorbed into its own column by `source_id`, so
-     * `columns` is 2 and `records` is 3. The count must say THREE.
+     * THE SHAPE IS THE FOUNDER'S OWN, TRANSCRIBED FROM WHAT THE PRODUCER EMITS:
+     * a contact imported from one address-book record with three further records
+     * confirmed. `getReviewStateByContact` yields `columns: 4, records: 4`, and
+     * his Sources panel showed four entries against a row claiming five. WHICH
+     * number is correct is settled in the main process against that panel
+     * (`contactCompare.test.ts`); this pins what the row does with it.
      */
-    it("the count counts RECORDS, not the columns the compare screen draws", () => {
+    it("the count counts RECORDS, and agrees with the badge beside it", () => {
       renderContactRow({
-        contact: withBadge("autolinked", { columns: 2, records: 3 }),
+        contact: withBadge("autolinked", { columns: 4, records: 4 }),
       });
 
       expect(screen.getByRole("status")).toHaveTextContent("Autolinked");
       expect(screen.getByTestId("contact-row-record-count")).toHaveTextContent(
-        "3 records combined",
+        "4 records combined",
+      );
+    });
+
+    /**
+     * A FIELD-WIRING PROBE, AND LABELLED AS ONE.
+     *
+     * `records` and `columns` are equal for every shape the app can currently
+     * produce — established by RUNNING both over the shape table in
+     * `contactCompare.test.ts`, not by algebra. So the fixture below, where they
+     * differ, is a state NO PRODUCER EMITS, and it exists for exactly one
+     * purpose: to pin which field the row reads.
+     *
+     * Said plainly, because an unlabelled impossible fixture is the failure
+     * shape recorded on 2026-08-04 — a test describing a state the code cannot
+     * reach, mistaken for evidence about behaviour. **This is not evidence about
+     * behaviour.** It is a wire check, and it earns its place because the two
+     * fields answer different questions and will diverge the moment the compare
+     * screen stops folding the contact's own record into its own column.
+     */
+    it("reads the records field, not the column count that currently equals it", () => {
+      renderContactRow({
+        contact: withBadge("autolinked", { columns: 2, records: 5 }),
+      });
+
+      expect(screen.getByTestId("contact-row-record-count")).toHaveTextContent(
+        "5 records combined",
       );
     });
 
