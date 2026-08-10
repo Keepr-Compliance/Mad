@@ -54,9 +54,11 @@ import {
 import { linkExternalContactsForUser } from "../services/contactSourceLinker";
 // BACKLOG-2410 — the contact-level review queue and contact provenance.
 import { runUniqueNameAutoLink } from "../services/contactNameAutoLink";
-// BACKLOG-2459: `sourceLabel` names a folded record's address book in the same
-// words the review queue uses, rather than minting a second mapping here.
-import { buildEvidence, sourceLabel } from "../services/contactLinkEvidence";
+// BACKLOG-2556: `sourceLabel` was imported beside `buildEvidence` to name a
+// FOLDED record's address book in the disclosure sentence. Nothing folds, so
+// nothing here needs the label; `contactLinkEvidence` still owns it for the
+// review queue, provenance and compare screens.
+import { buildEvidence } from "../services/contactLinkEvidence";
 import {
   proposeLink,
   listVerdicts,
@@ -309,13 +311,27 @@ type IdentitySkipReason =
 /**
  * EVERY source identity a picker row stands for (BACKLOG-2458).
  *
- * The row's own `(externalRecordId, externalSourceType)` PLUS every record the
- * picker folded into it. Deduped on the pair, because the representative also
- * appears in `collapsedSources` and a source record must be claimed once.
+ * ===========================================================================
+ * BACKLOG-2556 — THAT IS NOW EXACTLY ONE: THE ROW'S OWN RECORD.
+ * ===========================================================================
+ * This used to read `contact.collapsedSources` as well, which is how the
+ * picker's fold reached the durable store. A row that had absorbed two other
+ * records handed all three identities here, and `linkImportedContact` wrote
+ * each as a `contact_source_links` row with `match_method: 'source_id'` — the
+ * method reserved for a source asserting two entries are the same record.
+ * The founder imported ONE Luis Ferreira row and got three source records
+ * attached, after which no query could tell the guess from a real match.
  *
- * Order is the representative first, then the collapsed records in the order
- * the picker absorbed them, so the crosswalk rows a given import writes are
- * reproducible rather than dependent on Map iteration.
+ * The fold is deleted and so is `collapsedSources`. The only input left is the
+ * row's own `(externalSourceType, externalRecordId)` pair, so this returns at
+ * most one identity.
+ *
+ * THE PLURAL SHAPE IS KEPT ON PURPOSE. Collapsing it back to a single
+ * `SourceIdentity | null` would be a larger change reaching `linkImportedContact`
+ * and `ContactOrigin`, and the warning above `IdentitySkipReason` still holds:
+ * a single-identity reader compiles cleanly and passes lint. A container that
+ * happens to hold one is safe; a container that anything upstream may refill is
+ * not, which is why the deletion is of the INPUT and not of the shape.
  */
 function toSourceIdentities(contact: ImportableContact): {
   identities: SourceIdentity[];
@@ -351,9 +367,6 @@ function toSourceIdentities(contact: ImportableContact): {
   };
 
   consider(contact.externalSourceType, contact.externalRecordId, contact.externalUuid);
-  for (const collapsed of contact.collapsedSources ?? []) {
-    consider(collapsed.sourceType, collapsed.sourceRecordId, collapsed.externalUuid);
-  }
 
   if (identities.length > 0) return { identities, skipped: null };
   return {
@@ -1272,14 +1285,6 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // Counters only — never a per-contact line (this runs over ~1000 rows).
         let sourceDisabledCount = 0;
         let alreadyImportedCount = 0;
-        let duplicateSuppressedCount = 0;
-        // BACKLOG-2458: of the records `duplicateSuppressedCount` counts, how
-        // many handed their SOURCE IDENTITY to the row that absorbed them. The
-        // gap between the two is the set whose identity is genuinely lost (a
-        // local `contacts` row has no source record behind it), so the two
-        // numbers together say whether the carry is working in the field
-        // instead of only in a test.
-        let collapsedIdentitiesCarried = 0;
 
         // BACKLOG-2478: distinct source values outside EXTERNAL_SOURCE_TYPES.
         // These are now SHOWN rather than dropped (see the filter loop), so this
@@ -1288,270 +1293,57 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // same reason as the counters above (this runs over ~1000 rows).
         const unknownSources = new Set<string>();
 
-        // BACKLOG-2316: Deduplication state. Email is a strong identity signal,
-        // so a shared email always collapses. A shared phone is NOT — many
-        // distinct people share a household/office line — so we remember which
-        // NAMES have claimed each normalized phone and only treat a later
-        // contact as a duplicate when its name is compatible with one of them.
-        // Name-only matching was removed entirely: it silently dropped distinct
-        // people who happen to share a name string (e.g. multiple "Margaret"s).
-        //
-        // BACKLOG-2458: each identifier now remembers WHICH ROW claimed it, not
-        // merely that something did. A suppressed record is not discarded — it
-        // is folded INTO the row that absorbed it, and folding requires knowing
-        // which row that was. `seenEmails: Set<string>` could not answer that,
-        // which is the mechanical reason the user's own choice was thrown away:
-        // the picker knew two records were one person and had nowhere to put
-        // the conclusion.
-        //
-        // Values are indices into `availableContacts`, assigned before the push
-        // so they are the index the row is about to occupy.
         /**
-         * BACKLOG-2531 — SAME SHAPE AS THE PHONE MAP, AND FOR THE SAME REASON.
+         * =====================================================================
+         * BACKLOG-2556 — THE FOLD IS GONE. Founder, 2026-08-09: "delete the fold".
+         * =====================================================================
+         * Between here and STEP 1 there used to be ~250 lines of deduplication
+         * state — `seenEmailOwner`, `seenPhoneOwners`, `collectPhones`,
+         * `emailOwnerFor`, `rememberEmailOwner`, `markAsSeen`,
+         * `findDuplicateOwner`, `absorbDisplayRecord`, `absorbSourceIdentity` —
+         * whose entire job was to decide that two records the user had NEVER
+         * linked were one person, drop the loser, and label the survivor
+         * "N records combined".
          *
-         * This was `Map<string, number>`: an address to the row that claimed
-         * it, with no name recorded, so a later row sharing the address folded
-         * into it unconditionally. `seenPhoneOwners` below has always carried
-         * the holder's NAME and required `namesAreCompatible` before collapsing
-         * — the phone rule was fixed by BACKLOG-2416 and the email rule was
-         * left behind.
+         * SUPPRESS ONLY WHAT WE KNOW. NEVER WHAT WE GUESS. The knowledge half
+         * above is untouched: `linkedSourceKeys` (the crosswalk says you clicked
+         * import on that exact card) still suppresses, and `rejectedSourceKeys`
+         * still releases. What is deleted is judgement.
          *
-         * Found by the founder testing the picker fix: Tom Whitfield stopped
-         * being hidden from the list, and was then COLLAPSED INTO Sarah's row
-         * instead, with the interface explaining that both list the same
-         * address. Same defect, a different pass — the suppression moved rather
-         * than ending.
+         * WHAT IT COST, on the founder's own fictional corpus (2026-08-09):
+         *
+         *  - IT HID A PERSON. Elena Marsh-Okonkwo folded under Elena Marsh on a
+         *    shared address. She was not merely mislabelled — she was absent
+         *    from the array the renderer receives, so she could not be imported
+         *    as her own contact even if she is a different person.
+         *  - IT DISCARDED DATA. Two `Tobias Quill` records, one carrying
+         *    `ORG: Quill Inspections`. The fold kept the representative's fields
+         *    and `continue`d the other away; the organisation appeared nowhere,
+         *    not on the row and not in the detail pane.
+         *  - IT LAUNDERED A GUESS INTO A FACT. This is the worst of the three
+         *    and it is why the deletion reaches `collapsedSources` and not only
+         *    the display. `absorbSourceIdentity` pushed the folded record's
+         *    `(source_type, source_record_id)` onto the survivor, and
+         *    `toSourceIdentities` -> `linkImportedContact` wrote EVERY one of
+         *    them as a `contact_source_links` row with
+         *    `match_method: 'source_id'` — the method that means "the source
+         *    itself says these are the same record". The founder imported ONE
+         *    Luis Ferreira row and got THREE source records attached, each
+         *    indistinguishable, forever, from a genuine identifier match.
+         *
+         * A PICKER ROW NOW STANDS FOR EXACTLY ONE SOURCE RECORD: its own. That
+         * is the whole reason `collapsedSources` goes with the fold rather than
+         * being left as a permanently single-element array — a channel that can
+         * carry a second identity is a channel the next writer can refill.
+         *
+         * DELIBERATELY NOT TOUCHED HERE (BACKLOG-2608 owns them): the
+         * already-imported content fallbacks `emailClaimedByImported` /
+         * `phoneClaimedByImported` above. They are the same class of guess —
+         * they answer "is this person already saved?" from a shared identifier
+         * plus a compatible name — but they are the only thing standing between
+         * contacts imported before the crosswalk existed and appearing twice.
+         * They are replaced by a crosswalk-based check, not deleted blind.
          */
-        const seenEmailOwner = new Map<string, Array<{ name: string; owner: number }>>();
-        const seenPhoneOwners = new Map<string, Array<{ name: string; owner: number }>>();
-
-        type DedupContact = {
-          name?: string | null;
-          display_name?: string | null;
-          email?: string | null;
-          emails?: string[];
-          phone?: string | null;
-          phones?: string[];
-        };
-
-        /**
-         * The row a contact duplicates, AND what the two agreed on
-         * (BACKLOG-2459).
-         *
-         * This replaced a bare `number | null`. The rule is unchanged — every
-         * branch returns the same owner it returned before — but a bare index
-         * could say only THAT two records were one person, never WHY, and "why"
-         * is the whole of what has to be shown to the user.
-         */
-        type DuplicateMatch = {
-          owner: number;
-          matchedOn: "email" | "phone";
-          /** The value as saved on the LOSING record, unnormalised. */
-          matchedValue: string;
-        };
-
-        /** Collect every raw phone string on a contact (single + array). */
-        function collectPhones(contact: DedupContact): string[] {
-          const out: string[] = [];
-          if (contact.phone) out.push(contact.phone);
-          if (contact.phones) {
-            for (const p of contact.phones) if (p) out.push(p);
-          }
-          return out;
-        }
-
-        /**
-         * The index of the already-kept row this contact duplicates, or `null`
-         * when it is nobody's duplicate.
-         *
-         * A contact duplicates a kept row when it shares an email, OR shares a
-         * normalized phone with it AND their names are compatible (the same
-         * person recorded twice — not two people on one line).
-         *
-         * BACKLOG-2458: this replaced a boolean `isDuplicate`. The RULE is
-         * unchanged, deliberately and verifiably — every existing case in
-         * `contact-handlers.pickerIdentity.test.ts` still holds. What changed is
-         * that the answer now names the row, so the loser's identity has
-         * somewhere to go.
-         */
-        /**
-         * The row that owns this address, IF one of its claimants could be this
-         * person. A shared address alone is not ownership (BACKLOG-2531).
-         *
-         * Mirrors the phone branch below deliberately. Two shapes is how these
-         * two rules drifted apart for four months.
-         */
-        function emailOwnerFor(
-          email: string,
-          candidateName: string | null | undefined,
-        ): number | undefined {
-          const claimants = seenEmailOwner.get(email);
-          if (!claimants) return undefined;
-          for (const claimant of claimants) {
-            if (namesAreCompatible(candidateName, claimant.name)) return claimant.owner;
-          }
-          return undefined;
-        }
-
-        /** First claim wins PER NAME, matching the phone map's behaviour. */
-        function rememberEmailOwner(email: string, name: string, owner: number): void {
-          let claimants = seenEmailOwner.get(email);
-          if (!claimants) {
-            claimants = [];
-            seenEmailOwner.set(email, claimants);
-          }
-          if (!claimants.some((c) => c.name === name)) claimants.push({ name, owner });
-        }
-
-        function findDuplicateOwner(contact: DedupContact): DuplicateMatch | null {
-          // BACKLOG-2531: the name is read HERE, before either identifier is
-          // tested, because BOTH now need it. It used to be declared further
-          // down, next to the phone branch — the only branch that used it.
-          const name = normalizeContactName(contact.name || contact.display_name);
-
-          // Email — a shared address is not proof of the same person. The name
-          // must be compatible too, exactly as the phone branch below requires.
-          // BACKLOG-2370 recorded this asymmetry ("email collapses regardless of
-          // name") while fixing a different problem; it survived that item, 2416
-          // and 2458, because each was solving something else.
-          const email = contact.email?.toLowerCase();
-          if (email) {
-            const owner = emailOwnerFor(email, name);
-            // BACKLOG-2459: the value reported is the one the user has SAVED
-            // (`contact.email`), never the lowercased comparison key.
-            // Comparison must normalise or two spellings are two people; the
-            // sentence must not, or it names something unrecognisable.
-            if (owner !== undefined) {
-              return { owner, matchedOn: "email", matchedValue: contact.email as string };
-            }
-          }
-          if (contact.emails) {
-            for (const e of contact.emails) {
-              if (!e) continue;
-              const owner = emailOwnerFor(e.toLowerCase(), name);
-              if (owner !== undefined) {
-                return { owner, matchedOn: "email", matchedValue: e };
-              }
-            }
-          }
-
-          // Phone — only a duplicate when the names are compatible. `name` is
-          // now declared above, because the email branch needs it too.
-          for (const p of collectPhones(contact)) {
-            const normalizedPhone = toE164(p);
-            if (!normalizedPhone || normalizedPhone === "+") continue;
-            const holders = seenPhoneOwners.get(normalizedPhone);
-            if (!holders) continue;
-            for (const holder of holders) {
-              if (namesAreCompatible(name, holder.name)) {
-                return { owner: holder.owner, matchedOn: "phone", matchedValue: p };
-              }
-            }
-          }
-
-          return null;
-        }
-
-        /**
-         * Record, for display, that a row absorbed a record (BACKLOG-2459).
-         *
-         * The twin of `absorbSourceIdentity` below. That one keeps the folded
-         * record's IDENTITY so the import can write a crosswalk row; this one
-         * keeps it in WORDS so the user can be told it happened. Both are called
-         * at the same `continue`, because the moment a record is dropped is the
-         * only moment anything still knows it existed — after it, the record is
-         * not merely hidden from the screen, it is absent from the array the
-         * renderer receives.
-         *
-         * `sourceLabel` is resolved here rather than sent as an enum: at this
-         * point the value is still an `ExternalContactSource`, the vocabulary
-         * `sourceLabel()` is keyed on. A row from the local contacts table has
-         * no address book behind it and passes `null`.
-         */
-        function absorbDisplayRecord(
-          ownerIndex: number,
-          folded: { label: string | null; sourceLabel: string | null } & DuplicateMatch,
-        ): void {
-          const owner = availableContacts[ownerIndex];
-          if (!owner) return;
-          const existing = owner.absorbedRecords ?? [];
-          existing.push({
-            label: folded.label,
-            sourceLabel: folded.sourceLabel,
-            matchedOn: folded.matchedOn,
-            matchedValue: folded.matchedValue,
-          });
-          owner.absorbedRecords = existing;
-        }
-
-        /**
-         * Mark a contact's identifiers as seen for deduplication, owned by the
-         * row at `owner`. Each of the contact's normalized phones records this
-         * contact's (normalized) name so a later shared-phone contact can be
-         * name-compared against it.
-         *
-         * First claim wins for an email: the row that arrived first is the one
-         * a later duplicate folds into, which matches the order the funnel
-         * counters and the list itself are built in.
-         */
-        function markAsSeen(contact: DedupContact, owner: number): void {
-          const email = contact.email?.toLowerCase();
-          const ownerName = normalizeContactName(contact.name || contact.display_name);
-          if (email) rememberEmailOwner(email, ownerName, owner);
-          if (contact.emails) {
-            for (const e of contact.emails) {
-              if (!e) continue;
-              rememberEmailOwner(e.toLowerCase(), ownerName, owner);
-            }
-          }
-
-          const nameKey = normalizeContactName(contact.name || contact.display_name);
-          for (const p of collectPhones(contact)) {
-            const normalizedPhone = toE164(p);
-            if (!normalizedPhone || normalizedPhone === "+") continue;
-            let holders = seenPhoneOwners.get(normalizedPhone);
-            if (!holders) {
-              holders = [];
-              seenPhoneOwners.set(normalizedPhone, holders);
-            }
-            if (!holders.some((h) => h.name === nameKey && h.owner === owner)) {
-              holders.push({ name: nameKey, owner });
-            }
-          }
-        }
-
-        /**
-         * Fold a suppressed record's SOURCE IDENTITY into the row that absorbed
-         * it (BACKLOG-2458 I1).
-         *
-         * The row's details are the representative's and stay that way — only
-         * the identity set grows. That set is what the import turns into
-         * `source_id` crosswalk rows, so the user's decision to accept the
-         * collapsed row is recorded for every record it stands for, rather than
-         * being left for the next sync to re-derive by content matching (which
-         * cannot succeed at all when the records share no email or phone).
-         */
-        function absorbSourceIdentity(
-          ownerIndex: number,
-          sourceType: string | null | undefined,
-          sourceRecordId: string | null | undefined,
-          externalUuid: string | null | undefined,
-        ): void {
-          const owner = availableContacts[ownerIndex];
-          if (!owner || !sourceType || !sourceRecordId) return;
-          if (!EXTERNAL_SOURCE_TYPES.has(sourceType)) return;
-          const existing = owner.collapsedSources ?? [];
-          if (
-            existing.some(
-              (s) => s.sourceType === sourceType && s.sourceRecordId === sourceRecordId,
-            )
-          ) {
-            return;
-          }
-          existing.push({ sourceType, sourceRecordId, externalUuid: externalUuid ?? null });
-          owner.collapsedSources = existing;
-          collapsedIdentitiesCarried++;
-        }
 
         // STEP 1: Get unimported contacts from the local `contacts` table.
         // These take precedence because they have real DB IDs.
@@ -1632,31 +1424,10 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             }
           }
 
-          // Skip if this is a duplicate (by email, or shared phone + compatible name)
-          //
-          // BACKLOG-2458: no SOURCE IDENTITY is absorbed here. These rows come
-          // from the local `contacts` table and carry no external record, so a
-          // suppressed one has nothing to hand the import — which is exactly
-          // the gap `collapsedIdentitiesCarried` makes visible.
-          //
-          // BACKLOG-2459: it still has a NAME and an agreed identifier, and the
-          // user still loses a row. Having no crosswalk identity is a reason not
-          // to tell the import about it, not a reason not to tell the person.
-          const dbDuplicate = findDuplicateOwner(dbContact);
-          if (dbDuplicate !== null) {
-            duplicateSuppressedCount++;
-            absorbDisplayRecord(dbDuplicate.owner, {
-              label: dbContact.name || dbContact.display_name || null,
-              // No address book behind it — see AbsorbedContactRecord.sourceLabel.
-              sourceLabel: null,
-              ...dbDuplicate,
-            });
-            continue;
-          }
-
-          // Mark this contact's identifiers as seen, owned by the row this
-          // contact is about to become (pushed immediately below).
-          markAsSeen(dbContact, availableContacts.length);
+          // BACKLOG-2556: `findDuplicateOwner` used to run here and fold this
+          // row into an earlier one on a shared email, or a shared phone with a
+          // compatible name. It is deleted. A legacy local row that resembles
+          // another row is still its own row.
 
           // Query actual emails/phones from contact_emails/contact_phones tables
           // (BACKLOG-1270: was hardcoded as [] which dropped all email data)
@@ -2006,51 +1777,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             }
           }
 
-          // Create dedup-check object
-          const extContactForDedup = {
-            name: extContact.name,
-            email: extContact.emails?.[0] || null,
-            emails: extContact.emails,
-            phone: extContact.phones?.[0] || null,
-            phones: extContact.phones,
-          };
-
-          // Skip if already added from iPhone-synced contacts.
-          //
-          // BACKLOG-2458 — THE ROW ABSORBS THIS RECORD'S IDENTITY.
-          //
-          // This `continue` is where the founder's Casey Lane was lost. He
-          // exists in both the Mac address book and Outlook on one shared
-          // number; the picker collapsed them correctly and then dropped the
-          // loser entirely, so importing the row wrote one crosswalk entry at
-          // most and the other record was rediscovered by CONTENT matching on
-          // the next sync — a weaker reason for a fact the user had already
-          // settled, and one that cannot be derived at all when two records
-          // share no email or phone.
-          const duplicateOwner = findDuplicateOwner(extContactForDedup);
-          if (duplicateOwner !== null) {
-            duplicateSuppressedCount++;
-            absorbSourceIdentity(
-              duplicateOwner.owner,
-              extContact.source,
-              extContact.external_record_id,
-              extContact.external_uuid,
-            );
-            // BACKLOG-2459 — and say so. This `continue` is the only place the
-            // folded record still exists; everything downstream, the renderer
-            // included, sees a list it was already removed from.
-            absorbDisplayRecord(duplicateOwner.owner, {
-              label: extContact.name || null,
-              sourceLabel: EXTERNAL_SOURCE_TYPES.has(extContact.source)
-                ? sourceLabel(extContact.source as ExternalContactSource)
-                : null,
-              ...duplicateOwner,
-            });
-            continue;
-          }
-
-          // Mark as seen, owned by the row pushed immediately below.
-          markAsSeen(extContactForDedup, availableContacts.length);
+          // BACKLOG-2556: `findDuplicateOwner` ran here and this is the
+          // `continue` the founder's Elena Marsh-Okonkwo and the second Tobias
+          // Quill record disappeared down — the point at which a record stopped
+          // existing for every layer downstream, renderer included. It also ran
+          // `absorbSourceIdentity`, which is how a shared address became a
+          // permanent `source_id` crosswalk row at import. Both are deleted.
+          // Every record the shadow table holds now reaches the array below.
 
           availableContacts.push({
             id: extContact.id, // Use shadow table ID
@@ -2076,20 +1809,13 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             externalRecordId: extContact.external_record_id,
             externalSourceType: extContact.source,
             externalUuid: extContact.external_uuid ?? null,
-            // BACKLOG-2458: the row stands for its OWN record from the moment
-            // it is created, so a row that never absorbs anything still
-            // presents one identity rather than an absent field the import
-            // would have to special-case. Records folded in later append here.
-            collapsedSources:
-              extContact.external_record_id && EXTERNAL_SOURCE_TYPES.has(extContact.source)
-                ? [
-                    {
-                      sourceType: extContact.source,
-                      sourceRecordId: extContact.external_record_id,
-                      externalUuid: extContact.external_uuid ?? null,
-                    },
-                  ]
-                : [],
+            // BACKLOG-2556: `collapsedSources` was here, seeded with this row's
+            // OWN identity so folded records had somewhere to append. Nothing
+            // folds any more, so the field was a one-element restatement of the
+            // three above it — and a plural channel that invites a second
+            // writer to refill it. `toSourceIdentities` reads the three fields
+            // directly, and one picker row now claims exactly one source
+            // record.
           });
         }
 
@@ -2134,8 +1860,17 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           rowsIn: unimportedDbContacts.length + externalContacts.length,
           sourceDisabled: sourceDisabledCount,
           alreadyImported: alreadyImportedCount,
-          duplicateSuppressed: duplicateSuppressedCount,
-          collapsedIdentitiesCarried,
+          // BACKLOG-2556: structurally 0 — the fold that this counted is
+          // deleted, and there is no other path that drops a row as a
+          // duplicate. The FIELD stays on `PickerStage` because it is a
+          // persisted diagnostics shape: `contactsDiagnostics` and the support
+          // ticket bundle read back snapshots written before this change, and
+          // removing a required field would make those unparseable. Reporting
+          // the true value 0 is honest; removing the field is not free.
+          // `collapsedIdentitiesCarried` is optional and is now omitted
+          // entirely, so `formatPickerLine` prints no "(identity carried …)"
+          // parenthetical rather than claiming a carry of zero.
+          duplicateSuppressed: 0,
           shown: availableContacts.length,
         });
 
@@ -2366,10 +2101,29 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
         for (let i = 0; i < newContactsToCreate.length; i++) {
           const source = newContactSources[i];
-          // ANY identity being claimed settles it. A collapsed picker row stands
-          // for several source records (BACKLOG-2458); if even one of them is
-          // already owned, the person is already imported and a second contact
-          // would be a duplicate that owns nothing.
+          /**
+           * BACKLOG-2556 — THIS LOOP'S INPUT SET CHANGED, AND THAT IS THE POINT.
+           *
+           * It used to read: *"A collapsed picker row stands for several source
+           * records (BACKLOG-2458); if even one of them is already owned, the
+           * person is already imported."* That sentence was true and it was the
+           * laundering mechanism — the fold decided which records travelled
+           * together, and this loop and `linkImportedContact` below turned that
+           * decision into `source_id` crosswalk rows.
+           *
+           * `toSourceIdentities` now yields AT MOST ONE identity: the row's own
+           * record. So the loop runs zero or one iteration and the question it
+           * asks has narrowed from "is any of the records this row was folded
+           * from already owned?" to "is THIS record already owned?" — which is
+           * the only question the crosswalk can actually answer.
+           *
+           * The loop is KEPT rather than rewritten to `source.identities[0]`.
+           * The behaviour is identical for a one- or zero-element array, and
+           * indexing would bake the arity into the code at the exact site where
+           * a future plural input would need to be noticed. Verified by
+           * execution, not by reading: `contact-handlers.foldDeleted-2556.test.ts`
+           * asserts the crosswalk row ID SET after importing one row.
+           */
           let incumbent: string | null = null;
           for (const identity of source.identities) {
             incumbent = findContactIdBySourceRecord(

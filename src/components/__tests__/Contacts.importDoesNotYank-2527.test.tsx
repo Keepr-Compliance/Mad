@@ -122,13 +122,6 @@ const importTarget = {
   externalRecordId: "AB-RECORD-7731",
   externalSourceType: "macos",
   externalUuid: "b48f2a19-3d6c-4e07-91ab-5d2f8c1e0a73",
-  collapsedSources: [
-    {
-      sourceType: "macos",
-      sourceRecordId: "AB-RECORD-7731",
-      externalUuid: "b48f2a19-3d6c-4e07-91ab-5d2f8c1e0a73",
-    },
-  ],
 } as unknown as Contact;
 
 /** A second address-book person, so "somewhere else" can be a real place. */

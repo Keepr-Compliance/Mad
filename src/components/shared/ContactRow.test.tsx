@@ -483,4 +483,86 @@ describe("ContactRow", () => {
       expect(row).toHaveClass("custom-class");
     });
   });
+
+  /**
+   * =========================================================================
+   * BACKLOG-2556 — TWO CONTROLS THAT LOOKED IDENTICAL ON SCREEN. ONE SURVIVES.
+   * =========================================================================
+   * The founder read both out of the live DOM on 2026-08-09 and asked whether
+   * he was confusing them. He was not — they used the SAME TWO WORDS:
+   *
+   *   A  `contact-row-collapsed-toggle`  purple, expandable   "1 record combined"
+   *      On an UNIMPORTED address-book record. A GUESS: the picker had folded
+   *      another record into this row on a shared email or phone, and nothing
+   *      the user did put it there. DELETED.
+   *
+   *   B  `contact-row-review-flag`       amber pill           "2 records combined"
+   *      On a SAVED contact. A FACT: `review_state` is stamped from the
+   *      crosswalk, so it counts records genuinely linked. STAYS.
+   *
+   * Deleting A resolves the collision by itself, which is why the founder chose
+   * deletion over rewording — rewording would have kept a guess he had already
+   * ruled out. This block pins BOTH halves of that outcome in one render, so
+   * "the purple one is gone" and "the amber one is untouched" cannot drift
+   * apart. B's own separate defect (it counts COLUMNS while its sentence counts
+   * RECORDS, BACKLOG-2471) is deliberately NOT fixed here and NOT asserted
+   * against, so this guard stays true either way.
+   *
+   * WHAT THE NEGATIVE ASSERTION CAN AND CANNOT CATCH, stated rather than
+   * implied: it catches the purple block being re-added to this component. It
+   * cannot catch a re-added block behind a prop nobody passes — but the prop
+   * itself (`collapsedRecords`) is deleted, so re-adding one is a type error at
+   * every call site rather than a silent no-op. The behavioural control lives
+   * in the main process (`contact-handlers.foldDeleted-2556.test.ts`), which is
+   * where the fold actually was.
+   */
+  describe("the fold is gone and the crosswalk badge is not (BACKLOG-2556)", () => {
+    it("renders the amber review flag from review_state, unchanged", () => {
+      renderContactRow({
+        contact: createTestContact({
+          review_state: { needsReview: true, columns: 2 },
+        }),
+      });
+
+      const flag = screen.getByTestId("contact-row-review-flag");
+      expect(flag).toHaveTextContent("2 records combined");
+      expect(flag).toHaveClass("bg-amber-50");
+    });
+
+    it("still renders the green Confirmed pill when nothing needs review", () => {
+      renderContactRow({
+        contact: createTestContact({
+          review_state: { needsReview: false, columns: 1 },
+        }),
+      });
+
+      expect(screen.getByTestId("contact-row-confirmed-flag")).toHaveTextContent(
+        "Confirmed",
+      );
+      expect(
+        screen.queryByTestId("contact-row-review-flag"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("never renders the purple collapsed disclosure, on any row", () => {
+      // Rendered WITH a review_state so the amber badge is present in the same
+      // DOM: this asserts the two were separated, not that the row is empty.
+      renderContactRow({
+        contact: createTestContact({
+          review_state: { needsReview: true, columns: 2 },
+        }),
+      });
+
+      expect(screen.getByTestId("contact-row-review-flag")).toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-row-collapsed-toggle"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-row-collapsed-detail"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-row-collapsed-record-reason"),
+      ).not.toBeInTheDocument();
+    });
+  });
 });
