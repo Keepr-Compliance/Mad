@@ -259,27 +259,42 @@ function installBackend(options: { availableAfterAnswer: Contact[] }) {
     };
   });
 
+  /*
+    KEYED ON WHETHER THE QUESTION HAS BEEN ANSWERED, NOT ON THE CALL ORDINAL.
+
+    These two used to return the question on their FIRST call and nothing after.
+    That held only while exactly one consumer read them; BACKLOG-2626 added a
+    second (`useOpenQuestions`, which the contact-row walk reads), and an ordinal
+    mock answers the second reader as though the first had already resolved
+    something.
+
+    `answered` is what the main process actually keys on — `resolveProposal`
+    flips `status` off `'pending'` and `PENDING_JOIN` selects on it — so this is
+    the producer's own rule rather than a counter that happened to match it. It
+    is also why the guards below still mean what they meant: nothing about WHEN
+    the queue empties has changed, only what makes it empty.
+  */
+  let answered = false;
+
   // The button that opens the queue only renders while the count is > 0, so the
-  // first read must find the question and the post-answer read must not.
-  let countCalls = 0;
-  jest.mocked(window.api.contacts.getReviewQueueCount).mockImplementation(async () => {
-    countCalls += 1;
-    return { success: true, count: countCalls === 1 ? 1 : 0 };
-  });
-
-  let queueCalls = 0;
-  jest.mocked(window.api.contacts.getReviewQueue).mockImplementation(async () => {
-    queueCalls += 1;
-    return {
-      success: true,
-      clusters: queueCalls === 1 ? [openQuestionCluster()] : [],
-    };
-  });
-
+  // read before the answer must find the question and the read after must not.
   jest
-    .mocked(window.api.contacts.confirmLink)
-    .mockResolvedValue({ success: true, linked: true, alsoRejected: 0 });
-  jest.mocked(window.api.contacts.rejectLink).mockResolvedValue({ success: true });
+    .mocked(window.api.contacts.getReviewQueueCount)
+    .mockImplementation(async () => ({ success: true, count: answered ? 0 : 1 }));
+
+  jest.mocked(window.api.contacts.getReviewQueue).mockImplementation(async () => ({
+    success: true,
+    clusters: answered ? [] : [openQuestionCluster()],
+  }));
+
+  jest.mocked(window.api.contacts.confirmLink).mockImplementation(async () => {
+    answered = true;
+    return { success: true, linked: true, alsoRejected: 0 };
+  });
+  jest.mocked(window.api.contacts.rejectLink).mockImplementation(async () => {
+    answered = true;
+    return { success: true };
+  });
   jest
     .mocked(window.api.contacts.checkCanDelete)
     .mockResolvedValue({ success: true, transactions: [] });
@@ -415,24 +430,31 @@ describe("BACKLOG-2627 — an answer moves the list behind the queue", () => {
    *
    * CONTROL: add `void load()` to the compare overlay's `onClose` and the
    * ReviewDuplicatesModal guard reads 2. Add a queue reload to `onResolved` and
-   * this one reads 3.
+   * the DELTA below reads 2.
+   *
+   * ASSERTED AS A DELTA, not as a total (BACKLOG-2626). The property is "the
+   * contacts refresh contributes no queue read", which is about what the ANSWER
+   * costs — and a total also counts every read taken before it, so it moved the
+   * moment a second consumer mounted. A delta says the same thing and keeps
+   * saying it.
    */
   it("adds no queue read of its own — the queue does not reshuffle mid-session", async () => {
     installBackend({ availableAfterAnswer: [bystanderRecord] });
     render(<Contacts userId={USER_ID} onClose={jest.fn()} />);
 
     await openTheQueue();
-    expect(window.api.contacts.getReviewQueue).toHaveBeenCalledTimes(1);
+    const before = jest.mocked(window.api.contacts.getReviewQueue).mock.calls.length;
 
     await userEvent.click(screen.getByTestId(`review-confirm-${PROPOSAL_ID}`));
     await waitFor(() =>
       expect(renderedContactIds()).toEqual([SAVED_CONTACT_ID, BYSTANDER_ROW_ID].sort()),
     );
 
-    // Exactly two: the mount, and the modal's OWN post-answer reload, which is
-    // shipped BACKLOG-2502 behaviour and predates this change. The contacts
-    // refresh contributed none.
-    expect(window.api.contacts.getReviewQueue).toHaveBeenCalledTimes(2);
+    // Exactly one: the modal's OWN post-answer reload, which is shipped
+    // BACKLOG-2502 behaviour and predates this change. The contacts refresh
+    // contributed none.
+    const after = jest.mocked(window.api.contacts.getReviewQueue).mock.calls.length;
+    expect(after - before).toBe(1);
   });
 
   /**
@@ -483,22 +505,20 @@ describe("BACKLOG-2627 — an answer moves the list behind the queue", () => {
       return { success: true, contacts: [bystanderRecord] };
     });
 
-    let countCalls = 0;
-    jest.mocked(window.api.contacts.getReviewQueueCount).mockImplementation(async () => {
-      countCalls += 1;
-      return { success: true, count: countCalls === 1 ? 1 : 0 };
-    });
-    let queueCalls = 0;
-    jest.mocked(window.api.contacts.getReviewQueue).mockImplementation(async () => {
-      queueCalls += 1;
-      return {
-        success: true,
-        clusters: queueCalls === 1 ? [openQuestionCluster()] : [],
-      };
-    });
+    // Keyed on the answer rather than the call ordinal, for the reason given in
+    // `installBackend`.
+    let answered = false;
     jest
-      .mocked(window.api.contacts.confirmLink)
-      .mockResolvedValue({ success: true, linked: true, alsoRejected: 0 });
+      .mocked(window.api.contacts.getReviewQueueCount)
+      .mockImplementation(async () => ({ success: true, count: answered ? 0 : 1 }));
+    jest.mocked(window.api.contacts.getReviewQueue).mockImplementation(async () => ({
+      success: true,
+      clusters: answered ? [] : [openQuestionCluster()],
+    }));
+    jest.mocked(window.api.contacts.confirmLink).mockImplementation(async () => {
+      answered = true;
+      return { success: true, linked: true, alsoRejected: 0 };
+    });
     jest
       .mocked(window.api.contacts.checkCanDelete)
       .mockResolvedValue({ success: true, transactions: [] });

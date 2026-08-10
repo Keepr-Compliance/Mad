@@ -6,4 +6,4 @@ export {
   type UseContactsLayoutReturn,
 } from "./useContactsLayout";
 // BACKLOG-2410 — review queue count + a contact's provenance.
-export { useReviewQueueCount, useContactSources } from "./useContactLinkReview";
+export { useReviewQueueCount, useOpenQuestions, useContactSources } from "./useContactLinkReview";

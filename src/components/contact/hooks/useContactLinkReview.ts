@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import logger from "../../../utils/logger";
-import type { ContactSourceProvenance } from "@/types/contactProvenance";
+import type { ContactReviewItem, ContactSourceProvenance } from "@/types/contactProvenance";
 
 /**
  * Renderer plumbing for BACKLOG-2410 — the review-queue count and a contact's
@@ -93,6 +93,92 @@ export function useReviewQueueCount(userId: string): {
   }, [refresh]);
 
   return { count, refresh };
+}
+
+/**
+ * THE OPEN QUESTIONS, FLAT, FOR THE WHOLE USER (BACKLOG-2626).
+ *
+ * ===========================================================================
+ * WHY THIS READS THE QUEUE RATHER THAN A NEW PER-CONTACT CHANNEL
+ * ===========================================================================
+ * The walk needs "the questions still outstanding against THIS contact, in the
+ * order the queue would ask them". `contacts:get-review-queue` already answers
+ * exactly that for every contact at once, in one statement, ordered by
+ * `p.cluster_key, p.created_at, p.id`. Filtering it by `contactId` in the
+ * renderer gives the walk the queue's OWN order for free.
+ *
+ * A new contact-scoped channel would be a second predicate to keep equal to
+ * `PENDING_JOIN`, and the whole defect this item fixes is two surfaces
+ * disagreeing about what is outstanding. One reader, one order, no new IPC.
+ *
+ * ===========================================================================
+ * `refresh` RESOLVES TO THE FRESH ITEMS — THAT IS THE POINT
+ * ===========================================================================
+ * After an answer the walk must decide, immediately, whether a next question
+ * exists. Reading `items` back out of state cannot do it: the caller is inside
+ * the handler that triggered the refresh, and the state it can see is the state
+ * BEFORE it. That stale read is precisely the founder's complaint in a new
+ * costume — a screen that shows him a question he has already answered.
+ *
+ * So `refresh` returns the array it just fetched, and the walk advances off the
+ * RETURN VALUE, never off `items`.
+ */
+export function useOpenQuestions(userId: string): {
+  items: ContactReviewItem[];
+  refresh: () => Promise<ContactReviewItem[]>;
+} {
+  const [items, setItems] = useState<ContactReviewItem[]>([]);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  const refresh = useCallback(async (): Promise<ContactReviewItem[]> => {
+    try {
+      const result = await window.api.contacts.getReviewQueue(userId);
+      const next = result.success
+        ? (result.clusters ?? []).flatMap((cluster) => cluster.items)
+        : [];
+      if (!result.success) {
+        logger.warn(`[Contacts] open questions unavailable: ${result.error}`);
+      }
+      if (isMountedRef.current) setItems(next);
+      return next;
+    } catch (err) {
+      /*
+        AN EMPTY LIST IS THE RIGHT FALLBACK AND A LOGGED ONE IS THE ONLY SAFE
+        ONE. No questions means no walk and no badge, so a broken channel simply
+        opens the contact card — the behaviour of a healthy empty queue, which is
+        why it must be distinguishable in the log. Same discipline as the count
+        above, and the same reason: this is the surface a user finds a wrong
+        merge on.
+      */
+      logger.warn(`[Contacts] open questions failed: ${String(err)}`);
+      if (isMountedRef.current) setItems([]);
+      return [];
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  /**
+   * Same subscription as the count above, for the same reason: the linking pass
+   * runs on every import and on every contact write, so a question filed while
+   * the user sits on this screen must reach the badge without a navigation.
+   */
+  useEffect(() => {
+    return window.api?.contacts?.onLinkReviewUpdated?.(() => {
+      void refresh();
+    });
+  }, [refresh]);
+
+  return { items, refresh };
 }
 
 /**

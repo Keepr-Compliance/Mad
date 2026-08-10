@@ -66,6 +66,27 @@ import type {
 interface ReviewDuplicatesModalProps {
   userId: string;
   onClose: () => void;
+  /**
+   * BACKLOG-2626 — SHOW ONLY THIS CONTACT'S OUTSTANDING QUESTIONS.
+   *
+   * Founder, 2026-08-10, on what should happen when a contact with open
+   * questions is clicked: *"we should reuse the Possible duplicates [screen] and
+   * only filter for that contact."* Undefined is the whole queue, which is the
+   * header button's state and the behaviour this screen has always had.
+   *
+   * A FILTER, not a mode. Nothing else changes: the same tucked card, the same
+   * per-candidate eye / check / ×, the same independent answers, the same
+   * compare overlay. That sameness is the point — the alternative was a second
+   * review surface to keep in step with this one, and his standing instruction
+   * is *"as similar as we can, to have less to maintain"*. The post-import flow
+   * and BACKLOG-2603 take the same parameter.
+   *
+   * Applied to the GROUPS rather than to the fetch: the queue's reader is
+   * user-wide, its cluster `exclusive` flag is computed across contacts, and a
+   * contact-scoped query would have to reproduce that. Filtering after the
+   * regroup keeps one predicate — `PENDING_JOIN` — deciding what is askable.
+   */
+  filterContactId?: string;
   /** Fired after any answer, so the caller can refresh the count and the list. */
   onResolved?: () => void;
   /**
@@ -103,6 +124,7 @@ interface ContactGroup {
 export function ReviewDuplicatesModal({
   userId,
   onClose,
+  filterContactId,
   onResolved,
   onConfirmedAndEdit,
 }: ReviewDuplicatesModalProps): React.ReactElement {
@@ -214,6 +236,12 @@ export function ReviewDuplicatesModal({
     for (const cluster of clusters ?? []) {
       const clusterIsExclusive = cluster.exclusive && cluster.items.length > 1;
       for (const item of cluster.items) {
+        // BACKLOG-2626 — the filter, applied to the ITEMS so a cluster spanning
+        // several contacts contributes only the part that belongs to this one.
+        // Dropping whole clusters instead would take a question away from the
+        // contact being asked about, because a `record:` cluster is one source
+        // record several contacts are competing for.
+        if (filterContactId && item.contactId !== filterContactId) continue;
         let group = byContact.get(item.contactId);
         if (!group) {
           group = {
@@ -230,9 +258,41 @@ export function ReviewDuplicatesModal({
       }
     }
     return [...byContact.values()];
-  }, [clusters]);
+  }, [clusters, filterContactId]);
 
-  const total = (clusters ?? []).reduce((sum, c) => sum + c.items.length, 0);
+  /**
+   * The number this screen reports, counted from the GROUPS it is about to
+   * render rather than from the clusters it fetched.
+   *
+   * BACKLOG-2626: filtered, the two differ, and the one the user can check is
+   * the rendered one. "Review 12 possible duplicates" opening onto 3 is the same
+   * small lie the queue's own count rule was written to prevent — it just moves
+   * inside this component once a filter exists.
+   */
+  const total = groups.reduce((sum, g) => sum + g.items.length, 0);
+
+  /**
+   * ANSWER THEM ALL AND THE SCREEN LEAVES — filtered only (BACKLOG-2626).
+   *
+   * The founder's sentence is *"answer the last, land on the contact card"*, and
+   * the card is already mounted underneath: `handleContactClick` opened it
+   * before this screen went over it. So closing IS landing on it, and holding an
+   * empty review screen open in front of it would be a dead surface asking
+   * nothing.
+   *
+   * Deliberately NOT done for the unfiltered queue. There, an empty list is a
+   * finished inbox and the founder gets to see that he has finished it; here,
+   * there is a card behind waiting to be read.
+   *
+   * Gated on `clusters !== null` so the FIRST render — before the queue has been
+   * read at all — cannot be mistaken for an empty one and close the screen
+   * instantly. `null` is "not yet known" and is distinct from `[]` throughout
+   * this feature.
+   */
+  useEffect(() => {
+    if (!filterContactId || clusters === null || comparing) return;
+    if (total === 0) onClose();
+  }, [filterContactId, clusters, comparing, total, onClose]);
 
   return (
     <>

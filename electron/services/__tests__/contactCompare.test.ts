@@ -1421,17 +1421,27 @@ describe("a contact with no non-origin links at all", () => {
 
 describe("the review-state set", () => {
   /**
-   * THE RULE THIS BLOCK EXISTS FOR.
+   * THE RULE THIS BLOCK EXISTS FOR, AS BACKLOG-2626 LEFT IT.
    *
-   * The set decides which rows are flagged AND which clicks open the compare
-   * screen, so it must equal the set the compare screen actually opens for. If
-   * it does not, one of two lies ships: a flagged row that opens an ordinary
-   * card, or an intercepted click landing on "there is nothing to compare".
+   * It used to be one rule: the set equalled "the contacts the compare screen
+   * opens for", because the same flag drove the badge AND the click. BACKLOG-2626
+   * split those. A click now walks OPEN QUESTIONS, which are proposals; the badge
+   * still describes the crosswalk. So the set is a union of two populations and
+   * the invariants are checked separately:
    *
-   * Every case below is built through the REAL producers and then checked
-   * against the REAL shipped functions — `getContactCompareColumns` and its
-   * `isConfirmed` — rather than against a re-derived predicate. A test that
-   * re-implemented the rule would only ever agree with itself.
+   *   - **crosswalk half** — `columns` still equals what `Compare sources` draws,
+   *     and `needsReview` still equals `!isConfirmed`, both checked against the
+   *     REAL `getContactCompareColumns`. `Compare sources` is still gated on
+   *     `showSourcesPanel`, so this half is unchanged and must stay so.
+   *   - **question half** — `openQuestions` equals what the REAL review queue
+   *     would ask, checked against `getReviewQueue`. A badge promising a question
+   *     the queue has none of is the founder's defect from the other side: the
+   *     row says something is outstanding and the walk opens onto nothing.
+   *
+   * Every case is built through the REAL producers (`recordContactOrigin`,
+   * `createLink`, `proposeLink`) and checked against the REAL shipped readers,
+   * never against a re-derived predicate. A test that re-implemented the rule
+   * would only ever agree with itself.
    */
   const shapes: { id: string; name: string; build: () => void }[] = [
     {
@@ -1501,7 +1511,12 @@ describe("the review-state set", () => {
       const state = set.get(shape.id);
 
       // CONTROL: drop the `COUNT(*) > 1 OR MIN(...) <> 'source_id'` clause and
-      // rA joins the set — a flagged row whose click opens nothing.
+      // rA joins the set — a badge on a contact with nothing combined.
+      //
+      // None of these shapes carries a proposal, so the crosswalk half is the
+      // WHOLE set here and the equality is exact. The question half gets its own
+      // tests below rather than being folded in, precisely so this one keeps
+      // asserting the unchanged rule rather than a weakened union.
       expect({ shape: shape.name, inSet: state !== undefined }).toEqual({
         shape: shape.name,
         inSet: view !== null,
@@ -1520,6 +1535,25 @@ describe("the review-state set", () => {
           shape: shape.name,
           columns: view.columns.length,
         });
+        /*
+          BACKLOG-2626 — AND THE OTHER NUMBER, WHICH IS DELIBERATELY DIFFERENT.
+
+          `records` counts the contact's own record plus EVERY non-origin link,
+          including the `source_id` one the compare screen absorbs into column 1.
+          So on any imported contact the two numbers differ by exactly one, and
+          this asserts the RELATIONSHIP rather than a literal — a literal would
+          have to be restated per shape and could be quietly made equal.
+
+          CONTROL: set `records: 1 + link_count - (source_id_count > 0 ? 1 : 0)`
+          — i.e. make it a second name for `columns` — and rB, rC, rD go red
+          while rE (no `source_id` row) stays green. That asymmetry is what
+          proves the absorbed record is being counted.
+        */
+        const absorbed = shape.id === "rE" ? 0 : 1;
+        expect({ shape: shape.name, records: state.records }).toEqual({
+          shape: shape.name,
+          records: view.columns.length + absorbed,
+        });
       }
     }
   });
@@ -1533,8 +1567,118 @@ describe("the review-state set", () => {
     shapes[4].build();
     expect(getReviewStateByContact(USER).get("rE")).toEqual({
       columns: 3,
+      records: 3,
       needsReview: true,
+      openQuestions: 0,
+      badge: "autolinked",
     });
+  });
+
+  // =========================================================================
+  // BACKLOG-2626 — THE QUESTION HALF, AND THE THREE BADGES
+  // =========================================================================
+
+  /**
+   * THE POPULATION THE OLD RULE COULD NOT SEE.
+   *
+   * `rA` is the founder's Rosalind shape: imported from ONE address-book card,
+   * nothing attached, so the crosswalk has nothing to say about her and the old
+   * membership rule excluded her outright. A proposal stands against her, and if
+   * she carries no badge the question is invisible outside the queue — which is
+   * exactly what he reported on the clean database: *"I don't see a pill
+   * indicating suggested duplicates or auto linked."*
+   *
+   * CONTROL, OBSERVED: delete the second population loop in
+   * `getReviewStateByContact` (the `for (const [contactId, open] of
+   * openQuestions)` block) and this goes red with `undefined` — she vanishes
+   * from the set entirely, which is the shipped-today behaviour.
+   */
+  it("a contact with only a QUESTION earns a badge the crosswalk cannot give her", () => {
+    shapes[0].build();
+    addExternal("out-rA", "Tad Brooks", "outlook");
+    propose("rA", "outlook", "out-rA", "contact:rA");
+
+    expect(getReviewStateByContact(USER).get("rA")).toEqual({
+      columns: 1,
+      records: 1,
+      needsReview: false,
+      openQuestions: 1,
+      badge: "suggestion",
+    });
+  });
+
+  /**
+   * `openQuestions` EQUALS WHAT THE QUEUE WOULD ASK — checked against the queue's
+   * OWN reader, not against a copy of its SQL.
+   *
+   * `PENDING_JOIN` refuses a proposal whose source record has vanished, because a
+   * question with no answer is one the queue cannot ask. The badge must refuse it
+   * too, or the row promises something the walk cannot open onto.
+   *
+   * The unanswerable proposal here points at a record that was never inserted
+   * into `external_contacts` — the real shape after an address-book entry is
+   * deleted between the linking pass and the read.
+   *
+   * CONTROL, OBSERVED: drop the `JOIN external_contacts` from
+   * `getOpenQuestionsByContact` and `openQuestions` reads 2 while the queue asks
+   * 1.
+   */
+  it("counts only the questions the queue would actually ask", () => {
+    shapes[0].build();
+    addExternal("out-rA", "Tad Brooks", "outlook");
+    propose("rA", "outlook", "out-rA", "contact:rA");
+    // Askable by `status` alone, unanswerable in fact: no such record exists.
+    propose("rA", "android_sync", "gone-rA", "contact:rA");
+
+    const asked = getReviewQueue(USER)
+      .flatMap((c) => c.items)
+      .filter((i) => i.contactId === "rA");
+
+    expect(asked.map((i) => i.sourceRecordId)).toEqual(["out-rA"]);
+    expect(getReviewStateByContact(USER).get("rA")!.openQuestions).toBe(asked.length);
+    expect(countReviewQueue(USER)).toBe(asked.length);
+  });
+
+  /**
+   * PRECEDENCE: Suggestion > Autolinked > You linked these.
+   *
+   * The three sets are NOT disjoint — `11abce67` says so explicitly, and this is
+   * the shape it describes: a contact holding an auto-attached record awaiting
+   * confirmation AND a separate proposal the matcher refused to guess about.
+   *
+   * `Suggestion` must win. It is the state that replaced the forced compare
+   * screen as the way an open question stays discoverable; demote it and the
+   * question is invisible outside the queue again, which is the whole defect.
+   *
+   * CONTROL, OBSERVED: reverse the badge ternary to
+   * `needsReview ? "autolinked" : open > 0 ? "suggestion" : "user_linked"` and
+   * this goes red reading `autolinked`, while the two single-state tests either
+   * side of it stay green — the asymmetry that makes this about precedence and
+   * not about the values.
+   */
+  it("an open question outranks an unratified auto-link", () => {
+    twoColumnContact("rP");
+    addExternal("and-rP", "Paul Dorian", "android_sync");
+    propose("rP", "android_sync", "and-rP", "contact:rP");
+
+    const state = getReviewStateByContact(USER).get("rP")!;
+    expect(state.needsReview).toBe(true);
+    expect(state.openQuestions).toBe(1);
+    expect(state.badge).toBe("suggestion");
+  });
+
+  /**
+   * The user decided, by either route — and the founder ruled out a fourth
+   * "Confirmed" state: *"confirmed" and "you linked it" are the same fact from
+   * his side.* So confirming through the compare screen produces `user_linked`,
+   * the same value a manual link produces, and there is no fourth value for a
+   * future reader to reach for.
+   */
+  it("a fully confirmed contact reads as the user's own doing", () => {
+    twoColumnContact("rU");
+    confirmContactSources(USER, "rU");
+
+    expect(getReviewStateByContact(USER).get("rU")!.badge).toBe("user_linked");
   });
 
   it("resolves 'latest' the same way the screen does, inside one second", async () => {

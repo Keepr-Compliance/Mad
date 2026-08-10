@@ -23,7 +23,7 @@
  */
 
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from "react";
-import { ContactRow } from "./ContactRow";
+import { BADGE_LABELS, ContactRow } from "./ContactRow";
 import { GroupedMultiSelect } from "./GroupedMultiSelect";
 import type { ExtendedContact } from "../../types/components";
 import {
@@ -381,18 +381,18 @@ export function ContactSearchList({
     [filterMode],
   );
   /**
-   * BACKLOG-2471 PR F — the "Needs review" filter.
+   * BACKLOG-2471 PR F, renamed by BACKLOG-2626 — the `Autolinked` filter.
    *
    * DELIBERATELY NOT PERSISTED, unlike Source and Role. Founder decision D4 made
    * `searchQuery` session-only for the same reason, and this is the stronger
    * case: an empty search box is VISIBLY empty, while an active filter reads as
-   * "this is the whole list". A forgotten Needs-review filter would hide the
-   * rest of the address book with nothing on screen admitting it.
+   * "this is the whole list". A forgotten filter would hide the rest of the
+   * address book with nothing on screen admitting it.
    *
    * So it is plain state — not in `ContactFilters`, not in the
    * `contactModal.filterModel.v1` payload, and no migration of either.
    */
-  const [needsReviewOnly, setNeedsReviewOnly] = useState(false);
+  const [autolinkedOnly, setAutolinkedOnly] = useState(false);
   const [selectedSources, setSelectedSources] = useState<Set<string>>(initialFilters.sources);
   const [selectedRoles, setSelectedRoles] = useState<Set<string>>(initialFilters.roles);
 
@@ -502,22 +502,27 @@ export function ContactSearchList({
     );
     const afterAdd = isAddMode ? projected.filter((c) => !selectedSet.has(c.id)) : projected;
     // BACKLOG-2471 PR F: applied LAST, on the same list the rows render from, so
-    // the chip's count and the rows it reveals cannot come from two predicates.
-    return needsReviewOnly
-      ? afterAdd.filter((c) => c.review_state?.needsReview === true)
+    // the control's visibility and the rows it reveals cannot come from two
+    // predicates. BACKLOG-2626 switched the predicate to the BADGE, so the rows
+    // this reveals are exactly the rows wearing `Autolinked` — one rule, decided
+    // in `getReviewStateByContact`, read here and by `ContactRow`.
+    return autolinkedOnly
+      ? afterAdd.filter((c) => c.review_state?.badge === "autolinked")
       : afterAdd;
-  }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys, isAddMode, selectedSet, needsReviewOnly]);
+  }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys, isAddMode, selectedSet, autolinkedOnly]);
 
   /**
-   * How many contacts still owe a decision — counted from the SAME array the
-   * filter above narrows, before it is narrowed.
+   * How many contacts the app linked on its own — counted from the SAME array
+   * the filter above narrows, before it is narrowed.
    *
-   * Not a second query and not a prop: "Review 12" opening onto 9 is the kind of
-   * small lie that costs a feature its credibility, and the only way it cannot
-   * happen is for the number and the rows to have one source.
+   * Not a second query and not a prop: a control that offers a set it cannot
+   * produce is the "Review 12 opening onto 9" defect in miniature, and the only
+   * way it cannot happen is for the visibility test and the rows to have one
+   * source. The NUMBER is no longer shown (`11abce67`); it survives only as the
+   * hidden-at-zero test.
    */
-  const needsReviewCount = useMemo(
-    () => contacts.filter((c) => c.review_state?.needsReview === true).length,
+  const autolinkedCount = useMemo(
+    () => contacts.filter((c) => c.review_state?.badge === "autolinked").length,
     [contacts],
   );
 
@@ -825,30 +830,42 @@ export function ContactSearchList({
             >
               Alphabetical
             </button>
+            {/*
+              BACKLOG-2626, folding in `11abce67` — the chip became an OPTION.
+
+              It used to be a standalone amber pill reading `Needs review · N`.
+              Three things changed, all of them the founder's:
+
+              1. **`Autolinked`, not `Needs review`.** These are the contacts the
+                 matcher was CONFIDENT about — it attached the record without
+                 asking. The genuinely uncertain ones are the open questions.
+                 Labelling the confident set "needs review" inverts the signal.
+              2. **No count.** *"Just the word."* A number turns a lens into a
+                 backlog, and there is nothing here the user is behind on.
+              3. **Inside the Sort control**, as one of its options rather than a
+                 badge beside it — his words, and it is why this button sits in
+                 the same bordered group as Recent and Alphabetical.
+
+              It remains a FILTER rather than a sort: pressing it narrows the list
+              and pressing it again restores it, and the chosen sort order is
+              untouched either way. That is deliberate and is what he described —
+              the control is one segmented cluster, not one exclusive choice.
+
+              Still hidden at zero, like the header's review button: a filter that
+              can only ever return an empty list is a dead control.
+            */}
+            {autolinkedCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setAutolinkedOnly((on) => !on)}
+                aria-pressed={autolinkedOnly}
+                className={`${sortButtonClass(autolinkedOnly)} border-l border-gray-300`}
+                data-testid="filter-autolinked"
+              >
+                {BADGE_LABELS.autolinked}
+              </button>
+            )}
           </div>
-
-          {/*
-            BACKLOG-2471 PR F — the "Needs review" chip, from the mock's list
-            section. Hidden at zero, like the header's review button: a filter
-            offering an empty result is a dead control.
-
-            It is a FILTER, not a mode — pressing it again returns the full list.
-          */}
-          {needsReviewCount > 0 && (
-            <button
-              type="button"
-              onClick={() => setNeedsReviewOnly((on) => !on)}
-              aria-pressed={needsReviewOnly}
-              className={`flex-shrink-0 text-xs px-2.5 py-1 rounded-full border transition-colors ${
-                needsReviewOnly
-                  ? "bg-amber-50 border-amber-300 text-amber-800 font-semibold"
-                  : "bg-white border-gray-300 text-gray-600 hover:border-gray-400"
-              }`}
-              data-testid="needs-review-chip"
-            >
-              Needs review · {needsReviewCount}
-            </button>
-          )}
 
           {showFilterUI && (
             <>

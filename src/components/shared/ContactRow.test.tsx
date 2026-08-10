@@ -517,43 +517,54 @@ describe("ContactRow", () => {
    * where the fold actually was.
    */
   describe("the fold is gone and the crosswalk badge is not (BACKLOG-2556)", () => {
-    it("renders the amber review flag from review_state, unchanged", () => {
+    it("renders the crosswalk badge from review_state, unchanged", () => {
       renderContactRow({
         contact: createTestContact({
-          review_state: { needsReview: true, columns: 2 },
+          review_state: {
+            needsReview: true,
+            columns: 2,
+            records: 3,
+            openQuestions: 0,
+            badge: "autolinked",
+          },
         }),
       });
 
-      const flag = screen.getByTestId("contact-row-review-flag");
-      expect(flag).toHaveTextContent("2 records combined");
-      expect(flag).toHaveClass("bg-amber-50");
+      expect(screen.getByRole("status")).toHaveTextContent("Autolinked");
     });
 
-    it("still renders the green Confirmed pill when nothing needs review", () => {
+    it("still renders a badge for a contact whose links are all the user's", () => {
       renderContactRow({
         contact: createTestContact({
-          review_state: { needsReview: false, columns: 1 },
+          review_state: {
+            needsReview: false,
+            columns: 1,
+            records: 2,
+            openQuestions: 0,
+            badge: "user_linked",
+          },
         }),
       });
 
-      expect(screen.getByTestId("contact-row-confirmed-flag")).toHaveTextContent(
-        "Confirmed",
-      );
-      expect(
-        screen.queryByTestId("contact-row-review-flag"),
-      ).not.toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("You linked these");
     });
 
     it("never renders the purple collapsed disclosure, on any row", () => {
-      // Rendered WITH a review_state so the amber badge is present in the same
-      // DOM: this asserts the two were separated, not that the row is empty.
+      // Rendered WITH a review_state so the crosswalk badge is present in the
+      // same DOM: this asserts the two were separated, not that the row is empty.
       renderContactRow({
         contact: createTestContact({
-          review_state: { needsReview: true, columns: 2 },
+          review_state: {
+            needsReview: true,
+            columns: 2,
+            records: 3,
+            openQuestions: 0,
+            badge: "autolinked",
+          },
         }),
       });
 
-      expect(screen.getByTestId("contact-row-review-flag")).toBeInTheDocument();
+      expect(screen.getByTestId("contact-row-badge")).toBeInTheDocument();
       expect(
         screen.queryByTestId("contact-row-collapsed-toggle"),
       ).not.toBeInTheDocument();
@@ -562,6 +573,122 @@ describe("ContactRow", () => {
       ).not.toBeInTheDocument();
       expect(
         screen.queryByTestId("contact-row-collapsed-record-reason"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  // =========================================================================
+  // BACKLOG-2626 — THE THREE BADGES
+  // =========================================================================
+
+  /**
+   * CONTROLS 6 AND 7.
+   *
+   * Every badge is fetched with `getByRole("status")` rather than by testid. A
+   * testid survives ANY relabelling, and relabelling is exactly what this item
+   * is: `Needs review` -> `Autolinked`, `Confirmed` -> `You linked these`. A
+   * suite keyed on testids would have stayed green through the rename it exists
+   * to protect, which is the "check whose inputs cannot separate pass from fail"
+   * shape. The role query plus a text assertion cannot.
+   *
+   * OBSERVED RED, control 6: replacing the `BADGE_LABELS` lookup with a constant
+   * `"Autolinked"` turns the Suggestion and You-linked cases red while the
+   * Autolinked case stays green — the asymmetry that proves all three are real.
+   *
+   * OBSERVED RED, control 7: rendering `columns` instead of `records` in the
+   * count turns `the count counts RECORDS` red, reading "2 records combined"
+   * where three records are combined.
+   */
+  describe("the three badges (BACKLOG-2626)", () => {
+    const withBadge = (
+      badge: "suggestion" | "autolinked" | "user_linked",
+      extra: Partial<{
+        columns: number;
+        records: number;
+        needsReview: boolean;
+        openQuestions: number;
+      }> = {},
+    ) =>
+      createTestContact({
+        review_state: {
+          columns: 2,
+          records: 2,
+          needsReview: badge === "autolinked",
+          openQuestions: badge === "suggestion" ? 1 : 0,
+          badge,
+          ...extra,
+        },
+      });
+
+    it.each([
+      ["suggestion" as const, "Suggestion"],
+      ["autolinked" as const, "Autolinked"],
+      ["user_linked" as const, "You linked these"],
+    ])("%s renders exactly its own word", (badge, label) => {
+      renderContactRow({ contact: withBadge(badge) });
+
+      const badges = screen.getAllByRole("status");
+      expect(badges).toHaveLength(1);
+      expect(badges[0]).toHaveTextContent(label);
+    });
+
+    /**
+     * THE REGRESSION GUARD AGAINST DECORATING EVERY ROW.
+     *
+     * The founder's rule: a contact with no auto-links and no open questions
+     * carries NO badge, because the ordinary state needs no label. `undefined`
+     * `review_state` is that state and must never be read as a fourth value.
+     */
+    it("a contact with neither carries no badge at all", () => {
+      renderContactRow({ contact: createTestContact({}) });
+
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("contact-row-badge")).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("contact-row-record-count"),
+      ).not.toBeInTheDocument();
+    });
+
+    /**
+     * CONTROL 7 — the badge and its sentence, asserted TOGETHER.
+     *
+     * `14617008`: the badge counted COLUMNS while the sentence beside it counted
+     * RECORDS, so a two-record contact read "1 records combined". Both numbers
+     * were right about different things and the user read them as one
+     * contradictory statement. Asserting them in one test is what stops them
+     * drifting apart again — separate tests would each stay green while
+     * disagreeing with each other.
+     *
+     * The shape below is the founder's own: a contact assembled from three
+     * records where one is absorbed into its own column by `source_id`, so
+     * `columns` is 2 and `records` is 3. The count must say THREE.
+     */
+    it("the count counts RECORDS, not the columns the compare screen draws", () => {
+      renderContactRow({
+        contact: withBadge("autolinked", { columns: 2, records: 3 }),
+      });
+
+      expect(screen.getByRole("status")).toHaveTextContent("Autolinked");
+      expect(screen.getByTestId("contact-row-record-count")).toHaveTextContent(
+        "3 records combined",
+      );
+    });
+
+    /**
+     * Nothing is COMBINED at one record, so the phrase would be a false
+     * statement rather than merely an ungrammatical one. The badge still renders
+     * — a question can stand against a contact made of a single record, and that
+     * is the whole reason the `Suggestion` population is not the crosswalk
+     * population.
+     */
+    it("says nothing about combining when there is one record", () => {
+      renderContactRow({
+        contact: withBadge("suggestion", { columns: 1, records: 1 }),
+      });
+
+      expect(screen.getByRole("status")).toHaveTextContent("Suggestion");
+      expect(
+        screen.queryByTestId("contact-row-record-count"),
       ).not.toBeInTheDocument();
     });
   });

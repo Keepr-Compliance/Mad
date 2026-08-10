@@ -173,19 +173,95 @@ function verdictsExist(): boolean {
   return !!row;
 }
 
+/** Same guard, same reason, for the table the `Suggestion` badge reads. */
+function proposalsExist(): boolean {
+  const row = dbGet<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'contact_link_proposals'`,
+  );
+  return !!row;
+}
+
 /**
- * Every combined contact for one user, with its column count and whether it is
- * still awaiting a decision. ONE query for the whole list, for the reason
- * stated at the top of this file.
+ * How many questions are OPEN against each contact (BACKLOG-2626).
  *
  * ===========================================================================
- * THE MEMBERSHIP RULE, AND WHY IT IS NOT NEGOTIABLE
+ * THE PREDICATE IS COPIED FROM THE QUEUE ON PURPOSE
  * ===========================================================================
- * The set this produces decides which rows are flagged AND which clicks open
- * the compare screen. So it must equal the set the compare screen actually
- * opens for. If it does not, one of two lies ships: a flagged row that opens an
- * ordinary card, or an intercepted click landing on "there is nothing to
- * compare". Both are worse than no flag at all.
+ * `contactLinkReview.ts`'s `PENDING_JOIN` is the definition of an ASKABLE
+ * question: pending, against a contact that still exists, about a source record
+ * that still exists. A proposal whose record has vanished from the address book
+ * is a question with no answer, and the queue deliberately does not ask it.
+ *
+ * The badge must count the same set. A `Suggestion` badge on a contact the queue
+ * has no question for is the BACKLOG-2626 defect restated from the other side —
+ * the row would promise something outstanding and the walk would open onto
+ * nothing. So the two predicates agree, and `contactCompare.test.ts` asserts that
+ * agreement against the queue's own reader rather than against a copy of the SQL.
+ *
+ * NOT imported from `contactLinkReview.ts`: that module is a service that opens
+ * transactions and writes verdicts, and this is the DB layer beneath it. The
+ * dependency would run the wrong way. The test is what keeps them equal.
+ */
+function getOpenQuestionsByContact(userId: string): Map<string, number> {
+  if (!proposalsExist()) return new Map();
+
+  const rows = dbAll<{ contact_id: string; open_questions: number }>(
+    `SELECT p.contact_id AS contact_id, COUNT(*) AS open_questions
+       FROM contact_link_proposals p
+       JOIN contacts c
+         ON c.id = p.contact_id AND c.removed_at IS NULL
+       JOIN external_contacts ec
+         ON ec.user_id = p.user_id
+        AND ec.source = p.source_type
+        AND ec.external_record_id = p.source_record_id
+      WHERE p.user_id = ? AND p.status = 'pending'
+      GROUP BY p.contact_id`,
+    [userId],
+  );
+
+  return new Map(rows.map((r) => [r.contact_id, r.open_questions]));
+}
+
+/**
+ * Every contact for one user that carries a badge, with the numbers behind it.
+ * TWO queries for the whole list, for the reason stated at the top of this file.
+ *
+ * ===========================================================================
+ * WHAT THIS SET MEANS NOW — BACKLOG-2626 CHANGED IT
+ * ===========================================================================
+ * It used to mean "the contacts the compare screen opens for", because the same
+ * flag drove the row badge AND the click interception. **It no longer decides
+ * where a click goes.** A click now opens the contact card, or walks the OPEN
+ * QUESTIONS one at a time (`Contacts.tsx`), and those questions are proposals —
+ * rows in `contact_link_proposals`, which the old rule could not see at all.
+ *
+ * That blindness was the founder's defect. He answered two candidates, clicked
+ * the contact, and got a compare screen showing three columns he had ALREADY
+ * approved, while the fourth, unanswered candidate — the actual reason it opened
+ * — was nowhere on screen. The old membership rule reads the crosswalk, and the
+ * crosswalk only knows about links that already exist.
+ *
+ * So the set is now a UNION of two populations:
+ *
+ *   1. **Crosswalk members** — contacts assembled from more than one record, or
+ *      from a record attached after the fact. They earn `Autolinked` (the app
+ *      attached something the user has not ratified) or `You linked these`.
+ *   2. **Contacts with an open question** — which need NOT be crosswalk members
+ *      at all. A proposal can stand against a contact holding nothing but the
+ *      card it was imported from, and that contact must show `Suggestion` or the
+ *      question is invisible outside the queue.
+ *
+ * A contact in NEITHER population carries no badge, and `review_state` stays
+ * `undefined`. That is the regression guard against decorating every row, and it
+ * is asserted directly.
+ *
+ * ===========================================================================
+ * THE CROSSWALK MEMBERSHIP RULE, UNCHANGED
+ * ===========================================================================
+ * `columns` still promises exactly what `Compare sources` will draw, and that
+ * button is still gated on `showSourcesPanel`. So the crosswalk half keeps the
+ * rule it had, and for the same reason: a badge whose number disagrees with the
+ * screen it describes is a small lie on an audit surface.
  *
  * `showSourcesPanel`, expressed in SQL:
  *   - more than one non-origin link, OR
@@ -210,9 +286,68 @@ function verdictsExist(): boolean {
  * the same contact.
  */
 export function getReviewStateByContact(userId: string): Map<string, ContactReviewState> {
-  if (!crosswalkExists() || !verdictsExist()) return new Map();
+  const openQuestions = getOpenQuestionsByContact(userId);
 
-  const rows = dbAll<{
+  const rows = crosswalkExists() && verdictsExist() ? readCrosswalkAggregate(userId) : [];
+
+  const byContact = new Map<string, ContactReviewState>();
+
+  for (const r of rows) {
+    const open = openQuestions.get(r.contact_id) ?? 0;
+    const needsReview = r.unconfirmed > 0;
+    byContact.set(r.contact_id, {
+      // The contact's own column, plus every non-origin link EXCEPT the one
+      // that column absorbs — at most one `source_id` row.
+      columns: 1 + r.link_count - (r.source_id_count > 0 ? 1 : 0),
+      /*
+        RECORDS, NOT COLUMNS — BACKLOG-2626, folding in `14617008`.
+
+        The contact's own record plus every non-origin link. The record a contact
+        was created FROM is a real, separate record that came together with the
+        contact; the compare screen ABSORBS it into the contact's column, which
+        is why `columns` subtracts it and why this must not.
+
+        The founder's case was a two-record contact whose second record matched by
+        stable id. It read "1 records combined" — right about columns, wrong about
+        what he was being told, and ungrammatical on top. It now reads "2 records
+        combined", which is what the sentence beside it always said.
+      */
+      records: 1 + r.link_count,
+      needsReview,
+      openQuestions: open,
+      badge: open > 0 ? "suggestion" : needsReview ? "autolinked" : "user_linked",
+    });
+  }
+
+  /*
+    THE SECOND POPULATION: a question standing against a contact the crosswalk
+    has nothing to say about.
+
+    Its `columns`/`records` are 1 — it is assembled from one record — so the row
+    shows the badge and no count, which is correct: nothing is combined YET. The
+    candidate is not a record this contact is made of; it is the question.
+  */
+  for (const [contactId, open] of openQuestions) {
+    if (byContact.has(contactId)) continue;
+    byContact.set(contactId, {
+      columns: 1,
+      records: 1,
+      needsReview: false,
+      openQuestions: open,
+      badge: "suggestion",
+    });
+  }
+
+  return byContact;
+}
+
+function readCrosswalkAggregate(userId: string): Array<{
+  contact_id: string;
+  link_count: number;
+  source_id_count: number;
+  unconfirmed: number;
+}> {
+  return dbAll<{
     contact_id: string;
     link_count: number;
     source_id_count: number;
@@ -240,26 +375,14 @@ export function getReviewStateByContact(userId: string): Map<string, ContactRevi
      HAVING COUNT(*) > 1 OR MIN(l.match_method) <> 'source_id'`,
     [userId, userId, ORIGIN_MATCH_METHOD],
   );
-
-  return new Map(
-    rows.map((r) => [
-      r.contact_id,
-      {
-        // The contact's own column, plus every non-origin link EXCEPT the one
-        // that column absorbs — at most one `source_id` row.
-        columns: 1 + r.link_count - (r.source_id_count > 0 ? 1 : 0),
-        needsReview: r.unconfirmed > 0,
-      },
-    ]),
-  );
 }
 
 /**
- * Stamp `review_state` onto a list of contacts with ONE query.
+ * Stamp `review_state` onto a list of contacts with ONE pair of queries.
  *
- * Contacts with nothing to compare are returned untouched — `review_state`
- * stays `undefined`, which every consumer must read as "no flag, no
- * interception", never as "reviewed".
+ * Contacts with no badge to carry are returned untouched — `review_state` stays
+ * `undefined`, which every consumer must read as "no badge", never as
+ * "reviewed" and never as "nothing outstanding".
  *
  * Applied wherever `attachLiveSources` is, and for the same reason: a contact
  * reached through a path that stamps one and not the other carries half its
