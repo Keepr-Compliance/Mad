@@ -116,13 +116,6 @@ const externalAddressBookRecord = {
   externalRecordId: "AB-RECORD-7731",
   externalSourceType: "macos",
   externalUuid: "f0b2d5a8-6c19-4e73-8a05-1d9c3b7e2f44",
-  collapsedSources: [
-    {
-      sourceType: "macos",
-      sourceRecordId: "AB-RECORD-7731",
-      externalUuid: "f0b2d5a8-6c19-4e73-8a05-1d9c3b7e2f44",
-    },
-  ],
 } as unknown as Contact;
 
 /** A second person, present throughout, so "the list survived" is checkable. */

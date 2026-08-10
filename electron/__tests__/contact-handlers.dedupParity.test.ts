@@ -49,6 +49,31 @@
  * including the released-record case that made the decision necessary.
  * `contactNameCompat.parity.test.ts` still pins the shared NAME rule, which the
  * backend continues to consume.
+ *
+ * ---------------------------------------------------------------------------
+ * BACKLOG-2556, 2026-08-09 — HALF 1 ABOVE IS NO LONGER TRUE. RE-POINTED.
+ * ---------------------------------------------------------------------------
+ * Half 1 said "the BACKEND rule still behaves exactly as BACKLOG-2416 left it".
+ * The founder deleted that rule: *"ok lets delete the fold"*. `findDuplicateOwner`
+ * and both its call sites are gone, so the backend no longer decides that two
+ * unimported records are one person on ANY content.
+ *
+ * THREE CASES HERE ASSERTED "keeps ONE" AND NOW ASSERT "keeps BOTH" — the same
+ * pairs, the opposite verdict, each carrying the reason inline. They are the
+ * sharpest form of this deletion's control: the pairs were chosen precisely
+ * because the old rule folded them.
+ *
+ * The FIVE "keeps BOTH" cases are untouched and still pass. That matters more
+ * than it looks: Margaret Chen / Margaret Torres on one office line survived
+ * because of the NAME guard INSIDE the fold. Deleting the guard instead of the
+ * fold would have kept those five green while inverting them in the field, so
+ * they are the discriminating negative for "did you delete the right thing".
+ *
+ * The suite's FILENAME is now historical. It is kept because the pairs and
+ * their catalogue references are the value here, and a rename would detach the
+ * cases from the four months of reasoning above them. There is nothing left in
+ * parity because there is nothing left to be in parity WITH — both rules are
+ * deleted, the renderer's by BACKLOG-2370 and the backend's by BACKLOG-2556.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -292,23 +317,38 @@ describe("BACKLOG-2370 — the backend decides, and the renderer decides nothing
     );
   });
 
-  it("the same person twice on one line: the backend keeps ONE", async () => {
+  /**
+   * RE-POINTED BY BACKLOG-2556 — was "the backend keeps ONE", `["chen-mac"]`.
+   *
+   * The same person recorded in two address books really is one person, and the
+   * old rule got this pair right. It is still deleted, because the app cannot
+   * tell this pair from Elena Marsh / Elena Marsh-Okonkwo, and getting that one
+   * wrong hid a reachable person. Two rows the user can merge beats one row
+   * with someone missing from it.
+   */
+  it("the same person twice on one line: the backend keeps BOTH [BACKLOG-2556]", async () => {
     await assertOneRuleDecides(
       [
         { recordId: "chen-mac", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0102"] },
         { recordId: "chen-out", name: "Margaret Chen", source: "outlook", emails: [], phones: ["415-555-0102"] },
       ],
-      ["chen-mac"],
+      ["chen-mac", "chen-out"],
     );
   });
 
-  it("an abbreviated spelling on one line: the backend keeps ONE", async () => {
+  /**
+   * RE-POINTED BY BACKLOG-2556 — was "the backend keeps ONE", `["chen-full"]`.
+   *
+   * "Margaret C." is prefix-compatible with "Margaret Chen" — and equally
+   * compatible with Margaret Chen's daughter. That is the guess.
+   */
+  it("an abbreviated spelling on one line: the backend keeps BOTH [BACKLOG-2556]", async () => {
     await assertOneRuleDecides(
       [
-        { recordId: "chen-full", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0102"] },
         { recordId: "chen-abbrev", name: "Margaret C.", source: "outlook", emails: [], phones: ["415-555-0102"] },
+        { recordId: "chen-full", name: "Margaret Chen", source: "macos", emails: [], phones: ["(415) 555-0102"] },
       ],
-      ["chen-full"],
+      ["chen-abbrev", "chen-full"],
     );
   });
 
@@ -349,16 +389,25 @@ describe("BACKLOG-2370 — the backend decides, and the renderer decides nothing
     );
   });
 
-  it("a shared email with COMPATIBLE names: the backend still keeps ONE", async () => {
-    // The other half, and the one a careless fix breaks. Removing the collapse
-    // entirely would pass the test above and be wrong: the same person recorded
-    // in two address books is still one person.
+  /**
+   * RE-POINTED BY BACKLOG-2556 — was "the backend still keeps ONE", `["a"]`.
+   *
+   * Its old comment read: *"Removing the collapse entirely would pass the test
+   * above and be wrong."* The founder decided otherwise on 2026-08-09, having
+   * watched this exact branch hide Elena Marsh-Okonkwo under Elena Marsh on a
+   * shared address — two different surnames, no user decision anywhere, and the
+   * hidden record unreachable rather than merely mislabelled.
+   *
+   * This is the branch the founder's Elena case runs through, and it is the one
+   * `contact-handlers.foldDeleted-2556.test.ts` control 1 reddens on revert.
+   */
+  it("a shared email with COMPATIBLE names: the backend keeps BOTH [BACKLOG-2556]", async () => {
     await assertOneRuleDecides(
       [
         { recordId: "a", name: "Margaret Chen", source: "macos", emails: ["office@brokerage.com"], phones: [] },
         { recordId: "b", name: "Margaret C.", source: "outlook", emails: ["office@brokerage.com"], phones: [] },
       ],
-      ["a"],
+      ["a", "b"],
     );
   });
 

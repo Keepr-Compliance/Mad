@@ -14,13 +14,6 @@ import type {
   OAuthProvider,
   ContactSource,
 } from "../../electron/types/models";
-import type {
-  AbsorbedContactRecord,
-  CollapsedSource,
-} from "../../electron/types/handlerTypes";
-
-export type { AbsorbedContactRecord, CollapsedSource };
-
 // ============================================
 // EXTENDED/SHARED TYPES
 // ============================================
@@ -44,17 +37,6 @@ export interface ExtendedContact extends Contact {
   communication_count?: number;
   /** Whether this contact exists in the database (false for external contacts from macOS Contacts) */
   isFromDatabase?: boolean;
-  /**
-   * BACKLOG-2459 — records the MAIN-PROCESS picker folded into this row.
-   *
-   * Set by `contacts:getAvailable` at the suppression point and carried across
-   * IPC untouched (`useContactList` spreads the handler's rows). This is the
-   * ONLY channel by which the founder's `dup-suppressed 21` can be shown: those
-   * records are `continue`d away inside the handler and appear in no array the
-   * renderer ever receives, so nothing on this side can re-derive them.
-   */
-  absorbedRecords?: AbsorbedContactRecord[];
-
   /**
    * BACKLOG-2510 — THE SOURCE IDENTITY, DECLARED SO IT CANNOT BE DROPPED AGAIN.
    *
@@ -85,11 +67,12 @@ export interface ExtendedContact extends Contact {
   /** macOS ZEXTERNALUUID. Captured for later; nothing matches on it. */
   externalUuid?: string | null;
   /**
-   * Every source record this ONE row stands for — its own identity plus every
-   * record the picker folded into it (BACKLOG-2458). The import writes one
-   * crosswalk row per entry, so dropping this loses the folded records.
+   * BACKLOG-2556: `collapsedSources` and `absorbedRecords` were declared here.
+   * Both were the picker fold's output — the identities it grouped and the
+   * words describing what it swallowed — and both are deleted with it. The
+   * three fields above are the row's ONE source record, which is now all a
+   * picker row ever stands for.
    */
-  collapsedSources?: CollapsedSource[];
 }
 
 /**

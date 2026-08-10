@@ -36,10 +36,12 @@
  * fiction). Names are unmistakably invented. The bug reproduces identically —
  * what matters is one value appearing twice on one record, never whose it was.
  *
- * This is NOT the cross-record dedup that decides whether the Mac card and the
- * Outlook record are the same person (that is BACKLOG-2416 / `findDuplicateOwner`).
- * It is dedup WITHIN one source record, before that record is ever compared to
- * another.
+ * This is NOT cross-record dedup. It is dedup WITHIN one source record, and it
+ * is unaffected by BACKLOG-2556 — which DELETED the only code that decided the
+ * Mac card and the Outlook record were the same person (`findDuplicateOwner`,
+ * formerly in `contacts:get-available`). Nothing now compares one record to
+ * another on content; this module still collapses a value repeated inside a
+ * single record, which is not a judgement about people.
  *
  * ===========================================================================
  * WHY THE FIELD TYPE IS NOT THE POINT

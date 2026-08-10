@@ -220,87 +220,32 @@ export interface AvailableContact {
   externalUuid?: string | null;
 
   /**
-   * BACKLOG-2458 — EVERY source record this ONE ROW STANDS FOR.
+   * BACKLOG-2556 — `collapsedSources` WAS HERE, AND IT IS DELETED.
    *
-   * The picker collapses duplicates: a person present in both the Mac address
-   * book and Outlook is folded into a single row, and the records that lost are
-   * `continue`d away. Until now their identity went with them, so importing the
-   * row wrote at most ONE crosswalk entry and the other records were left to be
-   * rediscovered by content matching on the NEXT sync — weaker evidence than
-   * the user's own selection, arriving a sync late, and for records sharing no
-   * email or phone it never arrives at all.
+   * It carried "every source record this ONE row stands for": the row's own
+   * identity plus every record the picker's fold absorbed into it. The import
+   * wrote one `source_id` crosswalk row per entry — so a display-time guess
+   * about two address-book cards became a permanent, unrecoverable claim that
+   * the SOURCE had asserted they were the same record.
    *
-   * This carries the whole set, representative included, so the import can
-   * write a `source_id` row for each. It is the row's OWN identity plus every
-   * identity it absorbed — `externalRecordId`/`externalSourceType` above remain
-   * the representative's and are unchanged, so nothing that reads only those
-   * needs to know about this.
+   * The fold is gone (see `contacts:get-available`), so a picker row stands for
+   * exactly one source record and the three fields above ARE that record.
+   * Deleted rather than left as a single-element array: a plural channel that
+   * nothing fills is a plural channel the next writer fills.
    */
-  collapsedSources?: CollapsedSource[];
+
 
   /**
-   * BACKLOG-2459 — the folded records, IN WORDS, so the collapse can be shown.
+   * BACKLOG-2556 — `absorbedRecords` WAS HERE, AND IT IS DELETED.
    *
-   * `collapsedSources` above carries the folded records' IDENTITY, which is what
-   * the import needs. It cannot be displayed: a `(sourceType, sourceRecordId)`
-   * pair says nothing to a person about who was folded in or on what grounds.
-   * This carries the same event described for a reader — the record's label,
-   * where it came from, and which detail the two agreed on.
-   *
-   * It exists because the collapse the founder pointed at is decided HERE. The
-   * suppressions below `continue` the losing record away, so it never reaches
-   * `availableContacts` and therefore never reaches the renderer at all; a
-   * renderer-side pass can only re-derive collapses among the records that
-   * SURVIVED, which is a different and nearly empty set. Whatever is not put on
-   * this field cannot be shown.
-   *
-   * Absent (not `[]`) on a row that absorbed nothing — the overwhelming majority.
+   * It described, in words, which records the fold had swallowed, so the purple
+   * "N records combined" disclosure could be drawn. With nothing folded there
+   * is nothing to disclose, and the disclosure's own words collided with the
+   * amber `contact-row-review-flag` on saved contacts — one saying "combined"
+   * about something the app DECIDED, the other about something that actually
+   * happened, with no way for a user to tell them apart. The amber pill stays;
+   * it reports the crosswalk.
    */
-  absorbedRecords?: AbsorbedContactRecord[];
-}
-
-/**
- * One record the picker folded into a row, described for display (BACKLOG-2459).
- *
- * Deliberately NOT the same type as {@link CollapsedSource}: that one is
- * identity, for the import to write crosswalk rows from, and must stay a bare
- * `(sourceType, sourceRecordId)` pair; this one is prose for a human and carries
- * no id at all. Keeping them apart means neither can quietly become the other's
- * contract.
- */
-export interface AbsorbedContactRecord {
-  /** The name the folded record was saved under, or null when it had none. */
-  label: string | null;
-  /**
-   * Where the folded record came from, already in words ("Outlook contacts").
-   *
-   * Resolved in the main process, where the value is still an
-   * `ExternalContactSource` and `sourceLabel()` can answer truthfully. Sending
-   * the raw enum would force the renderer to own a second copy of that mapping —
-   * the duplication the crosswalk vocabulary exists to prevent — and the
-   * renderer's own `ContactSource` union does not contain these members at all
-   * (`macos` vs `contacts_app`). `null` when the record came from the local
-   * contacts table and has no address book behind it.
-   */
-  sourceLabel: string | null;
-  /** Which detail the two records agreed on. */
-  matchedOn: "email" | "phone";
-  /** That detail's value AS SAVED on the folded record — never normalised. */
-  matchedValue: string;
-}
-
-/**
- * One source record folded into a picker row (BACKLOG-2458).
- *
- * Deliberately a plain, self-describing PAIR rather than a bare id: every
- * source has its own id space and nothing prevents two of them issuing the same
- * string, so identity is `(sourceType, sourceRecordId)` and never the id alone.
- */
-export interface CollapsedSource {
-  sourceType: string;
-  sourceRecordId: string;
-  /** macOS ZEXTERNALUUID, when the shadow row carried one. */
-  externalUuid?: string | null;
 }
 
 /**
@@ -323,12 +268,6 @@ export interface ImportableContact {
   externalSourceType?: string | null;
   externalUuid?: string | null;
 
-  /**
-   * BACKLOG-2458 — see AvailableContact. Round-trips through the renderer
-   * alongside the fields above; the import writes one `source_id` crosswalk row
-   * per entry.
-   */
-  collapsedSources?: CollapsedSource[];
 }
 
 /**

@@ -1015,7 +1015,7 @@ describe("Contact Handlers", () => {
         expect(ids).toEqual(new Set(["ext-margaret-bare", "ext-margaret-chen"]));
       });
 
-      it("still collapses the SAME person recorded twice under one full name", async () => {
+      it("no longer collapses an abbreviated spelling on one line [BACKLOG-2556]", async () => {
         // The control for the rule above: tightening the single-token case must
         // not stop genuine cross-source duplicates collapsing. Two full names
         // that agree token-by-token are still one person.
@@ -1054,10 +1054,14 @@ describe("Contact Handlers", () => {
 
         expect(result.success).toBe(true);
         const ids = new Set(result.contacts.map((c: any) => c.id));
-        expect(ids).toEqual(new Set(["ext-jane-full"]));
+        // BACKLOG-2556: was `new Set(["ext-jane-full"])`. "Jane S." on the same
+        // line as "Jane Smith" is prefix-compatible and used to fold; it is
+        // also exactly as compatible with a different Jane S. The fold is
+        // deleted, so both cards are offered.
+        expect(ids).toEqual(new Set(["ext-jane-full", "ext-jane-abbrev"]));
       });
 
-      it("still collapses two identical bare first names on one line", async () => {
+      it("no longer collapses two identical bare first names on one line [BACKLOG-2556]", async () => {
         // The other control: the tightening must not split an EXACT match.
         // "Margaret" / "Margaret" is handled by the equality check, so the same
         // person imported from two sources under a bare name still collapses.
@@ -1096,7 +1100,10 @@ describe("Contact Handlers", () => {
 
         expect(result.success).toBe(true);
         const ids = new Set(result.contacts.map((c: any) => c.id));
-        expect(ids).toEqual(new Set(["ext-bare-macos"]));
+        // BACKLOG-2556: was `new Set(["ext-bare-macos"])`. Two bare "Margaret"
+        // cards on one number is the case an equality check gets right and a
+        // shared office line gets wrong, and nothing here can tell them apart.
+        expect(ids).toEqual(new Set(["ext-bare-macos", "ext-bare-outlook"]));
       });
 
       it("recovers a contact the phone-map last-wins overwrite dropped (uses person list)", async () => {
@@ -1187,9 +1194,12 @@ describe("Contact Handlers", () => {
         expect(ids).toContain("ext-margaret-b");
       });
 
-      it("still collapses the SAME person across sources via a shared email", async () => {
-        // Guard against over-correction: a genuine macOS+shadow duplicate that
-        // shares an email must still collapse to one.
+      it("no longer collapses across sources via a shared email [BACKLOG-2556]", async () => {
+        // BACKLOG-2556: this asserted ONE row ("a genuine macOS+shadow
+        // duplicate that shares an email must still collapse"). Both records
+        // are unimported — a legacy local `contacts` row and a shadow row — and
+        // neither the user nor the crosswalk has said they are one person. Two
+        // rows.
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const externalContactDb = require("../services/db/externalContactDbService");
         (externalContactDb.getCount as jest.Mock).mockReturnValue(1);
@@ -1215,8 +1225,9 @@ describe("Contact Handlers", () => {
         const result = await handler(mockEvent, TEST_USER_ID);
 
         expect(result.success).toBe(true);
-        expect(result.contacts).toHaveLength(1);
-        expect(result.contacts[0].id).toBe("db-dana"); // DB record wins
+        // IDENTITY, not a count: the DB row is still first (STEP 1 runs before
+        // the shadow loop), and the shadow row it used to absorb is behind it.
+        expect(result.contacts.map((c: any) => c.id)).toEqual(["db-dana", "ext-dup"]);
       });
     });
 
@@ -1356,14 +1367,16 @@ describe("Contact Handlers", () => {
         expect(picker!.rowsIn).toBe(6);
         expect(picker!.sourceDisabled).toBe(1);      // ext-outlook-off
         expect(picker!.alreadyImported).toBe(2);     // db-imported (phone), ext-imported (email)
-        expect(picker!.duplicateSuppressed).toBe(1); // ext-dup-of-db
-        // BACKLOG-2458: the suppressed record handed its source identity to the
-        // row that absorbed it (db-keep) instead of being discarded. A DB row
-        // absorbing an EXTERNAL record's identity is the founder's case in
-        // miniature: without this the user's choice of the collapsed row is
-        // never recorded, and the next sync re-derives it by content matching.
-        expect(picker!.collapsedIdentitiesCarried).toBe(1);
-        expect(picker!.shown).toBe(2);
+        // BACKLOG-2556: was 1 (ext-dup-of-db folded into db-keep on a shared
+        // address). The fold is deleted, so this drop reason is structurally
+        // zero — nothing else in the handler suppresses a row as a duplicate.
+        // The FIELD stays because `PickerStage` is a persisted diagnostics
+        // shape read back by the support bundle.
+        expect(picker!.duplicateSuppressed).toBe(0);
+        // ...and `collapsedIdentitiesCarried` is omitted entirely rather than
+        // reported as 0, so no line claims a carry mechanism that is gone.
+        expect(picker!.collapsedIdentitiesCarried).toBeUndefined();
+        expect(picker!.shown).toBe(3);
 
         // The funnel is only trustworthy if it balances.
         expect(
@@ -1377,10 +1390,13 @@ describe("Contact Handlers", () => {
       it("the surviving rows are the EXACT ones the counts claim", async () => {
         const result = await runFunnelFixture();
 
-        // Identity, not count: `shown: 2` is equally satisfied by dropping
+        // Identity, not count: `shown: 3` is equally satisfied by dropping
         // db-keep and keeping ext-dup-of-db, which would be the wrong rows.
+        // BACKLOG-2556: `ext-dup-of-db` is the third — it shared an address and
+        // a name with the legacy `db-keep` row and used to be folded into it.
         expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual([
           "db-keep",
+          "ext-dup-of-db",
           "ext-keep",
         ]);
       });
@@ -1395,7 +1411,7 @@ describe("Contact Handlers", () => {
         expect(pickerLines).toHaveLength(1);
         expect(pickerLines[0]).toBe(
           "[Contacts] picker: 6 in (db 2 + external 4) -> source-disabled 1" +
-            " -> already-imported 2 -> dup-suppressed 1 (identity carried 1) -> shown 2",
+            " -> already-imported 2 -> dup-suppressed 0 -> shown 3",
         );
       });
 
@@ -2400,9 +2416,11 @@ describe("Contact Handlers", () => {
         expect(android.source).toBe("android_sync");
         expect(android.externalRecordId).toBe("rec-android");
         expect(android.externalSourceType).toBe("android_sync");
-        expect(android.collapsedSources).toEqual([
-          { sourceType: "android_sync", sourceRecordId: "rec-android", externalUuid: "uuid-android" },
-        ]);
+        expect(android.externalUuid).toBe("uuid-android");
+        // BACKLOG-2556: `collapsedSources` was asserted here as a
+        // single-element restatement of the three fields above. Deleted with
+        // the fold that filled it; the three fields ARE the record.
+        expect(android.collapsedSources).toBeUndefined();
       });
     });
 
@@ -2567,7 +2585,11 @@ describe("Contact Handlers", () => {
             synced_at: new Date().toISOString(),
           },
           {
-            // Duplicate: shares ext-android's email, so it collapses into it.
+            // BACKLOG-2556: shares ext-android's email under the same name, so
+            // it USED to collapse into it. The fold is deleted and it is now
+            // its own row — kept in the fixture deliberately, because a funnel
+            // that "balances" is only meaningful if a row that used to be
+            // dropped is proven to be counted as shown instead.
             id: "ext-dup", user_id: TEST_USER_ID, name: "Android Person",
             phones: ["+15555550125"], emails: ["android@example.com"],
             external_record_id: "rec-dup", external_uuid: null,
@@ -2580,13 +2602,16 @@ describe("Contact Handlers", () => {
         ]);
 
         const result = await getAvailable();
-        expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual(["ext-android"]);
+        expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual([
+          "ext-android",
+          "ext-dup",
+        ]);
 
         const picker = getContactIngestionFunnel().picker;
         expect(picker!.sourceDisabled).toBe(1);      // ext-macos
         expect(picker!.alreadyImported).toBe(1);     // ext-imported
-        expect(picker!.duplicateSuppressed).toBe(1); // ext-dup
-        expect(picker!.shown).toBe(1);
+        expect(picker!.duplicateSuppressed).toBe(0); // BACKLOG-2556: was 1 (ext-dup)
+        expect(picker!.shown).toBe(2);
         expect(
           picker!.rowsIn -
             picker!.sourceDisabled -

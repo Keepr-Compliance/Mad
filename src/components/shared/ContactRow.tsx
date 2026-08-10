@@ -1,11 +1,6 @@
-import React, { useState } from "react";
+import React from "react";
 import type { ExtendedContact } from "../../types/components";
 import { labelForContact } from "../../utils/contactDisplayLabel";
-import type { FoldedRecord } from "../../utils/contactCollapseDisclosure";
-import {
-  collapsedRecordSummary,
-  describeIdentifier,
-} from "../../utils/contactCollapseVocabulary";
 import { sourceDisplayLabel } from "./SourcePill";
 
 export interface ContactRowProps {
@@ -37,21 +32,6 @@ export interface ContactRowProps {
    * leaves it `false` (default) and is unaffected.
    */
   showAddButton?: boolean;
-  /**
-   * Records the picker folded INTO this row (BACKLOG-2459), from both the
-   * main-process suppression and the renderer's residual pass — see
-   * `contactCollapseDisclosure.foldedRecordsFor`.
-   *
-   * The founder watched `picker: 1126 in -> dup-suppressed 21 -> shown 1105` and
-   * said "a user must have a way to see that". Twenty-one people were folded
-   * together and nothing on screen said so; he only noticed because he already
-   * knew one contact existed twice. A contact here is a party to a transaction
-   * under audit, so two people wrongly folded together is a compliance error —
-   * and it was being made with no notice and nothing to inspect.
-   *
-   * Undefined/empty (the overwhelming majority of rows) renders nothing at all.
-   */
-  collapsedRecords?: FoldedRecord[];
   /**
    * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default `false`
    * so shared consumers (the transaction add-contact flows) are unaffected.
@@ -186,7 +166,6 @@ export function ContactRow({
   showCheckbox = false,
   showImportButton = false,
   showAddButton = false,
-  collapsedRecords,
   compact = false,
   showDetailLine = false,
   onSelect,
@@ -196,19 +175,6 @@ export function ContactRow({
   const displayName = getDisplayName(contact);
   const initial = getInitial(displayName);
   const detailLine = showDetailLine ? buildDetailLine(contact) : null;
-
-  // BACKLOG-2459 — the folded records, and whether the user has asked to see
-  // which ones. Collapsed by default: the disclosure has to be quiet enough to
-  // sit on 1,105 rows without becoming noise, and loud enough that nobody can
-  // say they were not told.
-  const collapsedCount = collapsedRecords?.length ?? 0;
-  const [showCollapsed, setShowCollapsed] = useState(false);
-
-  const handleCollapsedToggle = (event: React.MouseEvent) => {
-    // The row's own onClick opens the contact; expanding the evidence must not.
-    event.stopPropagation();
-    setShowCollapsed((open) => !open);
-  };
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -313,68 +279,12 @@ export function ContactRow({
           </p>
         )}
 
-        {/* BACKLOG-2459 — say that a collapse happened, and let it be inspected.
-            The count is a count of records the user owns, written out next to
-            what it counts; there is no score anywhere in this block. */}
-        {collapsedCount > 0 && (
-          <>
-            <button
-              type="button"
-              onClick={handleCollapsedToggle}
-              aria-expanded={showCollapsed}
-              className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-purple-700 hover:text-purple-900 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 rounded"
-              data-testid="contact-row-collapsed-toggle"
-            >
-              {collapsedCount} {collapsedCount === 1 ? "record" : "records"} combined
-              <svg
-                className={`w-3 h-3 transition-transform ${showCollapsed ? "rotate-180" : ""}`}
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </button>
-
-            {showCollapsed && (
-              <ul
-                className="mt-1 mb-1 space-y-1.5 border-l-2 border-purple-200 pl-2"
-                data-testid="contact-row-collapsed-detail"
-              >
-                {(collapsedRecords ?? []).map((record) => (
-                  <li key={record.key} data-testid="contact-row-collapsed-record">
-                    <p
-                      className="text-xs font-medium text-gray-900 truncate"
-                      data-testid="contact-row-collapsed-record-name"
-                    >
-                      {record.label?.trim() || "No name"}
-                    </p>
-                    {/* The sentence asserts ONLY what the collapse established:
-                        which record was folded in, where it came from, and the
-                        detail the two agreed on. Nothing about this row's own
-                        source, and nothing about anything being "already saved"
-                        — the picker checks neither, and this row is frequently
-                        an unimported address-book record still showing its own
-                        import button. See `collapsedRecordSummary`. */}
-                    <p
-                      className="text-xs text-gray-500"
-                      data-testid="contact-row-collapsed-record-reason"
-                    >
-                      {collapsedRecordSummary({
-                        foldedLabel: record.label,
-                        foldedSourceLabel: record.sourceLabel,
-                        identifierPhrase: describeIdentifier(record.matchedOn, [
-                          record.matchedValue,
-                        ]),
-                      })}
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
+        {/* BACKLOG-2556 — the purple "N records combined" disclosure was here.
+            It only ever appeared because the main-process fold had swallowed a
+            record; with nothing folded there is nothing to disclose. The amber
+            `contact-row-review-flag` below is a DIFFERENT control with the same
+            two words — it counts what the crosswalk actually links on a SAVED
+            contact — and it stays. */}
       </div>
 
       {/* Adding spinner */}

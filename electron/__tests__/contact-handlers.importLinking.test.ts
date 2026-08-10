@@ -338,60 +338,110 @@ afterEach(() => {
 });
 
 // ===========================================================================
-describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for", () => {
+describe("BACKLOG-2556 — a picker row claims EXACTLY the record it stands for", () => {
   /**
-   * THE FOUNDER'S CASE. Casey Lane is in the Mac address book and in Outlook
-   * on the same number under the same name, so the picker collapses them to one
-   * row. He imports that row.
+   * =========================================================================
+   * THIS BLOCK ASSERTED THE OPPOSITE UNTIL 2026-08-09. IT IS THE LAUNDERING.
+   * =========================================================================
+   * It was "BACKLOG-2458 I1 — a collapsed row links EVERY record it stands
+   * for", and it was a faithful description of what the code did: the picker
+   * folded two address-book records into one row on a shared number plus a
+   * compatible name, `absorbSourceIdentity` put BOTH identities on the
+   * survivor, and importing that row wrote TWO `contact_source_links` rows,
+   * each with `match_method: 'source_id'` — the method that means "the source
+   * itself says these are the same record".
    *
-   * NEGATIVE CONTROL (executed, output in the PR): delete the
-   * `absorbSourceIdentity` call at the duplicate `continue` and this drops to a
-   * single macos link — the pre-fix behaviour, and the reason the next sync
-   * content-matched both records.
+   * The founder reproduced it live with fictional data: he imported ONE Luis
+   * Ferreira row and the contact came back carrying THREE sources, two of them
+   * labelled *"Recognised by its own entry in your Mac address book"*. Nothing
+   * in the database could then distinguish the picker's guess from a genuine
+   * identifier match, and there is no undo.
+   *
+   * The fold is deleted, so a row stands for one record and claims one record.
+   * These cases keep the SAME fixtures — the same two Casey Lane cards on the
+   * same number — and assert the opposite outcome, because the fixtures are the
+   * exact shape the old rule folded.
+   *
+   * WHY THE ID SET AND NEVER A COUNT: "two links" cannot tell "both records
+   * claimed" from "one record claimed twice", and "one link" cannot tell "the
+   * right record" from "the other one".
+   *
+   * The addresses below were `paul@pauljdorian.com` / `dorian@bluespaces.com` —
+   * a real personal domain and the company domain, in a PUBLIC repo, beside a
+   * name that had itself been scrubbed to `Casey Lane` (the `mac-paul` /
+   * `out-paul` variable names are the residue). The fixture-PII guard does not
+   * catch either, because its email rule covers consumer mailbox domains only.
+   * Scrubbed here because these lines were being rewritten anyway; the guard
+   * gap is filed separately and is not this PR's to fix.
    */
   beforeEach(() => {
     mockShadowRows = [
-      shadowRow("mac-paul", "Casey Lane", "macos", ["paul@pauljdorian.com"], [
+      shadowRow("mac-paul", "Casey Lane", "macos", ["casey@example.com"], [
         "(408) 555-0101",
       ]),
-      shadowRow("out-paul", "Casey Lane", "outlook", ["dorian@bluespaces.com"], [
+      shadowRow("out-paul", "Casey Lane", "outlook", ["c.lane@example.org"], [
         "4085550101",
       ]),
     ];
   });
 
-  it("collapses the two records to one row and carries BOTH identities on it", async () => {
+  it("offers the two records as TWO rows, neither carrying the other's identity", async () => {
     const rows = await getAvailable();
 
-    expect(rows.map((r) => r.name)).toEqual(["Casey Lane"]);
+    expect(rows.map((r) => r.name)).toEqual(["Casey Lane", "Casey Lane"]);
     expect(
-      rows[0].collapsedSources
-        .map((s: any) => `${s.sourceType}/${s.sourceRecordId}`)
-        .sort(),
+      rows.map((r: any) => `${r.externalSourceType}/${r.externalRecordId}`).sort(),
     ).toEqual(["macos/mac-paul", "outlook/out-paul"]);
+    // The channel the fold used to append the loser's identity to the winner is
+    // deleted, not merely empty.
+    for (const row of rows) {
+      expect((row as any).collapsedSources).toBeUndefined();
+    }
   });
 
-  it("writes a source_id crosswalk row for BOTH records, before any sync", async () => {
+  /**
+   * CONTROL 3 — THE LAUNDERING CASE, AND THE MOST IMPORTANT ONE HERE.
+   *
+   * Import ONE row and assert the crosswalk row ID SET. Before the deletion
+   * this returned both `macos/mac-paul/source_id` and `outlook/out-paul/source_id`
+   * from a single click.
+   *
+   * OBSERVED RED: restore `findDuplicateOwner` + `absorbSourceIdentity` at the
+   * external-loop `continue` and this reddens with the second, unchosen record
+   * named in the received value.
+   */
+  it("importing ONE row writes ONE source_id crosswalk row — the one the user picked", async () => {
     const rows = await getAvailable();
-    await importRows(rows);
+    const macRow = rows.filter((r: any) => r.externalRecordId === "mac-paul");
+    expect(macRow).toHaveLength(1);
 
-    const paul = contactIdByName("Casey Lane");
-    expect(linkTriples(paul)).toEqual([
-      "macos/mac-paul/source_id",
-      "outlook/out-paul/source_id",
-    ]);
+    await importRows(macRow);
+
+    const casey = contactIdByName("Casey Lane");
+    expect(linkTriples(casey)).toEqual(["macos/mac-paul/source_id"]);
+    // And nothing else in the table: the Outlook record is unclaimed and still
+    // importable as its own contact.
+    expect(
+      mockDb!
+        .prepare("SELECT COUNT(*) AS n FROM contact_source_links WHERE user_id = ?")
+        .get(USER),
+    ).toEqual({ n: 1 });
   });
 
-  it("reports the carry in the picker funnel line", async () => {
+  it("reports no duplicate suppression in the picker funnel line", async () => {
     await getAvailable();
 
     const picker = logLines.find((l) => l.message.includes("[Contacts] picker:"));
-    expect(picker?.message).toContain("dup-suppressed 1 (identity carried 1)");
+    // Was "dup-suppressed 1 (identity carried 1)". Nothing is suppressed as a
+    // duplicate any more, and the optional carry counter is omitted entirely
+    // rather than reported as zero.
+    expect(picker?.message).toContain("dup-suppressed 0");
+    expect(picker?.message).not.toContain("identity carried");
   });
 
-  it("captures the portable identifier of a COLLAPSED record, not just the winner", async () => {
+  it("carries each record's OWN portable identifier, and only its own", async () => {
     // ZEXTERNALUUID is the only candidate cross-device key and it cannot be
-    // captured later. Dropping the collapsed record dropped its copy too.
+    // captured later. Each row must carry the uuid of the record it IS.
     mockShadowRows = [
       shadowRow("mac-paul", "Casey Lane", "macos", [], ["(408) 555-0101"], "uuid-mac"),
       shadowRow("out-paul", "Casey Lane", "outlook", [], ["4085550101"], "uuid-out"),
@@ -399,25 +449,36 @@ describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for",
 
     await importRows(await getAvailable());
 
-    const paul = contactIdByName("Casey Lane");
+    // Both rows were imported this time, so both are claimed — but as TWO
+    // contacts, each owning its own record, not one contact owning both.
+    const links = mockDb!
+      .prepare(
+        "SELECT contact_id, source_record_id, external_uuid FROM contact_source_links WHERE user_id = ?",
+      )
+      .all(USER) as Array<{
+      contact_id: string;
+      source_record_id: string;
+      external_uuid: string | null;
+    }>;
     expect(
-      getLinksForContact(paul)
-        .map((l) => `${l.source_record_id}=${l.external_uuid}`)
-        .sort(),
+      links.map((l) => `${l.source_record_id}=${l.external_uuid}`).sort(),
     ).toEqual(["mac-paul=uuid-mac", "out-paul=uuid-out"]);
+    expect(new Set(links.map((l) => l.contact_id)).size).toBe(2);
   });
 
-  it("collapses THREE records onto one row and links all three", async () => {
+  it("three records that resemble each other are three rows and three separate claims", async () => {
     mockShadowRows.push(
       shadowRow("goo-paul", "Casey Lane", "google_contacts", [], ["408-555-0101"]),
     );
 
-    await importRows(await getAvailable());
+    const rows = await getAvailable();
+    expect(rows).toHaveLength(3);
+
+    // Import only the Google one. The other two stay unclaimed.
+    await importRows(rows.filter((r: any) => r.externalRecordId === "goo-paul"));
 
     expect(linkTriples(contactIdByName("Casey Lane"))).toEqual([
       "google_contacts/goo-paul/source_id",
-      "macos/mac-paul/source_id",
-      "outlook/out-paul/source_id",
     ]);
   });
 
@@ -429,19 +490,18 @@ describe("BACKLOG-2458 I1 — a collapsed row links EVERY record it stands for",
     );
 
     const rows = await getAvailable();
-    const paulRow = rows.filter((r) => r.name === "Casey Lane");
-    expect(paulRow).toHaveLength(1);
-    await importRows(paulRow);
+    const outRow = rows.filter((r: any) => r.externalRecordId === "out-paul");
+    expect(outRow).toHaveLength(1);
+    await importRows(outRow);
 
     expect(linkTriples(contactIdByName("Casey Lane"))).toEqual([
-      "macos/mac-paul/source_id",
       "outlook/out-paul/source_id",
     ]);
     expect(
       mockDb!
         .prepare("SELECT COUNT(*) AS n FROM contact_source_links WHERE user_id = ?")
         .get(USER),
-    ).toEqual({ n: 2 });
+    ).toEqual({ n: 1 });
   });
 });
 
@@ -561,9 +621,6 @@ describe("BACKLOG-2458 I2 — a missing identity is LOGGED, never silent", () =>
         isFromDatabase: false,
         externalRecordId: "rec-1",
         externalSourceType: "carrier_pigeon",
-        collapsedSources: [
-          { sourceType: "carrier_pigeon", sourceRecordId: "rec-1", externalUuid: null },
-        ],
       },
     ];
 
@@ -596,44 +653,54 @@ describe("BACKLOG-2458 — the crosswalk's own guarantees still hold", () => {
     ).toEqual({ n: 1 });
   });
 
-  it("does not write a duplicate row when the representative repeats in the set", async () => {
-    // `collapsedSources` includes the representative by construction, so the
-    // dedup inside `toSourceIdentities` is load-bearing, not defensive.
-    const rows = [
-      {
-        id: "x",
-        name: "Twice Listed",
-        email: "twice@example.com",
-        phone: null,
-        isFromDatabase: false,
-        externalRecordId: "rec-dup",
-        externalSourceType: "macos",
-        collapsedSources: [
-          { sourceType: "macos", sourceRecordId: "rec-dup", externalUuid: null },
-          { sourceType: "macos", sourceRecordId: "rec-dup", externalUuid: null },
-        ],
-      },
-    ];
+  /**
+   * DELETED BY BACKLOG-2556 — "does not write a duplicate row when the
+   * representative repeats in the set".
+   *
+   * It fed `collapsedSources` a repeat of the representative and asserted that
+   * `toSourceIdentities`'s pair-dedup caught it, calling that dedup
+   * "load-bearing, not defensive". It WAS load-bearing, for exactly as long as
+   * `collapsedSources` existed. With the field deleted the only input is the
+   * row's own pair, so the `seen` set can no longer be handed a repeat and the
+   * test would pass while exercising nothing — the vacuous-green shape. Removed
+   * rather than re-pointed: there is no remaining input that can produce a
+   * duplicate for it to catch.
+   */
 
-    await importRows(rows);
-
-    expect(linkTriples(contactIdByName("Twice Listed"))).toEqual([
-      "macos/rec-dup/source_id",
-    ]);
-  });
-
+  /**
+   * RE-POINTED BY BACKLOG-2556. The GUARANTEE is unchanged and is still the
+   * point: identity is the `(source_type, source_record_id)` PAIR, so two
+   * sources that happen to issue the same id string do not collide.
+   *
+   * What changed is how the two records reach the crosswalk. The fold used to
+   * collapse them onto ONE row (same name, same address) and the import wrote
+   * both links against one contact. Now they are two rows and the user imports
+   * both, producing two contacts — and the pair-keying is still what stops the
+   * second `createLink` being rejected as a repeat of the first.
+   *
+   * Asserted across the whole table rather than per contact, because "both
+   * link" is now a statement about two contacts.
+   */
   it("keys identity on the PAIR, so two sources issuing the same id both link", async () => {
     mockShadowRows = [
       shadowRow("shared-id", "Twin Ids", "macos", ["twin@example.com"], []),
       shadowRow("shared-id", "Twin Ids", "outlook", ["twin@example.com"], []),
     ];
 
-    await importRows(await getAvailable());
+    const rows = await getAvailable();
+    expect(rows).toHaveLength(2);
+    await importRows(rows);
 
-    expect(linkTriples(contactIdByName("Twin Ids"))).toEqual([
-      "macos/shared-id/source_id",
-      "outlook/shared-id/source_id",
+    const links = mockDb!
+      .prepare(
+        "SELECT contact_id, source_type, source_record_id FROM contact_source_links WHERE user_id = ? ORDER BY source_type",
+      )
+      .all(USER) as Array<{ contact_id: string; source_type: string; source_record_id: string }>;
+    expect(links.map((l) => `${l.source_type}/${l.source_record_id}`)).toEqual([
+      "macos/shared-id",
+      "outlook/shared-id",
     ]);
+    expect(new Set(links.map((l) => l.contact_id)).size).toBe(2);
   });
 });
 
@@ -673,10 +740,12 @@ describe("BACKLOG-2462 L10 — the case the carry does NOT reach", () => {
 
     const rows = await getAvailable();
 
-    // Two rows, each carrying exactly its own identity.
+    // Two rows, each carrying exactly its own identity. BACKLOG-2556: read off
+    // the row's own `externalSourceType`/`externalRecordId` — `collapsedSources`
+    // was deleted with the fold, and it is now the ONLY identity a row has.
     expect(
-      rows.map((r) => r.collapsedSources.map((s: any) => `${s.sourceType}/${s.sourceRecordId}`)),
-    ).toEqual([["outlook/out-jane"], ["macos/mac-jane"]]);
+      rows.map((r: any) => `${r.externalSourceType}/${r.externalRecordId}`),
+    ).toEqual(["outlook/out-jane", "macos/mac-jane"]);
 
     await importRows(rows);
 
@@ -694,7 +763,7 @@ describe("BACKLOG-2462 L10 — the case the carry does NOT reach", () => {
     expect(new Set(links.map((l) => l.contact_id)).size).toBe(2);
   });
 
-  it("records nothing as carried when nothing was collapsed", async () => {
+  it("records no duplicate suppression, and no carry counter at all", async () => {
     mockShadowRows = [
       shadowRow("out-jane", "Jane Seller", "outlook", ["jane@realty.com"], []),
       shadowRow("mac-jane", "Jane Seller", "macos", [], ["(415) 555-0109"]),
@@ -703,7 +772,11 @@ describe("BACKLOG-2462 L10 — the case the carry does NOT reach", () => {
     await getAvailable();
 
     const picker = logLines.find((l) => l.message.includes("[Contacts] picker:"));
-    expect(picker?.message).toContain("dup-suppressed 0 (identity carried 0)");
+    // BACKLOG-2556: was "dup-suppressed 0 (identity carried 0)". The carry
+    // counter is now omitted rather than reported as zero, so the line does not
+    // imply a carry mechanism that no longer exists.
+    expect(picker?.message).toContain("dup-suppressed 0");
+    expect(picker?.message).not.toContain("identity carried");
   });
 });
 
@@ -801,7 +874,9 @@ describe("BACKLOG-2511 — an imported record is gone from the NEXT picker call"
     // import having claimed it.
     const picker = logLines.find((l) => l.message.includes("[Contacts] picker:"));
     expect(picker?.message).toContain("already-imported 1");
-    expect(picker?.message).toContain("dup-suppressed 0 (identity carried 0)");
+    // BACKLOG-2556: the carry parenthetical is gone with the fold.
+    expect(picker?.message).toContain("dup-suppressed 0");
+    expect(picker?.message).not.toContain("identity carried");
   });
 
   it("returns the SAME contact if the same record is imported twice — the stale row is now harmless", async () => {
@@ -1100,33 +1175,28 @@ describe("BACKLOG-2525 — importing the same source record twice is ONE contact
     expect(linkTriples(olegId)).toEqual(["macos/mac-oleg/source_id"]);
   });
 
-  it("holds a COLLAPSED row to one contact across three concurrent presses, keeping both identities", async () => {
+  it("holds ONE record to one contact across three concurrent presses [BACKLOG-2556]", async () => {
     /**
-     * A picker row can stand for several source records (BACKLOG-2458), so the
-     * guard must ask about EVERY identity the row carries and not just the
-     * representative. Three concurrent presses on a two-record row: one contact,
-     * owning both records.
+     * RE-POINTED BY BACKLOG-2556 — was "holds a COLLAPSED row to one contact
+     * across three concurrent presses, keeping both identities".
      *
-     * -----------------------------------------------------------------------
-     * A FIXTURE THAT HAD TO BE THROWN AWAY, RECORDED BECAUSE THE NEXT PERSON
-     * WILL REACH FOR IT TOO
-     * -----------------------------------------------------------------------
-     * This test first staged the "one identity claimed, one not" case: import
-     * Nita while only the Mac record existed, let Outlook's copy arrive, then
-     * import the now-collapsed row. It failed — TWO contacts — and the fixture
-     * was the reason, not the guard.
+     * The re-entry guard is what this test is FOR and it is unchanged: three
+     * overlapping presses on one row must produce one contact, because the
+     * `findContactIdBySourceRecord` read and the `createLink` write fall in one
+     * synchronous stretch with no `await` between them.
      *
-     * Once `mac-nita` is claimed, `contacts:get-available` SUPPRESSES it
-     * (`contactHandlers.ts:1695-1701`), so the second call does not return a
-     * collapsed row carrying both identities. It returns the Outlook record
-     * ALONE, as a new and genuinely unclaimed offer. There is no picker output
-     * in which one identity of a row is claimed and another is not, so the
-     * assertion was describing a state the code cannot emit.
+     * What changed is the fixture's premise. Two Nita Bramwell records sharing
+     * an address and a number used to arrive as ONE collapsed row carrying both
+     * identities, and this asserted that one contact ended up owning both. That
+     * grouping was the fold's guess, written down as two `source_id` rows. They
+     * are now two rows; pressing one of them three times claims exactly that
+     * one record, and the OTHER record stays unclaimed and importable.
      *
-     * Importing that Outlook row does create a second contact for the same
-     * person, and that is correctly NOT this defect: it is the cross-source
-     * duplicate that `runContactLinkingNow` queues for review (BACKLOG-2474).
-     * BACKLOG-2525 is about the SAME record pressed twice.
+     * The docblock this replaced recorded a fixture that had to be thrown away —
+     * "one identity claimed, one not" describes a state the picker cannot emit,
+     * because a claimed record is suppressed. That observation survives the
+     * deletion and is worth keeping: it is why the second record here is checked
+     * as ABSENT from the crosswalk rather than by re-reading the picker.
      */
     mockShadowRows = [
       shadowRow("mac-nita", "Nita Bramwell", "macos", ["nita.bramwell@example.test"], [
@@ -1137,25 +1207,31 @@ describe("BACKLOG-2525 — importing the same source record twice is ONE contact
       ]),
     ];
 
-    // The picker's own collapsing, not a hand-built payload.
-    const collapsed = await getAvailable();
-    expect(collapsed).toHaveLength(1);
-    expect(collapsed[0].collapsedSources.map((s: any) => s.sourceRecordId).sort()).toEqual([
+    // The picker's own output, not a hand-built payload. Two rows now.
+    const offered = await getAvailable();
+    expect(offered.map((r: any) => r.externalRecordId).sort()).toEqual([
       "mac-nita",
       "out-nita",
     ]);
 
+    const macOnly = offered.filter((r: any) => r.externalRecordId === "mac-nita");
+    expect(macOnly).toHaveLength(1);
+
     await Promise.all([
-      handlerImport(collapsed),
-      handlerImport(collapsed),
-      handlerImport(collapsed),
+      handlerImport(macOnly),
+      handlerImport(macOnly),
+      handlerImport(macOnly),
     ]);
 
     const ids = savedContactIds();
     expect(ids).toHaveLength(1);
-    expect(linkTriples(ids[0])).toEqual([
-      "macos/mac-nita/source_id",
-      "outlook/out-nita/source_id",
-    ]);
+    // EXACTLY the record pressed. `out-nita` is untouched — three presses on
+    // one card cannot claim a card the user never pressed.
+    expect(linkTriples(ids[0])).toEqual(["macos/mac-nita/source_id"]);
+    expect(
+      mockDb!
+        .prepare("SELECT COUNT(*) AS n FROM contact_source_links WHERE user_id = ?")
+        .get(USER),
+    ).toEqual({ n: 1 });
   });
 });

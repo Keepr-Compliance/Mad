@@ -40,7 +40,6 @@ import {
   scrollTopForAnchor,
   type ContactListAnchor,
 } from "../../utils/contactListAnchor";
-import { foldedRecordsFor } from "../../utils/contactCollapseDisclosure";
 import {
   SOURCE_GROUPS,
   ROLE_GROUPS,
@@ -1017,10 +1016,8 @@ export function ContactSearchList({
                 }
                 compact={compact}
                 showDetailLine={showDetailLine}
-                // BACKLOG-2459: the records the MAIN PROCESS folded into this
-                // row, which since BACKLOG-2370 is the only place a collapse is
-                // decided — and the only place one is stored.
-                collapsedRecords={foldedRecordsFor(contact)}
+                // BACKLOG-2556: `collapsedRecords` was passed here. The fold
+                // that produced them is deleted, so there is nothing to pass.
                 onSelect={() => handleRowSelect(contact, isExternal)}
                 onImport={() => handleImportButtonClick(contact)}
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}
