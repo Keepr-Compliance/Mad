@@ -404,6 +404,37 @@ export async function getIgnoredCommunicationsByUser(
 }
 
 /**
+ * BACKLOG-2571 — TRANSITION BRIDGE, NOT THE INTENDED DESIGN.
+ *
+ * Both matchers below identify a dismissed email by
+ * (scope, sender, subject, timestamp) with EXACT string equality on the
+ * timestamp. That timestamp is copied from an email row's `sent_at`
+ * (`transactionService.unlinkCommunication`), and BACKLOG-2571 changed what
+ * `sent_at` means: it used to be the RECEIVE time and is now the
+ * sender-asserted SEND time.
+ *
+ * So one `ignored_communications` table now holds keys written under two
+ * different semantics, and an equality match against a single value misses
+ * whichever half it was not handed. A miss here is not cosmetic: an email the
+ * founder explicitly dismissed COMES BACK on the next scan.
+ *
+ * `IN (?, ?)` lets a caller offer both candidate timestamps — an email's
+ * `sent_at` and its `received_at` — so a key written under either semantics
+ * still matches. A caller holding only one value passes it alone; the second
+ * placeholder then repeats it, which matches exactly what the single-value
+ * form used to do.
+ *
+ * The index `(user_id, email_sender, email_subject, email_sent_at)` still
+ * serves an `IN` on its trailing column, so this costs nothing at runtime.
+ *
+ * DO NOT BUILD ON THIS SHAPE. "Match either timestamp" is a bridge across a
+ * meaning change, not a design — a timestamp was always a weak key, and two
+ * weak keys are not stronger than one. The intended fix is to re-key
+ * `ignored_communications` on `message_id_header` / `email_id`, which identify
+ * a message rather than describing it. Filed as the follow-up to BACKLOG-2571.
+ */
+
+/**
  * Check if a communication is ignored for a transaction
  * Uses email sender, subject, and sent_at to identify the email
  */
@@ -412,13 +443,15 @@ export async function isEmailIgnoredForTransaction(
   emailSender: string,
   emailSubject: string,
   emailSentAt: string,
+  /** BACKLOG-2571: second candidate timestamp — see the bridge note above. */
+  emailAltSentAt?: string | null,
 ): Promise<boolean> {
   const sql = `
     SELECT id FROM ignored_communications
     WHERE transaction_id = ?
       AND email_sender = ?
       AND email_subject = ?
-      AND email_sent_at = ?
+      AND email_sent_at IN (?, ?)
     LIMIT 1
   `;
   const result = dbGet(sql, [
@@ -426,6 +459,7 @@ export async function isEmailIgnoredForTransaction(
     emailSender,
     emailSubject,
     emailSentAt,
+    emailAltSentAt ?? emailSentAt,
   ]);
   return !!result;
 }
@@ -439,16 +473,24 @@ export async function isEmailIgnoredByUser(
   emailSender: string,
   emailSubject: string,
   emailSentAt: string,
+  /** BACKLOG-2571: second candidate timestamp — see the bridge note above. */
+  emailAltSentAt?: string | null,
 ): Promise<boolean> {
   const sql = `
     SELECT id FROM ignored_communications
     WHERE user_id = ?
       AND email_sender = ?
       AND email_subject = ?
-      AND email_sent_at = ?
+      AND email_sent_at IN (?, ?)
     LIMIT 1
   `;
-  const result = dbGet(sql, [userId, emailSender, emailSubject, emailSentAt]);
+  const result = dbGet(sql, [
+    userId,
+    emailSender,
+    emailSubject,
+    emailSentAt,
+    emailAltSentAt ?? emailSentAt,
+  ]);
   return !!result;
 }
 

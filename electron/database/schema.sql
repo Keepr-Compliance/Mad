@@ -387,6 +387,18 @@ CREATE TABLE IF NOT EXISTS emails (
   references_header TEXT,              -- References header for threading
 
   -- Timestamps
+  -- BACKLOG-2571: sent_at is the SENDER-ASSERTED send time (Gmail `Date:`
+  -- header, Outlook `sentDateTime`); received_at is when the server took
+  -- delivery. They were the same value on every row until BACKLOG-2571, because
+  -- both derived from the provider's receive timestamp. A difference between
+  -- them is now meaningful — it is the send↔receive delta.
+  --
+  -- Rows written BEFORE that fix still hold a receive time in sent_at, and
+  -- nothing on disk distinguishes them: the send time was never stored (Outlook's
+  -- sentDateTime reached only the content hash; Gmail's `Date:` header was not
+  -- read at all), so there is nothing to backfill from. A provider re-sync
+  -- rewrites them; no marker column records the difference, by founder decision
+  -- 2026-08-09 — the only rows affected were one developer's test data.
   sent_at DATETIME,
   received_at DATETIME,
 

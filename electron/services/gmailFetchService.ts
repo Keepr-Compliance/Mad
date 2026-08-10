@@ -40,7 +40,21 @@ interface ParsedEmail {
   to: string | null;
   cc: string | null;
   bcc: string | null;
+  /**
+   * Gmail's `internalDate` — when Gmail RECEIVED the message.
+   *
+   * BACKLOG-2571: this is NOT the send time and must not be repointed at one.
+   * `emailSyncService`'s legacy-row matcher compares this against stored
+   * `sent_at` values that are themselves receive times, within ±2 seconds.
+   */
   date: Date;
+  /**
+   * BACKLOG-2571: the sender-asserted send time, from the RFC 5322 `Date:`
+   * header. This is what `emails.sent_at` now stores. Falls back to the receive
+   * time when the header is missing or unparseable — the fallback is the only
+   * way `sent_at` can still hold a receive time on a row written from here.
+   */
+  sentDate: Date;
   body: string;
   bodyPlain: string;
   snippet: string;
@@ -549,14 +563,56 @@ class GmailFetchService {
     // Extract fields for hash computation
     const subject = getHeader("Subject");
     const from = getHeader("From");
-    const sentDate = new Date(parseInt(message.internalDate || "0"));
+    /**
+     * Gmail's `internalDate` is when Gmail RECEIVED the message, not when the
+     * sender sent it. The name below says `receivedDate` for that reason — it
+     * was called `sentDate` until BACKLOG-2571, and that name is how the wrong
+     * value ended up in `emails.sent_at` in the first place.
+     */
+    const receivedDate = new Date(parseInt(message.internalDate || "0"));
     const bodyPlainForHash = bodyPlain || body;
 
-    // Compute content hash for deduplication fallback (TASK-918)
+    /**
+     * BACKLOG-2571 — the sender-asserted send time.
+     *
+     * The RFC 5322 `Date:` header is the only thing Gmail carries that states
+     * when the message was SENT. It costs nothing to read: messages are fetched
+     * `format: "full"` (see the list call), so the header array is already here,
+     * and `getHeader` already serves Subject/From/To/Cc/Bcc from it.
+     *
+     * It is also SENDER-ASSERTED, which means it can be absent, malformed, or
+     * wildly skewed by a broken client. `new Date("")` yields an Invalid Date
+     * whose `toISOString()` throws, so the guard is not defensive dressing — it
+     * is what stops one malformed header from discarding a whole email.
+     *
+     * When the header is unusable we fall back to the receive time. That
+     * fallback is not recorded anywhere: the marker column that would have said
+     * so was dropped by founder decision (2026-08-09) as cruft outliving its
+     * cause. A row that took the fallback is indistinguishable from one whose
+     * sender happened to stamp the send and receive times identically — which
+     * is the accepted cost, not an oversight.
+     */
+    const dateHeader = getHeader("Date");
+    const parsedSentDate = dateHeader ? new Date(dateHeader) : null;
+    const sentDateIsUsable =
+      parsedSentDate !== null && !Number.isNaN(parsedSentDate.getTime());
+    const sentDate = sentDateIsUsable ? parsedSentDate : receivedDate;
+
+    /**
+     * Compute content hash for deduplication fallback (TASK-918).
+     *
+     * DELIBERATELY STILL `receivedDate` (BACKLOG-2571). Before this task the
+     * variable feeding this argument was named `sentDate` and held
+     * `internalDate`; renaming it to `receivedDate` above would have silently
+     * changed every Gmail hash if this call had been left reading `sentDate`.
+     * Behaviour here is byte-for-byte unchanged on purpose — moving the hash
+     * onto the sender-asserted time is BACKLOG-2572, which lands separately so
+     * that a hash change is reviewed as a hash change.
+     */
     const contentHash = computeEmailHash({
       subject,
       from,
-      sentDate,
+      sentDate: receivedDate,
       bodyPlain: bodyPlainForHash,
     });
 
@@ -609,7 +665,22 @@ class GmailFetchService {
       to: toHeader,
       cc: ccHeader,
       bcc: bccHeader,
-      date: sentDate,
+      /**
+       * BACKLOG-2571: STILL the receive time, deliberately. `date` has four
+       * consumers in emailSyncService and two of them are the legacy-row
+       * matcher, which compares `candidate.date` against a legacy row's
+       * `sent_at` (itself a receive time) with a ±2 second tolerance.
+       * Repointing `date` at the send time would compare send-to-receive and
+       * the matcher would silently stop matching. The send time travels in
+       * `sentDate` below instead.
+       */
+      date: receivedDate,
+      /**
+       * BACKLOG-2571: the sender-asserted send time, and what now lands in
+       * `emails.sent_at`. Falls back to the receive time when the `Date:`
+       * header is missing or unparseable.
+       */
+      sentDate,
       body: body,
       bodyPlain: bodyPlainForHash,
       snippet: message.snippet || "",
@@ -624,9 +695,10 @@ class GmailFetchService {
       // no additional OAuth scope.
       inReplyTo: getHeader("In-Reply-To"),
       references: getHeader("References"),
-      // BACKLOG-2512: `sentDate` here is parsed from `message.internalDate`,
-      // which is Gmail's RECEIVE timestamp — the correct source for received_at.
-      receivedAt: sentDate,
+      // BACKLOG-2512: parsed from `message.internalDate`, which is Gmail's
+      // RECEIVE timestamp — the correct source for received_at. (BACKLOG-2571
+      // renamed the variable to `receivedDate`; the value is unchanged.)
+      receivedAt: receivedDate,
       // BACKLOG-2513: bulk-mail headers, captured HERE — before `parsed.raw` is
       // zeroed below. Built through the shared builder so Gmail and Graph
       // cannot drift in which headers are kept or what the JSON keys are named.
