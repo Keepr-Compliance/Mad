@@ -59,10 +59,14 @@ import { runUniqueNameAutoLink } from "../services/contactNameAutoLink";
 // nothing here needs the label; `contactLinkEvidence` still owns it for the
 // review queue, provenance and compare screens.
 import { buildEvidence } from "../services/contactLinkEvidence";
+// BACKLOG-2608: `getRejectedSourceKeys` is no longer imported here. It existed
+// to make a released record skip the CONTENT checks; those are deleted, so it
+// had nothing left to release it FROM. The verdict itself is untouched and is
+// still read where it decides an outcome — `hasCannotLink` in the linker, and
+// `contactCompare`.
 import {
   proposeLink,
   listVerdicts,
-  getRejectedSourceKeys,
   type LinkProposalReason,
 } from "../services/db/contactLinkReviewDbService";
 import {
@@ -105,8 +109,10 @@ import {
   validateString,
   sanitizeObject,
 } from "../utils/validation";
-import { toE164 } from "../utils/phoneNormalization";
-import { namesAreCompatible, normalizeContactName } from "../utils/contactNameCompat";
+// BACKLOG-2608: `toE164`, `namesAreCompatible` and `normalizeContactName` were
+// imported here for `emailClaimedByImported` / `phoneClaimedByImported` and
+// nothing else. Those are deleted, so the imports go with them — a helper kept
+// "in case" is how a deleted rule grows a second call site.
 import { contactInfoSourceFor } from "../utils/contactValueProvenance";
 import { applyLinkedSourceValues } from "../services/contactSourceValues";
 import {
@@ -1043,145 +1049,82 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           };
         }
 
-        // Get already imported contact identifiers to filter them out.
-        // BACKLOG-2316: only strong identifiers (email + normalized phone) are
-        // used to detect already-imported contacts — name-based matching was
-        // removed because it over-suppressed distinct same-named people.
-        // TASK-1956: Use async worker version to avoid blocking main process
-        const activeImported =
-          await databaseService.getImportedContactsByUserIdAsync(validatedUserId);
-
-        // BACKLOG-2365 — A REMOVED CONTACT IS STILL A CONTACT WE KNOW ABOUT.
-        //
-        // This filter decides what the picker OFFERS, by subtracting the people
-        // we already have. `getImportedContactsByUserIdAsync` now hides removed
-        // contacts, so unless they are added back here removal undoes itself
-        // through the import path: Madison deletes a duplicate, the next macOS
-        // sync runs, the contact no longer matches this filter, the picker
-        // offers her as though she were new, and re-importing her silently
-        // resurrects the contact she deleted.
-        //
-        // A tombstone means "we know about this person" — which is exactly the
-        // question this filter asks. So removed contacts are VISIBLE here and
-        // hidden from every list, which is the correct way round for both.
-        const removedContacts =
-          await databaseService.getRemovedContactIdentifiers(validatedUserId);
-        const importedContacts = [...activeImported, ...removedContacts];
-
         /**
          * =====================================================================
-         * AN EMAIL ADDRESS DOES NOT IDENTIFY A PERSON EITHER (BACKLOG-2531)
+         * BACKLOG-2608 — THE CONTENT FALLBACKS ARE GONE. THE CROSSWALK DECIDES.
          * =====================================================================
-         * This was a bare `Set<string>` of imported primary emails, and any
-         * candidate whose address appeared in it was declared already-imported
-         * with no further question asked.
+         * Between here and the crosswalk read below there used to be
+         * `importedEmailNames` / `emailClaimedByImported` and
+         * `importedPhoneNames` / `phoneClaimedByImported`: two maps from an
+         * identifier to the names of the saved contacts holding it, and two
+         * predicates that declared an address-book record ALREADY IMPORTED when
+         * a saved contact held its email or its phone under a compatible name.
          *
-         * That is the SAME defect BACKLOG-2416 fixed one line below for phone
-         * numbers — and the fix stopped at phones. A household address is
-         * shared exactly as an office line is: a married couple on one
-         * `home@`, an assistant's address recorded on their manager's card.
+         * THE CONTRADICTION THAT KILLED THEM (founder, 2026-08-09, clean
+         * database at `1590f890`):
          *
-         * WHAT IT COST. The second person was declared already-imported, so
-         * they never appeared in the picker, so they could never BE imported.
-         * Their correspondence then landed on the FIRST person's contact — and
-         * on a transaction under audit, that is one person's mail inside
-         * another person's compliance record. Silent: no error, just a contact
-         * with more history than they should have.
+         *   "If I only see them once in the clients list and all the rest are
+         *    hiding before I clicked confirm, that's an issue."
          *
-         * Now email -> the names of the imported contacts holding it, so the
-         * same name gate applies to both identifiers. ONE rule, not a strict
-         * one and a blind one.
+         * He imported ONE contact, Rosalind Vance. FOUR records were flagged as
+         * candidates and filed to the review queue, whose card reads
+         * "we could not tell — NOTHING CHANGES UNTIL YOU ANSWER". All four had
+         * already been removed from Clients & Contacts by these two predicates.
          *
-         * Note what this deliberately does NOT do: it does not stop suppressing
-         * a genuine duplicate. "Margaret C." is prefix-compatible with
-         * "Margaret Chen" and stays hidden. Sarah and Tom are not compatible,
-         * and Tom is offered. The gate distinguishes the two cases that a bare
-         * identifier match cannot.
+         * So the app was asking the user about records it refused to show him,
+         * and two surfaces were asserting opposite things about the same rows:
+         * the queue said it could not attribute them, the list had already
+         * concluded they were the same person. The card's promise was literally
+         * false — four rows vanished before he answered anything.
+         *
+         * WHY THE NARROW FIX WAS REJECTED. "Do not suppress a record that has a
+         * PENDING proposal" resolves the contradiction and fails the case the
+         * founder went straight to: you answer "not this person", the proposal
+         * is resolved so there is no longer a pending one, and the record
+         * disappears anyway — because these predicates never looked at
+         * questions, they looked at whether a saved contact held that email,
+         * which it still does.
+         *
+         *   Founder: "if I clicked not this person this contact shouldn't
+         *             disappear."
+         *
+         * THE RULE. `contact_source_links` decides what is already imported.
+         * That is knowledge — it is recorded, it is what the user decided, and
+         * it cannot disagree with the review queue because both read the same
+         * table. An identifier plus a compatible name is a guess, it was never
+         * disclosed, and it could not be undone.
+         *
+         * It also satisfies the tier rule directly (BACKLOG-2556, "do nothing
+         * to Dana"): on the basic tier the app does no consolidation at all,
+         * and these fallbacks were consolidation.
+         *
+         * WHAT THIS COSTS, STATED RATHER THAN DISCOVERED. The picker gets
+         * longer, exactly as the fold deletion made it longer. A saved contact
+         * that has no crosswalk row — imported before BACKLOG-2401 shipped, or
+         * created by hand — no longer suppresses the address-book record it
+         * came from, so that record is offered again. The crosswalk converges
+         * through the linker (`id-matched` writes rows; a content resemblance
+         * now files a QUESTION rather than a silent link), and until it does,
+         * the failure mode is a row the user declines rather than a person who
+         * cannot be imported at all. That asymmetry is the whole argument.
+         *
+         * `getImportedContactsByUserIdAsync` and `getRemovedContactIdentifiers`
+         * were read here to BUILD those two maps and for nothing else, so both
+         * reads are deleted with them. BACKLOG-2365's protection survives, and
+         * survives better: `getLinkedSourceKeys` does not filter tombstoned
+         * contacts, so a removed contact keeps its claims and its source
+         * records stay suppressed. Removal still cannot undo itself through the
+         * import path — now on the strength of a recorded link rather than a
+         * resemblance. Asserted in the suite, not assumed here.
          */
-        const importedEmailNames = new Map<string, Set<string>>();
-        for (const ic of importedContacts) {
-          const email = ic.email?.toLowerCase();
-          if (!email) continue;
-          let names = importedEmailNames.get(email);
-          if (!names) {
-            names = new Set<string>();
-            importedEmailNames.set(email, names);
-          }
-          names.add(normalizeContactName(ic.name || ic.display_name));
-        }
-
-        /**
-         * Does an already-imported contact plausibly OWN this email address?
-         *
-         * A shared address alone is not ownership. An imported contact must
-         * also carry a name this candidate could belong to. Mirrors
-         * `phoneClaimedByImported` below — deliberately the same shape, because
-         * two shapes is how the two rules drifted apart in the first place.
-         */
-        function emailClaimedByImported(
-          email: string,
-          candidateName: string | null | undefined,
-        ): boolean {
-          const names = importedEmailNames.get(email);
-          if (!names) return false;
-          for (const importedName of names) {
-            if (namesAreCompatible(candidateName, importedName)) return true;
-          }
-          return false;
-        }
-
-        // BACKLOG-2416 — A PHONE NUMBER DOES NOT IDENTIFY A PERSON.
-        //
-        // This used to be a bare `Set<string>` of normalized phones, and a
-        // candidate whose number appeared in it was declared already-imported
-        // with no further question asked. That is the rule the backend's own
-        // `isDuplicate` (below) had already rejected: it requires
-        // `namesAreCompatible` before a shared phone may collapse two records,
-        // precisely because household and office lines are shared by distinct
-        // people. Two layers, two answers to "are these the same person?".
-        //
-        // It is now phone -> the names of the imported contacts holding it, so
-        // the same name gate applies. Margaret Chen and Margaret Torres on one
-        // brokerage line stop hiding each other.
-        const importedPhoneNames = new Map<string, Set<string>>();
-        for (const ic of importedContacts) {
-          if (!ic.phone) continue;
-          const normalized = toE164(ic.phone);
-          if (!normalized || normalized === "+") continue;
-          let names = importedPhoneNames.get(normalized);
-          if (!names) {
-            names = new Set<string>();
-            importedPhoneNames.set(normalized, names);
-          }
-          names.add(normalizeContactName(ic.name || ic.display_name));
-        }
-
-        /**
-         * Does an already-imported contact plausibly OWN this phone number?
-         *
-         * A shared line alone is not ownership. An imported contact must also
-         * carry a name this candidate could belong to.
-         */
-        function phoneClaimedByImported(
-          normalizedPhone: string,
-          candidateName: string | null | undefined,
-        ): boolean {
-          const names = importedPhoneNames.get(normalizedPhone);
-          if (!names) return false;
-          for (const importedName of names) {
-            if (namesAreCompatible(candidateName, importedName)) return true;
-          }
-          return false;
-        }
 
         // BACKLOG-2401: the AUTHORITATIVE already-imported test — every
         // (source_type, source_record_id) pair already claimed by a saved
         // contact.
         //
-        // This is checked BEFORE the email/phone sets below, and it is what
-        // makes a renamed contact stop reappearing in this picker as a new
-        // person: identity is the record, not the display name and not the
-        // current contents of the record.
+        // It is what makes a renamed contact stop reappearing in this picker as
+        // a new person: identity is the record, not the display name and not
+        // the current contents of the record.
         //
         // It must match on ANY of a contact's crosswalk rows, not just one —
         // otherwise a person present in macOS AND Outlook re-offers themselves
@@ -1189,72 +1132,62 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // PAIR, two sources that happen to issue the same id string cannot
         // suppress each other.
         //
-        // The email/phone sets are KEPT as the fallback for contacts that have
-        // no crosswalk row yet (imported before this shipped, or manually
-        // created). Nothing regresses while the crosswalk converges.
+        // BACKLOG-2608: IT IS NOW THE ONLY TEST, not the first of three. The
+        // email/phone content fallbacks that used to follow it are deleted —
+        // see the long note above.
         //
-        // DEGRADES, NEVER FAILS. The crosswalk sharpens this filter; it is not
-        // required to run it. If the read fails, fall back to the email/phone
-        // sets — precisely the behaviour that shipped before this table existed
-        // — rather than failing the whole picker and leaving the user unable to
-        // import anyone at all. Logged, so a persistent failure is visible
-        // rather than merely quiet.
+        // DEGRADES TOWARDS SHOWING, AND THAT NOW COSTS MORE THAN IT DID. If the
+        // read throws, the empty set means nothing is suppressed and every
+        // already-imported record is offered again. Before this change the
+        // content fallbacks caught most of them, so the degrade was nearly
+        // invisible; it is not any more. The DIRECTION is still right — a
+        // picker that cannot read the crosswalk must over-offer rather than
+        // lock the user out of importing anyone — but a failure whose only
+        // symptom is a duplicated list needs to be findable, so it gets a
+        // breadcrumb and not just a line in a log nobody reads. The 2608
+        // investigation named this exact catch as the best fit for "a symptom
+        // that comes and goes"; it is now instrumented rather than inferred.
         let linkedSourceKeys: Set<string>;
         try {
           linkedSourceKeys = getLinkedSourceKeys(validatedUserId);
         } catch (error) {
+          Sentry.addBreadcrumb({
+            category: "contacts",
+            message:
+              "Crosswalk lookup failed; every already-imported record will be offered again in the picker",
+            level: "error",
+            data: {
+              backlog: "BACKLOG-2608",
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
           logService.warn(
-            `[Contacts] source-link lookup unavailable, falling back to email/phone matching: ${error}`,
+            `[Contacts] source-link lookup unavailable; already-imported records will be offered again: ${error}`,
             "Contacts",
           );
           linkedSourceKeys = new Set<string>();
         }
 
-        // BACKLOG-2427 — RECORDS THE USER HAS EXPLICITLY RELEASED.
+        // BACKLOG-2427 / BACKLOG-2608 — THE VERDICT READ IS GONE FROM HERE, AND
+        // "NOT THIS PERSON" IS HONOURED BY DEFAULT INSTEAD OF BY EXCEPTION.
         //
-        // "Not this person" deletes the crosswalk row and records a
-        // `different_people` verdict. Without this read the released record
-        // promptly disappeared instead of becoming importable: it still shares
-        // the contact's phone (that is WHY it was wrongly linked, and the phone
-        // may legitimately live on a source that is still linked), so the
-        // content checks below re-classified it as already-imported. The user
-        // was left unable to undo the merge, unable to import the other person
-        // separately, and still had the rejected address in their audit.
+        // `getRejectedSourceKeys` was read here to let a released record SKIP
+        // the content checks. It never suppressed anything; it exempted. With
+        // the content checks deleted there is nothing to exempt it from — a
+        // released record has no crosswalk row for the contact that rejected
+        // it, so the one remaining test does not hide it and it is offered.
         //
-        // The user's own answer outranks a content resemblance. Checked only
-        // AFTER the crosswalk check below, so a record rejected from contact A
-        // but legitimately linked to contact B stays suppressed.
+        // This is strictly stronger than what it replaced. The exemption was a
+        // second mechanism that had to keep working for the user's answer to
+        // stand, and its own catch block degraded to an empty set — i.e. a
+        // failed verdict read silently turned "not this person" back into a
+        // one-way disappearance. That failure mode no longer exists, because
+        // the answer is honoured by the absence of a rule rather than by an
+        // extra one.
         //
-        // DEGRADES, NEVER FAILS — same contract as the crosswalk read above. An
-        // empty set is the pre-BACKLOG-2427 behaviour, not a broken picker.
-        let rejectedSourceKeys: Set<string>;
-        try {
-          rejectedSourceKeys = getRejectedSourceKeys(validatedUserId);
-        } catch (error) {
-          // A BREADCRUMB, NOT JUST A WARNING (SR review, PR #2186).
-          //
-          // The verdict is now the SOLE mechanism that returns a released
-          // record to this picker — the removal cannot do it, because the
-          // stranding phone legitimately survives on a still-linked source.
-          // So this catch firing reproduces the founder's original bug exactly:
-          // "Not this person" silently becomes a one-way disappearance. A
-          // warning in a log file nobody reads is not enough for a failure
-          // whose only symptom is a record that quietly is not there.
-          Sentry.addBreadcrumb({
-            category: "contacts",
-            message: "Verdict lookup failed; released source records will stay hidden in the picker",
-            level: "error",
-            data: {
-              backlog: "BACKLOG-2427",
-              error: error instanceof Error ? error.message : String(error),
-            },
-          });
-          logService.warn(
-            `[Contacts] verdict lookup unavailable; released source records may stay hidden: ${error}`,
-            "Contacts",
-          );
-          rejectedSourceKeys = new Set<string>();
-        }
+        // The verdict itself is untouched and still decides outcomes where it
+        // must: `hasCannotLink` stops the linker re-proposing an answered pair,
+        // and `contactCompare` reads the same window.
 
         // TASK-1950: Check contact source preferences
         const macosEnabled = await isContactSourceEnabled(validatedUserId, "direct", "macosContacts", true);
@@ -1398,36 +1331,16 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         );
 
         for (const dbContact of unimportedDbContacts) {
-          // Skip if already imported. BACKLOG-2316: match ONLY on strong
-          // identifiers (email / normalized phone). Name matching was removed —
-          // it hid a distinct unimported contact whenever ANY already-imported
-          // contact shared the same name string (e.g. a second "Margaret").
-          const dbEmailLower = dbContact.email?.toLowerCase();
-          if (
-            dbEmailLower &&
-            emailClaimedByImported(dbEmailLower, dbContact.name || dbContact.display_name)
-          ) {
-            alreadyImportedCount++;
-            continue;
-          }
-          if (dbContact.phone) {
-            // BACKLOG-2416: a shared line is not proof of the same person — the
-            // holder's name must be compatible too.
-            const normalizedPhone = toE164(dbContact.phone);
-            if (
-              normalizedPhone &&
-              normalizedPhone !== "+" &&
-              phoneClaimedByImported(normalizedPhone, dbContact.name || dbContact.display_name)
-            ) {
-              alreadyImportedCount++;
-              continue;
-            }
-          }
-
-          // BACKLOG-2556: `findDuplicateOwner` used to run here and fold this
-          // row into an earlier one on a shared email, or a shared phone with a
-          // compatible name. It is deleted. A legacy local row that resembles
-          // another row is still its own row.
+          // BACKLOG-2608: `emailClaimedByImported` / `phoneClaimedByImported`
+          // ran here and dropped this row when a saved contact held its address
+          // or its number under a compatible name. Both are deleted — see the
+          // note at their former definition. These legacy rows have no
+          // `(source_type, source_record_id)` pair at all, so the crosswalk
+          // check below cannot speak to them either way; a legacy local row is
+          // now always its own row.
+          //
+          // BACKLOG-2556: `findDuplicateOwner` also used to run here and fold
+          // this row into an earlier one. Also deleted.
 
           // Query actual emails/phones from contact_emails/contact_phones tables
           // (BACKLOG-1270: was hardcoded as [] which dropped all email data)
@@ -1726,56 +1639,22 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
             continue;
           }
 
-          // BACKLOG-2427: the user has said, in as many words, that this record
-          // is NOT the contact it resembles. The content checks below ask
-          // whether it resembles one — a question already answered. Skipping
-          // them is what makes "Not this person" recoverable instead of a
-          // one-way disappearance.
+          // BACKLOG-2608: THE CONTENT CHECKS RAN HERE AND THIS IS WHERE THE
+          // FOUR RECORDS THE APP WAS ASKING ABOUT DISAPPEARED.
           //
-          // Safe to place after the crosswalk check and before the content
-          // checks: a released record has no crosswalk row for the contact that
-          // rejected it, and if some OTHER contact legitimately claims it the
-          // crosswalk check above has already suppressed it.
-          const releasedByUser =
-            !!extContact.external_record_id &&
-            rejectedSourceKeys.has(sourceKey(extContact.source, extContact.external_record_id));
-
-          const primaryEmail = extContact.emails?.[0]?.toLowerCase();
-
-          // Skip if already imported. BACKLOG-2316: match ONLY on strong
-          // identifiers (email here, phone below) — never on name alone, which
-          // suppressed distinct external contacts that shared a name with an
-          // already-imported contact.
-          if (
-            !releasedByUser &&
-            primaryEmail &&
-            emailClaimedByImported(primaryEmail, extContact.name)
-          ) {
-            alreadyImportedCount++;
-            continue;
-          }
-
-          // Check if already imported by phone. BACKLOG-2416: the number alone
-          // never decides it — an imported contact holding it must also have a
-          // compatible name.
-          if (!releasedByUser && extContact.phones && extContact.phones.length > 0) {
-            let phoneAlreadyImported = false;
-            for (const phone of extContact.phones) {
-              const normalized = toE164(phone);
-              if (
-                normalized &&
-                normalized !== "+" &&
-                phoneClaimedByImported(normalized, extContact.name)
-              ) {
-                phoneAlreadyImported = true;
-                break;
-              }
-            }
-            if (phoneAlreadyImported) {
-              alreadyImportedCount++;
-              continue;
-            }
-          }
+          // `emailClaimedByImported(primaryEmail, extContact.name)` and the
+          // per-phone `phoneClaimedByImported` loop, each with its own
+          // `alreadyImportedCount++; continue;`. On the founder's clean
+          // database, importing Rosalind Vance made THREE records count as
+          // already-imported: Rosalind herself, by the crosswalk check above,
+          // and two more down these two `continue`s — with nothing attaching
+          // them to anything, while the review queue was asking him about them.
+          //
+          // Both are deleted, along with the `releasedByUser` exemption whose
+          // only job was to steer a rejected record PAST them. Every record the
+          // shadow table holds that no contact claims now reaches the array
+          // below, whether it has been asked about, answered, or never
+          // mentioned.
 
           // BACKLOG-2556: `findDuplicateOwner` ran here and this is the
           // `continue` the founder's Elena Marsh-Okonkwo and the second Tobias

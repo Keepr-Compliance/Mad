@@ -160,6 +160,26 @@ jest.mock("../services/db/externalContactDbService", () => ({
   getContactSourceStats: jest.fn().mockReturnValue({ macos: 0, iphone: 0, outlook: 0 }),
 }));
 
+/**
+ * BACKLOG-2608 — THE PICKER'S ONLY ALREADY-IMPORTED TEST IS THE CROSSWALK, so
+ * this suite has to be able to state one.
+ *
+ * The email/phone content fallbacks are deleted, so a fixture can no longer
+ * express "this record is already imported" by giving it a saved contact's
+ * address. It expresses it the way the app now does: a
+ * `contact_source_links` row for the (source_type, source_record_id) PAIR.
+ *
+ * `sourceKey` is deliberately the REAL one — the set the handler consults and
+ * the set a test seeds must be keyed by the same function, or a fixture can
+ * claim a link the handler cannot see.
+ */
+let mockLinkedSourceKeys = new Set<string>();
+
+jest.mock("../services/db/contactSourceLinkDbService", () => ({
+  ...jest.requireActual("../services/db/contactSourceLinkDbService"),
+  getLinkedSourceKeys: jest.fn(() => mockLinkedSourceKeys),
+}));
+
 // Mock contactDbService functions used by the handler (BACKLOG-1270)
 jest.mock("../services/db/contactDbService", () => ({
   ...jest.requireActual("../services/db/contactDbService"),
@@ -169,6 +189,9 @@ jest.mock("../services/db/contactDbService", () => ({
 
 // Import after mocks are set up
 import { registerContactHandlers } from "../handlers/contactHandlers";
+// BACKLOG-2608: the REAL key builder, so a seeded claim and the handler's lookup
+// cannot be keyed differently.
+import { sourceKey } from "../services/db/contactSourceLinkDbService";
 import databaseService from "../services/databaseService";
 import { getContactNames } from "../services/contactsService";
 import type {
@@ -358,6 +381,8 @@ describe("Contact Handlers", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     resetExternalContactsMock();
+    // BACKLOG-2608: nothing is claimed unless a case says so.
+    mockLinkedSourceKeys = new Set<string>();
     // TASK-1950: Default all sources to enabled
     mockIsContactSourceEnabled.mockResolvedValue(true);
   });
@@ -532,7 +557,10 @@ describe("Contact Handlers", () => {
           emails: ["john@example.com"],
           company: null,
           last_message_at: null,
-          macos_record_id: "record-1",
+          // BACKLOG-2608: the shadow table always carries a source identity, and
+          // it is what the already-imported test now reads.
+          external_record_id: "record-1",
+          source: "macos",
           synced_at: new Date().toISOString(),
         },
         {
@@ -543,7 +571,8 @@ describe("Contact Handlers", () => {
           emails: ["jane@example.com"],
           company: null,
           last_message_at: null,
-          macos_record_id: "record-2",
+          external_record_id: "record-2",
+          source: "macos",
           synced_at: new Date().toISOString(),
         },
       ]);
@@ -552,6 +581,10 @@ describe("Contact Handlers", () => {
       mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
         { name: "John Doe", email: "john@example.com" } as Contact,
       ]);
+      // BACKLOG-2608: John's card is imported because the CROSSWALK says the
+      // user imported that exact record. It used to be "because a saved contact
+      // shares his address", which is a resemblance and is no longer enough.
+      mockLinkedSourceKeys = new Set([sourceKey("macos", "record-1")]);
 
       const handler = registeredHandlers.get("contacts:get-available");
       const result = await handler(mockEvent, TEST_USER_ID);
@@ -1280,11 +1313,19 @@ describe("Contact Handlers", () => {
        * A corpus with one drop of each kind, so every counter is non-zero and
        * a counter wired to the wrong branch cannot hide behind a zero:
        *   - db-keep          : shown
-       *   - db-imported      : already-imported (phone matches an imported row)
+       *   - db-imported      : SHOWN since BACKLOG-2608 — see below
        *   - ext-keep         : shown
        *   - ext-dup-of-db    : duplicate (shares db-keep's email)
        *   - ext-outlook-off  : source disabled (outlook switched off)
-       *   - ext-imported     : already-imported (email matches an imported row)
+       *   - ext-imported     : already-imported (the crosswalk claims the record)
+       *
+       * BACKLOG-2608 — `db-imported` MOVED, and the move is the finding, not a
+       * fixture repair. It is a legacy row in the local `contacts` table with no
+       * `(source_type, source_record_id)` pair of any kind, so there is nothing
+       * the crosswalk can say about it and it can never again be called
+       * already-imported. It was being dropped because a saved contact shared
+       * its phone under a compatible name. `ext-imported` carries the
+       * already-imported case now, on a real claim.
        *
        * BACKLOG-2416: `db-imported` carries the NAME of the imported contact it
        * is meant to duplicate. A shared phone alone no longer proves two records
@@ -1333,6 +1374,9 @@ describe("Contact Handlers", () => {
             // that spelling would be OFFERED, which is the fix, not a break.
             id: "ext-imported", user_id: TEST_USER_ID, name: "Imported One",
             phones: ["+15554440000"], emails: ["already@example.com"],
+            // BACKLOG-2608: an identity, because the crosswalk is now the only
+            // thing that can call a record already-imported.
+            external_record_id: "rec-ext-imported", external_uuid: null,
             source: "macos", company: null, last_message_at: null,
             synced_at: new Date().toISOString(),
           },
@@ -1345,6 +1389,7 @@ describe("Contact Handlers", () => {
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
           { id: "imp-1", name: "Imported One", email: "already@example.com", phone: "+15559990000" } as Contact,
         ]);
+        mockLinkedSourceKeys = new Set([sourceKey("macos", "rec-ext-imported")]);
 
         // Outlook switched OFF, everything else on.
         mockIsContactSourceEnabled.mockImplementation(
@@ -1366,7 +1411,11 @@ describe("Contact Handlers", () => {
         expect(picker!.externalRowsIn).toBe(4);
         expect(picker!.rowsIn).toBe(6);
         expect(picker!.sourceDisabled).toBe(1);      // ext-outlook-off
-        expect(picker!.alreadyImported).toBe(2);     // db-imported (phone), ext-imported (email)
+        // BACKLOG-2608: was 2 — `db-imported` (a legacy local row with no source
+        // identity) was dropped on a shared phone plus a compatible name. Only
+        // `ext-imported` remains, and it is dropped because the crosswalk claims
+        // its record.
+        expect(picker!.alreadyImported).toBe(1);
         // BACKLOG-2556: was 1 (ext-dup-of-db folded into db-keep on a shared
         // address). The fold is deleted, so this drop reason is structurally
         // zero — nothing else in the handler suppresses a row as a duplicate.
@@ -1376,7 +1425,7 @@ describe("Contact Handlers", () => {
         // ...and `collapsedIdentitiesCarried` is omitted entirely rather than
         // reported as 0, so no line claims a carry mechanism that is gone.
         expect(picker!.collapsedIdentitiesCarried).toBeUndefined();
-        expect(picker!.shown).toBe(3);
+        expect(picker!.shown).toBe(4); // BACKLOG-2608: was 3, `db-imported` joined
 
         // The funnel is only trustworthy if it balances.
         expect(
@@ -1394,7 +1443,10 @@ describe("Contact Handlers", () => {
         // db-keep and keeping ext-dup-of-db, which would be the wrong rows.
         // BACKLOG-2556: `ext-dup-of-db` is the third — it shared an address and
         // a name with the legacy `db-keep` row and used to be folded into it.
+        // BACKLOG-2608: `db-imported` is the fourth — a legacy local row that
+        // no crosswalk row can speak for, previously dropped on a shared phone.
         expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual([
+          "db-imported",
           "db-keep",
           "ext-dup-of-db",
           "ext-keep",
@@ -1411,7 +1463,7 @@ describe("Contact Handlers", () => {
         expect(pickerLines).toHaveLength(1);
         expect(pickerLines[0]).toBe(
           "[Contacts] picker: 6 in (db 2 + external 4) -> source-disabled 1" +
-            " -> already-imported 2 -> dup-suppressed 0 -> shown 3",
+            " -> already-imported 1 -> dup-suppressed 0 -> shown 4",
         );
       });
 
@@ -2577,7 +2629,9 @@ describe("Contact Handlers", () => {
             synced_at: new Date().toISOString(),
           },
           {
-            // Already imported: email matches the imported contact below.
+            // Already imported. BACKLOG-2608: because the CROSSWALK claims the
+            // record (seeded below), not because its email matches the saved
+            // contact — a resemblance no longer suppresses anything.
             id: "ext-imported", user_id: TEST_USER_ID, name: "Imported Person",
             phones: ["+15555550117"], emails: ["imported@example.com"],
             external_record_id: "rec-imported", external_uuid: null,
@@ -2600,6 +2654,7 @@ describe("Contact Handlers", () => {
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
           { id: "imp-1", name: "Imported Person", email: "imported@example.com", phone: "+15555550117" } as Contact,
         ]);
+        mockLinkedSourceKeys = new Set([sourceKey("android_sync", "rec-imported")]);
 
         const result = await getAvailable();
         expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual([

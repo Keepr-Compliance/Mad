@@ -39,40 +39,38 @@
  * Electron build and cannot load under it.
  *
  * ===========================================================================
- * STATUS — HALF THE SPECIFICATION HAS LANDED (BACKLOG-2556, 2026-08-09)
+ * STATUS — THE SPECIFICATION IS COMPLETE (BACKLOG-2608, 2026-08-09)
  * ===========================================================================
- * The deletion named above is TWO deletions, and only the first has shipped.
+ * The deletion named above was TWO deletions and they shipped separately.
  *
- *   SHIPPED — THE FOLD. `findDuplicateOwner` and both its call sites, the
+ *   BACKLOG-2556 — THE FOLD. `findDuplicateOwner` and both its call sites, the
  *   `absorbedRecords` / `collapsedSources` payload they produced, and the
  *   purple "N records combined" disclosure that drew it. This is the pass that
  *   folded two UNIMPORTED records into one row.
  *
- *   NOT SHIPPED — THE CONTENT FALLBACKS. `emailClaimedByImported` /
- *   `phoneClaimedByImported`, which decide that an unimported record is
- *   ALREADY SAVED because a saved contact shares its address or number under a
- *   compatible name. They are the same class of guess and they are owned by
- *   BACKLOG-2608, which replaces them with a crosswalk-based check rather than
- *   deleting them blind — they are currently the only thing stopping contacts
- *   imported before the crosswalk existed from appearing twice.
+ *   BACKLOG-2608 — THE CONTENT FALLBACKS. `emailClaimedByImported` /
+ *   `phoneClaimedByImported`, which decided that an unimported record was
+ *   ALREADY SAVED because a saved contact shared its address or number under a
+ *   compatible name. The same class of guess, and now also gone: the crosswalk
+ *   is the only already-imported test.
  *
- * SO THE THREE `it.failing` CASES DID NOT ALL FLIP TOGETHER, and which one did
- * is itself the measurement:
+ * THE THREE `it.failing` CASES DID NOT FLIP TOGETHER, and which one moved when
+ * is itself the measurement — the discriminating evidence that the fold and the
+ * fallbacks were separate mechanisms rather than one rule described twice:
  *
- *   FLIPPED TO `it` BY THE FOLD DELETION
+ *   FLIPPED BY THE FOLD DELETION (BACKLOG-2556)
  *     - two unclaimed records sharing an email, neither absorbing the other
  *       (BOTH records are unimported — only the fold could have hidden one)
  *
- *   STILL `it.failing`, NOW POINTED AT BACKLOG-2608
+ *   FLIPPED BY THE FALLBACK DELETION (BACKLOG-2608)
  *     - same name, same number, no crosswalk row: the card is still offered
  *     - claiming one record does not suppress a different unclaimed one
- *       (in BOTH, a SAVED contact holds the identifier, so the drop happens in
+ *       (in BOTH, a SAVED contact holds the identifier, so the drop happened in
  *       `phoneClaimedByImported` before the fold was ever reached)
  *
- * That split is the discriminating evidence that the fold and the fallbacks are
- * separate mechanisms rather than one rule described twice: deleting the fold
- * moved exactly one of the three, and the two it did not move are the two whose
- * fixtures contain a saved contact.
+ * Deleting the fold moved exactly one of the three; the two it did not move are
+ * the two whose fixtures contain a saved contact, and the fallback deletion
+ * moved exactly those two.
  *
  *   LIVE (passing throughout, kept as PINS)
  *     - two people sharing an email are two rows
@@ -363,19 +361,19 @@ describe("a shared phone is not evidence of one person (BACKLOG-2556)", () => {
    *
    * This is the founder's Casey Lane shape with no link present.
    *
-   * STILL `it.failing` AFTER BACKLOG-2556, AND POINTED AT BACKLOG-2608.
+   * FLIPPED FROM `it.failing` TO `it` BY BACKLOG-2608, 2026-08-09.
    *
    * Measured, not assumed: `c-casey` is a SAVED contact holding
-   * `+14085550101`, so `phoneClaimedByImported` drops the Outlook card at
+   * `+14085550101`, so `phoneClaimedByImported` dropped the Outlook card at
    * `contacts:get-available` before the fold was ever consulted. Deleting the
-   * fold does not and cannot move this case — which is why the fold deletion
+   * fold did not and could not move this case — which is why the fold deletion
    * flipped exactly one of the three `it.failing` cases and not three.
    *
-   * The runner still asserts the red. BACKLOG-2608 replaces the content
-   * fallbacks with a crosswalk check and cannot merge without flipping this
-   * to `it`.
+   * OBSERVED RED, 2026-08-09: restoring `phoneClaimedByImported` and its
+   * external-loop call site turns this back to
+   * `Expected ["Casey Lane"] / Received []`.
    */
-  it.failing("same name, same number, no crosswalk row: the card is still offered", async () => {
+  it("same name, same number, no crosswalk row: the card is still offered", async () => {
     mockImportedContacts = [
       importedContact("c-casey", "Casey Lane", "+14085550101", null),
     ];
@@ -426,8 +424,8 @@ describe("the knowledge half survives untouched (BACKLOG-2556)", () => {
    * And the claim is per-RECORD, not per-person: claiming the Outlook card does
    * not suppress an unclaimed macOS card that happens to share details.
    *
-   * STILL `it.failing` AFTER BACKLOG-2556, AND POINTED AT BACKLOG-2608: `c-casey`
-   * is a SAVED contact holding the number, so `phoneClaimedByImported` takes
+   * FLIPPED FROM `it.failing` TO `it` BY BACKLOG-2608, 2026-08-09: `c-casey`
+   * is a SAVED contact holding the number, so `phoneClaimedByImported` took
    * `mac-casey` before the fold could have.
    *
    * MEASURED PRECISELY, because the first measurement was not precise enough
@@ -439,7 +437,7 @@ describe("the knowledge half survives untouched (BACKLOG-2556)", () => {
    * do with it. Reading only the first assertion is what let a wrong field name
    * through; both are stated here so the next reader does not repeat it.
    */
-  it.failing("claiming one record does not suppress a different unclaimed one", async () => {
+  it("claiming one record does not suppress a different unclaimed one", async () => {
     seedContactRow("c-casey", "Casey Lane");
     createLink({
       userId: USER,
