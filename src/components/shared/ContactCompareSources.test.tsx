@@ -483,7 +483,7 @@ const candidateColumnId = (c: { sourceType: string; sourceRecordId: string }): s
  * and the real driver: one `kind: "proposed"` column per candidate, in the
  * caller's order, keyed `proposed:<type>:<record>` and carrying `proposalId`.
  */
-function makeFourCandidateView(count = CANDIDATES.length): ContactCompareView {
+function makeFourCandidateView(count: number = CANDIDATES.length): ContactCompareView {
   const base = makeView();
   return {
     ...base,
@@ -509,6 +509,7 @@ function makeFourCandidateView(count = CANDIDATES.length): ContactCompareView {
 
 async function renderQueueRoute(
   view: ContactCompareView = makeFourCandidateView(),
+  extraProps: Partial<React.ComponentProps<typeof ContactCompareSources>> = {},
 ) {
   const getCompareColumns = jest.fn().mockResolvedValue({ success: true, view });
   const confirmLink = jest.fn().mockResolvedValue({ success: true, linked: true });
@@ -534,6 +535,7 @@ async function renderQueueRoute(
         proposalId: c.proposalId,
       }))}
       {...handlers}
+      {...extraProps}
     />,
   );
   await waitFor(() => expect(screen.queryByTestId("compare-loading")).toBeNull());
@@ -571,23 +573,43 @@ describe("BACKLOG-2502 R5 — every candidate is answered on its own column", ()
     expect(onCandidateSame).not.toHaveBeenCalled();
   });
 
-  it("puts no candidate control on the contact's column or on a linked record", async () => {
-    const view = makeFourCandidateView();
+  /**
+   * THE TWO PER-COLUMN CONTROLS ON ONE SCREEN, WHICH IS WHERE THEY COULD
+   * CONTAMINATE EACH OTHER.
+   *
+   * Both handlers are passed here — the mixed case a contact with a linked
+   * record AND an open question produces. Each column must offer the one act
+   * that applies to it: an existing link can be detached, a proposal can only be
+   * answered, and the contact can be neither.
+   */
+  it("gives each KIND of column its own act, and no other", async () => {
+    const view = makeFourCandidateView(1);
     view.columns.splice(1, 0, makeView().columns[1]); // a linked Outlook record
-    await renderQueueRoute(view);
+    await renderQueueRoute(view, { onUnlinkSource: jest.fn() });
 
-    // CONTROL: gate the block on `onCandidateDifferent` alone rather than on
+    const contact = within(screen.getByTestId(`compare-column-${CONTACT_LINK}`));
+    const linked = within(screen.getByTestId(`compare-column-${OUTLOOK_LINK}`));
+    const candidate = within(screen.getByTestId(candidateColumnId(CANDIDATES[0])));
+
+    // CONTROL: gate the candidate block on the handlers alone rather than on
     // `kind === "proposed"` and the contact's own column offers to reject itself.
-    expect(
-      within(screen.getByTestId(`compare-column-${CONTACT_LINK}`)).queryByText("Not this person"),
-    ).toBeNull();
-    expect(
-      within(screen.getByTestId(`compare-column-${OUTLOOK_LINK}`)).queryByText("Not this person"),
-    ).toBeNull();
-    // ...and the linked record keeps ITS OWN word for its own act.
-    expect(
-      within(screen.getByTestId(`compare-column-${OUTLOOK_LINK}`)).queryByText("Same person"),
-    ).toBeNull();
+    expect(contact.queryByText("Not this person")).toBeNull();
+    expect(contact.queryByText("Same person")).toBeNull();
+    expect(contact.queryByText("Unlink")).toBeNull();
+
+    // The linked record keeps ITS OWN word for its own act — detaching a link
+    // that EXISTS is not the same act as answering a proposal, and R5's whole
+    // risk is the two being harmonised into one word.
+    // CONTROL: relabel the source column's action "Not this person" and this
+    // fails on the record whose meaning changed.
+    expect(linked.getByTestId(`compare-unlink-${OUTLOOK_LINK}`).textContent).toBe("Unlink");
+    expect(linked.queryByText("Not this person")).toBeNull();
+    expect(linked.queryByText("Same person")).toBeNull();
+
+    // The candidate is answered, never unlinked — there is nothing to unlink.
+    expect(candidate.getByTestId(`compare-candidate-different-${CANDIDATES[0].proposalId}`))
+      .toBeTruthy();
+    expect(candidate.queryByText("Unlink")).toBeNull();
   });
 
   it("draws no candidate control for a candidate it cannot name", async () => {
@@ -670,11 +692,20 @@ describe("BACKLOG-2502 R5 — the column strip scrolls, the screen does not", ()
     const root = screen.getByTestId("contact-compare-screen");
     const strip = screen.getByTestId("compare-columns");
 
-    // CONTROL: move `overflow-x-auto` up onto the panel (the quick fix when a
-    // column is clipped) and this fails — the sideways scroll would then be the
-    // whole screen's, which is what the founder asked us not to build.
-    expect([...root.querySelectorAll('[class*="overflow-x"]')]).toEqual([strip]);
-    // The frame clips what the strip does not scroll, so nothing escapes it.
+    // THE ROOT IS IN THE SET IT IS BEING CHECKED AGAINST. `querySelectorAll`
+    // walks descendants only, so a scroller placed on the frame itself — the
+    // quick fix when a column looks clipped — would not appear in a descendant
+    // search and the assertion would pass while the whole screen scrolled
+    // sideways. `getAttribute` rather than `.className`, which is not a string
+    // on SVG elements.
+    const sidewaysScrollers = [root, ...root.querySelectorAll("*")].filter((el) =>
+      /overflow-x/.test(el.getAttribute("class") ?? ""),
+    );
+    // CONTROL: move `overflow-x-auto` up onto the frame and this fails, naming
+    // the frame — the sideways scroll would then be the whole screen's, which is
+    // what the founder asked us not to build.
+    expect(sidewaysScrollers).toEqual([strip]);
+    // And the frame clips what the strip does not scroll, so nothing escapes it.
     expect(root.className).toContain("overflow-hidden");
   });
 });
