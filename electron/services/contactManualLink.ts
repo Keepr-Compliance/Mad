@@ -74,7 +74,12 @@ import {
   getLinkedSourceKeys,
   sourceKey,
 } from "./db/contactSourceLinkDbService";
-import { getLatestVerdict, recordVerdict } from "./db/contactLinkReviewDbService";
+import {
+  getLatestVerdict,
+  listPendingProposals,
+  recordVerdict,
+  resolveProposal,
+} from "./db/contactLinkReviewDbService";
 import {
   getAllForUser,
   search as searchExternalContacts,
@@ -223,7 +228,52 @@ export function findLinkableSourceRecords(userId: string): LinkableSourceRecord[
  *   6. write the link as `manual` — ASSERTED, so it also upgrades a weaker
  *      incumbent method rather than being silently discarded (BACKLOG-2419);
  *   7. copy the record's emails and phones onto the contact NOW, not at the
- *      next app start (BACKLOG-2423) — the same call `confirmProposal` makes.
+ *      next app start (BACKLOG-2423) — the same call `confirmProposal` makes;
+ *   8. retire any pending question about THIS pair, because the user just
+ *      answered it by acting (BACKLOG-2596).
+ *
+ * ===========================================================================
+ * STEP 8 — A LINK MUST NOT LAND WITH ITS OWN QUESTION STILL PENDING
+ * ===========================================================================
+ * `PENDING_JOIN` (contactLinkReview.ts) selects on `p.status = 'pending'` and
+ * reads neither `contact_link_verdicts` nor `contact_source_links`. So writing
+ * `same_person` and creating the link left any pending proposal for that pair
+ * exactly where it was, and every unit test about verdicts still passed.
+ *
+ * The state that produced: the user links Pat to a record, the question "are
+ * these the same person?" stays on the queue, and answering it later — the only
+ * honest answer being *"Not this person"*, since the queue shows no sign the
+ * pair is already linked — appends `different_people` and removes NO link.
+ * `hasCannotLink` then reports TRUE FOR A LIVE LINK. The matcher believes the
+ * pair is barred while the crosswalk holds it, the record reads as released
+ * while it is claimed, and the card shows a record its own latest verdict
+ * rejects. Two answers to one question, and the app believes both.
+ *
+ * THIS IS NOT A NEW RULE. `confirmContactSources` (contactCompare.ts, PR D,
+ * shipped in #2260) already resolves the pending proposals for the pairs it
+ * confirms, in the same transaction, matched by pair. This is that rule
+ * reaching the one writer that was missed.
+ *
+ * SCOPE — ONLY THIS PAIR, and the boundary is the whole point (SR ruling on
+ * BACKLOG-2596). Retiring a CLUSTER SIBLING'S question would decide a pair the
+ * user never acted on: they attached one record, which says nothing about
+ * whether the other candidate is the same person. That is product policy and
+ * belongs to the founder. Resolving only what the user actually did is
+ * engineering correctness, which is why this could ship without him.
+ *
+ * MATCHED BY PAIR, NEVER BY CLUSTER KEY. `proposeLink` has two production
+ * callers — `resolveSourceRecord` (`cluster_key: record:%`) and
+ * `fileNameQuestion` (`name:%`) — so one pair can hold more than one pending
+ * question, from different producers. The loop takes every one of them;
+ * filtering on a key prefix would silently leave the name-rule question
+ * standing, which is the same defect with a smaller blast radius.
+ *
+ * COUNTED FROM `resolveProposal`'s RETURN VALUE, never from the number of rows
+ * examined. It is guarded on `status = 'pending'`, so a concurrent answer in
+ * another window resolves it exactly once and this call correctly counts zero.
+ *
+ * INSIDE THE EXISTING TRANSACTION. A link that commits while its question is
+ * still pending IS the state being removed, so the two cannot be separable.
  */
 export function linkSourceRecordToContact(
   userId: string,
@@ -308,8 +358,20 @@ export function linkSourceRecordToContact(
     // ---- 7. The addresses travel with the record -------------------------
     applyLinkedSourceValues(userId, contactId);
 
+    // ---- 8. The question is answered, so take it off the queue -----------
+    // Only this pair. See the header — a sibling's question is the founder's
+    // to decide, not this function's.
+    let proposalsResolved = 0;
+    for (const proposal of listPendingProposals(userId)) {
+      if (proposal.contact_id !== contactId) continue;
+      if (proposal.source_type !== source) continue;
+      if (proposal.source_record_id !== sourceRecordId) continue;
+      if (resolveProposal(proposal.id, "confirmed")) proposalsResolved += 1;
+    }
+
     logService.info(
-      `[Contacts] manual link: contact ${contactId} <- ${source} record (created=${link.created})`,
+      `[Contacts] manual link: contact ${contactId} <- ${source} record ` +
+        `(created=${link.created}, ${proposalsResolved} pending question(s) retired)`,
       "Contacts",
     );
 
