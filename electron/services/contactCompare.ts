@@ -477,6 +477,27 @@ export async function getContactCompareColumns(
    * absent means the view is exactly what PR C/D returned.
    */
   proposedSource?: { sourceType: string; sourceRecordId: string },
+  /**
+   * BACKLOG-2502 R8 — THE CONTACT IS ONE SIDE OF THE QUESTION, ON THE REVIEW
+   * ROUTE.
+   *
+   * Founder, 2026-08-09, after seeing four columns for one question: a contact
+   * holding two linked records plus one candidate drew four columns, three of
+   * which were his own records — so the screen looked like a four-way
+   * comparison when it was asking one thing. Collapsed, it reads as it should:
+   * *this person* against *this candidate*.
+   *
+   * A FLAG, NOT AN INFERENCE FROM `proposedSource`. Today the review queue is
+   * the only caller passing a candidate, so the two would be indistinguishable
+   * — and that is exactly why it is stated: this is a decision about what one
+   * screen MEANS, not a consequence of having a candidate, and the next reader
+   * should not have to know that one implies the other.
+   *
+   * CLIENTS & CONTACTS DOES NOT SET IT. There, one column per source IS the
+   * feature (PR C) — it is how a user sees which record contributed what, and
+   * how they unlink the wrong one.
+   */
+  options?: { collapseContactSources?: boolean },
 ): Promise<ContactCompareView | null> {
   const contact = dbGet<{
     user_id: string;
@@ -538,7 +559,17 @@ export async function getContactCompareColumns(
   /** Which row LABELS column 1. The origin row says it best when there is one. */
   const labelRow = originRow ?? absorbedSourceId;
 
-  const sourceRows = nonOrigin.filter((l) => l.id !== absorbedSourceId?.id);
+  /*
+    R8 — ON THE REVIEW ROUTE THE CONTACT'S OWN RECORDS ARE NOT OPPONENTS.
+
+    Collapsed, every non-origin row stops being a column and its VALUES join
+    column 1 instead (below). Uncollapsed, this is the expression it has always
+    been and the contact route is untouched.
+  */
+  const collapseContactSources = options?.collapseContactSources === true;
+  const sourceRows = collapseContactSources
+    ? []
+    : nonOrigin.filter((l) => l.id !== absorbedSourceId?.id);
 
   /*
     BACKLOG-2502 R1 — THE CANDIDATE IS READ BEFORE THE GUARD, BECAUSE THE GUARD
@@ -583,6 +614,48 @@ export async function getContactCompareColumns(
   const contactPhones = getContactPhoneEntries(contactId).map((p) => p.phone);
   const transactions = await getTransactionsByContact(contactId);
 
+  /*
+    THE UNION, NOT THE FIRST ONE FOUND.
+
+    A collapsed column that showed only `contact_emails` / `contact_phones` would
+    quietly drop any address or number that lives on a linked record and was
+    never copied across — and a value disappearing off this screen is the one
+    failure the founder has already been bitten by. So the contact's own values
+    LEAD (they are the saved truth and the ones the rest of the app uses) and
+    every record it is assembled from adds what it has.
+
+    OVER `links`, NOT `nonOrigin`: the origin row is one of the contact's own
+    records too. It is excluded from the COLUMN set because drawing the address
+    book a contact came from as its own opponent is noise — that is a statement
+    about columns, and it says nothing about its values.
+
+    Deduped by `dedupeEmailValues` / `dedupePhoneValues`, the same keys every
+    other column is built with, so "the same number" means one thing here.
+  */
+  const collapsedEmails = collapseContactSources
+    ? dedupeEmailValues([
+        ...contactEmails,
+        ...links.flatMap((l) => parseValueArray(l.ec_emails_json)),
+      ])
+    : dedupeEmailValues(contactEmails);
+  const collapsedPhones = collapseContactSources
+    ? dedupePhoneValues([
+        ...contactPhones,
+        ...links.flatMap((l) => parseValueArray(l.ec_phones_json)),
+      ])
+    : dedupePhoneValues(contactPhones);
+  /*
+    Company is ONE value on both sides, so there is no union to show. The
+    contact's own wins when it has one; when it has none, a record's company is
+    taken rather than left blank — the case where collapsing would otherwise
+    make a company vanish from the screen entirely.
+  */
+  const collapsedCompany =
+    contact.company?.trim() ||
+    (collapseContactSources
+      ? (links.map((l) => l.ec_company?.trim()).find((c) => !!c) ?? null)
+      : null);
+
   // Raw values first, marks second — a value cannot know whether it is shared
   // until every column has been read.
   interface RawColumn {
@@ -604,9 +677,9 @@ export async function getContactCompareColumns(
         ? columnLabelFor(labelRow.source_type, labelRow.match_method)
         : "Your contact",
       displayName: contact.display_name?.trim() || null,
-      emails: dedupeEmailValues(contactEmails),
-      phones: dedupePhoneValues(contactPhones),
-      company: contact.company?.trim() || null,
+      emails: collapsedEmails,
+      phones: collapsedPhones,
+      company: collapsedCompany,
       transactions: transactions.map((t) => t.property_address).filter((a): a is string => !!a),
       sourceRecordPresent: true,
     },

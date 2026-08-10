@@ -1064,6 +1064,169 @@ describe("the proposed column", () => {
 });
 
 // ===========================================================================
+// BACKLOG-2502 R8 — THE CONTACT SIDE, AS ONE COLUMN
+// ===========================================================================
+
+/**
+ * FOUNDER-OBSERVED, 2026-08-09, on `76ec6476`: *"the compare screen still shows
+ * four columns for one question"*.
+ *
+ * It was not the pairwise change failing — there was exactly one candidate. The
+ * other three columns were HIS OWN records, one per linked source, arranged as
+ * if he were being asked to choose between them. He is being asked one thing: is
+ * this candidate this person.
+ *
+ * So on the review route the contact is drawn as one column carrying everything
+ * it is already made of. On the contact route it is NOT, because there, one
+ * column per source is the feature — it is how a user sees which record
+ * contributed what, and how they unlink the wrong one.
+ */
+describe("R8 — collapsing the contact side", () => {
+  /** Held by the Outlook record and by no contact row — the value a naive collapse drops. */
+  const RECORD_ONLY_PHONE = "+12065550155";
+  /** Held by the Google record and by no contact row. */
+  const RECORD_ONLY_EMAIL = "pd.google@example.com";
+
+  /**
+   * The founder's shape: a contact assembled from THREE of its own records
+   * (origin + an absorbed `source_id` row + two attached ones) with one
+   * candidate against it. Four columns before this change, two after.
+   */
+  function assembledContact(id: string): void {
+    addContact(id, "Paul Dorian", { phones: [SHARED_PHONE], emails: [SHARED_EMAIL] });
+    origin(id, "contacts_app");
+    addExternal(`mac-${id}`, "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+    link(id, "macos", `mac-${id}`, "source_id");
+    // Carries a number the contact itself does not have.
+    addExternal(`out-${id}`, "Paul Dorian", "outlook", { phones: [RECORD_ONLY_PHONE] });
+    link(id, "outlook", `out-${id}`, "email");
+    // Carries an address the contact itself does not have.
+    addExternal(`goo-${id}`, "Paul Dorian", "google_contacts", { emails: [RECORD_ONLY_EMAIL] });
+    link(id, "google_contacts", `goo-${id}`, "phone");
+    // The candidate, unlinked.
+    addExternal(`and-${id}`, "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
+  }
+
+  const candidate = (id: string) => ({
+    sourceType: "android_sync",
+    sourceRecordId: `and-${id}`,
+  });
+
+  it("draws TWO columns where the contact route draws four", async () => {
+    assembledContact("r8a");
+
+    // CONTROL: drop the `collapseContactSources` branch on `sourceRows` and this
+    // reads ["contact","source","source","proposed"] — the founder's screenshot.
+    const collapsed = await getContactCompareColumns(USER, "r8a", candidate("r8a"), {
+      collapseContactSources: true,
+    });
+    expect(collapsed!.columns.map((c) => c.kind)).toEqual(["contact", "proposed"]);
+    expect(collapsed!.columns.map((c) => c.linkId)[1]).toBe(
+      "proposed:android_sync:and-r8a",
+    );
+  });
+
+  it("keeps every value the collapsed records held, not the first one found", async () => {
+    assembledContact("r8b");
+
+    const collapsed = await getContactCompareColumns(USER, "r8b", candidate("r8b"), {
+      collapseContactSources: true,
+    });
+    const contactColumn = collapsed!.columns[0];
+
+    // THE UNION, ASSERTED AS AN EXACT SET. A collapse that showed only
+    // `contact_phones` would pass any "two columns" test while silently losing
+    // the Outlook number — the failure the founder has been bitten by before.
+    // CONTROL: build the contact column from `contactPhones` alone and
+    // `+12065550155` disappears from this list.
+    expect(contactColumn.phones.map((p) => p.value)).toEqual([
+      SHARED_PHONE,
+      RECORD_ONLY_PHONE,
+    ]);
+    expect(contactColumn.emails.map((e) => e.value)).toEqual([
+      SHARED_EMAIL,
+      RECORD_ONLY_EMAIL,
+    ]);
+    // The contact's own values LEAD — they are the saved truth the rest of the
+    // app uses, and the order is what the user reads first.
+    expect(contactColumn.phones[0].value).toBe(SHARED_PHONE);
+    // And the candidate's shared number still marks against the collapsed side,
+    // so collapsing did not cost the comparison its point.
+    expect(contactColumn.phones[0].matched).toBe(true);
+  });
+
+  /**
+   * CONTROL 3, AND THE ONE THAT MATTERS MOST: both surfaces share one component,
+   * so a collapse that leaked would silently rewrite Clients & Contacts.
+   */
+  it("leaves the contact route drawing one column per source, with its own values", async () => {
+    assembledContact("r8c");
+
+    const contactRoute = await getContactCompareColumns(USER, "r8c");
+    // CONTROL: default the option to true, or collapse whenever a candidate is
+    // present, and this reads ["contact"] — PR C's whole screen gone.
+    expect(contactRoute!.columns.map((c) => c.kind)).toEqual([
+      "contact",
+      "source",
+      "source",
+    ]);
+    // Unchanged values: the union belongs to the collapsed column and nowhere
+    // else, so the record's own number is still ITS number here.
+    expect(contactRoute!.columns[0].phones.map((p) => p.value)).toEqual([SHARED_PHONE]);
+    const outlookColumn = contactRoute!.columns.find((c) => c.columnLabel.includes("Outlook"));
+    expect(outlookColumn!.phones.map((p) => p.value)).toEqual([RECORD_ONLY_PHONE]);
+
+    // The same contact with a candidate, still uncollapsed, is four columns —
+    // which is exactly what the founder saw, and is correct on this route.
+    const withCandidate = await getContactCompareColumns(USER, "r8c", candidate("r8c"));
+    expect(withCandidate!.columns.map((c) => c.kind)).toEqual([
+      "contact",
+      "source",
+      "source",
+      "proposed",
+    ]);
+  });
+
+  it("draws two columns for a contact with ONE record, not one and not three", async () => {
+    // R1's contact: a single source record, which is what most of the queue is.
+    addContact("r8d", "Paul Dorian", { phones: [SHARED_PHONE] });
+    origin("r8d", "contacts_app");
+    addExternal("mac-r8d", "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+    link("r8d", "macos", "mac-r8d", "source_id");
+    addExternal("and-r8d", "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
+
+    // CONTROL: collapse by emptying `sourceRows` AFTER the null guard reads it
+    // and this contact — whose only source row is the absorbed one — returns
+    // null, putting R1's "nothing to compare" bug back for the commonest case in
+    // the queue.
+    const view = await getContactCompareColumns(USER, "r8d", candidate("r8d"), {
+      collapseContactSources: true,
+    });
+    expect(view!.columns.map((c) => c.kind)).toEqual(["contact", "proposed"]);
+  });
+
+  it("takes a record's company when the contact has none, rather than losing it", async () => {
+    addContact("r8e", "Paul Dorian", { phones: [SHARED_PHONE] });
+    origin("r8e", "contacts_app");
+    addExternal("out-r8e", "Paul Dorian", "outlook", {
+      phones: [SHARED_PHONE],
+      company: "Example Realty",
+    });
+    link("r8e", "outlook", "out-r8e", "email");
+    addExternal("and-r8e", "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
+
+    // Company is ONE value on both sides, so there is no union to show — but a
+    // company that was visible in its own column must not vanish because that
+    // column was folded away. CONTROL: use `contact.company` alone and this
+    // reads null.
+    const collapsed = await getContactCompareColumns(USER, "r8e", candidate("r8e"), {
+      collapseContactSources: true,
+    });
+    expect(collapsed!.columns[0].company).toBe("Example Realty");
+  });
+});
+
+// ===========================================================================
 // BACKLOG-2502 R1 — COMPARE, FROM A CONTACT THAT HAS ONLY ONE RECORD
 // ===========================================================================
 

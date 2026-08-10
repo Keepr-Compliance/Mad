@@ -502,10 +502,15 @@ describe("the way into the compare screen", () => {
     // the reader cannot find it any other way.
     // CONTROL: drop the third argument and the candidate silently vanishes from
     // the comparison the user is being asked to make.
-    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(USER, "c-daniel", {
-      sourceType: "macos",
-      sourceRecordId: "mac-lilly",
-    });
+    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(
+      USER,
+      "c-daniel",
+      { sourceType: "macos", sourceRecordId: "mac-lilly" },
+      // R8: and the contact side arrives as ONE column. CONTROL: drop the flag
+      // at the call site and a contact with two linked records draws four
+      // columns for one question — the founder's report.
+      { collapseContactSources: true },
+    );
   });
 
   /**
@@ -535,10 +540,12 @@ describe("the way into the compare screen", () => {
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
     // CONTROL: pass `group.items[0]` here and the SECOND candidate can never be
     // compared — the exact dead end the eye exists to remove.
-    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(USER, "c-daniel", {
-      sourceType: "outlook",
-      sourceRecordId: "out-9",
-    });
+    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(
+      USER,
+      "c-daniel",
+      { sourceType: "outlook", sourceRecordId: "out-9" },
+      { collapseContactSources: true },
+    );
   });
 
   it("keeps `Different people` on the queue route, and routes Confirm to the PROPOSAL", async () => {
@@ -1076,10 +1083,12 @@ describe("R6 — a contact with four candidates stays pairwise", () => {
 
     // ONE candidate is asked for, and it is the one whose eye was pressed.
     // CONTROL: send the whole group (R5's shape) and this reads an array.
-    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(USER, "c-daniel", {
-      sourceType: "outlook",
-      sourceRecordId: "out-22",
-    });
+    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(
+      USER,
+      "c-daniel",
+      { sourceType: "outlook", sourceRecordId: "out-22" },
+      { collapseContactSources: true },
+    );
 
     // BY IDENTITY, both directions: candidate 2 has a column, and candidates 1,
     // 3 and 4 do not. A count of two would pass while showing the wrong one.
@@ -1324,10 +1333,12 @@ describe("R7 — the eye is the only way into compare from the queue", () => {
       await waitFor(() =>
         expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument(),
       );
-      expect(getColumns).toHaveBeenCalledWith(USER, "c-daniel", {
-        sourceType: c.sourceType,
-        sourceRecordId: c.sourceRecordId,
-      });
+      expect(getColumns).toHaveBeenCalledWith(
+        USER,
+        "c-daniel",
+        { sourceType: c.sourceType, sourceRecordId: c.sourceRecordId },
+        { collapseContactSources: true },
+      );
       expect(
         screen.getByTestId(`compare-column-proposed:${c.sourceType}:${c.sourceRecordId}`),
       ).toBeTruthy();

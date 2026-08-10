@@ -99,6 +99,16 @@ interface ContactCompareSourcesProps {
   proposedSource?: { sourceType: string; sourceRecordId: string };
   proposalId?: string;
   /**
+   * BACKLOG-2502 R8 — ask for the contact and its own records as ONE column.
+   *
+   * FORWARDED, NEVER READ. This component renders whatever columns it is given
+   * and asks no question about where they came from; the collapse happens in
+   * `contactCompare.ts`, where the keys that decide "the same phone number"
+   * live. That is what keeps ONE component serving both surfaces: the two
+   * callers differ in the data they ask for, never in the markup they get.
+   */
+  collapseContactSources?: boolean;
+  /**
    * BACKLOG-2502 — "different people", on the QUEUE route only.
    *
    * The two surfaces are NOT harmonised, and this is where that shows: from the
@@ -329,6 +339,7 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
   onConfirmedAndEdit,
   proposedSource,
   proposalId,
+  collapseContactSources,
   onRejected,
   why,
 }) => {
@@ -337,6 +348,7 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
     contactId,
     proposedSource,
     proposalId,
+    collapseContactSources,
   );
   const [whyOpen, setWhyOpen] = useState(false);
   /**

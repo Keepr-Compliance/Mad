@@ -421,6 +421,19 @@ export function ReviewDuplicatesModal({
                 sourceRecordId: comparing.sourceRecordId,
               }}
               proposalId={comparing.proposalId}
+              /*
+                R8 — ONE QUESTION, TWO COLUMNS. The founder opened a contact with
+                two linked records and one candidate and got four columns: three
+                of them his own records, arranged as if he were being asked to
+                choose between them. He is not — he is being asked whether the
+                candidate is this person. So the contact side is drawn as one
+                column carrying everything it is already made of.
+
+                Not set from a contact card, where one column per source IS the
+                feature: that screen exists to show which record contributed what
+                and to unlink the wrong one.
+              */
+              collapseContactSources
               why={
                 comparing.evidence
                   ? {

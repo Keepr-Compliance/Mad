@@ -20,6 +20,15 @@ export function useContactCompare(
   proposedSource?: { sourceType: string; sourceRecordId: string },
   /** BACKLOG-2502 — present ⇒ `confirm` answers a PROPOSAL, not a contact. */
   proposalId?: string,
+  /**
+   * BACKLOG-2502 R8 — the contact and its own records as ONE column.
+   *
+   * A plain boolean rather than an object, so it can sit in the dependency list
+   * beside the other primitives: an options object built fresh by the caller
+   * each render would re-fire the load on every render of the parent, which is
+   * the same trap `proposedSource` is destructured to avoid.
+   */
+  collapseContactSources?: boolean,
 ): {
   view: ContactCompareView | null;
   loading: boolean;
@@ -61,6 +70,7 @@ export function useContactCompare(
           userId,
           contactId,
           proposedSource,
+          collapseContactSources ? { collapseContactSources: true } : undefined,
         );
         if (!isMountedRef.current || seq !== requestSeqRef.current) return;
         if (!result.success) {
@@ -82,7 +92,13 @@ export function useContactCompare(
     })();
     // `proposedSource` is destructured into primitives so a caller passing a
     // fresh object literal each render cannot re-fire the load.
-  }, [userId, contactId, proposedSource?.sourceType, proposedSource?.sourceRecordId]);
+  }, [
+    userId,
+    contactId,
+    proposedSource?.sourceType,
+    proposedSource?.sourceRecordId,
+    collapseContactSources,
+  ]);
 
   useEffect(() => {
     reload();
