@@ -624,10 +624,23 @@ export async function getContactCompareColumns(
     LEAD (they are the saved truth and the ones the rest of the app uses) and
     every record it is assembled from adds what it has.
 
-    OVER `links`, NOT `nonOrigin`: the origin row is one of the contact's own
-    records too. It is excluded from the COLUMN set because drawing the address
-    book a contact came from as its own opponent is noise — that is a statement
-    about columns, and it says nothing about its values.
+    OVER `links` RATHER THAN `nonOrigin` — AND THE TWO ARE THE SAME SET TODAY.
+    Corrected after SR review (2026-08-09): the earlier note here said the origin
+    row is one of the contact's own records and so contributes values. It cannot.
+    Its `source_record_id` is the synthetic `origin:<contactId>`
+    (`db/contactOriginLink.ts`) and its `source_type` comes from the origin
+    vocabulary rather than one of the five external sources, so the LEFT JOIN
+    above cannot match on it: `ec_emails_json` / `ec_phones_json` are always NULL
+    there and `parseValueArray(null)` is `[]`. Run: swapping every `links` below
+    for `nonOrigin` leaves all 54 tests green, and no fixture can tell the two
+    apart without an `external_contacts` row keyed `origin:…`, which nothing
+    writes — so there is no test to add here, only this comment to get right.
+
+    `links` is kept because the exclusion of origin rows is a statement about
+    COLUMNS — drawing the address book a contact came from as its own opponent is
+    noise — and that reasoning does not transfer to values. If an origin row ever
+    pointed at a real record, its values would belong in this union, and this
+    expression already carries them.
 
     Deduped by `dedupeEmailValues` / `dedupePhoneValues`, the same keys every
     other column is built with, so "the same number" means one thing here.
@@ -810,10 +823,29 @@ export async function getContactCompareColumns(
          renders "You have confirmed these records are the same person" in
          place of the decision buttons — asserting a decision the user never
          made, and offering no way to make one.
-      2. `[].every(...)` IS `true`. A SINGLE-RECORD contact has no non-origin
-         links at all, so it reads confirmed unconditionally — and a
-         single-record contact with one candidate is precisely what the review
-         queue is made of. This is the founder's case, 2026-08-09.
+      2. `[].every(...)` IS `true`, so a contact with no non-origin links would
+         read confirmed on a vacuous quantifier rather than on a decision.
+
+    ONLY GUARD 1 CAN FIRE, AND THE FOUNDER'S CASE IS FIXED BY IT ALONE.
+    Corrected here after SR review (2026-08-09): the version of this note that
+    presented reason 2 as a second LIVE defect was wrong, and a false comment
+    outlives the code it describes. Guard 2 is unreachable as this function
+    stands —
+
+      `sourceRows` is either `[]` (collapsed) or a filter of `nonOrigin`, so
+      `sourceRows.length <= nonOrigin.length`. The null-return ~200 lines above
+      ends the function unless `sourceRows.length + (proposedRecord ? 1 : 0)`
+      is non-zero. So `nonOrigin.length === 0` reaches this line ONLY when a
+      `proposedRecord` exists — which is exactly when the candidate column was
+      pushed, so `proposedColumnPresent` is true and GUARD 1 HAS ALREADY FORCED
+      `false`. Run: dropping `nonOrigin.length > 0` leaves 54/54 green.
+
+    KEPT ANYWAY, and not as superstition. "Everything already linked is also
+    already confirmed" is not a claim you can make about nothing, and guard 2 is
+    what makes this expression say that on its own terms — without depending on
+    a `return null` two hundred lines away that was written for a different
+    reason and may move for a different reason again. Delete it and `isConfirmed`
+    is correct only by coincidence of where that return sits.
 
     Both guards sit IN FRONT of the quantifier, so the absorbed-row case the
     docblock below protects is untouched: with links present and no proposal,
