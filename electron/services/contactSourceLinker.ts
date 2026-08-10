@@ -27,6 +27,14 @@
  *   4. NEVER FALL BACK TO NAME. That is the mechanism being replaced. A rename
  *      in Contacts.app must not create a second person.
  *
+ *   5. A NAME IS STILL A VETO — BACKLOG-2619. Rule 4 says a name may never
+ *      CREATE a link. It has been read as though it also said a name may never
+ *      PREVENT one, and for three months that reading was the code: this file
+ *      contained no name logic of any kind, so the content fallback linked
+ *      "Marcus Ord" to a saved contact called "Priya Raman" on the strength of a
+ *      shared office line, silently, and copied Marcus's addresses onto Priya as
+ *      it went. See the section on the name veto below.
+ *
  * ===========================================================================
  * WHY STEP 3 EXISTS — the Daniel/Lilly case
  * ===========================================================================
@@ -75,6 +83,30 @@
  * filed, and the next pass re-files it.
  *
  * ===========================================================================
+ * THE NAME VETO — BACKLOG-2619 / BACKLOG-2624
+ * ===========================================================================
+ * The picker has always gated phone-based dedup on name compatibility. This
+ * module never did, and the two layers therefore answered the same question
+ * differently: `contacts:get-available` showed Marcus Ord and Priya Raman as two
+ * separate people, correctly, while `resolveSourceRecord` merged them.
+ *
+ * `nameSupportForAutoLink` is consulted LAST, immediately before the link is
+ * written, and it can only ever turn a would-be SILENT LINK into a QUESTION:
+ *
+ *   - it is not consulted at STEP 1 at all. A source-id match is knowledge, and
+ *     a person who renames a card in Contacts.app must not be re-asked about it;
+ *   - it runs AFTER the conflict and frozen-audit branches, so every match those
+ *     already withhold keeps its own, more specific reason;
+ *   - it adds no link anywhere. It is purely subtractive on the act band.
+ *
+ * A MISSING NAME IS ASK, NOT ACT (BACKLOG-2624). `namesAreCompatible("", x)` is
+ * TRUE — an empty name cannot contradict — which would disable the veto for
+ * precisely the records with the least evidence behind them. The guard module
+ * states that rule, together with what else counts as "no name": the "Unknown"
+ * literal five live paths still write, and the email/phone label
+ * `buildContactLabel` bakes into a nameless record's name field.
+ *
+ * ===========================================================================
  * A REJECTED PAIR IS NEVER LINKED AND NEVER RE-ASKED
  * ===========================================================================
  * `hasCannotLink` is consulted BEFORE this module links or proposes anything on
@@ -111,12 +143,14 @@ import {
 import { hasCannotLink, proposeLink } from "./db/contactLinkReviewDbService";
 import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
 import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
-import { buildEvidence } from "./contactLinkEvidence";
+import { buildEvidence, sourceRecordName } from "./contactLinkEvidence";
 import { applyLinkedSourceValues } from "./contactSourceValues";
 import { toLookupKey } from "../utils/phoneNormalization";
+import { realContactName } from "../utils/contactDisplayLabel";
+import { nameSupportForAutoLink } from "../utils/autoLinkNameGuard";
 import logService from "./logService";
 
-/** A source record offered for linking. Names are deliberately absent. */
+/** A source record offered for linking. */
 export interface SourceRecordCandidate {
   sourceType: ExternalContactSource;
   sourceRecordId: string;
@@ -124,6 +158,16 @@ export interface SourceRecordCandidate {
   externalUuid?: string | null;
   emails?: string[];
   phones?: string[];
+  /**
+   * The record's name, for the VETO only — never to match on (BACKLOG-2619).
+   *
+   * OPTIONAL, AND THE OMISSION IS NOT A BYPASS. A caller that leaves it out gets
+   * the name read from `external_contacts` instead (see `resolveSourceRecord`),
+   * so the guard cannot be switched off by forgetting a field — which is exactly
+   * how the `sourceRecordIsCurrent` precondition went quietly dead for one source
+   * and is documented at length below.
+   */
+  name?: string | null;
 }
 
 /**
@@ -147,7 +191,17 @@ export type FlagReason =
   /** The identifier is held by more than one saved contact; picking is guessing. */
   | "ambiguous_identifier"
   /** The candidate contact is referenced by an exported (frozen) audit. */
-  | "frozen_audit_contact";
+  | "frozen_audit_contact"
+  /**
+   * BACKLOG-2619 — the identifier is shared, but the two are saved under names
+   * that disagree. The office line, the household, the reassigned number.
+   */
+  | "name_mismatch"
+  /**
+   * BACKLOG-2624 — the identifier is shared and one of the two has no name to
+   * check it against. Absence of evidence, not evidence of a match.
+   */
+  | "name_unknown";
 
 export type LinkResolution =
   /** Step 1 — the crosswalk already claims this record. */
@@ -489,6 +543,23 @@ function recordProposal(args: {
 }
 
 /**
+ * The saved contact's `display_name`, raw.
+ *
+ * DELIBERATELY NOT `contactLinkEvidence.contactDisplayName`, which substitutes
+ * the words "this contact" when the column is empty. That substitution is
+ * correct for a sentence and catastrophic for a comparison: it would turn every
+ * nameless contact into one called "this contact", and two of them would then
+ * read as an exact name match. The guard needs the truth, including its absence.
+ */
+function savedContactName(contactId: string): string | null {
+  const row = dbGet<{ display_name: string | null }>(
+    `SELECT display_name FROM contacts WHERE id = ?`,
+    [contactId],
+  );
+  return row?.display_name ?? null;
+}
+
+/**
  * Resolve ONE source record to a contact, applying the full matching order.
  *
  * Pure decision + at most one INSERT. Never deletes, never re-points, never
@@ -704,6 +775,60 @@ export function resolveSourceRecord(
     };
   }
 
+  // ---- STEP 4: the names have to agree. BACKLOG-2619 / BACKLOG-2624. -------
+  //
+  // Everything above this line decided that ONE saved contact holds the
+  // identifier this record carries, that nobody has ruled the pair out, that no
+  // other current record of this source is claiming that contact, and that no
+  // exported audit depends on them. All of which is true of Marcus Ord and Priya
+  // Raman, who are not the same person and merely share an office line.
+  //
+  // The record's own name is preferred, but a candidate that carries none falls
+  // back to the shadow table rather than to a free pass — see the field's
+  // docblock. `realContactName` is applied first so a candidate carrying the
+  // "Unknown" literal consults the row too, instead of being taken at its word.
+  const recordName =
+    realContactName(candidate.name) ||
+    sourceRecordName(userId, sourceType, sourceRecordId);
+
+  const nameSupport = nameSupportForAutoLink({
+    recordName,
+    contactName: savedContactName(candidateContactId),
+    // The record's own identifiers, so a label baked out of one of them is
+    // recognised as the absence of a name rather than read as one.
+    identifiers: { emails: candidate.emails, phones: candidate.phones },
+  });
+
+  if (!nameSupport.supportsLink) {
+    logService.info(
+      `[Contacts] link withheld for review (${nameSupport.reason}): a ${sourceType} record ` +
+        `content-matched a contact on ${matchedOn}, but the names do not support linking them`,
+      "Contacts",
+    );
+    recordProposal({
+      userId,
+      contactId: candidateContactId,
+      sourceType,
+      sourceRecordId,
+      reason: nameSupport.reason,
+      matchedOn,
+      matchedValues,
+      // One contact, several source records wanting to be it: one question.
+      clusterKey: `contact:${candidateContactId}`,
+    });
+    return {
+      outcome: "flagged",
+      sourceRecordId,
+      candidateContactId,
+      // No incumbent record is involved — nothing else is claiming this contact.
+      // The other single-pair branches (`ambiguous_identifier`,
+      // `frozen_audit_contact`) report the same empty string for the same reason.
+      conflictingSourceRecordId: "",
+      matchedOn,
+      reason: nameSupport.reason,
+    };
+  }
+
   createLink({
     userId,
     contactId: candidateContactId,
@@ -785,11 +910,13 @@ export function linkExternalContactsForUser(userId: string): LinkRunSummary {
   const rows = dbAll<{
     external_record_id: string;
     source: ExternalContactSource;
+    name: string | null;
     emails_json: string | null;
     phones_json: string | null;
     external_uuid: string | null;
   }>(
-    `SELECT external_record_id, source, emails_json, phones_json, external_uuid
+    // BACKLOG-2619 added `name`, for the veto only. It is never matched on.
+    `SELECT external_record_id, source, name, emails_json, phones_json, external_uuid
        FROM external_contacts
       WHERE user_id = ? AND external_record_id IS NOT NULL
       ORDER BY source, external_record_id`,
@@ -800,6 +927,7 @@ export function linkExternalContactsForUser(userId: string): LinkRunSummary {
     sourceType: r.source,
     sourceRecordId: r.external_record_id,
     externalUuid: r.external_uuid,
+    name: r.name,
     emails: safeJsonArray(r.emails_json),
     phones: safeJsonArray(r.phones_json),
   }));

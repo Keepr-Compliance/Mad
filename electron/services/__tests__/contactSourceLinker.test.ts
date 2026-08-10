@@ -978,10 +978,25 @@ describe("android_sync INCREMENTAL diff — the guard must not go quietly dead",
     ]);
   });
 
-  it("DEMONSTRATES the defect without the re-stamp: Lilly's record binds to Daniel", () => {
-    // Exactly the state an unpatched incremental diff leaves behind. Pinned so
-    // the regression is legible rather than hypothetical, and so the fix has
-    // something concrete to be the fix OF.
+  /**
+   * BACKLOG-2619 CHANGED THIS TEST'S OUTCOME, AND THE REASON MATTERS.
+   *
+   * It used to assert a silent LINK — the state an unpatched incremental diff
+   * leaves behind — pinned so the regression was legible rather than
+   * hypothetical. The name veto now catches the same case one step later, so the
+   * outcome is `flagged`.
+   *
+   * The DISCRIMINATION IS PRESERVED, and it is the whole point of this block:
+   * with the re-stamp the reason is `duplicate_source_record` (the incumbent
+   * check fired); without it the reason is `name_mismatch` (the incumbent check
+   * did NOT fire, and the last line of defence caught it instead). Two different
+   * reasons still tell the two states apart.
+   *
+   * THE UNDERLYING DEFECT IS NOT FIXED BY THE NAME VETO — see the test below,
+   * which is the same shape with names that agree and still links silently. The
+   * re-stamp is still load-bearing.
+   */
+  it("WITHOUT the re-stamp the incumbent check does not fire — the name veto catches it instead", () => {
     const resolution = resolveSourceRecord(USER, {
       sourceType: "android_sync",
       sourceRecordId: LILLY_REC,
@@ -989,9 +1004,66 @@ describe("android_sync INCREMENTAL diff — the guard must not go quietly dead",
     });
 
     expect(resolution).toEqual({
-      outcome: "linked",
-      contactId: DANIEL,
+      outcome: "flagged",
       sourceRecordId: LILLY_REC,
+      candidateContactId: DANIEL,
+      // Empty, NOT `DANIEL_REC` — which is the tell that the incumbent branch
+      // never ran. With the re-stamp the test above names the incumbent.
+      conflictingSourceRecordId: "",
+      matchedOn: "phone",
+      reason: "name_mismatch",
+    });
+    expect(linkTriples(DANIEL)).toEqual([
+      `android_sync ${DANIEL_REC} -> ${DANIEL} (source_id)`,
+    ]);
+  });
+
+  /**
+   * DEMONSTRATES the defect the re-stamp fixes, with the name veto in place.
+   *
+   * Two people who share a name AND a number — the father/son shape this
+   * codebase already names as the credit-bureau mixed-file pattern, and the
+   * reason `name_generational_suffix` exists. The names agree, so the veto
+   * cannot help, and the record still binds to the wrong contact silently.
+   *
+   * NEGATIVE CONTROL (run, observed): call `markSourceRecordsCurrent` here and
+   * this goes red — it flags instead, which is the re-stamp doing its job.
+   */
+  it("the defect survives the name veto whenever the two names agree", () => {
+    const ROB = "c-and-rob";
+    const ROB_OLD = "and-rob-senior";
+    const ROB_NEW = "and-rob-junior";
+    const SHARED_LINE = "+14155557799";
+
+    addContact(ROB, "Robert Chen", { phones: [SHARED_LINE] });
+    addExternal(ROB_OLD, "Robert Chen", {
+      source: "android_sync",
+      phones: [SHARED_LINE],
+      syncedAt: OLD_DIFF,
+    });
+    createLink({
+      userId: USER,
+      contactId: ROB,
+      sourceType: "android_sync",
+      sourceRecordId: ROB_OLD,
+      matchMethod: "source_id",
+    });
+    addExternal(ROB_NEW, "Robert Chen", {
+      source: "android_sync",
+      phones: [SHARED_LINE],
+      syncedAt: NEW_DIFF,
+    });
+
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "android_sync",
+      sourceRecordId: ROB_NEW,
+      phones: [SHARED_LINE],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "linked",
+      contactId: ROB,
+      sourceRecordId: ROB_NEW,
       method: "phone",
     });
   });
@@ -1052,9 +1124,22 @@ describe("C10 — a contact imported before the crosswalk existed", () => {
    */
   const OLD = "c-legacy";
 
+  /**
+   * BACKLOG-2619 CHANGED THIS FIXTURE, NOT THIS RULE.
+   *
+   * The record used to be called "Completely Different Name" — chosen to make
+   * the point that the content fallback consults no name at all. That is no
+   * longer true: a name cannot CREATE a link, but it can now veto one, so a
+   * fixture built to be name-blind was testing a path the app no longer takes.
+   *
+   * The ordinary C10 shape is a contact whose `display_name` came from this very
+   * record, so the two agree. That is what is transcribed here. The
+   * differing-name variant is not deleted — it is the test below, with its new
+   * outcome.
+   */
   it("links opportunistically by EMAIL, recording match_method='email'", () => {
     addContact(OLD, "Legacy Person", { emails: ["legacy@example.com"] });
-    addExternal("UUID-LEGACY:ABPerson", "Completely Different Name", {
+    addExternal("UUID-LEGACY:ABPerson", "Legacy Person", {
       emails: ["legacy@example.com"],
     });
 
@@ -1062,6 +1147,28 @@ describe("C10 — a contact imported before the crosswalk existed", () => {
 
     expect(summary.contentMatched).toBe(1);
     expect(linkTriples(OLD)).toEqual([`macos UUID-LEGACY:ABPerson -> ${OLD} (email)`]);
+  });
+
+  /**
+   * BACKLOG-2619 — the honest cost of the name veto, stated rather than hidden.
+   *
+   * A pre-crosswalk contact the user RENAMED ("Bob" -> "Robert Chen") no longer
+   * re-acquires its link silently: it becomes one question, answered once. That
+   * is the founder's rule — a shared identifier with names that disagree is
+   * exactly what a person should see — but it is a behaviour change for existing
+   * data and it belongs in a test rather than in a release note nobody reads.
+   */
+  it("but a pre-crosswalk contact saved under a DIFFERENT name is asked about, not linked", () => {
+    addContact(OLD, "Legacy Person", { emails: ["legacy@example.com"] });
+    addExternal("UUID-LEGACY:ABPerson", "Completely Different Name", {
+      emails: ["legacy@example.com"],
+    });
+
+    const summary = linkExternalContactsForUser(USER);
+
+    expect(summary.contentMatched).toBe(0);
+    expect(summary.flagged).toBe(1);
+    expect(linkTriples(OLD)).toEqual([]);
   });
 
   it("prefers EMAIL over phone when both would match", () => {

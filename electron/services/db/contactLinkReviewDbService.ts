@@ -107,7 +107,19 @@ export type LinkProposalReason =
   | "name_generational_suffix"
   /** Exactly two, cross-family, but each already belongs to a DIFFERENT saved
    *  contact. Joining them is a merge (BACKLOG-2370), not a link. */
-  | "name_two_saved_contacts";
+  | "name_two_saved_contacts"
+  // --- the linker's NAME VETO (BACKLOG-2619 / BACKLOG-2624) ---
+  //
+  // Not the rule above. Those four are reasons a NAME MATCH was refused; these
+  // two are reasons an IDENTIFIER match was refused, on the evidence of the
+  // names. Adding them needed no migration: `contact_link_proposals.reason` is
+  // `TEXT NOT NULL` with no CHECK, deliberately, unlike `source_type`.
+  /** The identifier is shared but the two are saved under names that disagree —
+   *  the office line, the household, the number that changed hands. */
+  | "name_mismatch"
+  /** The identifier is shared and one of the two has no name to check it
+   *  against. A missing name is absence of evidence, not a match. */
+  | "name_unknown";
 
 /**
  * The evidence shown to the user, pre-rendered into sentences.

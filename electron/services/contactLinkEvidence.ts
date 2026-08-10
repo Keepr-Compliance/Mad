@@ -223,6 +223,22 @@ export function summaryForReason(
         `each is already saved as its own contact. Joining them would merge two saved people, which is ` +
         `more than a link.`
       );
+    // BACKLOG-2619 / BACKLOG-2624 — the linker's name veto. Both sentences name
+    // the identifier AND say what the names did, because the identifier alone is
+    // what made this look like a match in the first place.
+    case "name_mismatch":
+      return (
+        `A record in your ${ctx.sourceLabel} lists ${ident ?? "an identifier"} that you also have saved ` +
+        `against ${who} — but it is saved under a different name` +
+        `${ctx.nameText ? `, "${ctx.nameText}"` : ""}. A shared number or address often means an office, ` +
+        `a household, or a line that changed hands, rather than one person.`
+      );
+    case "name_unknown":
+      return (
+        `A record in your ${ctx.sourceLabel} lists ${ident ?? "an identifier"} that you also have saved ` +
+        `against ${who}, but one of the two has no name on it — so there is nothing to check the match ` +
+        `against. A missing name is not evidence that these are the same person.`
+      );
     default:
       return `This match was not applied automatically.`;
   }
@@ -522,6 +538,12 @@ function defaultRelationshipFor(reason: LinkProposalReason): RelationshipAssessm
     case "name_generational_suffix":
     case "name_same_source_family":
     case "name_two_saved_contacts":
+    // BACKLOG-2619 — a shared phone or email means SOMETHING even when the names
+    // say it is not one person. The office line that produced the mismatch is
+    // itself the connection, and `contactsShareTransaction` can still upgrade
+    // this to `connected`.
+    case "name_mismatch":
+    case "name_unknown":
       return "possibly_connected";
     case "name_not_unique":
       return "no_known_connection";
