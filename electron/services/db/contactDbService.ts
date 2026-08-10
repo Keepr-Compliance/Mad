@@ -1215,6 +1215,39 @@ export async function getContactByPhone(
  *
  * BACKLOG-1469: Added to support contact promotion dedup.
  *
+ * ===========================================================================
+ * BACKLOG-2621 — compares `phone_normalized`, not a re-derived key
+ * ===========================================================================
+ * This used to compute the lookup key inside the query:
+ *
+ *   SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(phone_e164,'+',''),'-',''),' ',''),'(',''), -10)
+ *
+ * which no index can serve, and which was a THIRD implementation of
+ * last-ten-digits — one in SQL here, one in `toLookupKey`, one in the caller
+ * (`localSyncService`, which strips `\D` and slices before calling). The two
+ * did not agree. The SQL copy strips only `+`, `-`, space and `(` — not `)`
+ * and not `.` — so for a number stored with punctuation it produced a
+ * different key from `toLookupKey`, and `contact_phones.phone_normalized`
+ * holds the `toLookupKey` one.
+ *
+ * THIS IS A BEHAVIOUR DELTA, AND IT IS THE ONE INTENTIONAL ONE IN BACKLOG-2621.
+ * `syncContactPhones` — the contact-edit path — writes `p.phone.trim()` into
+ * `phone_e164` verbatim, so a number typed by hand as "(415) 555-0109" is
+ * stored in that shape. The old SQL reduced it to "15)5550109" and therefore
+ * MISSED it; matching on `phone_normalized` ("4155550109") FINDS it. The
+ * effect is on Android contact promotion: a hand-entered number that today
+ * gets promoted a second time as a duplicate is now recognised as existing.
+ * Rows written through `toE164` (every import path) are "+" plus digits, for
+ * which the two forms are byte-identical — so nothing shifts for imported
+ * contacts. Both halves of that claim are pinned by
+ * `matchingIndexUsage.test.ts`, which builds its corpus
+ * by calling the real write paths rather than hand-writing rows.
+ *
+ * `+c.user_id` is the SQLite no-op prefix — see the long note in
+ * `contactSourceLinker.ts`. It leaves the result set alone and stops the term
+ * anchoring `contacts` as the outer loop, which is what lets
+ * `idx_contact_phones_normalized` drive the join.
+ *
  * @param userId - Owning user ID
  * @param normalizedPhone - Last 10 digits of the phone number
  * @returns Contact ID and display_name if found, null otherwise
@@ -1233,8 +1266,8 @@ export function findContactByNormalizedPhone(
       c.display_name
     FROM contacts c
     JOIN contact_phones cp ON c.id = cp.contact_id
-    WHERE c.user_id = ?
-      AND SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', ''), -10) = ?
+    WHERE +c.user_id = ?
+      AND cp.phone_normalized = ?
     LIMIT 1
   `;
 
