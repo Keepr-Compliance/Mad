@@ -1195,10 +1195,13 @@ describe("R8 — collapsing the contact side", () => {
     link("r8d", "macos", "mac-r8d", "source_id");
     addExternal("and-r8d", "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
 
-    // CONTROL: collapse by emptying `sourceRows` AFTER the null guard reads it
-    // and this contact — whose only source row is the absorbed one — returns
-    // null, putting R1's "nothing to compare" bug back for the commonest case in
-    // the queue.
+    // CONTROL, corrected after running it: the ordering mutation I first wrote
+    // here CANNOT go red — this contact's only non-origin link is the absorbed
+    // one, so `sourceRows` is empty whether the collapse runs before the guard
+    // or after it, and both orders return the same view. The mutation that does
+    // fire is R1's guard bug returning — `if (sourceRows.length === 0)`, which
+    // collapsing makes far likelier because it empties `sourceRows` for EVERY
+    // contact. Run: all four R8 views come back null.
     const view = await getContactCompareColumns(USER, "r8d", candidate("r8d"), {
       collapseContactSources: true,
     });
