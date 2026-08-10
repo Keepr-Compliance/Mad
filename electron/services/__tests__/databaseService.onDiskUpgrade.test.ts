@@ -784,6 +784,70 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
   });
 
   // -------------------------------------------------------------------------
+  // BACKLOG-2621 — an index added to schema.sql with NO migration
+  //
+  // The mirror image of the two tests above. Those protect against an index
+  // being added to schema.sql that CANNOT run on an upgrade. This one protects
+  // the opposite assumption — that an index added to schema.sql with no
+  // migration behind it DOES reach a database that has no migration pending.
+  //
+  // BACKLOG-2621 rests entirely on that: it adds
+  // `idx_contact_emails_email_lower` to schema.sql and deliberately writes no
+  // migration, on the reasoning that `runMigrations()` execs schema.sql
+  // UNCONDITIONALLY (databaseService.ts:776) and `CREATE INDEX IF NOT EXISTS`
+  // is therefore reached on every start.
+  //
+  // SR review found that mechanism unguarded: changing that one line to
+  // `if (willRunMigration) currentDb.exec(schemaSql)` — which would deny the
+  // index to EVERY existing install, the founder's included — left 96 suites
+  // and 1,388 tests green. Nothing in the repo observed it. This test does.
+  // -------------------------------------------------------------------------
+
+  it("BACKLOG-2621: a database ALREADY AT HEAD still gains idx_contact_emails_email_lower", async () => {
+    assertRealOnDiskTarget();
+
+    // Step 1 — bring the file to head, the way an install that upgraded BEFORE
+    // this change did. After this, `willRunMigration` is false.
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // Step 2 — the fixture builds its "v55" file by exec'ing the CURRENT
+    // schema.sql, so the index is already present and the assertion below would
+    // pass no matter what runMigrations() did. Drop it, exactly as the v62 test
+    // above drops its column and for the same reason: to make the fixture
+    // express a database that predates the change rather than one that already
+    // contains it.
+    db.exec("DROP INDEX IF EXISTS idx_contact_emails_email_lower");
+    expect(indexNames(db)).not.toContain("idx_contact_emails_email_lower");
+
+    // Step 3 — run again with NOTHING pending. Every version-gated branch is
+    // skipped (no backup, no chain body, no retention prune). The only thing
+    // left that can deliver the index is the unconditional schema.sql exec.
+    const versionBefore = schemaVersionOf(db);
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(versionBefore);
+
+    expect(indexNames(db)).toContain("idx_contact_emails_email_lower");
+
+    // Step 4 — present is not the same as reached. Assert the matching
+    // predicate is actually served by it, so an index that arrives under a
+    // different definition (a plain `email` index, say) does not pass.
+    const plan = (
+      db
+        .prepare(
+          `EXPLAIN QUERY PLAN
+             SELECT DISTINCT c.id FROM contacts c
+               JOIN contact_emails ce ON ce.contact_id = c.id
+              WHERE +c.user_id = ? AND LOWER(ce.email) IN (?, ?, ?)
+              ORDER BY c.id`,
+        )
+        .all("u", "a@example.com", "b@example.com", "c@example.com") as Array<{ detail: string }>
+    ).map((r) => r.detail);
+
+    expect(plan[0]).toBe("SEARCH ce USING INDEX idx_contact_emails_email_lower (<expr>=?)");
+  });
+
+  // -------------------------------------------------------------------------
   // BACKLOG-2401 — the crosswalk, over the SAME real file
   // -------------------------------------------------------------------------
 
