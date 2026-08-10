@@ -279,6 +279,59 @@ function getOpenQuestionsByContact(userId: string): Map<string, number> {
  *
  * A NULL verdict falls to `ELSE 1`, so an unjudged link counts as unconfirmed.
  *
+ * ===========================================================================
+ * THE CONTACT'S OWN RECORD IS NOT A LINK ANYONE OWES A VERDICT ON
+ * ===========================================================================
+ * Founder QA, 10 Aug, on `010bfd93`: he imported Desmond Okafor and attached
+ * Petra Lindqvist to him BY HAND. The row read `2 records combined` — correct —
+ * beside **`Autolinked`**, which is a statement about who decided, and nothing
+ * had guessed anything. Rosalind Vance, imported plus THREE hand-made links, had
+ * been mislabelled the same way all evening.
+ *
+ * His crosswalk for Desmond, non-origin rows only:
+ *
+ *   | match_method | latest verdict                          |
+ *   |--------------|-----------------------------------------|
+ *   | `source_id`  | none, ever                              |
+ *   | `manual`     | `same_person`, `decided_by=manual_link` |
+ *
+ * `linkSourceRecordToContact` writes that `same_person` verdict itself, so the
+ * hand-made link was confirmed. The `source_id` row was not — because a
+ * `source_id` row is the SOURCE ASSERTING ITS OWN RECORD. `linkImportedContact`
+ * writes it when the user picks a record in the import picker ("the link is
+ * asserted, not inferred — the strongest evidence this system ever gets"), and
+ * `resolveSourceRecord` only ever writes it to backfill an `externalUuid` on a
+ * pair that is ALREADY linked. Nothing reviews such a row, so no verdict is ever
+ * written against it, so it fell to `ELSE 1` forever. One unreviewed row was
+ * enough to flip the whole contact, and `user_linked` was unreachable for every
+ * imported contact in the database.
+ *
+ * This is the SAME mistake `6f8374df` fixed in `records` — the contact's own
+ * record treated as a match — and that fix corrected the counts and left this
+ * expression alone.
+ *
+ * SO IT IS SUBTRACTED, NOT FILTERED. Widening the `WHERE` to drop `source_id`
+ * rows is the intuitive fix and it silently re-breaks `6f8374df`: `link_count`
+ * and `source_id_count` come from THIS row set and feed `records` and `columns`.
+ * On a collapsed import — two `source_id` rows, the founder's Casey Lane — the
+ * filtered version reports 2 records where 3 came together. Asserted directly,
+ * because with a single `source_id` row the two spellings are numerically
+ * identical and the trap is invisible.
+ *
+ * `MAX(...)` EXEMPTS AT MOST ONE ROW, mirroring what `columns` and `records`
+ * already absorb — the ONE record the contact was made from. A collapsed import
+ * keeps its second `source_id` row in the tally and stays `Autolinked`, which is
+ * shipped behaviour left deliberately unchanged: whether picking one collapsed
+ * picker row counts as the user linking BOTH records is the founder's call, and
+ * it is filed on BACKLOG-2626 rather than decided here. It also keeps this
+ * reader agreeing with `contactCompare.isConfirmed`, which quantifies over every
+ * non-origin link — the two are asserted equal on every shape.
+ *
+ * `AND v.identity_verdict IS NULL` guards the arm order: a `source_id` row that
+ * someone REJECTED (`different_people`, via provenance unlink) keeps counting as
+ * unconfirmed. Only the never-judged row is exempt, because only that row is one
+ * nobody was ever asked about.
+ *
  * TIE-BREAK: `decided_at DESC, rowid DESC`, matching `getLatestVerdict`'s SQL —
  * NOT its docblock, which names `id`. `recordVerdict` assigns a `uuidv4()`, so
  * ordering by `id` would be random while `rowid` is insertion order. The list
@@ -388,7 +441,9 @@ function readCrosswalkAggregate(userId: string): Array<{
     `SELECT l.contact_id                                              AS contact_id,
             COUNT(*)                                                  AS link_count,
             SUM(CASE WHEN l.match_method = 'source_id' THEN 1 ELSE 0 END) AS source_id_count,
-            SUM(CASE WHEN v.identity_verdict = 'same_person' THEN 0 ELSE 1 END) AS unconfirmed
+            SUM(CASE WHEN v.identity_verdict = 'same_person' THEN 0 ELSE 1 END)
+              - MAX(CASE WHEN l.match_method = 'source_id' AND v.identity_verdict IS NULL
+                         THEN 1 ELSE 0 END)                          AS unconfirmed
        FROM contact_source_links l
        LEFT JOIN (
          SELECT contact_id, source_type, source_record_id, identity_verdict,
