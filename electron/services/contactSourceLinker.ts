@@ -215,6 +215,46 @@ export interface LinkRunSummary {
  */
 export { isContactOnFrozenTransaction };
 
+/**
+ * ===========================================================================
+ * WHY `+c.user_id` AND NOT `c.user_id` — BACKLOG-2621
+ * ===========================================================================
+ * The unary `+` is SQLite's documented no-op prefix. It does not change the
+ * value or the result set; it makes the term unusable for driving an index,
+ * which is the entire point here.
+ *
+ * With a plain `c.user_id = ?`, SQLite anchors `contacts` as the OUTER loop
+ * (`SEARCH c USING INDEX idx_contacts_user_id`) and then does one index seek
+ * into the child table PER CONTACT, applying the value predicate as a filter.
+ * The value indexes — `idx_contact_emails_email`, `idx_contact_phones_phone`,
+ * `idx_contact_phones_normalized` — are never touched, so the cost is
+ * O(contacts owned by this user) on EVERY call regardless of how few values
+ * are being probed. With the founder's 1,103 unmatched records and ~2,000
+ * contacts that is ~2.2M index seeks per link run. Measured, not assumed:
+ * `matchingIndexUsage.test.ts` asserts the plan both ways.
+ *
+ * Removing that one term from index consideration flips the join:
+ *
+ *     SEARCH ce USING INDEX idx_contact_emails_email_lower (<expr>=?)
+ *     SEARCH c  USING INDEX sqlite_autoindex_contacts_1 (id=?)
+ *
+ * — driven by the value index, `contacts` reached by primary key, cost
+ * O(values probed). `user_id` is still enforced, just as a filter rather than
+ * as the driver, so the result set is identical.
+ *
+ * The plan was verified stable with AND without `ANALYZE` statistics (the
+ * maintenance path runs `ANALYZE`, so both states occur in the wild) and at
+ * one and five distinct users. Rewriting the predicate ALONE does not flip
+ * the plan — that was tried first and measured; the anchoring term is what
+ * decides it.
+ *
+ * Affinity note: unary `+` also strips column affinity, so the bound value is
+ * compared without TEXT coercion. Every caller passes a string user id (the
+ * signature says so) and `contacts.user_id` is TEXT, so text-to-text
+ * comparison is unchanged. Covered by a numeric-looking-user-id case in the
+ * test file above.
+ */
+
 /** Imported contacts carrying any of these emails. Exact, case-insensitive. */
 function contactIdsByEmail(userId: string, emails: string[]): string[] {
   const cleaned = emails.map((e) => e?.trim().toLowerCase()).filter((e): e is string => !!e);
@@ -223,13 +263,30 @@ function contactIdsByEmail(userId: string, emails: string[]): string[] {
   return dbAll<{ id: string }>(
     `SELECT DISTINCT c.id FROM contacts c
        JOIN contact_emails ce ON ce.contact_id = c.id
-      WHERE c.user_id = ? AND LOWER(ce.email) IN (${placeholders})
+      WHERE +c.user_id = ? AND LOWER(ce.email) IN (${placeholders})
       ORDER BY c.id`,
     [userId, ...cleaned],
   ).map((r) => r.id);
 }
 
-/** Imported contacts carrying any of these phones, compared as lookup keys. */
+/**
+ * Imported contacts carrying any of these phones, compared as lookup keys.
+ *
+ * BACKLOG-2621 — this compared `COALESCE(NULLIF(cp.phone_normalized, ''),
+ * cp.phone_e164)`, which no index can serve. The COALESCE arm was also dead:
+ * it fires only for a row whose `phone_normalized` is NULL or empty, and it
+ * then compares `phone_e164` — an E.164 string like `+15555550109` — against a
+ * last-ten-digits lookup key like `5555550109`. Those are never equal. So the
+ * fallback could only ever match a row that had a bare ten-digit `phone_e164`
+ * AND no `phone_normalized`, and no write path produces that pair: every
+ * INSERT and UPDATE into `contact_phones` sets `phone_normalized` with
+ * `toLookupKey` (asserted across all of them by
+ * `electron/utils/__tests__/phoneNormalization.writePath.test.ts`), and
+ * migration v40 backfilled every pre-existing NULL. Dropping it is therefore
+ * behaviour-neutral, which `matchingIndexUsage.test.ts` pins by
+ * running both forms over the same corpus — including a row with a NULL
+ * `phone_normalized` — and asserting identical id sets.
+ */
 function contactIdsByPhone(userId: string, phones: string[]): string[] {
   const keys = phones.map((p) => toLookupKey(p)).filter((k) => k.length > 0);
   if (keys.length === 0) return [];
@@ -237,8 +294,8 @@ function contactIdsByPhone(userId: string, phones: string[]): string[] {
   return dbAll<{ id: string }>(
     `SELECT DISTINCT c.id FROM contacts c
        JOIN contact_phones cp ON cp.contact_id = c.id
-      WHERE c.user_id = ?
-        AND COALESCE(NULLIF(cp.phone_normalized, ''), cp.phone_e164) IN (${placeholders})
+      WHERE +c.user_id = ?
+        AND cp.phone_normalized IN (${placeholders})
       ORDER BY c.id`,
     [userId, ...keys],
   ).map((r) => r.id);

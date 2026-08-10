@@ -1175,38 +1175,21 @@ export async function searchContacts(
   return dbAll<Contact>(sql, [userId, searchPattern, searchPattern]);
 }
 
-/**
- * Look up contact by phone number.
- * Normalizes the phone number and searches across all contact phones.
- * Returns the contact with display_name if found.
+/*
+ * BACKLOG-2621 — `getContactByPhone` DELETED. It had no callers beyond a
+ * one-line pass-through on `databaseService`, which is deleted with it.
+ *
+ * It is removed rather than fixed because leaving it invited someone to wire it
+ * up: it read like the phone lookup, sat next to the real one, and was wrong in
+ * a way that would not show up in a test written against a single user's data.
+ * It carried NO `user_id` predicate at all, so it would happily return another
+ * account's contact, and it matched with
+ * `REPLACE(...) LIKE '%<key>'` — a trailing-wildcard pattern, which is both
+ * unindexable and a suffix match rather than an equality one.
+ *
+ * The lookup to use is `findContactByNormalizedPhone` below: scoped by user,
+ * compares `contact_phones.phone_normalized`, served by an index.
  */
-export async function getContactByPhone(
-  phone: string
-): Promise<{ id: string; display_name: string; phone: string } | null> {
-  // Normalize phone to last 10 digits for matching
-  const digits = phone.replace(/\D/g, '');
-  const normalized = digits.length >= 10 ? digits.slice(-10) : digits;
-
-  if (!normalized || normalized.length < 7) {
-    return null;
-  }
-
-  const sql = `
-    SELECT
-      c.id,
-      c.display_name,
-      cp.phone_e164 as phone
-    FROM contacts c
-    JOIN contact_phones cp ON c.id = cp.contact_id
-    WHERE REPLACE(REPLACE(REPLACE(REPLACE(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', '') LIKE ?
-    LIMIT 1
-  `;
-
-  // Match on last 10 digits
-  const pattern = `%${normalized}`;
-  const result = dbGet<{ id: string; display_name: string; phone: string }>(sql, [pattern]);
-  return result || null;
-}
 
 /**
  * Synchronous phone lookup scoped by user_id.
@@ -1214,6 +1197,39 @@ export async function getContactByPhone(
  * creating entries in the main contacts table.
  *
  * BACKLOG-1469: Added to support contact promotion dedup.
+ *
+ * ===========================================================================
+ * BACKLOG-2621 — compares `phone_normalized`, not a re-derived key
+ * ===========================================================================
+ * This used to compute the lookup key inside the query:
+ *
+ *   SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(phone_e164,'+',''),'-',''),' ',''),'(',''), -10)
+ *
+ * which no index can serve, and which was a THIRD implementation of
+ * last-ten-digits — one in SQL here, one in `toLookupKey`, one in the caller
+ * (`localSyncService`, which strips `\D` and slices before calling). The two
+ * did not agree. The SQL copy strips only `+`, `-`, space and `(` — not `)`
+ * and not `.` — so for a number stored with punctuation it produced a
+ * different key from `toLookupKey`, and `contact_phones.phone_normalized`
+ * holds the `toLookupKey` one.
+ *
+ * THIS IS A BEHAVIOUR DELTA, AND IT IS THE ONE INTENTIONAL ONE IN BACKLOG-2621.
+ * `syncContactPhones` — the contact-edit path — writes `p.phone.trim()` into
+ * `phone_e164` verbatim, so a number typed by hand as "(415) 555-0109" is
+ * stored in that shape. The old SQL reduced it to "15)5550109" and therefore
+ * MISSED it; matching on `phone_normalized` ("4155550109") FINDS it. The
+ * effect is on Android contact promotion: a hand-entered number that today
+ * gets promoted a second time as a duplicate is now recognised as existing.
+ * Rows written through `toE164` (every import path) are "+" plus digits, for
+ * which the two forms are byte-identical — so nothing shifts for imported
+ * contacts. Both halves of that claim are pinned by
+ * `matchingIndexUsage.test.ts`, which builds its corpus
+ * by calling the real write paths rather than hand-writing rows.
+ *
+ * `+c.user_id` is the SQLite no-op prefix — see the long note in
+ * `contactSourceLinker.ts`. It leaves the result set alone and stops the term
+ * anchoring `contacts` as the outer loop, which is what lets
+ * `idx_contact_phones_normalized` drive the join.
  *
  * @param userId - Owning user ID
  * @param normalizedPhone - Last 10 digits of the phone number
@@ -1233,8 +1249,8 @@ export function findContactByNormalizedPhone(
       c.display_name
     FROM contacts c
     JOIN contact_phones cp ON c.id = cp.contact_id
-    WHERE c.user_id = ?
-      AND SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(cp.phone_e164, '+', ''), '-', ''), ' ', ''), '(', ''), -10) = ?
+    WHERE +c.user_id = ?
+      AND cp.phone_normalized = ?
     LIMIT 1
   `;
 

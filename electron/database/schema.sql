@@ -961,6 +961,23 @@ CREATE INDEX IF NOT EXISTS idx_contacts_is_imported ON contacts(is_imported);
 CREATE INDEX IF NOT EXISTS idx_contacts_user_imported ON contacts(user_id, is_imported);
 CREATE INDEX IF NOT EXISTS idx_contact_emails_contact_id ON contact_emails(contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_emails_email ON contact_emails(email);
+-- BACKLOG-2621: every case-insensitive email lookup asks for `LOWER(email)`, and
+-- a plain index on `email` cannot serve a function-wrapped column. This
+-- EXPRESSION index matches the predicate exactly, so the matching queries stop
+-- being driven from `contacts` (one child seek per contact) and start being
+-- driven by the value being looked up.
+--
+-- An expression index rather than storing the address lowercased: case is part
+-- of what the user typed and of what gets printed into the compliance export.
+-- Case-folding stored addresses would be a data mutation and a visible change,
+-- and this change must be provably behaviour-neutral. The index changes zero rows.
+--
+-- Safe to declare here rather than in a migration (unlike
+-- idx_contact_phones_normalized below): `contact_emails.email` is an original
+-- table column, so it already exists on every upgrade path at the point
+-- schema.sql runs. SQLite's LOWER() is ASCII-only — unchanged either way, since
+-- the same LOWER() is what the query already asked for.
+CREATE INDEX IF NOT EXISTS idx_contact_emails_email_lower ON contact_emails(LOWER(email));
 CREATE INDEX IF NOT EXISTS idx_contact_phones_contact_id ON contact_phones(contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_phones_phone ON contact_phones(phone_e164);
 -- BACKLOG-1727: idx_contact_phones_normalized is created by migration v40 only.

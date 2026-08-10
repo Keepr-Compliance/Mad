@@ -3825,10 +3825,6 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return contactDb.restoreContact(contactId);
   }
 
-  async getContactByPhone(phone: string): Promise<{ id: string; display_name: string; phone: string } | null> {
-    return contactDb.getContactByPhone(phone);
-  }
-
   /**
    * Synchronous phone lookup scoped by user_id (BACKLOG-1469).
    * Used by Android contact promotion to check for duplicates.
