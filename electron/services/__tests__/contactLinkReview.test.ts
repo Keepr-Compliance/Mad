@@ -113,6 +113,8 @@ function addExternal(
     phones?: string[];
     userId?: string;
     syncedAt?: string;
+    /** BACKLOG-2625 — the record's own organisation, the first disambiguator. */
+    company?: string;
   } = {},
 ): void {
   const phones = opts.phones ?? [];
@@ -120,8 +122,8 @@ function addExternal(
     .prepare(
       `INSERT INTO external_contacts
         (id, user_id, name, phones_json, phones_normalized_json, emails_json,
-         external_record_id, source, synced_at, external_uuid)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+         company, external_record_id, source, synced_at, external_uuid)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
     )
     .run(
       `ext-${opts.source ?? "macos"}-${recordId}`,
@@ -130,6 +132,7 @@ function addExternal(
       JSON.stringify(phones),
       JSON.stringify(phones.map(lookupKey)),
       JSON.stringify(opts.emails ?? []),
+      opts.company ?? null,
       recordId,
       opts.source ?? "macos",
       opts.syncedAt ?? CURRENT_SYNC,
@@ -274,6 +277,55 @@ describe("a withheld link appears in the queue with its evidence", () => {
     seedIdentifierReassigned();
     linkExternalContactsForUser(USER);
     expect(getReviewQueue(USER)[0].items[0].contactCompany).toBeNull();
+  });
+
+  /**
+   * BACKLOG-2625 — THE CANDIDATE RECORD'S OWN ORGANISATION.
+   *
+   * `contactCompany` above is the CONTACT's — the subline under the card's
+   * heading. This is a different field about a different row: the organisation
+   * on the ADDRESS-BOOK RECORD being judged, which is what separates two
+   * candidates that share a name, a source and a matched value. The founder
+   * named it as the field that tells his two `Bianca Okafor` records apart.
+   *
+   * The two are asserted together precisely because they are one word apart and
+   * would otherwise be easy to wire to each other.
+   *
+   * OBSERVED RED: dropping `ec.company AS source_company` from the SELECT reads
+   * `Expected "Harbourline Escrow", received undefined`.
+   */
+  it("carries the candidate RECORD's organisation, distinct from the contact's", () => {
+    addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
+    mockDb!.prepare("UPDATE contacts SET company = ? WHERE id = 'c-daniel'").run("Blue Spaces LLC");
+    addExternal("mac-daniel", "Daniel Haim", { phones: ["+14155550105"] });
+    createLink({
+      userId: USER,
+      contactId: "c-daniel",
+      sourceType: "macos",
+      sourceRecordId: "mac-daniel",
+      matchMethod: "source_id",
+    });
+    addExternal("mac-nina", "Nina Stone", {
+      phones: ["+14155550134"],
+      company: "Harbourline Escrow",
+    });
+
+    linkExternalContactsForUser(USER);
+
+    const item = getReviewQueue(USER)[0].items[0];
+    expect(item.sourceCompany).toBe("Harbourline Escrow");
+    expect(item.contactCompany).toBe("Blue Spaces LLC");
+  });
+
+  /**
+   * An absent organisation is `null`, not `""` — the renderer treats a value as
+   * "a field that could separate these rows", and an empty string would be a
+   * field that separates nothing while looking like one.
+   */
+  it("leaves the record's organisation null when the address book holds none", () => {
+    seedIdentifierReassigned();
+    linkExternalContactsForUser(USER);
+    expect(getReviewQueue(USER)[0].items[0].sourceCompany).toBeNull();
   });
 
   it("reports the two axes separately, in words", () => {

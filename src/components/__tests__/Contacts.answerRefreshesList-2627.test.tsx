@@ -206,6 +206,10 @@ function openQuestionCluster(): ContactReviewCluster {
         sourceRecordId: "AB-RECORD-4417",
         sourceLabel: "Mac address book",
         sourceName: "R. Vance",
+        // BACKLOG-2625: the candidate record's own organisation. Required on
+        // `ReviewQueueItem`, so a fixture that omitted it would fail
+        // `type-check:tests` rather than silently describe an impossible item.
+        sourceCompany: null,
         recordEmails: ["r.vance@example.com"],
         recordPhones: ["+14155550134"],
         reason: "identifier_reassigned",

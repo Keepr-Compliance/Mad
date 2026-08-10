@@ -620,8 +620,16 @@ describe("ContactRow", () => {
         },
       });
 
+    /*
+      BACKLOG-2626 `d84dc2f6` — `Suggestion` was the app's INTERNAL CATEGORY
+      NAME. It told the user a suggestion existed without saying what about or
+      how many, which is the one question the badge is for. The fixture above
+      carries `openQuestions: 1` for the suggestion state, so the expected string
+      is the singular. The plural, the count's provenance, and the deliberate
+      rejection of "action required" live in `ContactRow.badgeWording-2626.test.tsx`.
+    */
     it.each([
-      ["suggestion" as const, "Suggestion"],
+      ["suggestion" as const, "1 possible duplicate"],
       ["autolinked" as const, "Autolinked"],
       ["user_linked" as const, "You linked these"],
     ])("%s renders exactly its own word", (badge, label) => {
@@ -715,7 +723,11 @@ describe("ContactRow", () => {
         contact: withBadge("suggestion", { columns: 1, records: 1 }),
       });
 
-      expect(screen.getByRole("status")).toHaveTextContent("Suggestion");
+      // BACKLOG-2626 `d84dc2f6`: the badge now carries its own count, which is
+      // the OPEN QUESTIONS (one here) and not the records (also one here, and
+      // the reason the "records combined" text is absent). Two numbers that
+      // happen to coincide on this shape and are asserted for different reasons.
+      expect(screen.getByRole("status")).toHaveTextContent("1 possible duplicate");
       expect(
         screen.queryByTestId("contact-row-record-count"),
       ).not.toBeInTheDocument();

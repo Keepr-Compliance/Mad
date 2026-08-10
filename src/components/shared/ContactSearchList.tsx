@@ -123,6 +123,22 @@ export interface ContactSearchListProps {
   /** Callback when a contact is clicked (for viewing details). If provided, clicking a contact calls this instead of selection. */
   onContactClick?: (contact: ExtendedContact) => void;
   /**
+   * BACKLOG-2603 — a way into a contact's open questions that does NOT spend
+   * the row click.
+   *
+   * Passed straight through to `ContactRow.onOpenQuestions`, which turns the
+   * badge into a button. It exists because `isSelectionMode` is derived from
+   * `!onContactClick` (see the row-render below): in the transaction wizard the
+   * row click means "add to the deal", so the questions need their own
+   * affordance — and the badge, already the thing that says a question exists,
+   * is it.
+   *
+   * Clients & Contacts omits this. Its row click already opens the filtered
+   * queue, so a second route off the same row would be two controls for one
+   * action. Omitting it leaves that surface byte-identical.
+   */
+  onOpenContactQuestions?: (contact: ExtendedContact) => void;
+  /**
    * Contact ID currently shown in a master-detail pane (BACKLOG-1898 QA fix).
    * When set, the matching row is highlighted even though `selectedIds` stays
    * empty in detail mode. Has no effect in selection mode. Default `undefined`.
@@ -325,6 +341,61 @@ function formatRoleSummary(selected: Set<string>): string {
   return `${count} selected`;
 }
 
+/**
+ * A label and the controls it names, as ONE wrappable unit — BACKLOG-2471,
+ * point 4 of the founder's 7 Aug spec.
+ *
+ * THE DEFECT THIS DELETES. The controls row is `flex-wrap`. The labels used to
+ * be bare siblings of their controls inside it, so every child was an
+ * independent wrap candidate. In the band of widths where the label still fits
+ * on line one but the controls after it no longer do, the browser broke the
+ * line between them and left the word `Filter:` stranded alone above its own
+ * dropdowns. `Sort:` had the identical shape.
+ *
+ * WHY A COMPONENT AND NOT A WRAP RULE. The founder: *"put them all as a part of
+ * the same wrap component so they all move together."* A `flex-nowrap` or a
+ * `whitespace-nowrap` tuned to today's widths would look right today and regress
+ * the moment someone appends a control — which has already happened once, when
+ * BACKLOG-2626 added `Autolinked` to this row. Grouping makes "they move
+ * together" structural: a cluster is a single flex item in the wrapping row, so
+ * the line can only break BETWEEN clusters, never inside one. Either the whole
+ * group sits on line one or the whole group moves to line two; the intermediate
+ * state the founder saw has no way to exist.
+ *
+ * Two rules hold this, and `ContactSearchList.controlClusters-2471.test.tsx`
+ * asserts both:
+ *   1. This wrapper does NOT set `flex-wrap` — its children cannot split.
+ *   2. Every element child of `contact-controls` IS a cluster. A new control
+ *      dropped in beside the clusters rather than inside one fails that test,
+ *      which is the regression the founder is actually worried about.
+ *
+ * No `role="group"` here: the sort segmented control already carries one, and
+ * nesting a second unlabelled group only adds noise for a screen reader. The
+ * grouping being asserted is a LAYOUT fact, so it is carried by a data
+ * attribute rather than by ARIA.
+ *
+ * Spacing is unchanged from before the grouping: the row's `gap-x-3` reproduces
+ * the old 8px gap + the `ml-1` that used to sit on the `Filter:` label (12px
+ * between clusters), and this `gap-2` reproduces the old 8px between a label and
+ * its controls.
+ */
+function ControlCluster({
+  label,
+  testId,
+  children,
+}: {
+  label: string;
+  testId: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <div className="flex items-center gap-2" data-control-cluster="" data-testid={testId}>
+      <span className="text-xs text-gray-400 flex-shrink-0">{label}</span>
+      {children}
+    </div>
+  );
+}
+
 export function ContactSearchList({
   contacts,
   externalContacts = [],
@@ -335,6 +406,7 @@ export function ContactSearchList({
   showDetailLine = false,
   showAddButtonForImported = false,
   onContactClick,
+  onOpenContactQuestions,
   activeContactId,
   onAddManually,
   addedContactIds = new Set(),
@@ -800,76 +872,81 @@ export function ContactSearchList({
           </div>
         </div>
 
-        {/* Sort control (always visible) + Source/Role grouped filters (filter modes only) */}
+        {/*
+          Sort control (always visible) + Source/Role grouped filters (filter
+          modes only). Each label travels with the controls it names — see
+          `ControlCluster`. This row wraps BETWEEN clusters and nowhere else, so
+          anything added here must go INSIDE a cluster, not beside one.
+        */}
         <div
-          className="px-2 sm:px-3 py-2 border-b border-gray-100 flex items-center gap-2 flex-wrap"
+          className="px-2 sm:px-3 py-2 border-b border-gray-100 flex items-center gap-x-3 gap-y-2 flex-wrap"
           data-testid="contact-controls"
         >
-          <span className="text-xs text-gray-400 flex-shrink-0">Sort:</span>
-          <div
-            role="group"
-            aria-label="Sort order"
-            className="inline-flex rounded-lg border border-gray-300 overflow-hidden"
-            data-testid="contact-sort-control"
-          >
-            <button
-              type="button"
-              onClick={() => setSortOrder("recent")}
-              aria-pressed={sortOrder === "recent"}
-              className={sortButtonClass(sortOrder === "recent")}
-              data-testid="sort-recent"
+          <ControlCluster label="Sort:" testId="contact-sort-cluster">
+            <div
+              role="group"
+              aria-label="Sort order"
+              className="inline-flex rounded-lg border border-gray-300 overflow-hidden"
+              data-testid="contact-sort-control"
             >
-              Recent
-            </button>
-            <button
-              type="button"
-              onClick={() => setSortOrder("alphabetical")}
-              aria-pressed={sortOrder === "alphabetical"}
-              className={`${sortButtonClass(sortOrder === "alphabetical")} border-l border-gray-300`}
-              data-testid="sort-alphabetical"
-            >
-              Alphabetical
-            </button>
-            {/*
-              BACKLOG-2626, folding in `11abce67` — the chip became an OPTION.
-
-              It used to be a standalone amber pill reading `Needs review · N`.
-              Three things changed, all of them the founder's:
-
-              1. **`Autolinked`, not `Needs review`.** These are the contacts the
-                 matcher was CONFIDENT about — it attached the record without
-                 asking. The genuinely uncertain ones are the open questions.
-                 Labelling the confident set "needs review" inverts the signal.
-              2. **No count.** *"Just the word."* A number turns a lens into a
-                 backlog, and there is nothing here the user is behind on.
-              3. **Inside the Sort control**, as one of its options rather than a
-                 badge beside it — his words, and it is why this button sits in
-                 the same bordered group as Recent and Alphabetical.
-
-              It remains a FILTER rather than a sort: pressing it narrows the list
-              and pressing it again restores it, and the chosen sort order is
-              untouched either way. That is deliberate and is what he described —
-              the control is one segmented cluster, not one exclusive choice.
-
-              Still hidden at zero, like the header's review button: a filter that
-              can only ever return an empty list is a dead control.
-            */}
-            {autolinkedCount > 0 && (
               <button
                 type="button"
-                onClick={() => setAutolinkedOnly((on) => !on)}
-                aria-pressed={autolinkedOnly}
-                className={`${sortButtonClass(autolinkedOnly)} border-l border-gray-300`}
-                data-testid="filter-autolinked"
+                onClick={() => setSortOrder("recent")}
+                aria-pressed={sortOrder === "recent"}
+                className={sortButtonClass(sortOrder === "recent")}
+                data-testid="sort-recent"
               >
-                {BADGE_LABELS.autolinked}
+                Recent
               </button>
-            )}
-          </div>
+              <button
+                type="button"
+                onClick={() => setSortOrder("alphabetical")}
+                aria-pressed={sortOrder === "alphabetical"}
+                className={`${sortButtonClass(sortOrder === "alphabetical")} border-l border-gray-300`}
+                data-testid="sort-alphabetical"
+              >
+                Alphabetical
+              </button>
+              {/*
+                BACKLOG-2626, folding in `11abce67` — the chip became an OPTION.
+
+                It used to be a standalone amber pill reading `Needs review · N`.
+                Three things changed, all of them the founder's:
+
+                1. **`Autolinked`, not `Needs review`.** These are the contacts the
+                   matcher was CONFIDENT about — it attached the record without
+                   asking. The genuinely uncertain ones are the open questions.
+                   Labelling the confident set "needs review" inverts the signal.
+                2. **No count.** *"Just the word."* A number turns a lens into a
+                   backlog, and there is nothing here the user is behind on.
+                3. **Inside the Sort control**, as one of its options rather than a
+                   badge beside it — his words, and it is why this button sits in
+                   the same bordered group as Recent and Alphabetical.
+
+                It remains a FILTER rather than a sort: pressing it narrows the list
+                and pressing it again restores it, and the chosen sort order is
+                untouched either way. That is deliberate and is what he described —
+                the control is one segmented cluster, not one exclusive choice.
+
+                Still hidden at zero, like the header's review button: a filter that
+                can only ever return an empty list is a dead control.
+              */}
+              {autolinkedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setAutolinkedOnly((on) => !on)}
+                  aria-pressed={autolinkedOnly}
+                  className={`${sortButtonClass(autolinkedOnly)} border-l border-gray-300`}
+                  data-testid="filter-autolinked"
+                >
+                  {BADGE_LABELS.autolinked}
+                </button>
+              )}
+            </div>
+          </ControlCluster>
 
           {showFilterUI && (
-            <>
-              <span className="text-xs text-gray-400 flex-shrink-0 ml-1">Filter:</span>
+            <ControlCluster label="Filter:" testId="contact-filter-cluster">
               <GroupedMultiSelect
                 groups={SOURCE_GROUPS}
                 selected={selectedSources}
@@ -886,7 +963,7 @@ export function ContactSearchList({
                 summaryFormatter={formatRoleSummary}
                 testId="role-filter"
               />
-            </>
+            </ControlCluster>
           )}
         </div>
       </div>
@@ -1037,6 +1114,13 @@ export function ContactSearchList({
                 // that produced them is deleted, so there is nothing to pass.
                 onSelect={() => handleRowSelect(contact, isExternal)}
                 onImport={() => handleImportButtonClick(contact)}
+                // BACKLOG-2603: undefined unless the consumer asked for it, so
+                // the badge stays a plain status everywhere it already was.
+                onOpenQuestions={
+                  onOpenContactQuestions
+                    ? () => onOpenContactQuestions(contact)
+                    : undefined
+                }
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}
               />
             );

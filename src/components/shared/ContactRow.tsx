@@ -11,12 +11,63 @@ import { sourceDisplayLabel } from "./SourcePill";
  * apart: they are one filter and one label for the same set, and two string
  * literals in two files is how "Needs review" survived in one place after being
  * renamed in the other.
+ *
+ * `suggestion` IS NOT HERE ANY MORE — it is the only one of the three whose
+ * label carries a number, so it cannot be a constant. `badgeLabel()` below is
+ * the single place all three are worded; this map remains only because the Sort
+ * control names the `autolinked` SET, which has no contact and therefore no
+ * count. Reach for `badgeLabel()` unless you are labelling a filter.
  */
-export const BADGE_LABELS: Record<ContactLinkBadge, string> = {
-  suggestion: "Suggestion",
+export const BADGE_LABELS: Record<Exclude<ContactLinkBadge, "suggestion">, string> = {
   autolinked: "Autolinked",
   user_linked: "You linked these",
 };
+
+/**
+ * THE BADGE'S WORDS — BACKLOG-2626, comment `d84dc2f6`.
+ *
+ * > *"It showed the suggestions pill — I'd rather call it X duplicates found or
+ * > something that a user can understand as duplicates found."*
+ *
+ * `Suggestion` named the app's INTERNAL CATEGORY. It told the user a suggestion
+ * existed without saying what it was about or how many, which is the one
+ * question the badge exists to answer: how much is outstanding on this contact.
+ * `Suggestion` cannot distinguish one question from four.
+ *
+ * The replacement is the COUNT plus the NOUN THIS SURFACE ALREADY USES. The
+ * header button says "Review N possible duplicates" and the queue is titled
+ * "Possible duplicates"; a third name for the same concept is how a user meets
+ * three ideas where there is one.
+ *
+ * NOT "action required", which he also floated and which is REJECTED: these are
+ * optional, the queue's own copy promises *"nothing changes until you answer"*,
+ * and he ruled the sibling badge a lens rather than a queue for exactly this
+ * reason. A badge that demands would contradict the screen it points at.
+ *
+ * The other two are UNCHANGED — `Autolinked` and `You linked these` already say
+ * what happened in plain words. Only the suggestion state was named after its
+ * internal concept.
+ *
+ * ON THE TWO NUMBERS THAT CAN NOW SHARE A ROW (his explicit question): this
+ * badge counts OPEN QUESTIONS while `N records combined` beside it counts
+ * RECORDS ATTACHED. They can appear together and they count different things.
+ * They no longer collide because each now names its own noun and the tenses
+ * separate them — "combined" is done, "possible duplicates" is outstanding. It
+ * was `Suggestion` beside "5 records combined" that could not be read, because
+ * only one of the two said what it counted. Both strings are asserted in one
+ * test so they cannot drift apart again (`14617008`'s standing instruction).
+ */
+export function badgeLabel(state: {
+  badge: ContactLinkBadge;
+  openQuestions: number;
+}): string {
+  if (state.badge !== "suggestion") return BADGE_LABELS[state.badge];
+  // Singular at one. "1 possible duplicates" is the kind of small wrongness
+  // that makes a user distrust the number beside it.
+  return state.openQuestions === 1
+    ? "1 possible duplicate"
+    : `${state.openQuestions} possible duplicates`;
+}
 
 /**
  * A LENS, NOT AN ALERT — founder, `11abce67` on BACKLOG-2471.
@@ -102,6 +153,21 @@ export interface ContactRowProps {
   onSelect?: () => void;
   /** Called when the import button is clicked */
   onImport?: () => void;
+  /**
+   * BACKLOG-2603 — make the badge a way IN to this contact's open questions.
+   *
+   * OPT-IN, and the opt-in is the point. Clients & Contacts already routes the
+   * questions through its ROW CLICK (`Contacts.handleContactClick`), so it does
+   * not pass this and its badge stays a plain status. The transaction wizard
+   * cannot: its row click adds the contact to the deal, and `ContactSearchList`
+   * derives `isSelectionMode` from the absence of `onContactClick`, so the row
+   * click is spoken for. This gives that surface a way in WITHOUT forking the
+   * row or changing what a row click means anywhere.
+   *
+   * Only ever rendered where a badge is (`review_state` present), so a consumer
+   * passing it does not decorate the ordinary contact.
+   */
+  onOpenQuestions?: () => void;
   /** Additional CSS classes */
   className?: string;
 }
@@ -198,6 +264,7 @@ export function ContactRow({
   showDetailLine = false,
   onSelect,
   onImport,
+  onOpenQuestions,
   className = "",
 }: ContactRowProps): React.ReactElement {
   const displayName = getDisplayName(contact);
@@ -215,6 +282,35 @@ export function ContactRow({
     event.stopPropagation();
     onImport?.();
   };
+
+  // BACKLOG-2603: see the badge's own note below. stopPropagation keeps the
+  // wizard's row-click (add to the transaction) from firing on the way to the
+  // questions — the badge asks a question, it does not join a deal.
+  const handleOpenQuestionsClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    onOpenQuestions?.();
+  };
+
+  /*
+    ONE BADGE NODE, RENDERED BARE OR WRAPPED — never two copies of the markup.
+    The clickable and plain shapes differ only in what surrounds it, so a change
+    to the badge itself cannot land on one surface and miss the other.
+  */
+  const badgeSpan = contact.review_state ? (
+    <span
+      className={`px-2 py-1 rounded-full text-xs font-semibold border ${BADGE_STYLES[contact.review_state.badge]}`}
+      data-testid="contact-row-badge"
+      /*
+        ROLE, NOT JUST A TESTID. The badge is asserted through
+        `getByRole("status")` so a rename cannot satisfy the test
+        vacuously — a testid survives any relabelling, and relabelling is
+        exactly what this item is about.
+      */
+      role="status"
+    >
+      {badgeLabel(contact.review_state)}
+    </span>
+  ) : null;
 
   // BACKLOG-2400: "+ Add" affordance triggers the row's selection action
   // (onSelect). stopPropagation prevents the row's own onClick from ALSO firing
@@ -403,19 +499,47 @@ export function ContactRow({
               {contact.review_state.records} records combined
             </span>
           )}
-          <span
-            className={`px-2 py-1 rounded-full text-xs font-semibold border ${BADGE_STYLES[contact.review_state.badge]}`}
-            data-testid="contact-row-badge"
-            /*
-              ROLE, NOT JUST A TESTID. The badge is asserted through
-              `getByRole("status")` so a rename cannot satisfy the test
-              vacuously — a testid survives any relabelling, and relabelling is
-              exactly what this item is about.
-            */
-            role="status"
-          >
-            {BADGE_LABELS[contact.review_state.badge]}
-          </span>
+          {/*
+            BACKLOG-2603 — THE BADGE IS THE WAY IN, AND IT IS THE SAME BADGE.
+
+            The founder found `Bea Okafor` in the transaction wizard and could
+            reach her; he found `Bianca Okafor`, who has four open questions, and
+            the wizard said nothing. In Clients & Contacts the same contact
+            carries a badge. His instruction was to REUSE, not to build: *"if we
+            were to reuse the search from the Clients & Contacts it shouldn't
+            [need building], should it?"* — and it did not, because both surfaces
+            already render THIS component. Only the wizard's projection was
+            dropping `review_state` (see `ContactAssignmentStep.toExtendedContact`).
+
+            WHY A BUTTON ROUND THE BADGE RATHER THAN A ROW CLICK. In Clients &
+            Contacts the row click opens the filtered queue. In the wizard the
+            row click ADDS THE CONTACT TO THE TRANSACTION — the surface's whole
+            purpose — and `ContactSearchList` derives `isSelectionMode` from the
+            ABSENCE of `onContactClick`, so routing the questions through that
+            prop would take add-mode away with it. One affordance that means two
+            things in two places is not reuse. The badge is the way in wherever
+            a consumer asks for one, and the row keeps its own meaning.
+
+            The `<span role="status">` INSIDE is untouched in both shapes, so the
+            2626 controls that assert `getByRole("status")` keep holding whether
+            or not this row is clickable. `stopPropagation` follows the grammar
+            `handleImportClick` / `handleAddClick` already use above: without it
+            the badge press would also fire the row's `onSelect` and silently add
+            her to the deal on the way to the question.
+          */}
+          {onOpenQuestions ? (
+            <button
+              type="button"
+              onClick={handleOpenQuestionsClick}
+              className="rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-indigo-500"
+              data-testid="contact-row-badge-action"
+              aria-label={`Review ${badgeLabel(contact.review_state)} for ${displayName}`}
+            >
+              {badgeSpan}
+            </button>
+          ) : (
+            badgeSpan
+          )}
         </div>
       )}
 

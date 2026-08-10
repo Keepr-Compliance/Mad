@@ -23,6 +23,9 @@ import { ContactSearchList } from "../shared/ContactSearchList";
 import { ContactRoleRow } from "../shared/ContactRoleRow";
 import { ContactPreview } from "../shared/ContactPreview";
 import { ContactFormModal } from "../contact";
+// BACKLOG-2603: the SHIPPED review screen, reused with a filter. See its mount
+// at the foot of this component for why it is not a wizard-specific copy.
+import { ReviewDuplicatesModal } from "../contact/components";
 import type { RoleOption } from "../shared/ContactRoleRow";
 import type { ContactAssignments } from "../../hooks/useAuditTransaction";
 import type { Contact } from "../../../electron/types/models";
@@ -95,25 +98,54 @@ interface ImportedTwin {
 
 /**
  * Converts Contact to ExtendedContact format for ContactSearchList/ContactRoleRow
+ *
+ * =========================================================================
+ * BACKLOG-2603 — CARRY EVERYTHING, WITHHOLD ON PURPOSE. IT USED TO BE THE
+ * OTHER WAY ROUND, AND THAT COST FOUR FIELDS.
+ * =========================================================================
+ * This was a FIELD-BY-FIELD ALLOWLIST: fourteen names copied across, and
+ * everything else silently gone. A projection like that does not fail loudly —
+ * the object still typechecks, the screen still renders, and one feature is
+ * quietly missing on this surface only. The record:
+ *
+ *   - BACKLOG-1270 — `allEmails` / `allPhones` lost, restored
+ *   - BACKLOG-1355 — `default_role` lost, restored
+ *   - BACKLOG-1727 follow-up — `last_communication_at` lost, and its own note
+ *     below records that the fix *"landed Jan 30 2026 for EditContactsModal but
+ *     was never applied here"*
+ *   - BACKLOG-2603 — `review_state` lost. THE FOUNDER FOUND THIS ONE: he
+ *     searched a contact with four outstanding questions in the transaction
+ *     wizard and the row said nothing, while the same contact in Clients &
+ *     Contacts carries a badge. Both surfaces render the SAME `ContactRow`
+ *     through the SAME `ContactSearchList`; only this function stood between
+ *     them.
+ *
+ * Adding a fifteenth line would have bought the fifth loss. So the default is
+ * inverted: the contact is spread, and anything withheld must now be an
+ * explicit, commented deletion that a reviewer can see.
+ *
+ * SAFE BECAUSE THE CONSUMERS WERE ENUMERATED, not because a spread feels
+ * harmless. Every `contact.<field>` read downstream: `ContactRow` reads
+ * `allEmails, allPhones, company, email, id, is_message_derived, phone,
+ * review_state, source`; `ContactSearchList` reads `disabled, id, review_state`.
+ * `review_state` is the ONLY field they read that the allowlist withheld — so
+ * this turns the badge on and changes nothing else. Neither reads `source_types`,
+ * so no source pill appears and BACKLOG-2356's name-only row is untouched.
+ *
+ * The two overrides below are the only things this function now decides.
  */
 function toExtendedContact(contact: Contact): ExtendedContact {
   return {
-    id: contact.id,
-    name: contact.name,
+    ...contact,
+    // The one genuine transformation: the list sorts and searches on
+    // `display_name`, and a contact with only `name` must not sort as blank.
     display_name: contact.display_name || contact.name,
-    email: contact.email,
-    phone: contact.phone,
-    company: contact.company,
-    source: contact.source,
-    is_message_derived: contact.is_message_derived,
-    user_id: contact.user_id,
-    created_at: contact.created_at,
-    updated_at: contact.updated_at,
-    // BACKLOG-1270: Preserve all emails/phones through the selection flow
+    // BACKLOG-1270: Preserve all emails/phones through the selection flow.
+    // Kept as explicit casts rather than left to the spread because `Contact`
+    // does not declare them — they are attached by `parseContactAddressAggregates`
+    // at read time, and naming them here is what tells the compiler they exist.
     allEmails: (contact as unknown as { allEmails?: string[] }).allEmails,
     allPhones: (contact as unknown as { allPhones?: string[] }).allPhones,
-    // BACKLOG-1355: Preserve default_role for auto-fill
-    default_role: contact.default_role,
     // BACKLOG-1727 follow-up: preserve last_communication_at so the frontend
     // sort in ContactSearchList can order all contacts by recency regardless
     // of imported/external origin. Same fix landed Jan 30 2026 (commit 5d6799e2)
@@ -169,6 +201,19 @@ function ContactAssignmentStep({
 
   // Track contact IDs to auto-select after manual add via ContactFormModal
   const [pendingAutoSelectIds, setPendingAutoSelectIds] = useState<string[]>([]);
+
+  /**
+   * BACKLOG-2603 — whose open questions are on screen, if anyone's.
+   *
+   * The founder's framing was *"if we were to reuse the search from the Clients
+   * & Contacts it shouldn't [need building], should it?"* — and it did not. This
+   * is a contact id handed to the SHIPPED `ReviewDuplicatesModal` as
+   * `filterContactId`, the same parameter Clients & Contacts passes at
+   * `Contacts.tsx`. One component, now four entry points: the full queue, the
+   * post-import filtered view, the contact click in Clients & Contacts, and
+   * this. Not a fourth screen.
+   */
+  const [questionsForContactId, setQuestionsForContactId] = useState<string | null>(null);
 
   // BACKLOG-1355: Auto-fill role state
   const [autoRoleEnabled, setAutoRoleEnabled] = useState(false);
@@ -624,6 +669,24 @@ function ContactAssignmentStep({
                 // clobbers the Clients & Contacts screen's saved filter selection.
                 // When not surfaced it is fully off (show everyone).
                 filterMode={showCategoryFilter ? "ephemeral" : "off"}
+                /*
+                  BACKLOG-2603 — the badge is the way into this contact's open
+                  questions, and NOT the row click.
+
+                  The row click here ADDS THE CONTACT TO THE TRANSACTION, which
+                  is what this surface is for; `ContactSearchList` also derives
+                  `isSelectionMode` from the absence of `onContactClick`, so
+                  routing the questions through that prop would take add-mode
+                  away with it. The badge — already the only thing on the row
+                  that says a question exists — carries the click instead.
+
+                  `showDetailLine` is deliberately still absent. The founder's
+                  BACKLOG-2591 ruling (*"ON for linking, OFF for the transaction
+                  picker"*) was about a per-row DETAIL LINE on every row; this is
+                  a conditional badge on the minority of rows that owe an answer,
+                  and it is the thing he asked for on this exact surface.
+                */
+                onOpenContactQuestions={(contact) => setQuestionsForContactId(contact.id)}
                 className="h-full"
               />
             </div>
@@ -700,6 +763,37 @@ function ContactAssignmentStep({
               setPendingAutoSelectIds((prev) => [...prev, savedContact.id]);
             }
             onRefreshContacts();
+          }}
+        />
+      )}
+
+      {/*
+        BACKLOG-2603 — THE SAME REVIEW SCREEN, FILTERED TO ONE CONTACT.
+
+        The founder searched a contact with four outstanding questions in this
+        wizard and had no way to reach them; in Clients & Contacts the same
+        contact carries a badge that leads to this screen. So it is mounted here
+        with the same `filterContactId` that surface uses — not a wizard-shaped
+        copy of it. Answering here writes through the same path and is the same
+        answer; that is `onResolved`'s whole job below.
+
+        It renders at `z-[60]`, above this wizard's `z-50` shell, which is the
+        same stacking it already relies on over the contact card.
+      */}
+      {questionsForContactId && (
+        <ReviewDuplicatesModal
+          userId={userId}
+          filterContactId={questionsForContactId}
+          onClose={() => setQuestionsForContactId(null)}
+          /*
+            SILENT, so answering does not blank the list the user is part-way
+            through choosing from. The refresh is what moves the badge: the
+            count lives on `review_state`, which is stamped by the same producer
+            this re-reads, so an answered question leaves the row on its own
+            rather than by a second rule kept in step by hand.
+          */
+          onResolved={() => {
+            void onSilentRefreshContacts();
           }}
         />
       )}

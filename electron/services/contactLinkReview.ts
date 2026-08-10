@@ -85,6 +85,23 @@ export interface ReviewQueueItem {
   sourceLabel: string;
   sourceName: string | null;
   /**
+   * BACKLOG-2625 — the FIRST FALLBACK when two candidate rows would read alike.
+   *
+   * The founder's four Bianca Okafor candidates come from ONE address book and
+   * match on TWO shared values, so source-plus-value cannot separate them — and
+   * two of them share a name as well. He named the field that does: they
+   * *"differ by organisation"*. Selected off the `external_contacts` row the
+   * queue already inner-joins, so it costs no extra query, and — like
+   * `recordEmails` / `recordPhones` below — read from the RECORD AS IT STANDS
+   * rather than from `evidence_json`, which is frozen at proposal time. A user
+   * judging whether two records are one person must be shown what they hold now.
+   *
+   * Rendered ONLY on collision — see `disambiguate()` in `ReviewDuplicatesModal`.
+   * He rejected showing everything (*"the card gets tall fast at four
+   * candidates"*) as firmly as he rejected identical rows.
+   */
+  sourceCompany: string | null;
+  /**
    * BACKLOG-2502 R2 — the candidate record's OWN identifiers, so the review card
    * can show the value under the source label instead of only naming the field.
    *
@@ -174,6 +191,7 @@ export function getReviewQueue(userId: string): ReviewQueueCluster[] {
   const rows = dbAll<
     LinkProposalRow & {
       source_name: string | null;
+      source_company: string | null;
       source_emails_json: string | null;
       source_phones_json: string | null;
       contact_name: string | null;
@@ -183,7 +201,8 @@ export function getReviewQueue(userId: string): ReviewQueueCluster[] {
     `SELECT p.id, p.user_id, p.contact_id, p.source_type, p.source_record_id, p.status,
             p.reason, p.matched_on, p.identity_assessment, p.relationship_assessment,
             p.cluster_key, p.evidence_json, p.created_at, p.resolved_at,
-            ec.name AS source_name, ec.emails_json AS source_emails_json,
+            ec.name AS source_name, ec.company AS source_company,
+            ec.emails_json AS source_emails_json,
             ec.phones_json AS source_phones_json,
             c.display_name AS contact_name, c.company AS contact_company
        ${PENDING_JOIN}
@@ -204,6 +223,7 @@ export function getReviewQueue(userId: string): ReviewQueueCluster[] {
       sourceRecordId: row.source_record_id,
       sourceLabel: sourceLabel(row.source_type),
       sourceName: row.source_name?.trim() || evidence?.sourceName || null,
+      sourceCompany: row.source_company?.trim() || null,
       recordEmails: parseValueArray(row.source_emails_json),
       recordPhones: parseValueArray(row.source_phones_json),
       reason: row.reason,

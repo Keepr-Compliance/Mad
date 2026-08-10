@@ -64,6 +64,12 @@ import { proposeLink } from "../db/contactLinkReviewDbService";
 import { countReviewQueue, getReviewQueue } from "../contactLinkReview";
 import { canUnlinkSource } from "../../../src/utils/contactSourceAffordances";
 import { getReviewStateByContact } from "../db/contactSourceSets";
+// The REAL hand-link producer. It writes a `same_person` / `manual_link` verdict
+// AND the `manual` crosswalk row in one transaction — which is precisely why the
+// fixtures below cannot be built with the `link()` helper: `createLink` writes no
+// verdict, so a hand-built "manual link" describes a state this app never emits
+// and cannot reproduce the founder's defect at all. See `10 Aug` block below.
+import { linkSourceRecordToContact } from "../contactManualLink";
 // BACKLOG-2502 — the REAL constant the service filters origin rows by, so the
 // "no non-origin links" premise below is transcribed from the producer instead
 // of re-spelled as a source-type list that would drift away from it.
@@ -1689,6 +1695,181 @@ describe("the review-state set", () => {
       openQuestions: 0,
       badge: "autolinked",
     });
+  });
+
+  // =========================================================================
+  // BACKLOG-2626 — WHO DECIDED, AFTER FOUNDER QA ON `010bfd93` (10 Aug)
+  // =========================================================================
+
+  /**
+   * THE FIXTURES BELOW ARE BUILT THROUGH `linkSourceRecordToContact`, AND THAT
+   * IS THE WHOLE REASON THEY CATCH ANYTHING.
+   *
+   * The `link()` helper calls `createLink`, which writes a crosswalk row and NO
+   * verdict. A "manual link" built that way describes a state the app cannot
+   * emit: the real producer writes `same_person` / `manual_link` and the row in
+   * ONE transaction. `rQ` above is exactly that invented shape — three `manual`
+   * rows with no verdicts — and it is why the existing suite could not see this
+   * defect: under any fix it still reads `autolinked`, correctly, because
+   * nothing in it was ever confirmed.
+   *
+   * So each fixture ASSERTS ITS OWN SHAPE against the crosswalk before asserting
+   * the badge. A fixture missing the verdict-less `source_id` row, or carrying
+   * verdict-less `manual` rows, cannot reproduce the founder's defect at all,
+   * and the shape assertions are what stop it from silently becoming that.
+   */
+  const verdictsFor = (contactId: string): Array<{ method: string; verdict: string | null }> =>
+    mockDb!
+      .prepare(
+        `SELECT l.match_method AS method, v.identity_verdict AS verdict
+           FROM contact_source_links l
+           LEFT JOIN contact_link_verdicts v
+             ON v.contact_id = l.contact_id
+            AND v.source_type = l.source_type
+            AND v.source_record_id = l.source_record_id
+          WHERE l.contact_id = ? AND l.match_method <> ?
+          ORDER BY l.match_method, l.source_record_id`,
+      )
+      .all(contactId, ORIGIN_MATCH_METHOD) as Array<{ method: string; verdict: string | null }>;
+
+  /**
+   * HIS EXACT SHAPE. He imported Desmond Okafor — the negative control, nothing
+   * is ever proposed for him — and attached Petra Lindqvist BY HAND. The row
+   * read `2 records combined` beside **`Autolinked`**. Nothing guessed anything.
+   *
+   * The count was right and the badge was a statement about WHO DECIDED, so the
+   * two are asserted together here: the fix must move one and not the other.
+   *
+   * OBSERVED RED: drop the `MAX(...)` arm from `unconfirmed` and this reads
+   * `autolinked` with `needsReview: true` — the shipped defect, exactly.
+   */
+  it("a contact whose every attached record was linked BY HAND is not autolinked", () => {
+    addContact("rDO", "Desmond Okafor");
+    origin("rDO", "contacts_app");
+    // The record he was imported FROM. Nothing reviews it, so it never gets a
+    // verdict — the row that flipped the badge.
+    addExternal("mac-rDO", "Desmond Okafor", "macos");
+    link("rDO", "macos", "mac-rDO", "source_id");
+    // Petra, attached by hand through the REAL writer.
+    addExternal("petra-rDO", "Petra Lindqvist", "macos");
+    expect(linkSourceRecordToContact(USER, "rDO", "macos", "petra-rDO").ok).toBe(true);
+
+    // THE SHAPE, transcribed from his database and asserted against ours.
+    expect(verdictsFor("rDO")).toEqual([
+      { method: "manual", verdict: "same_person" },
+      { method: "source_id", verdict: null },
+    ]);
+
+    expect(getReviewStateByContact(USER).get("rDO")).toEqual({
+      columns: 2,
+      records: 2,
+      needsReview: false,
+      openQuestions: 0,
+      badge: "user_linked",
+    });
+  });
+
+  /**
+   * THE SAME SHAPE AT THREE HAND-MADE LINKS — Rosalind Vance, who had been
+   * mislabelled all evening. One verdict-less `source_id` row outvoted three
+   * explicit human decisions, which is the defect stated at its worst.
+   */
+  it("stays the user's own doing however many records they linked by hand", () => {
+    addContact("rRV", "Rosalind Vance");
+    origin("rRV", "contacts_app");
+    addExternal("mac-rRV", "Rosalind Vance", "macos");
+    link("rRV", "macos", "mac-rRV", "source_id");
+    for (const record of ["roz-rRV", "hale-rRV", "rh-rRV"]) {
+      addExternal(record, "Rosalind Vance", "macos");
+      expect(linkSourceRecordToContact(USER, "rRV", "macos", record).ok).toBe(true);
+    }
+
+    expect(verdictsFor("rRV")).toEqual([
+      { method: "manual", verdict: "same_person" },
+      { method: "manual", verdict: "same_person" },
+      { method: "manual", verdict: "same_person" },
+      { method: "source_id", verdict: null },
+    ]);
+
+    expect(getReviewStateByContact(USER).get("rRV")).toEqual({
+      columns: 4,
+      records: 4,
+      needsReview: false,
+      openQuestions: 0,
+      badge: "user_linked",
+    });
+  });
+
+  /**
+   * THE DISCRIMINATOR. Without this the two tests above are satisfied by
+   * returning `user_linked` unconditionally.
+   *
+   * `twoColumnContact` is the imported contact plus a record the matcher
+   * attached on CONTENT (`match_method: 'email'`), unjudged. That is a link the
+   * app made and the user has not ratified — the state `Autolinked` exists to
+   * name — and it must survive the fix untouched.
+   */
+  it("still says autolinked when the app attached the record, not the user", () => {
+    twoColumnContact("rAL");
+
+    expect(verdictsFor("rAL")).toEqual([
+      { method: "email", verdict: null },
+      { method: "source_id", verdict: null },
+    ]);
+
+    const state = getReviewStateByContact(USER).get("rAL")!;
+    expect(state.needsReview).toBe(true);
+    expect(state.badge).toBe("autolinked");
+  });
+
+  /**
+   * THE TRAP, PINNED — the reason `unconfirmed` SUBTRACTS instead of the `WHERE`
+   * FILTERING.
+   *
+   * A collapsed import writes a `source_id` row per record it stood for
+   * (BACKLOG-2458, the founder's Casey Lane), so this contact holds TWO of them
+   * plus one hand-attached record. `link_count` and `source_id_count` come from
+   * the same row set as `unconfirmed` and feed `records` and `columns`, so
+   * dropping `source_id` rows from that set silently re-breaks `6f8374df`.
+   *
+   * IT MUST BE THIS SHAPE. With a single `source_id` row the filtered and
+   * subtracted spellings are numerically IDENTICAL — `columns` is
+   * `1 + (L-1) - 0` either way — so Desmond and Rosalind cannot fail under the
+   * naive fix and count assertions on them would prove nothing. At two, the
+   * filter drops both rows and the numbers move.
+   *
+   * OBSERVED RED: widen the `WHERE` to `AND l.match_method <> 'source_id'` and
+   * this reads `columns: 2, records: 2` against a Sources panel of 3.
+   *
+   * The badge here stays `autolinked`, and deliberately: only ONE `source_id`
+   * row is exempt, mirroring the one `columns` and `records` already absorb.
+   * Whether picking a collapsed picker row means the user linked BOTH records is
+   * the founder's call, filed on BACKLOG-2626 and not decided here.
+   */
+  it("counts every record of a collapsed import, which the naive fix would drop", () => {
+    addContact("rCI", "Casey Lane");
+    origin("rCI", "contacts_app");
+    // One picker row stood for both of these, so both are `source_id`.
+    addExternal("mac-rCI", "Casey Lane", "macos");
+    addExternal("out-rCI", "Casey Lane", "outlook");
+    link("rCI", "macos", "mac-rCI", "source_id");
+    link("rCI", "outlook", "out-rCI", "source_id");
+    // Plus one attached by hand, so the contact is not source_id-only.
+    addExternal("and-rCI", "Casey Lane", "android_sync");
+    expect(linkSourceRecordToContact(USER, "rCI", "android_sync", "and-rCI").ok).toBe(true);
+
+    const state = getReviewStateByContact(USER).get("rCI")!;
+    const panel = getContactProvenance(USER, "rCI");
+
+    // THE COUNTS `6f8374df` ESTABLISHED — three real records, once each,
+    // asserted against the panel the founder compared the row to.
+    expect(panel).toHaveLength(3);
+    expect(state.records).toBe(3);
+    expect(state.records).toBe(panel.length);
+    expect(state.columns).toBe(3);
+
+    // The second `source_id` row is still unratified, so the badge does not move.
+    expect(state.badge).toBe("autolinked");
   });
 
   // =========================================================================
