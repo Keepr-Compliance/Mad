@@ -76,8 +76,33 @@ interface UseContactListResult {
   externalContacts: ExtendedContact[];
   externalContactsLoading: boolean;
   /**
-   * Refresh BOTH lists for the import path, and commit them as ONE render
-   * (BACKLOG-2526).
+   * Refresh BOTH lists, and commit them as ONE render (BACKLOG-2526).
+   *
+   * ==========================================================================
+   * WHO CALLS IT, AND WHY THE NAME NO LONGER SAYS "IMPORT" (BACKLOG-2627)
+   * ==========================================================================
+   * Two callers, and they are the two things that change which source records
+   * `contacts:get-available` still offers:
+   *
+   *   - the IMPORT path, which writes a crosswalk row for the record it saved;
+   *   - ANSWERING a duplicate question, where `contacts:confirm-link` writes one
+   *     for the record the user just said is the same person.
+   *
+   * It was `refreshAfterImport`. The founder answered two questions in the
+   * review queue with Clients & Contacts open behind it and the list did not
+   * move: the answer path called `silentLoadContacts`, which re-reads the SAVED
+   * half only, and `loadExternalContacts`'s once-per-mount guard
+   * (`externalContactsLoadedRef`, :255) means the address-book half is never
+   * asked again for the life of the mount. The app's own funnel proves it —
+   * the last `picker:` line was logged BEFORE either answer.
+   *
+   * That defect cost more than a stale screen. The list was read as evidence
+   * that a DIFFERENT fix had failed to remove a record; it had worked, and the
+   * screen was ten minutes old. A verification that reads a cached list cannot
+   * tell "the fix failed" from "the screen is old".
+   *
+   * So the name names the CONTRACT — refresh both, commit once — and not the
+   * first caller to need it. Nothing about the behaviour changed with it.
    *
    * ==========================================================================
    * WHY THIS REPLACED `reloadExternalContacts` RATHER THAN JOINING IT
@@ -130,7 +155,9 @@ interface UseContactListResult {
    * on the next load, and a second Import press is folded by the crosswalk
    * guard in `contacts:import` (BACKLOG-2525), so the retry is safe.
    *
-   * THE RETURN VALUE IS THE CARD, NOT THE LIST, AND IT PLAYS BY ITS OWN RULE:
+   * THE RETURN VALUE IS THE CARD, NOT THE LIST, AND IT PLAYS BY ITS OWN RULE
+   * (it is the import path's; the answer path ignores it — nothing is created
+   * to land on, the contact the record joined was already in the list):
    * the saved-contact rows whenever that fetch succeeded, committed or not, and
    * `[]` when it failed. The caller lands the detail card on
    * `refreshed.find(...) ?? created`, and `created` carries ONE email and ONE
@@ -140,7 +167,7 @@ interface UseContactListResult {
    * BACKLOG-2459 complaint on the failure path for no gain. The list is one
    * refresh behind; the card is right.
    */
-  refreshAfterImport: () => Promise<ExtendedContact[]>;
+  refreshBothLists: () => Promise<ExtendedContact[]>;
 }
 
 /**
@@ -300,6 +327,7 @@ export function useContactList(userId: string, options?: UseContactListOptions):
 
   /**
    * BACKLOG-2526 — refresh both lists, commit them as one render.
+   * BACKLOG-2627 — and the second caller, answering a duplicate question.
    *
    * The full rationale is on the interface declaration above. The mechanics
    * that are easy to break are all here:
@@ -319,7 +347,7 @@ export function useContactList(userId: string, options?: UseContactListOptions):
    *   - `loadExternalContacts`'s once-per-mount guard is bypassed rather than
    *     cleared, so there is no window where the guard is down.
    */
-  const refreshAfterImport = useCallback(async (): Promise<ExtendedContact[]> => {
+  const refreshBothLists = useCallback(async (): Promise<ExtendedContact[]> => {
     const [saved, external] = await Promise.all([
       fetchSavedContacts(),
       fetchExternalContacts(),
@@ -334,9 +362,9 @@ export function useContactList(userId: string, options?: UseContactListOptions):
       externalContactsLoadedRef.current = true;
     } else {
       // Deliberately no partial commit: see the interface doc. The screen keeps
-      // the pre-import state, which is stale but consistent, and the next load
+      // the state it had, which is stale but consistent, and the next load
       // repairs it.
-      logger.error("Post-import refresh incomplete, leaving both lists as they were", {
+      logger.error("Contact list refresh incomplete, leaving both lists as they were", {
         savedContactsLoaded: saved !== null,
         externalContactsLoaded: external !== null,
       });
@@ -442,7 +470,7 @@ export function useContactList(userId: string, options?: UseContactListOptions):
     // External contacts (from macOS Contacts app, etc.)
     externalContacts,
     externalContactsLoading,
-    refreshAfterImport,
+    refreshBothLists,
   };
 }
 

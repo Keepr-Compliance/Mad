@@ -223,8 +223,10 @@ const savedTam = {
  * it carries ONE email and ONE phone however many the record had. The list query
  * carries all of them. So a card showing the second address can only have come
  * from the fetched row, and a card showing one address can only have come from
- * the handler's return value. That is what makes `refreshAfterImport`'s return
+ * the handler's return value. That is what makes `refreshBothLists`'s return
  * contract observable instead of a matter of opinion.
+ * (Named `refreshAfterImport` when this was written; renamed in BACKLOG-2627,
+ * which gave it its second caller — answering a duplicate question.)
  */
 const savedTamFullyLoaded = {
   ...(savedTam as unknown as Record<string, unknown>),
