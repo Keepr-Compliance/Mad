@@ -601,7 +601,14 @@ describe("clicking a contact with open questions", () => {
     const row = screen
       .getAllByTestId("contact-row")
       .find((r) => within(r).queryByText("Rosalind Vance"))!;
-    expect(within(row).getByRole("status")).toHaveTextContent("Suggestion");
+    /*
+      BACKLOG-2626 `d84dc2f6` — the badge now names its own count, and this
+      assertion is sharper for it. The point here is that the badge is STALE: it
+      advertises three questions off `review_state` while the queue this click
+      reads has nothing to ask. A badge that could only say "Suggestion" could
+      not have shown that discrepancy at all.
+    */
+    expect(within(row).getByRole("status")).toHaveTextContent("3 possible duplicates");
 
     const readsBefore = api().getReviewQueue.mock.calls.length;
     await openContact("Rosalind Vance");

@@ -123,6 +123,22 @@ export interface ContactSearchListProps {
   /** Callback when a contact is clicked (for viewing details). If provided, clicking a contact calls this instead of selection. */
   onContactClick?: (contact: ExtendedContact) => void;
   /**
+   * BACKLOG-2603 — a way into a contact's open questions that does NOT spend
+   * the row click.
+   *
+   * Passed straight through to `ContactRow.onOpenQuestions`, which turns the
+   * badge into a button. It exists because `isSelectionMode` is derived from
+   * `!onContactClick` (see the row-render below): in the transaction wizard the
+   * row click means "add to the deal", so the questions need their own
+   * affordance — and the badge, already the thing that says a question exists,
+   * is it.
+   *
+   * Clients & Contacts omits this. Its row click already opens the filtered
+   * queue, so a second route off the same row would be two controls for one
+   * action. Omitting it leaves that surface byte-identical.
+   */
+  onOpenContactQuestions?: (contact: ExtendedContact) => void;
+  /**
    * Contact ID currently shown in a master-detail pane (BACKLOG-1898 QA fix).
    * When set, the matching row is highlighted even though `selectedIds` stays
    * empty in detail mode. Has no effect in selection mode. Default `undefined`.
@@ -335,6 +351,7 @@ export function ContactSearchList({
   showDetailLine = false,
   showAddButtonForImported = false,
   onContactClick,
+  onOpenContactQuestions,
   activeContactId,
   onAddManually,
   addedContactIds = new Set(),
@@ -1037,6 +1054,13 @@ export function ContactSearchList({
                 // that produced them is deleted, so there is nothing to pass.
                 onSelect={() => handleRowSelect(contact, isExternal)}
                 onImport={() => handleImportButtonClick(contact)}
+                // BACKLOG-2603: undefined unless the consumer asked for it, so
+                // the badge stays a plain status everywhere it already was.
+                onOpenQuestions={
+                  onOpenContactQuestions
+                    ? () => onOpenContactQuestions(contact)
+                    : undefined
+                }
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}
               />
             );

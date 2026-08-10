@@ -626,6 +626,100 @@ function candidateValue(item: ContactReviewItem): string | null {
   return emails[0] ?? phones[0] ?? item.sourceName ?? null;
 }
 
+/**
+ * The name on the row — BACKLOG-2625.
+ *
+ * `sourceName` is the CANDIDATE RECORD's name, and it is the field that differs
+ * across the founder's four. It has been selected since the queue was written
+ * (`contactLinkReview.ts` — `ec.name AS source_name`) and reached this file
+ * unrendered: the row drew the source label and a value, which is enough only
+ * while candidates come from DIFFERENT sources with DIFFERENT values, as his own
+ * mock did. Four records from one address book matching on two shared values
+ * collapses that identifier, and four different people rendered as two
+ * byte-identical pairs.
+ *
+ * Falls back to the CONTACT's name rather than a placeholder: a nameless record
+ * is 18-in-1,124 on a verified store (BACKLOG-2461) and "the Bianca Okafor this
+ * might be" is still truer than "Unknown".
+ */
+function candidateName(item: ContactReviewItem): string {
+  return item.sourceName?.trim() || item.contactName;
+}
+
+/**
+ * THE SECOND FIELD, AND ONLY WHEN IT IS NEEDED — BACKLOG-2625, `3feb4bc3`.
+ *
+ * > *"When two candidate rows would otherwise be identical — same name, same
+ * > source, matching on the same value — show a second value that differs."*
+ *
+ * A FALLBACK, NOT A DEFAULT. He rejected both ends of this: showing everything
+ * (*"the card gets tall fast at four candidates"*) and leaving identical rows
+ * identical. So the row's triple — name, source, matched value — is tested for
+ * uniqueness AMONG THE CANDIDATES ON SCREEN, and only a colliding row gains a
+ * field. The single-candidate case can never collide and so can never gain one,
+ * which is the control that keeps the common shape quiet.
+ *
+ * ORDER: organisation first, then the identifier the matched value is NOT — he
+ * named both (*"they differ by organisation... and by phone"*) and organisation
+ * is the one that reads as a fact about the person rather than another string of
+ * digits to compare. Within the same kind, later entries are tried, so two
+ * records sharing a first email but differing on a second still separate.
+ *
+ * A VALUE, NEVER A SENTENCE. He has rejected per-candidate prose twice: *"at
+ * five candidates that is ten sentences saying what the header already made."*
+ *
+ * GENUINELY IDENTICAL RECORDS RETURN `null`, and the row says so rather than
+ * inventing a difference (his control 3). Two address-book entries alike in
+ * name, organisation, every email and every phone are indistinguishable
+ * BECAUSE THEY ARE — a disambiguator that implied otherwise would be the screen
+ * lying about the only thing it is for.
+ */
+/**
+ * Joins the row's three fields into a comparison key.
+ *
+ * A character no address book can hold, so a record named `"Vance"` with source
+ * `"Mac address book"` cannot key-collide with one named `"Vance Mac"` — the
+ * kind of accidental match that would suppress a disambiguator exactly where one
+ * is needed.
+ */
+const KEY_SEP = "\u001f";
+
+function disambiguate(
+  item: ContactReviewItem,
+  siblings: ContactReviewItem[],
+): string | null {
+  const key = (c: ContactReviewItem): string =>
+    [candidateName(c), c.sourceLabel, candidateValue(c) ?? ""].join(KEY_SEP);
+  const mine = key(item);
+  const collides = siblings.some((c) => c.proposalId !== item.proposalId && key(c) === mine);
+  if (!collides) return null;
+
+  const colliding = siblings.filter((c) => key(c) === mine);
+  const differsFromAColliding = (value: string | null, pick: (c: ContactReviewItem) => string | null): boolean =>
+    value !== null &&
+    colliding.some((c) => c.proposalId !== item.proposalId && (pick(c) ?? null) !== value);
+
+  // Organisation first.
+  const company = item.sourceCompany?.trim() || null;
+  if (differsFromAColliding(company, (c) => c.sourceCompany?.trim() || null)) return company;
+
+  // Then the identifier the matched value is not, then any other value that
+  // separates this row from a record it currently reads the same as.
+  const shown = candidateValue(item);
+  const others = [
+    ...(item.matchedOn === "email" ? item.recordPhones ?? [] : item.recordEmails ?? []),
+    ...(item.matchedOn === "email" ? item.recordEmails ?? [] : item.recordPhones ?? []),
+  ].filter((v) => v.trim() !== "" && v !== shown);
+
+  for (const candidate of others) {
+    const held = (c: ContactReviewItem): boolean =>
+      [...(c.recordEmails ?? []), ...(c.recordPhones ?? [])].includes(candidate);
+    if (colliding.some((c) => c.proposalId !== item.proposalId && !held(c))) return candidate;
+  }
+
+  return null;
+}
+
 function ContactReviewCard({
   group,
   busyId,
@@ -732,6 +826,12 @@ function ContactReviewCard({
           <CandidateRow
             key={item.proposalId}
             item={item}
+            // BACKLOG-2625 — the whole card's candidates, so a row can tell
+            // whether it reads the same as another ON THIS CARD. Answered rows
+            // are already gone from `group.items` (the queue reloads on every
+            // answer), so a disambiguator never survives the collision that
+            // justified it.
+            siblings={group.items}
             busy={busyId === item.proposalId}
             onView={() => onCompare(item)}
             onSame={() => onSame(item)}
@@ -802,18 +902,30 @@ function IconButton({
  */
 function CandidateRow({
   item,
+  siblings,
   busy,
   onView,
   onSame,
   onDifferent,
 }: {
   item: ContactReviewItem;
+  /**
+   * BACKLOG-2625 — every candidate ON SCREEN WITH THIS ONE, itself included.
+   *
+   * The row cannot decide alone whether it needs a second field: "identical" is
+   * a property of a PAIR, and the pair is only visible from the card. Passing
+   * the group down keeps the rule where the collision is observable instead of
+   * guessing from the record.
+   */
+  siblings: ContactReviewItem[];
   busy: boolean;
   onView: () => void;
   onSame: () => void;
   onDifferent: () => void;
 }): React.ReactElement {
   const value = candidateValue(item);
+  const name = candidateName(item);
+  const extra = disambiguate(item, siblings);
   return (
     <div
       className="mb-1.5 flex items-center gap-2.5 rounded-md border border-amber-300 bg-white px-2 py-2 last:mb-0"
@@ -823,6 +935,21 @@ function CandidateRow({
         {initialOf(item.sourceName ?? item.contactName)}
       </div>
       <div className="min-w-0 flex-1">
+        {/*
+          BACKLOG-2625 — WHO THIS RECORD IS, FIRST.
+
+          The founder was asked to answer four questions *"each one on its own"*
+          while being given nothing to tell the four apart. The name is the field
+          that differs across them and it was already on the object. It leads the
+          row because it is what a person is identified by; the source and the
+          value below it say WHERE the record lives and WHAT matched.
+        */}
+        <div
+          className="truncate text-[0.8rem] font-semibold text-gray-900"
+          data-testid={`review-name-${item.proposalId}`}
+        >
+          {name}
+        </div>
         {/*
           `sourceLabel` verbatim, even where the design draws the shorter
           "Outlook" and the shipped vocabulary says "Outlook contacts". ONE
@@ -842,6 +969,21 @@ function CandidateRow({
             data-testid={`review-value-${item.proposalId}`}
           >
             {value}
+          </div>
+        )}
+        {/*
+          BACKLOG-2625 — the second field, present ONLY where the row would
+          otherwise read the same as another on this card. `disambiguate` returns
+          `null` for every unique row, so this element does not exist on the
+          common shape rather than existing empty — a test asserting the fields a
+          row renders can therefore tell "not needed" from "needed and blank".
+        */}
+        {extra && (
+          <div
+            className="truncate text-[0.73rem] text-gray-500"
+            data-testid={`review-extra-${item.proposalId}`}
+          >
+            {extra}
           </div>
         )}
       </div>

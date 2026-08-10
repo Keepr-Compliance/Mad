@@ -485,10 +485,27 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
         } else {
           setUnlinkNotice(null);
         }
-        // The contact list carries the emails and phones this may have just
-        // taken back, so a stale list would keep showing a rejected person's
-        // address until the next reload.
-        silentLoadContacts();
+        /*
+          BACKLOG-2629 — BOTH HALVES, BECAUSE AN UNLINK CHANGES BOTH.
+
+          This called `silentLoadContacts()`, which re-reads `contacts:get-all`
+          and nothing else — the saved half. But an unlink DELETES a
+          `contact_source_links` row, and that table is exactly what
+          `contacts:get-available` suppresses on
+          (`contact-handlers.stopHidingRecords-2608.test.ts`, CONTROL 2). So the
+          record the user just detached should REAPPEAR as its own row in the
+          address-book half, and `loadExternalContacts` holds a once-per-mount
+          guard (`useContactList.ts` — `externalContactsLoadedRef`), so that half
+          was never asked again for the life of the mount.
+
+          The saved half still matters for its original reason (kept above): the
+          list carries the emails and phones this may have just taken back.
+          `refreshBothLists` does both and commits them in ONE render
+          (BACKLOG-2526), which is why it is reused rather than paired with a
+          second call — its own docblock: *"leaving a second, subtly different
+          refresh exported is how the split commit comes back."*
+        */
+        void refreshBothLists();
       } catch (err) {
         logger.warn(`[Contacts] unlink source threw: ${String(err)}`);
       } finally {
@@ -502,7 +519,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       provenanceContactId,
       refreshPreviewSources,
       refreshReviewQueueCount,
-      silentLoadContacts,
+      refreshBothLists,
     ],
   );
 
@@ -1009,6 +1026,32 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           unlinkingLinkId={unlinkingLinkId}
           // Confirm returns to the card, and the list behind it never
           // unmounted, so its filter and search are still there.
+          /*
+            BACKLOG-2629 — A THIRD CALLER THAT LOOKS LIKE THE DEFECT AND IS NOT.
+            LEFT ALONE DELIBERATELY, HAVING BEEN CHANGED AND CHANGED BACK.
+
+            `silentLoadContacts()` re-reads only the SAVED half, which is the
+            exact shape of the bug fixed on the two paths this item names —
+            `handleUnlinkSource` above and `LinkSourceSearch`'s `onLinked` below.
+            So this was widened to `refreshBothLists()` as well, and then the
+            mechanism was CHECKED rather than assumed. It does not hold.
+
+            The card route's confirm reaches `confirmContactSources`
+            (`contactCompare.ts`), which READS `contact_source_links` and writes
+            only verdicts (`recordVerdict`) and proposal resolutions
+            (`resolveProposal`). It creates NO crosswalk row. Since
+            `contacts:get-available` suppresses on that table, nothing this press
+            does changes the address-book half — there is no stale half here.
+
+            What it DOES change is the saved half: resolving a proposal drops the
+            contact's `openQuestions`, which rides on `contacts:get-all` via
+            `attachReviewState`. `silentLoadContacts()` is the right refresh for
+            precisely that, and widening it would have bought a second
+            address-book fetch per press with no observable difference.
+
+            The route that DOES create links is the queue's, and its `onResolved`
+            already goes through `refreshBothLists` (BACKLOG-2627).
+          */
           onConfirmed={() => {
             setCompareOpen(false);
             refreshPreviewSources();
@@ -1028,10 +1071,21 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           BACKLOG-2426 — manual linking. Above the card so the search and the
           contact it attaches to are on screen together.
 
-          `onLinked` refreshes BOTH: the sources panel gains the new row, and the
-          contact list carries the emails and phones the link just copied across
-          — the same pair `handleUnlinkSource` refreshes for the same reason, in
-          the opposite direction.
+          `onLinked` refreshes the sources panel (which gains the new row) and
+          BOTH LISTS.
+
+          BACKLOG-2629 — THE HALF THIS USED TO MISS IS THE HALF THE FOUNDER SAW.
+          It called `silentLoadContacts()`, so it refreshed the saved contacts
+          (which carry the emails and phones the link just copied across) and
+          never re-asked the address book. But a manual link WRITES a
+          `contact_source_links` row, and that is what `contacts:get-available`
+          suppresses on — so the record just attached should stop being its own
+          row. He linked Petra Lindqvist to Bianca Okafor on 2026-08-10; the link
+          appeared on Bianca's card and Petra stayed listed as her own row,
+          reading "not imported".
+
+          `refreshBothLists` — the same function `handleUnlinkSource` calls for
+          the mirror-image reason, and the one 2627 introduced. NOT a variant.
         */}
         {linkSearchOpen && !external && (
           <LinkSourceSearch
@@ -1041,7 +1095,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             onClose={() => setLinkSearchOpen(false)}
             onLinked={() => {
               refreshPreviewSources();
-              silentLoadContacts();
+              void refreshBothLists();
             }}
           />
         )}

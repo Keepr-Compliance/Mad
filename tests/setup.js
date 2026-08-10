@@ -167,6 +167,14 @@ if (typeof window !== 'undefined') {
       rejectLink: jest.fn().mockResolvedValue({ success: true }),
       getSources: jest.fn().mockResolvedValue({ success: true, sources: [] }),
       unlinkSource: jest.fn().mockResolvedValue({ success: true, remaining: 0 }),
+      // BACKLOG-2426/2591: manual linking, added by BACKLOG-2629's suite.
+      // Same EMPTY-SUCCESS convention as the block above — no linkable records
+      // renders the picker's empty state, so every existing test is unchanged.
+      // They were absent here entirely, which meant a test could reach these
+      // channels only by hand-installing them; `jest.mocked(...)` read
+      // `undefined` and failed inside the helper rather than in an assertion.
+      findLinkableSources: jest.fn().mockResolvedValue({ success: true, records: [] }),
+      linkSource: jest.fn().mockResolvedValue({ success: true, outcomes: [] }),
     },
     system: {
       // Platform detection (migrated from window.electron.platform)
