@@ -14,6 +14,7 @@ export {
   useContactSearch,
   useContactsLayout,
   useReviewQueueCount,
+  useOpenQuestions,
   useContactSources,
 } from "./hooks";
 

@@ -1,7 +1,35 @@
 import React from "react";
 import type { ExtendedContact } from "../../types/components";
+import type { ContactLinkBadge } from "../../../electron/types/models";
 import { labelForContact } from "../../utils/contactDisplayLabel";
 import { sourceDisplayLabel } from "./SourcePill";
+
+/**
+ * BACKLOG-2626 — the three badges, as WORDS THE FOUNDER CHOSE.
+ *
+ * Exported so the Sort control's `Autolinked` option and this row cannot drift
+ * apart: they are one filter and one label for the same set, and two string
+ * literals in two files is how "Needs review" survived in one place after being
+ * renamed in the other.
+ */
+export const BADGE_LABELS: Record<ContactLinkBadge, string> = {
+  suggestion: "Suggestion",
+  autolinked: "Autolinked",
+  user_linked: "You linked these",
+};
+
+/**
+ * A LENS, NOT AN ALERT — founder, `11abce67` on BACKLOG-2471.
+ *
+ * `Autolinked` is deliberately NOT amber any more. The set it names is the set
+ * the matcher was CONFIDENT about; the genuinely uncertain ones are the open
+ * questions, and those are the only ones that get a colour asking for attention.
+ */
+const BADGE_STYLES: Record<ContactLinkBadge, string> = {
+  suggestion: "bg-indigo-50 text-indigo-700 border-indigo-200",
+  autolinked: "bg-slate-50 text-slate-600 border-slate-200",
+  user_linked: "bg-green-50 text-green-700 border-green-200",
+};
 
 export interface ContactRowProps {
   /** The contact to display */
@@ -317,38 +345,78 @@ export function ContactRow({
       )}
 
       {/*
-        BACKLOG-2471 PR F — the combined-contact flag.
+        BACKLOG-2626 — THE THREE ROW BADGES, and the count beside them.
 
-        Rendered from the STAMPED `review_state`, so the number it promises is
-        the number of columns the compare screen will show. Counting crosswalk
-        rows here instead would over-promise by one on every imported contact,
-        because the screen folds the record a contact was created from into the
-        contact's own column.
+        `Autolinked` (the app linked these) · `Suggestion` (a question is open) ·
+        `You linked these` (the user decided, by either route). A contact with
+        none of those carries NO badge, which is `review_state: undefined`.
 
-        Absent `review_state` means "nothing to compare" — no flag. It is never
-        read as "reviewed"; that is `needsReview: false`, which earns the green
-        Confirmed pill below.
+        The founder ruled out a FOURTH "Confirmed" state on 2026-08-09: *"do you
+        think we need one status for confirmed linked contacts?"* — no.
+        "Confirmed" and "you linked it" are the same fact from his side, and how
+        he decided is provenance detail already on the source row inside the card
+        ("You confirmed this yourself" vs "You added this contact yourself").
+        That is why the green `Confirmed` pill this replaces did not survive as a
+        separate value: it was renamed, not joined.
 
-        Placed BEFORE the adding/added/import cluster and gated with it, so a
-        row being added to a transaction shows that state rather than two badges
+        PRECEDENCE, decided in `getReviewStateByContact` and not here, so one rule
+        serves the row and the filter: Suggestion > Autolinked > You linked these.
+        The three sets are NOT disjoint — `11abce67` says so explicitly, and one
+        contact can hold an auto-attached record awaiting confirmation AND a
+        separate proposal the matcher refused to guess about. `Suggestion` wins
+        because it is the state that REPLACED the forced compare screen as the way
+        an open question stays discoverable; demote it and the question is
+        invisible outside the queue again.
+
+        This is a LENS, NOT AN ALERT (founder, `11abce67`): these are contacts the
+        matcher was confident about, and styling them as a queue the user is
+        behind on inverts the signal. Hence neutral slate for `Autolinked` rather
+        than the amber it used to wear.
+
+        Placed BEFORE the adding/added/import cluster and gated with it, so a row
+        being added to a transaction shows that state rather than two badges
         competing for the same slot.
       */}
       {!isAdding && !isAdded && contact.review_state && (
-        contact.review_state.needsReview ? (
-          <div
-            className="flex-shrink-0 px-2 py-1 bg-amber-50 text-amber-800 border border-amber-300 rounded-full text-xs font-semibold"
-            data-testid="contact-row-review-flag"
+        <div className="flex-shrink-0 flex items-center gap-1.5">
+          {/*
+            THE RECORD COUNT — BACKLOG-2626, folding in `14617008`.
+
+            It counts RECORDS, not columns. The badge used to render
+            `review_state.columns` while the sentence beside it counted records,
+            so a two-record contact whose second record matched by stable id read
+            "1 records combined". Both numbers were accurate about different
+            things and the user read them as one contradictory statement.
+
+            Suppressed below two, which is not the `columns > 1` guard
+            `14617008` warned against: that guard hid the founder's own case
+            because it tested the WRONG NUMBER. Two records is two records
+            whether or not the compare screen draws them as two columns, and a
+            contact assembled from exactly one record has genuinely combined
+            nothing — the badge alone carries that row.
+          */}
+          {contact.review_state.records > 1 && (
+            <span
+              className="text-xs text-gray-500"
+              data-testid="contact-row-record-count"
+            >
+              {contact.review_state.records} records combined
+            </span>
+          )}
+          <span
+            className={`px-2 py-1 rounded-full text-xs font-semibold border ${BADGE_STYLES[contact.review_state.badge]}`}
+            data-testid="contact-row-badge"
+            /*
+              ROLE, NOT JUST A TESTID. The badge is asserted through
+              `getByRole("status")` so a rename cannot satisfy the test
+              vacuously — a testid survives any relabelling, and relabelling is
+              exactly what this item is about.
+            */
+            role="status"
           >
-            {contact.review_state.columns} records combined
-          </div>
-        ) : (
-          <div
-            className="flex-shrink-0 px-2 py-1 bg-green-50 text-green-700 border border-green-200 rounded-full text-xs font-semibold"
-            data-testid="contact-row-confirmed-flag"
-          >
-            Confirmed
-          </div>
-        )
+            {BADGE_LABELS[contact.review_state.badge]}
+          </span>
+        </div>
       )}
 
       {/* Added indicator with checkmark */}

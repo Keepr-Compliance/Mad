@@ -7,10 +7,14 @@ import {
   useContactList,
   useContactsLayout,
   useReviewQueueCount,
+  useOpenQuestions,
   useContactSources,
   ExtendedContact,
 } from "./contact";
-import type { ContactSourceProvenance } from "@/types/contactProvenance";
+import type {
+  ContactReviewItem,
+  ContactSourceProvenance,
+} from "@/types/contactProvenance";
 import { useAppStateMachine } from "../appCore";
 import { ContactSearchList } from "./shared/ContactSearchList";
 import {
@@ -128,6 +132,31 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    */
   const [compareOpen, setCompareOpen] = useState(false);
 
+  /**
+   * WHOSE QUESTIONS THE DUPLICATES SCREEN IS SHOWING (BACKLOG-2626), or `null`
+   * for the whole queue.
+   *
+   * Founder, 2026-08-10: *"we should reuse the Possible duplicates [screen] and
+   * only filter for that contact."* So a click on a contact with open questions
+   * opens the SHIPPED duplicates surface narrowed to her — the tucked review
+   * card, her outstanding candidates stacked beneath it, each answered
+   * independently and in place.
+   *
+   * NOT a chain of compare modals. That was a misreading of *"shows all compares
+   * one after another"*: the candidates STACK on one card, which is what "one
+   * after another" describes, and each keeps its own eye into the pairwise
+   * compare exactly as it has from the main queue. His standing instruction is
+   * the reason — *"as similar as we can, to have less to maintain"* — and it
+   * makes this a CALL SITE rather than a new surface, the same one the
+   * post-import flow and BACKLOG-2603 use.
+   *
+   * A CONTACT ID rather than a captured list of proposals: the screen re-reads
+   * the queue itself, so what it shows is what is still pending. Nothing here
+   * remembers which questions have been answered, which is what makes the
+   * founder's complaint impossible rather than merely fixed.
+   */
+  const [questionsForContactId, setQuestionsForContactId] = useState<string | null>(null);
+
   const showPreviewContact = useCallback((contact: ExtendedContact | null) => {
     previewContactIdRef.current = contact?.id ?? null;
     // BACKLOG-2426: the manual-link panel belongs to the contact that was on
@@ -187,6 +216,30 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   const [showReviewDuplicates, setShowReviewDuplicates] = useState(false);
   const { count: reviewQueueCount, refresh: refreshReviewQueueCount } =
     useReviewQueueCount(userId);
+  /**
+   * BACKLOG-2626 — the open questions, so a click can walk them.
+   *
+   * Beside `useReviewQueueCount` rather than replacing it: the header button's
+   * number is the whole user's queue and is allowed to be a cheap `COUNT(*)`,
+   * while this needs the questions themselves. Two reads of the same predicate,
+   * not two predicates.
+   */
+  const { items: openQuestions, refresh: refreshOpenQuestions } =
+    useOpenQuestions(userId);
+
+  /**
+   * This contact's outstanding questions, in the QUEUE'S OWN ORDER.
+   *
+   * `getReviewQueue` orders by `cluster_key, created_at, id` and this filter
+   * preserves it, so the walk asks them in the order the queue would. One order
+   * from one place is what stops the two surfaces disagreeing about "the next
+   * question" — which is the class of defect this whole item is.
+   */
+  const questionsFor = useCallback(
+    (contactId: string, from: ContactReviewItem[]) =>
+      from.filter((item) => item.contactId === contactId),
+    [],
+  );
 
   const provenanceContactId =
     previewContact && !previewIsExternal ? previewContact.id : null;
@@ -510,23 +563,34 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     selectContact(contact.id);
 
     /*
-      BACKLOG-2471 PR F — THE COMPARE SCREEN IS THE DEFAULT WAY IN, until the
-      user has said these records are one person.
+      BACKLOG-2626 — CLICKING OPENS HER OUTSTANDING QUESTIONS, FILTERED.
 
-      `showPreviewContact` above has already cleared `compareOpen` for the
-      outgoing contact, so this only ever opens it for the one being clicked —
-      which is why the order matters and why this line sits after it.
+      What was here before: `if (contact.review_state?.needsReview)
+      setCompareOpen(true)` — which opened the MULTI-COLUMN compare screen, the
+      one that draws a column per record the contact is already assembled from.
 
-      Gated on the STAMPED flag, not on a second query: `review_state` is
-      present only for contacts the compare screen actually opens for, so a
-      click can never be intercepted onto "there is nothing to compare".
-      `undefined` means no flag and no interception — never "reviewed".
+      That is the defect, in the founder's words: *"I approved it and when I go
+      to open the contact it shows me the compare screen as if it wasn't
+      approved."* It opened onto three columns he had already approved, because a
+      fourth candidate was unanswered — and the candidate was a PROPOSAL, which
+      that screen does not show at all. Two faults at once: settled decisions
+      re-presented as unsettled, and the outstanding one hidden.
 
-      Once confirmed, `needsReview` goes false and the ordinary card opens
-      again. The screen stays reachable from `Compare sources`, which is gated
-      on having records to compare rather than on this flag, so it is unaffected.
+      **Opening is fine. Opening onto the wrong content was the defect.** So the
+      click still intercepts, but onto the QUESTIONS: the duplicates screen he
+      already has, filtered to this contact, her outstanding candidates stacked
+      on one card and each answered in place.
+
+      Driven by the QUEUE and NOT by `review_state.badge`: the badge is stamped
+      when the list was last read, and the questions are what the screen must
+      actually render. A row can wear `Suggestion` from a stale read, and opening
+      a review screen with nothing on it would be the same lie in a new place.
+      No questions here means no interception, whatever the badge says.
     */
-    if (contact.review_state?.needsReview) setCompareOpen(true);
+    if (questionsFor(contact.id, openQuestions).length > 0) {
+      setQuestionsForContactId(contact.id);
+      setShowReviewDuplicates(true);
+    }
 
     if (isExternal(contact)) {
       // External contact - no transactions to load
@@ -535,7 +599,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       // Imported contact - load associated transactions
       loadContactTransactions(contact.id);
     }
-  }, [loadContactTransactions, selectContact, showPreviewContact]);
+  }, [loadContactTransactions, selectContact, showPreviewContact, openQuestions, questionsFor]);
 
   /**
    * Close/clear the detail view (narrow Back button, wide pane close, modal X).
@@ -1351,7 +1415,33 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       {showReviewDuplicates && (
         <ReviewDuplicatesModal
           userId={userId}
-          onClose={() => setShowReviewDuplicates(false)}
+          /*
+            BACKLOG-2626 — the SAME screen, narrowed to one contact when a click
+            on her row opened it, and the whole queue when the header button did.
+            `null` is the header's state and is what makes this one call site
+            rather than two mounts of the same component.
+          */
+          filterContactId={questionsForContactId ?? undefined}
+          /*
+            CLOSING RE-READS WHAT IS OUTSTANDING — and it is the ONLY moment that
+            does (BACKLOG-2626).
+
+            While the screen is up it owns the truth: it re-reads its own list
+            after every answer, and a second reader firing on each answer would
+            reshuffle a queue the user is part-way through — the exception
+            BACKLOG-2502 records and `Contacts.answerRefreshesList-2627` guards.
+
+            On close, the decision this refresh feeds is the NEXT CLICK: whether
+            that contact still has questions, and which ones. Re-reading here is
+            what makes "exiting part-way leaves the remainder, and the next click
+            resumes at the outstanding ones" true — the founder chose *"compare
+            again — you didn't answer"* over treating a dismissal as an answer.
+          */
+          onClose={() => {
+            setShowReviewDuplicates(false);
+            setQuestionsForContactId(null);
+            void refreshOpenQuestions();
+          }}
           /*
             BACKLOG-2627 — AN ANSWER REFRESHES THE LIST BEHIND THE QUEUE, AND
             THE ADDRESS-BOOK HALF IS THE HALF THAT MATTERS.
@@ -1408,6 +1498,8 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           */
           onConfirmedAndEdit={(contactId) => {
             setShowReviewDuplicates(false);
+            setQuestionsForContactId(null);
+            void refreshOpenQuestions();
             const contact = contacts.find((c) => c.id === contactId);
             if (contact) openContactCardForEdit(contact as ExtendedContact);
           }}

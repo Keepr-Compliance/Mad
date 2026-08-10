@@ -265,7 +265,26 @@ export interface UserLicense {
 // ============================================
 
 /**
- * What the contact LIST knows about one combined contact (BACKLOG-2471 PR F).
+ * Which of the three row badges a contact carries (BACKLOG-2626).
+ *
+ * Founder, 2026-08-09, on being asked whether a fourth "Confirmed" state was
+ * wanted: no. *"Confirmed"* and *"you linked it"* are the same fact from the
+ * user's side, so `user_linked` covers both routes and there is no fourth value
+ * to add later. A contact with none of these three carries NO badge, which is
+ * `review_state: undefined` rather than a value in this union — the ordinary
+ * state needs no label, and giving it one would decorate every row.
+ */
+export type ContactLinkBadge =
+  /** A question is open on this contact. Nobody has decided yet. */
+  | "suggestion"
+  /** The app attached a record on its own and the user has not ratified it. */
+  | "autolinked"
+  /** The user decided, by either route (manual link, or confirming a proposal). */
+  | "user_linked";
+
+/**
+ * What the contact LIST knows about one combined contact (BACKLOG-2471 PR F,
+ * extended by BACKLOG-2626).
  *
  * Declared here rather than in `db/contactSourceSets` because `models.ts` is the
  * shared vocabulary both the main process and the renderer read, and a type that
@@ -276,10 +295,46 @@ export interface ContactReviewState {
    * How many COLUMNS the compare screen will show — not how many links exist.
    * The screen folds the record a contact was created from into the contact's
    * own column, so two crosswalk rows show two columns, not three.
+   *
+   * Still the column count, and still only about `Compare sources`. BACKLOG-2626
+   * moved the BADGE off this number and onto `records` — see below.
    */
   columns: number;
+  /**
+   * How many REAL RECORDS the contact is assembled from, counted once each.
+   *
+   * Every non-origin crosswalk row is a real record; the contact's OWN record is
+   * added on top only when no link already stands for it. An imported contact's
+   * `source_id` row IS its own record, so it must not be counted twice — the
+   * founder saw `Sources 4` beside a row reading "5 records combined" on
+   * `b64da8c8`. A hand-made contact holds only a synthetic `origin:${contactId}`
+   * row, which stands for no address-book record, so there its own record IS the
+   * extra one and the `+ 1` is right.
+   *
+   * BACKLOG-2626, folding in `14617008`. The badge used to render `columns` while
+   * the sentence beside it counted records, so a contact whose second record was
+   * matched by stable id read **"1 records combined"** — accurate about columns,
+   * meaningless to the person reading it, and ungrammatical.
+   *
+   * Equal to `columns` on every shape TODAY, which is a coincidence of the
+   * compare screen folding exactly the record this declines to double-count —
+   * not a definition. Assert it against the Sources panel, never against
+   * `columns`.
+   */
+  records: number;
   /** False once every non-origin link carries a `same_person` verdict. */
   needsReview: boolean;
+  /**
+   * Pending `contact_link_proposals` rows against this contact — the questions
+   * the user has not answered (BACKLOG-2626).
+   *
+   * Counted with the SAME both-sides-still-exist predicate the review queue uses,
+   * so a badge can never promise a question the queue would not ask. A proposal
+   * whose source record has vanished is not askable and is not counted.
+   */
+  openQuestions: number;
+  /** Which badge the row carries. See `ContactLinkBadge`. */
+  badge: ContactLinkBadge;
 }
 
 export interface Contact {
