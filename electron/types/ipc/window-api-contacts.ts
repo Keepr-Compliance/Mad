@@ -327,8 +327,16 @@ export interface WindowApiContacts {
   getCompareColumns: (
     userId: string,
     contactId: string,
-    /** BACKLOG-2502 — the not-yet-linked candidate, as one more column. */
-    proposedSource?: { sourceType: string; sourceRecordId: string },
+    /**
+     * BACKLOG-2502 — the not-yet-linked candidates, as more columns. Plural
+     * since R5: a contact can carry several at once, and each is answered on
+     * its own, so each needs a column of its own.
+     */
+    proposedSources?: ReadonlyArray<{
+      sourceType: string;
+      sourceRecordId: string;
+      proposalId?: string;
+    }>,
   ) => Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }>;
   /**
    * "Yes, these records are all this person" (BACKLOG-2471 PR D). Writes one

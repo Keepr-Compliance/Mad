@@ -19,7 +19,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { ContactCompareSources } from "./ContactCompareSources";
 import type { ContactCompareView } from "@/types/contactProvenance";
 
@@ -451,5 +451,230 @@ describe("the header and the edge states", () => {
     expect(screen.getByTestId(`compare-absent-${OUTLOOK_LINK}`).textContent).toBe(
       "This entry is no longer in that account.",
     );
+  });
+});
+
+/**
+ * ===========================================================================
+ * BACKLOG-2502 R5 — FOUR CANDIDATES ON ONE SCREEN
+ * ===========================================================================
+ * The founder opened a contact with four possible duplicates and had no way to
+ * answer three of them: the screen drew one candidate and the footer carried one
+ * answer for the whole screen.
+ *
+ * Every assertion below names WHICH control belongs to WHICH record. A count of
+ * four buttons would pass with four copies of the same candidate's control.
+ */
+
+const CANDIDATES = [
+  { proposalId: "p-1", sourceType: "macos", sourceRecordId: "mac-11", displayName: "P. Dorian" },
+  { proposalId: "p-2", sourceType: "outlook", sourceRecordId: "out-22", displayName: "Paul Dorian" },
+  { proposalId: "p-3", sourceType: "google", sourceRecordId: "goo-33", displayName: "Paul Dorian" },
+  { proposalId: "p-4", sourceType: "macos", sourceRecordId: "mac-44", displayName: "Paul D." },
+] as const;
+
+/** The key `getContactCompareColumns` builds for a candidate — its shape is pinned by the service suite. */
+const candidateColumnId = (c: { sourceType: string; sourceRecordId: string }): string =>
+  `compare-column-proposed:${c.sourceType}:${c.sourceRecordId}`;
+
+/**
+ * TRANSCRIBED FROM THE PRODUCER. `electron/services/__tests__/contactCompare.test.ts`
+ * ("R5 — several candidates") builds this exact shape through the real writers
+ * and the real driver: one `kind: "proposed"` column per candidate, in the
+ * caller's order, keyed `proposed:<type>:<record>` and carrying `proposalId`.
+ */
+function makeFourCandidateView(count = CANDIDATES.length): ContactCompareView {
+  const base = makeView();
+  return {
+    ...base,
+    columns: [
+      base.columns[0],
+      ...CANDIDATES.slice(0, count).map((c) => ({
+        linkId: `proposed:${c.sourceType}:${c.sourceRecordId}`,
+        kind: "proposed" as const,
+        columnLabel: "Outlook contacts",
+        displayName: c.displayName,
+        name: { value: c.displayName, matched: false },
+        emails: [{ value: `${c.sourceRecordId}@example.com`, matched: false }],
+        phones: [],
+        company: null,
+        transactions: [],
+        recentCommunication: [],
+        sourceRecordPresent: true,
+        proposalId: c.proposalId,
+      })),
+    ],
+  };
+}
+
+async function renderQueueRoute(
+  view: ContactCompareView = makeFourCandidateView(),
+) {
+  const getCompareColumns = jest.fn().mockResolvedValue({ success: true, view });
+  const confirmLink = jest.fn().mockResolvedValue({ success: true, linked: true });
+  (window as unknown as { api: unknown }).api = {
+    contacts: { getCompareColumns, confirmLink },
+  };
+  const handlers = {
+    onClose: jest.fn(),
+    onCandidateSame: jest.fn(),
+    onCandidateDifferent: jest.fn(),
+    onConfirmed: jest.fn(),
+    onConfirmedAndEdit: jest.fn(),
+    onRejected: jest.fn(),
+  };
+  const utils = render(
+    <ContactCompareSources
+      userId="u1"
+      contactId="c-paul"
+      proposalId="p-1"
+      proposedSources={CANDIDATES.map((c) => ({
+        sourceType: c.sourceType,
+        sourceRecordId: c.sourceRecordId,
+        proposalId: c.proposalId,
+      }))}
+      {...handlers}
+    />,
+  );
+  await waitFor(() => expect(screen.queryByTestId("compare-loading")).toBeNull());
+  return { ...utils, ...handlers };
+}
+
+describe("BACKLOG-2502 R5 — every candidate is answered on its own column", () => {
+  it("gives each candidate its own two answers, INSIDE that candidate's column", async () => {
+    await renderQueueRoute();
+
+    // Identity, not arithmetic: the control for `p-3` must be inside the column
+    // drawn for `goo-33`, and nowhere else.
+    // CONTROL: key the buttons by column index, or pass one shared proposalId,
+    // and these `within` lookups fail even though four buttons are on screen.
+    for (const c of CANDIDATES) {
+      const column = within(screen.getByTestId(candidateColumnId(c)));
+      expect(column.getByTestId(`compare-candidate-different-${c.proposalId}`).textContent).toBe(
+        "Not this person",
+      );
+      expect(column.getByTestId(`compare-candidate-same-${c.proposalId}`).textContent).toBe(
+        "Same person",
+      );
+    }
+  });
+
+  it("answers ONLY the candidate whose control was pressed", async () => {
+    const { onCandidateDifferent, onCandidateSame } = await renderQueueRoute();
+
+    fireEvent.click(screen.getByTestId("compare-candidate-different-p-2"));
+
+    // CONTROL: close over the wrong candidate (e.g. the `proposalId` prop, which
+    // is `p-1` here) and this reads p-1 — the screen would answer a question the
+    // user did not press.
+    expect(onCandidateDifferent.mock.calls).toEqual([["p-2"]]);
+    expect(onCandidateSame).not.toHaveBeenCalled();
+  });
+
+  it("puts no candidate control on the contact's column or on a linked record", async () => {
+    const view = makeFourCandidateView();
+    view.columns.splice(1, 0, makeView().columns[1]); // a linked Outlook record
+    await renderQueueRoute(view);
+
+    // CONTROL: gate the block on `onCandidateDifferent` alone rather than on
+    // `kind === "proposed"` and the contact's own column offers to reject itself.
+    expect(
+      within(screen.getByTestId(`compare-column-${CONTACT_LINK}`)).queryByText("Not this person"),
+    ).toBeNull();
+    expect(
+      within(screen.getByTestId(`compare-column-${OUTLOOK_LINK}`)).queryByText("Not this person"),
+    ).toBeNull();
+    // ...and the linked record keeps ITS OWN word for its own act.
+    expect(
+      within(screen.getByTestId(`compare-column-${OUTLOOK_LINK}`)).queryByText("Same person"),
+    ).toBeNull();
+  });
+
+  it("draws no candidate control for a candidate it cannot name", async () => {
+    const view = makeFourCandidateView(1);
+    view.columns[1] = { ...view.columns[1], proposalId: undefined };
+    await renderQueueRoute(view);
+
+    // A button that cannot say which proposal it answers must not be drawn.
+    // CONTROL: drop the `column.proposalId` guard and this renders a control
+    // whose press names `undefined`.
+    expect(screen.queryByTestId("compare-candidate-different-undefined")).toBeNull();
+    expect(screen.queryByText("Not this person")).toBeNull();
+  });
+
+  it("stands the footer's single answer down once several candidates are on screen", async () => {
+    await renderQueueRoute();
+
+    // A footer button says "this one", and with four on screen it cannot say
+    // which. CONTROL: drop `!answersLiveOnColumns` from the footer's condition
+    // and `Different people` sits under four candidates meaning one of them.
+    expect(screen.queryByTestId("compare-footer")).toBeNull();
+    expect(screen.queryByTestId("compare-reject-proposal")).toBeNull();
+    expect(screen.queryByTestId("compare-confirm")).toBeNull();
+  });
+
+  it("keeps the footer exactly as it was for a single candidate", async () => {
+    await renderQueueRoute(makeFourCandidateView(1));
+
+    // The screen rounds 1-4 built and the founder approved. CONTROL: gate the
+    // footer on `candidateCount > 0` instead of `> 1` and this disappears.
+    expect(screen.getByTestId("compare-footer")).toBeTruthy();
+    expect(screen.getByTestId("compare-reject-proposal")).toBeTruthy();
+    expect(screen.getByTestId("compare-confirm")).toBeTruthy();
+    expect(screen.getByTestId("compare-confirm-edit")).toBeTruthy();
+  });
+
+  it("keeps the footer on the contact route, which has no candidates at all", async () => {
+    await renderDeciding();
+
+    // Control 4's other half: nothing about R5 may reach the contact-row path.
+    expect(screen.getByTestId("compare-footer")).toBeTruthy();
+    expect(screen.getByTestId("compare-confirm")).toBeTruthy();
+    expect(screen.getByTestId(`compare-unlink-${OUTLOOK_LINK}`).textContent).toBe("Unlink");
+  });
+});
+
+describe("BACKLOG-2502 R5 — the column strip scrolls, the screen does not", () => {
+  it("pins the CONTACT's column as a direct child of the one sideways scroller", async () => {
+    await renderQueueRoute();
+
+    const strip = screen.getByTestId("compare-columns");
+    const contactColumn = screen.getByTestId(`compare-column-${CONTACT_LINK}`);
+
+    // THE MECHANISM, not a class list: `position: sticky` resolves against the
+    // nearest scrolling ancestor, so the pinned column must be a DIRECT child of
+    // the element that scrolls. CONTROL: wrap the columns in an inner div — the
+    // obvious way to add a divider later — and every class below is still
+    // present while the column no longer sticks. This is the assertion that goes
+    // red for that.
+    expect(contactColumn.parentElement).toBe(strip);
+    expect(strip.className).toContain("sm:overflow-x-auto");
+    expect(contactColumn.className).toContain("sm:sticky");
+    expect(contactColumn.className).toContain("sm:left-0");
+    // Opaque, or the candidates scroll visibly under the contact's own values.
+    expect(contactColumn.className).toContain("bg-white");
+
+    // It is the contact's column that is pinned — by identity, not by position
+    // in a class list. CONTROL: pin `index === columns.length - 1` and this
+    // fails while four sticky candidates look fine in a screenshot.
+    const view = makeFourCandidateView();
+    expect(view.columns[0].kind).toBe("contact");
+    for (const c of CANDIDATES) {
+      expect(screen.getByTestId(candidateColumnId(c)).className).not.toContain("sticky");
+    }
+  });
+
+  it("scrolls sideways in exactly one place, and it is not the page", async () => {
+    await renderQueueRoute();
+
+    const root = screen.getByTestId("contact-compare-screen");
+    const strip = screen.getByTestId("compare-columns");
+
+    // CONTROL: move `overflow-x-auto` up onto the panel (the quick fix when a
+    // column is clipped) and this fails — the sideways scroll would then be the
+    // whole screen's, which is what the founder asked us not to build.
+    expect([...root.querySelectorAll('[class*="overflow-x"]')]).toEqual([strip]);
+    // The frame clips what the strip does not scroll, so nothing escapes it.
+    expect(root.className).toContain("overflow-hidden");
   });
 });

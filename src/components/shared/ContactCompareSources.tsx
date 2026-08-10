@@ -91,21 +91,49 @@ interface ContactCompareSourcesProps {
   /** `Confirm & edit`: same write, then open the contact's form. */
   onConfirmedAndEdit?: () => void;
   /**
-   * BACKLOG-2502 seam, declared from this PR onward so that item is purely
-   * additive and needs no new backend: the candidate that is NOT yet linked,
-   * rendered as one more column, and the proposal `Confirm` would resolve.
-   * Unused in PR C — the screen is read-only and nothing is proposed to it yet.
+   * BACKLOG-2502 — the candidates that are NOT yet linked, each rendered as one
+   * more column.
+   *
+   * PLURAL SINCE R5: a contact can carry several at once and each is answered on
+   * its own, so each needs a column of its own to be answered ON. One request,
+   * not one per candidate — see `useContactCompare`, where the reason (`matched`
+   * is decided over the column set) is stated.
    */
-  proposedSource?: { sourceType: string; sourceRecordId: string };
+  proposedSources?: ReadonlyArray<{
+    sourceType: string;
+    sourceRecordId: string;
+    proposalId?: string;
+  }>;
+  /**
+   * The candidate the FOOTER answers, when there is exactly one on screen. With
+   * several, the footer cannot name which it means and the columns answer
+   * instead — see the footer's own comment.
+   */
   proposalId?: string;
+  /**
+   * BACKLOG-2502 R5 — answer ONE candidate, from its own column.
+   *
+   * The caller owns both writes because it already owns them for the list rows
+   * behind this screen (`ReviewDuplicatesModal.answer`), and a second call site
+   * for `confirmLink`/`rejectLink` is a second set of rules about what happens
+   * afterwards — the reload, the exclusive-cluster siblings, the busy flag.
+   */
+  onCandidateSame?: (proposalId: string) => void;
+  onCandidateDifferent?: (proposalId: string) => void;
+  /** The candidate currently being answered, so its column can say so. */
+  answeringProposalId?: string | null;
   /**
    * BACKLOG-2502 — "different people", on the QUEUE route only.
    *
-   * The two surfaces are NOT harmonised, and this is where that shows: from the
-   * review queue nothing is linked yet, so the decision is about a PROPOSAL and
-   * a reject belongs in the footer. From a contact the records ARE linked, so
-   * rejection belongs on the record it removes and the footer carries none.
-   * Both are correct; neither overrides the other.
+   * From the review queue nothing is linked yet, so the decision is about a
+   * PROPOSAL; from a contact the records ARE linked, so rejection is an unlink
+   * and belongs on the record it removes.
+   *
+   * R5 NARROWS WHEN THIS ONE IS DRAWN, and the two surfaces move closer as a
+   * result: it is the footer's reject for the case of a SINGLE candidate, where
+   * "different people" can only mean one record. With several on screen the
+   * reject sits on each candidate column — the same place the contact route has
+   * always put it — and this button is not drawn at all.
    */
   onRejected?: () => void;
   /**
@@ -192,17 +220,71 @@ const CommRow: React.FC<{ item: CompareCommItem }> = ({ item }) => (
   </div>
 );
 
+/**
+ * The one place a per-column control is styled (BACKLOG-2502 R5).
+ *
+ * Founder, 2026-08-09: *"they should practically be as similar as we can, to
+ * have less to maintain"*. `Unlink` on a linked record and the two answers on a
+ * candidate are the SAME kind of control — a decision about the one record the
+ * column draws — so they are one button here with a caller-supplied word, not
+ * three buttons that will drift apart the first time one of them is restyled.
+ */
+const ColumnAction: React.FC<{
+  label: string;
+  busyLabel: string;
+  busy: boolean;
+  tone: "negative" | "positive";
+  testId: string;
+  onClick: () => void;
+}> = ({ label, busyLabel, busy, tone, testId, onClick }) => (
+  <button
+    onClick={onClick}
+    disabled={busy}
+    data-testid={testId}
+    className={`mt-2 w-full text-[13px] font-semibold py-1.5 rounded-lg border transition-colors disabled:opacity-60 disabled:cursor-wait ${
+      tone === "positive"
+        ? "border-green-300 text-green-700 hover:border-green-400 hover:bg-green-50"
+        : "border-gray-300 text-gray-600 hover:border-red-300 hover:text-red-600 hover:bg-red-50"
+    }`}
+  >
+    {busy ? busyLabel : label}
+  </button>
+);
+
 const Column: React.FC<{
   column: ContactCompareColumn;
   onUnlinkSource?: (linkId: string) => void;
   unlinkingLinkId?: string | null;
-}> = ({ column, onUnlinkSource, unlinkingLinkId }) => {
+  /** BACKLOG-2502 R5 — the queue's two answers, on the candidate they answer. */
+  onCandidateSame?: (proposalId: string) => void;
+  onCandidateDifferent?: (proposalId: string) => void;
+  answeringProposalId?: string | null;
+  /**
+   * BACKLOG-2502 R5 — the contact's own column, held still while the candidates
+   * scroll past it. Founder: *"keep the white 'original' contact that's on the
+   * left sticky and let the user scroll horizontally through the others."*
+   *
+   * `bg-white` is not decoration: a sticky column with a transparent background
+   * has the scrolling columns pass visibly UNDER its text.
+   */
+  pinned?: boolean;
+}> = ({
+  column,
+  onUnlinkSource,
+  unlinkingLinkId,
+  onCandidateSame,
+  onCandidateDifferent,
+  answeringProposalId,
+  pinned,
+}) => {
   const isSource = column.kind === "source";
 
   return (
     <div
       data-testid={`compare-column-${column.linkId}`}
-      className={`p-4 min-w-0 ${isSource ? "bg-amber-50/60 border-l border-gray-200" : ""}`}
+      className={`p-4 min-w-0 sm:min-w-[15rem] sm:flex-1 ${
+        isSource ? "bg-amber-50/60 border-l border-gray-200" : ""
+      } ${pinned ? "bg-white sm:sticky sm:left-0 sm:z-10 sm:border-r sm:border-gray-200" : ""}`}
     >
       <div className="flex items-center gap-2 pb-2 mb-2 border-b border-gray-200">
         <div className="min-w-0">
@@ -306,14 +388,60 @@ const Column: React.FC<{
         invariant over every link shape instead.
       */}
       {isSource && onUnlinkSource && (
-        <button
+        <ColumnAction
+          label="Unlink"
+          busyLabel="Unlinking…"
+          busy={unlinkingLinkId === column.linkId}
+          tone="negative"
+          testId={`compare-unlink-${column.linkId}`}
           onClick={() => onUnlinkSource(column.linkId)}
-          disabled={unlinkingLinkId === column.linkId}
-          data-testid={`compare-unlink-${column.linkId}`}
-          className="mt-3 w-full text-[13px] font-semibold py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-colors disabled:opacity-60 disabled:cursor-wait"
-        >
-          {unlinkingLinkId === column.linkId ? "Unlinking…" : "Unlink"}
-        </button>
+        />
+      )}
+
+      {/*
+        BACKLOG-2502 R5 — THE CANDIDATE IS ANSWERED ON ITS OWN COLUMN.
+
+        Founder, testing a contact with four of them: *"we don't have the unlink
+        / not-the-same button for each one of them"*. One footer button cannot
+        answer four questions, and it cannot name which of the four it means.
+        This is the rule stated three comments above — the control sits on the
+        record it acts on — reaching the one kind of column that never had it.
+
+        THE WORDS ARE THE CANDIDATE ROW'S, VERBATIM (`ReviewDuplicatesModal`'s
+        `CandidateRow`): "Same person" and "Not this person". The list and this
+        screen ask the same question about the same record, and a second
+        vocabulary is how two surfaces start disagreeing about what a button
+        does. `Unlink` above keeps its own word because it is a different act
+        with a different consequence — it detaches a link that EXISTS, while
+        these two answer a proposal that has linked nothing.
+
+        Gated on `proposalId` and not on `kind === "proposed"` alone: a candidate
+        the caller cannot name is a candidate it cannot answer, and a button that
+        would throw for want of an id must not be drawn.
+      */}
+      {column.kind === "proposed" && column.proposalId && (onCandidateSame || onCandidateDifferent) && (
+        <div className="mt-3 pt-2 border-t border-gray-200">
+          {onCandidateSame && (
+            <ColumnAction
+              label="Same person"
+              busyLabel="Saving…"
+              busy={answeringProposalId === column.proposalId}
+              tone="positive"
+              testId={`compare-candidate-same-${column.proposalId}`}
+              onClick={() => onCandidateSame(column.proposalId as string)}
+            />
+          )}
+          {onCandidateDifferent && (
+            <ColumnAction
+              label="Not this person"
+              busyLabel="Saving…"
+              busy={answeringProposalId === column.proposalId}
+              tone="negative"
+              testId={`compare-candidate-different-${column.proposalId}`}
+              onClick={() => onCandidateDifferent(column.proposalId as string)}
+            />
+          )}
+        </div>
       )}
     </div>
   );
@@ -327,15 +455,18 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
   unlinkingLinkId,
   onConfirmed,
   onConfirmedAndEdit,
-  proposedSource,
+  proposedSources,
   proposalId,
+  onCandidateSame,
+  onCandidateDifferent,
+  answeringProposalId,
   onRejected,
   why,
 }) => {
   const { view, loading, failed, reload, confirm } = useContactCompare(
     userId,
     contactId,
-    proposedSource,
+    proposedSources,
     proposalId,
   );
   const [whyOpen, setWhyOpen] = useState(false);
@@ -352,6 +483,22 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
   const [failure, setFailure] = useState<string | null>(null);
 
   const columnCount = view?.columns.length ?? 0;
+  /**
+   * BACKLOG-2502 R5 — WHERE THE ANSWER LIVES IS DECIDED BY HOW MANY QUESTIONS
+   * ARE ON SCREEN, and by nothing else.
+   *
+   * A footer button says "this one". With one candidate that is unambiguous and
+   * the footer keeps every control it has today — which is also the contact
+   * route, where there are no candidates at all and `Confirm` answers the links.
+   * With four candidates the same button cannot name which of them it means, so
+   * the decisions move onto the columns, where each names its own record.
+   *
+   * This is a fact about the DATA, not about which screen mounted the component:
+   * there is deliberately no "am I in the duplicates modal" flag here, and the
+   * two callers pass the same props for the same reasons.
+   */
+  const candidateCount = view?.columns.filter((c) => c.kind === "proposed").length ?? 0;
+  const answersLiveOnColumns = candidateCount > 1;
 
   const handleConfirm = async (thenEdit: boolean) => {
     if (busy) return;
@@ -478,17 +625,44 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
         </div>
       )}
 
+      {/*
+        BACKLOG-2502 R5 — ONE STRIP SCROLLS SIDEWAYS, AND THE PAGE NEVER DOES.
+
+        Founder, on a contact with four candidates: *"keep the white 'original'
+        contact that's on the left sticky and let the user scroll horizontally
+        through the others."* Five columns do not fit, and the previous
+        `auto-fit` grid answered that by making every column narrower until all
+        five were unreadable — the failure it was written to avoid at two.
+
+        `overflow-x-auto` is on THIS element and nowhere above it, and the
+        screen's own frame carries `overflow-hidden`, so the sideways scroll
+        cannot escape into the panel or the page. `sm:` because below that the
+        columns stack, which needs no scrolling at all.
+
+        The pinned column MUST be a direct child of this element: `position:
+        sticky` resolves against the nearest scrolling ancestor, so a wrapper
+        between the two — the obvious way to add a divider or a shadow later —
+        silently stops it sticking without changing a single class on it.
+      */}
       {!loading && !failed && view && (
         <div
           data-testid="compare-columns"
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(15rem,1fr))]"
+          className="flex flex-col sm:flex-row sm:overflow-x-auto"
         >
-          {view.columns.map((column) => (
+          {view.columns.map((column, index) => (
             <Column
               key={column.linkId}
               column={column}
               onUnlinkSource={onUnlinkSource ? handleUnlink : undefined}
               unlinkingLinkId={unlinkingLinkId}
+              onCandidateSame={onCandidateSame}
+              onCandidateDifferent={onCandidateDifferent}
+              answeringProposalId={answeringProposalId}
+              // `columns[0]` is the contact itself — the service's own promise,
+              // stated on `ContactCompareView.columns`. Pinning by index rather
+              // than by kind keeps the sticky column the FIRST child, which is
+              // the only child `left-0` can mean anything for.
+              pinned={index === 0}
             />
           ))}
         </div>
@@ -529,7 +703,7 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
         </div>
       )}
 
-      {!loading && !failed && view && (onConfirmed || onConfirmedAndEdit) && (
+      {!loading && !failed && view && (onConfirmed || onConfirmedAndEdit) && !answersLiveOnColumns && (
         <div
           data-testid="compare-footer"
           className="flex items-center gap-2 flex-wrap p-3 border-t border-gray-200 bg-gray-50"
@@ -555,13 +729,19 @@ export const ContactCompareSources: React.FC<ContactCompareSourcesProps> = ({
                 Confirm &amp; edit
               </button>
               {/*
-                BACKLOG-2502 — "different people", QUEUE ROUTE ONLY.
+                BACKLOG-2502 — "different people", QUEUE ROUTE, ONE CANDIDATE.
 
                 Present because nothing is linked yet and the decision is about a
                 proposal. On the contact route this is absent and `Unlink` sits on
-                the record it removes instead. The settled design says the two
-                surfaces are not to be harmonised — this conditional is where that
-                is enforced, and collapsing it is the change that would break it.
+                the record it removes instead.
+
+                R5: the whole footer is already gated on `!answersLiveOnColumns`,
+                so by the time this renders there is exactly one candidate and
+                this button can only mean that one. With more, each candidate
+                column carries its own "Not this person" and this is not drawn —
+                two controls doing one job is the confusion the founder asked us
+                to stop building, and the column is the one that can name its
+                record.
               */}
               {onRejected && proposalId && (
                 <button

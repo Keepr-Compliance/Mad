@@ -495,25 +495,30 @@ describe("the way into the compare screen", () => {
     fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
 
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
-    // The candidate travels as the PROPOSED SOURCE — it has no crosswalk row, so
-    // the reader cannot find it any other way.
+    // The candidate travels as a PROPOSED SOURCE — it has no crosswalk row, so
+    // the reader cannot find it any other way. Its `proposalId` rides with it
+    // (R5) so the column it becomes can be answered by name.
     // CONTROL: drop the third argument and the candidate silently vanishes from
     // the comparison the user is being asked to make.
-    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(USER, "c-daniel", {
-      sourceType: "macos",
-      sourceRecordId: "mac-lilly",
-    });
+    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(USER, "c-daniel", [
+      { sourceType: "macos", sourceRecordId: "mac-lilly", proposalId: "p-1" },
+    ]);
   });
 
   /**
-   * THE EYE OPENS THE SAME SCREEN FOR ITS OWN RECORD.
+   * THE EYE OPENS THE SAME SCREEN, WITH ITS OWN RECORD ON IT.
    *
    * Founder: *"You cannot judge 'same person' from one email address — you need
-   * to see the whole record, and the reject is permanent."* On a card with two
-   * candidates this is the ONLY way to reach the second one's comparison, which
-   * is why it is per-candidate while Compare is per-contact.
+   * to see the whole record, and the reject is permanent."*
+   *
+   * R5 CHANGED WHAT "for THAT candidate" MEANS, and this test says which. Before,
+   * the eye was the only way to reach the second candidate's comparison because
+   * the screen could hold one candidate at a time. Now EVERY open candidate is a
+   * column whichever control opened the screen, so what the eye still decides is
+   * narrower and worth keeping: which candidate's frozen evidence sits behind
+   * "How we decided this".
    */
-  it("opens it from a candidate's eye, for THAT candidate", async () => {
+  it("opens it from a candidate's eye, with every candidate on screen", async () => {
     jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,
       clusters: [
@@ -530,12 +535,12 @@ describe("the way into the compare screen", () => {
     fireEvent.click(await screen.findByTestId("review-view-p-2"));
 
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
-    // CONTROL: pass `group.items[0]` here and the SECOND candidate can never be
-    // compared — the exact dead end the eye exists to remove.
-    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(USER, "c-daniel", {
-      sourceType: "outlook",
-      sourceRecordId: "out-9",
-    });
+    // CONTROL: send `[openedItem]` instead of the group and the other three of
+    // the founder's four candidates have no column, which is the R5 defect.
+    expect(window.api.contacts.getCompareColumns).toHaveBeenCalledWith(USER, "c-daniel", [
+      { sourceType: "macos", sourceRecordId: "mac-lilly", proposalId: "p-1" },
+      { sourceType: "outlook", sourceRecordId: "out-9", proposalId: "p-2" },
+    ]);
   });
 
   it("keeps `Different people` on the queue route, and routes Confirm to the PROPOSAL", async () => {
@@ -949,5 +954,213 @@ describe("compare is its own popup", () => {
     expect(screen.getByTestId("review-duplicates-modal")).toContainElement(
       screen.getByTestId("review-item-p-1"),
     );
+  });
+});
+
+/**
+ * ===========================================================================
+ * BACKLOG-2502 R5 — THE FOUNDER'S CONTACT WITH FOUR CANDIDATES
+ * ===========================================================================
+ * *"One of the contacts has 4 duplicates and we don't have the unlink /
+ * not-the-same button for each one of them."*
+ *
+ * The whole chain is exercised here rather than at either end of it: an answer
+ * writes through the queue's own channel, the queue reloads, the group loses one
+ * item, the compare screen is asked again with the SHORTER candidate list, and
+ * the other three questions are still standing. Any link in that chain broken
+ * leaves an answered candidate on screen or takes the unanswered ones off it.
+ */
+describe("four candidates, answered one at a time", () => {
+  const FOUR = [
+    { proposalId: "p-1", sourceType: "macos", sourceRecordId: "mac-11" },
+    { proposalId: "p-2", sourceType: "outlook", sourceRecordId: "out-22" },
+    { proposalId: "p-3", sourceType: "google", sourceRecordId: "goo-33" },
+    { proposalId: "p-4", sourceType: "macos", sourceRecordId: "mac-44" },
+  ];
+
+  const queueWith = (candidates: typeof FOUR) => ({
+    success: true as const,
+    clusters: [
+      cluster({
+        items: candidates.map((c) =>
+          item({
+            proposalId: c.proposalId,
+            sourceType: c.sourceType,
+            sourceRecordId: c.sourceRecordId,
+            matchedOn: "name",
+          }),
+        ),
+      }),
+    ],
+  });
+
+  /**
+   * The producer's own projection, driven by what it is ASKED for — which is the
+   * point: this stub cannot show a candidate the modal did not send, so a screen
+   * that keeps an answered candidate cannot pass by fixture.
+   *
+   * The column shape is pinned against the real driver in
+   * `electron/services/__tests__/contactCompare.test.ts` ("R5 — several
+   * candidates"): one `kind: "proposed"` column per candidate, in the caller's
+   * order, keyed `proposed:<type>:<record>`, carrying `proposalId`.
+   */
+  const compareViewFor = (
+    sources: ReadonlyArray<{ sourceType: string; sourceRecordId: string; proposalId?: string }>,
+  ) => ({
+    contactId: "c-daniel",
+    isConfirmed: false,
+    title: "Is this the same Daniel Haim?",
+    reason: "Four records share this name.",
+    namesMatch: true,
+    columns: [
+      {
+        linkId: "l-origin",
+        kind: "contact" as const,
+        columnLabel: "Mac address book",
+        displayName: "Daniel Haim",
+        name: { value: "Daniel Haim", matched: true },
+        emails: [],
+        phones: [],
+        company: null,
+        transactions: [],
+        recentCommunication: [],
+        sourceRecordPresent: true,
+      },
+      ...sources.map((s) => ({
+        linkId: `proposed:${s.sourceType}:${s.sourceRecordId}`,
+        kind: "proposed" as const,
+        columnLabel: "Mac address book",
+        displayName: "Daniel Haim",
+        name: { value: "Daniel Haim", matched: true },
+        emails: [{ value: `${s.sourceRecordId}@example.com`, matched: false }],
+        phones: [],
+        company: null,
+        transactions: [],
+        recentCommunication: [],
+        sourceRecordPresent: true,
+        proposalId: s.proposalId,
+      })),
+    ],
+  });
+
+  beforeEach(() => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue(queueWith(FOUR));
+    const api = window.api.contacts as unknown as Record<string, jest.Mock>;
+    api.getCompareColumns = jest.fn().mockImplementation(async (_u, _c, sources) => ({
+      success: true,
+      view: compareViewFor(sources ?? []),
+    }));
+  });
+
+  const openCompare = async () => {
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
+  };
+
+  it("draws all four candidates, each with its own answer", async () => {
+    await openCompare();
+
+    // BY IDENTITY: the control for p-3 lives in the column for `goo-33`.
+    // CONTROL: send only the opened candidate (`[openedItem]`) and three of
+    // these four columns do not exist.
+    for (const c of FOUR) {
+      expect(
+        screen.getByTestId(`compare-column-proposed:${c.sourceType}:${c.sourceRecordId}`),
+      ).toBeTruthy();
+      expect(screen.getByTestId(`compare-candidate-different-${c.proposalId}`)).toBeTruthy();
+    }
+  });
+
+  it("answering candidate 2 writes about candidate 2, and leaves 1, 3 and 4 standing", async () => {
+    await openCompare();
+
+    // The second answer's queue: p-2 gone, the rest untouched.
+    jest
+      .mocked(window.api.contacts.getReviewQueue)
+      .mockResolvedValue(queueWith(FOUR.filter((c) => c.proposalId !== "p-2")));
+    jest.mocked(window.api.contacts.rejectLink).mockResolvedValue({ success: true });
+
+    fireEvent.click(screen.getByTestId("compare-candidate-different-p-2"));
+
+    // ONE record was written about, and it is the one whose control was pressed.
+    // CONTROL: hand `answer` the opened item instead of the pressed one and this
+    // reads p-1 — the founder's first candidate answered by his second click.
+    await waitFor(() =>
+      expect(jest.mocked(window.api.contacts.rejectLink).mock.calls).toEqual([[USER, "p-2"]]),
+    );
+    expect(window.api.contacts.confirmLink).not.toHaveBeenCalled();
+
+    // The answered candidate leaves; the other three are still on screen and
+    // still unanswered. CONTROL: freeze the candidate list in state (the shape
+    // before R5) and p-2 stays on screen, answered, forever.
+    await waitFor(() =>
+      expect(screen.queryByTestId("compare-column-proposed:outlook:out-22")).toBeNull(),
+    );
+    for (const c of FOUR.filter((x) => x.proposalId !== "p-2")) {
+      expect(
+        screen.getByTestId(`compare-column-proposed:${c.sourceType}:${c.sourceRecordId}`),
+      ).toBeTruthy();
+      expect(screen.getByTestId(`compare-candidate-different-${c.proposalId}`)).toBeTruthy();
+    }
+    // ...and the user is still on the compare screen, not dropped back to the list.
+    expect(screen.getByTestId("contact-compare-screen")).toBeTruthy();
+  });
+
+  it("says 'same person' through the queue's own confirm, for that candidate alone", async () => {
+    await openCompare();
+    jest.mocked(window.api.contacts.confirmLink).mockResolvedValue({ success: true, linked: true });
+    jest
+      .mocked(window.api.contacts.getReviewQueue)
+      .mockResolvedValue(queueWith(FOUR.filter((c) => c.proposalId !== "p-3")));
+
+    fireEvent.click(screen.getByTestId("compare-candidate-same-p-3"));
+
+    // CONTROL: build a second confirm path for this screen and the merge guard,
+    // the sibling rejection and the reload all have to be re-decided here.
+    await waitFor(() =>
+      expect(jest.mocked(window.api.contacts.confirmLink).mock.calls).toEqual([[USER, "p-3"]]),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("compare-column-proposed:google:goo-33")).toBeNull(),
+    );
+  });
+
+  it("reports the merge guard ON TOP of the compare screen, where the press happened", async () => {
+    await openCompare();
+    // `ok: true, linked: false` — the record is already saved to someone else.
+    jest.mocked(window.api.contacts.confirmLink).mockResolvedValue({
+      success: true,
+      linked: false,
+    });
+
+    fireEvent.click(screen.getByTestId("compare-candidate-same-p-4"));
+
+    // CONTROL: leave the notice on the list layer only (where it was before R5)
+    // and it renders UNDER this overlay — an outcome the user cannot see is one
+    // they will act on twice.
+    const notice = await screen.findByTestId("review-duplicates-notice");
+    expect(notice.textContent).toContain("already saved to a different contact");
+    expect(screen.getByTestId("review-compare-pane")).toContainElement(notice);
+  });
+
+  it("closes the compare screen when the last candidate is answered, and gives the list its × back", async () => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue(queueWith([FOUR[0]]));
+    await openCompare();
+    // The list's × is the compare screen's while compare is open (R3).
+    expect(screen.queryByTestId("review-duplicates-close")).toBeNull();
+
+    jest.mocked(window.api.contacts.rejectLink).mockResolvedValue({ success: true });
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
+      success: true,
+      clusters: [],
+    });
+    fireEvent.click(screen.getByTestId("compare-reject-proposal"));
+
+    // Nothing left to compare. CONTROL: leave `comparing` set when its group is
+    // gone and the list is left with NO way out — its × is still suppressed by a
+    // compare screen that renders nothing.
+    await waitFor(() => expect(screen.queryByTestId("contact-compare-screen")).toBeNull());
+    expect(screen.getByTestId("review-duplicates-close")).toBeTruthy();
   });
 });

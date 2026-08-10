@@ -16,8 +16,19 @@ import type { ContactCompareView, ConfirmSourcesOutcome } from "@/types/contactP
 export function useContactCompare(
   userId: string,
   contactId: string,
-  /** BACKLOG-2502 — the review queue's candidate, as one more column. */
-  proposedSource?: { sourceType: string; sourceRecordId: string },
+  /**
+   * BACKLOG-2502 — the review queue's candidates, as more columns.
+   *
+   * PLURAL SINCE R5. One call, not one per candidate: `matched` is decided by
+   * the service over the COLUMN SET it builds, so four separate calls would mark
+   * each candidate against a different set and the same address would read
+   * matched on one screen and unmatched on the next.
+   */
+  proposedSources?: ReadonlyArray<{
+    sourceType: string;
+    sourceRecordId: string;
+    proposalId?: string;
+  }>,
   /** BACKLOG-2502 — present ⇒ `confirm` answers a PROPOSAL, not a contact. */
   proposalId?: string,
 ): {
@@ -39,6 +50,10 @@ export function useContactCompare(
    */
   confirm: () => Promise<ConfirmSourcesOutcome | null>;
 } {
+  const proposedKey = (proposedSources ?? [])
+    .map((s) => `${s.sourceType}:${s.sourceRecordId}:${s.proposalId ?? ""}`)
+    .join("|");
+
   const [view, setView] = useState<ContactCompareView | null>(null);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -60,7 +75,7 @@ export function useContactCompare(
         const result = await window.api.contacts.getCompareColumns(
           userId,
           contactId,
-          proposedSource,
+          proposedSources,
         );
         if (!isMountedRef.current || seq !== requestSeqRef.current) return;
         if (!result.success) {
@@ -80,9 +95,13 @@ export function useContactCompare(
         if (isMountedRef.current && seq === requestSeqRef.current) setLoading(false);
       }
     })();
-    // `proposedSource` is destructured into primitives so a caller passing a
-    // fresh object literal each render cannot re-fire the load.
-  }, [userId, contactId, proposedSource?.sourceType, proposedSource?.sourceRecordId]);
+    // `proposedSources` is reduced to ONE STRING so a caller passing a fresh
+    // array literal each render cannot re-fire the load — the same rule the
+    // singular version kept by destructuring to primitives, which an array
+    // cannot do. The key carries every field the request is made of, so a
+    // candidate being answered (the array shortens) DOES re-fire it, which is
+    // what keeps the screen honest after an answer.
+  }, [userId, contactId, proposedKey]);
 
   useEffect(() => {
     reload();
