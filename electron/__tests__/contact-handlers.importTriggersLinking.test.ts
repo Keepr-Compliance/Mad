@@ -250,7 +250,7 @@ async function getAvailable(): Promise<any[]> {
 
 /**
  * Import the rows the renderer would have sent — the SAME objects
- * `getAvailable` returned, filtered, never rebuilt (ImportContactsModal:94).
+ * `getAvailable` returned, filtered, never rebuilt.
  */
 async function importRows(rows: any[]): Promise<void> {
   const result = await registeredHandlers.get("contacts:import")(mockEvent, USER, rows);

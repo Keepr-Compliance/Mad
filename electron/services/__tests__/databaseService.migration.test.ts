@@ -579,8 +579,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       jest.clearAllMocks();
 
       // Setup: version = 62 (all applied — BACKLOG-2513's v62
-      // emails.bulk_mail_headers on top of BACKLOG-2473's v61 crosswalk origin
-      // vocabulary)
+      // emails.bulk_mail_headers is the chain head)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
         .mockReturnValueOnce({ version: 62 });
@@ -722,6 +721,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       // BACKLOG-2427 adds v60 (recover hand-typed contact value provenance),
       // BACKLOG-2473 adds v61 (crosswalk origin vocabulary),
       // BACKLOG-2513 adds v62 (emails.bulk_mail_headers)).
+      //
+      // BACKLOG-2571 briefly added a v63 (emails.sent_at_source) and took it
+      // out again — founder decision, 2026-08-09. The count going back to 33 is
+      // the enumeration doing its job in the removal direction.
       expect(mockDb.transaction).toHaveBeenCalledTimes(33);
     });
 
@@ -730,8 +733,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 62, all migrations applied (including BACKLOG-2513's v62
-      // emails.bulk_mail_headers)
+      // version = 62, all migrations applied (BACKLOG-2513's v62
+      // emails.bulk_mail_headers is the chain head)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
         .mockReturnValueOnce({ version: 62 });

@@ -328,7 +328,7 @@ describe("BACKLOG-2509 — search survives the detail pane", () => {
 
   /**
    * The controlled pair is OPTIONAL. The three picker call sites
-   * (`ContactSelectModal`, `ContactAssignmentStep`, `EditContactsModal`) pass
+   * (`ContactAssignmentStep`, and the transaction flows) pass
    * neither prop and must keep their own ephemeral search. Making the props
    * mandatory, or deleting the internal fallback, reddens this.
    */

@@ -3991,12 +3991,15 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return communicationDb.getIgnoredCommunicationsByUser(userId);
   }
 
-  async isEmailIgnoredForTransaction(transactionId: string, emailSender: string, emailSubject: string, emailSentAt: string): Promise<boolean> {
-    return communicationDb.isEmailIgnoredForTransaction(transactionId, emailSender, emailSubject, emailSentAt);
+  // BACKLOG-2571: `emailAltSentAt` is the second candidate timestamp for the
+  // ignore-key transition bridge — see the note above the two matchers in
+  // communicationDbService.
+  async isEmailIgnoredForTransaction(transactionId: string, emailSender: string, emailSubject: string, emailSentAt: string, emailAltSentAt?: string | null): Promise<boolean> {
+    return communicationDb.isEmailIgnoredForTransaction(transactionId, emailSender, emailSubject, emailSentAt, emailAltSentAt);
   }
 
-  async isEmailIgnoredByUser(userId: string, emailSender: string, emailSubject: string, emailSentAt: string): Promise<boolean> {
-    return communicationDb.isEmailIgnoredByUser(userId, emailSender, emailSubject, emailSentAt);
+  async isEmailIgnoredByUser(userId: string, emailSender: string, emailSubject: string, emailSentAt: string, emailAltSentAt?: string | null): Promise<boolean> {
+    return communicationDb.isEmailIgnoredByUser(userId, emailSender, emailSubject, emailSentAt, emailAltSentAt);
   }
 
   async removeIgnoredCommunication(ignoredCommId: string): Promise<void> {

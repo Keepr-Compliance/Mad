@@ -3,7 +3,6 @@ export {
   ContactCard,
   ContactDetailsModal,
   ContactFormModal,
-  ImportContactsModal,
   RemoveConfirmationModal,
   BlockingTransactionsModal,
   ReviewDuplicatesModal,
