@@ -415,8 +415,16 @@ export const contactBridge = {
   getCompareColumns: (
     userId: string,
     contactId: string,
+    proposedSource?: { sourceType: string; sourceRecordId: string },
+    options?: { collapseContactSources?: boolean },
   ): Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }> =>
-    ipcRenderer.invoke("contacts:get-compare-columns", userId, contactId),
+    ipcRenderer.invoke(
+      "contacts:get-compare-columns",
+      userId,
+      contactId,
+      proposedSource,
+      options,
+    ),
 
   /**
    * BACKLOG-2471 PR D — the footer's `Confirm`. The ONLY write the compare

@@ -327,6 +327,14 @@ export interface WindowApiContacts {
   getCompareColumns: (
     userId: string,
     contactId: string,
+    /** BACKLOG-2502 — the not-yet-linked candidate, as one more column. */
+    proposedSource?: { sourceType: string; sourceRecordId: string },
+    /**
+     * BACKLOG-2502 R8 — draw the contact and everything it is already made of
+     * as ONE column. The review route sets it; Clients & Contacts does not,
+     * because one column per source is that screen's whole point.
+     */
+    options?: { collapseContactSources?: boolean },
   ) => Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }>;
   /**
    * "Yes, these records are all this person" (BACKLOG-2471 PR D). Writes one

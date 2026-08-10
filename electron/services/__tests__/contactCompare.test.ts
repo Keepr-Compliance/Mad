@@ -64,6 +64,10 @@ import { proposeLink } from "../db/contactLinkReviewDbService";
 import { countReviewQueue, getReviewQueue } from "../contactLinkReview";
 import { canUnlinkSource } from "../../../src/utils/contactSourceAffordances";
 import { getReviewStateByContact } from "../db/contactSourceSets";
+// BACKLOG-2502 — the REAL constant the service filters origin rows by, so the
+// "no non-origin links" premise below is transcribed from the producer instead
+// of re-spelled as a source-type list that would drift away from it.
+import { ORIGIN_MATCH_METHOD } from "../db/contactIdentitySchemaSql";
 
 const USER = "user-compare-2471";
 const OTHER_USER = "user-other-2471";
@@ -967,6 +971,447 @@ describe("every source column is detachable, by construction", () => {
       expect(link).toBeTruthy();
       expect(canUnlinkSource(sourceList, link!)).toBe(true);
     }
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2502 — THE REVIEW QUEUE'S CANDIDATE, AS ONE MORE COLUMN
+// ===========================================================================
+
+describe("the proposed column", () => {
+  beforeEach(() => {
+    twoColumnContact("pc");
+    // A record NOBODY has linked — the queue's candidate. It has no crosswalk
+    // row, which is exactly why the reader cannot find it any other way.
+    addExternal("and-pc", "Paul Dorian", "android_sync", {
+      emails: [SHARED_EMAIL],
+      phones: [SHARED_PHONE],
+    });
+  });
+
+  it("renders the unlinked candidate as the last column", async () => {
+    const view = await getContactCompareColumns(USER, "pc", {
+      sourceType: "android_sync",
+      sourceRecordId: "and-pc",
+    });
+
+    // CONTROL: ignore the third argument and the candidate silently disappears
+    // from the comparison the user is being asked to make.
+    const last = view!.columns[view!.columns.length - 1];
+    expect(last.linkId).toBe("proposed:android_sync:and-pc");
+    expect(last.kind).toBe("proposed");
+    expect(last.displayName).toBe("Paul Dorian");
+    // Its values join the same cross-column marking — the point of showing it.
+    expect(last.phones).toEqual([{ value: SHARED_PHONE, matched: true }]);
+  });
+
+  /**
+   * THE ONE THAT MATTERS — AND IT WAS INVERTED. Founder blocker, 2026-08-09.
+   *
+   * This test used to assert `isConfirmed` STAYED TRUE with a candidate on
+   * screen, on the reasoning that a proposal is not a link and must not re-open
+   * PR D's screen on contacts the user has already decided. The first half of
+   * that is still true and the conclusion was still wrong: `isConfirmed` is what
+   * `ContactCompareSources` renders "You have confirmed these records are the
+   * same person" from, INSTEAD of the decision buttons. So a settled contact
+   * with a new question against it showed the founder a screen that asserted a
+   * decision he had never made and gave him no way to make one.
+   *
+   * The original worry does not materialise, and the reason is structural: only
+   * the review-queue route passes a `proposedSource`. From the contact list none
+   * is passed, `kind: "proposed"` is absent, and the expression is unchanged —
+   * which is what the second half of this test pins.
+   *
+   * CONTROL (run, red): drop `!proposedColumnPresent` from `isConfirmed` and the
+   * first assertion goes red — `Expected: false, Received: true`.
+   */
+  it("re-opens the decision — a settled contact with a NEW question is not settled", async () => {
+    confirmContactSources(USER, "pc");
+    const without = await getContactCompareColumns(USER, "pc");
+    expect(without!.isConfirmed).toBe(true);
+
+    const withProposal = await getContactCompareColumns(USER, "pc", {
+      sourceType: "android_sync",
+      sourceRecordId: "and-pc",
+    });
+
+    expect(withProposal!.isConfirmed).toBe(false);
+    expect(withProposal!.columns.some((c) => c.kind === "proposed")).toBe(true);
+
+    // AND THE CONTACT ROUTE IS UNTOUCHED. Asked again without a candidate — the
+    // shape the contact list produces — it still reads confirmed. This is the
+    // regression guard for what PR D added, and it is asserted AFTER the flip
+    // above so a fix that simply stopped confirming anything cannot pass.
+    expect((await getContactCompareColumns(USER, "pc"))!.isConfirmed).toBe(true);
+  });
+
+  it("omits the column rather than rendering a blank one when the record is gone", async () => {
+    const view = await getContactCompareColumns(USER, "pc", {
+      sourceType: "android_sync",
+      sourceRecordId: "does-not-exist",
+    });
+
+    // It cannot happen through the queue — PENDING_JOIN inner-joins
+    // external_contacts — so a miss means a stale renderer. An empty column
+    // would invite a decision about a record that is not there.
+    expect(view!.columns.every((c) => c.kind !== "proposed")).toBe(true);
+  });
+
+  it("leaves the view untouched when no candidate is passed", async () => {
+    const plain = await getContactCompareColumns(USER, "pc");
+    expect(plain!.columns.map((c) => c.kind)).toEqual(["contact", "source"]);
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2502 R8 — THE CONTACT SIDE, AS ONE COLUMN
+// ===========================================================================
+
+/**
+ * FOUNDER-OBSERVED, 2026-08-09, on `76ec6476`: *"the compare screen still shows
+ * four columns for one question"*.
+ *
+ * It was not the pairwise change failing — there was exactly one candidate. The
+ * other three columns were HIS OWN records, one per linked source, arranged as
+ * if he were being asked to choose between them. He is being asked one thing: is
+ * this candidate this person.
+ *
+ * So on the review route the contact is drawn as one column carrying everything
+ * it is already made of. On the contact route it is NOT, because there, one
+ * column per source is the feature — it is how a user sees which record
+ * contributed what, and how they unlink the wrong one.
+ */
+describe("R8 — collapsing the contact side", () => {
+  /** Held by the Outlook record and by no contact row — the value a naive collapse drops. */
+  const RECORD_ONLY_PHONE = "+12065550155";
+  /** Held by the Google record and by no contact row. */
+  const RECORD_ONLY_EMAIL = "pd.google@example.com";
+
+  /**
+   * The founder's shape: a contact assembled from THREE of its own records
+   * (origin + an absorbed `source_id` row + two attached ones) with one
+   * candidate against it. Four columns before this change, two after.
+   */
+  function assembledContact(id: string): void {
+    addContact(id, "Paul Dorian", { phones: [SHARED_PHONE], emails: [SHARED_EMAIL] });
+    origin(id, "contacts_app");
+    addExternal(`mac-${id}`, "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+    link(id, "macos", `mac-${id}`, "source_id");
+    // Carries a number the contact itself does not have.
+    addExternal(`out-${id}`, "Paul Dorian", "outlook", { phones: [RECORD_ONLY_PHONE] });
+    link(id, "outlook", `out-${id}`, "email");
+    // Carries an address the contact itself does not have.
+    addExternal(`goo-${id}`, "Paul Dorian", "google_contacts", { emails: [RECORD_ONLY_EMAIL] });
+    link(id, "google_contacts", `goo-${id}`, "phone");
+    // The candidate, unlinked.
+    addExternal(`and-${id}`, "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
+  }
+
+  const candidate = (id: string) => ({
+    sourceType: "android_sync",
+    sourceRecordId: `and-${id}`,
+  });
+
+  it("draws TWO columns where the contact route draws four", async () => {
+    assembledContact("r8a");
+
+    // CONTROL: drop the `collapseContactSources` branch on `sourceRows` and this
+    // reads ["contact","source","source","proposed"] — the founder's screenshot.
+    const collapsed = await getContactCompareColumns(USER, "r8a", candidate("r8a"), {
+      collapseContactSources: true,
+    });
+    expect(collapsed!.columns.map((c) => c.kind)).toEqual(["contact", "proposed"]);
+    expect(collapsed!.columns.map((c) => c.linkId)[1]).toBe(
+      "proposed:android_sync:and-r8a",
+    );
+  });
+
+  it("keeps every value the collapsed records held, not the first one found", async () => {
+    assembledContact("r8b");
+
+    const collapsed = await getContactCompareColumns(USER, "r8b", candidate("r8b"), {
+      collapseContactSources: true,
+    });
+    const contactColumn = collapsed!.columns[0];
+
+    // THE UNION, ASSERTED AS AN EXACT SET. A collapse that showed only
+    // `contact_phones` would pass any "two columns" test while silently losing
+    // the Outlook number — the failure the founder has been bitten by before.
+    // CONTROL: build the contact column from `contactPhones` alone and
+    // `+12065550155` disappears from this list.
+    expect(contactColumn.phones.map((p) => p.value)).toEqual([
+      SHARED_PHONE,
+      RECORD_ONLY_PHONE,
+    ]);
+    expect(contactColumn.emails.map((e) => e.value)).toEqual([
+      SHARED_EMAIL,
+      RECORD_ONLY_EMAIL,
+    ]);
+    // The contact's own values LEAD — they are the saved truth the rest of the
+    // app uses, and the order is what the user reads first.
+    expect(contactColumn.phones[0].value).toBe(SHARED_PHONE);
+    // And the candidate's shared number still marks against the collapsed side,
+    // so collapsing did not cost the comparison its point.
+    expect(contactColumn.phones[0].matched).toBe(true);
+  });
+
+  /**
+   * CONTROL 3, AND THE ONE THAT MATTERS MOST: both surfaces share one component,
+   * so a collapse that leaked would silently rewrite Clients & Contacts.
+   */
+  it("leaves the contact route drawing one column per source, with its own values", async () => {
+    assembledContact("r8c");
+
+    const contactRoute = await getContactCompareColumns(USER, "r8c");
+    // CONTROL: default the option to true, or collapse whenever a candidate is
+    // present, and this reads ["contact"] — PR C's whole screen gone.
+    expect(contactRoute!.columns.map((c) => c.kind)).toEqual([
+      "contact",
+      "source",
+      "source",
+    ]);
+    // Unchanged values: the union belongs to the collapsed column and nowhere
+    // else, so the record's own number is still ITS number here.
+    expect(contactRoute!.columns[0].phones.map((p) => p.value)).toEqual([SHARED_PHONE]);
+    const outlookColumn = contactRoute!.columns.find((c) => c.columnLabel.includes("Outlook"));
+    expect(outlookColumn!.phones.map((p) => p.value)).toEqual([RECORD_ONLY_PHONE]);
+
+    // The same contact with a candidate, still uncollapsed, is four columns —
+    // which is exactly what the founder saw, and is correct on this route.
+    const withCandidate = await getContactCompareColumns(USER, "r8c", candidate("r8c"));
+    expect(withCandidate!.columns.map((c) => c.kind)).toEqual([
+      "contact",
+      "source",
+      "source",
+      "proposed",
+    ]);
+  });
+
+  it("draws two columns for a contact with ONE record, not one and not three", async () => {
+    // R1's contact: a single source record, which is what most of the queue is.
+    addContact("r8d", "Paul Dorian", { phones: [SHARED_PHONE] });
+    origin("r8d", "contacts_app");
+    addExternal("mac-r8d", "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+    link("r8d", "macos", "mac-r8d", "source_id");
+    addExternal("and-r8d", "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
+
+    // CONTROL, corrected after running it: the ordering mutation I first wrote
+    // here CANNOT go red — this contact's only non-origin link is the absorbed
+    // one, so `sourceRows` is empty whether the collapse runs before the guard
+    // or after it, and both orders return the same view. The mutation that does
+    // fire is R1's guard bug returning — `if (sourceRows.length === 0)`, which
+    // collapsing makes far likelier because it empties `sourceRows` for EVERY
+    // contact. Run: all four R8 views come back null.
+    const view = await getContactCompareColumns(USER, "r8d", candidate("r8d"), {
+      collapseContactSources: true,
+    });
+    expect(view!.columns.map((c) => c.kind)).toEqual(["contact", "proposed"]);
+  });
+
+  it("takes a record's company when the contact has none, rather than losing it", async () => {
+    addContact("r8e", "Paul Dorian", { phones: [SHARED_PHONE] });
+    origin("r8e", "contacts_app");
+    addExternal("out-r8e", "Paul Dorian", "outlook", {
+      phones: [SHARED_PHONE],
+      company: "Example Realty",
+    });
+    link("r8e", "outlook", "out-r8e", "email");
+    addExternal("and-r8e", "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
+
+    // Company is ONE value on both sides, so there is no union to show — but a
+    // company that was visible in its own column must not vanish because that
+    // column was folded away. CONTROL: use `contact.company` alone and this
+    // reads null.
+    const collapsed = await getContactCompareColumns(USER, "r8e", candidate("r8e"), {
+      collapseContactSources: true,
+    });
+    expect(collapsed!.columns[0].company).toBe("Example Realty");
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2502 R1 — COMPARE, FROM A CONTACT THAT HAS ONLY ONE RECORD
+// ===========================================================================
+
+/**
+ * THE FOUNDER-OBSERVED DEFECT, 7 Aug.
+ *
+ * "When I click Compare on a Possible-duplicates row, on some I see: Compare
+ * sources / This contact has only one record, so there is nothing to compare."
+ *
+ * The guard counted `sourceRows` — links, minus the absorbed one — and returned
+ * before the candidate was appended. So it failed on precisely the shape the
+ * review queue is made of: a contact assembled from ONE record, which is why an
+ * unlinked record looked like a match in the first place.
+ *
+ * Every case below builds that one-record shape through the REAL writers and
+ * asks the REAL shipped function, so the assertions cannot agree with a
+ * re-derived rule.
+ */
+describe("the one-record contact the review queue asks about", () => {
+  /** The `rA` shape: imported, its origin row plus the `source_id` row that
+   *  column 1 absorbs. Nothing left to be a second column. */
+  /** Returns the ORIGIN row id, which is what keys column 1 — so the assertions
+   *  below can name both columns exactly without hard-coding a uuid. */
+  const oneRecordContact = (id: string, name: string): string => {
+    addContact(id, name, { phones: [SHARED_PHONE] });
+    const originId = origin(id, "contacts_app");
+    addExternal(`mac-${id}`, name, "macos", { phones: [SHARED_PHONE] });
+    link(id, "macos", `mac-${id}`, "source_id");
+    return originId;
+  };
+
+  it("still has nothing to compare with no candidate — the guard is not deleted", async () => {
+    oneRecordContact("g1", "Tad Brooks");
+    expect(await getContactCompareColumns(USER, "g1")).toBeNull();
+  });
+
+  /**
+   * CONTROL C1. Revert the guard to `if (sourceRows.length === 0) return null;`
+   * and this returns null — the exact dead Compare the founder hit.
+   */
+  it("renders TWO columns once the queue's candidate is passed", async () => {
+    const originId = oneRecordContact("g2", "Paul Dorian");
+    addExternal("out-g2", "Paul Dorian", "outlook", {
+      emails: [SHARED_EMAIL],
+      phones: [SHARED_PHONE],
+    });
+
+    const view = await getContactCompareColumns(USER, "g2", {
+      sourceType: "outlook",
+      sourceRecordId: "out-g2",
+    });
+
+    expect(view).not.toBeNull();
+    // Identity, not count: WHICH two columns, in which order.
+    expect(columnIds(view)).toEqual([originId, "proposed:outlook:out-g2"]);
+    expect(view!.columns.map((c) => c.kind)).toEqual(["contact", "proposed"]);
+    // The candidate joins the cross-column marking, which is the whole point of
+    // opening this screen: the shared phone is what the user is judging.
+    expect(view!.columns[1].phones).toEqual([{ value: SHARED_PHONE, matched: true }]);
+  });
+
+  /**
+   * The guard counts the record, NOT the request. A `proposedSource` naming a
+   * record that is gone renders no second column, so the view is still a single
+   * column and must still be null — otherwise the fix would trade a dead button
+   * for a one-column "comparison".
+   */
+  it("stays null when the candidate record does not exist", async () => {
+    oneRecordContact("g3", "Ada Lovelace");
+    const view = await getContactCompareColumns(USER, "g3", {
+      sourceType: "outlook",
+      sourceRecordId: "gone",
+    });
+    expect(view).toBeNull();
+  });
+
+  /** A removed contact is out regardless — the tombstone guard is upstream of
+   *  this one and a candidate must not reopen it. */
+  it("stays null for a removed contact even with a candidate", async () => {
+    oneRecordContact("g4", "Grace Hopper");
+    addExternal("out-g4", "Grace Hopper", "outlook", { emails: [SHARED_EMAIL] });
+    mockDb!.prepare("UPDATE contacts SET removed_at = datetime('now') WHERE id = 'g4'").run();
+
+    expect(
+      await getContactCompareColumns(USER, "g4", {
+        sourceType: "outlook",
+        sourceRecordId: "out-g4",
+      }),
+    ).toBeNull();
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2502 — THE VACUOUS TRUTH ON THE EMPTY LINK SET
+// ===========================================================================
+
+/**
+ * FOUNDER BLOCKER, 2026-08-09, on his own data: "Test contact Blue Spaces" plus
+ * an Outlook record sharing an address. The compare screen opened, both columns
+ * rendered — and the footer read *"You have confirmed these records are the same
+ * person"* with no buttons under it.
+ *
+ * `[].every(...)` IS `true`. A contact with NO non-origin links reads confirmed
+ * unconditionally, and a contact with no non-origin links is exactly what the
+ * review queue is made of: one record, which is why an unrelated record looked
+ * like it might be a second one.
+ *
+ * The empty set is pinned BY NAME here rather than left to fall out of the
+ * proposal guard, because the two guards overlap on this shape and the emptiness
+ * is the older and less obvious of the two faults.
+ */
+describe("a contact with no non-origin links at all", () => {
+  /**
+   * The set `isConfirmed` quantifies over, read back through the SAME predicate
+   * the service filters by. Asserted as a PREMISE below: a test about the empty
+   * set that ran against a non-empty one would prove nothing, and nothing else
+   * in the fixture makes the emptiness visible.
+   */
+  const nonOriginLinks = (contactId: string): string[] =>
+    (
+      mockDb!
+        .prepare(
+          `SELECT source_type, source_record_id FROM contact_source_links
+            WHERE user_id = ? AND contact_id = ? AND match_method != ?
+            ORDER BY source_type, source_record_id`,
+        )
+        .all(USER, contactId, ORIGIN_MATCH_METHOD) as {
+        source_type: string;
+        source_record_id: string;
+      }[]
+    ).map((r) => `${r.source_type}|${r.source_record_id}`);
+
+  /**
+   * CONTROL 1 — THE FOUNDER'S EXACT CASE, and the primary test on this fix.
+   *
+   * Restore `const isConfirmed = nonOrigin.every(...)` and this goes red with
+   * `Expected: false, Received: true` — the screen that cannot be answered.
+   *
+   * Note for the reviewer: reverting EITHER guard alone leaves this green,
+   * because on this shape they overlap — `nonOrigin` is empty AND a proposed
+   * column is present. The guard that bites alone for the proposal is the
+   * settled-contact test above; the length guard is defence in depth for a shape
+   * the column rules do not currently produce without a candidate.
+   */
+  it("does not read confirmed just because it has nothing to be confirmed", async () => {
+    addContact("vt1", "Test contact Blue Spaces", { source: "manual" });
+    origin("vt1", "manual");
+    addExternal("out-vt1", "Test contact Blue Spaces", "outlook", { emails: [SHARED_EMAIL] });
+    propose("vt1", "outlook", "out-vt1", "record:out-vt1");
+
+    // THE PREMISE. This is the empty set the vacuous truth lives on.
+    expect(nonOriginLinks("vt1")).toEqual([]);
+
+    const view = await getContactCompareColumns(USER, "vt1", {
+      sourceType: "outlook",
+      sourceRecordId: "out-vt1",
+    });
+
+    // The screen the founder was looking at: two columns, one of them the
+    // candidate, and NOTHING confirmed about either of them.
+    expect(view).not.toBeNull();
+    expect(view!.columns.map((c) => c.kind)).toEqual(["contact", "proposed"]);
+    expect(view!.isConfirmed).toBe(false);
+  });
+
+  /**
+   * The same contact once the answer is in. `confirmProposal` creates the link,
+   * so the set this quantifies over stops being empty by the ordinary route —
+   * which is what makes the guard above a guard rather than a permanent `false`.
+   */
+  it("reads confirmed once the candidate has actually been linked and judged", async () => {
+    addContact("vt2", "Ada Lovelace", { source: "manual" });
+    origin("vt2", "manual");
+    addExternal("out-vt2", "Ada Lovelace", "outlook", { emails: [SHARED_EMAIL] });
+    link("vt2", "outlook", "out-vt2", "email");
+    confirmContactSources(USER, "vt2");
+
+    expect(nonOriginLinks("vt2")).toEqual(["outlook|out-vt2"]);
+    // No candidate is passed: this is the contact route, after the queue is done
+    // with it. CONTROL: keep `nonOrigin.length > 0` but move it AFTER a `!`, or
+    // leave `!proposedColumnPresent` permanently false, and this goes red.
+    expect((await getContactCompareColumns(USER, "vt2"))!.isConfirmed).toBe(true);
   });
 });
 

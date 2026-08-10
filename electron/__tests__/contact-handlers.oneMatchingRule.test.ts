@@ -362,28 +362,45 @@ describe("BACKLOG-2316 — two people on one office line both survive both layer
     expect(idsOf(assembleContacts([], externals))).toEqual(["ext-chen", "ext-torres"]);
   });
 
-  it("the same person twice on one line is still ONE row — decided by main, not here", async () => {
+  /**
+   * RE-POINTED BY BACKLOG-2556 — was "is still ONE row", and asserted the
+   * `absorbedRecords` disclosure that went with the fold.
+   *
+   * Main folded the Outlook record into the macOS one and drew "1 record
+   * combined" on the survivor. The founder deleted that: *"ok lets delete the
+   * fold"*. Both records now reach the renderer, and there is no
+   * `absorbedRecords` channel left to disclose anything on — that field is
+   * deleted from `AvailableContact` with the fold that filled it.
+   *
+   * The renderer half of the assertion is UNCHANGED in meaning and is the part
+   * still worth having: whatever main returns, `assembleContacts` passes
+   * through untouched.
+   */
+  it("the same person twice on one line is TWO rows — decided by main, not here [BACKLOG-2556]", async () => {
     mockShadowRows = [
       shadowRow("chen-mac", "Margaret Chen", "macos", [], ["(555) 0100"]),
       shadowRow("chen-out", "Margaret Chen", "outlook", [], ["555-0100"]),
     ];
 
     const externals = await externalsFromMain();
-    // Main folded the Outlook record into the macOS one...
-    expect(externals.map((c) => (c as any).externalRecordId)).toEqual(["chen-mac"]);
-    // ...and said so, which is the whole difference between the two rules: this
-    // collapse is stored and disclosed, the removed one was neither.
-    expect((externals[0] as any).absorbedRecords).toEqual([
-      {
-        label: "Margaret Chen",
-        sourceLabel: "Outlook contacts",
-        matchedOn: "phone",
-        matchedValue: "555-0100",
-      },
+    expect(externals.map((c) => (c as any).externalRecordId).sort()).toEqual([
+      "chen-mac",
+      "chen-out",
     ]);
+    // Nothing was absorbed, and there is nowhere for an absorption to be
+    // recorded. Asserted on the ROW rather than on the type so this stays a
+    // behavioural check: re-adding the field alone would not redden it, but
+    // re-adding the fold would.
+    for (const row of externals) {
+      expect((row as any).absorbedRecords).toBeUndefined();
+      expect((row as any).collapsedSources).toBeUndefined();
+    }
 
     // The renderer passes main's answer straight through.
-    expect(idsOf(assembleContacts([], externals))).toEqual(["ext-chen-mac"]);
+    expect(idsOf(assembleContacts([], externals))).toEqual([
+      "ext-chen-mac",
+      "ext-chen-out",
+    ]);
   });
 });
 
@@ -468,14 +485,19 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
       externals,
     );
 
-    // Main's own suppression is unchanged and still doing the work: 9 shadow
-    // rows in, 7 out (out-bea folded into mac-bea, out-alice already imported).
+    // BACKLOG-2556: was 7 out — `out-bea` was folded into `mac-bea` on the
+    // shared address. The fold is deleted, so it is 8, and `out-bea` is the one
+    // that came back. `out-alice` is still filtered: an already-imported
+    // contact holds that address under a compatible name, which is the
+    // `emailClaimedByImported` fallback this PR deliberately leaves alone
+    // (BACKLOG-2608 owns it).
     expect(externals.map((c) => (c as any).externalRecordId).sort()).toEqual([
+      "mac-bea",
       "mac-cleo",
       "mac-dov",
       "mac-gus",
       "mac-nameonly",
-      "mac-bea",
+      "out-bea",
       "out-nameonly",
       "out-paul",
     ].sort());
@@ -486,7 +508,7 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
     );
   });
 
-  it("names the THREE records the removed pass would have hidden, and why each must stay", async () => {
+  it("names the FOUR records that would have been hidden, and why each must stay", async () => {
     const externals = await externalsFromMain();
     const rendered = assembleContacts(
       mockImportedContacts as unknown as ExtendedContact[],
@@ -506,10 +528,16 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
     expect(shown.has("ext-mac-nameonly")).toBe(true);
     expect(shown.has("ext-out-nameonly")).toBe(true);
 
-    // Nothing ELSE appeared. The collapses main makes are still made: the
-    // Outlook Bea is folded into the macOS one, the Outlook Alice is filtered as
-    // already imported, and neither is in the rendered set.
-    expect(shown.has("ext-out-bea")).toBe(false);
+    // 3. BACKLOG-2556 — THE FOLD IS GONE. `out-bea` ("Bea E") shared
+    //    `BEA@example.test` with `mac-bea` ("Bea Example") under a
+    //    prefix-compatible name, and was folded away with a purple "1 record
+    //    combined" toggle on the survivor. It is now its own row. This is the
+    //    Elena Marsh / Elena Marsh-Okonkwo shape: two spellings, one address,
+    //    and no way for the app to know whether they are one person.
+    expect(shown.has("ext-out-bea")).toBe(true);
+
+    // Nothing ELSE appeared. The KNOWLEDGE half still suppresses: the Outlook
+    // Alice is filtered because a saved contact already holds that address.
     expect(shown.has("ext-out-alice")).toBe(false);
   });
 
@@ -615,16 +643,36 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
     ).toEqual(["s-multi"]);
   });
 
-  it("the main process still discloses every collapse it makes", async () => {
+  /**
+   * RE-POINTED BY BACKLOG-2556 — was "the main process still discloses every
+   * collapse it makes", asserting `{ "Bea Example": ["Bea E"] }`.
+   *
+   * That test was correct and is now meaningless: with no collapse there is
+   * nothing to disclose, and asserting `{}` against a deleted field would pass
+   * for the wrong reason — it would stay green if the fold came back but the
+   * disclosure did not, which is the WORSE of the two failure modes (a record
+   * vanishing with nothing on screen to say so).
+   *
+   * So it asserts the property that replaced it: every shadow row the picker
+   * did not suppress on the KNOWLEDGE half reaches the caller, by exact id set.
+   * `out-alice` is absent because a saved contact holds its address; nothing
+   * else is. If the fold returns, this names the record it swallowed.
+   */
+  it("nothing is folded away, so there is nothing to disclose [BACKLOG-2556]", async () => {
     const externals = await externalsFromMain();
 
-    // The suppression the founder counted, and the sentence PR #2204 renders
-    // from it, are untouched by this task.
-    const disclosed: Record<string, string[]> = {};
+    expect(externals.map((row) => (row as any).externalRecordId).sort()).toEqual([
+      "mac-bea",
+      "mac-cleo",
+      "mac-dov",
+      "mac-gus",
+      "mac-nameonly",
+      "out-bea",
+      "out-nameonly",
+      "out-paul",
+    ]);
     for (const row of externals) {
-      const records = (row as any).absorbedRecords as Array<{ label: string }> | undefined;
-      if (records?.length) disclosed[row.name as string] = records.map((r) => r.label);
+      expect((row as any).absorbedRecords).toBeUndefined();
     }
-    expect(disclosed).toEqual({ "Bea Example": ["Bea E"] });
   });
 });

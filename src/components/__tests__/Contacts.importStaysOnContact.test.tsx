@@ -56,7 +56,7 @@ const USER_ID = "user-123";
  * BACKLOG-2510 — the identity fields are transcribed from the real producer,
  * `contactHandlers.ts:1720-1758`. This fixture used to carry none of them,
  * which made it a row `contacts:get-available` never emits: the import path
- * reads `externalRecordId` / `externalSourceType` / `collapsedSources` to write
+ * reads `externalRecordId` / `externalSourceType` / `externalUuid` to write
  * the crosswalk link, so a fixture without them cannot distinguish an import
  * that records where a contact came from from one that records nothing.
  */
@@ -72,13 +72,6 @@ const externalAlice = {
   externalRecordId: "AB-RECORD-9021",
   externalSourceType: "macos",
   externalUuid: "d41f8c92-6b0e-4a37-95c1-2e8b7f5a1d04",
-  collapsedSources: [
-    {
-      sourceType: "macos",
-      sourceRecordId: "AB-RECORD-9021",
-      externalUuid: "d41f8c92-6b0e-4a37-95c1-2e8b7f5a1d04",
-    },
-  ],
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 } as unknown as Contact;

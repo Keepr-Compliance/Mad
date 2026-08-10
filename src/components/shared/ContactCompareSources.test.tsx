@@ -19,7 +19,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { ContactCompareSources } from "./ContactCompareSources";
 import type { ContactCompareView } from "@/types/contactProvenance";
 
@@ -165,6 +165,34 @@ describe("per-column Unlink", () => {
       ),
     ).toEqual([`compare-unlink-${OUTLOOK_LINK}`]);
     expect(screen.queryByTestId(`compare-unlink-${CONTACT_LINK}`)).toBeNull();
+  });
+
+  /**
+   * BACKLOG-2502 R6 — THE CONTACT ROUTE'S PER-COLUMN CONTROL, PINNED BY WHAT IT
+   * IS RATHER THAN BY WHAT IT IS CALLED.
+   *
+   * R5 briefly gave candidate columns their own decision buttons and was
+   * reverted on the founder's decision: the compare screen asks about ONE record
+   * and the decision belongs in its footer. The risk that leaves behind is a
+   * later change reintroducing a column-level decision under a new name, or
+   * quietly harmonising this one's word with the queue's.
+   *
+   * Counting BUTTONS rather than test ids is what makes that catchable: a
+   * renamed control is still a button, and a third control appearing beside this
+   * one changes the count even if nothing existing is touched.
+   */
+  it("is the source column's ONLY control, and it reads Unlink", async () => {
+    await renderDeciding();
+
+    const sourceButtons = within(
+      screen.getByTestId(`compare-column-${OUTLOOK_LINK}`),
+    ).getAllByRole("button");
+    expect(sourceButtons.map((b) => b.textContent)).toEqual(["Unlink"]);
+
+    // The contact's own column decides nothing about itself, in any wording.
+    expect(
+      within(screen.getByTestId(`compare-column-${CONTACT_LINK}`)).queryAllByRole("button"),
+    ).toEqual([]);
   });
 
   it("calls the caller's unlink with the link id, and nothing else", async () => {

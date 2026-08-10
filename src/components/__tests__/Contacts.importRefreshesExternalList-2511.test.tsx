@@ -116,13 +116,6 @@ const externalAddressBookRecord = {
   externalRecordId: "AB-RECORD-4417",
   externalSourceType: "macos",
   externalUuid: "3c9a1b7e-52d4-4f60-b8a1-9d7e2f0c4a55",
-  collapsedSources: [
-    {
-      sourceType: "macos",
-      sourceRecordId: "AB-RECORD-4417",
-      externalUuid: "3c9a1b7e-52d4-4f60-b8a1-9d7e2f0c4a55",
-    },
-  ],
 } as unknown as Contact;
 
 /** The same person once saved — a DIFFERENT id, which is the crux. */

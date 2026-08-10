@@ -85,7 +85,15 @@ export interface ContactCompareColumn {
    * here and the target `contacts:unlink-source` already takes in PR D.
    */
   linkId: string;
-  kind: "contact" | "source";
+  /**
+   * `"proposed"` is the review queue's candidate — a record that is NOT linked
+   * yet (BACKLOG-2502). It is deliberately a third value rather than a flag on
+   * `"source"`, because two shipped behaviours are already gated on
+   * `kind === "source"` and both are correct to withhold here: PR D's `Unlink`
+   * (there is nothing to unlink) and PR C's "linked record" tag (it is not one).
+   * Adding the value gets both right with no new conditionals.
+   */
+  kind: "contact" | "source" | "proposed";
   /** "Mac address book", "Added by you". Never assembled in the renderer. */
   columnLabel: string;
   /** `null` when the record carries no name — the cell then reads "none". */
@@ -154,6 +162,17 @@ export interface ConfirmSourcesOutcome {
    * here. `confirmProposal` gates its own side effects the same way.
    */
   proposalsResolved: number;
+  /**
+   * BACKLOG-2502 — did a LINK actually get created?
+   *
+   * Only meaningful on the proposal route. `confirmProposal` returns
+   * `ok: true, linked: false` when the record is already claimed by a different
+   * contact: the verdict stands, no link is made, and the sibling rejection is
+   * skipped. A caller that reads `ok` alone tells the user two records were
+   * joined when they were not. `undefined` on the contact route, where every
+   * link already exists.
+   */
+  linked?: boolean;
 }
 
 interface LinkRow {
@@ -450,6 +469,35 @@ function buildReason(
 export async function getContactCompareColumns(
   userId: string,
   contactId: string,
+  /**
+   * BACKLOG-2502 — the review queue's candidate, rendered as one more column.
+   *
+   * It has NO crosswalk row, so the query below cannot reach it at all: it is
+   * read straight from `external_contacts`. Absent for every other caller, and
+   * absent means the view is exactly what PR C/D returned.
+   */
+  proposedSource?: { sourceType: string; sourceRecordId: string },
+  /**
+   * BACKLOG-2502 R8 — THE CONTACT IS ONE SIDE OF THE QUESTION, ON THE REVIEW
+   * ROUTE.
+   *
+   * Founder, 2026-08-09, after seeing four columns for one question: a contact
+   * holding two linked records plus one candidate drew four columns, three of
+   * which were his own records — so the screen looked like a four-way
+   * comparison when it was asking one thing. Collapsed, it reads as it should:
+   * *this person* against *this candidate*.
+   *
+   * A FLAG, NOT AN INFERENCE FROM `proposedSource`. Today the review queue is
+   * the only caller passing a candidate, so the two would be indistinguishable
+   * — and that is exactly why it is stated: this is a decision about what one
+   * screen MEANS, not a consequence of having a candidate, and the next reader
+   * should not have to know that one implies the other.
+   *
+   * CLIENTS & CONTACTS DOES NOT SET IT. There, one column per source IS the
+   * feature (PR C) — it is how a user sees which record contributed what, and
+   * how they unlink the wrong one.
+   */
+  options?: { collapseContactSources?: boolean },
 ): Promise<ContactCompareView | null> {
   const contact = dbGet<{
     user_id: string;
@@ -511,16 +559,130 @@ export async function getContactCompareColumns(
   /** Which row LABELS column 1. The origin row says it best when there is one. */
   const labelRow = originRow ?? absorbedSourceId;
 
-  const sourceRows = nonOrigin.filter((l) => l.id !== absorbedSourceId?.id);
-  if (sourceRows.length === 0) return null;
+  /*
+    R8 — ON THE REVIEW ROUTE THE CONTACT'S OWN RECORDS ARE NOT OPPONENTS.
+
+    Collapsed, every non-origin row stops being a column and its VALUES join
+    column 1 instead (below). Uncollapsed, this is the expression it has always
+    been and the contact route is untouched.
+  */
+  const collapseContactSources = options?.collapseContactSources === true;
+  const sourceRows = collapseContactSources
+    ? []
+    : nonOrigin.filter((l) => l.id !== absorbedSourceId?.id);
+
+  /*
+    BACKLOG-2502 R1 — THE CANDIDATE IS READ BEFORE THE GUARD, BECAUSE THE GUARD
+    COUNTS COLUMNS THE VIEW WILL RENDER.
+
+    Founder, 7 Aug: clicking Compare on a Possible-duplicates row landed on
+    "this contact has only one record, so there is nothing to compare" — and it
+    landed there for exactly the contacts the review queue is about. A contact
+    proposed as a duplicate usually has ONE source record; that is WHY an
+    unlinked external record looked like a match. Counting `sourceRows` alone
+    discarded the candidate before it was ever appended (~60 lines below), so
+    Compare worked only on contacts that already had two or more linked records
+    — never on the ones being reviewed.
+
+    The lookup therefore moves ABOVE the guard rather than the guard moving
+    below the append: the guard must know whether the candidate column will
+    actually RENDER, and it renders only if the record still exists. A
+    `proposedSource` pointing at a vanished record is still a one-column view
+    and must still return null — which is why this counts `proposedRecord`, not
+    `proposedSource`.
+  */
+  const proposedRecord = proposedSource
+    ? dbGet<{
+        name: string | null;
+        emails_json: string | null;
+        phones_json: string | null;
+        company: string | null;
+      }>(
+        `SELECT name, emails_json, phones_json, company
+           FROM external_contacts
+          WHERE user_id = ? AND source = ? AND external_record_id = ?`,
+        [userId, proposedSource.sourceType, proposedSource.sourceRecordId],
+      ) ?? null
+    : null;
+
+  // Column 1 is the contact itself and always renders, so a comparison needs
+  // exactly one more: an attached source row, or the queue's candidate. Zero
+  // means a genuinely empty view, and that still returns null.
+  if (sourceRows.length + (proposedRecord ? 1 : 0) === 0) return null;
 
   const contactEmails = getContactEmailEntries(contactId).map((e) => e.email);
   const contactPhones = getContactPhoneEntries(contactId).map((p) => p.phone);
   const transactions = await getTransactionsByContact(contactId);
 
+  /*
+    THE UNION, NOT THE FIRST ONE FOUND.
+
+    A collapsed column that showed only `contact_emails` / `contact_phones` would
+    quietly drop any address or number that lives on a linked record and was
+    never copied across — and a value disappearing off this screen is the one
+    failure the founder has already been bitten by. So the contact's own values
+    LEAD (they are the saved truth and the ones the rest of the app uses) and
+    every record it is assembled from adds what it has.
+
+    OVER `links` RATHER THAN `nonOrigin` — AND THE TWO ARE THE SAME SET TODAY.
+    Corrected after SR review (2026-08-09): the earlier note here said the origin
+    row is one of the contact's own records and so contributes values. It cannot.
+    Its `source_record_id` is the synthetic `origin:<contactId>`
+    (`db/contactOriginLink.ts`) and its `source_type` comes from the origin
+    vocabulary rather than one of the five external sources, so the LEFT JOIN
+    above cannot match on it: `ec_emails_json` / `ec_phones_json` are always NULL
+    there and `parseValueArray(null)` is `[]`. Run: swapping every `links` below
+    for `nonOrigin` leaves all 54 tests green, and no fixture can tell the two
+    apart without an `external_contacts` row keyed `origin:…`, which nothing
+    writes — so there is no test to add here, only this comment to get right.
+
+    `links` is kept because the exclusion of origin rows is a statement about
+    COLUMNS — drawing the address book a contact came from as its own opponent is
+    noise — and that reasoning does not transfer to values. If an origin row ever
+    pointed at a real record, its values would belong in this union, and this
+    expression already carries them.
+
+    Deduped by `dedupeEmailValues` / `dedupePhoneValues`, the same keys every
+    other column is built with, so "the same number" means one thing here.
+  */
+  const collapsedEmails = collapseContactSources
+    ? dedupeEmailValues([
+        ...contactEmails,
+        ...links.flatMap((l) => parseValueArray(l.ec_emails_json)),
+      ])
+    : dedupeEmailValues(contactEmails);
+  const collapsedPhones = collapseContactSources
+    ? dedupePhoneValues([
+        ...contactPhones,
+        ...links.flatMap((l) => parseValueArray(l.ec_phones_json)),
+      ])
+    : dedupePhoneValues(contactPhones);
+  /*
+    Company is ONE value on both sides, so there is no union to show. The
+    contact's own wins when it has one; when it has none, a record's company is
+    taken rather than left blank — the case where collapsing would otherwise
+    make a company vanish from the screen entirely.
+  */
+  const collapsedCompany =
+    contact.company?.trim() ||
+    (collapseContactSources
+      ? (links.map((l) => l.ec_company?.trim()).find((c) => !!c) ?? null)
+      : null);
+
   // Raw values first, marks second — a value cannot know whether it is shared
   // until every column has been read.
-  const raw = [
+  interface RawColumn {
+    linkId: string;
+    kind: ContactCompareColumn["kind"];
+    columnLabel: string;
+    displayName: string | null;
+    emails: string[];
+    phones: string[];
+    company: string | null;
+    transactions: string[];
+    sourceRecordPresent: boolean;
+  }
+  const raw: RawColumn[] = [
     {
       linkId: labelRow?.id ?? `contact:${contactId}`,
       kind: "contact" as const,
@@ -528,9 +690,9 @@ export async function getContactCompareColumns(
         ? columnLabelFor(labelRow.source_type, labelRow.match_method)
         : "Your contact",
       displayName: contact.display_name?.trim() || null,
-      emails: dedupeEmailValues(contactEmails),
-      phones: dedupePhoneValues(contactPhones),
-      company: contact.company?.trim() || null,
+      emails: collapsedEmails,
+      phones: collapsedPhones,
+      company: collapsedCompany,
       transactions: transactions.map((t) => t.property_address).filter((a): a is string => !!a),
       sourceRecordPresent: true,
     },
@@ -549,6 +711,32 @@ export async function getContactCompareColumns(
       sourceRecordPresent: !!r.ec_id,
     })),
   ];
+
+  /*
+    BACKLOG-2502 — the candidate, appended as the last column.
+
+    Read straight from `external_contacts`: it has no crosswalk row, so the
+    query above cannot reach it. Keyed `proposed:<type>:<record>` because there
+    is no `linkId` to key it by, and that shape cannot collide with a UUID.
+
+    A MISSING RECORD YIELDS NO COLUMN RATHER THAN A BLANK ONE. It cannot happen
+    through the queue — `PENDING_JOIN` inner-joins `external_contacts` — so a
+    miss here means a stale renderer, and an empty column would invite a
+    decision about a record that is not there.
+  */
+  if (proposedSource && proposedRecord) {
+    raw.push({
+      linkId: `proposed:${proposedSource.sourceType}:${proposedSource.sourceRecordId}`,
+      kind: "proposed" as const,
+      columnLabel: sourceLabel(proposedSource.sourceType as ContactLinkSourceType),
+      displayName: proposedRecord.name?.trim() || null,
+      emails: dedupeEmailValues(parseValueArray(proposedRecord.emails_json)),
+      phones: dedupePhoneValues(parseValueArray(proposedRecord.phones_json)),
+      company: proposedRecord.company?.trim() || null,
+      transactions: [] as string[],
+      sourceRecordPresent: true,
+    });
+  }
 
   // A value is MARKED when it appears on two or more columns, by the same keys
   // the rest of the system compares values with — `emailKey`/`phoneKey` in
@@ -616,12 +804,64 @@ export async function getContactCompareColumns(
     ? { method: sourceRows[0].match_method, source: sourceRows[0].source_type }
     : null;
 
-  // Over LINKS, not columns — `nonOrigin`, which includes the row column 1
-  // absorbed. See the field's docblock; confirming only the rendered columns
-  // would make this unreachable.
-  const isConfirmed = nonOrigin.every((l) =>
-    hasMustLink(userId, contactId, l.source_type as ExternalContactSource, l.source_record_id),
-  );
+  /*
+    Over LINKS, not columns — `nonOrigin`, which includes the row column 1
+    absorbed. See the field's docblock; confirming only the rendered columns
+    would make this unreachable.
+
+    BACKLOG-2502 — TWO GUARDS IN FRONT OF THE QUANTIFIER, NOT A NEW QUANTIFIER.
+
+    `every` over the existing links answers "is everything already linked also
+    already confirmed". That is the right question on the contact route, and it
+    is the wrong answer to "is there anything left to decide" in two ways the
+    review-queue route hits immediately:
+
+      1. AN OPEN PROPOSAL IS NOT A LINK. The candidate column is by definition
+         unlinked, so it cannot make the predicate false. A contact whose
+         existing links are all confirmed therefore reads confirmed while an
+         unanswered question stands against it, and `ContactCompareSources`
+         renders "You have confirmed these records are the same person" in
+         place of the decision buttons — asserting a decision the user never
+         made, and offering no way to make one.
+      2. `[].every(...)` IS `true`, so a contact with no non-origin links would
+         read confirmed on a vacuous quantifier rather than on a decision.
+
+    ONLY GUARD 1 CAN FIRE, AND THE FOUNDER'S CASE IS FIXED BY IT ALONE.
+    Corrected here after SR review (2026-08-09): the version of this note that
+    presented reason 2 as a second LIVE defect was wrong, and a false comment
+    outlives the code it describes. Guard 2 is unreachable as this function
+    stands —
+
+      `sourceRows` is either `[]` (collapsed) or a filter of `nonOrigin`, so
+      `sourceRows.length <= nonOrigin.length`. The null-return ~200 lines above
+      ends the function unless `sourceRows.length + (proposedRecord ? 1 : 0)`
+      is non-zero. So `nonOrigin.length === 0` reaches this line ONLY when a
+      `proposedRecord` exists — which is exactly when the candidate column was
+      pushed, so `proposedColumnPresent` is true and GUARD 1 HAS ALREADY FORCED
+      `false`. Run: dropping `nonOrigin.length > 0` leaves 54/54 green.
+
+    KEPT ANYWAY, and not as superstition. "Everything already linked is also
+    already confirmed" is not a claim you can make about nothing, and guard 2 is
+    what makes this expression say that on its own terms — without depending on
+    a `return null` two hundred lines away that was written for a different
+    reason and may move for a different reason again. Delete it and `isConfirmed`
+    is correct only by coincidence of where that return sits.
+
+    Both guards sit IN FRONT of the quantifier, so the absorbed-row case the
+    docblock below protects is untouched: with links present and no proposal,
+    this is the same expression it has always been.
+
+    `proposedColumnPresent` is read off the columns actually built rather than
+    re-deriving it from `proposedSource`/`proposedRecord`, so it cannot come to
+    disagree with whether the candidate is on screen.
+  */
+  const proposedColumnPresent = columns.some((c) => c.kind === "proposed");
+  const isConfirmed =
+    !proposedColumnPresent &&
+    nonOrigin.length > 0 &&
+    nonOrigin.every((l) =>
+      hasMustLink(userId, contactId, l.source_type as ExternalContactSource, l.source_record_id),
+    );
 
   return {
     contactId,

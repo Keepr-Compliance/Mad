@@ -39,27 +39,45 @@
  * Electron build and cannot load under it.
  *
  * ===========================================================================
- * STATUS — THIS SUITE IS THE SPECIFICATION FOR A DELETION THAT HAS NOT LANDED
+ * STATUS — HALF THE SPECIFICATION HAS LANDED (BACKLOG-2556, 2026-08-09)
  * ===========================================================================
- * The deletion (findDuplicateOwner + the `contacts:get-available` content
- * fallbacks) is the NEXT PR. This suite ships with the Android claim fix
- * because that fix is its precondition, and because the target behaviour is
- * worth writing down while the reasoning is fresh.
+ * The deletion named above is TWO deletions, and only the first has shipped.
  *
- * MEASURED AT `572367f2`, before any deletion: 3 passed, 3 failed. The three
- * red ones now carry `it.failing`, so the RUNNER asserts they are red: the
- * deletion PR cannot merge without flipping each to `it`. A handoff note would
- * have been advisory; this is a gate. (SR, R5.)
+ *   SHIPPED — THE FOLD. `findDuplicateOwner` and both its call sites, the
+ *   `absorbedRecords` / `collapsedSources` payload they produced, and the
+ *   purple "N records combined" disclosure that drew it. This is the pass that
+ *   folded two UNIMPORTED records into one row.
  *
- *   LIVE (passing today, kept as PINS)
+ *   NOT SHIPPED — THE CONTENT FALLBACKS. `emailClaimedByImported` /
+ *   `phoneClaimedByImported`, which decide that an unimported record is
+ *   ALREADY SAVED because a saved contact shares its address or number under a
+ *   compatible name. They are the same class of guess and they are owned by
+ *   BACKLOG-2608, which replaces them with a crosswalk-based check rather than
+ *   deleting them blind — they are currently the only thing stopping contacts
+ *   imported before the crosswalk existed from appearing twice.
+ *
+ * SO THE THREE `it.failing` CASES DID NOT ALL FLIP TOGETHER, and which one did
+ * is itself the measurement:
+ *
+ *   FLIPPED TO `it` BY THE FOLD DELETION
+ *     - two unclaimed records sharing an email, neither absorbing the other
+ *       (BOTH records are unimported — only the fold could have hidden one)
+ *
+ *   STILL `it.failing`, NOW POINTED AT BACKLOG-2608
+ *     - same name, same number, no crosswalk row: the card is still offered
+ *     - claiming one record does not suppress a different unclaimed one
+ *       (in BOTH, a SAVED contact holds the identifier, so the drop happens in
+ *       `phoneClaimedByImported` before the fold was ever reached)
+ *
+ * That split is the discriminating evidence that the fold and the fallbacks are
+ * separate mechanisms rather than one rule described twice: deleting the fold
+ * moved exactly one of the three, and the two it did not move are the two whose
+ * fixtures contain a saved contact.
+ *
+ *   LIVE (passing throughout, kept as PINS)
  *     - two people sharing an email are two rows
  *     - a saved contact and a record on the same office line are two rows
  *     - a record claimed in the crosswalk is still suppressed
- *
- *   `it.skip` (the deletion's behaviour, red today — UNSKIP IN THAT PR)
- *     - two unclaimed records sharing an email, neither absorbing the other
- *     - same name, same number, no crosswalk row: the card is still offered
- *     - claiming one record does not suppress a different unclaimed one
  *
  * WHY THE FIRST TWO PINS ALREADY PASS, which is a real finding and not an
  * accident: BACKLOG-2531 made the email check require a compatible name, as the
@@ -291,15 +309,18 @@ describe("a shared email is not evidence of one person (BACKLOG-2556)", () => {
    * folded — one row would have absorbed the other and said "2 records
    * combined".
    *
-   * CONTROL for the deletion — RED AT `572367f2` (the fold absorbs Sam into
-   * Robin). Reinstating `findDuplicateOwner` at the external-loop call site
-   * reddens it again.
+   * CONTROL 1 FOR THE FOLD DELETION — FLIPPED FROM `it.failing` TO `it` BY
+   * BACKLOG-2556. It was red at `572367f2` (the fold absorbed Sam into Robin)
+   * and it is green now.
    *
-   * `it.failing` until the deletion PR: the runner ASSERTS this is red, so the
-   * deletion cannot merge without flipping it to `it`. A skip would have been a
-   * note; this is a gate.
+   * OBSERVED RED, 2026-08-09: reinstating `findDuplicateOwner` and its
+   * external-loop call site turns this back to
+   * `Expected ["Robin Hale","Sam Hale"] / Received ["Robin Hale"]`.
+   *
+   * This is the founder's Elena Marsh / Elena Marsh-Okonkwo case in the same
+   * shape: two surnames that share a prefix, one address, neither imported.
    */
-  it.failing("two unclaimed records sharing an email are two rows, and neither absorbs the other", async () => {
+  it("two unclaimed records sharing an email are two rows, and neither absorbs the other", async () => {
     mockShadowRows = [
       shadowRow("out-1", "Robin Hale", "outlook", ["shared@example.com"], []),
       shadowRow("mac-1", "Sam Hale", "macos", ["shared@example.com"], []),
@@ -342,12 +363,17 @@ describe("a shared phone is not evidence of one person (BACKLOG-2556)", () => {
    *
    * This is the founder's Casey Lane shape with no link present.
    *
-   * CONTROL for the deletion — RED AT `572367f2`. This is the case the name
-   * check cannot rescue and only the crosswalk can answer, so it is the
-   * sharpest statement of the rule.
+   * STILL `it.failing` AFTER BACKLOG-2556, AND POINTED AT BACKLOG-2608.
    *
-   * `it.failing` until the deletion PR — the runner asserts the red, so landing
-   * the deletion without flipping this to `it` fails CI.
+   * Measured, not assumed: `c-casey` is a SAVED contact holding
+   * `+14085550101`, so `phoneClaimedByImported` drops the Outlook card at
+   * `contacts:get-available` before the fold was ever consulted. Deleting the
+   * fold does not and cannot move this case — which is why the fold deletion
+   * flipped exactly one of the three `it.failing` cases and not three.
+   *
+   * The runner still asserts the red. BACKLOG-2608 replaces the content
+   * fallbacks with a crosswalk check and cannot merge without flipping this
+   * to `it`.
    */
   it.failing("same name, same number, no crosswalk row: the card is still offered", async () => {
     mockImportedContacts = [
@@ -398,9 +424,20 @@ describe("the knowledge half survives untouched (BACKLOG-2556)", () => {
 
   /**
    * And the claim is per-RECORD, not per-person: claiming the Outlook card does
-   * not suppress an unclaimed macOS card that happens to share details. Under
-   * the old fold, importing one collapsed row could hide several records at
-   * once; that is what "100% raw" removes.
+   * not suppress an unclaimed macOS card that happens to share details.
+   *
+   * STILL `it.failing` AFTER BACKLOG-2556, AND POINTED AT BACKLOG-2608: `c-casey`
+   * is a SAVED contact holding the number, so `phoneClaimedByImported` takes
+   * `mac-casey` before the fold could have.
+   *
+   * MEASURED PRECISELY, because the first measurement was not precise enough
+   * and shipped a broken assertion (SR, §2). Returning `false` from
+   * `phoneClaimedByImported` — the BACKLOG-2608 simulation — decides
+   * **assertion 1 only**: the macOS card becomes offered and
+   * `pickerNames()` passes. Assertion 2 is a separate claim about WHICH
+   * address book the surviving row came from, and the fallback has nothing to
+   * do with it. Reading only the first assertion is what let a wrong field name
+   * through; both are stated here so the next reader does not repeat it.
    */
   it.failing("claiming one record does not suppress a different unclaimed one", async () => {
     seedContactRow("c-casey", "Casey Lane");
@@ -422,7 +459,23 @@ describe("the knowledge half survives untouched (BACKLOG-2556)", () => {
 
     // The macOS card is still on offer; only the claimed Outlook one is gone.
     expect(await pickerNames()).toEqual(["Casey Lane"]);
-    const sources = (await pickerRows()).map((r) => r.source).sort();
+    // THE ADDRESS BOOK IS `externalSourceType`, NOT `source`.
+    //
+    // This read `r.source` and expected `["macos"]`. `source` is the PROVIDER
+    // CATEGORY, and the push site runs the shadow row's source through
+    // `toPersistedContactSource`, which maps the Mac address book to
+    // `contacts_app` (BACKLOG-1900: only outlook / google_contacts / iphone /
+    // android_sync keep a distinct value there). So the assertion described a
+    // shape the producer CANNOT emit — the same defect this PR corrected in six
+    // renderer fixtures, surviving in the gate suite the PR re-pointed.
+    //
+    // It matters because of WHEN it would have fired. Measured 2026-08-09 by
+    // returning `false` from `phoneClaimedByImported`, i.e. simulating
+    // BACKLOG-2608: assertion 1 above PASSES — the macOS card really is offered
+    // once the fallback is gone — and the case still failed, on the field name.
+    // BACKLOG-2608's author would have flipped this to `it`, seen red, and read
+    // a finished fix as unfinished.
+    const sources = (await pickerRows()).map((r) => r.externalSourceType).sort();
     expect(sources).toEqual(["macos"]);
   });
 });

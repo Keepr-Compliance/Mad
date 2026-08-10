@@ -22,7 +22,7 @@
  * WHAT SURVIVES IS THE PART THAT MATTERED. The defect was never "the two
  * disagree" in the abstract; it was that the Clients & Contacts path REBUILT a
  * payload field by field and the fields it did not name — `externalRecordId`,
- * `externalSourceType`, `externalUuid`, `collapsedSources` — were the identity
+ * `externalSourceType`, `externalUuid` — were the identity
  * of the actual address-book card. Dropping them meant no `contact_source_links`
  * row, so the record was never suppressed from the picker and nothing could ever
  * attach to that contact later. That path is the live one, and it is the one
@@ -37,9 +37,15 @@
  * THE FIXTURE IS TRANSCRIBED, NOT INVENTED
  * ===========================================================================
  * `externalAddressBookRecord` below is the projection `contacts:get-available`
- * pushes at `electron/handlers/contactHandlers.ts:1720-1758` — every key, in
- * that order, including `isFromDatabase: false` and the single-entry
- * `collapsedSources` a row carries before it absorbs anything.
+ * pushes at the shadow-table loop in `contacts:get-available` — every key, in
+ * that order, including `isFromDatabase: false`.
+ *
+ * BACKLOG-2556: the fixture also carried a single-entry `collapsedSources`,
+ * "the identity a row carries before it absorbs anything". The handler no
+ * longer emits that field — the fold that filled it is deleted — so keeping it
+ * would make this fixture describe a shape the producer CANNOT emit, which is
+ * the failure mode the paragraph above exists to prevent. Removed here and in
+ * the five sibling suites that copied it.
  *
  * This matters more than usual here. A fixture that omitted the identity fields
  * would describe a row the handler never emits, and every assertion below would
@@ -107,13 +113,6 @@ const externalAddressBookRecord = {
   externalRecordId: "AB-RECORD-4417",
   externalSourceType: "macos",
   externalUuid: "3c9a1b7e-52d4-4f60-b8a1-9d7e2f0c4a55",
-  collapsedSources: [
-    {
-      sourceType: "macos",
-      sourceRecordId: "AB-RECORD-4417",
-      externalUuid: "3c9a1b7e-52d4-4f60-b8a1-9d7e2f0c4a55",
-    },
-  ],
 } as unknown as Contact;
 
 /** What the handler returns once the record has become a saved contact. */
@@ -188,13 +187,10 @@ describe("BACKLOG-2510 — the live Import button forwards the whole record", ()
     expect(payload.externalRecordId).toBe("AB-RECORD-4417");
     expect(payload.externalSourceType).toBe("macos");
     expect(payload.externalUuid).toBe("3c9a1b7e-52d4-4f60-b8a1-9d7e2f0c4a55");
-    expect(payload.collapsedSources).toEqual([
-      {
-        sourceType: "macos",
-        sourceRecordId: "AB-RECORD-4417",
-        externalUuid: "3c9a1b7e-52d4-4f60-b8a1-9d7e2f0c4a55",
-      },
-    ]);
+    // BACKLOG-2556: `collapsedSources` was asserted here too. It is deleted,
+    // and asserting it as absent on a payload the test itself builds would
+    // prove nothing — the deep-equal above already fails if the live path
+    // invents a field the handler does not emit.
   });
 
   it("does not route the import through contacts:create", async () => {

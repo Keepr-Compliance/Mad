@@ -30,6 +30,7 @@
  * `scripts/ci/check-fixture-pii.mjs` (`/^\d{3}55501\d{2}$/`).
  */
 
+import fs from "fs";
 import path from "path";
 import type { Database as DatabaseType } from "better-sqlite3";
 import { CONTACT_IDENTITY_SCHEMA } from "./helpers/contactIdentitySchema";
@@ -79,12 +80,14 @@ import {
   linkSourceRecordsToContact,
 } from "../contactManualLink";
 import { resolveSourceRecord } from "../contactSourceLinker";
-import { confirmProposal } from "../contactLinkReview";
+import { confirmProposal, rejectProposal } from "../contactLinkReview";
+import logService from "../logService";
 import { getContactProvenance } from "../contactProvenance";
 import { getLinksForContact, createLink } from "../db/contactSourceLinkDbService";
 import {
   hasCannotLink,
   hasMustLink,
+  listPendingProposals,
   proposeLink,
   recordVerdict,
   listVerdicts,
@@ -746,6 +749,94 @@ describe("linking several records at once", () => {
   });
 
   /**
+   * THE ACKNOWLEDGEMENT IS KEYED ON THE PAIR, NOT ON EITHER HALF.
+   *
+   * `acknowledgedPriorRejections` is matched through a `Set` of
+   * `sourceType` + delimiter + `sourceRecordId`. Both halves have to be in the
+   * key: acknowledging a record in ONE address book must not silently
+   * acknowledge a same-named record in another, because a prior rejection is
+   * the user having said "not this person" and re-asking is the whole point.
+   *
+   * CONTROL: build the key from `sourceRecordId` alone and the first assertion
+   * flips to `ok`; from `sourceType` alone and the second does.
+   */
+  it("does not treat a half-matching pair as acknowledged", () => {
+    addExternal(OUTLOOK_RECORD, "Robin Marsh", { source: "outlook" });
+    recordVerdict({
+      userId: USER,
+      contactId: PAT,
+      sourceType: "outlook",
+      sourceRecordId: OUTLOOK_RECORD,
+      identityVerdict: "different_people",
+      decidedBy: "provenance_unlink",
+    });
+
+    // Right record id, WRONG source type.
+    const wrongType = linkSourceRecordsToContact(
+      USER,
+      PAT,
+      [{ sourceType: "outlook", sourceRecordId: OUTLOOK_RECORD }],
+      { acknowledgedPriorRejections: [{ sourceType: "macos", sourceRecordId: OUTLOOK_RECORD }] },
+    );
+    expect(wrongType.map((o) => (o.ok ? "ok" : o.reason))).toEqual(["prior_rejection"]);
+
+    // Right source type, WRONG record id.
+    const wrongId = linkSourceRecordsToContact(
+      USER,
+      PAT,
+      [{ sourceType: "outlook", sourceRecordId: OUTLOOK_RECORD }],
+      { acknowledgedPriorRejections: [{ sourceType: "outlook", sourceRecordId: MACOS_RECORD }] },
+    );
+    expect(wrongId.map((o) => (o.ok ? "ok" : o.reason))).toEqual(["prior_rejection"]);
+
+    // And nothing was written on either refusal.
+    expect(linkSet(PAT)).toEqual([]);
+  });
+
+  /**
+   * THE DELIMITER IS A NUL, AND IT IS WRITTEN AS AN ESCAPE.
+   *
+   * The composite key above used a LITERAL 0x00 byte in the source. The
+   * delimiter itself is right — NUL cannot occur in a source type or a record
+   * id, so the key is unambiguous — but as a raw byte it made the ENTIRE FILE
+   * read as binary: `file` reported `data`, and grep / ripgrep / git grep
+   * silently skipped it. Every codebase-wide sweep of the form "who else writes
+   * this table" or "find every caller" had been excluding manual linking
+   * without saying so.
+   *
+   * This asserts BOTH halves of the fix, because they can fail apart: the file
+   * must contain no raw NUL, AND the escape that replaced it must still denote
+   * char code 0 — swapping the delimiter would silently re-key the set.
+   *
+   * CONTROL: paste a raw 0x00 back into the template literal and the first
+   * assertion goes red; change the escape to any other character and the last
+   * one does.
+   */
+  it("writes the key delimiter as an escape, never as a raw NUL byte", () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, "..", "contactManualLink.ts"),
+      "utf8",
+    );
+
+    // `String.fromCharCode(0)` rather than an escape sequence, so that no raw
+    // control character can ever be typed into THIS file either.
+    expect(source.includes(String.fromCharCode(0))).toBe(false);
+
+    // Both occurrences, and both still denoting NUL. The captured text is what
+    // the shipped source actually contains; decoding THAT is what makes this an
+    // assertion about the code rather than about JSON.
+    const escapes = [
+      ...source.matchAll(
+        /\$\{\w+\.sourceType\}(\\u[0-9a-fA-F]{4})\$\{\w+\.sourceRecordId\}/g,
+      ),
+    ];
+    expect(escapes).toHaveLength(2);
+    for (const [, escape] of escapes) {
+      expect((JSON.parse(`"${escape}"`) as string).charCodeAt(0)).toBe(0);
+    }
+  });
+
+  /**
    * THE ATOMICITY CONTROL — and the reason it uses a THROW.
    *
    * My first version of this asserted on a `claimed` refusal and DID NOT GO RED
@@ -828,5 +919,321 @@ describe("linking several records at once", () => {
 
     expect(found).toHaveLength(N);
     expect(elapsedMs).toBeLessThan(2000);
+  });
+});
+
+// ===========================================================================
+// 7. BACKLOG-2596 — A LINK MUST NOT LAND WITH ITS OWN QUESTION STILL PENDING
+// ===========================================================================
+/**
+ * THE DEFECT, IN ORDER OF EVENTS.
+ *
+ * A pending proposal exists for a pair. The user MANUALLY LINKS that pair —
+ * and `linkSourceRecordToContact` never touched `contact_link_proposals`, so
+ * the question survived. `PENDING_JOIN` (contactLinkReview.ts) selects on
+ * `p.status = 'pending'` and reads neither the verdicts table nor the
+ * crosswalk, so the queue went on asking a question the user had already
+ * answered by acting, showing no sign the pair was linked.
+ *
+ * The user then answers it. The only honest answer to *"is this the same
+ * person?"* about someone they do not recognise is *"Not this person"* —
+ * `rejectProposal` appends `different_people` and removes NO link (its own
+ * comment says so: unlinking is the provenance panel's job).
+ *
+ * Result: `hasCannotLink` TRUE for a pair the crosswalk still holds. The
+ * matcher believes the pair is barred; the card shows a record its own latest
+ * verdict rejects; the record reads as released while it is claimed. Two
+ * answers to one question, and the app believes both.
+ *
+ * WHY THESE ASSERT THE HAZARD AND NOT THE MECHANISM. It would be cheaper to
+ * assert "the proposal row's status is confirmed" and stop. That passes for an
+ * implementation that resolves the row and breaks the link, and it never
+ * demonstrates why the row mattered. So the tests below carry the sequence
+ * through to the state the founder would meet: answer the stale question, then
+ * look at whether the live link is barred by it.
+ *
+ * ID SETS, NEVER COUNTS. `expect(pending).toHaveLength(0)` is equally satisfied
+ * by resolving the WRONG proposal — which is exactly what the scope control
+ * below is built to catch.
+ */
+describe("BACKLOG-2596 — a manual link retires the pair's pending question", () => {
+  // The display name for this record must stay "Robin Marsh" — an invented name
+  // already on the `check:pii` FICTIONAL_NAMES allow-list and already this file's
+  // name for a Robin. `check:pii` reports any other quoted `First Last` sharing a
+  // line with an email- or phone-shaped token, and the fix for that is a
+  // sanctioned name, never a baseline entry (PR-SOP §6.2d).
+  const ROBIN_RECORD = "macos-robin-9";
+
+  /** A pending question about one pair, as `resolveSourceRecord` would file it. */
+  function askAbout(
+    contactId: string,
+    sourceRecordId: string,
+    opts: { sourceType?: "macos" | "outlook"; clusterKey?: string } = {},
+  ): string {
+    const { id } = proposeLink({
+      userId: USER,
+      contactId,
+      sourceType: opts.sourceType ?? "macos",
+      sourceRecordId,
+      reason: "ambiguous_identifier",
+      identityAssessment: "possibly_same_person",
+      relationshipAssessment: "possibly_connected",
+      clusterKey: opts.clusterKey ?? `record:${sourceRecordId}`,
+      evidence: {
+        summary: "Two records share an email address.",
+        details: ["Both carry pat@example.com."],
+        contactLabel: "Pat Riverton",
+        sourceLabel: "your Mac address book",
+        sourceName: "Pat Riverton",
+      },
+    }) as { created: boolean; id: string };
+    return id;
+  }
+
+  const pendingIds = (): string[] => listPendingProposals(USER).map((p) => p.id).sort();
+
+  /**
+   * CONTROL 1 (SR-stated). Remove the resolve loop from step 8 and this goes
+   * red: the proposal survives the link, answering it writes `different_people`,
+   * and `hasCannotLink` returns TRUE for a link that is still live. That red is
+   * the BACKLOG-2596 hazard itself, not a proxy for it.
+   */
+  it("takes the question off the queue at link time", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    const question = askAbout(PAT, MACOS_RECORD);
+    expect(pendingIds()).toEqual([question]);
+
+    const outcome = linkSourceRecordToContact(USER, PAT, "macos", MACOS_RECORD);
+    expect(outcome.ok).toBe(true);
+
+    // Gone AT LINK TIME — not later, not on the next sync.
+    expect(pendingIds()).toEqual([]);
+    expect(linkSet(PAT)).toEqual([`macos|${MACOS_RECORD}|manual`]);
+  });
+
+  /**
+   * THE HAZARD ITSELF, and it asserts nothing about the queue on the way
+   * through — deliberately.
+   *
+   * Its sibling above fails at `pendingIds()` when the loop is removed, which
+   * proves the mechanism but stops before the consequence. This one walks the
+   * whole founder-visible sequence and asserts only the end state, so that when
+   * the loop is removed the red IS BACKLOG-2596: `hasCannotLink` true for a
+   * pair the crosswalk still holds.
+   */
+  it("leaves no way for a stale answer to bar a live link", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    const question = askAbout(PAT, MACOS_RECORD);
+
+    linkSourceRecordToContact(USER, PAT, "macos", MACOS_RECORD);
+
+    // The user goes to the queue and answers anyway. Whether this is refused
+    // (fixed) or accepted (broken) is not asserted here — only what it leaves
+    // behind.
+    rejectProposal(USER, question);
+
+    expect(hasCannotLink(USER, PAT, "macos", MACOS_RECORD)).toBe(false);
+    expect(hasMustLink(USER, PAT, "macos", MACOS_RECORD)).toBe(true);
+    expect(linkSet(PAT)).toEqual([`macos|${MACOS_RECORD}|manual`]);
+  });
+
+  /** The question is not merely gone from the queue — it is unanswerable. */
+  it("refuses a late answer to the question it retired", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    const question = askAbout(PAT, MACOS_RECORD);
+
+    linkSourceRecordToContact(USER, PAT, "macos", MACOS_RECORD);
+
+    expect(rejectProposal(USER, question)).toEqual({
+      ok: false,
+      error: "That review item has already been answered.",
+    });
+  });
+
+  /**
+   * CONTROL 2 (SR-stated) — THE CONTROL THAT KEEPS THIS OUT OF POLICY.
+   *
+   * Retiring a question the user did not answer would be deciding a pair they
+   * never acted on: attaching one record says nothing about whether some other
+   * candidate is the same person. That is the founder's call, and this asserts
+   * the code does not make it for him.
+   *
+   * RED: resolve every pending proposal instead of the linked pair's.
+   */
+  it("leaves a DIFFERENT pair's question exactly where it was", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    addExternal(ROBIN_RECORD, "Robin Marsh", { emails: ["robin@example.com"] });
+
+    const answered = askAbout(PAT, MACOS_RECORD);
+    const untouchedOtherRecord = askAbout(PAT, ROBIN_RECORD); // same contact, other record
+    const untouchedOtherContact = askAbout(JANE, ROBIN_RECORD); // other contact entirely
+
+    linkSourceRecordToContact(USER, PAT, "macos", MACOS_RECORD);
+
+    expect(pendingIds()).toEqual([untouchedOtherRecord, untouchedOtherContact].sort());
+    expect(pendingIds()).not.toContain(answered);
+
+    // And they are still ANSWERABLE — retiring a question the user never
+    // answered would silently discard it, which is the failure this guards.
+    expect(rejectProposal(USER, untouchedOtherRecord).ok).toBe(true);
+  });
+
+  /** CONTROL 3 (SR-stated) — regression pin: no question, no change in behaviour. */
+  it("links normally when no question was pending", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    expect(pendingIds()).toEqual([]);
+
+    const outcome = linkSourceRecordToContact(USER, PAT, "macos", MACOS_RECORD);
+
+    expect(outcome).toEqual({ ok: true, linkId: expect.any(String) });
+    expect(linkSet(PAT)).toEqual([`macos|${MACOS_RECORD}|manual`]);
+    expect(pendingIds()).toEqual([]);
+  });
+
+  /**
+   * BY PAIR, NEVER BY CLUSTER KEY.
+   *
+   * `proposeLink` has two production callers and they file different keys:
+   * `resolveSourceRecord` writes `record:%`, `fileNameQuestion` writes `name:%`.
+   * Which key a pair's question carries depends on WHICH PRODUCER GOT THERE
+   * FIRST, so a filter on `record:%` would silently leave every name-rule
+   * question standing — the same defect, with a smaller blast radius. PR D's
+   * `confirmContactSources` carries the identical warning.
+   *
+   * WRITTEN THIS WAY BECAUSE THE OBVIOUS VERSION IS IMPOSSIBLE. The first draft
+   * seeded TWO questions for one pair, one per producer, and asserted both were
+   * retired. It could not run: `contact_link_proposals` carries
+   * `UNIQUE (user_id, contact_id, source_type, source_record_id)`
+   * (`contactIdentitySchemaSql.ts`) and `proposeLink` is `INSERT OR IGNORE`, so
+   * the second call returned `id: null` and the fixture described a state the
+   * database cannot hold. One pair, one row, whichever producer filed it — so
+   * the reachable hazard is the KEY that row carries, and that is what this
+   * seeds.
+   *
+   * RED: filter step 8 on `cluster_key LIKE 'record:%'`.
+   */
+  it("retires the pair's question when the NAME rule was the one that asked", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    const nameRuleQuestion = askAbout(PAT, MACOS_RECORD, { clusterKey: "name:pat riverton" });
+    expect(pendingIds()).toEqual([nameRuleQuestion]);
+
+    linkSourceRecordToContact(USER, PAT, "macos", MACOS_RECORD);
+
+    expect(pendingIds()).toEqual([]);
+    expect(hasCannotLink(USER, PAT, "macos", MACOS_RECORD)).toBe(false);
+  });
+
+  /**
+   * AND IT STAYS RETIRED.
+   *
+   * The pair UNIQUE spans every status, not just `pending`, and `proposeLink`
+   * is `INSERT OR IGNORE` — so once the row exists as `confirmed`, a later sync
+   * proposing the same pair is a no-op and the question cannot come back. That
+   * is the property that makes step 8 a fix rather than a delay; without it the
+   * stale question would simply be re-filed on the next pass.
+   */
+  it("does not let a later sync re-ask the question it just retired", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    askAbout(PAT, MACOS_RECORD);
+    linkSourceRecordToContact(USER, PAT, "macos", MACOS_RECORD);
+    expect(pendingIds()).toEqual([]);
+
+    // A later linking pass meets the same pair again.
+    const reasked = proposeLink({
+      userId: USER,
+      contactId: PAT,
+      sourceType: "macos",
+      sourceRecordId: MACOS_RECORD,
+      reason: "ambiguous_identifier",
+      identityAssessment: "possibly_same_person",
+      relationshipAssessment: "possibly_connected",
+      clusterKey: `record:${MACOS_RECORD}`,
+      evidence: {
+        summary: "Two records share an email address.",
+        details: ["Both carry pat@example.com."],
+        contactLabel: "Pat Riverton",
+        sourceLabel: "your Mac address book",
+        sourceName: "Pat Riverton",
+      },
+    });
+
+    expect(reasked).toEqual({ created: false, id: null });
+    expect(pendingIds()).toEqual([]);
+  });
+
+  /**
+   * CONDITION 3 (SR-stated) — THE RETIREMENT AND THE LINK ARE ONE WRITE.
+   *
+   * `contactManualLink.ts`'s own header says the transaction test "covers
+   * removal of `dbTransaction` from this function as written; it does NOT cover
+   * a new multi-write added to this file later without its own crash test."
+   * Step 8 is exactly such a multi-write, so this is that test.
+   *
+   * A link that commits while its question is still pending IS the state being
+   * removed — so is a question retired for a link that never landed, which is
+   * the mirror image and would silently drop a real question. Both-or-neither
+   * is the property.
+   *
+   * `logService.info` is the injection point because it is the only statement
+   * after step 8 and inside the transaction. It is already mocked at the top of
+   * this file, so nothing new is stubbed to make this run.
+   *
+   * CONTROL: move the resolve loop ABOVE `return dbTransaction(...)`.
+   * OBSERVED: 1 failed — the question is gone and no link exists, so a disk
+   * error swallows a question the user never answered.
+   */
+  it("rolls the retired question back with the link when the write fails", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    const question = askAbout(PAT, MACOS_RECORD);
+
+    (logService.info as jest.Mock).mockImplementationOnce(() => {
+      throw new Error("disk full");
+    });
+
+    expect(() => linkSourceRecordToContact(USER, PAT, "macos", MACOS_RECORD)).toThrow(
+      "disk full",
+    );
+
+    // Neither half survived, and the question is answerable again — the user
+    // has lost nothing.
+    expect(linkSet(PAT)).toEqual([]);
+    expect(pendingIds()).toEqual([question]);
+    expect(rejectProposal(USER, question).ok).toBe(true);
+  });
+
+  /**
+   * THE BATCH PATH, WHICH IS N TRANSACTIONS AND NOT ONE.
+   *
+   * Step 8 runs inside `linkSourceRecordToContact`, after every refusal has
+   * already returned — so it applies per record that ACTUALLY LINKED. A record
+   * refused as `claimed` keeps its question, because nothing about that pair
+   * was decided.
+   */
+  it("retires questions only for the records that actually linked", () => {
+    addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
+    addExternal(ROBIN_RECORD, "Robin Marsh", { emails: ["robin@example.com"] });
+
+    // Robin's record already belongs to Jane, so linking it to Pat is refused.
+    createLink({
+      userId: USER,
+      contactId: JANE,
+      sourceType: "macos",
+      sourceRecordId: ROBIN_RECORD,
+      matchMethod: "email",
+    });
+
+    const linkedQuestion = askAbout(PAT, MACOS_RECORD);
+    const refusedQuestion = askAbout(PAT, ROBIN_RECORD);
+
+    const outcomes = linkSourceRecordsToContact(USER, PAT, [
+      { sourceType: "macos", sourceRecordId: MACOS_RECORD },
+      { sourceType: "macos", sourceRecordId: ROBIN_RECORD },
+    ]);
+
+    expect(outcomes.map((o) => (o.ok ? "ok" : o.reason))).toEqual(["ok", "claimed"]);
+
+    // The refused pair's question survives — nothing about it was decided.
+    expect(pendingIds()).toEqual([refusedQuestion]);
+    expect(pendingIds()).not.toContain(linkedQuestion);
   });
 });
