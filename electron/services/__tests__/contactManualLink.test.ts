@@ -868,6 +868,11 @@ describe("linking several records at once", () => {
  * below is built to catch.
  */
 describe("BACKLOG-2596 — a manual link retires the pair's pending question", () => {
+  // The display name for this record must stay "Robin Marsh" — an invented name
+  // already on the `check:pii` FICTIONAL_NAMES allow-list and already this file's
+  // name for a Robin. `check:pii` reports any other quoted `First Last` sharing a
+  // line with an email- or phone-shaped token, and the fix for that is a
+  // sanctioned name, never a baseline entry (PR-SOP §6.2d).
   const ROBIN_RECORD = "macos-robin-9";
 
   /** A pending question about one pair, as `resolveSourceRecord` would file it. */
@@ -968,7 +973,7 @@ describe("BACKLOG-2596 — a manual link retires the pair's pending question", (
    */
   it("leaves a DIFFERENT pair's question exactly where it was", () => {
     addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
-    addExternal(ROBIN_RECORD, "Robin Ashfield", { emails: ["robin@example.com"] });
+    addExternal(ROBIN_RECORD, "Robin Marsh", { emails: ["robin@example.com"] });
 
     const answered = askAbout(PAT, MACOS_RECORD);
     const untouchedOtherRecord = askAbout(PAT, ROBIN_RECORD); // same contact, other record
@@ -1117,7 +1122,7 @@ describe("BACKLOG-2596 — a manual link retires the pair's pending question", (
    */
   it("retires questions only for the records that actually linked", () => {
     addExternal(MACOS_RECORD, "Pat Riverton", { emails: ["pat@example.com"] });
-    addExternal(ROBIN_RECORD, "Robin Ashfield", { emails: ["robin@example.com"] });
+    addExternal(ROBIN_RECORD, "Robin Marsh", { emails: ["robin@example.com"] });
 
     // Robin's record already belongs to Jane, so linking it to Pat is refused.
     createLink({
