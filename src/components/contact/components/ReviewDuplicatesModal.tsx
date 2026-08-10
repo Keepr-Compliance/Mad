@@ -577,18 +577,22 @@ function ContactReviewCard({
         </div>
         <div className="min-w-0 flex-1">
           {/*
-            The contact name opens the comparison, as it does today. The card
-            answers what it can; the whole record is one click away and the
-            reject is permanent, which is why the way in stays on the card.
+            BACKLOG-2502 R7 — THE CONTACT'S NAME NAMES THE CONTACT. IT IS NOT A
+            WAY IN.
+
+            It used to open the comparison, and it opened it for `items[0]` — an
+            arbitrary one of the four when there are four. That is the same
+            defect as the `Compare` button removed below, wearing the contact's
+            name instead of a label, so removing one and keeping the other would
+            have left the ambiguity exactly where it was and only made it harder
+            to find. The eye on each candidate is the way in.
           */}
-          <button
-            type="button"
-            onClick={() => onCompare(group.items[0])}
-            className="block truncate text-left text-sm font-medium text-gray-900 hover:text-purple-700"
+          <div
+            className="block truncate text-left text-sm font-medium text-gray-900"
             data-testid={`review-contact-name-${group.contactId}`}
           >
             {group.contactName}
-          </button>
+          </div>
           {group.contactCompany && (
             <div
               className="truncate text-xs text-gray-400"
@@ -599,19 +603,30 @@ function ContactReviewCard({
           )}
         </div>
         {/*
-          COMPARE LIVES ON THE WHITE CONTACT ROW, outside the amber area — the
-          founder's rule. It opens the contact's side-by-side view; the eye on
-          each candidate below opens that same screen for THAT record, which is
-          the only way to reach the second and third candidates' comparison.
+          BACKLOG-2502 R7 — `Compare` IS GONE FROM THIS ROW, AND THE EYE ON EACH
+          CANDIDATE IS THE ONLY WAY INTO THE COMPARISON FROM HERE.
+
+          A REVERSAL AFTER OBSERVATION, NOT A DEFECT BEING FIXED. Round 2's rule
+          — *"Compare sits on the main contact row, outside the amber area, not
+          on the candidate rows"* — was right for the card it was written
+          against, which had one candidate: a contact-level control and a
+          candidate-level control pointed at the same single question, so putting
+          it on the row kept it out of the amber area and cost nothing.
+
+          Four candidates broke that. A control on the contact row has to choose
+          one of them, and it chose `group.items[0]` — the first, for no reason
+          the user can see. The founder removed it rather than have it guess.
+
+          THE COMPARISON IS NOT LESS REACHABLE FOR IT. Every candidate keeps its
+          own eye, one click, and that one is unambiguous by construction: it
+          compares the record whose row it sits on. What is gone is a second way
+          in that could not say what it was about to show.
+
+          Not to be confused with `Compare sources` on the contact card in
+          Clients & Contacts, which stays. That one compares a contact's OWN
+          linked records — there is no candidate for it to pick between, so it
+          has never had this problem.
         */}
-        <button
-          type="button"
-          onClick={() => onCompare(group.items[0])}
-          className="flex-shrink-0 rounded-lg px-3 py-1.5 text-sm font-semibold text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
-          data-testid={`review-compare-${group.contactId}`}
-        >
-          Compare
-        </button>
       </div>
 
       {/*

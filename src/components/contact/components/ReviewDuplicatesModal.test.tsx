@@ -484,15 +484,18 @@ describe("the way into the compare screen", () => {
   });
 
   /**
-   * COMPARE SITS ON THE WHITE CONTACT ROW, OUTSIDE THE AMBER AREA — the
-   * founder's rule, so the contact-level action is not repeated per candidate.
-   * It is keyed by CONTACT id now, not by proposal id.
+   * THE WAY IN IS THE CANDIDATE'S OWN EYE (R7).
+   *
+   * Round 2 put `Compare` on the white contact row, outside the amber area, so
+   * the contact-level action was not repeated per candidate. The founder removed
+   * it after seeing a card with four: a control on the contact row has to pick
+   * one of the four, and it picked the first for no reason the user could see.
+   * The eye compares the record whose row it sits on, which cannot be arbitrary.
    */
-  it("opens the SHIPPED compare screen from the contact row", async () => {
+  it("opens the SHIPPED compare screen from the candidate's eye", async () => {
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
 
-    // CONTROL: put Compare back on the candidate row and this id does not exist.
-    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    fireEvent.click(await screen.findByTestId("review-view-p-1"));
 
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
     // The candidate travels as the PROPOSED SOURCE — it has no crosswalk row, so
@@ -544,7 +547,7 @@ describe("the way into the compare screen", () => {
     api.confirmSources = jest.fn();
 
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
-    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    fireEvent.click(await screen.findByTestId("review-view-p-1"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
     // The two surfaces are NOT harmonised: nothing is linked yet here, so the
@@ -563,7 +566,7 @@ describe("the way into the compare screen", () => {
 
   it("holds the moved prose behind `How we decided this`", async () => {
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
-    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    fireEvent.click(await screen.findByTestId("review-view-p-1"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
     // Absent until asked for — the founder's whole complaint.
@@ -660,7 +663,7 @@ describe("one ×, popping one layer", () => {
   /** CONTROL 5, half two: the stack of two. */
   it("shows exactly ONE × with compare open, and it is COMPARE's", async () => {
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
-    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    fireEvent.click(await screen.findByTestId("review-view-p-1"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
     // THE SCREEN THE FOUNDER WAS LOOKING AT. One `×`, and it belongs to the top
@@ -711,7 +714,7 @@ describe("one ×, popping one layer", () => {
   it("× on compare pops ONE layer — the list is still there underneath", async () => {
     const onClose = jest.fn();
     render(<ReviewDuplicatesModal userId={USER} onClose={onClose} />);
-    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    fireEvent.click(await screen.findByTestId("review-view-p-1"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId("compare-close"));
@@ -727,7 +730,7 @@ describe("one ×, popping one layer", () => {
     // answered. CONTROL: add `void load()` to that handler and this reads 2.
     expect(window.api.contacts.getReviewQueue).toHaveBeenCalledTimes(1);
     // The way back in is unchanged — the popped layer can be pushed again.
-    expect(screen.getByTestId("review-compare-c-daniel")).toBeInTheDocument();
+    expect(screen.getByTestId("review-view-p-1")).toBeInTheDocument();
   });
 
   /** CONTROL 2 — the regression guard for the rule above. */
@@ -772,7 +775,7 @@ describe("where a decision lands, entering from the duplicates list", () => {
       .mockResolvedValue({ success: true, clusters: [] });
 
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
-    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    fireEvent.click(await screen.findByTestId("review-view-p-1"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId("compare-confirm"));
@@ -804,7 +807,7 @@ describe("where a decision lands, entering from the duplicates list", () => {
         onConfirmedAndEdit={onConfirmedAndEdit}
       />,
     );
-    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    fireEvent.click(await screen.findByTestId("review-view-p-1"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId("compare-confirm-edit"));
@@ -859,7 +862,7 @@ describe("compare is its own popup", () => {
 
   const openCompare = async () => {
     render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
-    fireEvent.click(await screen.findByTestId("review-compare-c-daniel"));
+    fireEvent.click(await screen.findByTestId("review-view-p-1"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
   };
 
@@ -1168,5 +1171,185 @@ describe("R6 — a contact with four candidates stays pairwise", () => {
     }
     expect(screen.queryByTestId("review-item-p-2")).toBeNull();
     expect(screen.getByTestId("review-duplicates-close")).toBeTruthy();
+  });
+});
+
+/**
+ * ===========================================================================
+ * BACKLOG-2502 R7 — `Compare` IS OFF THE QUEUE CARD'S CONTACT ROW
+ * ===========================================================================
+ * A REVERSAL AFTER OBSERVATION. Round 2's rule put `Compare` on the white
+ * contact row, outside the amber area, and it was right for the card it was
+ * written against: one candidate, so a contact-level control and a
+ * candidate-level control pointed at the same single question.
+ *
+ * Four candidates broke it. A control on the contact row has to choose one, and
+ * it chose `group.items[0]` — the first, for no reason the user can see. The
+ * founder removed it rather than have it guess.
+ *
+ * The contact's NAME went with it. It carried the same `onCompare(items[0])`
+ * call, so removing the labelled control and keeping the unlabelled one would
+ * have left the ambiguity where it was and only made it harder to find.
+ *
+ * ONE CANDIDATE IS TREATED THE SAME as four, deliberately. The founder did not
+ * ask for a conditional, and a control that appears only when a card happens to
+ * have one candidate is a rule the user has to discover from its absence. The
+ * eye is one click either way.
+ */
+describe("R7 — the eye is the only way into compare from the queue", () => {
+  const FOUR_R7 = [
+    { proposalId: "q-1", sourceType: "macos", sourceRecordId: "mac-a" },
+    { proposalId: "q-2", sourceType: "outlook", sourceRecordId: "out-b" },
+    { proposalId: "q-3", sourceType: "google", sourceRecordId: "goo-c" },
+    { proposalId: "q-4", sourceType: "macos", sourceRecordId: "mac-d" },
+  ];
+
+  const queueOf = (candidates: typeof FOUR_R7) => ({
+    success: true as const,
+    clusters: [
+      cluster({
+        items: candidates.map((c) =>
+          item({
+            proposalId: c.proposalId,
+            sourceType: c.sourceType,
+            sourceRecordId: c.sourceRecordId,
+            matchedOn: "name",
+          }),
+        ),
+      }),
+    ],
+  });
+
+  /** The producer's shape, driven by which candidate was asked for. */
+  const viewFor = (source?: { sourceType: string; sourceRecordId: string }) => ({
+    contactId: "c-daniel",
+    isConfirmed: false,
+    title: "Is this the same Daniel Haim?",
+    reason: "Four records share this name.",
+    namesMatch: true,
+    columns: [
+      {
+        linkId: "l-origin",
+        kind: "contact" as const,
+        columnLabel: "Mac address book",
+        displayName: "Daniel Haim",
+        name: { value: "Daniel Haim", matched: true },
+        emails: [],
+        phones: [],
+        company: null,
+        transactions: [],
+        recentCommunication: [],
+        sourceRecordPresent: true,
+      },
+      ...(source
+        ? [
+            {
+              linkId: `proposed:${source.sourceType}:${source.sourceRecordId}`,
+              kind: "proposed" as const,
+              columnLabel: "Mac address book",
+              displayName: "Daniel Haim",
+              name: { value: "Daniel Haim", matched: true },
+              emails: [],
+              phones: [],
+              company: null,
+              transactions: [],
+              recentCommunication: [],
+              sourceRecordPresent: true,
+            },
+          ]
+        : []),
+    ],
+  });
+
+  beforeEach(() => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue(queueOf(FOUR_R7));
+    const api = window.api.contacts as unknown as Record<string, jest.Mock>;
+    api.getCompareColumns = jest.fn().mockImplementation(async (_u, _c, source) => ({
+      success: true,
+      view: viewFor(source),
+    }));
+  });
+
+  /** Every control the card offers, in order, named. */
+  const expectedControls = (candidates: typeof FOUR_R7) =>
+    candidates.flatMap((c) => [
+      `review-view-${c.proposalId}`,
+      `review-confirm-${c.proposalId}`,
+      `review-reject-${c.proposalId}`,
+    ]);
+
+  it("offers four eyes and NO contact-row control, counted by role", async () => {
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    const card = await screen.findByTestId("review-contact-c-daniel");
+
+    // ENUMERATED BY ROLE, so a `Compare` renamed to anything at all — or the
+    // contact's name restored as a button — appears here as an id that is not in
+    // the expected list. An absence assertion on `review-compare-c-daniel` alone
+    // would go green for both of those.
+    // CONTROL: restore either control and this list gains an entry.
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("data-testid")),
+    ).toEqual(expectedControls(FOUR_R7));
+  });
+
+  it("gives the single-candidate card the same treatment", async () => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue(queueOf([FOUR_R7[0]]));
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    const card = await screen.findByTestId("review-contact-c-daniel");
+
+    // Deliberately not conditional on the count — see this block's docblock.
+    // CONTROL: bring `Compare` back for `items.length === 1` and this fails while
+    // the four-candidate test above still passes.
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("data-testid")),
+    ).toEqual(expectedControls([FOUR_R7[0]]));
+  });
+
+  it("opens each eye's OWN record, all four of them", async () => {
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    await screen.findByTestId("review-item-q-1");
+    const getColumns = window.api.contacts.getCompareColumns as unknown as jest.Mock;
+
+    // Every eye, not a sample: an off-by-one that pointed each eye at its
+    // neighbour would survive checking only the first.
+    // CONTROL: pass `group.items[0]` to `onView` and the second iteration reads
+    // `mac-a` where `out-b` is expected.
+    for (const c of FOUR_R7) {
+      getColumns.mockClear();
+      fireEvent.click(screen.getByTestId(`review-view-${c.proposalId}`));
+      await waitFor(() =>
+        expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument(),
+      );
+      expect(getColumns).toHaveBeenCalledWith(USER, "c-daniel", {
+        sourceType: c.sourceType,
+        sourceRecordId: c.sourceRecordId,
+      });
+      expect(
+        screen.getByTestId(`compare-column-proposed:${c.sourceType}:${c.sourceRecordId}`),
+      ).toBeTruthy();
+      // Back to the list for the next one — the × pops one layer (R3).
+      fireEvent.click(screen.getByTestId("compare-close"));
+      await waitFor(() => expect(screen.queryByTestId("contact-compare-screen")).toBeNull());
+    }
+  });
+
+  it("leaves no empty chrome on the contact row", async () => {
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} />);
+    const card = await screen.findByTestId("review-contact-c-daniel");
+    const contactRow = card.firstElementChild as HTMLElement;
+
+    // The Done footer in an earlier round was removed by emptying its container
+    // rather than deleting it, which left a bordered strip with nothing in it.
+    // CONTROL: leave `<div className="flex-shrink-0" />` where the button was and
+    // this names it.
+    const empties = [...contactRow.children].filter((el) => !el.textContent?.trim());
+    expect(empties.map((el) => el.outerHTML)).toEqual([]);
+    // Avatar and the name block, and nothing else.
+    expect(contactRow.children).toHaveLength(2);
+    expect(contactRow.textContent).toContain("Daniel Haim");
   });
 });

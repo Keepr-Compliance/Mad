@@ -430,7 +430,9 @@ describe("Confirm & edit, from both entry paths", () => {
     render(<Contacts userId={USER} onClose={jest.fn()} />);
     await waitFor(() => expect(screen.getByText("Paul Dorian")).toBeInTheDocument());
     await userEvent.click(await screen.findByTestId("review-duplicates-button"));
-    await userEvent.click(await screen.findByTestId("review-compare-c-paul"));
+    // The candidate's own eye — R7 removed `Compare` from the queue card's
+    // contact row, where it had to pick one of the contact's candidates.
+    await userEvent.click(await screen.findByTestId("review-view-p-paul"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
     await userEvent.click(screen.getByTestId("compare-confirm-edit"));
     await waitFor(() => expect(screen.queryAllByText("Edit Contact").length).toBeGreaterThan(0));
