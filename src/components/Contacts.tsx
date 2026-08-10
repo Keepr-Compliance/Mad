@@ -333,7 +333,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     // External contacts (from macOS Contacts app, etc.)
     externalContacts,
     externalContactsLoading,
-    refreshAfterImport,
+    refreshBothLists,
   } = useContactList(userId, { onContactDeleted: handleContactDeleted });
 
   /**
@@ -688,12 +688,12 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
            * saved-contact fetch is the fast one, so for the width of the
            * address-book read (~3.7s at 1000+ contacts) the list held BOTH rows.
            *
-           * `refreshAfterImport` fetches both in parallel and commits both in
+           * `refreshBothLists` fetches both in parallel and commits both in
            * ONE render. The whole rationale, including why it replaced
            * `reloadExternalContacts` outright rather than sitting beside it,
            * is on its declaration in `useContactList.ts`.
            */
-          const refreshed = await refreshAfterImport();
+          const refreshed = await refreshBothLists();
 
           /**
            * BACKLOG-2526 — the "Added" pill lands WITH the new list, not before
@@ -771,7 +771,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
 
       return run;
     },
-    [userId, refreshAfterImport]
+    [userId, refreshBothLists]
   );
 
   /**
@@ -1346,17 +1346,53 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
       )}
 
       {/* BACKLOG-2410 — possible-duplicates review.
-          The count is refreshed on every answer, and the contact list is
-          reloaded too: confirming a link changes which source records a saved
-          contact is assembled from, which the list already reflects. */}
+          The count is refreshed on every answer, and BOTH halves of the contact
+          list with it. See the note on `onResolved` below for why both. */}
       {showReviewDuplicates && (
         <ReviewDuplicatesModal
           userId={userId}
           onClose={() => setShowReviewDuplicates(false)}
+          /*
+            BACKLOG-2627 — AN ANSWER REFRESHES THE LIST BEHIND THE QUEUE, AND
+            THE ADDRESS-BOOK HALF IS THE HALF THAT MATTERS.
+
+            This called `silentLoadContacts()`, which re-reads `contacts:get-all`
+            and nothing else. But this screen joins TWO lists, and the one an
+            answer changes is the OTHER one: confirming a link writes a
+            `contact_source_links` row, and that table is what
+            `contacts:get-available` suppresses on
+            (`contact-handlers.stopHidingRecords-2608.test.ts`, CONTROL 2).
+            `loadExternalContacts` holds a once-per-mount guard
+            (`useContactList.ts` — `externalContactsLoadedRef`), so that half was
+            never asked again for the life of the mount.
+
+            The founder answered two questions and searched Clients & Contacts;
+            the list showed the pre-answer state until he navigated away and
+            back. The app's own funnel logged its last `picker:` line BEFORE
+            either answer. Worse than a stale screen: the list was then read as
+            evidence that a DIFFERENT fix had failed to remove a record. It had
+            worked. A verification that reads a cached list cannot tell "the fix
+            failed" from "the screen is old".
+
+            EAGER, NOT INVALIDATE-AND-REFETCH-LATER. His expectation is that the
+            record goes the moment he accepts, with this list open behind the
+            queue — a refresh that lands on next navigation is the defect
+            restated. And `refreshBothLists` commits both halves in ONE render
+            (BACKLOG-2526); a scheme that lets each half refetch when next read
+            is how the split commit, and the person on screen twice, comes back.
+
+            It is SILENT, so answering several in a row costs nothing on screen:
+            no spinner, no unmount, no lost place.
+
+            NOT the queue. The queue's own reload after an answer is unchanged,
+            and compare's `×` still does not reload it (BACKLOG-2502) — that
+            exception protects a list the user is part-way through ANSWERING,
+            and this is the list behind it.
+          */
           onResolved={() => {
             refreshReviewQueueCount();
             refreshPreviewSources();
-            silentLoadContacts();
+            void refreshBothLists();
           }}
           /*
             BACKLOG-2502 — `Confirm & edit` from the queue leaves for the card.
