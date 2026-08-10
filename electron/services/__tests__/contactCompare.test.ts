@@ -105,10 +105,6 @@ const SHARED_EMAIL = "paul@example.com";
 const OUTLOOK_ONLY_EMAIL = "p.dorian@example.test";
 /** Reaches the contact and no source record. The other half of the asymmetry. */
 const CONTACT_ONLY_PHONE = "+12065550188";
-/** R5: held by two CANDIDATES and by nothing the contact is already made of. */
-const PAIRED_EMAIL = "pd.pair@example.com";
-/** R5: held by one candidate and by nothing else at all. */
-const LONE_EMAIL = "pd.lone@example.com";
 
 function addContact(
   id: string,
@@ -994,10 +990,10 @@ describe("the proposed column", () => {
   });
 
   it("renders the unlinked candidate as the last column", async () => {
-    const view = await getContactCompareColumns(USER, "pc", [{
+    const view = await getContactCompareColumns(USER, "pc", {
       sourceType: "android_sync",
       sourceRecordId: "and-pc",
-    }]);
+    });
 
     // CONTROL: ignore the third argument and the candidate silently disappears
     // from the comparison the user is being asked to make.
@@ -1034,10 +1030,10 @@ describe("the proposed column", () => {
     const without = await getContactCompareColumns(USER, "pc");
     expect(without!.isConfirmed).toBe(true);
 
-    const withProposal = await getContactCompareColumns(USER, "pc", [{
+    const withProposal = await getContactCompareColumns(USER, "pc", {
       sourceType: "android_sync",
       sourceRecordId: "and-pc",
-    }]);
+    });
 
     expect(withProposal!.isConfirmed).toBe(false);
     expect(withProposal!.columns.some((c) => c.kind === "proposed")).toBe(true);
@@ -1050,10 +1046,10 @@ describe("the proposed column", () => {
   });
 
   it("omits the column rather than rendering a blank one when the record is gone", async () => {
-    const view = await getContactCompareColumns(USER, "pc", [{
+    const view = await getContactCompareColumns(USER, "pc", {
       sourceType: "android_sync",
       sourceRecordId: "does-not-exist",
-    }]);
+    });
 
     // It cannot happen through the queue — PENDING_JOIN inner-joins
     // external_contacts — so a miss means a stale renderer. An empty column
@@ -1064,129 +1060,6 @@ describe("the proposed column", () => {
   it("leaves the view untouched when no candidate is passed", async () => {
     const plain = await getContactCompareColumns(USER, "pc");
     expect(plain!.columns.map((c) => c.kind)).toEqual(["contact", "source"]);
-  });
-});
-
-// ===========================================================================
-// BACKLOG-2502 R5 — SEVERAL CANDIDATES, EACH ITS OWN COLUMN
-// ===========================================================================
-
-/**
- * THE FOUNDER'S CONTACT WITH FOUR POSSIBLE DUPLICATES, 2026-08-09.
- *
- * With one candidate per call this reader could only ever draw one of them, so
- * three of his four questions had no column — and a question with no column has
- * nowhere to put its answer. That was the defect behind *"we don't have the
- * unlink / not-the-same button for each one of them"*: not a missing button, a
- * missing column.
- */
-describe("R5 — several candidates", () => {
-  beforeEach(() => {
-    twoColumnContact("many");
-    addExternal("cand-a", "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
-    // cand-b and cand-c hold ONE address between them that the contact does not
-    // have. Nothing but a call that sees both candidates can mark it.
-    addExternal("cand-b", "Paul Dorian", "google", { emails: [PAIRED_EMAIL] });
-    addExternal("cand-c", "P. Dorian", "outlook", { emails: [PAIRED_EMAIL, LONE_EMAIL] });
-    addExternal("cand-d", "Paul D.", "macos", { phones: ["+12065550177"] });
-  });
-
-  const allFour = [
-    { sourceType: "android_sync", sourceRecordId: "cand-a", proposalId: "p-a" },
-    { sourceType: "google", sourceRecordId: "cand-b", proposalId: "p-b" },
-    { sourceType: "outlook", sourceRecordId: "cand-c", proposalId: "p-c" },
-    { sourceType: "macos", sourceRecordId: "cand-d", proposalId: "p-d" },
-  ];
-
-  it("draws one column per candidate, in the caller's order, each naming its own proposal", async () => {
-    const view = await getContactCompareColumns(USER, "many", allFour);
-
-    // BY IDENTITY, and in order: the third candidate asked for is the third
-    // candidate column, so the third card in the list is the third column here.
-    // CONTROL: keep the singular parameter (or `[0]` of the array) and only
-    // `proposed:android_sync:cand-a` exists — the R5 defect exactly.
-    const proposed = view!.columns.filter((c) => c.kind === "proposed");
-    expect(proposed.map((c) => c.linkId)).toEqual([
-      "proposed:android_sync:cand-a",
-      "proposed:google:cand-b",
-      "proposed:outlook:cand-c",
-      "proposed:macos:cand-d",
-    ]);
-    // The id the renderer answers with, carried per column rather than parsed
-    // back out of the key above. CONTROL: stop echoing it and every candidate
-    // control loses the only thing that tells it which question it answers.
-    expect(proposed.map((c) => c.proposalId)).toEqual(["p-a", "p-b", "p-c", "p-d"]);
-    // And on no other kind of column.
-    expect(
-      view!.columns.filter((c) => c.kind !== "proposed").every((c) => c.proposalId === undefined),
-    ).toBe(true);
-  });
-
-  it("marks values across the WHOLE set, which one call per candidate could not", async () => {
-    const view = await getContactCompareColumns(USER, "many", allFour);
-
-    // `matched` means "another COLUMN carries this too", so it is a fact about
-    // the column set and not about any one record. `PAIRED_EMAIL` is held by two
-    // CANDIDATES and by neither the contact nor its linked records: asked one
-    // candidate at a time, this address is alone in every single call and is
-    // marked in none of them. It can only be true here.
-    //
-    // CONTROL: call this reader once per candidate and merge the results in the
-    // renderer — the shape that avoids touching the boundary — and both of these
-    // read `matched: false` while every other assertion in this file still
-    // passes.
-    const byId = (id: string) => view!.columns.find((c) => c.linkId === id)!;
-    expect(byId("proposed:google:cand-b").emails).toEqual([
-      { value: PAIRED_EMAIL, matched: true },
-    ]);
-    expect(byId("proposed:outlook:cand-c").emails).toEqual([
-      { value: PAIRED_EMAIL, matched: true },
-      // Held by nobody else, in the same column, and says so — so the mark above
-      // is not simply "everything on this column is marked".
-      { value: LONE_EMAIL, matched: false },
-    ]);
-    // And the contact's own value still marks against a candidate, as before.
-    expect(byId("proposed:android_sync:cand-a").phones).toEqual([
-      { value: SHARED_PHONE, matched: true },
-    ]);
-  });
-
-  it("drops only the candidate whose record has gone, and keeps the rest", async () => {
-    const view = await getContactCompareColumns(USER, "many", [
-      allFour[0],
-      { sourceType: "google", sourceRecordId: "vanished", proposalId: "p-x" },
-      allFour[2],
-    ]);
-
-    // CONTROL: read the records before filtering (or filter the whole call on
-    // one miss) and a single stale row takes the other two candidates' columns
-    // with it.
-    expect(view!.columns.filter((c) => c.kind === "proposed").map((c) => c.linkId)).toEqual([
-      "proposed:android_sync:cand-a",
-      "proposed:outlook:cand-c",
-    ]);
-  });
-
-  it("still returns nothing to compare when a lone contact's only candidate has gone", async () => {
-    addContact("solo", "Paul Dorian", { phones: [SHARED_PHONE] });
-    origin("solo", "contacts_app");
-
-    // The R1 rule, which counts the records READ and not the candidates asked
-    // for. CONTROL: count `proposedSources.length` here and this contact gets a
-    // one-column "comparison" of itself against nothing.
-    expect(
-      await getContactCompareColumns(USER, "solo", [
-        { sourceType: "google", sourceRecordId: "vanished", proposalId: "p-x" },
-      ]),
-    ).toBeNull();
-  });
-
-  it("leaves the contact route alone when the array is empty", async () => {
-    const plain = await getContactCompareColumns(USER, "many", []);
-    expect(plain!.columns.map((c) => c.kind)).toEqual(["contact", "source"]);
-    expect(plain!.isConfirmed).toBe(
-      (await getContactCompareColumns(USER, "many"))!.isConfirmed,
-    );
   });
 });
 
@@ -1238,10 +1111,10 @@ describe("the one-record contact the review queue asks about", () => {
       phones: [SHARED_PHONE],
     });
 
-    const view = await getContactCompareColumns(USER, "g2", [{
+    const view = await getContactCompareColumns(USER, "g2", {
       sourceType: "outlook",
       sourceRecordId: "out-g2",
-    }]);
+    });
 
     expect(view).not.toBeNull();
     // Identity, not count: WHICH two columns, in which order.
@@ -1260,10 +1133,10 @@ describe("the one-record contact the review queue asks about", () => {
    */
   it("stays null when the candidate record does not exist", async () => {
     oneRecordContact("g3", "Ada Lovelace");
-    const view = await getContactCompareColumns(USER, "g3", [{
+    const view = await getContactCompareColumns(USER, "g3", {
       sourceType: "outlook",
       sourceRecordId: "gone",
-    }]);
+    });
     expect(view).toBeNull();
   });
 
@@ -1275,10 +1148,10 @@ describe("the one-record contact the review queue asks about", () => {
     mockDb!.prepare("UPDATE contacts SET removed_at = datetime('now') WHERE id = 'g4'").run();
 
     expect(
-      await getContactCompareColumns(USER, "g4", [{
+      await getContactCompareColumns(USER, "g4", {
         sourceType: "outlook",
         sourceRecordId: "out-g4",
-      }]),
+      }),
     ).toBeNull();
   });
 });
@@ -1344,10 +1217,10 @@ describe("a contact with no non-origin links at all", () => {
     // THE PREMISE. This is the empty set the vacuous truth lives on.
     expect(nonOriginLinks("vt1")).toEqual([]);
 
-    const view = await getContactCompareColumns(USER, "vt1", [{
+    const view = await getContactCompareColumns(USER, "vt1", {
       sourceType: "outlook",
       sourceRecordId: "out-vt1",
-    }]);
+    });
 
     // The screen the founder was looking at: two columns, one of them the
     // candidate, and NOTHING confirmed about either of them.

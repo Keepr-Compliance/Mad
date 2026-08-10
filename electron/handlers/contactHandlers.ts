@@ -4203,13 +4203,9 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       _event: IpcMainInvokeEvent,
       userId: string,
       contactId: string,
-      // BACKLOG-2502 — the review queue's candidates, rendered as more
-      // columns. Optional: every other caller omits them and gets PR C/D's view.
-      proposedSources?: ReadonlyArray<{
-        sourceType: string;
-        sourceRecordId: string;
-        proposalId?: string;
-      }>,
+      // BACKLOG-2502 — the review queue's candidate, rendered as one more
+      // column. Optional: every other caller omits it and gets PR C/D's view.
+      proposedSource?: { sourceType: string; sourceRecordId: string },
     ): Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }> => {
       try {
         const validatedUserId = await getValidUserId(userId, "Contacts");
@@ -4225,7 +4221,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           view: await getContactCompareColumns(
             validatedUserId,
             validatedContactId,
-            proposedSources,
+            proposedSource,
           ),
         };
       } catch (error) {

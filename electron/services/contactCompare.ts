@@ -108,18 +108,6 @@ export interface ContactCompareColumn {
   recentCommunication: CompareCommItem[];
   /** False when the crosswalk row outlived its `external_contacts` row. */
   sourceRecordPresent: boolean;
-  /**
-   * BACKLOG-2502 R5 — WHICH PROPOSAL THIS COLUMN ANSWERS. Present on `"proposed"`
-   * columns and on no other kind.
-   *
-   * A contact can carry several candidates at once, and each is answered on its
-   * own. The renderer therefore needs to name ONE of them per press, and the
-   * only other way to get that id back is to parse `linkId`'s
-   * `proposed:<type>:<record>` shape — which would put this module's key format
-   * in a second place and let the two drift silently. Identity crosses the
-   * boundary as data instead.
-   */
-  proposalId?: string;
 }
 
 export interface ContactCompareView {
@@ -482,27 +470,13 @@ export async function getContactCompareColumns(
   userId: string,
   contactId: string,
   /**
-   * BACKLOG-2502 — the review queue's candidates, rendered as more columns.
+   * BACKLOG-2502 — the review queue's candidate, rendered as one more column.
    *
-   * They have NO crosswalk row, so the query below cannot reach them at all:
-   * they are read straight from `external_contacts`. Absent (or empty) for every
-   * other caller, and absent means the view is exactly what PR C/D returned.
-   *
-   * PLURAL SINCE R5, BECAUSE A CONTACT CAN HAVE SEVERAL AT ONCE. The founder hit
-   * a contact with four, and with a single candidate parameter the compare
-   * screen could only ever draw one of them — so three of his four questions had
-   * no column, and therefore no way to be answered from this screen. The
-   * `matched` marks are the second reason it must be one call rather than four:
-   * a value is marked when it appears on two or more COLUMNS, so a per-candidate
-   * call would mark against a different column set each time and the same
-   * address would read matched on one screen and not on the next.
+   * It has NO crosswalk row, so the query below cannot reach it at all: it is
+   * read straight from `external_contacts`. Absent for every other caller, and
+   * absent means the view is exactly what PR C/D returned.
    */
-  proposedSources?: ReadonlyArray<{
-    sourceType: string;
-    sourceRecordId: string;
-    /** Echoed onto the column so the renderer can answer this candidate by id. */
-    proposalId?: string;
-  }>,
+  proposedSource?: { sourceType: string; sourceRecordId: string },
 ): Promise<ContactCompareView | null> {
   const contact = dbGet<{
     user_id: string;
@@ -582,36 +556,28 @@ export async function getContactCompareColumns(
     The lookup therefore moves ABOVE the guard rather than the guard moving
     below the append: the guard must know whether the candidate column will
     actually RENDER, and it renders only if the record still exists. A
-    A `proposedSources` entry pointing at a vanished record is still no column
-    at all — which is why this counts the records READ, not the candidates
-    asked for.
+    `proposedSource` pointing at a vanished record is still a one-column view
+    and must still return null — which is why this counts `proposedRecord`, not
+    `proposedSource`.
   */
-  /*
-    R5: the same read, once per candidate, keeping ONLY the ones whose record is
-    still there. A candidate that survives this filter is a column; one that does
-    not is dropped here and is counted by neither the guard below nor the append.
-    That is the singular rule unchanged — it just now has to hold per candidate,
-    because four candidates can miss independently of one another.
-  */
-  const proposedRecords = (proposedSources ?? []).flatMap((candidate) => {
-    const record = dbGet<{
-      name: string | null;
-      emails_json: string | null;
-      phones_json: string | null;
-      company: string | null;
-    }>(
-      `SELECT name, emails_json, phones_json, company
-         FROM external_contacts
-        WHERE user_id = ? AND source = ? AND external_record_id = ?`,
-      [userId, candidate.sourceType, candidate.sourceRecordId],
-    );
-    return record ? [{ candidate, record }] : [];
-  });
+  const proposedRecord = proposedSource
+    ? dbGet<{
+        name: string | null;
+        emails_json: string | null;
+        phones_json: string | null;
+        company: string | null;
+      }>(
+        `SELECT name, emails_json, phones_json, company
+           FROM external_contacts
+          WHERE user_id = ? AND source = ? AND external_record_id = ?`,
+        [userId, proposedSource.sourceType, proposedSource.sourceRecordId],
+      ) ?? null
+    : null;
 
   // Column 1 is the contact itself and always renders, so a comparison needs
-  // exactly one more: an attached source row, or one of the queue's candidates.
-  // Zero means a genuinely empty view, and that still returns null.
-  if (sourceRows.length + proposedRecords.length === 0) return null;
+  // exactly one more: an attached source row, or the queue's candidate. Zero
+  // means a genuinely empty view, and that still returns null.
+  if (sourceRows.length + (proposedRecord ? 1 : 0) === 0) return null;
 
   const contactEmails = getContactEmailEntries(contactId).map((e) => e.email);
   const contactPhones = getContactPhoneEntries(contactId).map((p) => p.phone);
@@ -629,7 +595,6 @@ export async function getContactCompareColumns(
     company: string | null;
     transactions: string[];
     sourceRecordPresent: boolean;
-    proposalId?: string;
   }
   const raw: RawColumn[] = [
     {
@@ -662,34 +627,28 @@ export async function getContactCompareColumns(
   ];
 
   /*
-    BACKLOG-2502 — the candidates, appended after the linked columns.
+    BACKLOG-2502 — the candidate, appended as the last column.
 
-    Read straight from `external_contacts`: they have no crosswalk row, so the
-    query above cannot reach them. Keyed `proposed:<type>:<record>` because there
-    is no `linkId` to key them by, and that shape cannot collide with a UUID.
+    Read straight from `external_contacts`: it has no crosswalk row, so the
+    query above cannot reach it. Keyed `proposed:<type>:<record>` because there
+    is no `linkId` to key it by, and that shape cannot collide with a UUID.
 
-    A MISSING RECORD YIELDS NO COLUMN RATHER THAN A BLANK ONE — applied per
-    candidate, above. It cannot happen through the queue — `PENDING_JOIN`
-    inner-joins `external_contacts` — so a miss means a stale renderer, and an
-    empty column would invite a decision about a record that is not there.
-
-    THE ORDER IS THE CALLER'S. The queue hands its candidates in the order it
-    renders them, and the columns keep it, so the third card in the list is the
-    third candidate column here. Re-sorting would leave the user matching a
-    record to a card by reading its values.
+    A MISSING RECORD YIELDS NO COLUMN RATHER THAN A BLANK ONE. It cannot happen
+    through the queue — `PENDING_JOIN` inner-joins `external_contacts` — so a
+    miss here means a stale renderer, and an empty column would invite a
+    decision about a record that is not there.
   */
-  for (const { candidate, record } of proposedRecords) {
+  if (proposedSource && proposedRecord) {
     raw.push({
-      linkId: `proposed:${candidate.sourceType}:${candidate.sourceRecordId}`,
+      linkId: `proposed:${proposedSource.sourceType}:${proposedSource.sourceRecordId}`,
       kind: "proposed" as const,
-      columnLabel: sourceLabel(candidate.sourceType as ContactLinkSourceType),
-      displayName: record.name?.trim() || null,
-      emails: dedupeEmailValues(parseValueArray(record.emails_json)),
-      phones: dedupePhoneValues(parseValueArray(record.phones_json)),
-      company: record.company?.trim() || null,
+      columnLabel: sourceLabel(proposedSource.sourceType as ContactLinkSourceType),
+      displayName: proposedRecord.name?.trim() || null,
+      emails: dedupeEmailValues(parseValueArray(proposedRecord.emails_json)),
+      phones: dedupePhoneValues(parseValueArray(proposedRecord.phones_json)),
+      company: proposedRecord.company?.trim() || null,
       transactions: [] as string[],
       sourceRecordPresent: true,
-      proposalId: candidate.proposalId,
     });
   }
 
@@ -738,7 +697,6 @@ export async function getContactCompareColumns(
     transactions: c.transactions,
     recentCommunication: comms[i],
     sourceRecordPresent: c.sourceRecordPresent,
-    proposalId: c.proposalId,
   }));
 
   const names = raw.map((c) => nameKey(c.displayName ?? ""));
@@ -789,7 +747,7 @@ export async function getContactCompareColumns(
     this is the same expression it has always been.
 
     `proposedColumnPresent` is read off the columns actually built rather than
-    re-deriving it from `proposedSources`, so it cannot come to
+    re-deriving it from `proposedSource`/`proposedRecord`, so it cannot come to
     disagree with whether the candidate is on screen.
   */
   const proposedColumnPresent = columns.some((c) => c.kind === "proposed");

@@ -110,30 +110,13 @@ export function ReviewDuplicatesModal({
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   /**
-   * BACKLOG-2502 — the CONTACT whose compare screen is open, and which of its
-   * candidates was opened.
+   * BACKLOG-2502 — the candidate whose compare screen is open, if any.
    *
    * The card settles what it can; this is where the rest goes. The compare
-   * screen is the SHIPPED component (BACKLOG-2471), given the candidates as more
-   * columns — not a second detail view built here.
-   *
-   * R5: THE CANDIDATES ARE DERIVED FROM THE LIVE QUEUE, NOT FROZEN HERE. Holding
-   * the `ContactReviewItem` objects in state would leave a candidate on screen
-   * after it was answered — including the siblings an exclusive cluster answers
-   * for us, which this component is not told about and must not guess. Keeping
-   * only the two ids means every answer re-reads the queue and the screen shows
-   * exactly what is still open, which is also what makes each answer visibly
-   * independent of the others.
-   *
-   * `proposalId` is the candidate the user opened, and it selects the frozen
-   * evidence behind "How we decided this". It is a preference, not a key: when
-   * that candidate is the one answered, the first still-open candidate takes
-   * over rather than the disclosure emptying.
+   * screen is the SHIPPED component (BACKLOG-2471), given the candidate as one
+   * more column — not a second detail view built here.
    */
-  const [comparing, setComparing] = useState<{
-    contactId: string;
-    proposalId: string;
-  } | null>(null);
+  const [comparing, setComparing] = useState<ContactReviewItem | null>(null);
   /**
    * An OUTCOME to report, not a load failure — kept apart from `error` because
    * the answer succeeded and the list is about to reload, and `load()` clears
@@ -251,35 +234,6 @@ export function ReviewDuplicatesModal({
 
   const total = (clusters ?? []).reduce((sum, c) => sum + c.items.length, 0);
 
-  /*
-    THE COMPARE SCREEN'S CANDIDATES, READ OFF THE LIVE QUEUE (R5).
-
-    Derived, never stored. Answering a candidate reloads the queue, this group
-    loses that item, and the compare screen re-renders with the rest — which is
-    what makes "answering one leaves the others pending" fall out of the existing
-    answer path instead of needing a rule of its own. It is also the only way the
-    exclusive-cluster case can be right: confirming a `record:` candidate rejects
-    its siblings in the main process, and a frozen list here would keep drawing
-    questions that have already been settled.
-
-    Group gone -> every question about that contact is answered, and the compare
-    screen has nothing left to show.
-  */
-  const compareGroup = comparing
-    ? (groups.find((g) => g.contactId === comparing.contactId) ?? null)
-    : null;
-  const openedItem = compareGroup
-    ? (compareGroup.items.find((i) => i.proposalId === comparing?.proposalId) ??
-      compareGroup.items[0])
-    : null;
-
-  useEffect(() => {
-    // The id outlived what it pointed at. Cleared so the LIST's `×` — gated on
-    // this screen not being open — comes back; leaving it set would take the
-    // list's only way out with it.
-    if (comparing && clusters !== null && !compareGroup) setComparing(null);
-  }, [comparing, clusters, compareGroup]);
-
   return (
     <>
       <ResponsiveModal
@@ -340,7 +294,7 @@ export function ReviewDuplicatesModal({
               answer.
             </p>
           </div>
-          {!compareGroup && (
+          {!comparing && (
             <button
               type="button"
               onClick={onClose}
@@ -360,15 +314,22 @@ export function ReviewDuplicatesModal({
         rather than looking like one window whose contents changed.
       */}
         <div className="px-6 py-4 overflow-y-auto">
-          {/*
-            THE MESSAGE FOLLOWS THE TOP LAYER (R5). Rendered here only while the
-            compare screen is down; with it open the same two messages render
-            over it instead (below), because a candidate can now be answered from
-            up there and an outcome the user cannot see is an outcome they will
-            act on twice. Rendered in ONE place either way — two copies would be
-            two elements answering to one test id.
-          */}
-          {!compareGroup && <QueueMessages notice={notice} error={error} />}
+          {notice && (
+            <div
+              className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900"
+              data-testid="review-duplicates-notice"
+            >
+              {notice}
+            </div>
+          )}
+          {error && (
+            <div
+              className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800"
+              data-testid="review-duplicates-error"
+            >
+              {error}
+            </div>
+          )}
 
           {clusters === null && (
             <div
@@ -395,12 +356,7 @@ export function ReviewDuplicatesModal({
                 key={group.contactId}
                 group={group}
                 busyId={busyId}
-                onCompare={(item) =>
-                  setComparing({
-                    contactId: item.contactId,
-                    proposalId: item.proposalId,
-                  })
-                }
+                onCompare={setComparing}
                 onSame={(item) => void answer(item, "same")}
                 onDifferent={(item) => void answer(item, "different")}
               />
@@ -441,7 +397,7 @@ export function ReviewDuplicatesModal({
         `contacts:reject-link` — the same two channels the cards use, so there is
         one resolution path and not three.
       */}
-      {compareGroup && openedItem && (
+      {comparing && (
         <ResponsiveModal
           /*
             POPS ONE LAYER, NOT THE STACK — the backdrop click and the compare
@@ -457,48 +413,19 @@ export function ReviewDuplicatesModal({
           testId="review-compare-overlay"
         >
           <div data-testid="review-compare-pane">
-            <QueueMessages notice={notice} error={error} />
             <ContactCompareSources
               userId={userId}
-              contactId={compareGroup.contactId}
-              /*
-                EVERY OPEN CANDIDATE, NOT JUST THE ONE THAT WAS CLICKED (R5).
-
-                Founder, on a contact with four: *"we don't have the unlink /
-                not-the-same button for each one of them"*. With one candidate
-                per screen, three of his four questions had no column and so no
-                way to be answered from here at all. The order is the list's
-                order, so the third card below is the third column above.
-
-                `proposalId` rides along on each so the compare screen can name
-                the candidate it is answering without parsing a column key.
-              */
-              proposedSources={compareGroup.items.map((item) => ({
-                sourceType: item.sourceType,
-                sourceRecordId: item.sourceRecordId,
-                proposalId: item.proposalId,
-              }))}
-              proposalId={openedItem.proposalId}
-              /*
-                ANSWERED HERE, BY THE SAME FUNCTION THE ROWS BELOW USE. `answer`
-                already owns the two channels, the busy flag, the merge-guard
-                notice and the reload — a second implementation for this screen
-                would be a second set of rules about what happens after a press.
-              */
-              onCandidateSame={(proposalId) => {
-                const item = compareGroup.items.find((i) => i.proposalId === proposalId);
-                if (item) void answer(item, "same");
+              contactId={comparing.contactId}
+              proposedSource={{
+                sourceType: comparing.sourceType,
+                sourceRecordId: comparing.sourceRecordId,
               }}
-              onCandidateDifferent={(proposalId) => {
-                const item = compareGroup.items.find((i) => i.proposalId === proposalId);
-                if (item) void answer(item, "different");
-              }}
-              answeringProposalId={busyId}
+              proposalId={comparing.proposalId}
               why={
-                openedItem.evidence
+                comparing.evidence
                   ? {
-                      summary: openedItem.evidence.summary,
-                      details: openedItem.evidence.details ?? [],
+                      summary: comparing.evidence.summary,
+                      details: comparing.evidence.details ?? [],
                     }
                   : undefined
               }
@@ -523,7 +450,7 @@ export function ReviewDuplicatesModal({
                 being told where to go; it owns closing this modal.
               */
               onConfirmedAndEdit={() => {
-                const { contactId } = compareGroup;
+                const { contactId } = comparing;
                 setComparing(null);
                 onResolved?.();
                 onConfirmedAndEdit?.(contactId);
@@ -536,45 +463,6 @@ export function ReviewDuplicatesModal({
             />
           </div>
         </ResponsiveModal>
-      )}
-    </>
-  );
-}
-
-/**
- * The queue's two messages — an outcome to report and a load failure — drawn
- * wherever the user is currently looking (R5).
- *
- * One component with one pair of test ids, mounted on exactly one layer at a
- * time. `notice` is deliberately NOT an error: it reports an answer that
- * SUCCEEDED and changed less than the user expects (the merge guard), and
- * dressing it in red would read as "your answer failed".
- */
-function QueueMessages({
-  notice,
-  error,
-}: {
-  notice: string | null;
-  error: string | null;
-}): React.ReactElement | null {
-  if (!notice && !error) return null;
-  return (
-    <>
-      {notice && (
-        <div
-          className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900"
-          data-testid="review-duplicates-notice"
-        >
-          {notice}
-        </div>
-      )}
-      {error && (
-        <div
-          className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800"
-          data-testid="review-duplicates-error"
-        >
-          {error}
-        </div>
       )}
     </>
   );
