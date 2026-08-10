@@ -109,6 +109,21 @@ function createSchema(db: DatabaseType): void {
       removed_reason TEXT
     );
 
+    -- Migration v57. BACKLOG-2618: the activity-sorted producer now suppresses a
+    -- message-derived person only when a saved contact's NAME is the whole of
+    -- its identity, and that question is answered here. Declared rather than
+    -- left out, so the fixture exercises the real predicate instead of the
+    -- table-missing fallback. No fixture row links anything, so every seeded
+    -- contact is name-only and these assertions are unaffected.
+    CREATE TABLE contact_source_links (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_record_id TEXT NOT NULL,
+      match_method TEXT NOT NULL
+    );
+
     CREATE TABLE contact_phones (
       id TEXT PRIMARY KEY,
       contact_id TEXT NOT NULL,

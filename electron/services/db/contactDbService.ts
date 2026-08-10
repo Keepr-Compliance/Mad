@@ -79,56 +79,173 @@ interface MessageDerivedContact {
 }
 
 /**
+ * The lowercased display names of saved contacts whose NAME IS ALL THEY ARE —
+ * the only contacts allowed to suppress a message-derived person of the same
+ * name (BACKLOG-2618).
+ *
+ * ONE definition, exported, because there are TWO surfaces that merge
+ * message-derived people into a saved-contact list — `getMessageDerivedContacts`
+ * (the contacts list and the activity sort) and `searchContactsForSelection`
+ * (the transaction picker) — and they had already disagreed: the first
+ * suppressed on name and the second did not suppress at all, so removing Dana
+ * hid her from one and left her twin visible in the other. Two copies of a rule
+ * is how they drifted; this is the fix for the drift as well as for the rule.
+ *
+ * The two terms, and neither folds into the other:
+ *
+ *   `removed_at IS NOT NULL` — BACKLOG-2365. The user acted on this person.
+ *     A removed contact must keep counting as KNOWN or the removal visibly
+ *     undoes itself, whether or not the contact came from an address book.
+ *
+ *   no `contact_source_links` row — the contact has no address-book record
+ *     behind it, so its display name is the whole of its identity: it was typed
+ *     by hand, or it was created by importing this very message-derived row.
+ *     A contact that DOES have a crosswalk row is an independent address-book
+ *     person, and a shared name with a text sender is a guess, not knowledge.
+ *
+ * `is_imported = 1 OR removed_at IS NOT NULL` is kept as the outer predicate so
+ * the question stays "do we already know about this person?" rather than
+ * "should this person be shown?" — the inversion BACKLOG-2365 exists to record.
+ */
+export function namesThatAreTheirOwnIdentity(userId: string): Set<string> {
+  const KNOWN_CONTACT = "(c.is_imported = 1 OR c.removed_at IS NOT NULL)";
+  try {
+    const rows = dbAll<{ name: string }>(
+      `SELECT LOWER(display_name) as name
+         FROM contacts c
+        WHERE c.user_id = ?
+          AND ${KNOWN_CONTACT}
+          AND (
+            c.removed_at IS NOT NULL
+            OR NOT EXISTS (
+              SELECT 1 FROM contact_source_links l
+               WHERE l.contact_id = c.id AND l.user_id = c.user_id
+            )
+          )`,
+      [userId],
+    );
+    return new Set(rows.map((r) => r.name).filter(Boolean));
+  } catch (error) {
+    /**
+     * DEGRADES TOWARDS THE PRE-BACKLOG-2618 BEHAVIOUR, NEVER FAILS.
+     *
+     * This introduced a `contact_source_links` dependency into
+     * `contacts:get-all`, which had none before — and that path renders the
+     * whole contacts list. A database below migration v57 has no such table, so
+     * an unguarded read would turn "a same-named person is hidden" into "the
+     * contacts list throws".
+     *
+     * THE DIRECTION IS CHOSEN, not defaulted. Falling back to the broader
+     * predicate keeps every saved contact suppressing its same-named twin,
+     * which is the behaviour that shipped: the quiet failure (a distinct
+     * same-named person stays hidden) rather than the loud one (a removed
+     * contact reappears one line below the list she was just deleted from,
+     * BACKLOG-2365). A warn rather than a breadcrumb is deliberate and
+     * proportionate — unlike the picker's crosswalk read, whose failure
+     * duplicates the entire list, this one is invisible either way.
+     */
+    logService.warn(
+      `[Contacts] crosswalk unavailable for message-derived suppression; falling back to name-only matching: ${error}`,
+      "ContactDbService",
+    );
+    const rows = dbAll<{ name: string }>(
+      `SELECT LOWER(display_name) as name FROM contacts c
+        WHERE c.user_id = ? AND ${KNOWN_CONTACT}`,
+      [userId],
+    );
+    return new Set(rows.map((r) => r.name).filter(Boolean));
+  }
+}
+
+/**
  * Get unique contacts derived from message participants (senders/recipients)
  * These are contacts who have sent/received messages but may not be explicitly imported.
  * Uses json_extract to parse the participants JSON field.
  */
 export function getMessageDerivedContacts(userId: string): MessageDerivedContact[] {
-  // BACKLOG-2365 — THESE THREE EXCLUSION SETS MUST STILL COUNT REMOVED CONTACTS.
-  //
-  // They answer "do we already have a saved contact for this person?", and the
-  // answer SUPPRESSES that person's message-derived twin. A removed contact has
-  // to stay IN these sets. This is the one place in this file where a tombstoned
-  // row must still count, and the predicate is therefore the exact OPPOSITE of
-  // every other tombstone filter here: elsewhere the question is "should this
-  // person be shown?", here it is "do we already know about this person?".
-  //
-  // Get it wrong and the removal visibly undoes itself. Dana is a saved contact
-  // who has texted the user. He removes her. She vanishes from the DB-backed
-  // rows and reappears one line later as `msg_dana example`, because
-  // getImportedContactsByUserId merges getMessageDerivedContacts into the very
-  // list it just filtered — same person, same list, different guise. The
-  // activity-sorted picker does the same.
-  const KNOWN_CONTACT = "(c.is_imported = 1 OR c.removed_at IS NOT NULL)";
-
-  // Get emails of imported contacts to exclude (avoid duplicates)
-  const importedEmailsSql = `
-    SELECT LOWER(email) as email
-    FROM contact_emails ce
-    JOIN contacts c ON ce.contact_id = c.id
-    WHERE c.user_id = ? AND ${KNOWN_CONTACT}
-  `;
-  const importedEmailRows = dbAll<{ email: string }>(importedEmailsSql, [userId]);
-  const importedEmails = new Set(importedEmailRows.map(r => r.email).filter(Boolean));
-
-  // Get phones of imported contacts to exclude (avoid duplicates)
-  const importedPhonesSql = `
-    SELECT LOWER(phone_e164) as phone
-    FROM contact_phones cp
-    JOIN contacts c ON cp.contact_id = c.id
-    WHERE c.user_id = ? AND ${KNOWN_CONTACT}
-  `;
-  const importedPhoneRows = dbAll<{ phone: string }>(importedPhonesSql, [userId]);
-  const importedPhones = new Set(importedPhoneRows.map(r => r.phone).filter(Boolean));
-
-  // Also get display_names of imported contacts to exclude (for SMS contacts without proper phone numbers)
-  const importedNamesSql = `
-    SELECT LOWER(display_name) as name
-    FROM contacts c
-    WHERE c.user_id = ? AND ${KNOWN_CONTACT}
-  `;
-  const importedNameRows = dbAll<{ name: string }>(importedNamesSql, [userId]);
-  const importedNames = new Set(importedNameRows.map(r => r.name).filter(Boolean));
+  /**
+   * =========================================================================
+   * BACKLOG-2618 — TWO OF THE THREE FILTERS HERE COULD NEVER FIRE. DELETED.
+   * =========================================================================
+   * There were three, and reading them left the impression that a
+   * message-derived person was matched against a saved contact on email, then
+   * phone, then name. Two of the three were structurally incapable of firing:
+   *
+   *   email — the WHERE below excludes any `from` value containing `@`, so the
+   *           projected `email` column is ALWAYS NULL and `contact.email &&`
+   *           short-circuits on every row.
+   *   phone — the same WHERE excludes `+%` and `[0-9]*`, so the projected
+   *           `phone` column holds a DISPLAY NAME. It was compared against
+   *           `LOWER(phone_e164)` values, which a display name cannot equal.
+   *
+   * DELETED RATHER THAN REPAIRED, deliberately. There is nothing to repair
+   * them WITH: this projection's only input is `participants.from`, and the
+   * rows it keeps are precisely the ones where that value is not an address.
+   * A filter that cannot fire is worse than no filter, because it reads as
+   * coverage — anyone auditing this function saw three identifiers being
+   * checked and one was being checked. A control asserts the WHERE guarantee
+   * directly, so this claim is measured rather than read off the source.
+   *
+   * =========================================================================
+   * WHAT SURVIVES, AND WHAT IT NOW ASKS
+   * =========================================================================
+   * The name filter was the only live one, and it hid a message-derived person
+   * whenever ANY saved contact carried the same display name. That is the rule
+   * BACKLOG-2316 believed it had removed — 2316 removed it from the PICKER and
+   * it was still here, feeding `contacts:get-all` and the activity-sorted list.
+   *
+   * THE HARM. Michael Chen the lender is a saved contact. A different Michael
+   * Chen, a buyer's agent, texts the user. The second Michael never appeared in
+   * Clients & Contacts, was never importable, and there was no disclosure and
+   * no undo.
+   *
+   * So the question is narrowed from "does a saved contact share this name?"
+   * to "does a saved contact exist whose ONLY identity IS this name?":
+   *
+   *   removed_at IS NOT NULL   — the user acted on this person (below), or
+   *   no crosswalk row         — this contact has no address-book record behind
+   *                              it, so its name is all it is.
+   *
+   * A contact WITH a `contact_source_links` row came from an address book: it
+   * is an independent record whose name coincidence with a text sender is
+   * exactly the Michael Chen guess, and it no longer suppresses.
+   *
+   * WHY NOT DELETE THE NAME FILTER OUTRIGHT — measured, not assumed. Importing
+   * a message-derived row (`Contacts.tsx` → `contacts.import`) mints a contact
+   * with a fresh uuid, and NO crosswalk row is possible for it: the
+   * `contact_source_links.source_type` CHECK admits address-book sources only
+   * (`macos`/`iphone`/`outlook`/`google_contacts`/`android_sync`), never
+   * `messages`. Delete the name filter and the twin renders beside the contact
+   * the user just created from it, permanently, with no undo — the same defect
+   * class this change exists to remove. The `NOT EXISTS` clause is what covers
+   * that case: the contact minted from the twin has no crosswalk row, so it
+   * still suppresses it.
+   *
+   * RESIDUAL GAPS, RECORDED RATHER THAN SILENTLY CLOSED. A saved contact typed
+   * by hand, or imported before the crosswalk existed, has no crosswalk row and
+   * therefore still suppresses a same-named sender. Both converge as the
+   * crosswalk fills; neither is closed here.
+   *
+   * =========================================================================
+   * BACKLOG-2365 — A REMOVED CONTACT MUST STILL COUNT AS KNOWN. UNCHANGED.
+   * =========================================================================
+   * This is the one place in this file where a tombstoned row must still
+   * count, and the predicate is the exact OPPOSITE of every other tombstone
+   * filter here: elsewhere the question is "should this person be shown?",
+   * here it is "do we already know about this person?".
+   *
+   * Get it wrong and the removal visibly undoes itself. Dana is a saved contact
+   * who has texted the user. He removes her. She vanishes from the DB-backed
+   * rows and reappears one line later as `msg_dana example`, because
+   * getImportedContactsByUserId merges getMessageDerivedContacts into the very
+   * list it just filtered — same person, same list, different guise. The
+   * activity-sorted picker does the same.
+   *
+   * `removed_at IS NOT NULL` is therefore a term on its own, ORed BEFORE the
+   * crosswalk clause and not folded into it: a removed contact suppresses its
+   * twin whether or not it came from an address book.
+   */
+  const importedNames = namesThatAreTheirOwnIdentity(userId);
 
   // Extract unique senders from messages (from field in participants JSON)
   // BACKLOG-313: Only include senders with actual display names (filter out raw emails/phones)
@@ -174,17 +291,11 @@ export function getMessageDerivedContacts(userId: string): MessageDerivedContact
 
   const results = dbAll<MessageDerivedContact>(sql, [userId]);
 
-  // Filter out contacts whose email, phone, or name is already imported
+  // BACKLOG-2618: ONE filter, and it is the one that can fire. The email and
+  // phone branches that stood above it are deleted — see the note at the top of
+  // this function for why they could not have fired and why they were not
+  // repairable.
   return results.filter(contact => {
-    // Filter by email match
-    if (contact.email && importedEmails.has(contact.email.toLowerCase())) {
-      return false;
-    }
-    // Filter by phone match
-    if (contact.phone && importedPhones.has(contact.phone.toLowerCase())) {
-      return false;
-    }
-    // Filter by display name match (for SMS contacts like "*162")
     if (contact.display_name && importedNames.has(contact.display_name.toLowerCase())) {
       return false;
     }
@@ -2298,15 +2409,18 @@ export function searchContactsForSelection(
   const phoneGate = phoneIsQuery ? 1 : 0;
   const phonePattern = phoneIsQuery ? `%${toLookupKey(query)}%` : "%";
 
-  // Get emails of imported contacts to exclude duplicates in message-derived results
-  const importedEmailsSql = `
-    SELECT LOWER(email) as email
-    FROM contact_emails ce
-    JOIN contacts c ON ce.contact_id = c.id
-    WHERE c.user_id = ? AND c.is_imported = 1
-  `;
-  const importedEmailRows = dbAll<{ email: string }>(importedEmailsSql, [userId]);
-  const importedEmails = new Set(importedEmailRows.map(r => r.email).filter(Boolean));
+  // BACKLOG-2618: the email set that stood here was read by a filter that could
+  // never fire — `messageSql` below carries the same
+  // `NOT LIKE '%@%'` guarantee as `getMessageDerivedContacts`, so the `email`
+  // column it projects is always NULL. Deleted with its filter.
+  //
+  // What replaces it is the rule the OTHER producer already applies, and this
+  // one did not apply at all: a message-derived person is suppressed only by a
+  // saved contact whose name is the whole of its identity. Before this, removing
+  // Dana hid her from the contacts list and left `msg_dana example` visible in
+  // the transaction picker's search — the BACKLOG-2365 defect surviving in the
+  // one surface that had no name filter.
+  const namesOwningThemselves = namesThatAreTheirOwnIdentity(userId);
 
   // Search imported contacts
   // Searches across display_name, all emails, phone, and company
@@ -2438,12 +2552,10 @@ export function searchContactsForSelection(
       limit,
     ]);
 
-    // Filter out message-derived contacts whose email is already imported
+    // BACKLOG-2618: one filter, the same one the contacts list applies.
     const filteredMessageResults = messageResults.filter(contact => {
-      if (contact.email) {
-        return !importedEmails.has(contact.email.toLowerCase());
-      }
-      return true;
+      const name = contact.display_name || contact.name;
+      return !(name && namesOwningThemselves.has(name.toLowerCase()));
     });
 
     // Merge results: imported first, then message-derived

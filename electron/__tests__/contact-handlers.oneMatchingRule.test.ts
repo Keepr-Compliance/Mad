@@ -219,6 +219,27 @@ function saved(
  * REAL schema rather than through a helper, so the suite depends on the shape
  * `getRejectedSourceKeys` actually queries.
  */
+/**
+ * The crosswalk row that says this source record IS this contact.
+ *
+ * BACKLOG-2608: raw SQL against the REAL schema, for the same reason
+ * `recordUnlinkVerdict` below is — the suite must depend on the shape
+ * `getLinkedSourceKeys` actually queries, and a saved contact needs a real
+ * `contacts` row for the foreign key to hold.
+ */
+function recordCrosswalkLink(contactId: string, name: string, sourceType: string, sourceRecordId: string): void {
+  mockDb!
+    .prepare("INSERT OR IGNORE INTO contacts (id, user_id, display_name, is_imported) VALUES (?, ?, ?, 1)")
+    .run(contactId, USER, name);
+  mockDb!
+    .prepare(
+      `INSERT INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, match_method)
+       VALUES (?, ?, ?, ?, ?, 'source_id')`,
+    )
+    .run(`l-${sourceType}-${sourceRecordId}`, USER, contactId, sourceType, sourceRecordId);
+}
+
 function recordUnlinkVerdict(contactId: string, sourceType: string, sourceRecordId: string): void {
   mockDb!
     .prepare(
@@ -274,10 +295,19 @@ describe("BACKLOG-2370 — an unlinked record comes back, and stays back", () =>
    *
    * He unlinked an Outlook record from a saved contact. The record carries the
    * SAME NAME and the SAME NUMBER as that contact — which is precisely why it
-   * was wrongly linked, and why neither removing the crosswalk row nor a
-   * name-compatibility check can bring it back. Only his own recorded answer
-   * distinguishes "this record is that person" from "this record shares that
-   * person's line", which is what `getRejectedSourceKeys` exists to carry.
+   * was wrongly linked.
+   *
+   * BACKLOG-2608 — THE FIXTURE NOW DESCRIBES THE STATE ITS OWN COMMENT CLAIMED.
+   * The macOS record was annotated "still legitimately linked" and NO crosswalk
+   * row existed for it; it was dropping out of the picker only because the
+   * saved contact held its number under a compatible name. With the content
+   * checks deleted that record is correctly offered, and the fix is to write
+   * the link the comment always asserted rather than to relax the assertion.
+   * The suite now tests what it says it tests.
+   *
+   * Note what carries the release now: nothing does. A released record has no
+   * crosswalk row, and the crosswalk is the only suppressor, so "not this
+   * person" is honoured by the ABSENCE of a rule rather than by an exemption.
    */
   const CONTACT_ID = "saved-dorian";
 
@@ -292,15 +322,15 @@ describe("BACKLOG-2370 — an unlinked record comes back, and stays back", () =>
       // RELEASED by the user. Same name, same number.
       shadowRow("out-paul", "Paul Example", "outlook", [], ["+1 (555) 0143"]),
     ];
+    recordCrosswalkLink(CONTACT_ID, "Paul Example", "macos", "mac-paul");
     recordUnlinkVerdict(CONTACT_ID, "outlook", "out-paul");
   });
 
   it("the main process releases it — the decision the user made is honoured", async () => {
     const externals = await externalsFromMain();
 
-    // The macOS record is suppressed as already-imported (the saved contact
-    // holds its number and a compatible name). The released Outlook record is
-    // NOT, because the verdict skips the content checks.
+    // The macOS record is suppressed because the crosswalk claims it. The
+    // released Outlook record is not claimed by anything, so it is offered.
     expect(externals.map((c) => (c as any).externalRecordId).sort()).toEqual(["out-paul"]);
   });
 
@@ -461,7 +491,12 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
       // Two people on one office line -> main keeps both.
       shadowRow("mac-cleo", "Cleo Example", "macos", [], ["+1 (555) 0100"]),
       shadowRow("mac-dov", "Dov Example", "macos", [], ["+1 (555) 0100"]),
-      // Already imported by email -> main drops it.
+      // Claimed by the crosswalk -> main drops it. BACKLOG-2608: this row was
+      // annotated "already imported by email" and was dropped by the content
+      // fallback. That fallback is deleted, so the fixture now carries the
+      // crosswalk row that is the ONLY thing entitled to drop it — and the
+      // "nothing else appeared" assertion below still has a suppressed record
+      // to be about.
       shadowRow("out-alice", "Alice Example", "outlook", ["alice@example.test"], []),
       // Released by the user -> main returns it.
       shadowRow("out-paul", "Paul Example", "outlook", [], ["+1 (555) 0143"]),
@@ -475,6 +510,7 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
       // Nobody's duplicate.
       shadowRow("mac-gus", "Gus Example", "macos", ["gus@example.test"], []),
     ];
+    recordCrosswalkLink("s-alice", "Alice Example", "outlook", "out-alice");
     recordUnlinkVerdict("s-paul", "outlook", "out-paul");
   });
 
@@ -487,10 +523,10 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
 
     // BACKLOG-2556: was 7 out — `out-bea` was folded into `mac-bea` on the
     // shared address. The fold is deleted, so it is 8, and `out-bea` is the one
-    // that came back. `out-alice` is still filtered: an already-imported
-    // contact holds that address under a compatible name, which is the
-    // `emailClaimedByImported` fallback this PR deliberately leaves alone
-    // (BACKLOG-2608 owns it).
+    // that came back. `out-alice` is still filtered — now by the crosswalk row
+    // in the fixture rather than by the deleted `emailClaimedByImported`
+    // fallback (BACKLOG-2608). The SET is unchanged; the reason one member is
+    // absent is not.
     expect(externals.map((c) => (c as any).externalRecordId).sort()).toEqual([
       "mac-bea",
       "mac-cleo",
@@ -537,7 +573,8 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
     expect(shown.has("ext-out-bea")).toBe(true);
 
     // Nothing ELSE appeared. The KNOWLEDGE half still suppresses: the Outlook
-    // Alice is filtered because a saved contact already holds that address.
+    // Alice is filtered because the crosswalk says a saved contact claims that
+    // exact record (BACKLOG-2608 — it used to be filtered on the address alone).
     expect(shown.has("ext-out-alice")).toBe(false);
   });
 
@@ -622,16 +659,33 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
     ).toEqual(["ext-out-rae", "s-phones"]);
   });
 
-  it("but a card under the PRIMARY value is still suppressed by main, as it always was", async () => {
-    // The control for the two above: change nothing except which of the saved
-    // contact's addresses the card carries, and main catches it. That is what
-    // proves the gap is main's primary-only set and not the removed pass.
+  /**
+   * BACKLOG-2608 — THE CONTROL IS NOW THE CROSSWALK, BECAUSE THE PRIMARY /
+   * SECONDARY DISTINCTION NO LONGER EXISTS.
+   *
+   * This asserted that the SAME card filed under the saved contact's PRIMARY
+   * address was caught while the secondary one was not, proving the gap lived
+   * in main's primary-only set. Both content sets are deleted, so primary and
+   * secondary are now treated identically — neither suppresses — and asserting
+   * `[]` on the primary card would assert nothing that is still true.
+   *
+   * The claim worth keeping is that main still suppresses SOMETHING, and what.
+   * So the fixture writes the crosswalk row and the assertion is unchanged in
+   * shape: an identical card, one difference, and main catches it.
+   *
+   * The two "KNOWN CONSEQUENCE" cases above are now understated rather than
+   * wrong — a card under a saved contact's PRIMARY value is shown too. Left
+   * standing because their point survives: a visible duplicate row is the trade
+   * the founder made against a hidden record nobody can act on.
+   */
+  it("but a card the crosswalk claims is still suppressed by main", async () => {
     mockImportedContacts = [
       saved("s-multi", "Paul Multi", ["paul@work.example.test", "paul@home.example.test"], []),
     ];
     mockShadowRows = [
       shadowRow("out-multi", "Paul Multi", "outlook", ["paul@work.example.test"], []),
     ];
+    recordCrosswalkLink("s-multi", "Paul Multi", "outlook", "out-multi");
 
     const externals = await externalsFromMain();
     expect(externals).toEqual([]);
@@ -655,8 +709,9 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
    *
    * So it asserts the property that replaced it: every shadow row the picker
    * did not suppress on the KNOWLEDGE half reaches the caller, by exact id set.
-   * `out-alice` is absent because a saved contact holds its address; nothing
-   * else is. If the fold returns, this names the record it swallowed.
+   * `out-alice` is absent because the crosswalk claims it (BACKLOG-2608 — it
+   * used to be absent because a saved contact held its address); nothing else
+   * is. If the fold returns, this names the record it swallowed.
    */
   it("nothing is folded away, so there is nothing to disclose [BACKLOG-2556]", async () => {
     const externals = await externalsFromMain();

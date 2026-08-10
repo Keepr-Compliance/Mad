@@ -107,6 +107,22 @@ function createSchema(database: DatabaseType): void {
       removed_reason TEXT
     );
 
+    -- Migration v57. BACKLOG-2618: this search now suppresses a message-derived
+    -- person only when a saved contact's NAME is the whole of its identity, and
+    -- that question is answered here. Declared rather than left out, so the
+    -- fixture exercises the real predicate instead of the table-missing
+    -- fallback — a fixture that cannot reach the code under test is the shape
+    -- that makes a green run mean nothing. No fixture row links anything, so
+    -- every seeded contact is name-only and the assertions below are unaffected.
+    CREATE TABLE contact_source_links (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_record_id TEXT NOT NULL,
+      match_method TEXT NOT NULL
+    );
+
     CREATE TABLE contact_emails (
       id TEXT PRIMARY KEY,
       contact_id TEXT NOT NULL,

@@ -365,11 +365,33 @@ describe("a removed contact still counts as already-imported", () => {
    * The picker subtracts "people we already have" from the address book. A
    * tombstone means we DO already have this person, so a removed contact must
    * stay VISIBLE to that filter — the exact opposite of every list assertion
-   * above. Both directions are asserted here because getting either one wrong
-   * resurrects her, just through a different door.
+   * above. Both directions matter because getting either one wrong resurrects
+   * her, just through a different door.
    *
-   * `importFilterEmails` reconstructs the filter as `contacts:get-available`
-   * builds it: the active imported set concatenated with the removed set.
+   * =========================================================================
+   * BACKLOG-2608 — THE PICKER NO LONGER BUILDS ITS FILTER THIS WAY.
+   * =========================================================================
+   * `importFilterEmails` below reconstructs the email set as
+   * `contacts:get-available` USED to build it — the active imported set
+   * concatenated with the removed set. That handler no longer reads either:
+   * its email/phone content fallbacks are deleted and `contact_source_links`
+   * is the only already-imported test, so `getRemovedContactIdentifiers` is
+   * not called from it at all.
+   *
+   * These cases are KEPT, and re-labelled rather than re-pointed, because what
+   * they assert is still true and still worth pinning: `getImportedContactsByUserId`
+   * hides a tombstoned contact and `getRemovedContactIdentifiers` returns her,
+   * which is the pair of behaviours any caller reconstructing that question
+   * depends on. They are now a unit test of those two functions, NOT of the
+   * picker.
+   *
+   * THE PICKER'S OWN VERSION OF THIS CLAIM lives in
+   * `contact-handlers.stopHidingRecords-2608.test.ts` ("a REMOVED contact's
+   * linked record is still suppressed"), where it is asserted through the
+   * handler against the mechanism that actually carries it now: a tombstoned
+   * contact keeps its crosswalk rows, because `getLinkedSourceKeys` does not
+   * filter removed contacts. Its observed red is adding
+   * `AND c.removed_at IS NULL` to that query.
    */
   const importFilterEmails = async (): Promise<string[]> => {
     const active = await getImportedContactsByUserId(USER);

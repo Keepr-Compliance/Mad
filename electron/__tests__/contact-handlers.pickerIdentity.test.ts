@@ -296,10 +296,19 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
     expect(await pickerNames()).toEqual([]);
   });
 
-  it("hides the record on the shared phone when nothing has been said about it", async () => {
-    // No link, no verdict. The phone matches and the names are compatible, so
-    // this is a genuine "already imported" — the filter must still work.
-    expect(await pickerNames()).toEqual([]);
+  /**
+   * BACKLOG-2608 — INVERTED, AND THIS IS THE HEADLINE CHANGE.
+   *
+   * This asserted `[]`: no link and no verdict, but the phone matched under a
+   * compatible name, so the record was declared already-imported. That is the
+   * guess the founder had removed. "Suppress only what we KNOW" — and what we
+   * know is the crosswalk, which says nothing about this record.
+   *
+   * OBSERVED RED, 2026-08-09: restoring `phoneClaimedByImported` and its call
+   * site gives `Expected ["Casey Lane"] / Received []`.
+   */
+  it("OFFERS the record on a shared phone when the crosswalk says nothing about it", async () => {
+    expect(await pickerNames()).toEqual(["Casey Lane"]);
   });
 
   it("OFFERS the record once the user has said it is a different person", async () => {
@@ -316,7 +325,26 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
     expect(await pickerNames()).toEqual(["Casey Lane"]);
   });
 
-  it("hides it again if the user changes their mind back", async () => {
+  /**
+   * BACKLOG-2608 — THE MIND-CHANGE IS HONOURED BY THE LINK, NOT BY THE VERDICT.
+   *
+   * This used to pass on the verdict alone, because a `same_person` verdict
+   * removed the pair from `getRejectedSourceKeys` and the content checks then
+   * hid it again. Both halves of that are gone, so the assertion now names what
+   * actually makes a record already-imported: the crosswalk row.
+   *
+   * That is not a weakening. Answering "same person" in the review queue writes
+   * the link (`confirmProposal` -> `createLink`), and a manual link writes it
+   * too — so every real route to this state writes one. What no longer happens
+   * is a record disappearing on a verdict whose link never landed, which is the
+   * half-state `contactManualLink.ts` documents and BACKLOG-2608's first
+   * hypothesis chased.
+   *
+   * BOTH ASSERTIONS ARE THE POINT, stated so a later reader does not take the
+   * second for the whole test: the verdict on its own leaves the record
+   * offered, and the link removes it.
+   */
+  it("hides it again when the mind-change writes the link, and not on the verdict alone", async () => {
     recordVerdict({
       userId: USER,
       contactId: PAUL,
@@ -332,6 +360,19 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
       sourceRecordId: "out-paul",
       identityVerdict: "same_person",
       decidedBy: "review_queue",
+    });
+
+    // The verdict alone changes nothing about what is offered.
+    expect(await pickerNames()).toEqual(["Casey Lane"]);
+
+    // The link is what the picker reads.
+    seedContactRow(PAUL, "Casey Lane");
+    createLink({
+      userId: USER,
+      contactId: PAUL,
+      sourceType: "outlook",
+      sourceRecordId: "out-paul",
+      matchMethod: "manual",
     });
 
     expect(await pickerNames()).toEqual([]);
@@ -361,10 +402,41 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
     expect(await pickerNames()).toEqual([]);
   });
 
-  it("keys the release on the PAIR, so another source's identical id is unaffected", async () => {
+  /**
+   * BACKLOG-2608 — RE-POINTED AT THE RULE THAT NOW ENFORCES PAIR KEYING.
+   *
+   * The property under test is unchanged and still matters: two sources that
+   * happen to issue the same id string must not speak for each other. What
+   * changed is which mechanism can demonstrate it. The RELEASE could, only
+   * because a release was an exemption from the content checks — with those
+   * gone, neither record is suppressed and the picker cannot tell the two
+   * apart, so asserting through the release would assert nothing.
+   *
+   * The crosswalk keys on the PAIR too, and it is now the only suppressor, so
+   * the same property is asserted where it is now load-bearing: link
+   * `outlook/out-paul`, leave `google_contacts/out-paul` alone, and only the
+   * Google record is offered.
+   *
+   * The verdict's own pair keying is still asserted directly on
+   * `getRejectedSourceKeys` — it is a property of the review service and does
+   * not stop being true because the picker stopped reading it.
+   *
+   * OBSERVED RED, 2026-08-09: keying `getLinkedSourceKeys` on the record id
+   * alone instead of the pair gives `Expected ["google_contacts"] / Received
+   * []`.
+   */
+  it("keys suppression on the PAIR, so another source's identical id is unaffected", async () => {
     mockShadowRows.push(
       shadowRow("out-paul", "Casey Lane", "google_contacts", [], [PAUL_PHONE_RAW]),
     );
+    seedContactRow(PAUL, "Casey Lane");
+    createLink({
+      userId: USER,
+      contactId: PAUL,
+      sourceType: "outlook",
+      sourceRecordId: "out-paul",
+      matchMethod: "source_id",
+    });
     recordVerdict({
       userId: USER,
       contactId: PAUL,
@@ -374,13 +446,11 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
       decidedBy: "provenance_unlink",
     });
 
-    // Only the OUTLOOK record was released. The Google record with the same id
-    // string is still suppressed by the shared phone.
     const handler = registeredHandlers.get("contacts:get-available");
     const result = await handler(mockEvent, USER);
     expect(
       (result.contacts as Array<{ source: string }>).map((c) => c.source),
-    ).toEqual(["outlook"]);
+    ).toEqual(["google_contacts"]);
     expect([...getRejectedSourceKeys(USER)]).toEqual([sourceKey("outlook", "out-paul")]);
   });
 });
@@ -434,9 +504,30 @@ describe("BACKLOG-2416 — two people on one office line", () => {
     expect(await pickerNames()).toEqual(["Tom Whitfield"]);
   });
 
-  it("still hides the SAME person recorded again on that address", async () => {
-    // The other half of the rule, and the one a careless fix breaks: a shared
-    // address PLUS a compatible name is still the same person.
+  /**
+   * =========================================================================
+   * BACKLOG-2608 — THE THREE CASES BELOW ALL INVERTED, AND ON PURPOSE.
+   * =========================================================================
+   * Each asserted `[]` on the strength of "a saved contact holds this
+   * identifier and carries a compatible name, so this record is that person".
+   * Each was a guess: undisclosed, and with no way for the user to overturn it.
+   *
+   * The founder's case that settled it: you answer "not this person" about a
+   * record, so there is no longer a pending question — and it disappears
+   * anyway, because the hiding rule never looked at questions, it looked at
+   * whether a saved contact held that email, which it still does.
+   *
+   *   "if I clicked not this person this contact shouldn't disappear."
+   *
+   * So a record is offered unless the crosswalk claims it. The cost is stated
+   * plainly rather than hidden: a genuine duplicate of an already-saved person
+   * IS now offered again when no crosswalk row exists for it — a row the user
+   * declines, rather than a person who cannot be imported at all.
+   *
+   * The crosswalk case is asserted immediately after these three, so "the fix
+   * hides nothing" and "the fix hides the right thing" are both measured.
+   */
+  it("OFFERS the SAME person recorded again on that address when nothing claims the record", async () => {
     mockImportedContacts = [
       importedContact("contact-sarah", "Sarah Whitfield", "+14155550140", "home@example.com"),
     ];
@@ -444,23 +535,46 @@ describe("BACKLOG-2416 — two people on one office line", () => {
       shadowRow("mac-sarah", "Sarah Whitfield", "macos", ["home@example.com"], []),
     ];
 
-    expect(await pickerNames()).toEqual([]);
+    expect(await pickerNames()).toEqual(["Sarah Whitfield"]);
   });
 
-  it("still hides the SAME person recorded again on that line", async () => {
-    // The other half of the rule, and the one a careless fix breaks: relaxing
-    // the filter must not re-offer someone already imported.
+  it("OFFERS the SAME person recorded again on that line when nothing claims the record", async () => {
     mockShadowRows = [
       shadowRow("mac-chen", "Margaret Chen", "macos", ["chen@brokerage.com"], ["(415) 555-0102"]),
     ];
 
-    expect(await pickerNames()).toEqual([]);
+    expect(await pickerNames()).toEqual(["Margaret Chen"]);
   });
 
-  it("still hides an abbreviated spelling of the same person", async () => {
-    // "Margaret C." is prefix-compatible with "Margaret Chen".
+  it("OFFERS an abbreviated spelling of the same person — a name is not a claim", async () => {
+    // "Margaret C." is prefix-compatible with "Margaret Chen", which is exactly
+    // what `namesAreCompatible` was for and exactly why it cannot decide this.
     mockShadowRows = [
       shadowRow("mac-chen-abbrev", "Margaret C.", "macos", [], ["(415) 555-0102"]),
+    ];
+
+    expect(await pickerNames()).toEqual(["Margaret C."]);
+  });
+
+  /**
+   * THE OTHER DIRECTION, and the one a careless deletion breaks. Same fixture
+   * as the "same person on that line" case above, plus the crosswalk row that
+   * says the user actually imported THAT card.
+   *
+   * OBSERVED RED, 2026-08-09: dropping the `linkedSourceKeys` check gives
+   * `Expected [] / Received ["Margaret Chen"]`.
+   */
+  it("still hides the SAME person once the crosswalk claims that record", async () => {
+    seedContactRow("contact-chen", "Margaret Chen");
+    createLink({
+      userId: USER,
+      contactId: "contact-chen",
+      sourceType: "macos",
+      sourceRecordId: "mac-chen",
+      matchMethod: "source_id",
+    });
+    mockShadowRows = [
+      shadowRow("mac-chen", "Margaret Chen", "macos", ["chen@brokerage.com"], ["(415) 555-0102"]),
     ];
 
     expect(await pickerNames()).toEqual([]);
@@ -479,12 +593,18 @@ describe("BACKLOG-2416 — two people on one office line", () => {
     expect(await pickerNames()).toEqual(["Margaret Okafor", "Margaret Torres"]);
   });
 
-  it("still hides a record whose EMAIL matches an imported contact", async () => {
-    // Email is a strong identity signal and is deliberately NOT name-gated.
+  /**
+   * BACKLOG-2608 — INVERTED. The comment this replaced read "email is a strong
+   * identity signal and is deliberately NOT name-gated", which was already
+   * false when it was written: BACKLOG-2531 name-gated it, for the household
+   * address case. Strong or not, it is a resemblance and not a record of
+   * anything the user did.
+   */
+  it("OFFERS a record whose EMAIL matches an imported contact", async () => {
     mockShadowRows = [
       shadowRow("mac-email", "M. Chen", "macos", ["chen@brokerage.com"], []),
     ];
 
-    expect(await pickerNames()).toEqual([]);
+    expect(await pickerNames()).toEqual(["M. Chen"]);
   });
 });

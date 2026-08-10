@@ -246,6 +246,14 @@ const FICTIONAL_NAMES = new Set([
   // down to — a fixture that did not look like a name would not reach the
   // producer at all, and the control it feeds could not fail.
   "sam rivers",
+  // BACKLOG-2365's documented case, and this repo's established name for it —
+  // `contactTombstone.test.ts` has used it since that item shipped. Invented,
+  // and self-evidently so: the surname is literally "Example". Listed rather
+  // than renamed because BACKLOG-2608's picker suite asserts the SAME case
+  // through the handler, and the two suites naming the same person is how a
+  // reader connects them. It fires there and not in `contactTombstone` only
+  // because that fixture puts the name and the address on separate lines.
+  "dana example",
 ]);
 
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));
