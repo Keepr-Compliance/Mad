@@ -70,11 +70,35 @@ export interface ReviewQueueItem {
   proposalId: string;
   contactId: string;
   contactName: string;
+  /**
+   * BACKLOG-2502 R2 — the contact card's subline on the tucked review card.
+   *
+   * The founder's design puts a role under the name ("Client (Buyer/Seller)"),
+   * borrowed from the transaction Key Contacts row. This queue is NOT scoped to
+   * a transaction, so there is no role to state; the company is the identifying
+   * subline a contact carries globally, and an absent one renders nothing rather
+   * than a placeholder.
+   */
+  contactCompany: string | null;
   sourceType: ExternalContactSource;
   sourceRecordId: string;
   sourceLabel: string;
   sourceName: string | null;
+  /**
+   * BACKLOG-2502 R2 — the candidate record's OWN identifiers, so the review card
+   * can show the value under the source label instead of only naming the field.
+   *
+   * Read off the `external_contacts` row the queue already inner-joins, so this
+   * costs no extra query. NOT read from `evidence_json`: that is frozen at
+   * proposal time on purpose, and a value the user is asked to judge must be the
+   * record as it stands now.
+   */
+  recordEmails: string[];
+  recordPhones: string[];
   reason: LinkProposalReason;
+  /** Which identifier the rule compared — `email`, `phone`, `name`. Null when
+   *  the proposal records no single field (BACKLOG-2502). */
+  matchedOn: string | null;
   /** Axis 1, as a phrase. Never a number. */
   identity: IdentityAssessment;
   identityPhrase: string;
@@ -120,6 +144,27 @@ const PENDING_JOIN = `
    WHERE p.user_id = ? AND p.status = 'pending'
 `;
 
+/**
+ * `emails_json` / `phones_json` off an `external_contacts` row.
+ *
+ * Same shape as `contactCompare.ts`'s private reader, deliberately duplicated
+ * rather than exported across: it is four lines of JSON defence, and the two
+ * files already state their own rules about the crosswalk on purpose. A bad blob
+ * yields no values rather than throwing — the queue must still render the rest
+ * of the question.
+ */
+function parseValueArray(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((v): v is string => typeof v === "string" && v.trim() !== "")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export function countReviewQueue(userId: string): number {
   const row = dbGet<{ n: number }>(`SELECT COUNT(*) AS n ${PENDING_JOIN}`, [userId]);
   return row?.n ?? 0;
@@ -127,12 +172,20 @@ export function countReviewQueue(userId: string): number {
 
 export function getReviewQueue(userId: string): ReviewQueueCluster[] {
   const rows = dbAll<
-    LinkProposalRow & { source_name: string | null; contact_name: string | null }
+    LinkProposalRow & {
+      source_name: string | null;
+      source_emails_json: string | null;
+      source_phones_json: string | null;
+      contact_name: string | null;
+      contact_company: string | null;
+    }
   >(
     `SELECT p.id, p.user_id, p.contact_id, p.source_type, p.source_record_id, p.status,
             p.reason, p.matched_on, p.identity_assessment, p.relationship_assessment,
             p.cluster_key, p.evidence_json, p.created_at, p.resolved_at,
-            ec.name AS source_name, c.display_name AS contact_name
+            ec.name AS source_name, ec.emails_json AS source_emails_json,
+            ec.phones_json AS source_phones_json,
+            c.display_name AS contact_name, c.company AS contact_company
        ${PENDING_JOIN}
       ORDER BY p.cluster_key, p.created_at, p.id`,
     [userId],
@@ -146,11 +199,22 @@ export function getReviewQueue(userId: string): ReviewQueueCluster[] {
       proposalId: row.id,
       contactId: row.contact_id,
       contactName: row.contact_name?.trim() || evidence?.contactLabel || "this contact",
+      contactCompany: row.contact_company?.trim() || null,
       sourceType: row.source_type,
       sourceRecordId: row.source_record_id,
       sourceLabel: sourceLabel(row.source_type),
       sourceName: row.source_name?.trim() || evidence?.sourceName || null,
+      recordEmails: parseValueArray(row.source_emails_json),
+      recordPhones: parseValueArray(row.source_phones_json),
       reason: row.reason,
+      // BACKLOG-2502: WHAT MATCHED, as a value rather than as prose.
+      //
+      // Selected from the row since BACKLOG-2410 and never copied out — it
+      // reached the UI only baked into `evidence.details`, one of the sentences
+      // the readable list moves behind `Why`. The row is specified as "the two
+      // names, the source, and the field that matched, in a few words", so
+      // taking the prose away would take the matched field with it.
+      matchedOn: row.matched_on,
       identity: row.identity_assessment,
       identityPhrase: identityPhrase(row.identity_assessment),
       relationship: row.relationship_assessment,

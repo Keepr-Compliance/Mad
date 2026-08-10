@@ -241,6 +241,41 @@ describe("a withheld link appears in the queue with its evidence", () => {
     expect(JSON.stringify(item)).not.toMatch(/confidence/i);
   });
 
+  /**
+   * BACKLOG-2502 R2 — WHAT THE TUCKED REVIEW CARD DRAWS, FROM THE REAL ROW.
+   *
+   * The card shows the candidate record's own email or phone under its source
+   * label, and the contact's company under its name. Both come off rows the
+   * queue ALREADY inner-joins, so they cost no extra query — and both are
+   * asserted here against the REAL linker's output, so the renderer fixture that
+   * stands in for this shape is transcribed rather than invented.
+   *
+   * CONTROL: drop `ec.phones_json` from the SELECT and `recordPhones` comes back
+   * `[]`, leaving the card a source label with no value under it — which is the
+   * "two candidates you cannot tell apart" failure the value line exists for.
+   */
+  it("carries the candidate's own values and the contact's company", () => {
+    seedIdentifierReassigned();
+    mockDb!.prepare("UPDATE contacts SET company = ? WHERE id = 'c-daniel'").run("Blue Spaces LLC");
+    linkExternalContactsForUser(USER);
+
+    const item = getReviewQueue(USER)[0].items[0];
+    // Identity, not shape: the number on NINA'S record — the one the user is
+    // being asked to judge — and not a masked rendering of it. The evidence
+    // prose says "…0134"; the card must show the value itself.
+    expect(item.recordPhones).toEqual(["+14155550134"]);
+    expect(item.recordEmails).toEqual([]);
+    expect(item.contactCompany).toBe("Blue Spaces LLC");
+    // Still no score, now that three more fields ride along.
+    expect(JSON.stringify(item)).not.toMatch(/confidence/i);
+  });
+
+  it("leaves the company null rather than inventing a subline", () => {
+    seedIdentifierReassigned();
+    linkExternalContactsForUser(USER);
+    expect(getReviewQueue(USER)[0].items[0].contactCompany).toBeNull();
+  });
+
   it("reports the two axes separately, in words", () => {
     seedIdentifierReassigned();
     linkExternalContactsForUser(USER);

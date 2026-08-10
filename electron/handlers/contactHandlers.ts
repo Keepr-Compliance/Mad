@@ -3957,6 +3957,11 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       _event: IpcMainInvokeEvent,
       userId: string,
       contactId: string,
+      // BACKLOG-2502 — the review queue's candidate, rendered as one more
+      // column. Optional: every other caller omits it and gets PR C/D's view.
+      proposedSource?: { sourceType: string; sourceRecordId: string },
+      // BACKLOG-2502 R8 — the contact as one column, on the review route only.
+      options?: { collapseContactSources?: boolean },
     ): Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }> => {
       try {
         const validatedUserId = await getValidUserId(userId, "Contacts");
@@ -3969,7 +3974,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         if (!validatedUserId) return { success: true, view: null };
         return {
           success: true,
-          view: await getContactCompareColumns(validatedUserId, validatedContactId),
+          view: await getContactCompareColumns(
+            validatedUserId,
+            validatedContactId,
+            proposedSource,
+            options,
+          ),
         };
       } catch (error) {
         logService.error("Get contact compare columns failed", "Contacts", {
