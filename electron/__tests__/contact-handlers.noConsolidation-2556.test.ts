@@ -426,12 +426,18 @@ describe("the knowledge half survives untouched (BACKLOG-2556)", () => {
    * And the claim is per-RECORD, not per-person: claiming the Outlook card does
    * not suppress an unclaimed macOS card that happens to share details.
    *
-   * STILL `it.failing` AFTER BACKLOG-2556, AND POINTED AT BACKLOG-2608, for the
-   * same measured reason as the case above: `c-casey` is saved and holds the
-   * number, so `phoneClaimedByImported` takes `mac-casey` before the fold could
-   * have. Verified by execution rather than inferred — with the fold deleted
-   * this case is unchanged, and it is the one that would have moved if the
-   * two mechanisms were really one.
+   * STILL `it.failing` AFTER BACKLOG-2556, AND POINTED AT BACKLOG-2608: `c-casey`
+   * is a SAVED contact holding the number, so `phoneClaimedByImported` takes
+   * `mac-casey` before the fold could have.
+   *
+   * MEASURED PRECISELY, because the first measurement was not precise enough
+   * and shipped a broken assertion (SR, §2). Returning `false` from
+   * `phoneClaimedByImported` — the BACKLOG-2608 simulation — decides
+   * **assertion 1 only**: the macOS card becomes offered and
+   * `pickerNames()` passes. Assertion 2 is a separate claim about WHICH
+   * address book the surviving row came from, and the fallback has nothing to
+   * do with it. Reading only the first assertion is what let a wrong field name
+   * through; both are stated here so the next reader does not repeat it.
    */
   it.failing("claiming one record does not suppress a different unclaimed one", async () => {
     seedContactRow("c-casey", "Casey Lane");
@@ -453,7 +459,23 @@ describe("the knowledge half survives untouched (BACKLOG-2556)", () => {
 
     // The macOS card is still on offer; only the claimed Outlook one is gone.
     expect(await pickerNames()).toEqual(["Casey Lane"]);
-    const sources = (await pickerRows()).map((r) => r.source).sort();
+    // THE ADDRESS BOOK IS `externalSourceType`, NOT `source`.
+    //
+    // This read `r.source` and expected `["macos"]`. `source` is the PROVIDER
+    // CATEGORY, and the push site runs the shadow row's source through
+    // `toPersistedContactSource`, which maps the Mac address book to
+    // `contacts_app` (BACKLOG-1900: only outlook / google_contacts / iphone /
+    // android_sync keep a distinct value there). So the assertion described a
+    // shape the producer CANNOT emit — the same defect this PR corrected in six
+    // renderer fixtures, surviving in the gate suite the PR re-pointed.
+    //
+    // It matters because of WHEN it would have fired. Measured 2026-08-09 by
+    // returning `false` from `phoneClaimedByImported`, i.e. simulating
+    // BACKLOG-2608: assertion 1 above PASSES — the macOS card really is offered
+    // once the fallback is gone — and the case still failed, on the field name.
+    // BACKLOG-2608's author would have flipped this to `it`, seen red, and read
+    // a finished fix as unfinished.
+    const sources = (await pickerRows()).map((r) => r.externalSourceType).sort();
     expect(sources).toEqual(["macos"]);
   });
 });

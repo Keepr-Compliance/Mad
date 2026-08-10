@@ -62,13 +62,22 @@
  * ===========================================================================
  * OBSERVED REDS (2026-08-09) — each control made to fail on purpose
  * ===========================================================================
- * Reinstating `findDuplicateOwner` + `absorbSourceIdentity` at the shadow-loop
- * `continue`:
- *   1. Elena       -> Received ["Elena Marsh"], expected both surnames
- *   2. Tobias      -> Received `undefined` for the company value
- *   3. Luis        -> Received TWO crosswalk rows from ONE import, the second
- *                     being the record the user never picked
- *   4. Ord/Raman   -> STAYS GREEN. That is what makes it discriminating.
+ * Restoring `electron/handlers/contactHandlers.ts` and `electron/types/handlerTypes.ts`
+ * from `origin/int/email-retention` and re-running this suite UNCHANGED:
+ *
+ *   1. Elena     -> `Expected ["Elena Marsh","Elena Marsh-Okonkwo"]`
+ *                   `Received ["Elena Marsh"]`
+ *   2. Tobias    -> `Expected ["Quill Inspections"]` / `Received []`
+ *   3. Luis      -> `Expected ["macos/mac-luis-a/source_id"]`
+ *                   `Received ["macos/mac-luis-a/source_id",`
+ *                             ` "macos/mac-luis-b/source_id"]`
+ *                   TWO crosswalk rows from ONE click, the second never picked.
+ *   4. Ord/Raman -> STAYS GREEN. That is what makes it discriminating.
+ *
+ * Control 3's red is only citeable because its row-count precondition was
+ * split into its own test — see the note there. The first version of this
+ * suite failed at the precondition instead, and the report quoted a crosswalk
+ * red the suite never printed.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -474,12 +483,28 @@ describe("CONTROL 3 — the fold laundered a guess into a fact (Luis Ferreira)",
     ];
   });
 
-  it("importing ONE row writes EXACTLY ONE crosswalk row — the record picked", async () => {
-    const rows = await getAvailable();
-    expect(rows).toHaveLength(2);
+  it("offers both records rather than one collapsed row", async () => {
+    // The row-presence precondition, DELIBERATELY ITS OWN TEST.
+    //
+    // It used to open the laundering case below, and that made the laundering
+    // case unciteable: under a reinstated fold it failed HERE, at
+    // `toHaveLength(2)`, and never reached the crosswalk. The implementation
+    // report then quoted a crosswalk red this suite does not produce (SR, §1).
+    // Split so the case below fails on the assertion it is named for.
+    expect(
+      (await getAvailable()).map((r) => r.externalRecordId).sort(),
+    ).toEqual(["mac-luis-a", "mac-luis-b"]);
+  });
 
-    const picked = rows.filter((r) => r.externalRecordId === "mac-luis-a");
-    expect(picked).toHaveLength(1);
+  it("importing ONE row writes EXACTLY ONE crosswalk row — the record picked", async () => {
+    // No row-count precondition: under a reinstated fold `getAvailable`
+    // returns ONE collapsed row and `mac-luis-a` is its representative, so
+    // `picked` is still length 1 and the import still runs. The FIRST
+    // assertion this test can fail is the crosswalk ID set, which is the
+    // claim it exists to make.
+    const picked = (await getAvailable()).filter(
+      (r) => r.externalRecordId === "mac-luis-a",
+    );
 
     await importRows(picked);
 
