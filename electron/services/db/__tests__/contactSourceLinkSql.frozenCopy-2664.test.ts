@@ -506,17 +506,25 @@ describe("BACKLOG-2664 — the copy is a consequence of the link, never a siblin
      * unfrozen contact. Out of scope here — flagged on the item.
      */
     it("still resolves an unfrozen contact by content, even from a refused record", () => {
-      const marcus = addContact("contact-marcus-ord", "Marcus Ord", { phones: ["+15035550140"] });
-      addExternal("rec-office", "Gwen Prentice", {
+      // Two people sharing an office line, so the names disagree and the linker
+      // refuses. BOTH NAMES ARE FROM `FICTIONAL_NAMES` in
+      // `scripts/ci/check-fixture-pii.mjs`: this repository is public, and a
+      // name beside a number is the identity-row shape that guard exists to
+      // catch. It caught this line on its first run, against a name that was
+      // not on that list — see the PR body.
+      const robin = addContact("contact-robin-marsh", "Robin Marsh", {
+        phones: ["+15035550140"],
+      });
+      addExternal("rec-office", "Pat Riverton", {
         source: "macos",
         phones: ["+1 (503) 555-0140", "+1 (503) 555-0141"],
       });
 
-      runSweep([marcus]);
+      runSweep([robin]);
 
-      expect(questionsFor(marcus)).toEqual(["macos rec-office (name_mismatch)"]);
-      expect(copyPlanFor(marcus)).toEqual(["phone:rec-office"]);
-      expect(phonesOf(marcus)).toEqual(["+15035550140", "+15035550141"]);
+      expect(questionsFor(robin)).toEqual(["macos rec-office (name_mismatch)"]);
+      expect(copyPlanFor(robin)).toEqual(["phone:rec-office"]);
+      expect(phonesOf(robin)).toEqual(["+15035550140", "+15035550141"]);
     });
   });
 
