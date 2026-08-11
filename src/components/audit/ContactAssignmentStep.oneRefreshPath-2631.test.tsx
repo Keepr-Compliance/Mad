@@ -639,19 +639,29 @@ describe("BACKLOG-2631 — one refresh path, both transaction surfaces", () => {
    */
   it("A: importing an address-book record refreshes both halves too", async () => {
     installBackend();
-    // What `contacts:import`/`create` returns: a NEW DB contact with its own id,
-    // never the source record's. The id swap is why `importedTwins` exists
+    // What `contacts:import` returns: a NEW DB contact with its own id, never
+    // the source record's. The id swap is why `importedTwins` exists
     // (BACKLOG-2400) and why the twin cannot be hidden by selection id alone.
-    jest.mocked(window.api.contacts.create).mockResolvedValue({
+    //
+    // BACKLOG-2638: this mocked `contacts:create`, because that is what the
+    // wizard called. It calls `contacts:import` now — the same door as Clients
+    // & Contacts — so a contact created from an address-book card CLAIMS the
+    // card. That claim is what makes the sentence three paragraphs above ("the
+    // import writes a crosswalk row for the record it saved, so the
+    // address-book half stops offering it") true of THIS surface rather than
+    // only of Clients & Contacts.
+    jest.mocked(window.api.contacts.import).mockResolvedValue({
       success: true,
-      contact: {
-        ...(savedBianca as unknown as Record<string, unknown>),
-        id: "3b8e5f21-6d94-4c07-a1f8-2e7b0d6a9c34",
-        name: "Petra Lindqvist",
-        display_name: "Petra Lindqvist",
-        email: "p.lindqvist@example.net",
-        review_state: undefined,
-      },
+      contacts: [
+        {
+          ...(savedBianca as unknown as Record<string, unknown>),
+          id: "3b8e5f21-6d94-4c07-a1f8-2e7b0d6a9c34",
+          name: "Petra Lindqvist",
+          display_name: "Petra Lindqvist",
+          email: "p.lindqvist@example.net",
+          review_state: undefined,
+        },
+      ],
     } as never);
 
     await openTheNewTransactionPicker();
@@ -662,7 +672,7 @@ describe("BACKLOG-2631 — one refresh path, both transaction surfaces", () => {
     );
 
     await waitFor(() =>
-      expect(window.api.contacts.create).toHaveBeenCalledTimes(1),
+      expect(window.api.contacts.import).toHaveBeenCalledTimes(1),
     );
     // The half the import changed, asked again.
     await waitFor(() => expect(getAvailableCallCount()).toBe(2));

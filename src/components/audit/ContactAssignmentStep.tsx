@@ -30,7 +30,12 @@ import type { RoleOption } from "../shared/ContactRoleRow";
 import type { ContactAssignments } from "../../hooks/useAuditTransaction";
 import type { Contact } from "../../../electron/types/models";
 import type { ExtendedContact } from "../../types/components";
-import { contactService, settingsService } from "../../services";
+// BACKLOG-2638: `contactService` is gone from this file with the `create` call
+// it existed for. The import now goes through `window.api.contacts.import`
+// directly, as Clients & Contacts has since BACKLOG-2510 — `contactService.import`
+// flattens the response to `{ imported: number }` and discards the contact rows,
+// which are exactly what this caller needs back.
+import { settingsService } from "../../services";
 import logger from '../../utils/logger';
 import { labelForContact } from "../../utils/contactDisplayLabel";
 
@@ -529,7 +534,71 @@ function ContactAssignmentStep({
     [contactAssignments, onAssignContact, onRemoveContact]
   );
 
-  // Handle adding a contact (import if external, or just select if already imported)
+  /**
+   * "+ Add" on the wizard's Available list: import the record if it is an
+   * address-book row, or just select it if it is already a saved contact.
+   *
+   * =========================================================================
+   * BACKLOG-2638 — THE CONTACT MUST CLAIM THE RECORD IT WAS MADE FROM. IT DID
+   * NOT, AND THE APP THEN ASKED WHETHER SHE WAS THE SAME PERSON AS HER CARD.
+   * =========================================================================
+   * The precise defect is NOT that this button "created instead of imported".
+   * It created a contact and the person did appear in Clients & Contacts
+   * afterwards; from the user's side it imported. What it never did was write
+   * a `(source_type, source_record_id)` crosswalk row for the address-book
+   * record the user picked.
+   *
+   * Observed on the founder's clean database, 2026-08-11. Dana Whitlock, added
+   * here, held ONE crosswalk row: the synthetic `origin:<contactId>`. Priya
+   * Raman, imported from Clients & Contacts, held `origin` AND `source_id`,
+   * written in the same second.
+   *
+   * Three consequences, in the order he met them:
+   *
+   *   1. `contacts:get-available` suppresses a record only when some contact
+   *      claims its `(source_type, external_record_id)` pair
+   *      (`contactHandlers.ts:1636-1641`). `origin:<contactId>` matches no real
+   *      record, so the card he had just added from was still on the list —
+   *      four rows for "Dana": one contact and three records, one of which he
+   *      had already used and could not tell apart from the two he had not.
+   *   2. `importedTwins` below hid it for the life of the component. Reopen the
+   *      wizard, or open a different transaction, and that state is gone. A
+   *      second press then made a SECOND Dana, and the two competed for the
+   *      same records.
+   *   3. THE ONE THAT NAMES THE BUG. The linker matched the unclaimed record to
+   *      the contact on content and filed a `pending` duplicate proposal — so
+   *      the app asked him whether Dana Whitlock is the same person as the card
+   *      Dana Whitlock was made out of. A question with no meaningful answer.
+   *
+   * WHY THE REBUILD WAS THE CAUSE. This called `contactService.create` with a
+   * payload assembled from seven named fields: name, email, phone, company,
+   * source, allEmails, allPhones. `toSourceIdentities` reads
+   * `externalRecordId`, `externalSourceType` and `externalUuid`
+   * (`contactHandlers.ts:342-360`) — none of which were named, and all three of
+   * which `contacts:get-available` puts on every row it emits. A payload that
+   * does not carry the record's identity cannot produce a link to it, whatever
+   * the handler on the other end does.
+   *
+   * THE FIX IS THE DOOR, NOT A NEW RULE. `contacts:import` already answers
+   * this: `toSourceIdentities` reads the identity, `linkImportedContact` writes
+   * the `source_id` row INSIDE `createContactsBatch`'s transaction
+   * (BACKLOG-2496), the BACKLOG-2525 guard returns the incumbent when the
+   * record is already claimed — by the RECORD, never by the name — and
+   * `runContactLinkingNow` runs the duplicate pass while the user waits.
+   * BACKLOG-2510 routed Clients & Contacts through the same door for the same
+   * reason; read the comment block on `Contacts.tsx:639-706`, which states the
+   * rule and names the fields a rebuild silently drops. This is that call, not
+   * a copy of that rule.
+   *
+   * HANDING THE ROW OVER WHOLE IS THE LOAD-BEARING DETAIL. Any rebuild here
+   * reintroduces the same defect for whichever field the next person forgets.
+   *
+   * DO NOT ADD A NAME COMPARISON. BACKLOG-2617 deleted one from
+   * `contacts:create` because it attached the WRONG same-named person to a
+   * deal on this very screen. Two different clients called "Chris Nguyen" are
+   * two contacts because they are two records; the same record pressed twice is
+   * one contact because it is one record.
+   */
   const handleImportContact = useCallback(
     async (contact: ExtendedContact): Promise<ExtendedContact> => {
       // Check if contact is already in our DB by matching against the contacts list
@@ -537,31 +606,58 @@ function ContactAssignmentStep({
       const isExternalContact = !isInDatabase;
 
       if (isExternalContact) {
-        // External contact: import first, then add to selection
-        const result = await contactService.create(userId, {
-          name: contact.display_name || contact.name || "",
-          email: contact.email,
-          phone: contact.phone,
-          company: contact.company,
-          source: contact.source || "contacts_app",
-          allEmails: contact.allEmails || [],
-          allPhones: contact.allPhones || [],
-        });
+        /**
+         * `is_message_derived` is a RENDERER BADGE, not part of the record.
+         * `useContactDirectory` stamps it on every address-book row (:255-259)
+         * purely so `ContactRow` can draw an "External" pill. Dropped here, at
+         * the boundary, rather than by rebuilding the object — the same
+         * destructure Clients & Contacts uses (`Contacts.tsx:721`), so the two
+         * screens hand `contacts:import` the same shape.
+         */
+        const { is_message_derived: _listBadge, ...record } = contact;
+        const result = await window.api.contacts.import(userId, [record]);
+        const importedContact = result.contacts?.[0];
 
-        if (result.success && result.data) {
-          const newContact = result.data as ExtendedContact;
+        if (result.success && importedContact) {
+          const newContact = importedContact as ExtendedContact;
           // BACKLOG-2400: record the external-original -> imported-DB link so the
           // external twin (`contact.id`) is hidden from Available while its
           // imported twin (`newContact.id`) is selected — independent of whether
           // dedup can bridge them. Also supplies the Added chip's row DATA before
           // the silent refresh folds newContact into `contacts`. selectedContactIds
           // (single source of truth) gets the new DB id.
+          //
+          // BACKLOG-2638 KEPT THIS DELIBERATELY. The item body suggested it
+          // "can probably go" once a real crosswalk row exists, and for the
+          // suppression it is now redundant — `contacts:get-available` stops
+          // offering the record the moment the link lands. It is NOT redundant
+          // for the chip: the selection add below happens BEFORE
+          // `onRefreshBothLists()` returns, and `addedContacts` resolves the
+          // chip's row data through `augmentedContacts`, which reads exactly
+          // this. Deleting it would leave the Added column blank for the width
+          // of two IPC round trips.
           setImportedTwins((prev) =>
             prev.some((t) => t.imported.id === newContact.id)
               ? prev
               : [...prev, { externalId: contact.id, imported: newContact }]
           );
-          onSelectedContactIdsChange([...selectedContactIds, newContact.id]);
+          /**
+           * BACKLOG-2638 — GUARDED, BECAUSE A SECOND PRESS NOW RETURNS THE
+           * CONTACT THAT ALREADY EXISTS.
+           *
+           * This was an unconditional append, which was safe only while every
+           * press minted a new id. `contacts:import` returns the INCUMBENT when
+           * the record is already claimed (BACKLOG-2525), and that id may
+           * already be selected — appending it again would put the same contact
+           * in `selectedContactIds` twice. The `addedContacts` projection
+           * de-duplicates for display, so the chip column would look right
+           * while the array underneath carried a phantom, which is the kind of
+           * disagreement this two-pane was rebuilt to remove. Mirrors the
+           * already-imported branch below.
+           */
+          if (!selectedContactIds.includes(newContact.id)) {
+            onSelectedContactIdsChange([...selectedContactIds, newContact.id]);
+          }
           /*
             BACKLOG-2631 — BOTH halves, because an import changes both.
 
@@ -574,6 +670,11 @@ function ContactAssignmentStep({
 
             Clients & Contacts' import path has refreshed both halves since
             BACKLOG-2526; this is the same call.
+
+            BACKLOG-2638: only true from this commit onwards. Until the call
+            above became `contacts:import`, no crosswalk row was written and the
+            address-book half had nothing to stop offering — the refresh
+            re-fetched the record and put it straight back on the list.
           */
           await onRefreshBothLists();
           return newContact;
