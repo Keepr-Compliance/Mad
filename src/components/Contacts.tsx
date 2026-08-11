@@ -683,6 +683,10 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
    * people. Two different clients called "Chris Nguyen" are two contacts; the
    * old branch silently discarded the second import and returned the first.
    *
+   * BACKLOG-2617 REMOVED THAT BRANCH FROM `contacts:create` TOO, so this is no
+   * longer a place the two doors disagree. Create creates; import folds on the
+   * SOURCE RECORD (below), never on the name.
+   *
    * BACKLOG-2525 CORRECTS THE SENTENCE ABOVE WITHOUT REVERSING IT. Dropping the
    * name guard was right; dropping EVERY guard was not, and the founder made
    * three Roseys with it. `contacts:import` now returns the existing contact

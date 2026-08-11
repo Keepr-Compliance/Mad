@@ -34,9 +34,17 @@
  *    contacts. A removal takes someone off the contact list; it does not redact
  *    who was on a message that has already been captured. Blanking those names
  *    back to raw phone numbers would destroy audit fidelity to achieve nothing.
- *  - **Dedup / matching lookups** (`findContactByName`,
- *    `findContactByNormalizedPhone`, `contactSourceLinker`) are untouched here
- *    by instruction — the one-matching-rule work is BACKLOG-2369/2370.
+ *  - **Dedup / matching lookups** (`findContactByNormalizedPhone`,
+ *    `contactSourceLinker`) are untouched here by instruction — the
+ *    one-matching-rule work is BACKLOG-2369/2370, and the tombstone-side defect
+ *    in matching is BACKLOG-2636.
+ *
+ *    `findContactByName` was named in this list until BACKLOG-2617 DELETED it.
+ *    Its missing tombstone filter was not a cosmetic omission: it sat on the
+ *    CREATE path, so a REMOVED contact could capture a new create — press Save
+ *    and get back the person you deleted. Nothing on the create path resolves
+ *    identity any more, so that path is now indifferent to tombstones by
+ *    construction rather than by filter.
  */
 
 /**

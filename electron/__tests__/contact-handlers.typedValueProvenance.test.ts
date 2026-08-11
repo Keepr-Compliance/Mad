@@ -102,7 +102,12 @@ jest.mock("../services/databaseService", () => {
         contactDb.backfillContactEmails(id, emails, source),
       backfillContactPhones: (id: string, phones: string[], source?: any) =>
         contactDb.backfillContactPhones(id, phones, source),
-      findContactByName: () => Promise.resolve(null),
+      // BACKLOG-2617: `findContactByName` is deleted from production. The stub
+      // that used to sit here returned null, so the duplicate-by-name early
+      // return never fired in this suite — which is exactly why nothing here
+      // ever noticed that the branch handed back a DIFFERENT person's contact
+      // and reported success. `contact-handlers.createDoesNotSubstitute-2617`
+      // drives this same real-DB harness with no such stub.
       getUserById: (id: string) => Promise.resolve({ id }),
       isInitialized: () => true,
       getImportedContactsByUserIdAsync: () => Promise.resolve([]),

@@ -115,10 +115,10 @@ import {
 // "in case" is how a deleted rule grows a second call site.
 import { contactInfoSourceFor } from "../utils/contactValueProvenance";
 import { applyLinkedSourceValues } from "../services/contactSourceValues";
-import {
-  recordContactOrigin,
-  type ContactOrigin,
-} from "../services/db/contactOriginLink";
+// BACKLOG-2617: `recordContactOrigin` was imported here for the duplicate-by-name
+// early return in `contacts:create` and nothing else. That branch is deleted, so
+// the import goes with it. Only the type remains in use.
+import { type ContactOrigin } from "../services/db/contactOriginLink";
 import { getValidUserId } from "../utils/userIdHelper";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import contactSyncService from "../services/contactSyncService";
@@ -2286,36 +2286,47 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
         const validatedData = validateContactData(contactData, false);
 
-        // Check for duplicate contact by name (to prevent multiple imports of the same message contact)
-        if (validatedData.name) {
-          const existingByName = await databaseService.findContactByName(
-            validatedUserId,
-            validatedData.name
-          );
-          if (existingByName) {
-            // BACKLOG-2473 — THIS EARLY RETURN IS A SECOND CREATE PATH.
-            //
-            // It returns before the origin write further down, so a contact
-            // first reached through this branch would never get a crosswalk row
-            // at all. Harmless today, because the source filter still falls back
-            // to the `contacts.source` scalar — but step 4 of BACKLOG-2473
-            // removes that fallback, and such a contact would then be invisible
-            // under EVERY filter.
-            //
-            // Safe on an already-existing contact: the write is INSERT OR IGNORE
-            // keyed on (user, source_type, `origin:<contactId>`), so a contact
-            // that already has its origin row is a no-op.
-            recordContactOrigin(
-              validatedUserId,
-              existingByName.id,
-              (existingByName as { source?: string }).source,
-            );
-            return {
-              success: true,
-              contact: existingByName,
-            };
-          }
-        }
+        /**
+         * CREATING A CONTACT CREATES A CONTACT (BACKLOG-2617).
+         *
+         * A duplicate-by-name branch used to sit on this line. It called
+         * `findContactByName` — `LOWER(display_name) = LOWER(?) AND
+         * is_imported = 1`, name only, no email, no phone, no tombstone filter
+         * — and on a hit it RETURNED THE EXISTING CONTACT WITH
+         * `success: true`, having created nothing.
+         *
+         * What that did to a user, in full: they have a saved contact Michael
+         * Chen, their lender. A different Michael Chen, a buyer's agent, needs
+         * adding to a deal. They type the name, press Save, and are told it
+         * worked. The lender is now attached to the deal. Nothing was created,
+         * so there is nothing to undo, and nothing told them. Founder-verified
+         * live on 2026-08-09 — and note his FIRST attempt appeared to refute
+         * it, because he re-added a contact he had made by hand and correctly
+         * got two rows: `is_imported = 1` is why. Every contact that arrived
+         * through an import or a sync satisfies it, and `createContact`
+         * DEFAULTS it to 1, so the sparing case was the minority.
+         *
+         * THE RULE, decided by the founder on 2026-08-09: **a name is not an
+         * identifier.** Two people can share one and the app has no business
+         * assuming otherwise. Two Michael Chens is the truth, and the truth is
+         * what the list should show. He was offered "ask which you meant" and
+         * "create it but flag it as a possible duplicate" and chose NEITHER —
+         * so do not add a prompt here, and do not flag the new contact. If two
+         * same-named contacts should ever be offered as a merge, that is the
+         * matcher's job once contact-versus-contact proposals exist
+         * (BACKLOG-2616), not a special case bolted onto the create path.
+         *
+         * `findContactByName` itself is GONE with this branch, not left
+         * callable. It was the loosest identity rule in the codebase — every
+         * other heuristic requires a shared identifier, that one required only
+         * a matching string — and it had no other production caller.
+         *
+         * This also closes the crosswalk gap BACKLOG-2473 flagged: the branch
+         * returned BEFORE the origin write, so a contact first reached through
+         * it never got a `contact_source_links` row. There is no second create
+         * path to miss the write now; `createContact` takes the origin as a
+         * required argument and writes it in the same transaction.
+         */
 
         // Extract source from input data (falls back to "manual" if not provided)
         // BACKLOG-1900 (P0.1): allow distinct per-origin sources so an inbound

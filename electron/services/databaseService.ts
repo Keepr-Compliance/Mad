@@ -3721,9 +3721,8 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return contactDb.getContactById(contactId);
   }
 
-  async findContactByName(userId: string, name: string): Promise<Contact | null> {
-    return contactDb.findContactByName(userId, name);
-  }
+  // BACKLOG-2617: the `findContactByName` delegate is gone with the function it
+  // delegated to. Name-only identity is not a lookup this facade offers.
 
   async getContacts(filters?: ContactFilters): Promise<Contact[]> {
     return contactDb.getContacts(filters);
