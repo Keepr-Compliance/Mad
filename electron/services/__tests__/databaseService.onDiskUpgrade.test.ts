@@ -848,6 +848,79 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
   });
 
   // -------------------------------------------------------------------------
+  // BACKLOG-2633 — the same mechanism, for the contacts picker's index
+  //
+  // The picker's recency subqueries look a contact's own addresses up in
+  // `email_participants` under `LOWER(email_address)`, which no shipped index
+  // could serve. Without a by-address path the planner drove the subquery from
+  // `emails` — the whole mailbox, once per contact — and the picker took 7.4
+  // seconds at the founder's record count.
+  //
+  // Like BACKLOG-2621, `idx_email_participants_lower_address` ships in
+  // schema.sql with NO migration behind it, because `runMigrations()` execs
+  // schema.sql unconditionally. That reasoning is only worth anything if
+  // something observes it, and the founder's own database is the case that
+  // matters: he is already at head, so every version-gated branch is skipped and
+  // the unconditional exec is the ONLY thing that can deliver the index to him.
+  //
+  // Safe as a standalone CREATE INDEX because `email_participants` and
+  // `email_address` are declared in schema.sql itself — the BACKLOG-2298/2300
+  // "no such column" failure bites an index on a MIGRATION-added column, which
+  // this is not. The two tests above cover that direction.
+  // -------------------------------------------------------------------------
+
+  it("BACKLOG-2633: a database ALREADY AT HEAD still gains idx_email_participants_lower_address", async () => {
+    assertRealOnDiskTarget();
+
+    // Step 1 — bring the file to head, as an install that upgraded BEFORE this
+    // change did. After this, `willRunMigration` is false.
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // Step 2 — the fixture builds its file by exec'ing the CURRENT schema.sql,
+    // so the index is already there and the assertion below would pass no matter
+    // what runMigrations() did. Drop it, so the fixture expresses a database
+    // that predates the change rather than one that already contains it.
+    db.exec("DROP INDEX IF EXISTS idx_email_participants_lower_address");
+    expect(indexNames(db)).not.toContain("idx_email_participants_lower_address");
+
+    // Step 3 — run again with NOTHING pending. No backup, no chain body, no
+    // retention prune. The unconditional schema.sql exec is all that is left.
+    const versionBefore = schemaVersionOf(db);
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(versionBefore);
+
+    expect(indexNames(db)).toContain("idx_email_participants_lower_address");
+
+    // Step 4 — present is not the same as reached, and this index in particular
+    // is worthless unless the plan probes THROUGH it: measured, adding it and
+    // changing nothing else is worth 1.0x, because the planner keeps its
+    // mailbox-first join order. `(<expr>=?)` is SQLite reporting an EXPRESSION
+    // index probe, so an index that arrived under this name over the plain
+    // `email_address` column would NOT pass this line.
+    const plan = (
+      db
+        .prepare(
+          `EXPLAIN QUERY PLAN
+             SELECT MAX(COALESCE(em.sent_at, em.received_at))
+               FROM json_each(?) AS e_lc
+               CROSS JOIN email_participants ep_lc
+                 ON LOWER(ep_lc.email_address) = LOWER(e_lc.value)
+               CROSS JOIN emails em
+                 ON em.id = ep_lc.email_id
+                AND em.user_id = ?`,
+        )
+        .all(JSON.stringify(["a@example.com"]), USER_ID) as Array<{ detail: string }>
+    ).map((r) => r.detail);
+
+    expect(plan).toContain(
+      "SEARCH ep_lc USING INDEX idx_email_participants_lower_address (<expr>=?)",
+    );
+    // And the mailbox is reached last, by primary key — never scanned.
+    expect(plan.join("\n")).not.toContain("idx_emails_user_sent");
+  });
+
+  // -------------------------------------------------------------------------
   // BACKLOG-2401 — the crosswalk, over the SAME real file
   // -------------------------------------------------------------------------
 
