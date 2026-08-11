@@ -264,9 +264,14 @@ describe("useContactDirectory — fetch discipline (BACKLOG-2631)", () => {
         autoLoadExternal: false,
       });
       latest = directory;
+      // Mirrors `Screen2Overlay`'s effect exactly: depends on
+      // `triggerLazyLoad` alone. That is the property under test — it is a
+      // stable `useCallback`, so the effect fires once per mount and twice
+      // under StrictMode, which is the input this case exists to supply.
+      const { triggerLazyLoad } = directory;
       React.useEffect(() => {
-        directory.triggerLazyLoad();
-      }, [directory.triggerLazyLoad]); // eslint-disable-line react-hooks/exhaustive-deps
+        triggerLazyLoad();
+      }, [triggerLazyLoad]);
       return <span data-testid="external">{directory.externalContacts.map((c) => c.id).join(",")}</span>;
     }
 
