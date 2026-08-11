@@ -6,8 +6,10 @@
  * WHAT THE FOUNDER HIT
  * ===========================================================================
  * Gate 3, 11 Aug. Searching `whit` in the transaction Add Contacts picker
- * returned three rows reading `Dana Whitlock` and six reading one other real
- * person's name. Every row was a name and a `+ Add`. The instruction was "import
+ * returned three rows sharing one name and six sharing another. The surnames
+ * are NOT repeated here: those rows came out of the founder's live database and
+ * this repository is public. `Dana Example` is the repo's established invented
+ * stand-in (`FICTIONAL_NAMES`, `scripts/ci/check-fixture-pii.mjs`). Every row was a name and a `+ Add`. The instruction was "import
  * the Dana with phone 555-0130" and it could not be followed from that screen.
  * It blocked the same gate step three separate times.
  *
@@ -114,8 +116,8 @@ describe("BACKLOG-2663 — same-named picker rows are distinguishable", () => {
     render(
       <ContactAssignmentStep
         {...propsWith([
-          contact({ id: "d1", name: "Dana Whitlock", company: "Acme Realty" }),
-          contact({ id: "d2", name: "Dana Whitlock", company: "Borden Group" }),
+          contact({ id: "d1", name: "Dana Example", company: "Acme Realty" }),
+          contact({ id: "d2", name: "Dana Example", company: "Borden Group" }),
         ])}
       />,
     );
@@ -139,8 +141,8 @@ describe("BACKLOG-2663 — same-named picker rows are distinguishable", () => {
     render(
       <ContactAssignmentStep
         {...propsWith([
-          contact({ id: "d1", name: "Dana Whitlock", company: "Acme Realty" }),
-          contact({ id: "d2", name: "Dana Whitlock", company: "Borden Group" }),
+          contact({ id: "d1", name: "Dana Example", company: "Acme Realty" }),
+          contact({ id: "d2", name: "Dana Example", company: "Borden Group" }),
           contact({
             id: "r1",
             name: "Robin Marsh",
@@ -176,12 +178,12 @@ describe("BACKLOG-2663 — same-named picker rows are distinguishable", () => {
     render(
       <ContactAssignmentStep
         {...propsWith([
-          contact({ id: "a1", name: "Dana Whitlock", company: "Acme Realty", phone: "5550130" }),
-          contact({ id: "a2", name: "Dana Whitlock", company: "Acme Realty", phone: "5550131" }),
-          contact({ id: "a3", name: "Dana Whitlock", company: "Acme Realty", phone: "5550132" }),
-          contact({ id: "b1", name: "Dana Whitlock", company: "Borden Group", phone: "5550133" }),
-          contact({ id: "b2", name: "Dana Whitlock", company: "Borden Group", phone: "5550134" }),
-          contact({ id: "b3", name: "Dana Whitlock", company: "Borden Group", phone: "5550135" }),
+          contact({ id: "a1", name: "Dana Example", company: "Acme Realty", phone: "5550130" }),
+          contact({ id: "a2", name: "Dana Example", company: "Acme Realty", phone: "5550131" }),
+          contact({ id: "a3", name: "Dana Example", company: "Acme Realty", phone: "5550132" }),
+          contact({ id: "b1", name: "Dana Example", company: "Borden Group", phone: "5550133" }),
+          contact({ id: "b2", name: "Dana Example", company: "Borden Group", phone: "5550134" }),
+          contact({ id: "b3", name: "Dana Example", company: "Borden Group", phone: "5550135" }),
         ])}
       />,
     );
@@ -215,15 +217,21 @@ describe("BACKLOG-2663 — same-named picker rows are distinguishable", () => {
         {...propsWith([
           contact({
             id: "p", name: "Pat Riverton",
-            email: "pat@example.com", phone: "+1 206 555-0142", company: "Example Realty",
+            email: "pat@example.com",
+            phone: "+1 206 555-0142",
+            company: "Example Realty",
           }),
           contact({
             id: "r", name: "Robin Marsh",
-            email: "robin@example.org", phone: "+1 206 555-0155", company: "Example Inspections",
+            email: "robin@example.org",
+            phone: "+1 206 555-0155",
+            company: "Example Inspections",
           }),
           contact({
             id: "j", name: "Jane Doe",
-            email: "jane@example.net", phone: "+1 206 555-0177", company: "Example Escrow",
+            email: "jane@example.net",
+            phone: "+1 206 555-0177",
+            company: "Example Escrow",
           }),
         ])}
       />,

@@ -5,10 +5,18 @@
  * THE BUG
  * ===========================================================================
  * Searching `whit` in the transaction Add Contacts picker returned three rows
- * reading `Dana Whitlock` and six reading one other real person's name. Every
- * row was a name and a `+ Add`. The gate instruction was "import the Dana with
- * phone 555-0130" and it could not be followed. It blocked the same step three
- * times.
+ * with one name and six with another, every row a name and a `+ Add`. The gate
+ * instruction was "import the Dana with phone 555-0130" and it could not be
+ * followed. It blocked the same step three times.
+ *
+ * THE SURNAMES IN THE REPORT ARE NOT REPEATED HERE. Those rows came out of the
+ * founder's live database, this repository is PUBLIC, and a committed fixture
+ * cannot be un-published. `Dana Example` is this repo's established invented
+ * stand-in (already in `FICTIONAL_NAMES`, `scripts/ci/check-fixture-pii.mjs`);
+ * the given name is kept only so a reader can connect these cases to the item.
+ * The fixture PII guard caught the first draft of this file doing otherwise —
+ * the reasoning "it is probably a gate fixture" is exactly what that guard
+ * exists to refuse.
  *
  * ===========================================================================
  * THE ASSERTION SHAPE, AND WHY IT IS SETS AND NOT COUNTS
@@ -58,7 +66,7 @@ describe("buildRowDisambiguators", () => {
    */
   it("says nothing about rows whose names are unique [CONTROL 6]", () => {
     const rows = [
-      row("a", "Dana Whitlock", { company: "Acme", phone: "5550130" }),
+      row("a", "Dana Example", { company: "Acme", phone: "5550130" }),
       row("b", "Robin Marsh", { company: "Borden", phone: "5550131" }),
       row("c", "Pat Riverton", { company: "Cole", phone: "5550132" }),
     ];
@@ -79,8 +87,8 @@ describe("buildRowDisambiguators", () => {
    */
   it("gives two same-named rows the field that differs [CONTROL 5]", () => {
     const rows = [
-      row("a", "Dana Whitlock", { company: "Acme Realty", phone: "5550130" }),
-      row("b", "Dana Whitlock", { company: "Borden Group", phone: "5550131" }),
+      row("a", "Dana Example", { company: "Acme Realty", phone: "5550130" }),
+      row("b", "Dana Example", { company: "Borden Group", phone: "5550131" }),
     ];
 
     expect(linesFor(rows)).toEqual(["Acme Realty", "Borden Group"]);
@@ -91,7 +99,7 @@ describe("buildRowDisambiguators", () => {
    * OTHER.
    *
    * The founder's harder case. All six are at the SAME firm, so the organisation
-   * separates nothing and must be dropped — a row reading "Dana Whitlock / Acme
+   * separates nothing and must be dropped — a row reading "Dana Example / Acme
    * Realty" six times is the bug with an extra line. The phone separates all six
    * and is what shows.
    *
@@ -105,7 +113,7 @@ describe("buildRowDisambiguators", () => {
    */
   it("makes six rows sharing one name distinguishable FROM EACH OTHER [CONTROL 7]", () => {
     const rows = Array.from({ length: 6 }, (_, i) =>
-      row(`d${i}`, "Dana Whitlock", {
+      row(`d${i}`, "Dana Example", {
         company: "Acme Realty",
         phone: `555013${i}`,
       }),
@@ -143,12 +151,12 @@ describe("buildRowDisambiguators", () => {
    */
   it("separates six rows when NO single field separates them [CONTROL 7]", () => {
     const rows = [
-      row("a1", "Dana Whitlock", { company: "Acme Realty", phone: "5550130" }),
-      row("a2", "Dana Whitlock", { company: "Acme Realty", phone: "5550131" }),
-      row("a3", "Dana Whitlock", { company: "Acme Realty", phone: "5550132" }),
-      row("b1", "Dana Whitlock", { company: "Borden Group", phone: "5550133" }),
-      row("b2", "Dana Whitlock", { company: "Borden Group", phone: "5550134" }),
-      row("b3", "Dana Whitlock", { company: "Borden Group", phone: "5550135" }),
+      row("a1", "Dana Example", { company: "Acme Realty", phone: "5550130" }),
+      row("a2", "Dana Example", { company: "Acme Realty", phone: "5550131" }),
+      row("a3", "Dana Example", { company: "Acme Realty", phone: "5550132" }),
+      row("b1", "Dana Example", { company: "Borden Group", phone: "5550133" }),
+      row("b2", "Dana Example", { company: "Borden Group", phone: "5550134" }),
+      row("b3", "Dana Example", { company: "Borden Group", phone: "5550135" }),
     ];
 
     const lines = linesFor(rows);
@@ -165,9 +173,9 @@ describe("buildRowDisambiguators", () => {
    */
   it("shows the phone the founder was told to pick when only phones differ", () => {
     const rows = [
-      row("a", "Dana Whitlock", { phone: "5550130", email: "d@acme.test" }),
-      row("b", "Dana Whitlock", { phone: "5550131", email: "d@acme.test" }),
-      row("c", "Dana Whitlock", { phone: "5550132", email: "d@acme.test" }),
+      row("a", "Dana Example", { phone: "5550130", email: "d@acme.test" }),
+      row("b", "Dana Example", { phone: "5550131", email: "d@acme.test" }),
+      row("c", "Dana Example", { phone: "5550132", email: "d@acme.test" }),
     ];
 
     expect(linesFor(rows)).toEqual(["555-0130", "555-0131", "555-0132"]);
@@ -176,11 +184,11 @@ describe("buildRowDisambiguators", () => {
   /** Falls through to email when organisation and phone are shared or absent. */
   it("falls through to email when nothing earlier separates the group", () => {
     const rows = [
-      row("a", "Dana Whitlock", { company: "Acme", email: "dana.w@acme.test" }),
-      row("b", "Dana Whitlock", { company: "Acme", email: "dana.whitlock@acme.test" }),
+      row("a", "Dana Example", { company: "Acme", email: "dana.w@acme.test" }),
+      row("b", "Dana Example", { company: "Acme", email: "dana.example@acme.test" }),
     ];
 
-    expect(linesFor(rows)).toEqual(["dana.w@acme.test", "dana.whitlock@acme.test"]);
+    expect(linesFor(rows)).toEqual(["dana.w@acme.test", "dana.example@acme.test"]);
   });
 
   /**
@@ -194,8 +202,8 @@ describe("buildRowDisambiguators", () => {
    */
   it("adds nothing when two records are identical in every field it reads", () => {
     const rows = [
-      row("a", "Dana Whitlock", { company: "Acme", phone: "5550130", email: "d@acme.test" }),
-      row("b", "Dana Whitlock", { company: "Acme", phone: "5550130", email: "d@acme.test" }),
+      row("a", "Dana Example", { company: "Acme", phone: "5550130", email: "d@acme.test" }),
+      row("b", "Dana Example", { company: "Acme", phone: "5550130", email: "d@acme.test" }),
     ];
 
     expect(buildRowDisambiguators(rows).size).toBe(0);
@@ -204,12 +212,12 @@ describe("buildRowDisambiguators", () => {
   /**
    * Ambiguity is what the user SEES, so it is keyed on the rendered label and
    * normalised — `labelForContact` trims, and casing is not a distinction a user
-   * can act on. Two rows reading "dana whitlock" and "Dana Whitlock" collide.
+   * can act on. Two rows reading "dana example" and "Dana Example" collide.
    */
   it("treats names differing only in case or padding as the same name", () => {
     const rows = [
-      row("a", "Dana Whitlock", { company: "Acme" }),
-      row("b", "  dana whitlock ", { company: "Borden" }),
+      row("a", "Dana Example", { company: "Acme" }),
+      row("b", "  dana example ", { company: "Borden" }),
     ];
 
     expect(linesFor(rows)).toEqual(["Acme", "Borden"]);
@@ -236,8 +244,8 @@ describe("buildRowDisambiguators", () => {
    */
   it("omits a row that holds none of the separating fields", () => {
     const rows = [
-      row("a", "Dana Whitlock", { company: "Acme Realty" }),
-      row("b", "Dana Whitlock"),
+      row("a", "Dana Example", { company: "Acme Realty" }),
+      row("b", "Dana Example"),
     ];
 
     expect(linesFor(rows)).toEqual(["Acme Realty", undefined]);

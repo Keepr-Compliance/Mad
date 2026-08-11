@@ -5,7 +5,7 @@
  * THE BUG THIS EXISTS TO FIX
  * ===========================================================================
  * Searching `whit` in the transaction Add Contacts picker returned three rows
- * reading `Dana Whitlock` and six rows reading one other real person's name.
+ * with one name and six rows with another.
  * Every row was a name and a `+ Add` button. The gate step was "import the Dana
  * with phone 555-0130" and it could not be followed from that screen — it
  * blocked the same step three separate times.
@@ -157,7 +157,7 @@ function separatingFields(
  * an empty string — so a caller cannot render a blank element for them.
  *
  * `rows` must be the VISIBLE result set. Ambiguity is a property of what is on
- * screen: two people called Dana Whitlock are only a problem when both are in
+ * screen: two people sharing a name are only a problem when both are in
  * front of the user, and searching to one of them should quiet the row again.
  */
 export function buildRowDisambiguators(

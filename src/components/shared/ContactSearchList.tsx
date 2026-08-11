@@ -688,7 +688,7 @@ export function ContactSearchList({
    * BACKLOG-2663 — which visible rows need a field to tell them apart.
    *
    * Computed HERE and not in `ContactRow` because ambiguity is a property of the
-   * RESULT SET: three rows reading "Dana Whitlock" are unchoosable only while all
+   * RESULT SET: three rows sharing one name are unchoosable only while all
    * three are on screen, and a row that knows only about itself cannot tell.
    *
    * Deliberately over `visibleContacts` — post filter, post search — so
