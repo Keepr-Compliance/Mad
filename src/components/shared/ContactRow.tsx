@@ -149,6 +149,24 @@ export interface ContactRowProps {
    * `ContactAssignmentStep`, not against this default.
    */
   showDetailLine?: boolean;
+  /**
+   * BACKLOG-2663 — the field that tells this row from the other rows with the
+   * SAME NAME, or absent when the name is unique in what the user is looking at.
+   *
+   * NOT a second `showDetailLine`, and the difference is the whole point.
+   * `showDetailLine` is a CALLER's choice — a surface decides its rows always
+   * carry metadata. This is a property of the RESULT SET: the same contact gets
+   * a line when a namesake is on screen beside it, and no line when the user
+   * searches down to one of them. So it cannot be defaulted on or off per
+   * surface, and it is computed by `ContactSearchList` (the only component that
+   * knows what else is visible) rather than here.
+   *
+   * BACKLOG-2356's name-only rule is untouched: with a unique name this is
+   * `undefined` and the row renders exactly the one `<p>` it rendered before,
+   * which `ContactAssignmentStep.rowsUnchanged-2591.test.tsx` asserts as literal
+   * `textContent`.
+   */
+  disambiguator?: string | null;
   /** Called when the row is selected (clicked or keyboard) */
   onSelect?: () => void;
   /** Called when the import button is clicked */
@@ -262,6 +280,7 @@ export function ContactRow({
   showAddButton = false,
   compact = false,
   showDetailLine = false,
+  disambiguator = null,
   onSelect,
   onImport,
   onOpenQuestions,
@@ -270,6 +289,15 @@ export function ContactRow({
   const displayName = getDisplayName(contact);
   const initial = getInitial(displayName);
   const detailLine = showDetailLine ? buildDetailLine(contact) : null;
+  /**
+   * BACKLOG-2663 — suppressed when the detail line is already on.
+   *
+   * The only surface that turns `showDetailLine` on is the manual-link picker,
+   * and `buildDetailLine` already emits source, email, phone and company. Adding
+   * a second line drawn from the same fields would repeat one of them directly
+   * underneath itself, which is noise rather than an answer.
+   */
+  const ambiguityLine = showDetailLine ? null : disambiguator?.trim() || null;
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "Enter" || event.key === " ") {
@@ -400,6 +428,20 @@ export function ContactRow({
             data-testid="contact-row-detail"
           >
             {detailLine}
+          </p>
+        )}
+
+        {/* BACKLOG-2663 — shown ONLY when a namesake is on screen beside this
+            row. `ContactSearchList` decides that, because ambiguity is a
+            property of the visible result set and not of the contact. A unique
+            name renders nothing here, which is what keeps 2356's name-only rule
+            and its fence test intact. */}
+        {ambiguityLine && (
+          <p
+            className="text-xs text-gray-600 truncate"
+            data-testid="contact-row-disambiguator"
+          >
+            {ambiguityLine}
           </p>
         )}
 

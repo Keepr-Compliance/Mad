@@ -49,6 +49,11 @@ import {
   ALL_SOURCE_LEAF_IDS,
   type ContactFilters,
 } from "../../utils/contactFilterModel";
+import {
+  summariseContactSources,
+  type ContactSourceSegment,
+} from "../../utils/contactSourceBreakdown";
+import { buildRowDisambiguators } from "../../utils/contactRowDisambiguation";
 import logger from "../../utils/logger";
 
 /**
@@ -192,6 +197,23 @@ export interface ContactSearchListProps {
    * an effect (never during render). Default: unused.
    */
   onVisibleCountChange?: (count: number) => void;
+  /**
+   * Called with the rendered rows partitioned by SOURCE, whenever that
+   * partition changes (BACKLOG-2662).
+   *
+   * A SECOND callback rather than a widened `onVisibleCountChange`, on purpose.
+   * That one has a live contract test (`ContactSearchList.test.tsx`, "reports
+   * the rendered row count via onVisibleCountChange") and several callers that
+   * want the number and nothing else; changing its arity to serve one header
+   * would rewrite every one of them for no gain.
+   *
+   * Derived from `visibleContacts` — THE SAME ARRAY that renders and that
+   * `onVisibleCountChange` counts — so a consumer showing both cannot show a
+   * total and a breakdown that disagree. That disagreement was the bug: the
+   * header's total was this array's length while its parenthetical was the raw,
+   * unfiltered `get-available` payload, and nothing made them reconcile.
+   */
+  onVisibleSourceBreakdownChange?: (segments: ContactSourceSegment[]) => void;
   /**
    * Called the moment a row is opened via `onContactClick`, with everything
    * needed to find the user's place again (BACKLOG-2459).
@@ -419,6 +441,7 @@ export function ContactSearchList({
   className = "",
   compact = false,
   onVisibleCountChange,
+  onVisibleSourceBreakdownChange,
   onAnchorCapture,
   pendingAnchor = null,
   onAnchorConsumed,
@@ -630,6 +653,64 @@ export function ContactSearchList({
   useEffect(() => {
     onVisibleCountChange?.(visibleContacts.length);
   }, [visibleContacts.length, onVisibleCountChange]);
+
+  /**
+   * The same rows, partitioned by source (BACKLOG-2662).
+   *
+   * Computed from `visibleContacts` rather than from its length: two lists of
+   * equal length can hold different sources (untick Outlook, tick Gmail), and a
+   * length-keyed report would leave the header naming a source that is no longer
+   * on screen.
+   *
+   * ===========================================================================
+   * WHY THE EFFECT FIRES ON A STRING AND NOT ON THE ARRAY — THIS IS AN INFINITE
+   * RENDER LOOP IF YOU CHANGE IT
+   * ===========================================================================
+   * `visibleContacts` DOES NOT HAVE A STABLE IDENTITY. `Contacts.tsx` passes
+   * `selectedIds={[]}` — a fresh array literal on every render — so `selectedSet`
+   * memoises to a new Set each time, and `visibleContacts` (which depends on it)
+   * memoises to a new array each time, for the same rows.
+   *
+   * `onVisibleCountChange` survives that because it reports a NUMBER: React bails
+   * out of a `useState` write when the new value is identical, so the loop closes
+   * after one pass. An ARRAY is never identical to the last one, so reporting the
+   * segments on array identity means: effect -> parent setState -> parent render
+   * -> new `selectedIds` -> new `visibleContacts` -> new segments -> effect,
+   * without end. Measured, not predicted: it hung this component's own suite and
+   * every other test that mounts the Contacts screen.
+   *
+   * So the effect is keyed on the partition's VALUE. Equal partitions produce an
+   * equal key, the effect does not re-run, and the parent is written to only when
+   * what the header says would actually change. The key uses the ASCII unit/record
+   * separators (\u001f, \u001e), which cannot occur in a source label.
+   */
+  /**
+   * BACKLOG-2663 — which visible rows need a field to tell them apart.
+   *
+   * Computed HERE and not in `ContactRow` because ambiguity is a property of the
+   * RESULT SET: three rows sharing one name are unchoosable only while all
+   * three are on screen, and a row that knows only about itself cannot tell.
+   *
+   * Deliberately over `visibleContacts` — post filter, post search — so
+   * searching down to one Dana quiets her row again. Over the raw props it would
+   * keep disambiguating rows whose namesake the user has already filtered away.
+   */
+  const rowDisambiguators = useMemo(
+    () => buildRowDisambiguators(visibleContacts),
+    [visibleContacts],
+  );
+
+  const visibleSourceBreakdown = summariseContactSources(visibleContacts);
+  const visibleSourceBreakdownKey = visibleSourceBreakdown
+    .map((s) => `${s.label}\u001f${s.count}`)
+    .join("\u001e");
+
+  const visibleSourceBreakdownRef = useRef(visibleSourceBreakdown);
+  visibleSourceBreakdownRef.current = visibleSourceBreakdown;
+
+  useEffect(() => {
+    onVisibleSourceBreakdownChange?.(visibleSourceBreakdownRef.current);
+  }, [visibleSourceBreakdownKey, onVisibleSourceBreakdownChange]);
 
   // Toggle selection for an imported/selectable contact.
   const handleSelect = useCallback(
@@ -1110,6 +1191,9 @@ export function ContactSearchList({
                 }
                 compact={compact}
                 showDetailLine={showDetailLine}
+                // BACKLOG-2663: absent for a unique name — `.get` returns
+                // `undefined` and the row renders name-only, unchanged.
+                disambiguator={rowDisambiguators.get(contact.id)}
                 // BACKLOG-2556: `collapsedRecords` was passed here. The fold
                 // that produced them is deleted, so there is nothing to pass.
                 onSelect={() => handleRowSelect(contact, isExternal)}
