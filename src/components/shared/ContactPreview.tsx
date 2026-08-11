@@ -6,6 +6,7 @@ import type { ExtendedContact } from "../../types/components";
 import type { Communication, ContactMessageThread, Message } from "@/types";
 import type { ContactSourceProvenance } from "@/types/contactProvenance";
 import { labelForContact } from "@/utils/contactDisplayLabel";
+import { parseDbTimestamp } from "@/utils/dateFormatters";
 import {
   canUnlinkSource,
   showSourcesPanel,
@@ -343,9 +344,11 @@ function getInitial(name: string): string {
  * meta segment) when the date is missing/invalid — never renders "Invalid Date".
  */
 function formatAddedDate(createdAt: string | undefined): string | undefined {
-  if (!createdAt) return undefined;
-  const parsed = new Date(createdAt);
-  if (Number.isNaN(parsed.getTime())) return undefined;
+  // BACKLOG-2632: contacts.created_at is written by `DEFAULT CURRENT_TIMESTAMP`,
+  // i.e. UTC with no zone marker. A bare `new Date()` reads it as LOCAL time, so
+  // a contact imported after 18:00 in Costa Rica (UTC-6) read "Added <tomorrow>".
+  const parsed = parseDbTimestamp(createdAt);
+  if (!parsed) return undefined;
   return `Added ${parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}`;
 }
 

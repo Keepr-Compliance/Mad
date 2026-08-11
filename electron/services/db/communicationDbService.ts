@@ -15,6 +15,7 @@ import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun } from "./core/dbConnection";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
 import { isTextMessage } from "../../utils/channelHelpers";
+import { dbTimestampNow } from "../../utils/dbTimestamp";
 import logService from "../logService";
 
 /**
@@ -325,14 +326,23 @@ export async function addIgnoredCommunication(
 ): Promise<IgnoredCommunication> {
   const id = crypto.randomUUID();
 
+  // BACKLOG-2632: persist ignored_at EXPLICITLY instead of leaning on the column
+  // default. Previously the row got `DEFAULT CURRENT_TIMESTAMP` (naive UTC,
+  // "2026-08-10 01:00:00") while the object returned below carried
+  // `new Date().toISOString()` — a different string for the same instant. The
+  // in-memory value rendered the correct day and then FLIPPED to the next day on
+  // the first refetch, which reads as data corruption rather than a skewed date.
+  // One value, written and returned, so persisted and in-memory are byte-identical.
+  const ignoredAt = dbTimestampNow();
+
   // BACKLOG-1560: Include email_id and thread_id columns for direct suppression
   // BACKLOG-2319: + match_reason, preserved so restore reclassifies correctly.
   const sql = `
     INSERT INTO ignored_communications (
       id, user_id, transaction_id, email_subject, email_sender,
       email_sent_at, email_thread_id, email_id, thread_id,
-      original_communication_id, reason, match_reason
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      original_communication_id, reason, match_reason, ignored_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const params = [
@@ -348,6 +358,7 @@ export async function addIgnoredCommunication(
     data.original_communication_id || null,
     data.reason || null,
     data.match_reason || null,
+    ignoredAt,
   ];
 
   dbRun(sql, params);
@@ -369,7 +380,9 @@ export async function addIgnoredCommunication(
     original_communication_id: data.original_communication_id || null,
     reason: data.reason || null,
     match_reason: data.match_reason || null,
-    ignored_at: new Date().toISOString(),
+    // BACKLOG-2632: the SAME string that was just persisted, not a fresh
+    // toISOString(). Renderers normalise it via parseDbTimestamp().
+    ignored_at: ignoredAt,
   } as IgnoredCommunication;
 
   return ignoredComm;

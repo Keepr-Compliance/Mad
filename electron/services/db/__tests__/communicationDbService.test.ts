@@ -390,8 +390,17 @@ describe("communicationDbService", () => {
       ) as [string, unknown[]];
       expect(insert).toBeDefined();
       expect(insert[0]).toContain("match_reason");
-      // match_reason is the LAST param (after reason).
-      expect(insert[1][insert[1].length - 1]).toBe("user_confirmed");
+      // BACKLOG-2632: was `insert[1][length - 1]`, on the assumption that
+      // match_reason is the last bound param. It no longer is — `ignored_at` is
+      // now bound EXPLICITLY rather than falling back to the column's
+      // DEFAULT CURRENT_TIMESTAMP. Bind by COLUMN NAME so the next column added
+      // here cannot silently move this assertion onto the wrong value.
+      const columns = insert[0]
+        .slice(insert[0].indexOf("(") + 1, insert[0].indexOf(")"))
+        .split(",")
+        .map((c) => c.trim());
+      expect(columns).toContain("match_reason");
+      expect(insert[1][columns.indexOf("match_reason")]).toBe("user_confirmed");
     });
 
     it("confirmEmailLinksByEmailIds updates only the given emails on the given transaction", () => {
