@@ -74,7 +74,7 @@
 
 import { namesAreCompatible } from "./contactNameCompat";
 import { realContactName } from "./contactDisplayLabel";
-import { formatPhoneNumber, toLookupKey } from "./phoneNormalization";
+import { toLookupKey } from "./phoneNormalization";
 
 /**
  * Why the names refused an automatic link. Recorded distinguishably because the
@@ -104,7 +104,7 @@ export interface AutoLinkNameInput {
  * The name a human would recognise as a name, or "" when there isn't one.
  *
  * ===========================================================================
- * THE PHONE COMPARISON HAS TWO ARMS, AND THE SECOND IS WHY
+ * THE PHONE COMPARISON IS NOT LENGTH-GATED, AND HAS ONE ARM
  * ===========================================================================
  * The first draft gated the key comparison on the key being exactly ten digits,
  * reasoning that "anything shorter cannot equal a stored key". **That was false,
@@ -118,13 +118,34 @@ export interface AutoLinkNameInput {
  * short local numbers, short codes, and alphanumeric senders such as `VERIZON`,
  * which `toLookupKey` passes through unchanged.
  *
- * So the key comparison is no longer length-gated, and there is a second, EXACT
- * comparison against `formatPhoneNumber(phone)` — the string
- * `buildContactLabel` actually writes. Comparing against the producer's own
- * output catches every shape BY CONSTRUCTION rather than by guessing what looks
- * like a phone number.
+ * ===========================================================================
+ * THERE WAS A SECOND ARM. IT WAS UNREACHABLE, AND IT IS DELETED (BACKLOG-2620)
+ * ===========================================================================
+ * The fix for the above shipped with a second, exact comparison against
+ * `formatPhoneNumber(phone)` — the string `buildContactLabel` actually writes —
+ * documented as "the better half, because it catches every shape by
+ * construction". SR's re-review of PR #2274 measured that claim by deleting each
+ * arm separately: deleting the SECOND left all 114 tests green, deleting the
+ * FIRST turned one red. No input can reach it.
  *
- * Both arms fail in the same safe direction: they can only produce more
+ * It is subsumed rather than merely untested, and the reason is one property:
+ *
+ *     toLookupKey(formatPhoneNumber(p).trim()) === toLookupKey(p),  for all p.
+ *
+ * `formatPhoneNumber` preserves the digit multiset in every branch — the US
+ * shapes regroup the same digits, the international branch re-attaches "+" to
+ * them, and the no-digit fallback returns the original string, which
+ * `toLookupKey` also returns untouched. So whenever the deleted arm would have
+ * fired on a label, arm 1 has already fired on the same phone's key.
+ *
+ * **`phoneNormalization.formatPhoneNumber.lookupKeyInvariant-2620.test.ts`
+ * sweeps that invariant over every branch and boundary.** It is not a pin on
+ * deleted code: it is the live property that makes the deletion safe, and if
+ * `formatPhoneNumber` ever stops preserving the key — a country-specific
+ * regrouping that drops or adds a digit, say — that suite goes red and THIS
+ * FUNCTION NEEDS THE SECOND ARM BACK.
+ *
+ * The remaining arm fails in the safe direction: it can only produce more
  * `name_unknown`, never more links. A real name is unaffected — "Studio 54"
  * keys to "54" and matches nothing unless the record's OWN phone list holds
  * "54", in which case reading that as an identifier rather than a name is the
@@ -134,18 +155,15 @@ function usableName(
   raw: string | null | undefined,
   emailKeys: Set<string>,
   phoneKeys: Set<string>,
-  phoneLabels: Set<string>,
 ): string {
   const real = realContactName(raw);
   if (!real) return "";
 
   if (emailKeys.has(real.toLowerCase())) return "";
 
-  // Arm 1 — normalization-tolerant: "555-0112" and "5550112" key alike.
+  // Normalization-tolerant: "555-0112" and "5550112" key alike, and so does
+  // "(555) 555-0112" — which is why the label comparison was redundant.
   if (phoneKeys.has(toLookupKey(real))) return "";
-
-  // Arm 2 — exactly what the label writer produces, whatever its shape.
-  if (phoneLabels.has(real)) return "";
 
   return real;
 }
@@ -165,12 +183,9 @@ export function nameSupportForAutoLink(input: AutoLinkNameInput): AutoLinkNameVe
   );
   const phones = input.identifiers?.phones ?? [];
   const phoneKeys = new Set(phones.map((p) => toLookupKey(p)).filter((k) => k.length > 0));
-  const phoneLabels = new Set(
-    phones.map((p) => formatPhoneNumber(p ?? "").trim()).filter((l) => l.length > 0),
-  );
 
-  const record = usableName(input.recordName, emailKeys, phoneKeys, phoneLabels);
-  const contact = usableName(input.contactName, emailKeys, phoneKeys, phoneLabels);
+  const record = usableName(input.recordName, emailKeys, phoneKeys);
+  const contact = usableName(input.contactName, emailKeys, phoneKeys);
 
   // BACKLOG-2624. Checked BEFORE compatibility, because `namesAreCompatible`
   // would answer `true` here and that answer is the defect.
