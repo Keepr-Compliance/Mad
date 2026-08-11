@@ -275,6 +275,29 @@ jobs:
       - name: Assert nothing under .husky/_ is tracked
         run: npm run check:hooks
 
+  # BACKLOG-2637: a source file holding a raw NUL byte is classified as binary by
+  # grep, which then omits it from every repo-wide search WITHOUT warning and
+  # WITHOUT a non-zero exit. The result is not a slow search or a failed one — it
+  # is a clean-looking negative, and nothing anywhere says the file was skipped.
+  # It happened twice in one epic and both times a person found it by running
+  # `file` on a hunch. Deliberately NOT gated on docs-only: one `git ls-files`
+  # over the tracked set, no install step, and it must always report a status.
+  text-sources:
+    name: Text Source Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      - name: Assert no tracked .ts/.tsx reads as binary
+        run: npm run check:text-sources
+
   # BACKLOG-1750: gate the @keepr/ui shared component library. Isolated,
   # platform-agnostic job (single OS, no native modules) — the root `test` job
   # excludes packages/ (see jest.config.js testPathIgnorePatterns), so without
