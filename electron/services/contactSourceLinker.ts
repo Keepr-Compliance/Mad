@@ -135,11 +135,12 @@
 
 import { dbAll, dbGet } from "./db/core/dbConnection";
 import type { ExternalContactSource } from "./db/externalContactDbService";
+import { createLink, getLinksForContactBySource } from "./db/contactSourceLinkDbService";
 import {
-  createLink,
-  findContactIdBySourceRecord,
-  getLinksForContactBySource,
-} from "./db/contactSourceLinkDbService";
+  liveContactMatchIndex,
+  loadContactMatchIndex,
+  type ContactMatchIndex,
+} from "./db/contactMatchIndex";
 import { hasCannotLink, proposeLink } from "./db/contactLinkReviewDbService";
 import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
 import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
@@ -271,89 +272,25 @@ export { isContactOnFrozenTransaction };
 
 /**
  * ===========================================================================
- * WHY `+c.user_id` AND NOT `c.user_id` — BACKLOG-2621
+ * THE THREE PROBES MOVED TO `db/contactMatchIndex.ts` — BACKLOG-2620
  * ===========================================================================
- * The unary `+` is SQLite's documented no-op prefix. It does not change the
- * value or the result set; it makes the term unusable for driving an index,
- * which is the entire point here.
+ * `contactIdsByEmail`, `contactIdsByPhone` and the crosswalk lookup used to
+ * live here as three per-record queries. They now sit behind a
+ * `ContactMatchIndex`, which has two implementations:
  *
- * With a plain `c.user_id = ?`, SQLite anchors `contacts` as the OUTER loop
- * (`SEARCH c USING INDEX idx_contacts_user_id`) and then does one index seek
- * into the child table PER CONTACT, applying the value predicate as a filter.
- * The value indexes — `idx_contact_emails_email`, `idx_contact_phones_phone`,
- * `idx_contact_phones_normalized` — are never touched, so the cost is
- * O(contacts owned by this user) on EVERY call regardless of how few values
- * are being probed. With the founder's 1,103 unmatched records and ~2,000
- * contacts that is ~2.2M index seeks per link run. Measured, not assumed:
- * `matchingIndexUsage.test.ts` asserts the plan both ways.
+ *   - the LIVE one, one statement per probe — what `resolveSourceRecord` uses
+ *     when it is called for a single record, which is unchanged behaviour;
+ *   - the BATCH one, which reads each relation ONCE for a whole pass.
  *
- * Removing that one term from index consideration flips the join:
+ * The queries themselves are transcribed verbatim into that module, including
+ * the unary `+c.user_id` from BACKLOG-2621 and the reasoning for it.
  *
- *     SEARCH ce USING INDEX idx_contact_emails_email_lower (<expr>=?)
- *     SEARCH c  USING INDEX sqlite_autoindex_contacts_1 (id=?)
- *
- * — driven by the value index, `contacts` reached by primary key, cost
- * O(values probed). `user_id` is still enforced, just as a filter rather than
- * as the driver, so the result set is identical.
- *
- * The plan was verified stable with AND without `ANALYZE` statistics (the
- * maintenance path runs `ANALYZE`, so both states occur in the wild) and at
- * one and five distinct users. Rewriting the predicate ALONE does not flip
- * the plan — that was tried first and measured; the anchoring term is what
- * decides it.
- *
- * Affinity note: unary `+` also strips column affinity, so the bound value is
- * compared without TEXT coercion. Every caller passes a string user id (the
- * signature says so) and `contacts.user_id` is TEXT, so text-to-text
- * comparison is unchanged. Covered by a numeric-looking-user-id case in the
- * test file above.
+ * WHY: this module fed every row of `external_contacts` to a per-record
+ * resolver on every sync, and 1,153 of the founder's 1,169 records matched
+ * nothing and so paid three statements each, every pass, permanently. Read
+ * `contactMatchIndex.ts`'s header for why the fix is batch recomputation rather
+ * than a remembered "no match".
  */
-
-/** Imported contacts carrying any of these emails. Exact, case-insensitive. */
-function contactIdsByEmail(userId: string, emails: string[]): string[] {
-  const cleaned = emails.map((e) => e?.trim().toLowerCase()).filter((e): e is string => !!e);
-  if (cleaned.length === 0) return [];
-  const placeholders = cleaned.map(() => "?").join(", ");
-  return dbAll<{ id: string }>(
-    `SELECT DISTINCT c.id FROM contacts c
-       JOIN contact_emails ce ON ce.contact_id = c.id
-      WHERE +c.user_id = ? AND LOWER(ce.email) IN (${placeholders})
-      ORDER BY c.id`,
-    [userId, ...cleaned],
-  ).map((r) => r.id);
-}
-
-/**
- * Imported contacts carrying any of these phones, compared as lookup keys.
- *
- * BACKLOG-2621 — this compared `COALESCE(NULLIF(cp.phone_normalized, ''),
- * cp.phone_e164)`, which no index can serve. The COALESCE arm was also dead:
- * it fires only for a row whose `phone_normalized` is NULL or empty, and it
- * then compares `phone_e164` — an E.164 string like `+15555550109` — against a
- * last-ten-digits lookup key like `5555550109`. Those are never equal. So the
- * fallback could only ever match a row that had a bare ten-digit `phone_e164`
- * AND no `phone_normalized`, and no write path produces that pair: every
- * INSERT and UPDATE into `contact_phones` sets `phone_normalized` with
- * `toLookupKey` (asserted across all of them by
- * `electron/utils/__tests__/phoneNormalization.writePath.test.ts`), and
- * migration v40 backfilled every pre-existing NULL. Dropping it is therefore
- * behaviour-neutral, which `matchingIndexUsage.test.ts` pins by
- * running both forms over the same corpus — including a row with a NULL
- * `phone_normalized` — and asserting identical id sets.
- */
-function contactIdsByPhone(userId: string, phones: string[]): string[] {
-  const keys = phones.map((p) => toLookupKey(p)).filter((k) => k.length > 0);
-  if (keys.length === 0) return [];
-  const placeholders = keys.map(() => "?").join(", ");
-  return dbAll<{ id: string }>(
-    `SELECT DISTINCT c.id FROM contacts c
-       JOIN contact_phones cp ON cp.contact_id = c.id
-      WHERE +c.user_id = ?
-        AND cp.phone_normalized IN (${placeholders})
-      ORDER BY c.id`,
-    [userId, ...keys],
-  ).map((r) => r.id);
-}
 
 /**
  * Does this source record still carry any of `values` in its email/phone list?
@@ -564,15 +501,23 @@ function savedContactName(contactId: string): string | null {
  *
  * Pure decision + at most one INSERT. Never deletes, never re-points, never
  * touches the contact row.
+ *
+ * `index` (BACKLOG-2620) is where the three identifier probes come from. Omit
+ * it and every probe is a live query, which is what a single-record caller
+ * wants; `linkSourceRecords` passes a batch index it loaded once for the whole
+ * pass. The two are pinned to identical answers by the parity control in
+ * `contactSourceLinker.convergence-2620.test.ts`.
  */
 export function resolveSourceRecord(
   userId: string,
   candidate: SourceRecordCandidate,
+  index: ContactMatchIndex = liveContactMatchIndex(),
 ): LinkResolution {
   const { sourceType, sourceRecordId, externalUuid = null } = candidate;
 
   // ---- STEP 1: source id. Always wins. -----------------------------------
-  const linkedContactId = findContactIdBySourceRecord(userId, sourceType, sourceRecordId);
+  const linkedRecord = index.linkedRecord(userId, sourceType, sourceRecordId);
+  const linkedContactId = linkedRecord?.contactId ?? null;
   if (linkedContactId) {
     // Opportunistically capture the portable identifier on a row that predates
     // it. Does not change the link or how it was made.
@@ -586,7 +531,15 @@ export function resolveSourceRecord(
     // `contactSourceAffordances.isAttachedSource`, withdraws the Unlink button
     // and the whole Sources panel from single-source contacts. See the
     // `assertMethod` docblock in contactSourceLinkDbService.ts.
-    if (externalUuid) {
+    //
+    // BACKLOG-2620 — AND ONLY WHEN IT WOULD ADD SOMETHING. `createLink` on an
+    // existing row is a SELECT plus, when a uuid is supplied, an UPDATE whose
+    // `external_uuid` is COALESCE'd: on a row that already carries one the
+    // write changes nothing but `updated_at`, which no query in this repo
+    // reads. Skipping it removes two statements INCLUDING A WRITE per
+    // id-matched record per pass — and in the healthy steady state every record
+    // is id-matched, so that is the cost this feature settles into.
+    if (externalUuid && !linkedRecord?.hasExternalUuid) {
       createLink({
         userId,
         contactId: linkedContactId,
@@ -602,8 +555,8 @@ export function resolveSourceRecord(
   // ---- STEP 2: content fallback, email THEN phone. -----------------------
   // Email first: it is the stronger identifier of the two and far less prone to
   // being reassigned between people than a phone number.
-  const byEmail = contactIdsByEmail(userId, candidate.emails ?? []);
-  const byPhone = byEmail.length > 0 ? [] : contactIdsByPhone(userId, candidate.phones ?? []);
+  const byEmail = index.contactIdsByEmail(userId, candidate.emails ?? []);
+  const byPhone = byEmail.length > 0 ? [] : index.contactIdsByPhone(userId, candidate.phones ?? []);
   const matchedOn: "email" | "phone" = byEmail.length > 0 ? "email" : "phone";
   const allMatches = byEmail.length > 0 ? byEmail : byPhone;
   const matchedValues = matchedOn === "email" ? (candidate.emails ?? []) : (candidate.phones ?? []);
@@ -847,6 +800,14 @@ export function resolveSourceRecord(
   // address set, and nothing re-swept when the addresses later arrived.
   applyLinkedSourceValues(userId, candidateContactId);
 
+  // BACKLOG-2620 — THE COPY ABOVE JUST CHANGED A RELATION THE INDEX IS BUILT
+  // FROM, and a later record in this same pass may legitimately match this
+  // contact through an address the pass itself added. With per-record queries
+  // that came for free; with a batch index it has to be said. This is the only
+  // in-pass invalidation there is: linking writes crosswalk rows, review-queue
+  // rows and these values, and only these values are read by the index.
+  index.noteContactValuesChanged(candidateContactId);
+
   return { outcome: "linked", contactId: candidateContactId, sourceRecordId, method: matchedOn };
 }
 
@@ -859,10 +820,17 @@ export function resolveSourceRecord(
  * code, no upgrade path to get wrong, self-healing as syncs run, and it also
  * covers contacts created AFTER this ships that somehow lack a link — which a
  * one-time migration would not.
+ *
+ * BACKLOG-2620 — the identifier probes come from ONE `ContactMatchIndex` loaded
+ * for the whole batch, so their SQL cost is four statements for the pass rather
+ * than three per record. Pass an index in to share one across several batches;
+ * the default loads a fresh one, which is what makes every pass see the current
+ * contact set rather than a remembered verdict.
  */
 export function linkSourceRecords(
   userId: string,
   candidates: SourceRecordCandidate[],
+  index: ContactMatchIndex = loadContactMatchIndex(userId),
 ): LinkRunSummary {
   const summary: LinkRunSummary = {
     idMatched: 0,
@@ -875,7 +843,7 @@ export function linkSourceRecords(
 
   for (const candidate of candidates) {
     if (!candidate.sourceRecordId) continue;
-    const resolution = resolveSourceRecord(userId, candidate);
+    const resolution = resolveSourceRecord(userId, candidate, index);
     summary.resolutions.push(resolution);
     switch (resolution.outcome) {
       case "already_linked":
@@ -902,9 +870,29 @@ export function linkSourceRecords(
  * The opportunistic pass, run after a sync has refreshed the shadow table.
  *
  * `external_contacts` IS the current source set, so every row in it is a
- * candidate. Records already claimed by the crosswalk resolve on one indexed
- * lookup and cost nothing more; only the genuinely unlinked ones reach the
- * content fallback, and only until they converge.
+ * candidate.
+ *
+ * ===========================================================================
+ * THE COST MODEL — the old one here was FALSE, and BACKLOG-2620 is the bill
+ * ===========================================================================
+ * This docblock used to say: "Records already claimed by the crosswalk resolve
+ * on one indexed lookup and cost nothing more; only the genuinely unlinked ones
+ * reach the content fallback, AND ONLY UNTIL THEY CONVERGE."
+ *
+ * The last clause was wrong, and it was wrong in the direction that hurts. A
+ * record that matches nothing has nothing written about it, so it converges on
+ * nothing: it re-enters the content fallback on the next pass and on every pass
+ * after, forever. The founder's log at `71ddcbb0` — 1,169 records, 10
+ * id-matched, 1,153 unmatched — is 1,153 records paying three statements each
+ * per pass, and passes are frequent.
+ *
+ * What is true now: the pass reads its three relations ONCE
+ * (`loadContactMatchIndex`), so the identifier SQL is **four statements per
+ * pass, independent of how many records match nothing**. Records still all get
+ * looked at — the per-record work is a `Map.get`, not a query. Nothing is
+ * remembered between passes, which is deliberate: a remembered "no match" is
+ * only correct with an invalidation signal, and the honest ones cost as much as
+ * simply reading the data again. `contactMatchIndex.ts` argues that out in full.
  */
 export function linkExternalContactsForUser(userId: string): LinkRunSummary {
   const rows = dbAll<{
