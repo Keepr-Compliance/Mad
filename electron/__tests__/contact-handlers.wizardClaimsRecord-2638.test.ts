@@ -556,7 +556,14 @@ describe("CONTROL 3 — pressing Add twice is one contact, and the crosswalk is 
     const result = await registeredHandlers.get("contacts:import")(mockEvent, USER, [
       { ...stale, name: "Dana Whitlock-Reyes", display_name: "Dana Whitlock-Reyes" },
     ]);
-    expect(result.success).toBe(true);
+    // OBSERVED, 2026-08-11: replacing the crosswalk lookup in the handler's
+    // re-entry guard with `LOWER(display_name) = LOWER(?)` fails HERE, with
+    // `UNIQUE constraint failed: contact_source_links.user_id,
+    // source_type, source_record_id`. A name fold misses the renamed card,
+    // creates a second contact, and the crosswalk's own UNIQUE then refuses to
+    // let two contacts claim one record. Worth stating rather than tidying
+    // away: the schema is the last line of this defence, not the guard.
+    expect(result.success ? true : result.error).toBe(true);
 
     expect(result.contacts.map((c: any) => c.id)).toEqual([first]);
     expect(allContacts()).toEqual([`${first}|Dana Whitlock`]);
