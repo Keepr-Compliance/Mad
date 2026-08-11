@@ -128,37 +128,42 @@ function gitZ(args) {
     .filter(Boolean);
 }
 
-function lineAt(buf, offset) {
-  let line = 1;
-  for (let i = 0; i < offset; i++) if (buf[i] === 0x0a) line++;
-  return line;
-}
-
 /**
  * Everything wrong with these bytes. Authoritative and depth-independent: it
  * reads the whole buffer rather than a prefix, which is where `file(1)` fails.
+ *
+ * Line numbers are carried along in the single scan rather than recomputed per
+ * finding. Recomputing is the obvious way to write this and it is quadratic in
+ * (file size x number of findings): harmless on the one vendored bundle in scope
+ * today (1 MB, 30 control bytes, 15 ms) and a CI job that never returns on a
+ * minified file carrying thousands of them.
  */
 function inspect(buf) {
   const faults = new Set();
   const sites = [];
   const context = [];
+  let line = 1;
 
   for (let i = 0; i < buf.length; i++) {
     const b = buf[i];
-    if (b === 0x09 || b === 0x0a) continue;
+    if (b === 0x0a) {
+      line++;
+      continue;
+    }
+    if (b === 0x09) continue;
     if (b === 0x0d) {
       if (buf[i + 1] !== 0x0a) {
         faults.add(LONE_CR);
-        sites.push({ offset: i, byte: b, line: lineAt(buf, i) });
+        sites.push({ offset: i, byte: b, line });
       }
       continue;
     }
     if (b === 0x00) {
       faults.add(NUL);
-      sites.push({ offset: i, byte: b, line: lineAt(buf, i) });
+      sites.push({ offset: i, byte: b, line });
     } else if (b < 0x20 || b === 0x7f) {
       // Context only. Nothing skips a file for these.
-      context.push({ offset: i, byte: b, line: lineAt(buf, i) });
+      context.push({ offset: i, byte: b, line });
     }
   }
 
