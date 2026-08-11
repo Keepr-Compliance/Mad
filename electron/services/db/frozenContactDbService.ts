@@ -23,60 +23,32 @@
  */
 
 import { dbGet } from "./core/dbConnection";
+import { FROZEN_CONTACT_EXISTS_SQL } from "./frozenContactSql";
 
 /**
  * Is this contact referenced by an EXPORTED (frozen) transaction?
  *
- * `transactions.first_exported_at IS NOT NULL` is the freeze boundary
- * (BACKLOG-2013). The contact→transaction relationship is THREE-WAY and a
- * predicate that checks only the junction table under-reports:
- *   1. direct FK columns on `transactions` (buyer_agent_id, ...)
- *   2. the `transaction_contacts` junction
- *   3. the `other_contacts` JSON array
- */
-/**
- * BACKLOG-2366 — THE JUNCTION CHECK BELOW IS DELIBERATELY NOT FILTERED BY
- * `removed_at`, which is the opposite of every other read of
- * `transaction_contacts` after that ticket.
+ * ===========================================================================
+ * THE PREDICATE ITSELF LIVES IN `frozenContactSql.ts` — BACKLOG-2664
+ * ===========================================================================
+ * It used to be written out here, and that was fine while every caller could
+ * run TypeScript. The backfill's content fallback
+ * (`contactSourceLinkSql.CONTACT_SOURCE_RECORDS_SQL`) now has to ask the same
+ * question from inside a query, on a worker thread that cannot import this
+ * module. Two hand-written copies of a rule that guards an audit guarantee is a
+ * drift waiting to happen, so the `EXISTS (...)` body is a shared constant and
+ * this function is one of its two consumers.
  *
- * The question this predicate asks is not "is this contact a current party?" but
- * "did this contact's details go out in a filed audit?" — and removing someone
- * from a deal today cannot un-send yesterday's export.
- *
- * Adding the filter here would let a user remove a party from an already-exported
- * transaction and thereby unlock deletion of the email addresses and phone
- * numbers that defined that audit's search set (see contactSourceValues.ts:310),
- * silently changing what the filed artifact can be reconciled against.
- *
- * The tombstone makes this position STRONGER than it was: that junction row used
- * to be deleted outright on removal, so this check could go quiet on its own.
+ * Read `frozenContactSql.ts` for what the predicate asks and why the junction
+ * check ignores `removed_at`. `contactSourceLinkSql.frozenCopy-2664.test.ts`
+ * holds the two consumers to the same answers.
  */
 export function isContactOnFrozenTransaction(contactId: string): boolean {
-  // Named parameter: `contactId` appears six times and better-sqlite3 rejects
-  // `?N` numbered placeholders, while six positional `?` would be an ordering
-  // hazard on every future edit.
+  // Named parameter: `contactId` appears six times inside the fragment and
+  // better-sqlite3 rejects `?N` numbered placeholders, while six positional `?`
+  // would be an ordering hazard on every future edit.
   const row = dbGet<{ hit: number }>(
-    `SELECT 1 AS hit FROM transactions t
-      WHERE t.first_exported_at IS NOT NULL
-        AND (
-          t.buyer_agent_id = @contactId
-          OR t.seller_agent_id = @contactId
-          OR t.escrow_officer_id = @contactId
-          OR t.inspector_id = @contactId
-          -- BACKLOG-2366: deliberately NOT filtered by removed_at.
-          -- See the docblock above for why.
-          OR EXISTS (
-            SELECT 1 FROM transaction_contacts tc
-             WHERE tc.transaction_id = t.id AND tc.contact_id = @contactId
-          )
-          OR (
-            t.other_contacts IS NOT NULL
-            AND EXISTS (
-              SELECT 1 FROM json_each(t.other_contacts) j WHERE j.value = @contactId
-            )
-          )
-        )
-      LIMIT 1`,
+    `SELECT 1 AS hit WHERE ${FROZEN_CONTACT_EXISTS_SQL}`,
     [{ contactId }],
   );
   return row !== undefined && row !== null;

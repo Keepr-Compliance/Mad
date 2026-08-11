@@ -138,6 +138,22 @@ const SCHEMA = `
     FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     UNIQUE (user_id, source_type, source_record_id)
   );
+  -- BACKLOG-2664: CONTACT_SOURCE_RECORDS_SQL's content fallbacks now refuse to
+  -- offer a copy plan for a contact on an EXPORTED transaction, so the query
+  -- reads these two tables. Minimal shapes, columns named by the predicate in
+  -- db/frozenContactSql.ts; every contact below is a party to nothing, so the
+  -- freeze is false for all of them and no assertion in this file changes.
+  -- Their absence surfaced as an immediate "no such table: transactions".
+  CREATE TABLE transactions (
+    id TEXT PRIMARY KEY, user_id TEXT, property_address TEXT,
+    first_exported_at DATETIME, buyer_agent_id TEXT, seller_agent_id TEXT,
+    escrow_officer_id TEXT, inspector_id TEXT, other_contacts TEXT
+  );
+  CREATE TABLE transaction_contacts (
+    id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL, contact_id TEXT NOT NULL,
+    role TEXT, removed_at DATETIME, removed_reason TEXT,
+    UNIQUE(transaction_id, contact_id)
+  );
 `;
 
 /** Every source record a saved contact resolves to, in declared order. */

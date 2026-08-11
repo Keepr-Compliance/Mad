@@ -67,7 +67,51 @@
  * The gate therefore counts only RECORD-BACKED links. Spelled as a literal
  * rather than an interpolated constant because this string is also read verbatim
  * by `contactQueryWorker`, which holds its own driver handle.
+ *
+ * ---------------------------------------------------------------------------
+ * AND WHY PRIORITIES 2 AND 3 ALSO ASK ABOUT THE FREEZE (BACKLOG-2664)
+ * ---------------------------------------------------------------------------
+ * READ THIS BEFORE REMOVING THE `NOT EXISTS ... transactions` CLAUSE.
+ *
+ * This query is not a reader. Its two consumers — the backfill on the main
+ * thread and its worker twin — COPY every row it returns onto the contact's
+ * `contact_emails` / `contact_phones`. Priorities 2 and 3 select records by
+ * CONTENT ALONE: no link, no name check, no verdict, and until this ticket no
+ * freeze check. So the query was a copy path that had never agreed to anything.
+ *
+ * Founder QA, 11 Aug. Dana Whitlock, a party to a FILED transaction, holding one
+ * number she had approved. A sweep refused to link all three of her source
+ * records — filing them as `frozen_audit_contact` questions, which is correct —
+ * and copied two numbers off them anyway. There was no link to unlink, so no
+ * answer to those questions could take the numbers back: answering "different
+ * people" would have left a stranger's number on a filed audit's party
+ * permanently.
+ *
+ * AND THE FREEZE IS WHY SHE WAS THE ONE IT HAPPENED TO. A contact on a filed
+ * transaction can never acquire a record-backed crosswalk row by content
+ * matching, because `contactSourceLinker.resolveSourceRecord` refuses at its
+ * `frozen_audit_contact` branch. The gate above therefore never closes for her,
+ * so the fallback re-copies every content-matching record on every sweep,
+ * forever. An unfrozen contact converges out of it the first time a link is
+ * written — which is why the same sweep left the founder's unfrozen control
+ * contact byte-identical.
+ *
+ * The rule this restores: THE COPY IS A CONSEQUENCE OF THE LINK, NEVER A SIBLING
+ * OF IT. Priority 1 is untouched, because a linked record's values ARE a
+ * consequence of its link and stay correct when the contact is frozen; a frozen
+ * contact still receives values the moment a human confirms a question or links
+ * a source by hand. Only the two branches that copy without a link now stop at
+ * the freeze.
+ *
+ * The predicate is `frozenContactSql.FROZEN_CONTACT_EXISTS_SQL` — the same
+ * constant `frozenContactDbService.isContactOnFrozenTransaction` is built from,
+ * so the gate cannot drift from the function that decides the identical question
+ * one module away. It is interpolated rather than inlined for that reason, and
+ * `contactQueryWorker` picks it up transitively: the constant is a leaf module
+ * with no db imports, which is what makes it reachable from a worker thread.
  */
+
+import { FROZEN_CONTACT_EXISTS_SQL } from "./frozenContactSql";
 
 /**
  * Params: @userId = user_id, @contactId = contact_id.
@@ -111,6 +155,9 @@ export const CONTACT_SOURCE_RECORDS_SQL = `
              WHERE x.contact_id = @contactId
                AND x.match_method <> 'origin'
           )
+      -- BACKLOG-2664: a copy with no link behind it must not reach a contact an
+      -- exported audit depends on. See the header.
+      AND NOT ${FROZEN_CONTACT_EXISTS_SQL}
       AND EXISTS (
         SELECT 1 FROM contact_emails ce, json_each(COALESCE(ec.emails_json, '[]')) j
          WHERE ce.contact_id = @contactId
@@ -134,6 +181,10 @@ export const CONTACT_SOURCE_RECORDS_SQL = `
              WHERE x.contact_id = @contactId
                AND x.match_method <> 'origin'
           )
+      -- BACKLOG-2664: same gate as priority 2. The founder's records each
+      -- carried one number, so this branch is the one his case may NOT have
+      -- taken — it is closed for the same reason regardless.
+      AND NOT ${FROZEN_CONTACT_EXISTS_SQL}
       AND EXISTS (
         SELECT 1 FROM contact_phones cp, json_each(COALESCE(ec.phones_normalized_json, '[]')) j
          WHERE cp.contact_id = @contactId
