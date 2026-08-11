@@ -749,7 +749,19 @@ export async function getTaskByLegacyId(
 // 39. pm_record_task_tokens -- Record actual token usage for a task
 // ---------------------------------------------------------------------------
 
-/** Record actual token usage for a task, rolling up to the parent backlog item. */
+/**
+ * Record actual token usage for a task, rolling up to the parent backlog item.
+ *
+ * BACKLOG-2642: the RPC aggregates `billable_tokens` (input + output +
+ * cache_creation), NOT `total_tokens` — `total_tokens` includes cache reads and
+ * is ~19x inflated. The parent item rolls up from metrics attributed to the
+ * item, not from child-task sums.
+ *
+ * The agent-metric arguments below (`agentId` through `sessionId`) are accepted
+ * for signature compatibility and are IGNORED by the RPC — it no longer writes
+ * to `pm_token_metrics`. Metric rows are written by `pm_log_agent_metrics` (the
+ * SubagentStop hook path). The response carries `agent_metrics_written: false`.
+ */
 export async function recordTaskTokens(
   taskId: string,
   actualTokens: number,
