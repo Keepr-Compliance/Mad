@@ -350,19 +350,19 @@ function seedParityCorpus(db: DatabaseType): void {
 
   // Contact ids are deliberately NOT in insertion order, so `ORDER BY c.id`
   // and "the order rows were written" cannot be confused for one another.
-  insC.run("c-zoe", USER_ID, "Zoe Adler");
-  insE.run("e-zoe", "c-zoe", "ZOE.ADLER@Example.COM");
-  insC.run("c-amir", USER_ID, "Amir Haddad");
-  insE.run("e-amir1", "c-amir", "amir@example.com");
-  insE.run("e-amir2", "c-amir", "amir.haddad@example.org");
-  insC.run("c-mira", USER_ID, "Mira Sandoval");
+  insC.run("c-pat", USER_ID, "Pat Riverton");
+  insE.run("e-pat", "c-pat", "PAT.RIVERTON@Example.COM");
+  insC.run("c-robin", USER_ID, "Robin Marsh");
+  insE.run("e-robin1", "c-robin", "robin@example.com");
+  insE.run("e-robin2", "c-robin", "robin.marsh@example.org");
+  insC.run("c-chris", USER_ID, "Chris Alvarez");
   // Leading space in the STORED address. `LOWER()` does not trim it, so this
   // must NOT match a probe for the same address without the space.
-  insE.run("e-mira", "c-mira", " mira@example.com");
-  insP.run("p-mira", "c-mira", "+15555550171", "5555550171");
-  insC.run("c-tomas", USER_ID, "Tomas Iverson");
-  insP.run("p-tomas", "c-tomas", "+15555550171", "5555550171");
-  insC.run("c-null", USER_ID, "Nell Barros");
+  insE.run("e-chris", "c-chris", " chris@example.com");
+  insP.run("p-chris", "c-chris", "+15555550171", "5555550171");
+  insC.run("c-dana", USER_ID, "Dana Alvarez");
+  insP.run("p-dana", "c-dana", "+15555550171", "5555550171");
+  insC.run("c-null", USER_ID, "Robin Hale");
   // A NULL lookup key: `IN` can never match it, in either implementation.
   insP.run("p-null", "c-null", "+15555550188", null);
   insC.run("c-short", USER_ID, "Short Code Sender");
@@ -395,13 +395,13 @@ function seedParityCorpus(db: DatabaseType): void {
   };
 
   // Case differs on both sides.
-  add("p-case", { name: "Zoe Adler", emails: ["zoe.adler@example.com"] });
+  add("p-case", { name: "Pat Riverton", emails: ["pat.riverton@example.com"] });
   // Two of the record's emails reach ONE contact — the live query's DISTINCT.
-  add("p-distinct", { name: "Amir Haddad", emails: ["amir@example.com", "amir.haddad@example.org"] });
+  add("p-distinct", { name: "Robin Marsh", emails: ["robin@example.com", "robin.marsh@example.org"] });
   // The stored address has a leading space, the probe does not: no match.
-  add("p-untrimmed", { name: "Mira Sandoval", emails: ["mira@example.com"] });
+  add("p-untrimmed", { name: "Chris Alvarez", emails: ["chris@example.com"] });
   // Two contacts share the phone: order decides which one the question names.
-  add("p-shared-phone", { name: "Mira Sandoval", phones: ["+1 (555) 555-0171"] });
+  add("p-shared-phone", { name: "Chris Alvarez", phones: ["+1 (555) 555-0171"] });
   // Email matches nobody, phone matches somebody: the phone arm must be reached.
   add("p-phone-fallback", {
     name: "Other Holder",
@@ -415,7 +415,7 @@ function seedParityCorpus(db: DatabaseType): void {
     phones: ["+15555550166"],
   });
   // A NULL stored key is unreachable.
-  add("p-null-key", { name: "Nell Barros", phones: ["+15555550188"] });
+  add("p-null-key", { name: "Robin Hale", phones: ["+15555550188"] });
   add("p-short-code", { name: "Short Code Sender", phones: ["12345"] });
   add("p-alphanumeric", { name: "Verizon Notices", phones: ["VERIZON"] });
   // Nothing to probe with at all.
@@ -491,7 +491,7 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
   it("CONTROL 2 — a record that matched nothing links to a contact created AFTER it", async () => {
     db = makeDb();
     setDb(db);
-    addRecord("rec-late", { emails: ["dana.reyes@example.com"], name: "Dana Reyes" });
+    addRecord("rec-late", { emails: ["casey.lane@example.com"], name: "Casey Lane" });
 
     const first = linkExternalContactsForUser(USER_ID);
     expect(idsOf(first, "no_match")).toEqual(["rec-late"]);
@@ -500,9 +500,9 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
     const contact = await createContact(
       {
         user_id: USER_ID,
-        display_name: "Dana Reyes",
+        display_name: "Casey Lane",
         source: "manual",
-        email: "dana.reyes@example.com",
+        email: "casey.lane@example.com",
       } as Parameters<typeof createContact>[0],
       { kind: "derived" },
     );
@@ -520,11 +520,11 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
     it("3a — an email ADDED to an existing contact links a record that did not match before", async () => {
       db = makeDb();
       setDb(db);
-      addRecord("rec-3a", { emails: ["marcus.ord@example.com"], name: "Marcus Ord" });
+      addRecord("rec-3a", { emails: ["sam.hale@example.com"], name: "Sam Hale" });
       const contact = await createContact(
         {
           user_id: USER_ID,
-          display_name: "Marcus Ord",
+          display_name: "Sam Hale",
           source: "manual",
         } as Parameters<typeof createContact>[0],
         { kind: "derived" },
@@ -532,7 +532,7 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
 
       expect(idsOf(linkExternalContactsForUser(USER_ID), "no_match")).toEqual(["rec-3a"]);
 
-      syncContactEmails(contact.id, [{ email: "marcus.ord@example.com", is_primary: true }]);
+      syncContactEmails(contact.id, [{ email: "sam.hale@example.com", is_primary: true }]);
 
       expect(idsOf(linkExternalContactsForUser(USER_ID), "linked")).toEqual(["rec-3a"]);
       expect(crosswalkPairs()).toContainEqual([contact.id, "rec-3a"]);
@@ -541,11 +541,11 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
     it("3b — an identifier REMOVED from a contact returns its record to no_match", async () => {
       db = makeDb();
       setDb(db);
-      addRecord("rec-3b", { phones: ["+14155550123"], name: "Priya Raman" });
+      addRecord("rec-3b", { phones: ["+14155550123"], name: "Lee Park" });
       const contact = await createContact(
         {
           user_id: USER_ID,
-          display_name: "Priya Raman",
+          display_name: "Lee Park",
           source: "manual",
           phone: "+14155550123",
         } as Parameters<typeof createContact>[0],
@@ -565,20 +565,20 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
     it("3c — an identifier MOVED between contacts re-points the record to the new holder", async () => {
       db = makeDb();
       setDb(db);
-      addRecord("rec-3c", { emails: ["shared.desk@example.com"], name: "Shared Desk" });
+      addRecord("rec-3c", { emails: ["mo.park@example.com"], name: "Mo Park" });
       const first = await createContact(
         {
           user_id: USER_ID,
-          display_name: "Shared Desk",
+          display_name: "Mo Park",
           source: "manual",
-          email: "shared.desk@example.com",
+          email: "mo.park@example.com",
         } as Parameters<typeof createContact>[0],
         { kind: "derived" },
       );
       const second = await createContact(
         {
           user_id: USER_ID,
-          display_name: "Shared Desk",
+          display_name: "Mo Park",
           source: "manual",
         } as Parameters<typeof createContact>[0],
         { kind: "derived" },
@@ -590,7 +590,7 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
       // Move the address, and drop the crosswalk row so the content path is the
       // one under test rather than STEP 1's memory of the old answer.
       syncContactEmails(first.id, []);
-      syncContactEmails(second.id, [{ email: "shared.desk@example.com", is_primary: true }]);
+      syncContactEmails(second.id, [{ email: "mo.park@example.com", is_primary: true }]);
       db.prepare("DELETE FROM contact_source_links WHERE source_record_id = ?").run("rec-3c");
 
       expect(idsOf(linkExternalContactsForUser(USER_ID), "linked")).toEqual(["rec-3c"]);
@@ -611,13 +611,13 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
     it("3d — a tombstoned contact is still a candidate, before and after (existing behaviour, pinned)", async () => {
       db = makeDb();
       setDb(db);
-      addRecord("rec-3d", { emails: ["removed.person@example.com"], name: "Removed Person" });
+      addRecord("rec-3d", { emails: ["sam.rivers@example.com"], name: "Sam Rivers" });
       const contact = await createContact(
         {
           user_id: USER_ID,
-          display_name: "Removed Person",
+          display_name: "Sam Rivers",
           source: "manual",
-          email: "removed.person@example.com",
+          email: "sam.rivers@example.com",
         } as Parameters<typeof createContact>[0],
         { kind: "derived" },
       );
@@ -640,11 +640,11 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
     it("3e — the RECORD's own identifiers changing is seen on the next pass", async () => {
       db = makeDb();
       setDb(db);
-      addRecord("rec-3e", { emails: ["old.address@example.com"], name: "Sam Okafor" });
+      addRecord("rec-3e", { emails: ["old.address@example.com"], name: "Jane Seller" });
       const contact = await createContact(
         {
           user_id: USER_ID,
-          display_name: "Sam Okafor",
+          display_name: "Jane Seller",
           source: "manual",
           email: "new.address@example.com",
         } as Parameters<typeof createContact>[0],
@@ -666,11 +666,11 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
     it("3f — a crosswalk row written between passes is honoured at STEP 1", async () => {
       db = makeDb();
       setDb(db);
-      addRecord("rec-3f", { emails: ["typed.by.hand@example.com"], name: "Jo Nakamura" });
+      addRecord("rec-3f", { emails: ["typed.by.hand@example.com"], name: "John Smith" });
       const contact = await createContact(
         {
           user_id: USER_ID,
-          display_name: "Jo Nakamura",
+          display_name: "John Smith",
           source: "manual",
         } as Parameters<typeof createContact>[0],
         { kind: "derived" },
@@ -705,20 +705,20 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
       setDb(db);
       // Record A: matches Ada by email, and also carries her phone.
       addRecord("rec-a", {
-        emails: ["ada.brennan@example.com"],
+        emails: ["dana.example@example.com"],
         phones: ["+15125550144"],
-        name: "Ada Brennan",
+        name: "Dana Example",
       });
       // Record B: carries ONLY that phone. The saved contact does not have it
       // until record A's link copies it across, mid-pass.
-      addRecord("rec-b", { phones: ["+15125550144"], name: "Ada Brennan", source: "outlook" });
+      addRecord("rec-b", { phones: ["+15125550144"], name: "Dana Example", source: "outlook" });
 
       const contact = await createContact(
         {
           user_id: USER_ID,
-          display_name: "Ada Brennan",
+          display_name: "Dana Example",
           source: "manual",
-          email: "ada.brennan@example.com",
+          email: "dana.example@example.com",
         } as Parameters<typeof createContact>[0],
         { kind: "derived" },
       );
@@ -750,10 +750,10 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
     db = makeDb();
     setDb(db);
     db.prepare(
-      "INSERT INTO contacts (id, user_id, display_name, is_imported) VALUES ('c-steady', ?, 'Steady Person', 1)",
+      "INSERT INTO contacts (id, user_id, display_name, is_imported) VALUES ('c-steady', ?, 'Test Contact', 1)",
     ).run(USER_ID);
     addRecord("rec-steady", {
-      name: "Steady Person",
+      name: "Test Contact",
       emails: ["steady@example.com"],
       externalUuid: "1F2E3D4C-5B6A-7988-9A0B-1C2D3E4F5062",
     });
