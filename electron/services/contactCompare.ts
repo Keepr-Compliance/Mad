@@ -408,6 +408,17 @@ function loadCommunications(
   }
 
   // ---- texts --------------------------------------------------------------
+  /*
+    THE MATCH INPUT. RAW, AND NO TEST WILL CATCH YOU CHANGING THAT.
+
+    BACKLOG-2644 formats phones for the screen; these values are not for the
+    screen, they are what `phonesMatch` compares against `participants_flat`.
+    Formatting here was RUN as a control and left all 102 tests green, because
+    `phonesMatch` normalises both sides through `toE164` — so the mistake is
+    invisible to behaviour today and would only surface when someone later
+    changed the formatter. Display goes on the way OUT (`matchedIdentifier`
+    below), never on the way IN.
+  */
   const phonesByBundle = bundles.map((b) => b.phones.filter((p) => p.trim() !== ""));
   if (phonesByBundle.some((p) => p.length > 0)) {
     const rows = dbAll<{

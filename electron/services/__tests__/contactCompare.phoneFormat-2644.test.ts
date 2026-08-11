@@ -28,8 +28,28 @@
  *   C1b  `+1…` vs bare ten digits render identically break: `displayPhone` -> bare `formatPhoneNumber`
  *   C2   `12345` / `VERIZON` survive unchanged       break: `displayPhone` -> `extractDigits`
  *   C3   1–9 digit runs are not mangled              break: `displayPhone` -> `toE164`
- *   C4   matching is untouched                       break: format the `loadCommunications` bundles
- *   C5   the `match` tag's behaviour did not change  established by RUNNING C1/C1b at base e1b01393
+ *   C3b  a stated country code is not overwritten    break: drop the `+` guard from `displayPhone`
+ *   C4   the match path still finds the message      break: starve one column's bundle
+ *   C4b  formatting preserves `toLookupKey`          break: `formatPhoneNumber("1" + digits.slice(1))`
+ *   C5   the reason sentence agrees with the cells   break: unwrap `displayPhone` at `buildReason`
+ *
+ * ---------------------------------------------------------------------------
+ * ONE MUTATION WAS RUN AND DID *NOT* GO RED. RECORDED, NOT HIDDEN.
+ * ---------------------------------------------------------------------------
+ * Formatting the `loadCommunications` MATCH BUNDLES — deliberately moving
+ * display INTO the match path, the exact boundary violation this PR claims not
+ * to commit — leaves all 102 tests green. That is not a gap in the suite; it is
+ * a property of the match path, and it was measured rather than assumed:
+ * `phonesMatch` normalises BOTH sides through `toE164`
+ * (`messageMatchingService.ts:84`), so any formatting that preserves the digit
+ * run is invisible to it.
+ *
+ * Two consequences worth stating. The display change cannot reach message
+ * matching even if a later refactor moved it there — which is the strongest
+ * form of "display-only" available here. And no test can be written to forbid
+ * that refactor by behaviour alone, so the boundary is held by the comment at
+ * the `phonesByBundle` line and by review, not by this file. A reader looking
+ * for the test that pins it should stop looking.
  *
  * ---------------------------------------------------------------------------
  * FIXTURES
@@ -197,6 +217,21 @@ describe("the same number renders as one shape, whichever store it came from", (
     expect(phones).toEqual([
       [{ value: "+1 (206) 555-0130", matched: true }],
       [{ value: "+1 (206) 555-0130", matched: true }],
+    ]);
+  });
+
+  /**
+   * The reported values, transcribed rather than restated in this file's own
+   * area code: `+15035550130` on the contact, `+1 (503) 555-0130` on the
+   * record, exactly as they appeared on the founder's screen. Kept alongside
+   * C1 so the suite contains the case as filed, not only its shape.
+   */
+  it("prints the founder's reported pair as one shape", async () => {
+    const phones = await comparePhones("c1-reported", ["+15035550130"], ["+1 (503) 555-0130"]);
+
+    expect(phones).toEqual([
+      [{ value: "+1 (503) 555-0130", matched: true }],
+      [{ value: "+1 (503) 555-0130", matched: true }],
     ]);
   });
 
@@ -418,13 +453,17 @@ describe("matching is untouched — display is a leaf", () => {
    * behaviour: `loadCommunications` compares each column's phones against
    * `messages.participants_flat`. It must keep comparing STORED values.
    *
-   * The fixture makes the two stores disagree on spelling AND the message
-   * carry a third spelling, so a bundle built from formatted values would stop
-   * matching at least one column.
+   * The fixture makes the two stores disagree on spelling and the message carry
+   * a third, so each column reaches the message by a different string.
    *
-   * CONTROL: format the `phonesByBundle` inputs instead of the reported `hit`
-   * and this drops to one column, or none. Asserted as EXACT MESSAGE ID SETS —
-   * a count would pass while the wrong column claimed the message.
+   * CONTROL: `bundles.map((b, i) => (i === 1 ? [] : …))` — starve the source
+   * column's bundle and this reads `[["msg-1"], []]`. RUN, red. That control
+   * exists because the OBVIOUS one does not work: formatting the bundles leaves
+   * this green (see the header), so the assertion had to be proved non-vacuous
+   * a different way.
+   *
+   * Asserted as EXACT MESSAGE ID SETS — a count would pass while the wrong
+   * column claimed the message.
    */
   it("still finds a text through both columns when the two stores spell the number differently", async () => {
     addContact("c4", "Robin Marsh", { phones: ["+12065550177"] });
