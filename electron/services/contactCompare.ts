@@ -44,7 +44,7 @@ import type {
 import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
 import { matchMethodDescription, sourceLabel } from "./contactLinkEvidence";
 import { dedupeEmailValues, dedupePhoneValues } from "../utils/contactValueDedup";
-import { toLookupKey } from "../utils/phoneNormalization";
+import { extractDigits, formatPhoneNumber, toLookupKey } from "../utils/phoneNormalization";
 import { phonesMatch } from "./messageMatchingService";
 import { isReactionRow } from "../utils/reactionUtils";
 import logService from "./logService";
@@ -202,6 +202,87 @@ const emailKey = (email: string): string => email.trim().toLowerCase();
 const phoneKey = (phone: string): string => toLookupKey(phone);
 const nameKey = (name: string): string =>
   name.trim().replace(/\s+/g, " ").toLowerCase();
+
+/**
+ * ONE SHAPE PER NUMBER, ON THE ONE SCREEN THAT EXISTS TO COMPARE THEM.
+ * (BACKLOG-2644)
+ *
+ * ===========================================================================
+ * THE REPORTED SCREEN
+ * ===========================================================================
+ * Founder, 11 Aug, comparing two records of one person:
+ *
+ *     Phone                          Phone
+ *       +15035550130                   +1 (503) 555-0130
+ *
+ * Same number. Two shapes. The columns read different stores and this service
+ * printed both verbatim: column 1 is `contact_phones.phone_e164`
+ * (`getContactPhoneEntries` projects `phone_e164 AS phone`), normalised at
+ * import; a record column is `external_contacts.phones_json`, which preserves
+ * the address book's own punctuation on purpose (`contactValueDedup`'s "first
+ * spelling wins", BACKLOG-2457). NEITHER STORE IS WRONG. The rendering was.
+ *
+ * The cost is asymmetric and permanent, which is why this is not cosmetic: a
+ * user who cannot see that two numbers match answers *different people*, and a
+ * `different_people` verdict is final — the matcher can never propose the pair
+ * again. A punctuation difference becomes an irreversible wrong answer.
+ *
+ * ===========================================================================
+ * WHY `formatPhoneNumber` ALONE IS NOT ENOUGH — AND WHY THIS WRAPPER EXISTS
+ * ===========================================================================
+ * `formatPhoneNumber` branches on DIGIT COUNT, so the same number stored two
+ * ways still lands in two branches. Measured, not reasoned (the probe is now
+ * `renders one shape ...` in `contactCompare.phoneFormat-2644.test.ts`):
+ *
+ *     "+12065550142"      -> "+1 (206) 555-0142"
+ *     "(206) 555-0142"    -> "(206) 555-0142"        <- same number, still two shapes
+ *
+ * and `toLookupKey` says those two ARE one number, which is why this screen
+ * already tags them `match`. A ten-digit spelling with no country code is the
+ * ordinary address-book shape, and it was already pinned as expected output by
+ * `contactCompare.test.ts` ("marks the same number written two ways") — the
+ * founder's defect, preserved as an assertion.
+ *
+ * So a ten-digit run is canonicalised to the `+1` form before formatting.
+ *
+ * THIS ASSERTS NOTHING NEW. "Ten digits means NANP" is already claimed three
+ * times upstream: by `toE164`'s ten-digit branch, by `contact_phones.phone_e164`
+ * which is written through it, and by this screen's own `match` tag. The display
+ * is being brought into line with a claim the screen already makes.
+ *
+ * ===========================================================================
+ * THE `+` GUARD IS THE POINT, NOT A DEFENSIVE HABIT
+ * ===========================================================================
+ * A value like `+4405550142` states a country code AND carries exactly ten
+ * digits. Without the guard this would print `+1 (440) 555-0142` — a US country
+ * code invented over one the record actually stated, which is the one thing a
+ * screen about identity must not do. With it, an explicitly-prefixed value
+ * keeps `formatPhoneNumber`'s existing treatment (today, the US ten-digit
+ * shape): neither improved nor made worse here, and owned by BACKLOG-2461 /
+ * BACKLOG-2635.
+ *
+ * ===========================================================================
+ * LOCAL, AND NOT IN `phoneNormalization.ts`
+ * ===========================================================================
+ * `formatPhoneNumber`'s output shape is load-bearing elsewhere — it is the
+ * string `buildContactLabel` writes and the one `autoLinkNameGuard` compares
+ * against (`phoneNormalization.formatPhoneNumber.lookupKeyInvariant-2620.test.ts`).
+ * Widening it would move the linker. This is a rule about ONE SCREEN'S display
+ * and it lives on that screen.
+ *
+ * DISPLAY-ONLY, AND THE BOUNDARY IS EXACT: every comparison on this screen —
+ * `sharedPhoneKeys`, `dedupePhoneValues`, `phonesMatch` in `loadCommunications`
+ * — runs on the RAW stored value. This function's output is read by nothing but
+ * a person. It also preserves `toLookupKey` (the last ten of `"1" + d` is `d`),
+ * asserted over a boundary sweep in the suite, so even a future caller that
+ * compared the formatted string could not disagree with one that did not.
+ */
+const displayPhone = (raw: string): string => {
+  const digits = extractDigits(raw);
+  return digits.length === 10 && !raw.trim().startsWith("+")
+    ? formatPhoneNumber("1" + digits)
+    : formatPhoneNumber(raw);
+};
 
 function parseValueArray(raw: string | null): string[] {
   if (!raw) return [];
@@ -363,7 +444,24 @@ function loadCommunications(
           channel: "text",
           title: r.subject?.trim() || firstLine(r.body_text),
           occurredAt: r.sent_at ?? r.received_at,
-          matchedIdentifier: hit,
+          /*
+            THE THIRD PLACE A NUMBER IS PRINTED ON THIS SCREEN (BACKLOG-2644).
+
+            `hit` is one of THIS column's stored phones — the number the message
+            reached — and `CommRow` prints it under every communication line.
+            Left raw it would read "text · 4 Aug · +12065550142" directly beneath
+            a Phone row reading "+1 (206) 555-0142": the same defect, two rows
+            lower, on the same column.
+
+            Formatted HERE and not in the bundle above: `phonesByBundle` is the
+            match input, and `phonesMatch(p, t)` compares it against
+            `participants_flat` tokens. Formatting what is matched ON, rather
+            than what is reported, would put display in the match path.
+
+            The EMAIL branch is deliberately untouched — `r.addr` is an address,
+            already lower-cased-and-trimmed by the query that found it.
+          */
+          matchedIdentifier: displayPhone(hit),
         });
       });
     });
@@ -811,8 +909,22 @@ export async function getContactCompareColumns(
   const sharedPhoneKeys = sharedKeys((c) => c.phones, phoneKey);
   const sharedNameKeys = sharedKeys((c) => (c.displayName ? [c.displayName] : []), nameKey);
 
-  const mark = (values: string[], keys: Set<string>, key: (v: string) => string): CompareValue[] =>
-    values.map((value) => ({ value, matched: keys.has(key(value)) }));
+  /**
+   * `display` FORMATS, `key` COMPARES, AND THEY ARE GIVEN THE SAME RAW INPUT.
+   *
+   * BACKLOG-2644. `matched` is computed from the STORED value and only `value`
+   * is rewritten for the screen. Formatting first and keying off the formatted
+   * string would be the same code with the bug back in it: two normalisations
+   * of "the same number" in one function, which is the shape this file's
+   * `CompareValue` docblock exists to forbid.
+   */
+  const mark = (
+    values: string[],
+    keys: Set<string>,
+    key: (v: string) => string,
+    display: (v: string) => string = (v) => v,
+  ): CompareValue[] =>
+    values.map((value) => ({ value: display(value), matched: keys.has(key(value)) }));
 
   const comms = loadCommunications(
     userId,
@@ -828,7 +940,7 @@ export async function getContactCompareColumns(
       ? { value: c.displayName, matched: sharedNameKeys.has(nameKey(c.displayName)) }
       : null,
     emails: mark(c.emails, sharedEmailKeys, emailKey),
-    phones: mark(c.phones, sharedPhoneKeys, phoneKey),
+    phones: mark(c.phones, sharedPhoneKeys, phoneKey, displayPhone),
     company: c.company,
     transactions: c.transactions,
     recentCommunication: comms[i],
@@ -853,6 +965,8 @@ export async function getContactCompareColumns(
   const fallback = sourceRows[0]
     ? { method: sourceRows[0].match_method, source: sourceRows[0].source_type }
     : null;
+
+  const sharedPhoneRaw = firstShared((c) => c.phones, phoneKey, sharedPhoneKeys);
 
   /*
     Over LINKS, not columns — `nonOrigin`, which includes the row column 1
@@ -919,7 +1033,19 @@ export async function getContactCompareColumns(
     title: `Is this the same ${contact.display_name?.trim() || "person"}?`,
     reason: buildReason(
       columns,
-      firstShared((c) => c.phones, phoneKey, sharedPhoneKeys),
+      /*
+        THE SENTENCE PRINTS THE SAME SHAPE THE COLUMNS DO (BACKLOG-2644).
+
+        `firstShared` returns the RAW stored value — it searches `raw`, whose
+        values are the ones `sharedPhoneKeys` was built from, and that is
+        correct: the search must key on what the marking keyed on. But the
+        result is then printed two rows above the columns it names. Left
+        unformatted it would read "Both records list the phone number
+        +12065550142" over a column reading "+1 (206) 555-0142" — this bug,
+        one line higher, on the sentence whose whole job is to name the value
+        the user is being asked to check.
+      */
+      sharedPhoneRaw === null ? null : displayPhone(sharedPhoneRaw),
       firstShared((c) => c.emails, emailKey, sharedEmailKeys),
       namesMatch,
       fallback,

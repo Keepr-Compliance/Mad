@@ -109,6 +109,17 @@ const OTHER_USER = "user-other-2471";
  * as the one that hid real-name shapes on 2026-08-06.
  */
 const SHARED_PHONE = "+12065550142";
+/**
+ * WHAT THE SCREEN PRINTS FOR `SHARED_PHONE` — a separate fact from what is
+ * STORED, and separate on purpose (BACKLOG-2644).
+ *
+ * Every column now renders its phones through one formatter, so a stored
+ * spelling and its on-screen shape are two different things and these tests say
+ * which is which. `SHARED_PHONE` is what goes into the fixture; this is what a
+ * person reads. The controls for the formatting rule itself live in
+ * `contactCompare.phoneFormat-2644.test.ts`.
+ */
+const SHARED_PHONE_SHOWN = "+1 (206) 555-0142";
 const SHARED_EMAIL = "paul@example.com";
 /** Held by the Outlook record and by nothing else. The asymmetry in test 1. */
 const OUTLOOK_ONLY_EMAIL = "p.dorian@example.test";
@@ -657,7 +668,18 @@ describe("match marking", () => {
     const source = view!.columns[1];
 
     expect(source.emails).toEqual([{ value: "PAUL@example.com", matched: true }]);
-    expect(source.phones).toEqual([{ value: "(206) 555-0142", matched: true }]);
+    /*
+      BACKLOG-2644 — THIS LINE USED TO ASSERT THE DEFECT.
+
+      It expected `(206) 555-0142` while column 1 held `+12065550142`: one
+      number, `matched: true`, printed in two shapes, on the screen that exists
+      so a person can decide whether two records are the same human. The mark
+      was right and the rendering was not, and the assertion pinned the
+      rendering. Both columns now read one shape, and the pair below is the
+      claim — not two independent literals that could drift apart again.
+    */
+    expect(source.phones).toEqual([{ value: SHARED_PHONE_SHOWN, matched: true }]);
+    expect(view!.columns[0].phones.map((p) => p.value)).toEqual([SHARED_PHONE_SHOWN]);
     expect(view!.columns[0].emails).toEqual([{ value: SHARED_EMAIL, matched: true }]);
   });
 
@@ -699,8 +721,10 @@ describe("the reason sentence", () => {
     const view = await getContactCompareColumns(USER, "r1");
 
     expect(view!.title).toBe("Is this the same Paul Dorian?");
+    // The SHOWN shape, not the stored one — the sentence sits two rows above
+    // the cells it names and must agree with them (BACKLOG-2644).
     expect(view!.reason).toBe(
-      `Both records list the phone number ${SHARED_PHONE}, and the names match.`,
+      `Both records list the phone number ${SHARED_PHONE_SHOWN}, and the names match.`,
     );
   });
 
@@ -1098,7 +1122,7 @@ describe("the proposed column", () => {
     expect(last.kind).toBe("proposed");
     expect(last.displayName).toBe("Paul Dorian");
     // Its values join the same cross-column marking — the point of showing it.
-    expect(last.phones).toEqual([{ value: SHARED_PHONE, matched: true }]);
+    expect(last.phones).toEqual([{ value: SHARED_PHONE_SHOWN, matched: true }]);
   });
 
   /**
@@ -1250,6 +1274,8 @@ describe("linked, then unlinked, reads as unlinked again", () => {
 describe("R8 — collapsing the contact side", () => {
   /** Held by the Outlook record and by no contact row — the value a naive collapse drops. */
   const RECORD_ONLY_PHONE = "+12065550155";
+  /** What the screen prints for it. See `SHARED_PHONE_SHOWN` (BACKLOG-2644). */
+  const RECORD_ONLY_PHONE_SHOWN = "+1 (206) 555-0155";
   /** Held by the Google record and by no contact row. */
   const RECORD_ONLY_EMAIL = "pd.google@example.com";
 
@@ -1306,8 +1332,8 @@ describe("R8 — collapsing the contact side", () => {
     // CONTROL: build the contact column from `contactPhones` alone and
     // `+12065550155` disappears from this list.
     expect(contactColumn.phones.map((p) => p.value)).toEqual([
-      SHARED_PHONE,
-      RECORD_ONLY_PHONE,
+      SHARED_PHONE_SHOWN,
+      RECORD_ONLY_PHONE_SHOWN,
     ]);
     expect(contactColumn.emails.map((e) => e.value)).toEqual([
       SHARED_EMAIL,
@@ -1315,7 +1341,7 @@ describe("R8 — collapsing the contact side", () => {
     ]);
     // The contact's own values LEAD — they are the saved truth the rest of the
     // app uses, and the order is what the user reads first.
-    expect(contactColumn.phones[0].value).toBe(SHARED_PHONE);
+    expect(contactColumn.phones[0].value).toBe(SHARED_PHONE_SHOWN);
     // And the candidate's shared number still marks against the collapsed side,
     // so collapsing did not cost the comparison its point.
     expect(contactColumn.phones[0].matched).toBe(true);
@@ -1338,9 +1364,9 @@ describe("R8 — collapsing the contact side", () => {
     ]);
     // Unchanged values: the union belongs to the collapsed column and nowhere
     // else, so the record's own number is still ITS number here.
-    expect(contactRoute!.columns[0].phones.map((p) => p.value)).toEqual([SHARED_PHONE]);
+    expect(contactRoute!.columns[0].phones.map((p) => p.value)).toEqual([SHARED_PHONE_SHOWN]);
     const outlookColumn = contactRoute!.columns.find((c) => c.columnLabel.includes("Outlook"));
-    expect(outlookColumn!.phones.map((p) => p.value)).toEqual([RECORD_ONLY_PHONE]);
+    expect(outlookColumn!.phones.map((p) => p.value)).toEqual([RECORD_ONLY_PHONE_SHOWN]);
 
     // The same contact with a candidate, still uncollapsed, is four columns —
     // which is exactly what the founder saw, and is correct on this route.
@@ -1454,7 +1480,7 @@ describe("the one-record contact the review queue asks about", () => {
     expect(view!.columns.map((c) => c.kind)).toEqual(["contact", "proposed"]);
     // The candidate joins the cross-column marking, which is the whole point of
     // opening this screen: the shared phone is what the user is judging.
-    expect(view!.columns[1].phones).toEqual([{ value: SHARED_PHONE, matched: true }]);
+    expect(view!.columns[1].phones).toEqual([{ value: SHARED_PHONE_SHOWN, matched: true }]);
   });
 
   /**
