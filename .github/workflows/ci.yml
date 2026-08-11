@@ -275,13 +275,26 @@ jobs:
       - name: Assert nothing under .husky/_ is tracked
         run: npm run check:hooks
 
-  # BACKLOG-2637: a source file holding a raw NUL byte is classified as binary by
-  # grep, which then omits it from every repo-wide search WITHOUT warning and
-  # WITHOUT a non-zero exit. The result is not a slow search or a failed one — it
-  # is a clean-looking negative, and nothing anywhere says the file was skipped.
-  # It happened twice in one epic and both times a person found it by running
-  # `file` on a hunch. Deliberately NOT gated on docs-only: one `git ls-files`
-  # over the tracked set, no install step, and it must always report a status.
+  # BACKLOG-2637: a source file holding a raw NUL is classified as binary by the
+  # search tools, which then omit it from every repo-wide sweep WITHOUT warning
+  # and WITHOUT a non-zero exit. The result is not a slow search or a failed one
+  # — it is a clean-looking negative, and nothing anywhere says the file was
+  # skipped. It happened twice in one epic and both times a person found it by
+  # running `file` on a hunch, not by any check.
+  #
+  # Scope is repository-wide on purpose. The narrow first draft (electron/ and
+  # src/) left 691 of 2,051 tracked .ts/.tsx unchecked — a third of the
+  # TypeScript — and the clinching case is the guard script itself, which
+  # acquired the defect during its own development and lives in scripts/.
+  #
+  # Detection is a strict read of every tracked TS/JS file, NOT `file(1)`: file
+  # reads a prefix, and was measured calling a 200 KB file with a NUL at offset
+  # 150,000 "ASCII text" while that file was silently unsearchable. The same pass
+  # catches invalid UTF-8, which git cannot see and which ugrep — what `grep`
+  # resolves to in the agent shell — also skips silently. 2,121 files in ~0.7s.
+  #
+  # Deliberately NOT gated on docs-only: no install step, and it must always
+  # report a status.
   text-sources:
     name: Text Source Guard
     runs-on: ubuntu-latest
@@ -295,7 +308,7 @@ jobs:
         with:
           node-version: 20.x
 
-      - name: Assert no tracked .ts/.tsx reads as binary
+      - name: Assert every tracked TS/JS file is searchable
         run: npm run check:text-sources
 
   # BACKLOG-1750: gate the @keepr/ui shared component library. Isolated,
