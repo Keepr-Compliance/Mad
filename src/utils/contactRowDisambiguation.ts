@@ -88,7 +88,7 @@ const DISAMBIGUATION_FIELDS: ReadonlyArray<(row: DisambiguableRow) => string> = 
 /** Separator between kept fields, and between composite key parts. */
 const FIELD_JOIN = " · ";
 /** Unit separator — cannot occur in a company name, phone or email. */
-const KEY_SEP = "";
+const KEY_SEP = "\u001f";
 
 /** Everything this module reads off a row. Structural, so tests need no full contact. */
 export interface DisambiguableRow {
