@@ -40,7 +40,12 @@
  * runner in any zone.
  */
 
-import { parseDbTimestamp, formatDbDate, parseDateSafe } from "../dateFormatters";
+import {
+  parseDbTimestamp,
+  formatDbDate,
+  parseDateSafe,
+  normalizeDbTimestamp,
+} from "../dateFormatters";
 
 /** The founder's zone. Pinned explicitly — never inherited from the runner. */
 const CR = "America/Costa_Rica";
@@ -86,6 +91,55 @@ describe("Fixture guard (this suite is void if these do not hold)", () => {
     // and would be green against the unfixed code.
     expect(displayedByTheBug("2026-08-10 01:00:00")).toBe("Aug 10, 2026");
     expect(displayedByTheBug("2026-08-10 01:00:00")).not.toBe("Aug 9, 2026");
+  });
+});
+
+/**
+ * ===========================================================================
+ * THE ONLY CONTROL THAT DISCRIMINATES ON A UTC CI RUNNER
+ * ===========================================================================
+ * At UTC the naive shape and the UTC shape name the same instant, so
+ * `new Date("2026-08-10 01:00:00")` and the fixed parser agree exactly — the
+ * DEFECT ITSELF is undetectable there. Measured: with the normalisation removed,
+ * every end-to-end assertion in this file still passes under `TZ=UTC` and 14 of
+ * them fail under `TZ=America/Costa_Rica`.
+ *
+ * `normalizeDbTimestamp` is a pure string transform with no ambient timezone in
+ * it, so these assertions go red at ANY offset including UTC. Without this
+ * describe block, CI would be a green light that carries no information.
+ */
+describe("Zone-marking (ambient-free — this is what CI actually verifies)", () => {
+  it.each([
+    ["2026-08-10 01:00:00", "2026-08-10T01:00:00.000Z"],
+    ["2026-08-05 03:08:06", "2026-08-05T03:08:06.000Z"],
+    ["2026-08-10T01:00:00", "2026-08-10T01:00:00.000Z"],
+    ["2026-08-10 01:00", "2026-08-10T01:00:00.000Z"],
+    ["2026-08-10 01:00:00.500", "2026-08-10T01:00:00.500Z"],
+    ["2026-08-10 01:00:00.123456", "2026-08-10T01:00:00.123Z"],
+  ])("marks the naive %s as UTC -> %s", (raw, expected) => {
+    expect(normalizeDbTimestamp(raw)).toBe(expected);
+  });
+
+  it.each([
+    "2026-08-10T21:56:27.989Z",
+    "2026-08-10T01:00:00Z",
+    "2026-08-10T01:00:00+00:00",
+    "2026-08-09T19:00:00-06:00",
+    "2026-08-10",
+    "not a date",
+  ])("leaves %s byte-for-byte untouched", (raw) => {
+    expect(normalizeDbTimestamp(raw)).toBe(raw);
+  });
+
+  it("adds a zone marker to every naive value and to nothing else", () => {
+    // Sweeping the discriminator itself: a value either gains a Z or is identical.
+    for (const raw of ["2026-08-10 00:00:00", "2026-08-10 23:59:59", "2026-08-10 06:00:00"]) {
+      expect(normalizeDbTimestamp(raw)).toMatch(/Z$/);
+      expect(normalizeDbTimestamp(raw)).not.toBe(raw);
+    }
+    for (const raw of ["2026-08-10T00:00:00Z", "2026-08-10T00:00:00-06:00"]) {
+      expect(normalizeDbTimestamp(raw)).toBe(raw);
+    }
   });
 });
 

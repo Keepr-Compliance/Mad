@@ -82,18 +82,35 @@ export function parseDbTimestamp(value: Date | string | null | undefined): Date 
   const raw = String(value).trim();
   if (!raw) return null;
 
+  const d = new Date(normalizeDbTimestamp(raw));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * BACKLOG-2632 — the normalisation step of {@link parseDbTimestamp}, exported so
+ * it can be asserted WITHOUT `new Date`.
+ *
+ * That matters more than it looks. At UTC the naive shape and the UTC shape name
+ * the same instant, so `new Date("2026-08-10 01:00:00")` and the fixed parser
+ * agree exactly — the defect is undetectable there, and an end-to-end test on a
+ * UTC CI runner stays green whether or not the fix is present. This function is
+ * a pure string transform with no ambient timezone in it, so a test can prove
+ * the naive shape really is being marked as UTC on ANY runner.
+ *
+ * @param raw - a trimmed, non-empty raw column value
+ * @returns the same string, with a `Z` marker added if and only if it had none
+ */
+export function normalizeDbTimestamp(raw: string): string {
   // Anchored, so ANY trailing zone designator (`Z`, `+00:00`, `-06:00`) fails to
-  // match and falls through to standard parsing. Only a genuinely zone-less
-  // date+time is reinterpreted as UTC.
+  // match and is returned untouched. Only a genuinely zone-less date+time is
+  // reinterpreted as UTC. Date-only `YYYY-MM-DD` also fails to match — JS
+  // already reads that as UTC, and `parseDateSafe` owns its Windows behaviour.
   const naive =
     /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,6}))?$/.exec(raw);
+  if (!naive) return raw;
 
-  const normalized = naive
-    ? `${naive[1]}-${naive[2]}-${naive[3]}T${naive[4]}:${naive[5]}:${naive[6] ?? "00"}.${(naive[7] ?? "").padEnd(3, "0").slice(0, 3)}Z`
-    : raw;
-
-  const d = new Date(normalized);
-  return isNaN(d.getTime()) ? null : d;
+  const millis = (naive[7] ?? "").padEnd(3, "0").slice(0, 3);
+  return `${naive[1]}-${naive[2]}-${naive[3]}T${naive[4]}:${naive[5]}:${naive[6] ?? "00"}.${millis}Z`;
 }
 
 /**
