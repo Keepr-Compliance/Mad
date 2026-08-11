@@ -567,10 +567,23 @@ function runOpportunisticLinking(userId: string): number {
       fileNameQuestion(userId, pair, ctx);
     });
     linksCreated += nameSummary.autoLinked;
-    if (nameSummary.autoLinked > 0 || nameSummary.asked > 0) {
+    // BACKLOG-2666 — `barredByFreeze` is published here for the same reason
+    // BACKLOG-2410 published `declined` rather than folding it into
+    // `unmatched`: on the one screen support actually reads, "asked because the
+    // rule was unsure" and "asked because the contact is on a filed audit" are
+    // different events with different answers, and a line that reports only the
+    // first cannot tell them apart. Also the reason `barredByFreeze > 0` joins
+    // the emit condition — a pass whose ONLY outcome was a freeze refusal is
+    // exactly the pass worth a line, and it would otherwise be silent.
+    if (
+      nameSummary.autoLinked > 0 ||
+      nameSummary.asked > 0 ||
+      nameSummary.barredByFreeze > 0
+    ) {
       logService.info(
         `[Contacts] unique-name pass: auto-linked ${nameSummary.autoLinked}, ` +
-          `asked ${nameSummary.asked}, barred by a previous answer ${nameSummary.barredByVerdict}`,
+          `asked ${nameSummary.asked}, barred by a previous answer ${nameSummary.barredByVerdict}, ` +
+          `withheld from a contact on an exported audit ${nameSummary.barredByFreeze}`,
         "Contacts",
       );
     }
