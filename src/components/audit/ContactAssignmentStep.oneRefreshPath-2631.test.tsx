@@ -552,18 +552,28 @@ describe("BACKLOG-2631 — one refresh path, both transaction surfaces", () => {
    * `contacts:get-available` reads the whole address book. BACKLOG-2633 brought
    * it from 7.4s at the founder's corpus (91s at a realistic mailbox) to ~11ms,
    * which is what made removing the mount guard safe — but "safe to ask again"
-   * is not "ask on every render". Typing is the hazard: the search box is
-   * controlled state, so every keystroke re-renders the whole picker, and a
-   * refresh reached from a render or from an unstable effect dependency would
-   * show up here as one fetch per character.
+   * is not "ask on every render".
+   *
+   * WHAT DRIVES THE RENDER HERE, STATED PRECISELY, BECAUSE THE OBVIOUS ANSWER IS
+   * WRONG: the search box is UNCONTROLLED on this surface — `ContactSearchList`
+   * keeps `searchQuery` in its own state and `ContactAssignmentStep` passes none
+   * — so typing re-renders the LIST and not the container that owns the hook. A
+   * keystroke-only assertion could not separate the two implementations, so it
+   * is not the load-bearing half of this test.
+   *
+   * SELECTING A CONTACT is. "+ Add" calls `onSelectedContactIdsChange`, which
+   * lands in `useAuditContactAssignment`'s own state — the hook's container
+   * re-renders, `useContactDirectory` is called again, and any fetch reachable
+   * from a render or from an unstable effect dependency fires here. The
+   * keystrokes stay because they cost nothing and cover the list's own renders.
    *
    * ASSERTED AS A COUNT, and deliberately: the resulting LIST is identical
    * either way, so no assertion about rows can separate the two.
    *
-   * OBSERVED RED: move the address-book fetch into an effect without its
-   * initial-load guard and this reads 8 rather than 1.
+   * The guard that makes this hold is measured directly, one layer down, in
+   * `useContactDirectory.fetchDiscipline-2631.test.tsx`.
    */
-  it("A: does not re-read the address book on render or on every keystroke", async () => {
+  it("A: does not re-read the address book on render, selection, or keystroke", async () => {
     installBackend();
     await openTheNewTransactionPicker();
     await waitFor(() => expect(getAvailableCallCount()).toBe(1));
@@ -573,22 +583,35 @@ describe("BACKLOG-2631 — one refresh path, both transaction surfaces", () => {
     await waitFor(() =>
       expect(renderedContactIds()).toEqual([MERGED_RECORD_ID]),
     );
-
-    // Nine keystrokes and nine renders later: still ONE read.
     expect(getAvailableCallCount()).toBe(1);
-    expect(window.api.contacts.getSortedByActivity).toHaveBeenCalledTimes(1);
 
-    // Clearing is nine more renders, and still one read.
     await userEvent.clear(search);
     await waitFor(() => expect(renderedContactIds()).toHaveLength(3));
-    expect(getAvailableCallCount()).toBe(1);
 
-    // And exactly one MORE for the answer. Not two, which is what a container
-    // that both refreshed and re-triggered its lazy load would produce.
-    await answerSamePersonFromThePicker();
-    await waitFor(() => expect(getAvailableCallCount()).toBe(2));
+    // THE LOAD-BEARING PART: container re-renders driven by real selection.
+    // The SAVED contact, not an address-book row — "+ Add" on an external record
+    // IMPORTS it, which is a different action with its own refresh, and would
+    // confound the count this test exists to read.
+    await userEvent.click(
+      within(rowFor("Bianca Okafor")).getByTestId("contact-row-add-button"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("added-count")).toHaveTextContent("1"),
+    );
+    await userEvent.click(screen.getByTestId(`remove-added-${SAVED_CONTACT_ID}`));
+    await waitFor(() =>
+      expect(screen.getByTestId("added-count")).toHaveTextContent("0"),
+    );
+    await userEvent.click(
+      within(rowFor("Bianca Okafor")).getByTestId("contact-row-add-button"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("added-count")).toHaveTextContent("1"),
+    );
     await settle();
-    expect(getAvailableCallCount()).toBe(2);
+
+    expect(getAvailableCallCount()).toBe(1);
+    expect(window.api.contacts.getSortedByActivity).toHaveBeenCalledTimes(1);
   });
 
   /**
