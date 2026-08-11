@@ -116,7 +116,13 @@ jest.mock("../../../../contexts/ContactsContext", () => ({
     loading: false,
     error: null,
     refreshContacts: jest.fn(),
-    silentRefresh: jest.fn().mockResolvedValue(undefined),
+    // BACKLOG-2631: the provider carries the address-book half and the shared
+    // both-halves refresh now. `Screen2Overlay` calls `triggerLazyLoad` on mount,
+    // so a mock without it throws before this suite's subject renders.
+    refreshBothLists: jest.fn().mockResolvedValue(undefined),
+    externalContacts: [],
+    externalContactsLoading: false,
+    triggerLazyLoad: jest.fn(),
   }),
 }));
 

@@ -60,7 +60,9 @@ export interface UseAuditTransactionReturn {
   contactsLoading: boolean;
   contactsError: string | null;
   refreshContacts: () => Promise<void>;
-  silentRefreshContacts: () => Promise<void>;
+  /** BACKLOG-2631 — both halves, one commit. Was `silentRefreshContacts`, which
+   *  re-read the saved half only. See `useAuditContactAssignment`. */
+  refreshBothLists: () => Promise<void>;
 
   // External contacts (from macOS Contacts app, etc.)
   externalContacts: Contact[];
@@ -154,7 +156,7 @@ export function useAuditTransaction({
     contactsLoading: contactAssignment.contactsLoading,
     contactsError: contactAssignment.contactsError,
     refreshContacts: contactAssignment.refreshContacts,
-    silentRefreshContacts: contactAssignment.silentRefreshContacts,
+    refreshBothLists: contactAssignment.refreshBothLists,
 
     // External contacts (from macOS Contacts app, etc.)
     externalContacts: contactAssignment.externalContacts,

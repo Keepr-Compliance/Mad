@@ -47,6 +47,15 @@ import userEvent from "@testing-library/user-event";
 const mockGetDetails = jest.fn();
 const mockBatchUpdateContacts = jest.fn();
 const mockGetAvailable = jest.fn();
+/**
+ * BACKLOG-2631 — the SAVED half is now read here too, because this suite no
+ * longer mocks `ContactsContext` away. See the note where that mock used to be.
+ * `property_address` is set on the fixture transaction, so the provider reads
+ * `getSortedByActivity`; `getAll` is wired as well so a fixture without an
+ * address does not fall through to `undefined`.
+ */
+const mockGetAll = jest.fn();
+const mockGetSortedByActivity = jest.fn();
 
 beforeAll(() => {
   (window as unknown as { api: unknown }).api = {
@@ -56,6 +65,8 @@ beforeAll(() => {
     },
     contacts: {
       getAvailable: mockGetAvailable,
+      getAll: mockGetAll,
+      getSortedByActivity: mockGetSortedByActivity,
     },
   };
 });
@@ -122,16 +133,20 @@ const externalNew: ExtendedContact = {
   updated_at: "2024-03-01",
 };
 
-jest.mock("../../../../contexts/ContactsContext", () => ({
-  ContactsProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  useContacts: () => ({
-    contacts: [assignedTwoEmail, janeUnassigned],
-    loading: false,
-    error: null,
-    refreshContacts: jest.fn(),
-    silentRefresh: jest.fn().mockResolvedValue(undefined),
-  }),
-}));
+/*
+  BACKLOG-2631 — THE `ContactsContext` MOCK IS GONE, ON PURPOSE.
+
+  This suite used to replace the whole context module with a static object. That
+  was harmless while the address-book half was fetched inside `Screen2Overlay`
+  itself; now that BOTH halves come from the provider, a mocked context would
+  mean this file never runs the loading path at all — it would assert two-pane
+  behaviour against fixtures the app's own code never produced, and could not go
+  red if the wiring between provider and overlay were cut.
+
+  So the real `ContactsProvider` runs, against `window.api.contacts.*` above.
+  The comment on the "Zoe New" wait below — that it is a race-free signal the
+  ASYNC address-book load has landed — is true again for the same reason.
+*/
 
 // Screen 1 / Step 3 role rows are not under test here — mock them to keep the
 // suite focused on the real Available/Added two-pane (ContactSearchList).
@@ -193,6 +208,15 @@ describe("EditContactsModal two-pane (BACKLOG-2405, real ContactSearchList)", ()
       transaction: {
         contact_assignments: [{ id: "a1", contact_id: "db-paul", role: "client" }],
       },
+    });
+    // The saved half, as the provider reads it for a deal with an address.
+    mockGetSortedByActivity.mockResolvedValue({
+      success: true,
+      contacts: [assignedTwoEmail, janeUnassigned],
+    });
+    mockGetAll.mockResolvedValue({
+      success: true,
+      contacts: [assignedTwoEmail, janeUnassigned],
     });
     // The address book returns the twin (its strong-id filter let a name-only
     // contact through) plus a genuinely-new contact used as a load signal.

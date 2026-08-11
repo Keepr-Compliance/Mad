@@ -3,9 +3,10 @@
  * Manages contact selection, role assignment, and lazy contact loading.
  * Extracted from useAuditTransaction.ts (TASK-2261)
  */
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { Contact, Transaction } from "../../../electron/types/models";
 import type { ContactAssignment, ContactAssignments } from "./types";
+import { useContactDirectory } from "../contacts/useContactDirectory";
 import logger from "../../utils/logger";
 
 interface UseAuditContactAssignmentProps {
@@ -25,7 +26,21 @@ export interface UseAuditContactAssignmentReturn {
   contactsLoading: boolean;
   contactsError: string | null;
   refreshContacts: () => Promise<void>;
-  silentRefreshContacts: () => Promise<void>;
+  /**
+   * BACKLOG-2631 — BOTH halves, committed as one render.
+   *
+   * This was `silentRefreshContacts`, and it re-read the SAVED half only. The
+   * address-book half sat behind a once-per-mount guard in this file, so
+   * answering "yes, same person" inside the wizard left the record the user had
+   * just merged away on screen as a selectable row for the life of the modal —
+   * `contacts:confirm-link` writes a `contact_source_links` row and
+   * `contacts:get-available` suppresses on exactly that table, so the record
+   * would have gone on the next read and there was no next read.
+   *
+   * The guard is gone and the refresh is the shared one. The name says which
+   * lists move, because that was the thing the old name did not say.
+   */
+  refreshBothLists: () => Promise<void>;
   // External contacts (from macOS Contacts app, etc.)
   externalContacts: Contact[];
   externalContactsLoading: boolean;
@@ -44,118 +59,54 @@ export function useAuditContactAssignment({
   // Selected contact IDs for step 2 (select contacts)
   const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
 
-  // Contact loading state (lazy-loaded when reaching step 2)
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [contactsLoading, setContactsLoading] = useState<boolean>(false);
-  const [contactsError, setContactsError] = useState<string | null>(null);
-
-  // External contacts state (from macOS Contacts app, etc.)
-  const [externalContacts, setExternalContacts] = useState<Contact[]>([]);
-  const [externalContactsLoading, setExternalContactsLoading] = useState<boolean>(false);
-
-  // Track if contacts have been loaded (prevents duplicate loads in StrictMode and step navigation)
-  const contactsLoadedRef = useRef(false);
-  const externalContactsLoadedRef = useRef(false);
-  const isMountedRef = useRef(true);
-
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
-
   /**
-   * Load contacts - called lazily when reaching step 2, or when explicitly refreshed
+   * BACKLOG-2631 — THE PICKER'S DATA COMES FROM THE SHARED HOOK NOW.
+   *
+   * This file used to hold its own copy of the loading layer: its own saved-half
+   * fetch, its own address-book fetch, and its own once-per-mount guard on the
+   * second one. That guard is what made the reported defect possible — the
+   * wizard never asked the address book again, so a record merged away inside
+   * the questions modal stayed on the list until the modal was closed and
+   * reopened.
+   *
+   * Both `autoLoad*` flags off keep the wizard's lazy behaviour EXACTLY as it was:
+   * nothing is read until `triggerLazyLoad` fires on the transition to step 2,
+   * so opening the modal on step 1 still costs no contact query. Unifying the
+   * refresh must not turn one fetch per picker-open into one fetch per mount —
+   * that is asserted as a call count in
+   * `ContactAssignmentStep.oneRefreshPath-2631.test.tsx`.
+   *
+   * `propertyAddress` selects `contacts:get-sorted-by-activity` over
+   * `contacts:get-all`, which is what this hook already did.
    */
-  const loadContacts = useCallback(async (forceRefresh = false, showLoading = true) => {
-    if (contactsLoadedRef.current && !forceRefresh) {
-      return;
-    }
-
-    if (!isMountedRef.current) return;
-
-    if (showLoading) {
-      setContactsLoading(true);
-    }
-    setContactsError(null);
-
-    try {
-      const result = propertyAddress
-        ? await window.api.contacts.getSortedByActivity(userId, propertyAddress)
-        : await window.api.contacts.getAll(userId);
-
-      if (!isMountedRef.current) return;
-
-      if (result.success) {
-        setContacts(result.contacts || []);
-        contactsLoadedRef.current = true;
-      } else {
-        setContactsError(result.error || "Failed to load contacts");
-      }
-    } catch (err) {
-      if (!isMountedRef.current) return;
-      logger.error("Failed to load contacts:", err);
-      setContactsError("Unable to load contacts");
-    } finally {
-      if (isMountedRef.current) {
-        setContactsLoading(false);
-      }
-    }
-  }, [userId, propertyAddress]);
-
-  /**
-   * Load external contacts (from macOS Contacts app, etc.)
-   */
-  const loadExternalContacts = useCallback(async () => {
-    if (externalContactsLoadedRef.current) return;
-    if (!isMountedRef.current) return;
-
-    setExternalContactsLoading(true);
-    try {
-      const result = await window.api.contacts.getAvailable(userId);
-      if (!isMountedRef.current) return;
-
-      if (result.success && result.contacts) {
-        const external = result.contacts.map((c: Contact) => ({
-          ...c,
-          is_message_derived: true,
-        }));
-        setExternalContacts(external);
-        externalContactsLoadedRef.current = true;
-      }
-    } catch (err) {
-      if (!isMountedRef.current) return;
-      logger.error("Failed to load external contacts:", err);
-    } finally {
-      if (isMountedRef.current) {
-        setExternalContactsLoading(false);
-      }
-    }
-  }, [userId]);
-
-  /**
-   * Trigger lazy load of contacts and external contacts.
-   * Called by the composition hook when step transitions to 2.
-   */
-  const triggerLazyLoad = useCallback(() => {
-    if (!contactsLoadedRef.current) {
-      loadContacts();
-    }
-    if (!externalContactsLoadedRef.current) {
-      loadExternalContacts();
-    }
-  }, [loadContacts, loadExternalContacts]);
+  const {
+    contacts,
+    contactsLoading,
+    contactsError,
+    externalContacts,
+    externalContactsLoading,
+    loadContacts,
+    refreshBothLists,
+    triggerLazyLoad,
+  } = useContactDirectory({
+    userId,
+    propertyAddress,
+    autoLoadSaved: false,
+    autoLoadExternal: false,
+  });
 
   // Wrapper to expose refresh functionality that always forces reload
   const refreshContacts = useCallback((): Promise<void> => {
-    return loadContacts(true, true);
+    return loadContacts();
   }, [loadContacts]);
 
-  // Silent refresh - forces reload without showing loading state
-  const silentRefreshContacts = useCallback((): Promise<void> => {
-    return loadContacts(true, false);
-  }, [loadContacts]);
+  // `refreshBothLists` returns the rows it loaded (the import path on Clients &
+  // Contacts lands its detail card on them). Nothing in the wizard reads them —
+  // it keeps its own `importedTwins` row data — so the promise is flattened to
+  // void rather than widening this hook's contract with a value no caller uses.
+  const refreshBothListsVoid = useCallback(async (): Promise<void> => {
+    await refreshBothLists();
+  }, [refreshBothLists]);
 
   /**
    * Pre-fill contact assignments when editing an existing transaction
@@ -341,7 +292,7 @@ export function useAuditContactAssignment({
     contactsLoading,
     contactsError,
     refreshContacts,
-    silentRefreshContacts,
+    refreshBothLists: refreshBothListsVoid,
     externalContacts,
     externalContactsLoading,
     triggerLazyLoad,
