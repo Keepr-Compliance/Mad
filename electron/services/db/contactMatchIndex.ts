@@ -262,9 +262,22 @@ const BATCH_LINKS_SQL = `SELECT source_type, source_record_id, contact_id, exter
       WHERE user_id = ?`;
 
 function crosswalkKey(sourceType: string, sourceRecordId: string): string {
-  // NUL cannot appear in either part (both come from a TEXT column that a JSON
-  // or SQL writer produced), so it cannot be forged into a collision.
-  return `${sourceType} ${sourceRecordId}`;
+  // =========================================================================
+  // THE DELIMITER IS WRITTEN AS AN ESCAPE, AND THAT IS NOT A STYLE CHOICE
+  // =========================================================================
+  // `\u0000` rather than a literal NUL byte in the source. A raw NUL makes the
+  // whole FILE read as binary -- `file` reports "data", and every plain `grep`
+  // over the repository silently skips it, which is how `contactManualLink.ts`
+  // went missing from repo-wide sweeps. Caught here by running `file` before
+  // this shipped, having written the byte itself.
+  //
+  // NUL is the right delimiter because it cannot occur in either part: both are
+  // TEXT columns written by a JSON parser or a SQL writer, and `source_type` is
+  // additionally CHECK-constrained to a nine-value vocabulary
+  // (`contactIdentitySchemaSql.ts`). Two distinct (type, record id) pairs
+  // therefore cannot collide on one key however exotic a provider's record id
+  // is -- and an Outlook record id IS an opaque Graph token, not a UUID.
+  return `${sourceType}\u0000${sourceRecordId}`;
 }
 
 function addTo(map: Map<string, string[]>, key: string, contactId: string): void {
