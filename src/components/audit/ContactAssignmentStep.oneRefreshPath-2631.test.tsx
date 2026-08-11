@@ -615,6 +615,61 @@ describe("BACKLOG-2631 — one refresh path, both transaction surfaces", () => {
   });
 
   /**
+   * CONTROL — THE IMPORT PATH GOES THROUGH THE SAME REFRESH.
+   *
+   * `onRefreshBothLists` has TWO call sites in `ContactAssignmentStep`: the
+   * answer path (`:796`) and the import path (`:549`). Every control above
+   * exercises the first. Without this one, "both call sites use it" is a claim
+   * in a commit message that no assertion can make go red — the leaf-level
+   * suites hand the component a `jest.fn` and cannot tell which refresh it is.
+   *
+   * The claim is worth pinning because the mechanism is the same as the reported
+   * defect: importing an address-book record writes a crosswalk row for it, so
+   * `contacts:get-available` stops offering that record. Before this change the
+   * wizard hid the twin BY HAND instead (`importedTwins`), per-action, which is
+   * the workaround the item calls out — evidence the staleness was known at this
+   * layer and papered over rather than fixed.
+   *
+   * `importedTwins` is deliberately still here and still doing its job: it
+   * supplies the Added chip's row data and hides the twin in the window before
+   * the refresh lands. This asserts the refresh happens, not that the workaround
+   * was ripped out.
+   *
+   * OBSERVED RED: revert `:549` to a saved-half-only refresh and this reads 1.
+   */
+  it("A: importing an address-book record refreshes both halves too", async () => {
+    installBackend();
+    // What `contacts:import`/`create` returns: a NEW DB contact with its own id,
+    // never the source record's. The id swap is why `importedTwins` exists
+    // (BACKLOG-2400) and why the twin cannot be hidden by selection id alone.
+    jest.mocked(window.api.contacts.create).mockResolvedValue({
+      success: true,
+      contact: {
+        ...(savedBianca as unknown as Record<string, unknown>),
+        id: "3b8e5f21-6d94-4c07-a1f8-2e7b0d6a9c34",
+        name: "Petra Lindqvist",
+        display_name: "Petra Lindqvist",
+        email: "p.lindqvist@example.net",
+        review_state: undefined,
+      },
+    } as never);
+
+    await openTheNewTransactionPicker();
+    await waitFor(() => expect(getAvailableCallCount()).toBe(1));
+
+    await userEvent.click(
+      within(rowFor("Petra Lindqvist")).getByTestId("contact-row-add-button"),
+    );
+
+    await waitFor(() =>
+      expect(window.api.contacts.create).toHaveBeenCalledTimes(1),
+    );
+    // The half the import changed, asked again.
+    await waitFor(() => expect(getAvailableCallCount()).toBe(2));
+    expect(window.api.contacts.getSortedByActivity).toHaveBeenCalledTimes(2);
+  });
+
+  /**
    * CONTROL 5, THE HALF THAT IS ABOUT THE PROVIDER.
    *
    * `ContactsProvider` wraps Screen 1 as well as the picker. Moving the
