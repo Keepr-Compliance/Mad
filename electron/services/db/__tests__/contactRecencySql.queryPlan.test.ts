@@ -141,13 +141,21 @@ function seed(db: DatabaseType, opts: { emails: number }): Seeded {
     emails: string[];
     phones: string[];
   }> = [
-    { id: "x-email-only", name: "Zoe Emailonly", emails: ["EMAIL.ONLY@example.com"], phones: [] },
-    { id: "x-phone-only", name: "Yuri Phoneonly", emails: [], phones: ["+15550000001"] },
-    { id: "x-both", name: "Xavier Both", emails: ["both@example.com"], phones: ["+15550000002"] },
-    { id: "x-neither", name: "Wanda Neither", emails: ["nobody@example.com"], phones: ["+15559999999"] },
-    // The tie: same timestamp, names ordered OPPOSITE to ids.
-    { id: "x-tie-b", name: "Aaron Tie", emails: ["TIE.ONE@example.com"], phones: [] },
-    { id: "x-tie-a", name: "Bella Tie", emails: ["tie.two@example.com"], phones: [] },
+    // NAMES ARE CASE LABELS IN CAPS, NOT PEOPLE, and phone numbers are in the
+    // NANP fictional range 555-0100..555-0199 (ATIS-0300115). Both are required
+    // by `scripts/ci/check-fixture-pii.mjs` on this PUBLIC repo. The caps are
+    // not shouting: that guard flags any `"Firstname Lastname"` sharing a line
+    // with an address or a number, because that is the identity-row shape that
+    // leaked in BACKLOG-2542, and a label like "Zoe Emailonly" is
+    // indistinguishable from a real one to a regex.
+    { id: "x-email-only", name: "CASE EMAIL ONLY", emails: ["EMAIL.ONLY@example.com"], phones: [] },
+    { id: "x-phone-only", name: "CASE PHONE ONLY", emails: [], phones: ["+12065550101"] },
+    { id: "x-both", name: "CASE BOTH", emails: ["both@example.com"], phones: ["+12065550102"] },
+    { id: "x-neither", name: "CASE NEITHER", emails: ["nobody@example.com"], phones: ["+12065550199"] },
+    // The tie: same timestamp, names ordered OPPOSITE to ids — "CASE TIE A" on
+    // x-tie-**b**, so a lost `name ASC` tiebreak flips the asserted order.
+    { id: "x-tie-b", name: "CASE TIE A", emails: ["TIE.ONE@example.com"], phones: [] },
+    { id: "x-tie-a", name: "CASE TIE B", emails: ["tie.two@example.com"], phones: [] },
   ];
 
   const insertEmailTo = (address: string, at: string, seq: number) => {
@@ -177,8 +185,9 @@ function seed(db: DatabaseType, opts: { emails: number }): Seeded {
     insertEmailTo("tie.one@example.com", iso(300), 3);
     insertEmailTo("tie.two@example.com", iso(300), 4);
 
-    insPlm.run("+15550000001", USER_ID, iso(600));
-    insPlm.run("+15550000002", USER_ID, iso(450));
+    // Must match the `shaped` phones above verbatim — these ARE the join keys.
+    insPlm.run("+12065550101", USER_ID, iso(600));
+    insPlm.run("+12065550102", USER_ID, iso(450));
 
     // ---- bulk, so the plan has something to be wrong about ----------------
     for (let i = 0; i < opts.emails; i++) {
@@ -519,7 +528,7 @@ describe("BACKLOG-2633 — the answer is byte-identical; only the plan moved", (
   it("returns the EXACT SAME ordered (id, last_message_at) sequence as the pre-fix query", () => {
     const shape = (sql: string) =>
       (db.prepare(sql).all(USER_ID) as Array<{ id: string; last_message_at: string | null }>).map(
-        (r) => `${r.id} ${r.last_message_at ?? "<null>"}`,
+        (r) => `${r.id} ${r.last_message_at ?? "<null>"}`,
       );
 
     const before = shape(PRE_FIX_GET_ALL_SQL);
@@ -550,7 +559,7 @@ describe("BACKLOG-2633 — the answer is byte-identical; only the plan moved", (
     expect(rows[2].last_message_at).toBe(new Date(Date.UTC(2024, 0, 1) + 450 * 3_600_000).toISOString());
 
     // The tie is broken by name ASC, which orders these OPPOSITE to their ids.
-    expect(at("x-tie-b")).toBeLessThan(at("x-tie-a")); // "Aaron Tie" < "Bella Tie"
+    expect(at("x-tie-b")).toBeLessThan(at("x-tie-a")); // "CASE TIE A" < "CASE TIE B"
     expect(rows[at("x-tie-b")].last_message_at).toBe(rows[at("x-tie-a")].last_message_at);
     expect(rows[at("x-tie-b")].last_message_at).not.toBeNull();
 
