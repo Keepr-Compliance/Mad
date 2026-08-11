@@ -203,14 +203,23 @@ function rowFor(id: string): { display_name: string; is_imported: number; remove
     .get(id) as { display_name: string; is_imported: number; removed_at: string | null };
 }
 
-/** The synthetic `origin:<id>` crosswalk row `createContact` writes in-transaction. */
-function originRowCountFor(contactId: string): number {
-  const row = mockDb!
+/**
+ * Every synthetic `origin:<id>` crosswalk row in the table, as a SET of the
+ * contact ids they point at.
+ *
+ * A per-contact COUNT is the wrong shape here and was the first thing written:
+ * with the branch reverted, `returnedId` IS the pre-existing contact's id, so
+ * "the returned contact has exactly one origin row" is true both before and
+ * after the fix. The control could not go red. Reading the whole table and
+ * comparing an exact ID SET is what separates one person from two.
+ */
+function originLinkedContactIds(): Set<string> {
+  const rows = mockDb!
     .prepare(
-      "SELECT COUNT(*) AS n FROM contact_source_links WHERE user_id = ? AND source_record_id = ?",
+      "SELECT source_record_id FROM contact_source_links WHERE user_id = ? AND source_record_id LIKE 'origin:%'",
     )
-    .get(USER, originRecordId(contactId)) as { n: number };
-  return row.n;
+    .all(USER) as Array<{ source_record_id: string }>;
+  return new Set(rows.map((r) => r.source_record_id));
 }
 
 /**
@@ -326,10 +335,13 @@ describe("two people who share a name are two contacts (BACKLOG-2617)", () => {
       email: "buyers.agent@example.org",
     });
 
-    expect(originRowCountFor(returnedId)).toBe(1);
-    // And the pre-existing person still has exactly one — not two, and not the
-    // new contact's.
-    expect(originRowCountFor(lenderId)).toBe(1);
+    expect(returnedId).not.toBe(lenderId);
+    // TWO people, TWO origin rows — asserted as the exact set of ids the table
+    // points at, so a run that produced only the lender's row fails here rather
+    // than satisfying a count with the wrong row.
+    expect(originLinkedContactIds()).toEqual(
+      new Set([originRecordId(lenderId), originRecordId(returnedId)]),
+    );
   });
 
   /**
