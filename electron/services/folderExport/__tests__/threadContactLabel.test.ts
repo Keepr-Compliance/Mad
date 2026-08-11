@@ -133,6 +133,18 @@ describe("threadContactIsUnresolved", () => {
   });
 });
 
+// Every character Windows forbids in a filename, plus the whole C0 control range.
+//
+// BACKLOG-2637: the control range is spelled with ESCAPES. Written as raw bytes —
+// which is how this file shipped — the file reads as binary, and every plain grep
+// skips it without a word: a repo-wide search for any symbol in here comes back
+// looking like a clean negative.
+//
+// This pattern is used below in a `not.toMatch` assertion, which passes trivially
+// against a class that degraded into literal backslash-u text. The negative use
+// therefore proves nothing on its own, so the pattern is asserted POSITIVELY first.
+const ILLEGAL_OR_CONTROL = /[<>:"/\\|?*\u0000-\u001f]/;
+
 describe("fileSafeContactLabel — the name that lands on disk (BACKLOG-2463)", () => {
   it("files a nameless party under their number, exactly", () => {
     expect(fileSafeContactLabel(threadContactLabel({ phone: "+12065550103", name: null }))).toBe(
@@ -196,12 +208,32 @@ describe("fileSafeContactLabel — the name that lands on disk (BACKLOG-2463)", 
     expect(fileSafeContactLabel("Jane*Doe")).toBe("Jane_Doe");
   });
 
+  it("matches control characters with the class the hostile-input test relies on", () => {
+    // BACKLOG-2637. The test below asserts `not.toMatch(ILLEGAL_OR_CONTROL)`, which
+    // is green against a pattern matching nothing. This makes the class earn it.
+    expect("a\u0000b").toMatch(ILLEGAL_OR_CONTROL);
+    expect("a\u001fb").toMatch(ILLEGAL_OR_CONTROL);
+    expect("a\u001bb").toMatch(ILLEGAL_OR_CONTROL);
+    expect("Jane<Doe").toMatch(ILLEGAL_OR_CONTROL);
+    // ...and not so greedy that the negative assertion below is unfalsifiable.
+    expect("Jane_Doe.2026-01-15").not.toMatch(ILLEGAL_OR_CONTROL);
+  });
+
   it("emits nothing outside [A-Za-z0-9_.-] for any hostile input", () => {
+    // BACKLOG-2637: a real NUL, spelled as an escape so this file stays valid
+    // text. The escape only earns its keep if it still produces the BYTE, so
+    // that is asserted here — a respelling that quietly produced the literal
+    // characters would leave every assertion below green while deleting the
+    // control-character case this fixture exists to cover.
+    const NUL_IN_NAME = "Jane\u0000Doe";
+    expect(NUL_IN_NAME.charCodeAt("Jane".length)).toBe(0);
+    expect(NUL_IN_NAME).toHaveLength("JaneDoe".length + 1);
+
     const hostile = [
       'Jane <>:"/\\|?* Doe',
       "..\\..\\..\\Windows\\System32",
       "../../etc/passwd",
-      "Jane Doe",
+      NUL_IN_NAME,
       "Jane\tDoe\nSmith",
       "+1 (206) 555-0103",
       "José Álvarez",
@@ -212,7 +244,7 @@ describe("fileSafeContactLabel — the name that lands on disk (BACKLOG-2463)", 
       const safe = fileSafeContactLabel(input);
       expect(safe).toMatch(/^[A-Za-z0-9_.-]+$/);
       // Every Windows-illegal character, plus the C0 control range.
-      expect(safe).not.toMatch(/[<>:"/\\|?* -]/);
+      expect(safe).not.toMatch(ILLEGAL_OR_CONTROL);
       expect(safe.toLowerCase()).not.toContain("unknown");
     }
   });
