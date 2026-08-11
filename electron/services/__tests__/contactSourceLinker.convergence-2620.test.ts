@@ -731,6 +731,62 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
   });
 
   /**
+   * CONTROL 5 — the id-matched steady state, which is where this feature ENDS
+   * UP, not where the founder is today.
+   *
+   * STEP 1 backfills `external_uuid` onto a crosswalk row that predates it. That
+   * call was made on EVERY pass for every id-matched record carrying a uuid: a
+   * SELECT plus an UPDATE whose `external_uuid` is COALESCE'd, so on a row that
+   * already has one it wrote nothing but `updated_at`. Once linking works and
+   * every record id-matches, that is 1,169 pointless writes per pass.
+   *
+   * Both halves are asserted here because the obvious "fix" — never call it —
+   * silently disables the backfill, and NOTHING IN THE SUITE WOULD HAVE NOTICED:
+   * mutating the condition to `false` left all 62 tests in this suite and
+   * `contactSourceLinker.test.ts` green. The existing uuid test covers the INSERT
+   * path (a NEW link carries the uuid), never the backfill of an existing row.
+   */
+  it("CONTROL 5 — the uuid backfill happens once, and the pass after it writes nothing", () => {
+    db = makeDb();
+    setDb(db);
+    db.prepare(
+      "INSERT INTO contacts (id, user_id, display_name, is_imported) VALUES ('c-steady', ?, 'Steady Person', 1)",
+    ).run(USER_ID);
+    addRecord("rec-steady", {
+      name: "Steady Person",
+      emails: ["steady@example.com"],
+      externalUuid: "1F2E3D4C-5B6A-7988-9A0B-1C2D3E4F5062",
+    });
+    // A crosswalk row that predates the uuid column — exactly what the backfill
+    // exists for.
+    db.prepare(
+      `INSERT INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, match_method, external_uuid)
+       VALUES ('l-steady', ?, 'c-steady', 'macos', 'rec-steady', 'email', NULL)`,
+    ).run(USER_ID);
+
+    const firstCounter = countStatements(db);
+    expect(idsOf(linkExternalContactsForUser(USER_ID), "already_linked")).toEqual(["rec-steady"]);
+    firstCounter.stop();
+
+    expect(
+      db.prepare("SELECT external_uuid FROM contact_source_links WHERE id = 'l-steady'").get(),
+    ).toEqual({ external_uuid: "1F2E3D4C-5B6A-7988-9A0B-1C2D3E4F5062" });
+    expect(
+      firstCounter.executed.filter((s) => s.includes("UPDATE contact_source_links")).length,
+    ).toBe(1);
+
+    // Second pass: nothing has changed, so nothing may be written, and the only
+    // statements are the pass's four index loads plus the record read.
+    const secondCounter = countStatements(db);
+    expect(idsOf(linkExternalContactsForUser(USER_ID), "already_linked")).toEqual(["rec-steady"]);
+    secondCounter.stop();
+
+    expect(secondCounter.executed.filter((s) => /^\s*(INSERT|UPDATE|DELETE)/i.test(s))).toEqual([]);
+    expect(secondCounter.executed.length).toBe(5);
+  });
+
+  /**
    * CONTROL 4 — the two implementations answer identically.
    *
    * The batch index is a second implementation of three queries, and a second
