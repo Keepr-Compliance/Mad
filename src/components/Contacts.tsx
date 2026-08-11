@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useContext, useMemo, useRef } from "react";
+import React, { useState, useCallback, useContext, useRef } from "react";
 import {
   ContactFormModal,
   RemoveConfirmationModal,
@@ -22,12 +22,6 @@ import {
   type ContactTransaction,
 } from "./shared/ContactPreview";
 import type { ContactListAnchor } from "../utils/contactListAnchor";
-import { assembleContacts } from "../utils/contactPickerList";
-import {
-  summariseContactSources,
-  formatContactSourceSummary,
-  type ContactSourceSegment,
-} from "../utils/contactSourceBreakdown";
 import { useContactComms } from "../hooks/useContactComms";
 import { useContactCommViewers } from "../hooks/useContactCommViewers";
 import logger from '../utils/logger';
@@ -357,28 +351,6 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   // reports (falls back to the raw total below).
   const [visibleCount, setVisibleCount] = useState<number | null>(null);
 
-  /**
-   * BACKLOG-2662 — the header's parenthetical, partitioned from the SAME rows
-   * that produce the count above it.
-   *
-   * It used to be `externalContacts.length` under the hard-coded words "from
-   * Contacts App", which was wrong twice over: it named one provider for records
-   * of every source (the founder's five Outlook records were credited to the Mac
-   * address book), and it counted a DIFFERENT population from the total beside
-   * it — the raw `get-available` array against the filtered, searched, rendered
-   * row count. That mismatch is where his unexplained "1173 against 1171" came
-   * from: the saved half (`contacts:get-all`, which is imported rows PLUS
-   * message-derived pseudo-contacts) is in the total and was in no part of the
-   * breakdown. Reported up from the list, the parts now sum to the total because
-   * they are a partition OF the total.
-   *
-   * `null` until the list reports, exactly like `visibleCount`, and falls back
-   * the same way — see `headerSourceBreakdown` below.
-   */
-  const [visibleSourceBreakdown, setVisibleSourceBreakdown] = useState<
-    ContactSourceSegment[] | null
-  >(null);
-
   // Clear stale imported IDs when a contact is deleted
   // BACKLOG-2367: removed-contacts section state. Open state is lifted here so
   // it survives the list's loading remount — a restore never collapses it.
@@ -416,26 +388,6 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     externalContactsLoading,
     refreshBothLists,
   } = useContactList(userId, { onContactDeleted: handleContactDeleted });
-
-  /**
-   * BACKLOG-2662 — what the header actually renders.
-   *
-   * The list's report when it has one; otherwise the same partition computed
-   * over `assembleContacts(contacts, externalContacts)` — which is the exact
-   * expression the count beside it falls back to (`contacts.length +
-   * externalContacts.length` is that array's length, since `assembleContacts`
-   * drops only exactly-repeated ids). Total and parts therefore fall back
-   * TOGETHER, and the first paint cannot show a total from one population and a
-   * breakdown from another. Leaving the fallback out would have shown a bare
-   * count for a frame and then grown a parenthetical, which reads as a number
-   * changing under the user.
-   */
-  const headerSourceBreakdown = useMemo(
-    () =>
-      visibleSourceBreakdown ??
-      summariseContactSources(assembleContacts(contacts, externalContacts)),
-    [visibleSourceBreakdown, contacts, externalContacts],
-  );
 
   /**
    * BACKLOG-2367: toasts for the removed-contacts restore path. The rest of this
@@ -1242,7 +1194,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             <button
               type="button"
               onClick={() => setShowReviewDuplicates(true)}
-              className="text-white bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg px-2.5 py-2 sm:px-3.5 transition-all flex items-center gap-1.5 font-medium text-xs sm:text-sm"
+              className="flex-shrink-0 whitespace-nowrap text-white bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg px-2.5 py-2 sm:px-3.5 transition-all flex items-center gap-1.5 font-medium text-xs sm:text-sm"
               data-testid="review-duplicates-button"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1260,16 +1212,52 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               <span className="sm:hidden">Review {reviewQueueCount}</span>
             </button>
           )}
-          <div className="text-right">
+          {/*
+            BACKLOG-2671 — `min-w-0` here and `flex-shrink-0` on the review button
+            above decide WHICH of the two gives way when the header runs out of
+            room. Without them both children are shrinkable and the flex row
+            resolves the overflow by squeezing whichever it reaches first, which
+            is how a growing count line came to push the review action. Now the
+            action keeps its box and the title block absorbs the loss.
+
+            The growth vector is gone too — this line no longer varies with the
+            number of connected sources — so the two are independent by
+            construction, not merely by measurement. That is the property
+            `Contacts.headerNoSourceClaim-2671.test.tsx` asserts across 2, 3 and 4
+            sources.
+          */}
+          <div className="text-right min-w-0" data-testid="contacts-header-title-block">
             <h2 className="text-lg sm:text-2xl font-bold text-white">
               Clients &amp; Contacts
             </h2>
+            {/*
+              THE COUNT, AND NOTHING ABOUT SOURCES (BACKLOG-2671).
+
+              BACKLOG-2662 put a per-source breakdown here — `1175 contacts (1168
+              from Contacts App, 5 from Outlook, 2 from From Texts)`. It was
+              correct, and it made this line grow with every source the user
+              connects, crowding the "Review N possible duplicates" button beside
+              it. Both are primary; neither should be able to displace the other.
+
+              The founder's ruling (BACKLOG-2671) moves the counts into the source
+              filter dropdown — already the control that answers "which sources" —
+              so this line goes back to the total alone. Moving them also dissolved
+              the "2 from From Texts" wart for free, without renaming any source:
+              the label only reads badly inside a sentence, not as a row in a list.
+
+              A HEADER WITH NO SOURCE CLAIM IS FINE; A HEADER WITH A WRONG ONE IS
+              THE ORIGINAL DEFECT. `1175 contacts (1175 from Contacts App)` — every
+              record credited to one provider — is what BACKLOG-2662 was filed to
+              kill and must not return by any route. So the route is GONE, not
+              dormant: `contactSourceBreakdown.ts` and the list's reporting
+              callback are deleted. Pinned by
+              `Contacts.headerNoSourceClaim-2671.test.tsx`.
+            */}
             <p
               className="text-purple-100 text-xs sm:text-sm"
               data-testid="contacts-header-count"
             >
               {visibleCount ?? contacts.length + externalContacts.length} contacts
-              {formatContactSourceSummary(headerSourceBreakdown)}
             </p>
           </div>
         </div>
@@ -1365,7 +1353,6 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               className="h-full"
               compact
               onVisibleCountChange={setVisibleCount}
-              onVisibleSourceBreakdownChange={setVisibleSourceBreakdown}
               // BACKLOG-2459: keep the user's place across open/close, anchored
               // on the contact rather than a scroll offset.
               onAnchorCapture={handleAnchorCapture}
