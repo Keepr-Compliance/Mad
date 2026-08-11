@@ -8,10 +8,10 @@
  * ## The failure this exists to prevent
  *
  * A source file containing a raw NUL byte is classified as binary by the search
- * tools, which then omit it from every repo-wide sweep. They do not warn, do not
- * print "binary file matches" when asked for a filename list, and do not exit
- * non-zero. They silently leave it out. Measured on the file this rule was
- * written for:
+ * tools, and the one an agent actually runs — see the next section, it is not
+ * the one a human runs — then omits it from every repo-wide sweep. No warning,
+ * no "binary file matches" line, no non-zero exit. It silently leaves the file
+ * out. Measured on the file this rule was written for, in that shell:
  *
  *     $ grep -rn 'defuses every reserved Windows DEVICE name' electron/
  *     (no output, exit 1)      <- the string was on line 259 of that file
