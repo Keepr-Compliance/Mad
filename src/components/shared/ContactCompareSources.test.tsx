@@ -2,12 +2,12 @@
  * BACKLOG-2471 PR C — the compare screen's columns, read-only.
  *
  * WHAT THIS FILE PINS THAT THE SERVICE SUITE CANNOT: the candidate column's
- * three state labels are strings on screen, not fields in a payload. The service
+ * state labels are strings on screen, not fields in a payload. The service
  * returns `transactions: []` and `kind: "proposed"`; whether that reaches the
- * user as "not imported yet" or as an empty cell is decided here, and only here.
- * The wording has moved four times (see `NOT_IMPORTED_YET` in the component) and
- * the service was indifferent to every one of them — which is the boundary
- * working, not a gap.
+ * user as "not imported yet", as "none", or as nothing at all is decided here,
+ * and only here. The wording has moved five times (see `NOT_IMPORTED_YET` in the
+ * component) and the service was indifferent to every one of them — which is the
+ * boundary working, not a gap.
  *
  * The view is stubbed at `window.api` rather than mocked at the hook, so the
  * component and its hook are exercised together — the same reason
@@ -379,10 +379,29 @@ describe("the columns", () => {
  *   11 Aug #2   a real lookup, else "none"      superseded — absence asserted
  *   11 Aug #3   Transactions -> "not imported yet", other two left
  *                                              superseded — absence asserted
- *   11 Aug #4   ALL THREE -> "not imported yet" asserted, per site, by id
+ *   11 Aug #4   ALL THREE -> "not imported yet" superseded at ONE site
+ *   11 Aug #5   header + Transactions keep it; the communication
+ *               heading carries NO tag          asserted, per site, by id
  *
  * The founder's reason for #4, after seeing it live: *"unify them, not imported
  * yet is clearer."* One state should not have three names.
+ *
+ * HIS REASON FOR #5, SEEING #4 LIVE — and it is not redundancy: *"if it says not
+ * imported yet a user might think this contact doesn't have any texts because
+ * the texts aren't imported yet."*
+ *
+ * Next to "Recent communication" the phrase attaches to the MESSAGES, and as a
+ * claim about messages it is FALSE. Matching runs on the email address and the
+ * phone number themselves and never consults import state, so that row is
+ * already complete for the record. A user reading the label there waits for
+ * texts that are not coming — and may answer *is this the same person?*
+ * believing evidence is still on its way. On Transactions the same phrase is
+ * true of both the record and the row, because deals attach to contacts.
+ *
+ * THE RULE THIS SUITE PINS: `not imported yet` belongs on rows describing what
+ * the RECORD cannot have until it is imported. It must not appear next to
+ * Recent communication. #5 deletes one copy; it does not reverse #4, which is
+ * still live at both surviving sites and asserted as such.
  *
  * THE RENDERER CANNOT SEE HOW A LINK WAS MADE, and that is the point rather
  * than a gap: `ContactCompareColumn` carries no `match_method`, so a manual link
@@ -477,19 +496,26 @@ describe("BACKLOG-2628 — the wording of a record that belongs to nobody", () =
   });
 
   /**
-   * ONE PHRASE FOR ONE STATE — ALL THREE SITES, ASSERTED INDIVIDUALLY.
+   * ONE PHRASE FOR ONE STATE, IN TWO PLACES — AND NOT IN THE THIRD (11 Aug #5).
    *
-   * Founder, 11 Aug: *"unify them, not imported yet is clearer."*
+   * Founder, 11 Aug, after #4 put the same words on all three: *"if it says not
+   * imported yet a user might think this contact doesn't have any texts because
+   * the texts aren't imported yet."* Under that heading the phrase describes the
+   * MESSAGES, not the record, and as a claim about messages it is false —
+   * matching never consults import state, so the row is already complete.
    *
-   * THE THREE ARE ASSERTED SEPARATELY, BY ID, RATHER THAN AS ONE `textContent`
-   * SWEEP. A sweep over the column would pass with the phrase rendered three
-   * times in ONE place and missing from the other two, which is the failure this
-   * is guarding — the founder's complaint was about where the words sit, not how
-   * many times the string occurs.
+   * THE SURVIVORS ARE ASSERTED SEPARATELY, BY ID, RATHER THAN AS ONE
+   * `textContent` SWEEP. A sweep over the column would pass with the phrase
+   * rendered twice in ONE place and missing from the other, which is the failure
+   * this guards — the complaint was about where the words sit, not how many
+   * times the string occurs. Asserting the two literals also means deleting the
+   * third tag cannot cascade into deleting one of these.
    *
-   * CONTROL: revert any ONE site and only its own line goes red.
+   * CONTROL: restore the `{isProposed && …}` tag on the communication heading
+   * and the third assertion goes red; revert either surviving site and only its
+   * own line does.
    */
-  it("all three of a candidate's state labels read 'not imported yet'", async () => {
+  it("a candidate's two state labels read 'not imported yet' and its communication heading carries none", async () => {
     const view = makeView();
     await renderScreen({
       success: true,
@@ -500,16 +526,97 @@ describe("BACKLOG-2628 — the wording of a record that belongs to nobody", () =
     expect(screen.getByTestId(`compare-proposed-tag-${PROPOSED_LINK}`).textContent).toBe(
       "not imported yet",
     );
-    // Site 2 — the Transactions cell.
+    // Site 2 — the Transactions cell. Deals attach to contacts, so an
+    // un-imported record has none BY CONSTRUCTION and the row states the reason.
     expect(screen.getByTestId(`compare-row-transactions-${PROPOSED_LINK}`).textContent).toBe(
       "not imported yet",
     );
-    // Site 3 — the communication heading tag. Was D5's "not linked".
-    expect(screen.getByTestId(`compare-unimported-${PROPOSED_LINK}`).textContent).toBe(
-      "not imported yet",
+    // Site 3 — DELETED. There the phrase described the MESSAGES rather than the
+    // record, telling a user texts were still on their way when the row was
+    // already complete.
+    expect(screen.queryByTestId(`compare-unimported-${PROPOSED_LINK}`)).toBeNull();
+    // The heading itself is still drawn — the absence above is the tag's, not
+    // the whole section's.
+    expect(screen.getByTestId(`compare-column-${PROPOSED_LINK}`).textContent).toContain(
+      "Recent communication",
     );
     // A candidate is not a linked record, so it carries neither affordance.
     expect(screen.queryByTestId(`compare-source-tag-${PROPOSED_LINK}`)).toBeNull();
+  });
+
+  /**
+   * THE PHRASE IS GONE FROM THAT HEADING ON EVERY COLUMN, not merely on the
+   * candidate — the tag was only ever drawn for `proposed`, so this also pins
+   * that its deletion did not migrate somewhere else on the screen.
+   *
+   * CONTROL: restore the tag and the candidate's id resolves again.
+   */
+  it("no column carries the unimported tag on its communication heading", async () => {
+    const view = makeView();
+    await renderScreen({
+      success: true,
+      view: { ...view, columns: [...view.columns, proposedColumn()] },
+    });
+
+    for (const linkId of [CONTACT_LINK, OUTLOOK_LINK, PROPOSED_LINK]) {
+      expect(screen.queryByTestId(`compare-unimported-${linkId}`)).toBeNull();
+      // Paired structural assertion: the column rendered, so the absence is real.
+      expect(screen.getByTestId(`compare-column-${linkId}`)).toBeTruthy();
+    }
+    // The phrase itself survives — this deleted one copy, not the wording.
+    expect(screen.getByTestId("contact-compare-screen").textContent).toContain(
+      "not imported yet",
+    );
+  });
+
+  /**
+   * THE VALUE ROW IS UNTOUCHED, ASSERTED IN BOTH DIRECTIONS.
+   *
+   * A fix that removed the tag by emptying the communication row would pass
+   * every absence assertion above, so the row is pinned with messages AND
+   * without.
+   *
+   * THE POPULATED HALF IS ALSO WHAT MAKES THE FOUNDER'S ARGUMENT CHECKABLE: an
+   * un-imported record's own messages ARE found and shown, because matching runs
+   * on the address and the number and never on a contact row. That is precisely
+   * why "not imported yet" was false above this row — the messages were never
+   * pending anything.
+   *
+   * CONTROL: return `[]` from the communication block for `isProposed`, or gate
+   * the block on `!isProposed`, and the populated half goes red while every
+   * absence assertion above stays green.
+   */
+  it("a candidate with messages shows them, and one without still reads 'none'", async () => {
+    const view = makeView();
+    const withMessages: ContactCompareColumn = {
+      ...proposedColumn(),
+      recentCommunication: [
+        {
+          id: "tx-9",
+          channel: "text",
+          title: "can we move the walkthrough",
+          occurredAt: "2026-08-03T11:00:00.000Z",
+          matchedIdentifier: "+1 (206) 555-0142",
+        },
+      ],
+    };
+
+    await renderScreen({
+      success: true,
+      view: { ...view, columns: [...view.columns, withMessages] },
+    });
+
+    const populated = screen.getByTestId(`compare-row-communication-${PROPOSED_LINK}`);
+    expect(populated.querySelector("[data-testid='compare-comm-tx-9']")).toBeTruthy();
+    expect(populated.textContent).toContain("can we move the walkthrough");
+    // The row prints the message, NOT the empty literal.
+    expect(populated.textContent).not.toBe("none");
+    // …and no state label reappeared above it now that the row has content.
+    expect(screen.queryByTestId(`compare-unimported-${PROPOSED_LINK}`)).toBeNull();
+
+    // The empty half is asserted by "a candidate's empty-but-applicable rows
+    // still read 'none'" below, on the same `PROPOSED_LINK`, with
+    // `recentCommunication: []`.
   });
 
   /**

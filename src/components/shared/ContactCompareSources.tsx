@@ -27,15 +27,29 @@ import type {
  * row below it out of line with its neighbours.
  *
  * ===========================================================================
- * THREE LABELS ON A CANDIDATE COLUMN, AND THEY ALL SAY "not imported yet"
+ * TWO LABELS ON A CANDIDATE COLUMN, AND THEY BOTH SAY "not imported yet"
  * ===========================================================================
  *   the column header pill               -> "not imported yet"
  *   Transactions, on a PROPOSED record   -> "not imported yet", muted italic
- *   Recent communication, on a PROPOSED  -> that record's OWN messages, under a
- *                                           heading tagged "not imported yet"
- * None is a placeholder for missing data: they are one statement about one
- * state, repeated where the eye lands. Founder, 11 Aug — see `NOT_IMPORTED_YET`
- * for the four positions this wording passed through and why this is the last.
+ *   Recent communication, on a PROPOSED  -> that record's OWN messages, under an
+ *                                           UNTAGGED heading; "none" when it has
+ *                                           none
+ * Neither is a placeholder for missing data: they state what the RECORD cannot
+ * have until it is imported. See `NOT_IMPORTED_YET` for the five positions this
+ * wording passed through and why this is the last.
+ *
+ * THE COMMUNICATION HEADING CARRIES NO TAG, AND THE REASON IS NOT TIDINESS
+ * (11 Aug #5). Next to "Recent communication" the phrase attaches to the wrong
+ * noun: it reads as *the messages have not been imported yet*, so a user
+ * concludes the texts exist and are still on their way. They are not.
+ * COMMUNICATIONS MATCH ON THE EMAIL ADDRESS AND PHONE NUMBER THEMSELVES, NEVER
+ * ON A CONTACT ROW, so message matching does not depend on import state at all
+ * and what that row shows is ALREADY COMPLETE for that record. `none` there
+ * means there genuinely are none.
+ *
+ * The phrase is true of the record and false of the communications. On
+ * Transactions it is true of both — deals attach to contacts, so an un-imported
+ * record cannot have any — which is why that row keeps it.
  *
  * BACKLOG-2628 — THE DISCRIMINATOR IS `proposed`, NOT `source`, AND THAT IS THE
  * WHOLE FIX. Both treatments used to hang off `kind === "source"`, which is the
@@ -70,7 +84,7 @@ const NONE = "none";
  * communication heading. ONE STATE SHOULD NOT HAVE THREE NAMES.
  *
  * THE COMPLETE HISTORY OF THIS WORDING, so no later reader restores a
- * superseded decision believing it is live. Four positions in five days, each
+ * superseded decision believing it is live. Five positions in five days, each
  * deliberate:
  *
  *   D5, 6 Aug    "not a contact yet" (Transactions) + "not linked"
@@ -80,7 +94,9 @@ const NONE = "none";
  *                (built, then reverted — see `contactCompare.ts`)
  *   11 Aug #3    Transactions -> "not imported yet"; the other
  *                two left alone                                SUPERSEDED
- *   11 Aug #4    ALL THREE -> "not imported yet"               THIS
+ *   11 Aug #4    ALL THREE -> "not imported yet"               SUPERSEDED
+ *   11 Aug #5    header + Transactions -> "not imported yet";
+ *                the communication heading -> NO TAG           THIS
  *
  * Why this is the one that lasts: IMPORT is the word the founder uses for the
  * action that turns an address-book record into a contact, so the label names
@@ -88,10 +104,31 @@ const NONE = "none";
  * state instead — whether a crosswalk row exists ("not linked"), or whether the
  * record has become a contact ("not a contact yet").
  *
- * THREE RENDER SITES, ONE CONSTANT, AND THEY STAY THREE SITES. Each keeps its
- * own `data-testid` so a regression at one cannot be masked by the other two:
+ * WHY #5 FOLLOWED #4 SO FAST, and it is not a reversal. #4 was right and is
+ * still live at both surviving sites. #5 removes the third copy because in THAT
+ * POSITION the phrase is not merely repetitive — it is misleading.
+ *
+ * FOUNDER, 11 Aug, seeing #4 live: *"if it says not imported yet a user might
+ * think this contact doesn't have any texts because the texts aren't imported
+ * yet."* And: *"remove the not imported yet from the recent comm, just keep the
+ * none."*
+ *
+ * He is right, and this is the argument that must survive: under "Recent
+ * communication" the label attaches to the MESSAGES rather than to the record,
+ * and as a claim about messages it is false. Matching runs on the email address
+ * and the phone number themselves, so it never consults import state — the row
+ * is already complete. A user reading "not imported yet" there waits for texts
+ * that are not coming, and may answer the identity question believing evidence
+ * is still on its way.
+ *
+ * THE RULE, stated so the next reader does not restore it by symmetry:
+ * `not imported yet` belongs on rows describing what the RECORD cannot have
+ * until it is imported. It must not appear next to Recent communication.
+ *
+ * TWO RENDER SITES, ONE CONSTANT. Each keeps its own `data-testid` so a
+ * regression at one cannot be masked by the other:
  * `ContactCompareSources.test.tsx` reverts each independently and requires each
- * to go red on its own.
+ * to go red on its own, and asserts the DELETED third site stays absent.
  *
  * WHAT THIS DELIBERATELY DOES NOT TOUCH: the `match` tag on agreeing values,
  * and the plain `NONE` above, used where a real and applicable value is simply
@@ -346,32 +383,34 @@ const Column: React.FC<{
       />
 
       <div className="mt-3 pt-2 border-t border-gray-200">
-        <SectionHeading>
-          Recent communication
-          {/*
-            Site 3 of 3. Was D5's "not linked" until the founder unified the
-            three on 11 Aug.
+        {/*
+          NO TAG HERE, ON ANY COLUMN — DELETED, NOT HIDDEN (11 Aug #5).
 
-            It stays gated on `isProposed`, which is this item's fix: it was
-            `isSource` — the same boolean that draws the `linked record` tag and
-            `Unlink` — so a LINKED record's messages, which do reach the contact,
-            were tagged as reaching nobody two rows under a tag saying `linked
-            record`.
+          This heading carried a third `not imported yet` on candidate columns
+          (`compare-unimported-<linkId>`, and D5's `not linked` before that).
 
-            TEST ID RENAMED from `compare-notlinked-` to `compare-unimported-`,
-            the one non-string change here: an id naming a superseded phrase is a
-            fourth name for the state the founder just reduced to one. Nothing
-            outside this component's own suite selects it.
-          */}
-          {isProposed && (
-            <span
-              data-testid={`compare-unimported-${column.linkId}`}
-              className="font-sans text-[10px] font-bold uppercase tracking-wide rounded px-1 py-px bg-amber-50 text-amber-800 border border-amber-300"
-            >
-              {NOT_IMPORTED_YET}
-            </span>
-          )}
-        </SectionHeading>
+          FOUNDER, 11 Aug, seeing it live: *"if it says not imported yet a user
+          might think this contact doesn't have any texts because the texts
+          aren't imported yet."*
+
+          THAT IS THE REASON, AND IT IS NOT REDUNDANCY. Next to this heading the
+          phrase attaches to the MESSAGES, and as a claim about messages it is
+          false. Matching runs on the email address and the phone number
+          themselves — it never consults import state — so this row is ALREADY
+          COMPLETE for that record. A user reading "not imported yet" here waits
+          for texts that are not coming, and may answer *is this the same
+          person?* believing evidence is still on its way.
+
+          THE VALUE ROW IS UNTOUCHED, which is the whole shape of the fix: it
+          prints that record's real messages when it has any, and "none" when it
+          has none — a true statement about an applicable field.
+
+          DO NOT RESTORE THIS BY SYMMETRY WITH TRANSACTIONS. `not imported yet`
+          belongs on rows describing what the RECORD cannot have until it is
+          imported. Deals attach to contacts, so Transactions is such a row.
+          Communications are not.
+        */}
+        <SectionHeading>Recent communication</SectionHeading>
         <div data-testid={`compare-row-communication-${column.linkId}`}>
           {column.recentCommunication.length === 0 ? (
             <div className="text-sm italic text-gray-400">{NONE}</div>
