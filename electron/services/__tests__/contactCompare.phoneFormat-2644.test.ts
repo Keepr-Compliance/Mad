@@ -30,7 +30,8 @@
  *   C3   1–9 digit runs are not mangled              break: `displayPhone` -> `toE164`
  *   C3b  a stated country code is not overwritten    break: drop the `+` guard from `displayPhone`
  *   C4   the match path still finds the message      break: starve one column's bundle
- *   C4b  formatting preserves `toLookupKey`          break: `formatPhoneNumber("1" + digits.slice(1))`
+ *   C4b  the RENDERED value keeps both comparison
+ *        keys (`toLookupKey` AND `toE164`)          break: `formatPhoneNumber("1" + digits.slice(1))`
  *   C5   the reason sentence agrees with the cells   break: unwrap `displayPhone` at `buildReason`
  *
  * ---------------------------------------------------------------------------
@@ -47,9 +48,14 @@
  * Two consequences worth stating. The display change cannot reach message
  * matching even if a later refactor moved it there — which is the strongest
  * form of "display-only" available here. And no test can be written to forbid
- * that refactor by behaviour alone, so the boundary is held by the comment at
- * the `phonesByBundle` line and by review, not by this file. A reader looking
- * for the test that pins it should stop looking.
+ * that refactor by behaviour alone, so the boundary itself is held by the
+ * comment at the `phonesByBundle` line and by review, not by this file.
+ *
+ * What C4b DOES pin is the property that green result RESTS on: the rendered
+ * value keeps both `toLookupKey` AND `toE164`. The refactor is invisible only
+ * while that holds, so C4b reds before the boundary could ever matter — which
+ * is as close as a test can get, and is why it asserts two keys rather than
+ * the one it originally did (SR review, PR #2287).
  *
  * ---------------------------------------------------------------------------
  * FIXTURES
@@ -93,7 +99,7 @@ jest.mock("../logService", () => {
 import { getContactCompareColumns } from "../contactCompare";
 import { createLink } from "../db/contactSourceLinkDbService";
 import { recordContactOrigin } from "../db/contactOriginLink";
-import { toLookupKey, formatPhoneNumber } from "../../utils/phoneNormalization";
+import { toE164, toLookupKey } from "../../utils/phoneNormalization";
 
 const USER = "user-2644";
 
@@ -416,12 +422,35 @@ describe("numbers stored without a country code are not mangled", () => {
   });
 
   /**
-   * THE INVARIANT THE DISPLAY-ONLY CLAIM RESTS ON, swept over every shape this
-   * file exercises: formatting preserves `toLookupKey`, so even a future caller
-   * that compared the rendered string could not disagree with one that compared
-   * the stored value. `formatPhoneNumber`'s own half of this is
+   * THE INVARIANT THE DISPLAY-ONLY CLAIM RESTS ON — READ OFF THE SCREEN, NOT
+   * RE-DERIVED.
+   *
+   * SR review, PR #2287: the first version of this sweep re-implemented
+   * `displayPhone` inline and compared THAT against the stored value, so it
+   * asserted a property of this file. Measured: with `displayPhone` mutated in
+   * the service (M10, `formatPhoneNumber("1" + digits.slice(1))`), seven other
+   * tests went red and this sweep stayed GREEN. It is the same defect this
+   * file's own header describes for M8, one screen over.
+   *
+   * `rendered` now comes out of `getContactCompareColumns`, so the invariant is
+   * asserted about the SHIPPED path.
+   *
+   * TWO KEYS, NOT ONE, and the second is the point:
+   *
+   *   `toLookupKey` — what this screen's `match` tag, `dedupePhoneValues` and
+   *   `sharedPhoneKeys` compare on.
+   *   `toE164`      — what `phonesMatch` compares on, and therefore the exact
+   *   property that makes the M8 result in the header TRUE. Formatting the
+   *   match bundles is invisible to behaviour only for as long as this holds.
+   *
+   * The header says no test can forbid that refactor, and that is still true —
+   * a refactor is not observable. This is the nearest thing available: it pins
+   * the property the refactor's safety RESTS on, so if `displayPhone` ever
+   * stops preserving either key, this reds before the boundary matters.
+   *
+   * `formatPhoneNumber`'s own half of the lookup-key invariant is
    * `phoneNormalization.formatPhoneNumber.lookupKeyInvariant-2620.test.ts`;
-   * this covers the ten-digit canonicalisation that wrapper adds.
+   * this covers the ten-digit canonicalisation the wrapper adds on top.
    */
   it.each([
     ...BARE_RUNS,
@@ -432,15 +461,15 @@ describe("numbers stored without a country code are not mangled", () => {
     "206.555.0142",
     "+4405550142",
     "+50664103686",
-  ])("preserves the lookup key of %s", (raw) => {
-    const digits = raw.replace(/\D/g, "");
-    const rendered =
-      digits.length === 10 && !raw.trim().startsWith("+")
-        ? formatPhoneNumber("1" + digits)
-        : formatPhoneNumber(raw);
+  ])("preserves both comparison keys of %s through the screen", async (raw) => {
+    const phones = await comparePhones(`inv-${raw.replace(/\W/g, "") || "empty"}`, [raw], []);
+    const rendered = phones[0][0].value.trim();
 
-    // `"1" + d` has `d` as its last ten, so the key survives canonicalisation.
-    expect([raw, toLookupKey(rendered.trim())]).toEqual([raw, toLookupKey(raw)]);
+    expect([raw, toLookupKey(rendered), toE164(rendered)]).toEqual([
+      raw,
+      toLookupKey(raw),
+      toE164(raw),
+    ]);
   });
 });
 

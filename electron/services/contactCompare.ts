@@ -75,6 +75,18 @@ export interface CompareCommItem {
  * the value backfill would come to disagree about what a phone number is.
  */
 export interface CompareValue {
+  /**
+   * WHAT A PERSON READS — NOT ALWAYS WHAT IS STORED (BACKLOG-2644).
+   *
+   * Emails and names are the stored value verbatim. PHONES ARE FORMATTED for
+   * the screen (see `displayPhone`), because two spellings of one number on a
+   * comparison screen was the defect this field carried.
+   *
+   * So this is a DISPLAY string, and it crosses the IPC boundary as one: do not
+   * compare it, key off it, or send it back as an identifier. `matched` is
+   * already decided here and the crosswalk row is `linkId`. No consumer does
+   * any of those things today; this note exists so the next one does not start.
+   */
   value: string;
   matched: boolean;
 }
