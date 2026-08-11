@@ -309,18 +309,30 @@ describe("rejecting a source never deletes what the user typed", () => {
   /**
    * THE REGRESSION SR CAUGHT, end to end.
    *
-   * A hand-typed contact, an address-book record that happens to share the
-   * typed phone number, the linker connecting the two on that content match,
-   * and then "Not this person". Before the fix this deleted the typed email AND
-   * the typed phone — the client's own contact details, gone, because a
-   * stranger's address book listed the same number.
+   * A hand-typed contact, an address-book record that shares the typed phone
+   * number, the linker connecting the two on that content match, and then "Not
+   * this person". Before the fix this deleted the typed email AND the typed
+   * phone — the client's own contact details, gone.
+   *
+   * BACKLOG-2619 CHANGED THIS FIXTURE'S NAME, NOT WHAT IT TESTS. The record used
+   * to be called "Some Body" — a STRANGER whose card happened to list the same
+   * line. The content fallback no longer claims that record at all: mismatched
+   * names on a shared identifier is now a question, pinned by
+   * `contactSourceLinker.nameGuard-2619.test.ts`. The old fixture therefore
+   * described a link the app can no longer make, and building on it would have
+   * meant exercising an unreachable path.
+   *
+   * The record is now the SAME person the user typed in — you enter a client by
+   * hand and your Mac address book already has them — which is both the common
+   * case and still a silent auto-link. What is under test is unchanged:
+   * rejecting that source must not delete what the human typed.
    */
   it("keeps every typed value when the linked source is rejected", async () => {
     const contactId = await createViaManualForm();
 
-    // An address book record that shares the typed phone. Nothing here is the
-    // user's data — it is somebody else's card that lists the same line.
-    addExternal("mac-someone", "Some Body", "macos", ["someone@else.com"], [TYPED_PHONE]);
+    // The same person's address-book card, carrying an address of its own that
+    // the user never typed.
+    addExternal("mac-someone", "Hand Typed Person", "macos", ["someone@else.com"], [TYPED_PHONE]);
 
     // The content fallback links them, exactly as it does in production: it
     // filters on neither `is_imported` nor `source`.
