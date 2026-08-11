@@ -307,7 +307,7 @@ describe("BACKLOG-2619 — Marcus Ord and Priya Raman share an office line", () 
     addExternal(MARCUS_OUTLOOK, "Marcus Ord", {
       source: "outlook",
       emails: [MARCUS_EMAIL],
-      phones: [OFFICE_LINE, "+14155559999"],
+      phones: [OFFICE_LINE, "+14155550129"],
     });
 
     const emailsBefore = contactEmails(PRIYA);
@@ -321,7 +321,7 @@ describe("BACKLOG-2619 — Marcus Ord and Priya Raman share an office line", () 
 
     expect(contactPhones(PRIYA)).toEqual(phonesBefore);
     expect(contactPhones(PRIYA)).toEqual([OFFICE_LINE]);
-    expect(contactPhones(PRIYA)).not.toContain("+14155559999");
+    expect(contactPhones(PRIYA)).not.toContain("+14155550129");
   });
 
   it("files a question instead — the pair reaches the review queue", () => {
@@ -407,9 +407,9 @@ describe("BACKLOG-2619 — the act band survives (positive controls)", () => {
     expect(contactPhones(DANA)).toEqual([DANA_WORK_PHONE]);
   });
 
-  it("'Jane S.' is still Jane Smith — an abbreviated surname is not a mismatch", () => {
-    const JANE = addContact("c-jane", "Jane Smith", { emails: ["jane@example.com"] });
-    addExternal("outlook-jane", "Jane S.", {
+  it("Jane D. is still Jane Doe — an abbreviated surname is not a mismatch", () => {
+    const JANE = addContact("c-jane", "Jane Doe", { emails: ["jane@example.com"] });
+    addExternal("outlook-jane", "Jane D.", {
       source: "outlook",
       emails: ["jane@example.com"],
     });
@@ -551,6 +551,40 @@ describe("BACKLOG-2624 — a nameless record asks, it never acts", () => {
   });
 
   /**
+   * SR'S FINDING, PINNED END TO END — the echo rule used to be length-gated.
+   *
+   * The first draft compared a name against a phone only when the lookup key was
+   * exactly ten digits, on the false premise that a shorter key could not match a
+   * stored one. `toLookupKey` returns ALL the digits below ten, and the same
+   * function writes `phone_normalized`, so a saved contact and a nameless record
+   * sharing a SEVEN-digit local number were still linked silently, with zero
+   * questions filed.
+   *
+   * The ten-digit row is the positive control: it discriminated even under the
+   * old gate, so a failure on the short row is a finding and not a broken
+   * harness.
+   */
+  it.each([
+    ["a seven-digit local number", "5550112", "outlook-short"],
+    ["a ten-digit number (positive control)", "+14155550112", "outlook-ten"],
+  ])("%s: a nameless record sharing it asks, and links nothing", (_label, phone, recordId) => {
+    // The contact's own `display_name` IS the baked label — what
+    // `buildContactLabel` writes for a nameless record, and what
+    // `validateContactData` then forces into the column on import.
+    const baked = formatPhoneNumber(phone);
+    const NAMELESS = addContact("c-short", baked, { phones: [phone] });
+    addExternal(recordId, baked, { source: "outlook", phones: [phone] });
+
+    const summary = linkExternalContactsForUser(USER);
+
+    expect(summary.contentMatched).toBe(0);
+    expect(allLinkTriples()).toEqual([]);
+    expect(proposalTriples()).toEqual([
+      `outlook ${recordId} -> ${NAMELESS} [name_unknown/pending]`,
+    ]);
+  });
+
+  /**
    * THE GUARD CANNOT BE SWITCHED OFF BY FORGETTING A FIELD.
    *
    * `SourceRecordCandidate.name` is optional. A caller that omits it gets the
@@ -601,13 +635,13 @@ describe("BACKLOG-2619 — the guard runs LAST, so existing reasons are untouche
    * name problem, and that distinction would stop being testable.
    */
   it("the Daniel/Lilly shape keeps its own reason, not a name reason", () => {
-    const MOVER = addContact("c-mover", "Mover Chen", { phones: ["+14155553333"] });
+    const MOVER = addContact("c-mover", "Robin Marsh", { phones: ["+14155550133"] });
     // The incumbent is Mover's OWN card. It is linked by the sweep while it
     // still carries the number, and the number is taken off it afterwards —
     // which is the real sequence a correction in Contacts.app produces, and the
     // only way to reach this branch without writing a crosswalk row by hand.
-    addExternal("UUID-MOVER-OLD:ABPerson", "Mover Chen", {
-      phones: ["+14155553333"],
+    addExternal("UUID-MOVER-OLD:ABPerson", "Robin Marsh", {
+      phones: ["+14155550133"],
     });
     linkExternalContactsForUser(USER);
     expect(linkTriples(MOVER)).toEqual([`macos UUID-MOVER-OLD:ABPerson -> ${MOVER} (phone)`]);
@@ -619,13 +653,13 @@ describe("BACKLOG-2619 — the guard runs LAST, so existing reasons are untouche
         "UPDATE external_contacts SET phones_json = '[]', phones_normalized_json = '[]' WHERE external_record_id = ?",
       )
       .run("UUID-MOVER-OLD:ABPerson");
-    addExternal("UUID-MOVER-NEW:ABPerson", "Someone New", { phones: ["+14155553333"] });
+    addExternal("UUID-MOVER-NEW:ABPerson", "Pat Riverton", { phones: ["+14155550133"] });
 
     const resolution = resolveSourceRecord(USER, {
       sourceType: "macos",
       sourceRecordId: "UUID-MOVER-NEW:ABPerson",
-      name: "Someone New",
-      phones: ["+14155553333"],
+      name: "Pat Riverton",
+      phones: ["+14155550133"],
     });
 
     expect(resolution).toEqual({
@@ -640,8 +674,8 @@ describe("BACKLOG-2619 — the guard runs LAST, so existing reasons are untouche
   });
 
   it("an ambiguous identifier is still ambiguous, whatever the names say", () => {
-    const A = addContact("c-amb-a", "Alma Ferro", { phones: ["+14155550144"] });
-    const B = addContact("c-amb-b", "Bruno Ferro", { phones: ["+14155550144"] });
+    const A = addContact("c-amb-a", "Lee Park", { phones: ["+14155550144"] });
+    const B = addContact("c-amb-b", "Mo Park", { phones: ["+14155550144"] });
     addExternal("outlook-amb", "Marcus Ord", {
       source: "outlook",
       phones: ["+14155550144"],

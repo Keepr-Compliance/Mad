@@ -1033,7 +1033,7 @@ describe("android_sync INCREMENTAL diff — the guard must not go quietly dead",
     const ROB = "c-and-rob";
     const ROB_OLD = "and-rob-senior";
     const ROB_NEW = "and-rob-junior";
-    const SHARED_LINE = "+14155557799";
+    const SHARED_LINE = "+14155550179";
 
     addContact(ROB, "Robert Chen", { phones: [SHARED_LINE] });
     addExternal(ROB_OLD, "Robert Chen", {

@@ -139,7 +139,7 @@ describe("BACKLOG-2624 — a missing name is ASK, and it has three shapes", () =
     ["null", null],
     ["undefined", undefined],
   ])("%s on the RECORD side asks instead of acting", (_label, value) => {
-    expect(verdict(value, "Priya Raman")).toEqual({
+    expect(verdict(value, "Robin Marsh")).toEqual({
       supportsLink: false,
       reason: "name_unknown",
     });
@@ -151,7 +151,7 @@ describe("BACKLOG-2624 — a missing name is ASK, and it has three shapes", () =
     ["null", null],
     ["undefined", undefined],
   ])("%s on the CONTACT side asks too — the rule is not one-sided", (_label, value) => {
-    expect(verdict("Priya Raman", value)).toEqual({
+    expect(verdict("Robin Marsh", value)).toEqual({
       supportsLink: false,
       reason: "name_unknown",
     });
@@ -165,7 +165,7 @@ describe("BACKLOG-2624 — a missing name is ASK, and it has three shapes", () =
   it.each(["Unknown", "unknown", "UNKNOWN", "  Unknown  ", "Unknown Contact", "unknown contact"])(
     "the machine literal %p is not a name",
     (sentinel) => {
-      expect(verdict(sentinel, "Priya Raman")).toEqual({
+      expect(verdict(sentinel, "Robin Marsh")).toEqual({
         supportsLink: false,
         reason: "name_unknown",
       });
@@ -186,7 +186,7 @@ describe("BACKLOG-2624 — a missing name is ASK, and it has three shapes", () =
     "%p IS a real name and is compared as one",
     (realName) => {
       expect(verdict(realName, realName)).toEqual({ supportsLink: true });
-      expect(verdict(realName, "Priya Raman")).toEqual({
+      expect(verdict(realName, "Robin Marsh")).toEqual({
         supportsLink: false,
         reason: "name_mismatch",
       });
@@ -215,25 +215,25 @@ describe("BACKLOG-2624 — a missing name is ASK, and it has three shapes", () =
     // `formatPhoneNumber` is what `buildContactLabel` calls, so this IS the
     // producer's output rather than a transcription of it.
     expect(BAKED_PHONE_LABEL).not.toBe("");
-    expect(verdict(BAKED_PHONE_LABEL, "Priya Raman")).toEqual({
+    expect(verdict(BAKED_PHONE_LABEL, "Robin Marsh")).toEqual({
       supportsLink: false,
       reason: "name_unknown",
     });
     // The same number written as the source stored it, unformatted.
-    expect(verdict(PHONE, "Priya Raman")).toEqual({
+    expect(verdict(PHONE, "Robin Marsh")).toEqual({
       supportsLink: false,
       reason: "name_unknown",
     });
     // And with different punctuation again — the comparison is on the lookup
     // key, so formatting cannot smuggle a label past it.
-    expect(verdict("(415) 555-0120", "Priya Raman")).toEqual({
+    expect(verdict("(415) 555-0120", "Robin Marsh")).toEqual({
       supportsLink: false,
       reason: "name_unknown",
     });
   });
 
   it("the email echo is case-insensitive and trimmed, like every other email comparison here", () => {
-    expect(verdict("  LUIS@EXAMPLE.COM ", "Priya Raman")).toEqual({
+    expect(verdict("  LUIS@EXAMPLE.COM ", "Robin Marsh")).toEqual({
       supportsLink: false,
       reason: "name_unknown",
     });
@@ -249,7 +249,7 @@ describe("BACKLOG-2624 — a missing name is ASK, and it has three shapes", () =
     expect(verdict("someone.else@example.com", "someone.else@example.com")).toEqual({
       supportsLink: true,
     });
-    expect(verdict(BAKED_PHONE_LABEL, "Priya Raman", { emails: [], phones: [] })).toEqual({
+    expect(verdict(BAKED_PHONE_LABEL, "Robin Marsh", { emails: [], phones: [] })).toEqual({
       supportsLink: false,
       // Still refused — but as a MISMATCH, because with no identifier set to
       // compare against the label is taken at face value as a name.
@@ -264,9 +264,48 @@ describe("BACKLOG-2624 — a missing name is ASK, and it has three shapes", () =
     },
   );
 
-  it("a nine-digit-ish string is not treated as a phone key", () => {
-    // `toLookupKey` returns the last TEN digits; anything shorter cannot equal a
-    // stored key, and the guard requires exactly ten before it will compare.
+  /**
+   * SR FOUND THE BOUNDARY AND THIS CASE HAD DRAWN THE LINE ON THE WRONG SIDE OF
+   * IT. The first draft asserted `supportsLink: true` for a nine-digit string,
+   * with the rationale "toLookupKey returns the last TEN digits; anything
+   * shorter cannot equal a stored key".
+   *
+   * **That rationale is false.** `toLookupKey` returns ALL the digits when there
+   * are fewer than ten (`if (digits.length >= 10) return digits.slice(-10);
+   * return digits;`), the identical function writes
+   * `contact_phones.phone_normalized`, and `contactIdsByPhone` filters candidate
+   * keys on `length > 0` — not on ten. A short key matches a short stored key.
+   * The length gate therefore left three shapes linking SILENTLY, and the
+   * comment made the hole read as a decision rather than an oversight.
+   *
+   * The distinction that matters is not LENGTH. It is whether the string is one
+   * of THIS RECORD'S OWN identifiers.
+   */
+  it.each([
+    ["a seven-digit local number", "5550112"],
+    ["an alphanumeric sender", "VERIZON"],
+    ["a short code", "12345"],
+  ])("%s that IS the record's own phone is a label, not a name", (_label, phone) => {
+    const ids = { emails: [], phones: [phone] };
+    // Built by the same formatter `buildContactLabel` calls — the producer's
+    // own output, not a guess at its shape.
+    expect(verdict(formatPhoneNumber(phone), "Robin Marsh", ids)).toEqual({
+      supportsLink: false,
+      reason: "name_unknown",
+    });
+    // And two nameless records carrying it do not match on it either.
+    expect(verdict(formatPhoneNumber(phone), formatPhoneNumber(phone), ids)).toEqual({
+      supportsLink: false,
+      reason: "name_unknown",
+    });
+  });
+
+  it("but the very same string is a NAME when the record does not hold it", () => {
+    // Identical input, different identifier set. This is what makes the rule an
+    // echo test rather than a "looks like a phone number" heuristic.
+    expect(verdict("5550112", "5550112", { emails: [], phones: ["+14155550120"] })).toEqual({
+      supportsLink: true,
+    });
     expect(verdict("415555012", "415555012")).toEqual({ supportsLink: true });
   });
 });
@@ -274,20 +313,20 @@ describe("BACKLOG-2624 — a missing name is ASK, and it has three shapes", () =
 // ===========================================================================
 describe("BACKLOG-2624 — the two refusals are told apart", () => {
   it("mismatch and unknown are distinct verdicts, not one 'refused'", () => {
-    expect(verdict("Marcus Ord", "Priya Raman").supportsLink).toBe(false);
-    expect(verdict("", "Priya Raman").supportsLink).toBe(false);
-    expect(verdict("Marcus Ord", "Priya Raman")).not.toEqual(verdict("", "Priya Raman"));
+    expect(verdict("Marcus Ord", "Robin Marsh").supportsLink).toBe(false);
+    expect(verdict("", "Robin Marsh").supportsLink).toBe(false);
+    expect(verdict("Marcus Ord", "Robin Marsh")).not.toEqual(verdict("", "Robin Marsh"));
   });
 
   it("an absent name wins over a mismatch — there is nothing to mismatch against", () => {
-    expect(verdict("Unknown", "Priya Raman")).toEqual({
+    expect(verdict("Unknown", "Robin Marsh")).toEqual({
       supportsLink: false,
       reason: "name_unknown",
     });
   });
 
   it("no identifiers supplied at all still applies the empty-name rule", () => {
-    expect(nameSupportForAutoLink({ recordName: "", contactName: "Priya Raman" })).toEqual({
+    expect(nameSupportForAutoLink({ recordName: "", contactName: "Robin Marsh" })).toEqual({
       supportsLink: false,
       reason: "name_unknown",
     });

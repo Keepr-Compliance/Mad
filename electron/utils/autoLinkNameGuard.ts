@@ -55,9 +55,9 @@
  *
  *    A name that is exactly one of the record's own identifiers is therefore
  *    treated as absent. Exact comparison only — lowercased equality for email,
- *    a ten-digit lookup key for phone — so a person genuinely called
- *    "Unknown Records LLC", or one whose name merely contains a digit, keeps
- *    their name.
+ *    and for phone BOTH the lookup key and the formatted label the writer
+ *    produces (see `usableName`) — so a person genuinely called "Unknown Records
+ *    LLC", or one whose name merely contains a digit, keeps their name.
  *
  * ===========================================================================
  * WHY THERE IS NO `src/` MIRROR
@@ -74,7 +74,7 @@
 
 import { namesAreCompatible } from "./contactNameCompat";
 import { realContactName } from "./contactDisplayLabel";
-import { toLookupKey } from "./phoneNormalization";
+import { formatPhoneNumber, toLookupKey } from "./phoneNormalization";
 
 /**
  * Why the names refused an automatic link. Recorded distinguishably because the
@@ -100,29 +100,52 @@ export interface AutoLinkNameInput {
   identifiers?: { emails?: string[] | null; phones?: string[] | null };
 }
 
-/** A ten-digit lookup key, and nothing else. */
-const TEN_DIGIT_KEY = /^\d{10}$/;
-
 /**
  * The name a human would recognise as a name, or "" when there isn't one.
  *
- * `toLookupKey` returns the ORIGINAL STRING when its input holds no digits, so
- * the phone comparison is gated on the key actually being ten digits. Without
- * that gate every name would be its own lookup key and any record whose phone
- * list happened to contain that same text would read as an echo.
+ * ===========================================================================
+ * THE PHONE COMPARISON HAS TWO ARMS, AND THE SECOND IS WHY
+ * ===========================================================================
+ * The first draft gated the key comparison on the key being exactly ten digits,
+ * reasoning that "anything shorter cannot equal a stored key". **That was false,
+ * and SR proved it end to end.** `toLookupKey` returns ALL the digits when there
+ * are fewer than ten, and the identical function writes
+ * `contact_phones.phone_normalized`, so a seven-digit key matches a seven-digit
+ * stored key exactly as a ten-digit one does — `contactIdsByPhone` filters
+ * candidate keys on `length > 0`, not on ten. A saved contact and a nameless
+ * record sharing a seven-digit local number were still linked SILENTLY, with
+ * zero questions filed: BACKLOG-2624's own rule failing for three shapes —
+ * short local numbers, short codes, and alphanumeric senders such as `VERIZON`,
+ * which `toLookupKey` passes through unchanged.
+ *
+ * So the key comparison is no longer length-gated, and there is a second, EXACT
+ * comparison against `formatPhoneNumber(phone)` — the string
+ * `buildContactLabel` actually writes. Comparing against the producer's own
+ * output catches every shape BY CONSTRUCTION rather than by guessing what looks
+ * like a phone number.
+ *
+ * Both arms fail in the same safe direction: they can only produce more
+ * `name_unknown`, never more links. A real name is unaffected — "Studio 54"
+ * keys to "54" and matches nothing unless the record's OWN phone list holds
+ * "54", in which case reading that as an identifier rather than a name is the
+ * right answer anyway.
  */
 function usableName(
   raw: string | null | undefined,
   emailKeys: Set<string>,
   phoneKeys: Set<string>,
+  phoneLabels: Set<string>,
 ): string {
   const real = realContactName(raw);
   if (!real) return "";
 
   if (emailKeys.has(real.toLowerCase())) return "";
 
-  const key = toLookupKey(real);
-  if (TEN_DIGIT_KEY.test(key) && phoneKeys.has(key)) return "";
+  // Arm 1 — normalization-tolerant: "555-0112" and "5550112" key alike.
+  if (phoneKeys.has(toLookupKey(real))) return "";
+
+  // Arm 2 — exactly what the label writer produces, whatever its shape.
+  if (phoneLabels.has(real)) return "";
 
   return real;
 }
@@ -140,14 +163,14 @@ export function nameSupportForAutoLink(input: AutoLinkNameInput): AutoLinkNameVe
       .map((e) => (e || "").trim().toLowerCase())
       .filter((e) => e.length > 0),
   );
-  const phoneKeys = new Set(
-    (input.identifiers?.phones ?? [])
-      .map((p) => toLookupKey(p))
-      .filter((k) => TEN_DIGIT_KEY.test(k)),
+  const phones = input.identifiers?.phones ?? [];
+  const phoneKeys = new Set(phones.map((p) => toLookupKey(p)).filter((k) => k.length > 0));
+  const phoneLabels = new Set(
+    phones.map((p) => formatPhoneNumber(p ?? "").trim()).filter((l) => l.length > 0),
   );
 
-  const record = usableName(input.recordName, emailKeys, phoneKeys);
-  const contact = usableName(input.contactName, emailKeys, phoneKeys);
+  const record = usableName(input.recordName, emailKeys, phoneKeys, phoneLabels);
+  const contact = usableName(input.contactName, emailKeys, phoneKeys, phoneLabels);
 
   // BACKLOG-2624. Checked BEFORE compatibility, because `namesAreCompatible`
   // would answer `true` here and that answer is the defect.
