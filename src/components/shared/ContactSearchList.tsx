@@ -53,6 +53,7 @@ import {
   summariseContactSources,
   type ContactSourceSegment,
 } from "../../utils/contactSourceBreakdown";
+import { buildRowDisambiguators } from "../../utils/contactRowDisambiguation";
 import logger from "../../utils/logger";
 
 /**
@@ -683,6 +684,22 @@ export function ContactSearchList({
    * what the header says would actually change. The key uses the ASCII unit/record
    * separators (\u001f, \u001e), which cannot occur in a source label.
    */
+  /**
+   * BACKLOG-2663 — which visible rows need a field to tell them apart.
+   *
+   * Computed HERE and not in `ContactRow` because ambiguity is a property of the
+   * RESULT SET: three rows reading "Dana Whitlock" are unchoosable only while all
+   * three are on screen, and a row that knows only about itself cannot tell.
+   *
+   * Deliberately over `visibleContacts` — post filter, post search — so
+   * searching down to one Dana quiets her row again. Over the raw props it would
+   * keep disambiguating rows whose namesake the user has already filtered away.
+   */
+  const rowDisambiguators = useMemo(
+    () => buildRowDisambiguators(visibleContacts),
+    [visibleContacts],
+  );
+
   const visibleSourceBreakdown = summariseContactSources(visibleContacts);
   const visibleSourceBreakdownKey = visibleSourceBreakdown
     .map((s) => `${s.label}\u001f${s.count}`)
@@ -1174,6 +1191,9 @@ export function ContactSearchList({
                 }
                 compact={compact}
                 showDetailLine={showDetailLine}
+                // BACKLOG-2663: absent for a unique name — `.get` returns
+                // `undefined` and the row renders name-only, unchanged.
+                disambiguator={rowDisambiguators.get(contact.id)}
                 // BACKLOG-2556: `collapsedRecords` was passed here. The fold
                 // that produced them is deleted, so there is nothing to pass.
                 onSelect={() => handleRowSelect(contact, isExternal)}
