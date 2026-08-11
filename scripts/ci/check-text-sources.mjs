@@ -52,10 +52,18 @@
  * only to report the exact offsets. That keeps the common (passing) path to a
  * single git call, and makes a failure actionable rather than a bare filename.
  *
- * It also distinguishes the one legitimate reason git reports `-text` without a
- * NUL present: a `.gitattributes` rule marking the path binary. That is a
- * deliberate configuration choice, not this defect, so it is reported as such
- * instead of being mislabelled.
+ * The two columns can disagree, and the message says which one is at fault. The
+ * case that matters is `i/-text w/lf`: the STAGED blob carries the bytes while
+ * the file on disk is already clean. That is a developer who fixed the file and
+ * staged the wrong version, and it is the state that would actually reach a
+ * commit — so the offsets are read out of the index blob, not off disk.
+ *
+ * An earlier draft reported that state as a `.gitattributes` rule and would have
+ * sent someone hunting for a rule that does not exist. Provoking the branch is
+ * what exposed it, and testing the claim is what settled it: `-text`, `binary`
+ * and `-text -diff` were each set on a clean file and all three left the eol
+ * columns at `i/lf w/lf`, moving only the attr column. Git derives those columns
+ * from blob content, so an attribute cannot cause this failure at all.
  *
  * @module scripts/ci/check-text-sources
  */
@@ -66,27 +74,39 @@ import { readFileSync } from "node:fs";
 const PATHSPECS = ["electron/*.ts", "electron/*.tsx", "src/*.ts", "src/*.tsx"];
 
 /** Bytes that make a file unreadable as text. Tab, LF and CR are excluded. */
-function offendingBytes(path) {
-  let buf;
-  try {
-    buf = readFileSync(path);
-  } catch {
-    return null; // deleted from the worktree; the index entry is still the truth
-  }
+function offendingBytes(buf) {
   const found = [];
   for (let i = 0; i < buf.length; i++) {
     const b = buf[i];
     if (b === 0x09 || b === 0x0a || b === 0x0d) continue;
-    if (b < 0x20 || b === 0x7f) found.push({ offset: i, byte: b });
+    if (b < 0x20 || b === 0x7f) {
+      let line = 1;
+      for (let j = 0; j < i; j++) if (buf[j] === 0x0a) line++;
+      found.push({ offset: i, byte: b, line });
+    }
   }
   return found;
 }
 
-function lineOf(path, offset) {
-  const head = readFileSync(path).subarray(0, offset);
-  let line = 1;
-  for (const b of head) if (b === 0x0a) line++;
-  return line;
+/** The bytes as they exist on disk. Null if the file is not in the worktree. */
+function worktreeBytes(path) {
+  try {
+    return readFileSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/** The bytes as STAGED — what a commit would actually carry. */
+function indexBytes(path) {
+  try {
+    return execFileSync("git", ["cat-file", "blob", `:${path}`], {
+      encoding: "buffer",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    return null;
+  }
 }
 
 // `git ls-files --eol` emits: i/<eol> w/<eol> attr/<text-attr> \t <path>
@@ -101,48 +121,77 @@ const binary = [];
 for (const row of rows) {
   const tab = row.indexOf("\t");
   if (tab === -1) continue;
-  const [index, work, attr] = row.slice(0, tab).trim().split(/\s+/);
+  const [index, work] = row.slice(0, tab).trim().split(/\s+/);
   const path = row.slice(tab + 1);
   if (index === "i/-text" || work === "w/-text") {
-    binary.push({ path, attr: attr ?? "attr/" });
+    binary.push({ path, staged: index === "i/-text", onDisk: work === "w/-text" });
   }
+}
+
+const FIX =
+  `      Fix: spell them as escapes. A control character wanted as fixture\n` +
+  `      content belongs in the source as \\u0000 — same byte at runtime, and\n` +
+  `      the file stays greppable. If it is a real NUL in a fixture, assert its\n` +
+  `      char code is 0 so the escape is proven to produce the byte.\n` +
+  `      Worked example: the BACKLOG-2637 comments in\n` +
+  `      electron/services/folderExport/__tests__/threadContactLabel.test.ts\n`;
+
+function listBytes(found) {
+  const shown = found
+    .slice(0, 10)
+    .map(
+      ({ offset, byte, line }) =>
+        `        offset ${offset} (line ${line}): 0x` + byte.toString(16).padStart(2, "0"),
+    )
+    .join("\n");
+  return (
+    `      ${found.length} control byte(s):\n${shown}` +
+    (found.length > 10 ? `\n        ...and ${found.length - 10} more` : "")
+  );
 }
 
 if (binary.length > 0) {
   console.error("\ntext-source check FAILED (BACKLOG-2637):\n");
-  for (const { path, attr } of binary) {
-    const found = offendingBytes(path);
-    if (found && found.length > 0) {
-      const shown = found
-        .slice(0, 10)
-        .map(
-          ({ offset, byte }) =>
-            `        offset ${offset} (line ${lineOf(path, offset)}): 0x` +
-            byte.toString(16).padStart(2, "0"),
-        )
-        .join("\n");
-      console.error(
-        `  - ${path}\n` +
-          `      reads as BINARY, so every plain grep skips it silently — a repo-wide\n` +
-          `      search for anything in this file returns a clean-looking negative.\n\n` +
-          `      ${found.length} control byte(s):\n${shown}` +
-          (found.length > 10 ? `\n        ...and ${found.length - 10} more` : "") +
-          `\n\n` +
-          `      Fix: spell them as escapes. A control character wanted as fixture\n` +
-          `      content belongs in the source as \\u0000 — same byte at runtime, and\n` +
-          `      the file stays greppable. If it is a real NUL in a fixture, assert its\n` +
-          `      char code is 0 so the escape is proven to produce the byte.\n` +
-          `      Worked example: the BACKLOG-2637 comments in\n` +
-          `      electron/services/folderExport/__tests__/threadContactLabel.test.ts\n`,
-      );
-    } else {
-      console.error(
-        `  - ${path}\n` +
-          `      git reports it as binary (${attr}) but it holds no control bytes, so a\n` +
-          `      .gitattributes rule is marking this path binary. Source under electron/\n` +
-          `      and src/ must stay greppable — drop the rule or move the file.\n`,
-      );
+  for (const { path, staged, onDisk } of binary) {
+    const header =
+      `  - ${path}\n` +
+      `      reads as BINARY, so every plain grep skips it silently — a repo-wide\n` +
+      `      search for anything in this file returns a clean-looking negative.\n\n`;
+
+    const disk = onDisk ? offendingBytes(worktreeBytes(path) ?? Buffer.alloc(0)) : [];
+    if (disk.length > 0) {
+      console.error(header + listBytes(disk) + `\n\n` + FIX);
+      continue;
     }
+
+    // Staged binary, clean on disk: the fix exists in the working tree but the
+    // blob heading for the commit is still the bad one. Report the INDEX bytes,
+    // because those are what would actually land.
+    const idx = staged ? offendingBytes(indexBytes(path) ?? Buffer.alloc(0)) : [];
+    if (idx.length > 0) {
+      console.error(
+        header +
+          `      The file ON DISK is clean — these bytes are in the STAGED blob, which\n` +
+          `      is what a commit would carry. Stage the fixed file:  git add ${path}\n\n` +
+          listBytes(idx) +
+          `\n\n` +
+          FIX,
+      );
+      continue;
+    }
+
+    // Fallback. Not reachable by any route found while writing this: git derives
+    // the eol columns from blob CONTENT, and no .gitattributes setting moves them
+    // (`-text`, `binary` and `-text -diff` were each tried against a clean file
+    // and all three left `i/lf w/lf`, changing only the attr column). It exists
+    // so a flagged file can never produce an empty report — e.g. an unreadable
+    // worktree copy with no index blob to fall back on.
+    console.error(
+      `  - ${path}\n` +
+        `      git calls this binary, but neither the staged blob nor the file on disk\n` +
+        `      could be read for control bytes. Run:  file ${path}\n` +
+        `      and check for a .gitattributes rule marking the path binary.\n`,
+    );
   }
   process.exit(1);
 }
