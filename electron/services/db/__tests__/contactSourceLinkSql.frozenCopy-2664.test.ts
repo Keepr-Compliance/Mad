@@ -101,7 +101,7 @@ import { backfillContactEmailsSync, backfillContactPhonesSync } from "../contact
 import { listPendingProposals } from "../contactLinkReviewDbService";
 import { createLink } from "../contactSourceLinkDbService";
 import { linkExternalContactsForUser } from "../../contactSourceLinker";
-import { rejectProposal } from "../../contactLinkReview";
+import { confirmProposal, rejectProposal } from "../../contactLinkReview";
 
 const USER = "user-2664";
 
@@ -467,7 +467,12 @@ describe("BACKLOG-2664 — the copy is a consequence of the link, never a siblin
      * ticket's clothes, and until this test existed nothing here objected to it.
      *
      * NEGATIVE CONTROL RUN: adding the freeze gate to priority 1 as well fails
-     * this on the phone exact set — `+15035550133` never arrives.
+     * this. IT REDS ON THE COPY PLAN, NOT ON THE PHONE EXACT SET — an earlier
+     * revision of this comment named the wrong line, and a wrong line number is
+     * exactly what a later reader takes on trust. Re-run with the copy-plan
+     * assertion disabled and the value assertion alone still reds
+     * (`- "+15035550133"`), so both halves discriminate and neither is merely
+     * shadowed by the other.
      */
     it("still copies from a LINKED record onto a FROZEN contact", () => {
       addContact(DANA, "Dana Whitlock", { emails: [DANA_EMAIL], phones: [DANA_OWN_PHONE] });
@@ -492,6 +497,70 @@ describe("BACKLOG-2664 — the copy is a consequence of the link, never a siblin
       expect(copyPlanFor(DANA)).toEqual(["source_id:rec-0130"]);
       expect(phonesOf(DANA)).toEqual([DANA_OWN_PHONE, "+15035550133"]);
       // Nothing was asked: the record was already claimed by the source-id step.
+      expect(questionsFor(DANA)).toEqual([]);
+    });
+
+    /**
+     * THE LOAD-BEARING ASSUMPTION OF THIS WHOLE FIX, TESTED END TO END.
+     *
+     * The justification for leaving priority 1 ungated is a sentence: "a frozen
+     * contact still receives values the moment a human confirms a question."
+     * The test above seeds `createLink` by hand, which assumes that sentence
+     * rather than demonstrating it. Nothing else here drives a confirm at all —
+     * the reject path is covered, the confirm path was not.
+     *
+     * That gap is not cosmetic. `confirmProposal` could plausibly have re-entered
+     * the linker, met the `frozen_audit_contact` branch, and been refused. This
+     * PR would then have converted "her card acquires a stranger's number" into
+     * "her card can never be corrected", which is worse, and no assertion in this
+     * file would have noticed. So the answer is driven through the real queue:
+     * refuse -> ask -> a human says yes -> the link is created AND the values
+     * arrive.
+     *
+     * THE PAIR IS ASSERTED SEPARATELY ON PURPOSE. A link with no copy is a
+     * confirm that did nothing visible; a copy with no link is the defect this
+     * ticket is about. Only both together are the difference between a gate and
+     * a wall.
+     *
+     * NEGATIVE CONTROL RUN: gating priority 1 as well fails this on the copy
+     * plan — after the confirm she IS crosswalk-linked, so the backfill must see
+     * her through priority 1, and a gate there makes her permanently invisible
+     * to it. See the PR body for the observed output.
+     */
+    it("a human confirming the question links AND delivers the values, frozen or not", () => {
+      addContact(DANA, "Dana Whitlock", { emails: [DANA_EMAIL], phones: [DANA_OWN_PHONE] });
+      freezeViaJunction("txn-dana", DANA);
+      addExternal("rec-confirm", "Dana Whitlock", {
+        source: "macos",
+        emails: [DANA_EMAIL],
+        phones: ["+1 (503) 555-0130", "+1 (503) 555-0134"],
+      });
+
+      // The sweep refuses and asks — the state this PR guarantees she is left in.
+      runSweep([DANA]);
+      expect(questionsFor(DANA)).toEqual(["macos rec-confirm (frozen_audit_contact)"]);
+      expect(phonesOf(DANA)).toEqual([DANA_OWN_PHONE]);
+
+      const pending = listPendingProposals(USER).filter((p) => p.contact_id === DANA);
+      expect(pending.map((p) => p.source_record_id)).toEqual(["rec-confirm"]);
+
+      // The human answers "yes, same person".
+      expect(confirmProposal(USER, pending[0].id)).toEqual({
+        ok: true,
+        linked: true,
+        alsoRejected: 0,
+      });
+
+      // 1. The link exists, and says a human made it.
+      expect(linkedRecordsOf(DANA)).toEqual([
+        `macos origin:${DANA} (origin)`,
+        "macos rec-confirm (manual)",
+      ]);
+      // 2. The values arrived with it — the answer was not merely recorded.
+      expect(phonesOf(DANA)).toEqual([DANA_OWN_PHONE, "+15035550134"]);
+      // 3. And she is now reachable through priority 1, so later sweeps keep her
+      //    up to date instead of leaving her frozen in both senses.
+      expect(copyPlanFor(DANA)).toEqual(["source_id:rec-confirm"]);
       expect(questionsFor(DANA)).toEqual([]);
     });
 
