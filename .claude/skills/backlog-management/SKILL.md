@@ -129,7 +129,7 @@ SELECT MAX(item_number) + 1 AS next_num FROM pm_backlog_items;
 -- 2. Insert with manual item_number + legacy_id; RETURNING confirms the row exists
 INSERT INTO pm_backlog_items (item_number, legacy_id, title, description, type, area, priority, status, est_tokens, start_date)
 VALUES (<next_num>, 'BACKLOG-<next_num>', '<title>', '<description>',
-        '<bug|feature|chore|improvement>', '<area>', '<critical|high|medium|low>',
+        '<feature|bug|chore|refactor|test|epic|docs|spike>', '<area>', '<critical|high|medium|low>',
         'pending', <est_tokens>, CURRENT_DATE)
 RETURNING id, item_number, legacy_id;
 
@@ -268,8 +268,17 @@ ever reports the split. 559 of 2,450 live items have no `area` — if you know i
 
 ### 4. `type` is already reliable — leave it alone
 
-Zero nulls across all 2,450 live items. It is the one grouping field that works today. Keep
-setting it on creation (`bug` / `feature` / `chore` / `improvement` / `spike`); nothing else needed.
+Zero nulls across all 2,450 live items. It is the one grouping field that works today, and unlike
+`area` it cannot drift: a CHECK constraint enforces exactly eight values. Keep setting it on
+creation; nothing else needed.
+
+```
+feature · bug · chore · refactor · test · epic · docs · spike
+```
+
+**`improvement` is not one of them** — an `INSERT` using it fails on
+`pm_backlog_items_type_check`. Use `feature` or `refactor`. And file an epic as `epic`, not as a
+`feature`: 61 live items depend on that distinction to group their children.
 
 ---
 
