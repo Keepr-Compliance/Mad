@@ -39,9 +39,19 @@ import type { Database as DatabaseType, Statement } from "better-sqlite3";
 import { setDb } from "../db/core/dbConnection";
 import {
   linkExternalContactsForUser,
+  linkSourceRecords,
   resolveSourceRecord,
   type LinkResolution,
+  type SourceRecordCandidate,
 } from "../contactSourceLinker";
+import {
+  createContact,
+  deleteContact,
+  restoreContact,
+  syncContactEmails,
+  syncContactPhones,
+} from "../db/contactDbService";
+import { createLink } from "../db/contactSourceLinkDbService";
 import {
   CONTACT_SOURCE_LINKS_TABLE_SQL,
   CONTACT_SOURCE_LINKS_INDEX_SQL,
@@ -67,14 +77,26 @@ const SCHEMA_SQL = fs.readFileSync(
 const V40_INDEX_SQL =
   "CREATE INDEX IF NOT EXISTS idx_contact_phones_normalized ON contact_phones(phone_normalized)";
 const V57_EXTERNAL_UUID_SQL = "ALTER TABLE external_contacts ADD COLUMN external_uuid TEXT";
+/** Migration v56's tombstone columns — what `deleteContact`/`restoreContact` write. */
+const V56_TOMBSTONE_SQL = [
+  "ALTER TABLE contacts ADD COLUMN removed_at DATETIME",
+  "ALTER TABLE contacts ADD COLUMN removed_reason TEXT",
+];
 
 const USER_ID = "user-2620";
+
+/** The open handle. Module scope so the helpers below can reach it. */
+let db: DatabaseType;
+function currentDb(): DatabaseType {
+  return db;
+}
 
 function makeDb(): DatabaseType {
   const db = new Database(":memory:");
   db.exec(SCHEMA_SQL);
   db.exec(V40_INDEX_SQL);
   db.exec(V57_EXTERNAL_UUID_SQL);
+  for (const sql of V56_TOMBSTONE_SQL) db.exec(sql);
   db.exec(CONTACT_SOURCE_LINKS_TABLE_SQL);
   db.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
   db.exec(CONTACT_LINK_PROPOSALS_TABLE_SQL);
@@ -223,12 +245,196 @@ function seedCorpus(db: DatabaseType, n: number, contactCount: number): Corpus {
 }
 
 // ---------------------------------------------------------------------------
+// One-record helpers for the invalidation controls
+// ---------------------------------------------------------------------------
+
+let nextRow = 0;
+
+/** One row of `external_contacts`, the way a sync writes it. */
+function addRecord(
+  recordId: string,
+  opts: {
+    name?: string | null;
+    emails?: string[];
+    phones?: string[];
+    source?: string;
+    externalUuid?: string | null;
+  },
+): void {
+  const phones = opts.phones ?? [];
+  currentDb()
+    .prepare(
+      `INSERT INTO external_contacts
+         (id, user_id, name, phones_json, phones_normalized_json, emails_json,
+          external_record_id, source, synced_at, external_uuid)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-08-10T00:00:00.000Z', ?)`,
+    )
+    .run(
+      `ext-${nextRow++}`,
+      USER_ID,
+      opts.name ?? null,
+      JSON.stringify(phones),
+      JSON.stringify(phones.map((p) => p.replace(/\D/g, "").slice(-10))),
+      JSON.stringify(opts.emails ?? []),
+      recordId,
+      opts.source ?? "macos",
+      opts.externalUuid ?? null,
+    );
+}
+
+/** Source record ids with this outcome, sorted — an exact set, never a count. */
+function idsOf(summary: { resolutions: LinkResolution[] }, outcome: string): string[] {
+  return summary.resolutions
+    .filter((r) => r.outcome === outcome)
+    .map((r) => r.sourceRecordId)
+    .sort();
+}
+
+/** Every crosswalk row as `[contactId, sourceRecordId]`, origin rows excluded. */
+function crosswalkPairs(): Array<[string, string]> {
+  return (
+    currentDb()
+      .prepare(
+        `SELECT contact_id, source_record_id FROM contact_source_links
+          WHERE match_method != 'origin' ORDER BY contact_id, source_record_id`,
+      )
+      .all() as Array<{ contact_id: string; source_record_id: string }>
+  ).map((r) => [r.contact_id, r.source_record_id]);
+}
+
+/** The candidate list `linkExternalContactsForUser` builds, read the same way. */
+function readCandidates(): SourceRecordCandidate[] {
+  return (
+    currentDb()
+      .prepare(
+        `SELECT external_record_id, source, name, emails_json, phones_json, external_uuid
+           FROM external_contacts
+          WHERE user_id = ? AND external_record_id IS NOT NULL
+          ORDER BY source, external_record_id`,
+      )
+      .all(USER_ID) as Array<{
+      external_record_id: string;
+      source: string;
+      name: string | null;
+      emails_json: string | null;
+      phones_json: string | null;
+      external_uuid: string | null;
+    }>
+  ).map((r) => ({
+    sourceType: r.source as SourceRecordCandidate["sourceType"],
+    sourceRecordId: r.external_record_id,
+    externalUuid: r.external_uuid,
+    name: r.name,
+    emails: JSON.parse(r.emails_json ?? "[]") as string[],
+    phones: JSON.parse(r.phones_json ?? "[]") as string[],
+  }));
+}
+
+/**
+ * The corpus for the parity control. Written with raw SQL rather than through
+ * `createContact` because several rows are shapes the create path will not
+ * produce on purpose — a NULL `phone_normalized`, an untrimmed stored email —
+ * and those are exactly the rows a hand-written map gets wrong.
+ */
+function seedParityCorpus(db: DatabaseType): void {
+  const insC = db.prepare(
+    "INSERT INTO contacts (id, user_id, display_name, is_imported) VALUES (?, ?, ?, 1)",
+  );
+  const insE = db.prepare(
+    "INSERT INTO contact_emails (id, contact_id, email, is_primary, source) VALUES (?, ?, ?, 0, 'import')",
+  );
+  const insP = db.prepare(
+    `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source)
+     VALUES (?, ?, ?, ?, 0, 'import')`,
+  );
+
+  // Contact ids are deliberately NOT in insertion order, so `ORDER BY c.id`
+  // and "the order rows were written" cannot be confused for one another.
+  insC.run("c-zoe", USER_ID, "Zoe Adler");
+  insE.run("e-zoe", "c-zoe", "ZOE.ADLER@Example.COM");
+  insC.run("c-amir", USER_ID, "Amir Haddad");
+  insE.run("e-amir1", "c-amir", "amir@example.com");
+  insE.run("e-amir2", "c-amir", "amir.haddad@example.org");
+  insC.run("c-mira", USER_ID, "Mira Sandoval");
+  // Leading space in the STORED address. `LOWER()` does not trim it, so this
+  // must NOT match a probe for the same address without the space.
+  insE.run("e-mira", "c-mira", " mira@example.com");
+  insP.run("p-mira", "c-mira", "+15555550171", "5555550171");
+  insC.run("c-tomas", USER_ID, "Tomas Iverson");
+  insP.run("p-tomas", "c-tomas", "+15555550171", "5555550171");
+  insC.run("c-null", USER_ID, "Nell Barros");
+  // A NULL lookup key: `IN` can never match it, in either implementation.
+  insP.run("p-null", "c-null", "+15555550188", null);
+  insC.run("c-short", USER_ID, "Short Code Sender");
+  insP.run("p-short", "c-short", "12345", "12345");
+  insC.run("c-alpha", USER_ID, "Verizon Notices");
+  insP.run("p-alpha", "c-alpha", "VERIZON", "VERIZON");
+  insC.run("c-both", USER_ID, "Bo Tran");
+  insE.run("e-both", "c-both", "bo.tran@example.com");
+  insC.run("c-phone-only", USER_ID, "Other Holder");
+  insP.run("p-phone-only", "c-phone-only", "+15555550166", "5555550166");
+
+  const add = (recordId: string, opts: Parameters<typeof addRecord>[1]) => {
+    const phones = opts.phones ?? [];
+    db.prepare(
+      `INSERT INTO external_contacts
+         (id, user_id, name, phones_json, phones_normalized_json, emails_json,
+          external_record_id, source, synced_at, external_uuid)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-08-10T00:00:00.000Z', ?)`,
+    ).run(
+      `ext-p-${recordId}`,
+      USER_ID,
+      opts.name ?? null,
+      JSON.stringify(phones),
+      JSON.stringify(phones.map((p) => p.replace(/\D/g, "").slice(-10))),
+      JSON.stringify(opts.emails ?? []),
+      recordId,
+      opts.source ?? "macos",
+      opts.externalUuid ?? null,
+    );
+  };
+
+  // Case differs on both sides.
+  add("p-case", { name: "Zoe Adler", emails: ["zoe.adler@example.com"] });
+  // Two of the record's emails reach ONE contact — the live query's DISTINCT.
+  add("p-distinct", { name: "Amir Haddad", emails: ["amir@example.com", "amir.haddad@example.org"] });
+  // The stored address has a leading space, the probe does not: no match.
+  add("p-untrimmed", { name: "Mira Sandoval", emails: ["mira@example.com"] });
+  // Two contacts share the phone: order decides which one the question names.
+  add("p-shared-phone", { name: "Mira Sandoval", phones: ["+1 (555) 555-0171"] });
+  // Email matches nobody, phone matches somebody: the phone arm must be reached.
+  add("p-phone-fallback", {
+    name: "Other Holder",
+    emails: ["nobody@example.net"],
+    phones: ["+15555550166"],
+  });
+  // Email matches; the phone would match a DIFFERENT contact. Email wins.
+  add("p-email-first", {
+    name: "Bo Tran",
+    emails: ["bo.tran@example.com"],
+    phones: ["+15555550166"],
+  });
+  // A NULL stored key is unreachable.
+  add("p-null-key", { name: "Nell Barros", phones: ["+15555550188"] });
+  add("p-short-code", { name: "Short Code Sender", phones: ["12345"] });
+  add("p-alphanumeric", { name: "Verizon Notices", phones: ["VERIZON"] });
+  // Nothing to probe with at all.
+  add("p-empty", { name: "No Identifiers" });
+  // Already claimed by the crosswalk, and carrying a uuid to backfill.
+  insC.run("c-claimed", USER_ID, "Claimed Person");
+  add("p-claimed", { name: "Claimed Person", externalUuid: "UUID-CLAIMED-0001" });
+  db.prepare(
+    `INSERT INTO contact_source_links
+       (id, user_id, contact_id, source_type, source_record_id, match_method)
+     VALUES ('l-claimed', ?, 'c-claimed', 'macos', 'p-claimed', 'phone')`,
+  ).run(USER_ID);
+}
+
+// ---------------------------------------------------------------------------
 // The measurement
 // ---------------------------------------------------------------------------
 
 describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatched records", () => {
-  let db: DatabaseType;
-
   afterEach(() => {
     if (db) db.close();
     setDb(undefined as unknown as DatabaseType);
@@ -266,5 +472,305 @@ describe("BACKLOG-2620 — the linking pass does not scale its SQL with unmatche
     );
 
     expect(large.fallback).toBe(small.fallback);
+    // And the whole pass, not just the fallback: four index loads plus the one
+    // read of `external_contacts`. Naming the number means an extra per-record
+    // statement introduced later cannot hide inside "roughly constant".
+    expect(large.total).toBe(5);
+    expect(small.total).toBe(5);
+  });
+
+  /**
+   * CONTROL 2 — THE ANTI-TRAP, and the reason this is not a "skip what didn't
+   * match" patch.
+   *
+   * A record that matched nothing must be reconsidered when the contact set
+   * changes. Its RED state is the staleness this design forbids: share ONE
+   * index across both passes, which is exactly what caching a negative result
+   * would amount to, and the record stays unmatched.
+   */
+  it("CONTROL 2 — a record that matched nothing links to a contact created AFTER it", async () => {
+    db = makeDb();
+    setDb(db);
+    addRecord("rec-late", { emails: ["dana.reyes@example.com"], name: "Dana Reyes" });
+
+    const first = linkExternalContactsForUser(USER_ID);
+    expect(idsOf(first, "no_match")).toEqual(["rec-late"]);
+    expect(crosswalkPairs()).toEqual([]);
+
+    const contact = await createContact(
+      {
+        user_id: USER_ID,
+        display_name: "Dana Reyes",
+        source: "manual",
+        email: "dana.reyes@example.com",
+      } as Parameters<typeof createContact>[0],
+      { kind: "derived" },
+    );
+
+    const second = linkExternalContactsForUser(USER_ID);
+    expect(idsOf(second, "linked")).toEqual(["rec-late"]);
+    expect(crosswalkPairs()).toContainEqual([contact.id, "rec-late"]);
+  });
+
+  /**
+   * CONTROL 3 — one case per way the contact set can change, each driven
+   * through the write path the app actually uses.
+   */
+  describe("CONTROL 3 — every way the contact set changes is seen by the next pass", () => {
+    it("3a — an email ADDED to an existing contact links a record that did not match before", async () => {
+      db = makeDb();
+      setDb(db);
+      addRecord("rec-3a", { emails: ["marcus.ord@example.com"], name: "Marcus Ord" });
+      const contact = await createContact(
+        {
+          user_id: USER_ID,
+          display_name: "Marcus Ord",
+          source: "manual",
+        } as Parameters<typeof createContact>[0],
+        { kind: "derived" },
+      );
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "no_match")).toEqual(["rec-3a"]);
+
+      syncContactEmails(contact.id, [{ email: "marcus.ord@example.com", is_primary: true }]);
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "linked")).toEqual(["rec-3a"]);
+      expect(crosswalkPairs()).toContainEqual([contact.id, "rec-3a"]);
+    });
+
+    it("3b — an identifier REMOVED from a contact returns its record to no_match", async () => {
+      db = makeDb();
+      setDb(db);
+      addRecord("rec-3b", { phones: ["+14155550123"], name: "Priya Raman" });
+      const contact = await createContact(
+        {
+          user_id: USER_ID,
+          display_name: "Priya Raman",
+          source: "manual",
+          phone: "+14155550123",
+        } as Parameters<typeof createContact>[0],
+        { kind: "derived" },
+      );
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "linked")).toEqual(["rec-3b"]);
+
+      // The crosswalk now claims the record, so STEP 1 would answer it forever.
+      // Removing that row is what makes this a test of the CONTENT path.
+      db.prepare("DELETE FROM contact_source_links WHERE source_record_id = ?").run("rec-3b");
+      syncContactPhones(contact.id, []);
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "no_match")).toEqual(["rec-3b"]);
+    });
+
+    it("3c — an identifier MOVED between contacts re-points the record to the new holder", async () => {
+      db = makeDb();
+      setDb(db);
+      addRecord("rec-3c", { emails: ["shared.desk@example.com"], name: "Shared Desk" });
+      const first = await createContact(
+        {
+          user_id: USER_ID,
+          display_name: "Shared Desk",
+          source: "manual",
+          email: "shared.desk@example.com",
+        } as Parameters<typeof createContact>[0],
+        { kind: "derived" },
+      );
+      const second = await createContact(
+        {
+          user_id: USER_ID,
+          display_name: "Shared Desk",
+          source: "manual",
+        } as Parameters<typeof createContact>[0],
+        { kind: "derived" },
+      );
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "linked")).toEqual(["rec-3c"]);
+      expect(crosswalkPairs()).toContainEqual([first.id, "rec-3c"]);
+
+      // Move the address, and drop the crosswalk row so the content path is the
+      // one under test rather than STEP 1's memory of the old answer.
+      syncContactEmails(first.id, []);
+      syncContactEmails(second.id, [{ email: "shared.desk@example.com", is_primary: true }]);
+      db.prepare("DELETE FROM contact_source_links WHERE source_record_id = ?").run("rec-3c");
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "linked")).toEqual(["rec-3c"]);
+      expect(crosswalkPairs()).toContainEqual([second.id, "rec-3c"]);
+    });
+
+    /**
+     * 3d — DELETE AND RESTORE CHANGE NOTHING, AND THAT IS THE SHIPPED
+     * BEHAVIOUR, NOT AN OVERSIGHT OF THIS CHANGE.
+     *
+     * Removing a contact is a TOMBSTONE (`contacts.removed_at`), and neither
+     * matching query filters on it — so a removed contact has always remained a
+     * link candidate. This pins that, because "the batch index missed the
+     * delete" and "the linker never looked at deletes" would otherwise be
+     * indistinguishable from the outside. Changing the behaviour is a separate
+     * decision with a user-visible consequence; it is not this item's.
+     */
+    it("3d — a tombstoned contact is still a candidate, before and after (existing behaviour, pinned)", async () => {
+      db = makeDb();
+      setDb(db);
+      addRecord("rec-3d", { emails: ["removed.person@example.com"], name: "Removed Person" });
+      const contact = await createContact(
+        {
+          user_id: USER_ID,
+          display_name: "Removed Person",
+          source: "manual",
+          email: "removed.person@example.com",
+        } as Parameters<typeof createContact>[0],
+        { kind: "derived" },
+      );
+
+      await deleteContact(contact.id);
+      db.prepare("DELETE FROM contact_source_links WHERE source_record_id = ?").run("rec-3d");
+      expect(
+        db.prepare("SELECT removed_at FROM contacts WHERE id = ?").get(contact.id),
+      ).not.toEqual({ removed_at: null });
+
+      const whileRemoved = linkExternalContactsForUser(USER_ID);
+      expect(idsOf(whileRemoved, "linked")).toEqual(["rec-3d"]);
+      expect(crosswalkPairs()).toContainEqual([contact.id, "rec-3d"]);
+
+      await restoreContact(contact.id);
+      db.prepare("DELETE FROM contact_source_links WHERE source_record_id = ?").run("rec-3d");
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "linked")).toEqual(["rec-3d"]);
+    });
+
+    it("3e — the RECORD's own identifiers changing is seen on the next pass", async () => {
+      db = makeDb();
+      setDb(db);
+      addRecord("rec-3e", { emails: ["old.address@example.com"], name: "Sam Okafor" });
+      const contact = await createContact(
+        {
+          user_id: USER_ID,
+          display_name: "Sam Okafor",
+          source: "manual",
+          email: "new.address@example.com",
+        } as Parameters<typeof createContact>[0],
+        { kind: "derived" },
+      );
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "no_match")).toEqual(["rec-3e"]);
+
+      // What a sync does: rewrite the shadow row.
+      db.prepare("UPDATE external_contacts SET emails_json = ? WHERE external_record_id = ?").run(
+        JSON.stringify(["new.address@example.com"]),
+        "rec-3e",
+      );
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "linked")).toEqual(["rec-3e"]);
+      expect(crosswalkPairs()).toContainEqual([contact.id, "rec-3e"]);
+    });
+
+    it("3f — a crosswalk row written between passes is honoured at STEP 1", async () => {
+      db = makeDb();
+      setDb(db);
+      addRecord("rec-3f", { emails: ["typed.by.hand@example.com"], name: "Jo Nakamura" });
+      const contact = await createContact(
+        {
+          user_id: USER_ID,
+          display_name: "Jo Nakamura",
+          source: "manual",
+        } as Parameters<typeof createContact>[0],
+        { kind: "derived" },
+      );
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "no_match")).toEqual(["rec-3f"]);
+
+      createLink({
+        userId: USER_ID,
+        contactId: contact.id,
+        sourceType: "macos",
+        sourceRecordId: "rec-3f",
+        matchMethod: "manual",
+      });
+
+      expect(idsOf(linkExternalContactsForUser(USER_ID), "already_linked")).toEqual(["rec-3f"]);
+    });
+
+    /**
+     * 3g — THE ONE THE ITEM DOES NOT NAME, and the only invalidation that has
+     * to happen DURING a pass.
+     *
+     * A content match calls `applyLinkedSourceValues`, which copies the source
+     * record's addresses onto the contact. Those are rows the index is built
+     * from, so a LATER record in the SAME pass can legitimately match through an
+     * address this pass just created. With per-record SQL that was free; with a
+     * batch index it needs `noteContactValuesChanged`, and its RED state is
+     * deleting that call.
+     */
+    it("3g — a record matches through an address an EARLIER record's link contributed in the same pass", async () => {
+      db = makeDb();
+      setDb(db);
+      // Record A: matches Ada by email, and also carries her phone.
+      addRecord("rec-a", {
+        emails: ["ada.brennan@example.com"],
+        phones: ["+15125550144"],
+        name: "Ada Brennan",
+      });
+      // Record B: carries ONLY that phone. The saved contact does not have it
+      // until record A's link copies it across, mid-pass.
+      addRecord("rec-b", { phones: ["+15125550144"], name: "Ada Brennan", source: "outlook" });
+
+      const contact = await createContact(
+        {
+          user_id: USER_ID,
+          display_name: "Ada Brennan",
+          source: "manual",
+          email: "ada.brennan@example.com",
+        } as Parameters<typeof createContact>[0],
+        { kind: "derived" },
+      );
+
+      const summary = linkExternalContactsForUser(USER_ID);
+
+      expect(idsOf(summary, "linked").sort()).toEqual(["rec-a", "rec-b"]);
+      expect(crosswalkPairs()).toContainEqual([contact.id, "rec-b"]);
+    });
+  });
+
+  /**
+   * CONTROL 4 — the two implementations answer identically.
+   *
+   * The batch index is a second implementation of three queries, and a second
+   * implementation is a place for a silent divergence to live. Every case here
+   * is one where a plausible map is WRONG:
+   *
+   *   - a stored address with a leading space (SQL `LOWER` does not trim, the
+   *     probe side does — so it must NOT match);
+   *   - case differences on both sides (SQL `LOWER` vs `toLowerCase`);
+   *   - email wins over phone even when the phone would match a different
+   *     contact (the email-first short circuit);
+   *   - one contact reached by two of a record's emails (the live query's
+   *     DISTINCT);
+   *   - two contacts sharing one identifier, where `matches[0]` decides which
+   *     contact the question names — so ORDER matters, not just membership;
+   *   - `VERIZON` and a short code, which `toLookupKey` passes through;
+   *   - a `contact_phones` row with a NULL `phone_normalized`, which `IN` can
+   *     never match;
+   *   - a record with no identifiers at all.
+   */
+  it("CONTROL 4 — live and batch resolution agree, record for record, on a corpus built to break them", () => {
+    db = makeDb();
+    setDb(db);
+    seedParityCorpus(db);
+
+    const candidates = readCandidates();
+    expect(candidates.length).toBeGreaterThan(8);
+
+    // Resolve with the live per-record index, on a pristine copy of the data.
+    const live = candidates.map((c) => resolveSourceRecord(USER_ID, c));
+    const liveCrosswalk = crosswalkPairs();
+
+    // Rebuild byte-identically and resolve with the batch index.
+    db.close();
+    db = makeDb();
+    setDb(db);
+    seedParityCorpus(db);
+    const batch = linkSourceRecords(USER_ID, readCandidates()).resolutions;
+
+    expect(batch).toEqual(live);
+    expect(crosswalkPairs()).toEqual(liveCrosswalk);
   });
 });

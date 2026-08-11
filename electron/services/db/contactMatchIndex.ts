@@ -273,10 +273,12 @@ function addTo(map: Map<string, string[]>, key: string, contactId: string): void
     map.set(key, [contactId]);
     return;
   }
-  // The load is ordered by contact id, so a duplicate can only be adjacent —
-  // the same contact reaching one key through two of its own rows. That is what
-  // the live query's DISTINCT removes.
-  if (existing[existing.length - 1] !== contactId) existing.push(contactId);
+  // `includes` rather than a check against the last element: during the ordered
+  // load a repeat IS adjacent, but `noteContactValuesChanged` re-adds one
+  // contact's keys mid-pass and has no such guarantee. This is what the live
+  // query's DISTINCT removes — a contact reaching one key through two of its
+  // own rows ("A@x" and "a@x" both lower to one key).
+  if (!existing.includes(contactId)) existing.push(contactId);
 }
 
 function removeFrom(map: Map<string, string[]>, key: string, contactId: string): void {
@@ -341,13 +343,26 @@ export function loadContactMatchIndex(userId: string): ContactMatchIndex {
     }
   }
 
+  /**
+   * The contacts holding any of these keys, in `ORDER BY c.id` order.
+   *
+   * ===========================================================================
+   * THE SORT IS UNCONDITIONAL, AND A ONE-KEY FAST PATH WAS A REAL BUG
+   * ===========================================================================
+   * The first version returned the stored array unsorted when there was only one
+   * key, reasoning that the load is already ordered by contact id. It is — until
+   * `noteContactValuesChanged` appends a contact mid-pass, which puts a
+   * LATER-sorting id at the front of a key it just joined.
+   *
+   * That is not cosmetic. When two contacts share an identifier the record is
+   * flagged `ambiguous_identifier` and `matches[0]` is the contact the question
+   * NAMES, so the order decides what a human is asked. The parity control caught
+   * it: the live query said `c-both`, the batch said `c-phone-only`, for a
+   * record whose rival contact had just been given the phone number by the
+   * previous record's link.
+   */
   function union(map: Map<string, string[]>, keys: string[]): string[] {
     if (keys.length === 0) return [];
-    if (keys.length === 1) {
-      // One key: the stored array is already in `ORDER BY c.id` order, and it
-      // has no duplicates. Returning a copy so a caller cannot mutate the index.
-      return [...(map.get(keys[0]) ?? [])];
-    }
     const out = new Set<string>();
     for (const key of keys) {
       for (const id of map.get(key) ?? []) out.add(id);
