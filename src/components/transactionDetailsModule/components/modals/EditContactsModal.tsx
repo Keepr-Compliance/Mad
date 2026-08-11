@@ -1001,10 +1001,64 @@ function Screen2Overlay({
         />
       </div>
 
-      {/* Desktop footer — BACKLOG-2405: counts only NEW additions (pre-populated
-          existing chips are not "being added"); removals commit live via ✕. */}
-      <div className="hidden sm:flex flex-shrink-0 px-6 py-4 bg-gray-50 rounded-b-xl items-center justify-between">
-        <p className="text-sm text-gray-600">
+      {/*
+        ============================================================
+        BACKLOG-2639 — ONE FOOTER, IN FLOW, AT EVERY WIDTH.
+        THERE USED TO BE A SECOND, FLOATING COPY. IT COVERED THE SAVE
+        BUTTON OF EVERY OVERLAY OPENED FROM THIS SCREEN.
+        ============================================================
+        The founder, at a narrow window: *"the add selected covers the add save
+        button on narrow view."* Below `sm` this footer was `hidden` and a
+        SECOND copy of the same button rendered as
+        `sm:hidden fixed bottom-4 right-4 z-[71]`.
+
+        `fixed` positions against the VIEWPORT, so that copy sat in the
+        bottom-right corner of the window no matter what was underneath it.
+        What was underneath it was `ContactFormModal` — which mounts inside
+        `ContactAssignmentStep` (a DESCENDANT of this overlay), renders
+        full-screen below `sm`, and puts its **"Add Contact"** save button at
+        the bottom-right (`ContactFormModal.tsx:535`). Both layers land in this
+        overlay's `z-10` stacking context, where the pill's `z-[71]` beats the
+        form's `z-[70]`, so the pill took the click. Measured in chromium over a
+        1px width sweep: the pill won `elementFromPoint` at the save button's
+        centre at EVERY width from 360px to 639px — the whole sub-`sm` band, not
+        a narrow strip, because the cause is a media-query gate and not a
+        fitting problem.
+
+        WHY THIS SHAPE AND NOT A GATE. The obvious fix is what
+        `AuditTransactionModal.tsx:388` does: `{!isContactFormOpen && ...}`,
+        fed by `ContactAssignmentStep`'s `onModalStateChange` (BACKLOG-1654).
+        That is a per-overlay gate that has to be extended by hand for every
+        overlay that might ever open underneath — and it has ALREADY been
+        forgotten once, which is this bug: the audit wizard got the gate, this
+        screen did not. It is still incomplete over there, too (that pill is
+        ungated against `ReviewDuplicatesModal`, mounted at `z-[60]` by
+        `ContactAssignmentStep.tsx:783`).
+
+        So the floating copy is gone rather than gated. This footer is an
+        in-flow, non-positioned `flex-shrink-0` row in the overlay's flex
+        column, above a `flex-1 min-h-0` content region. It PARTICIPATES IN
+        LAYOUT: it reserves its own height, so it cannot paint over anything at
+        any z-index, and it has no stacking context to lose a race in. A control
+        added here later consumes footer width — it cannot float, because
+        nothing here is positioned. That is the property that cannot regress;
+        the old arrangement could only be kept correct by remembering to.
+
+        One control, one place — the founder's rule for this screen family:
+        *"put them all as a part of the same wrap component so they all move
+        together — actually putting them together is even better."*
+
+        Only `hidden sm:flex` -> `flex` changed on this element. Every other
+        class is untouched, so at `sm` and above the computed layout is
+        identical to before.
+      */}
+      {/* BACKLOG-2405: counts only NEW additions (pre-populated existing chips
+          are not "being added"); removals commit live via ✕. */}
+      <div
+        className="flex flex-shrink-0 px-6 py-4 bg-gray-50 rounded-b-xl items-center justify-between gap-3"
+        data-testid="add-contacts-footer"
+      >
+        <p className="text-sm text-gray-600 min-w-0 truncate">
           {newlyAddedIds.length > 0
             ? `${newlyAddedIds.length} contact${newlyAddedIds.length !== 1 ? "s" : ""} to add`
             : "Select contacts to add"}
@@ -1012,31 +1066,12 @@ function Screen2Overlay({
         <button
           onClick={handleAddSelected}
           disabled={newlyAddedIds.length === 0 || isAddingSelected}
-          className={`px-6 py-2 rounded-lg font-semibold transition-all ${
+          className={`flex-shrink-0 px-6 py-2 rounded-lg font-semibold transition-all ${
             newlyAddedIds.length === 0 || isAddingSelected
               ? "bg-gray-300 text-gray-500 cursor-not-allowed"
               : "bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 shadow-md hover:shadow-lg"
           }`}
           data-testid="add-selected-button"
-        >
-          {isAddingSelected
-            ? "Adding..."
-            : newlyAddedIds.length > 0
-              ? `Add Selected (${newlyAddedIds.length})`
-              : "Add Selected"}
-        </button>
-      </div>
-      {/* Mobile floating button */}
-      <div className="sm:hidden fixed bottom-4 right-4 z-[71]">
-        <button
-          onClick={handleAddSelected}
-          disabled={newlyAddedIds.length === 0 || isAddingSelected}
-          className={`px-6 py-3 rounded-full font-semibold text-sm shadow-lg transition-all ${
-            newlyAddedIds.length === 0 || isAddingSelected
-              ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-              : "bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 shadow-lg hover:shadow-xl"
-          }`}
-          data-testid="add-selected-button-mobile"
         >
           {isAddingSelected
             ? "Adding..."
