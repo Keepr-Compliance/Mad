@@ -9,7 +9,7 @@ This skill defines how agents hand off work during sprint task execution. Read t
 
 ---
 
-> **Source of Truth (read this first):** All sprint plans, task plans, progress logs, status transitions, decisions, and issue entries live in Supabase: `pm_sprints.body`, `pm_backlog_items.body`, `pm_comments`, `pm_token_metrics`. Do NOT create `.claude/plans/sprints/*.md` or `.claude/plans/tasks/*.md` files for new work. The `.claude/.current-task` file is the only on-disk PM artifact (it's an IPC contract the metrics hook reads). Existing `.md` files under `.claude/plans/` are historical/archive only. When this document references "the task file" or "the sprint file," read/write the corresponding Supabase `body` column instead.
+> **Source of Truth (read this first):** All sprint plans, task plans, progress logs, status transitions, decisions, and issue entries live in Supabase: `pm_sprints.body`, `pm_backlog_items.body`, `pm_comments`, `pm_token_metrics`. Do NOT create `.claude/plans/sprints/*.md` or `.claude/plans/tasks/*.md` files for new work. The `.claude/.current-task` file is the only on-disk PM artifact. It is no longer how an agent is identified: since BACKLOG-1693 (PR #2280) the metrics hooks bind identity per agent at spawn via a sidecar keyed on `agent_id`, and `.current-task` is the **fourth** fallback in the resolution order — consulted only when no sibling subagent is running and its mtime falls inside that run's window. Writing it is still supported and still correct for single-agent sessions; it is simply not load-bearing. `.claude/hooks/README.md` is the authority on attribution — read it before writing PM tooling that depends on how metrics are labelled. Existing `.md` files under `.claude/plans/` are historical/archive only. When this document references "the task file" or "the sprint file," read/write the corresponding Supabase `body` column instead.
 
 ---
 
@@ -18,7 +18,7 @@ This skill defines how agents hand off work during sprint task execution. Read t
 ### PM Agent Steps
 | Step | Action | Status Update | Hand Off To |
 |------|--------|---------------|-------------|
-| 0 | Write `.current-task` with sprint context | — | - (before any agent work) |
+| 0 | Name `BACKLOG-nnnn` in every agent brief (this is what attributes tokens); `.current-task` optional | — | - (before any agent work) |
 | 1 | Verify backlog item exists with plan in `pm_backlog_items.body` (via `pm_get_item_by_legacy_id`) | — | - (abort if missing) |
 | 2-4 | Setup (worktree, branch, status) | Task + Item → `in_progress` | - |
 | 5 | Task ready for planning | — | Engineer (read-only exploration) |
@@ -63,18 +63,21 @@ Sprint Task Lifecycle
 
 PHASE A: SETUP (PM)
 -------------------
-0.  PM: Write .current-task with sprint context (BEFORE any agent work)
-    - This is the FIRST thing PM does — before planning, before spawning any agent
-    - **CRITICAL: sprint_id MUST be the sprint UUID (not the name)**
-      The track-agent-tokens hook writes sprint_id directly to pm_token_metrics.
-      Using the name (e.g., "SPRINT-T") instead of the UUID breaks sprint-level metrics queries.
+0.  PM: Put BACKLOG-nnnn in every agent brief (attribution happens at spawn)
+    - **This, not .current-task, is what attributes an agent's tokens.** Since
+      BACKLOG-1693 the register-agent hook writes a per-agent sidecar keyed on
+      agent_id when the agent is spawned, and the SubagentStop hook reads it back
+      by that same agent_id. Naming the item in the brief is sufficient.
+    - Writing .current-task is OPTIONAL and is the 4th fallback in the resolution
+      order — used only when no sibling subagent is running and its mtime falls
+      inside that run's window. With parallel agents it is ignored by design.
+      Do NOT rely on it to distinguish concurrent agents; that is the failure it
+      caused (five consecutive agents recorded against one item, measured
+      2026-08-11). See `.claude/hooks/README.md` for the full order.
+    - If you do write it, sprint_id MUST be the sprint UUID (not the name).
+      The hook writes sprint_id straight to pm_token_metrics; a name like
+      "SPRINT-T" breaks sprint-level metrics queries.
     - echo '{"agent_type": "pm", "sprint_id": "<sprint-uuid>", "description": "Sprint setup"}' > .claude/.current-task
-    - Update .current-task BEFORE EVERY agent invocation with the correct agent_type:
-      * Before Engineer: {"task_id": "TASK-XXXX", "agent_type": "engineer", "sprint_id": "<sprint-uuid>"}
-      * Before SR Engineer: {"task_id": "TASK-XXXX", "agent_type": "sr-engineer", "sprint_id": "<sprint-uuid>"}
-      * Before QA: {"agent_type": "qa", "sprint_id": "<sprint-uuid>", "description": "Sprint QA"}
-      * Sprint-level work (no task): omit task_id, include sprint_id + description
-    - This ensures every subagent's token usage is captured with correct attribution
 
 1a. PM: Create integration branch (if not already created for this sprint)
     - git checkout develop && git pull origin develop
@@ -110,7 +113,9 @@ PHASE A: SETUP (PM)
     - Valid statuses: pending, in_progress, testing, completed, deferred
 
 5.  PM → ENGINEER: Handoff task for planning (read-only exploration)
-    - Write `.claude/.current-task` with task context for metrics hook:
+    - Include the `BACKLOG-nnnn` id in the engineer's brief — that is what binds
+      the metrics row to this item (BACKLOG-1693). Optionally also write
+      `.claude/.current-task` (legacy fallback, ignored when agents run in parallel):
       `echo '{"task_id": "TASK-XXXX", "agent_type": "engineer", "sprint_id": "<sprint-uuid>"}' > .claude/.current-task`
     - Use handoff message template
     - Specify: Task ID (legacy_id), backlog item UUID, branch name.
@@ -245,13 +250,22 @@ PHASE D: PR, TEST & MERGE
       `SELECT pm_update_item_status('<backlog_item_uuid>', 'completed');`
     - Reconcile metrics (verify all agents logged to Supabase):
       ```sql
-      SELECT agent_id, agent_type, total_tokens, task_id
+      SELECT agent_id, agent_type, billable_tokens, task_id
       FROM pm_token_metrics WHERE task_id = 'TASK-XXXX' ORDER BY recorded_at;
       ```
+      **Use `billable_tokens`, never `total_tokens`.** `total_tokens` includes
+      `cache_read_tokens` and runs ~19x higher (measured 19.54x across the live
+      table on 2026-08-11); summing it for cost or variance is simply wrong.
+      `billable_tokens` is `GENERATED ALWAYS AS (input + output + cache_creation)`
+      — cache reads are excluded on purpose. See "A note on `total_tokens`" below.
     - If any agents are unlabeled, label them:
       `SELECT pm_label_agent_metrics('<agent_id>', 'TASK-XXXX', 'engineer', 'Implementation');`
-    - Record task totals (auto-sums from metric rows):
+      Label the rows the hooks already wrote — do NOT insert agent rows by hand.
+    - Record task totals (auto-sums the metric rows above):
       `SELECT pm_record_task_tokens('<task_uuid>');`
+      Pass NO agent arguments. The function takes 11 but uses only the first
+      two; the agent ones are accepted and silently ignored. See the Step 14
+      entry under "SQL Reference" for why, and what to use instead.
     - Collect issues from handoff messages and log them as
       `pm_comments` (tag with `issue` keyword) on the relevant backlog item
 
@@ -259,10 +273,12 @@ PHASE D: PR, TEST & MERGE
     - Verify all tasks are complete
     - Aggregate all task metrics from Supabase:
       ```sql
-      SELECT task_id, SUM(total_tokens) AS total, SUM(billable_tokens) AS billable
+      SELECT task_id, SUM(billable_tokens) AS billable
       FROM pm_token_metrics WHERE sprint_id = '<sprint-uuid>'
       GROUP BY task_id ORDER BY task_id;
       ```
+      `SUM(total_tokens)` was removed from this query, not renamed. It double-counts
+      cache reads (~19x), and every sprint figure derived from it is wrong.
     - Populate `pm_sprints.body` with the sprint retrospective
       (UPDATE pm_sprints SET body = '<markdown>' WHERE id = '<sprint-uuid>'):
       - Estimation accuracy table (est vs actual per task)
@@ -444,17 +460,75 @@ SELECT pm_update_item_status('<backlog_item_uuid>', 'testing');
 SELECT pm_update_task_status('<task_uuid>', 'completed');
 -- Note: <task_uuid> here is pm_tasks.id (the sprint task row),
 -- NOT pm_backlog_items.id. Resolve via pm_get_task_by_legacy_id('TASK-XXXX').
--- All args after p_task_id are optional; the auto-sum form is just:
---   SELECT pm_record_task_tokens('<task_uuid>');
-SELECT pm_record_task_tokens(
-  '<task_uuid>',
-  <total_actual_tokens>,
-  '<engineer_agent_id>',
-  'engineer',
-  <input_tokens>, <output_tokens>, <cache_read>, <cache_create>,
-  <duration_ms>, <api_calls>, '<session_id>'
-);
+
+-- Use this form. It sums the metric rows the hooks already wrote and
+-- writes pm_tasks.actual_tokens + the parent item's actual_tokens/variance.
+SELECT pm_record_task_tokens('<task_uuid>');
+
+-- Second form, only to override the sum with a hand-set total:
+SELECT pm_record_task_tokens('<task_uuid>', <total_actual_tokens>);
 ```
+
+**`pm_record_task_tokens` records the task TOTAL. It does not write agent rows.**
+
+The function still declares 11 parameters, but only the first two do anything.
+`p_agent_id`, `p_agent_type`, `p_input_tokens`, `p_output_tokens`, `p_cache_read`,
+`p_cache_create`, `p_duration_ms`, `p_api_calls` and `p_session_id` are **accepted and
+ignored** — passing them is silently discarded, and the returned payload always reads
+`agent_metrics_written: false`. **Do not add them back.** They were kept only so the
+admin portal keeps compiling.
+
+PR #2282 removed the synthetic agent-metric row this function used to insert, because
+`pm_token_metrics.billable_tokens` is a `GENERATED ALWAYS` column
+(`input + output + cache_creation`) — every row the function wrote re-entered the sum it
+had just computed, inflating the very total it was recording.
+
+Agent-level rows come from the hooks, not from this call:
+
+| Want | Use |
+|---|---|
+| Per-agent token rows | Nothing — the `SubagentStop` hook writes them. Since BACKLOG-1693 identity is bound per agent at spawn, so put `BACKLOG-nnnn` in the agent's brief and attribution follows. See `.claude/hooks/README.md`. |
+| An unlabelled row attached to a task | `SELECT pm_label_agent_metrics('<agent_id>', 'TASK-XXXX', 'engineer', 'Implementation');` — works from an MCP session |
+| The task/item rollup | `SELECT pm_record_task_tokens('<task_uuid>');` |
+
+`pm_log_agent_metrics` is the RPC the hook itself calls. It is guarded by an
+`internal_roles` check with a service-role bypass, so it works for the hook and **fails
+from an MCP session** with "Access denied: internal role required". A PM should not be
+calling it by hand.
+
+**`pm_record_task_tokens` raises when there is nothing to sum.** If no metric rows exist
+for the task or its parent item it errors rather than returning — that means the hooks
+did not record, so fix attribution instead of passing a number to silence it. When rows
+exist for the item but none are keyed to this task, it deliberately leaves
+`pm_tasks.actual_tokens` alone (an item may have several tasks) and rolls up the item only.
+
+### A note on `total_tokens` — never sum it for cost
+
+**Effort, cost and variance come from `billable_tokens`. `total_tokens` is not a smaller
+mistake, it is a ~19x one.**
+
+| Column | Contents | Use for cost? |
+|---|---|---|
+| `billable_tokens` | `GENERATED ALWAYS AS (input + output + cache_creation)` | **Yes** |
+| `total_tokens` | the above **plus `cache_read_tokens`** | **No** |
+
+Cache reads dominate an agent's transcript and are excluded from `billable_tokens` on
+purpose. Measured across the whole live table on 2026-08-11
+(`SELECT SUM(total_tokens), SUM(billable_tokens) FROM pm_token_metrics`):
+15,967,627,947 vs 817,061,720 — **19.54x**.
+
+This is not hypothetical. Summing `total_tokens` is what made every `variance` in the
+tracker wrong; 89 item rows had to be recomputed from `SUM(billable_tokens)`, and it is
+the reason PR #2282 changed `pm_record_task_tokens`. `pm_record_task_tokens` already sums
+the right column — this note is for the hand-written reconciliation queries in Steps 14
+and 15, where the choice is yours.
+
+Do not "simplify" these queries back to `total_tokens`, and do not add it alongside
+`billable_tokens` in a query whose output is a cost or variance figure — offering both is
+how the wrong one gets copied into a sprint retrospective. It is fine in a full component
+breakdown that already lists `cache_read_tokens` separately (see
+`.claude/skills/log-metrics/SKILL.md`), where it is plainly the sum of the parts and is
+labelled diagnostic-only.
 
 ### Step 15: PM closes sprint (if all tasks done)
 ```sql
