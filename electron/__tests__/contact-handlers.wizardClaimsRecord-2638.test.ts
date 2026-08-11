@@ -150,9 +150,18 @@ jest.mock("../services/databaseService", () => {
             .prepare("SELECT * FROM contacts WHERE user_id = ? AND is_imported = 1")
             .all("550e8400-e29b-41d4-a716-446655440000"),
         ),
-      // No legacy local rows in any case here: every record under test is an
-      // address-book row in the shadow table.
-      getUnimportedContactsByUserId: () => Promise.resolve([]),
+      /**
+       * BACKLOG-2638 (SR finding F4): this returned `[]`, so the legacy branch
+       * of `contacts:get-available` was never exercised and CONTROL 8 could not
+       * have gone red. Reads the real rows now — a legacy local contact is
+       * simply one with `is_imported = 0`, which is what that query means.
+       */
+      getUnimportedContactsByUserId: () =>
+        Promise.resolve(
+          mockDb!
+            .prepare("SELECT * FROM contacts WHERE user_id = ? AND is_imported = 0")
+            .all("550e8400-e29b-41d4-a716-446655440000"),
+        ),
       getRawDatabase: () => mockDb,
     },
   };
@@ -264,6 +273,7 @@ jest.mock("../workers/contactWorkerPool", () => ({
 
 import { registerContactHandlers } from "../handlers/contactHandlers";
 import { toLookupKey } from "../utils/phoneNormalization";
+import { toPersistedContactSource } from "../utils/contactSourceVocabulary";
 
 const USER = "550e8400-e29b-41d4-a716-446655440000";
 const mockEvent = {} as IpcMainInvokeEvent;
@@ -556,13 +566,41 @@ describe("CONTROL 3 — pressing Add twice is one contact, and the crosswalk is 
     const result = await registeredHandlers.get("contacts:import")(mockEvent, USER, [
       { ...stale, name: "Dana Whitlock-Reyes", display_name: "Dana Whitlock-Reyes" },
     ]);
-    // OBSERVED, 2026-08-11: replacing the crosswalk lookup in the handler's
-    // re-entry guard with `LOWER(display_name) = LOWER(?)` fails HERE, with
-    // `UNIQUE constraint failed: contact_source_links.user_id,
-    // source_type, source_record_id`. A name fold misses the renamed card,
-    // creates a second contact, and the crosswalk's own UNIQUE then refuses to
-    // let two contacts claim one record. Worth stating rather than tidying
-    // away: the schema is the last line of this defence, not the guard.
+    /**
+     * ===================================================================
+     * WHAT A NAME FOLD ACTUALLY DOES HERE. CORRECTED — THE FIRST VERSION
+     * OF THIS COMMENT WAS WRONG, AND WRONG IN THE DANGEROUS DIRECTION.
+     * ===================================================================
+     * It said the mutation fails with `UNIQUE constraint failed:
+     * contact_source_links…` and concluded *"the schema is the last line of
+     * this defence"*. **There is no such backstop.** `createLink`
+     * (`contactSourceLinkDbService.ts:341-384`) reads the existing pair and
+     * returns `{ created: false }`. It never throws.
+     *
+     * OBSERVED, 2026-08-11, re-running with the re-entry guard changed to
+     * `LOWER(display_name) = LOWER(?)`:
+     *
+     *     expect(received).toEqual(expected)
+     *     -   "e654f6cd-89f8-44b8-b5d0-1a83f02c88a5"
+     *     +   "75f01ed6-153c-48d4-9d99-134889f5f75c"
+     *
+     * The import SUCCEEDS and hands back a SECOND contact for a record the
+     * first contact already claims. Nothing below the guard objects. The
+     * guard is the only thing standing here, which is exactly why this test
+     * exists.
+     *
+     * HOW THE FIRST VERSION GOT IT WRONG, because the mechanism matters more
+     * than the correction: `staleRowFor` was emitting `source: "macos"`, and
+     * the real `contacts:get-available` projection emits
+     * `toPersistedContactSource("macos")` = `"contacts_app"`. `macos` is not
+     * in the `contacts.source` CHECK vocabulary, so under the mutation the
+     * second create died on a CHECK constraint before it could demonstrate
+     * anything — and that fixture artifact was written up as a schema
+     * guarantee. An untranscribed fixture did not merely weaken a control; it
+     * invented a safety net a later reader would have relied on. Found by SR
+     * review of PR #2292 (F1/F2); the fixture now goes through the real
+     * projection.
+     */
     expect(result.success ? true : result.error).toBe(true);
 
     expect(result.contacts.map((c: any) => c.id)).toEqual([first]);
@@ -741,6 +779,100 @@ describe("CONTROL 7 — the app does not ask whether she is her own source card"
   });
 });
 
+// ===========================================================================
+describe("CONTROL 8 — a legacy local row is claimed, not duplicated", () => {
+  /**
+   * =========================================================================
+   * THE ONE THIS FIX GETS FOR FREE, NOW DRIVEN RATHER THAN REASONED ABOUT.
+   * =========================================================================
+   * `contacts:get-available` offers two kinds of row. Address-book records from
+   * the shadow table carry `isFromDatabase: false`. LEGACY LOCAL CONTACTS —
+   * rows in `contacts` with `is_imported = 0`, written by builds old enough
+   * that nothing produces them any more — carry `isFromDatabase: true` and
+   * their own REAL contact id.
+   *
+   * The wizard decides "is this external?" with
+   * `contacts.some(c => c.id === contact.id)` against the SAVED list, which
+   * holds imported contacts only. A legacy row is not in it, so it was treated
+   * as external and handed to `contacts:create` — which created a SECOND
+   * contact row for a person who was already in the table under the id the
+   * picker had just handed over.
+   *
+   * `contacts:import` splits on `isFromDatabase` and marks the existing row
+   * imported instead. The wizard gets that for nothing by using the same door.
+   *
+   * SR FINDING F4: this was asserted by READING the handler, and the suite
+   * stubbed `getUnimportedContactsByUserId` to `[]` so no test could have
+   * contradicted it. "Safe by inspection" is the claim this file exists to stop
+   * anyone making. Driven now.
+   */
+  it("marks the existing contact imported instead of creating a second one", async () => {
+    // A legacy local contact: real `contacts` row, `is_imported = 0`, no
+    // address-book record behind it. Seeded directly because nothing in the
+    // current app writes this state — which is the point of the case.
+    const LEGACY_ID = "3f2a7c18-5b64-4e09-9d31-8a06f4c7b2e5";
+    mockDb!
+      .prepare(
+        "INSERT INTO contacts (id, user_id, display_name, company, source, is_imported) VALUES (?, ?, ?, ?, ?, 0)",
+      )
+      .run(LEGACY_ID, USER, "Hal Bramwell", "Bramwell Title", "contacts_app");
+
+    // The picker offers it, flagged as already being a database row.
+    const legacyRow = (await getAvailable()).find((r) => r.id === LEGACY_ID);
+    expect(legacyRow).toBeDefined();
+    expect(legacyRow.isFromDatabase).toBe(true);
+
+    const before = allContacts();
+    const result = await registeredHandlers.get("contacts:import")(mockEvent, USER, [
+      { ...legacyRow, display_name: legacyRow.name },
+    ]);
+    expect(result.success ? true : result.error).toBe(true);
+
+    // The SAME contact came back — no second Hal Bramwell.
+    expect(result.contacts.map((c: any) => c.id)).toEqual([LEGACY_ID]);
+    expect(allContacts()).toEqual(before);
+    expect(
+      (mockDb!.prepare("SELECT is_imported FROM contacts WHERE id = ?").get(LEGACY_ID) as {
+        is_imported: number;
+      }).is_imported,
+    ).toBe(1);
+  });
+
+  /**
+   * THE RED: the shipped path made a second person.
+   *
+   * `contacts:create` cannot see `isFromDatabase` at all — it takes a name and
+   * makes a contact. The legacy row stays unimported and a duplicate appears
+   * beside it.
+   */
+  it("RED: the old create path makes a second contact for a row that already existed", async () => {
+    const LEGACY_ID = "3f2a7c18-5b64-4e09-9d31-8a06f4c7b2e5";
+    mockDb!
+      .prepare(
+        "INSERT INTO contacts (id, user_id, display_name, company, source, is_imported) VALUES (?, ?, ?, ?, ?, 0)",
+      )
+      .run(LEGACY_ID, USER, "Hal Bramwell", "Bramwell Title", "contacts_app");
+
+    const legacyRow = (await getAvailable()).find((r) => r.id === LEGACY_ID);
+    const result = await registeredHandlers.get("contacts:create")(mockEvent, USER, {
+      name: legacyRow.name,
+      email: legacyRow.email,
+      phone: legacyRow.phone,
+      company: legacyRow.company,
+      source: legacyRow.source || "contacts_app",
+      allEmails: legacyRow.allEmails || [],
+      allPhones: legacyRow.allPhones || [],
+    });
+    expect(result.success).toBe(true);
+
+    const created = (result.contact ?? result.contacts?.[0]).id as string;
+    expect(created).not.toBe(LEGACY_ID);
+    expect(allContacts()).toEqual(
+      [`${LEGACY_ID}|Hal Bramwell`, `${created}|Hal Bramwell`].sort(),
+    );
+  });
+});
+
 /**
  * The picker row for a record the picker no longer offers.
  *
@@ -760,7 +892,7 @@ async function staleRowFor(recordId: string): Promise<any> {
     phone: JSON.parse(r.phones_json ?? "[]")[0] ?? null,
     email: JSON.parse(r.emails_json ?? "[]")[0] ?? null,
     company: r.company,
-    source: r.source,
+    source: toPersistedContactSource(r.source),
     allPhones: JSON.parse(r.phones_json ?? "[]"),
     allEmails: JSON.parse(r.emails_json ?? "[]"),
     isFromDatabase: false,
