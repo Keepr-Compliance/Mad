@@ -250,9 +250,14 @@ PHASE D: PR, TEST & MERGE
       `SELECT pm_update_item_status('<backlog_item_uuid>', 'completed');`
     - Reconcile metrics (verify all agents logged to Supabase):
       ```sql
-      SELECT agent_id, agent_type, total_tokens, task_id
+      SELECT agent_id, agent_type, billable_tokens, task_id
       FROM pm_token_metrics WHERE task_id = 'TASK-XXXX' ORDER BY recorded_at;
       ```
+      **Use `billable_tokens`, never `total_tokens`.** `total_tokens` includes
+      `cache_read_tokens` and runs ~19x higher (measured 19.54x across the live
+      table on 2026-08-11); summing it for cost or variance is simply wrong.
+      `billable_tokens` is `GENERATED ALWAYS AS (input + output + cache_creation)`
+      — cache reads are excluded on purpose. See "A note on `total_tokens`" below.
     - If any agents are unlabeled, label them:
       `SELECT pm_label_agent_metrics('<agent_id>', 'TASK-XXXX', 'engineer', 'Implementation');`
       Label the rows the hooks already wrote — do NOT insert agent rows by hand.
@@ -268,10 +273,12 @@ PHASE D: PR, TEST & MERGE
     - Verify all tasks are complete
     - Aggregate all task metrics from Supabase:
       ```sql
-      SELECT task_id, SUM(total_tokens) AS total, SUM(billable_tokens) AS billable
+      SELECT task_id, SUM(billable_tokens) AS billable
       FROM pm_token_metrics WHERE sprint_id = '<sprint-uuid>'
       GROUP BY task_id ORDER BY task_id;
       ```
+      `SUM(total_tokens)` was removed from this query, not renamed. It double-counts
+      cache reads (~19x), and every sprint figure derived from it is wrong.
     - Populate `pm_sprints.body` with the sprint retrospective
       (UPDATE pm_sprints SET body = '<markdown>' WHERE id = '<sprint-uuid>'):
       - Estimation accuracy table (est vs actual per task)
@@ -494,6 +501,34 @@ for the task or its parent item it errors rather than returning — that means t
 did not record, so fix attribution instead of passing a number to silence it. When rows
 exist for the item but none are keyed to this task, it deliberately leaves
 `pm_tasks.actual_tokens` alone (an item may have several tasks) and rolls up the item only.
+
+### A note on `total_tokens` — never sum it for cost
+
+**Effort, cost and variance come from `billable_tokens`. `total_tokens` is not a smaller
+mistake, it is a ~19x one.**
+
+| Column | Contents | Use for cost? |
+|---|---|---|
+| `billable_tokens` | `GENERATED ALWAYS AS (input + output + cache_creation)` | **Yes** |
+| `total_tokens` | the above **plus `cache_read_tokens`** | **No** |
+
+Cache reads dominate an agent's transcript and are excluded from `billable_tokens` on
+purpose. Measured across the whole live table on 2026-08-11
+(`SELECT SUM(total_tokens), SUM(billable_tokens) FROM pm_token_metrics`):
+15,967,627,947 vs 817,061,720 — **19.54x**.
+
+This is not hypothetical. Summing `total_tokens` is what made every `variance` in the
+tracker wrong; 89 item rows had to be recomputed from `SUM(billable_tokens)`, and it is
+the reason PR #2282 changed `pm_record_task_tokens`. `pm_record_task_tokens` already sums
+the right column — this note is for the hand-written reconciliation queries in Steps 14
+and 15, where the choice is yours.
+
+Do not "simplify" these queries back to `total_tokens`, and do not add it alongside
+`billable_tokens` in a query whose output is a cost or variance figure — offering both is
+how the wrong one gets copied into a sprint retrospective. It is fine in a full component
+breakdown that already lists `cache_read_tokens` separately (see
+`.claude/skills/log-metrics/SKILL.md`), where it is plainly the sum of the parts and is
+labelled diagnostic-only.
 
 ### Step 15: PM closes sprint (if all tasks done)
 ```sql

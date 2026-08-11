@@ -104,10 +104,16 @@ Use this skill when the user asks for any of:
 
    | Need | SQL |
    |------|-----|
-   | Task totals | `SELECT SUM(total_tokens), SUM(billable_tokens) FROM pm_token_metrics WHERE task_id = 'TASK-XXXX'` |
+   | Task totals | `SELECT SUM(billable_tokens) FROM pm_token_metrics WHERE task_id = 'TASK-XXXX'` |
    | Label unlabeled | `SELECT pm_label_agent_metrics('<agent_id>', 'TASK-XXXX', 'engineer', 'desc')` |
    | Record + rollup | `SELECT pm_record_task_tokens('<task_uuid>')` — auto-sums from metric rows |
-   | Sprint totals | `SELECT task_id, SUM(total_tokens) FROM pm_token_metrics WHERE sprint_id = '<uuid>' GROUP BY task_id` |
+   | Sprint totals | `SELECT task_id, SUM(billable_tokens) FROM pm_token_metrics WHERE sprint_id = '<uuid>' GROUP BY task_id` |
+
+   **Sum `billable_tokens`, never `total_tokens`.** `total_tokens` includes
+   `cache_read_tokens` and runs ~19x higher (measured 19.54x across the live table on
+   2026-08-11). `billable_tokens` is `GENERATED ALWAYS AS (input + output + cache_creation)`.
+   Summing the wrong column made every tracker `variance` wrong and forced 89 item rows to
+   be recomputed (PR #2282).
 
 ## Progressive disclosure (how to use the bundled modules)
 
