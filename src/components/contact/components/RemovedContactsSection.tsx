@@ -28,6 +28,7 @@
 import React, { useCallback } from "react";
 import type { RemovedContactRow } from "@electron/types/ipc/window-api-contacts";
 import { RemovedItemsSection } from "../../transactionDetailsModule/components/RemovedItemsSection";
+import { formatDbDate } from "@/utils/dateFormatters";
 import {
   useRemovedSection,
   type RemovedRestoreResult,
@@ -53,15 +54,15 @@ interface RemovedContactsSectionProps {
 /** Format a timestamp for the "Removed <date>" line. Matches RemovedEmailsSection. */
 function formatRemovedDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "";
-  try {
-    return new Date(dateStr).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch {
-    return dateStr;
-  }
+  // BACKLOG-2632: `removed_at` / `ignored_at` are written by SQLite
+  // (`CURRENT_TIMESTAMP` / `datetime('now')`) as UTC with NO zone marker. A bare
+  // `new Date()` reads that as LOCAL time, so anything removed after 18:00 in
+  // Costa Rica (UTC-6) showed TOMORROW's date. parseDbTimestamp/formatDbDate
+  // tolerate both that shape and the ISO-with-Z shape other writers store, so
+  // existing rows and new rows both render the right day.
+  return (
+    formatDbDate(dateStr, { month: "short", day: "numeric", year: "numeric" }) ?? ""
+  );
 }
 
 /*

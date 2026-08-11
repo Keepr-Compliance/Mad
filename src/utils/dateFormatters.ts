@@ -49,6 +49,73 @@ export function parseDateSafe(
 }
 
 /**
+ * BACKLOG-2632 — the one parser for timestamps that came out of the local SQLite DB.
+ *
+ * SQLite's `CURRENT_TIMESTAMP` / `datetime('now')` write UTC with NO zone marker:
+ *
+ *     2026-08-10 01:00:00        <- naive; happens to be UTC
+ *     2026-08-10T21:56:27.989Z   <- what our `toISOString()` writers store
+ *
+ * `new Date("2026-08-10 01:00:00")` parses the first shape as **local** time.
+ * In Costa Rica (UTC-6, no DST) that is 6h (21,600,000 ms) too late, so every
+ * event between 18:00 and 23:59 local renders with TOMORROW's date. Adding a
+ * `T` changes nothing; only a zone marker does.
+ *
+ * This parser tolerates BOTH shapes, which is what makes it safe to apply to
+ * columns that already hold naive rows: the naive shape is re-read as UTC, and
+ * anything already carrying `Z` / `+hh:mm` is handed to `new Date` untouched.
+ * Date-only `YYYY-MM-DD` is also left alone (JS already reads it as UTC) so
+ * `parseDateSafe`'s Windows behaviour is unaffected.
+ *
+ * Use this — not a bare `new Date(...)` — for any value that came from SQLite.
+ *
+ * @param value - raw column value, a Date, or null/undefined
+ * @returns a Date, or null when the value is missing or unparseable
+ */
+export function parseDbTimestamp(value: Date | string | null | undefined): Date | null {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? null : value;
+  }
+
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  // Anchored, so ANY trailing zone designator (`Z`, `+00:00`, `-06:00`) fails to
+  // match and falls through to standard parsing. Only a genuinely zone-less
+  // date+time is reinterpreted as UTC.
+  const naive =
+    /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d{1,6}))?$/.exec(raw);
+
+  const normalized = naive
+    ? `${naive[1]}-${naive[2]}-${naive[3]}T${naive[4]}:${naive[5]}:${naive[6] ?? "00"}.${(naive[7] ?? "").padEnd(3, "0").slice(0, 3)}Z`
+    : raw;
+
+  const d = new Date(normalized);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * BACKLOG-2632 — display helper over {@link parseDbTimestamp}.
+ *
+ * Returns null (never the string "Invalid Date") when the value is missing or
+ * unparseable, so callers can choose their own empty rendering.
+ *
+ * @param value - raw DB column value
+ * @param options - Intl options; defaults to the app's "Aug 9, 2026" shape
+ * @param locales - pass an explicit locale in tests; production uses the OS locale
+ */
+export function formatDbDate(
+  value: Date | string | null | undefined,
+  options: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" },
+  locales?: string | string[],
+): string | null {
+  const parsed = parseDbTimestamp(value);
+  return parsed ? parsed.toLocaleDateString(locales, options) : null;
+}
+
+/**
  * Format MAC timestamp for display as relative or absolute date
  * @param timestamp - MAC timestamp (nanoseconds since 2001-01-01)
  * @returns Formatted date string
