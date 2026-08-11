@@ -4,7 +4,7 @@
  * WHAT THIS FILE PINS THAT THE SERVICE SUITE CANNOT: the two FOUNDER DECISION D5
  * treatments are strings on screen, not fields in a payload. The service returns
  * `transactions: []` and `kind: "source"`; whether that reaches the user as
- * "not a contact yet" or as an empty cell is decided here, and only here.
+ * "not imported yet" or as an empty cell is decided here, and only here.
  *
  * The view is stubbed at `window.api` rather than mocked at the hook, so the
  * component and its hook are exercised together — the same reason
@@ -13,7 +13,7 @@
  * Every assertion names EXACT ids. A count would pass while rendering the wrong
  * column.
  *
- * NEGATIVE-CONTROL DISCIPLINE: an assertion that "not a contact yet" is on
+ * NEGATIVE-CONTROL DISCIPLINE: an assertion that "not imported yet" is on
  * screen would also pass if the whole column vanished, so each copy assertion is
  * paired with a structural one naming the column it must appear IN.
  */
@@ -360,12 +360,20 @@ describe("the columns", () => {
 });
 
 /**
- * BACKLOG-2628 — FOUNDER DECISION D5, ON THE COLUMN IT WAS WRITTEN FOR.
+ * BACKLOG-2628 — THE WORDING OF A RECORD THAT BELONGS TO NOBODY.
  *
- * Both treatments used to hang off `kind === "source"` — the same boolean that
- * draws the `linked record` tag and `Unlink`. So a record the founder had just
- * confirmed as the same person read `linked record`, offered `Unlink`, and two
- * rows below said "not a contact yet" and "not linked".
+ * Two cell treatments used to hang off `kind === "source"` — the same boolean
+ * that draws the `linked record` tag and `Unlink`. So a record the founder had
+ * just confirmed as the same person read `linked record`, offered `Unlink`, and
+ * two rows below said it belonged to nobody.
+ *
+ * THREE POSITIONS WERE TAKEN ON THE TRANSACTIONS CELL IN FIVE DAYS. This suite
+ * pins the LIVE one and asserts the absence of the superseded ones, so a later
+ * merge cannot quietly restore a decision that was replaced:
+ *
+ *   D5, 6 Aug          "not a contact yet"        superseded — absence asserted
+ *   11 Aug, earlier    a real lookup, else "none" superseded — absence asserted
+ *   11 Aug, current    "not imported yet"         asserted, string for string
  *
  * THE RENDERER CANNOT SEE HOW A LINK WAS MADE, and that is the point rather
  * than a gap: `ContactCompareColumn` carries no `match_method`, so a manual link
@@ -377,10 +385,10 @@ describe("the columns", () => {
  * THE EMPTY-CELL SHAPES ARE WHAT MAKE THIS FALSIFIABLE. The wording is an
  * `emptyText`, so a column carrying values cannot exercise it at all: the
  * linked-case control below uses a contact with NO deals, where the branch is
- * the only thing deciding between "none" and "not a contact yet". Asserting the
+ * the only thing deciding between "none" and "not imported yet". Asserting the
  * populated case alone would leave the renderer discriminator untested.
  */
-describe("founder decision D5 — the wording of a record that belongs to nobody", () => {
+describe("BACKLOG-2628 — the wording of a record that belongs to nobody", () => {
   /** The queue's candidate. Keyed as the service keys it — not a UUID. */
   const PROPOSED_LINK = "proposed:android_sync:and-1";
 
@@ -427,11 +435,11 @@ describe("founder decision D5 — the wording of a record that belongs to nobody
     );
   });
 
-  it("a LINKED record on a contact with no deals reads 'none', not the unlinked wording", async () => {
+  it("a LINKED record on a contact with no deals reads 'none', not the unimported wording", async () => {
     await renderScreen({ success: true, view: viewWithNoDeals() });
 
     // CONTROL: change the discriminator back to `isSource` and this reads
-    // "not a contact yet" — the founder's defect, restored, on a column that
+    // "not imported yet" — the founder's defect, restored, on a column that
     // says `linked record` and offers `Unlink`.
     expect(screen.getByTestId(`compare-row-transactions-${OUTLOOK_LINK}`).textContent).toBe(
       "none",
@@ -460,16 +468,13 @@ describe("founder decision D5 — the wording of a record that belongs to nobody
   });
 
   /**
-   * THE REGRESSION GUARD FOR D5. Literal strings, on the column D5 describes: a
-   * record no contact has claimed. It is on no deals and its messages reach
-   * nobody, and both sentences are true and useful exactly here.
+   * THE LIVE WORDING, string for string, on the column it belongs to.
    *
    * CONTROL: revert either discriminator to `isSource` and BOTH assertions go
-   * red — the candidate is not a `source`, so it would fall to "none" with no
-   * tag, which is what it did before this item and is the reading that would
-   * have deleted D5's wording from the app entirely.
+   * red — the candidate is not a `source`, so its Transactions cell would fall
+   * to "none" and its communication heading would lose the tag.
    */
-  it("an UNLINKED candidate reads D5, string for string", async () => {
+  it("an UNLINKED candidate's Transactions cell reads 'not imported yet'", async () => {
     const view = makeView();
     await renderScreen({
       success: true,
@@ -477,8 +482,10 @@ describe("founder decision D5 — the wording of a record that belongs to nobody
     });
 
     expect(screen.getByTestId(`compare-row-transactions-${PROPOSED_LINK}`).textContent).toBe(
-      "not a contact yet",
+      "not imported yet",
     );
+    // D5's OTHER treatment survives untouched — the founder changed the row
+    // above and only that row.
     expect(screen.getByTestId(`compare-notlinked-${PROPOSED_LINK}`).textContent).toBe(
       "not linked",
     );
@@ -489,6 +496,66 @@ describe("founder decision D5 — the wording of a record that belongs to nobody
     );
     // A candidate is not a linked record, so it carries neither affordance.
     expect(screen.queryByTestId(`compare-source-tag-${PROPOSED_LINK}`)).toBeNull();
+  });
+
+  /**
+   * NEITHER SUPERSEDED POSITION SURVIVES ON THE CANDIDATE'S TRANSACTIONS CELL.
+   *
+   * SCOPED TO THAT CELL DELIBERATELY, and the scope is the honest part: "none"
+   * is the correct and untouched reading of a candidate's Emails, Phone and
+   * Company rows when it carries no such value, so an assertion that "none"
+   * appears nowhere in the column would be asserting a screen the founder never
+   * asked for — and would collide with the requirement that those rows stay
+   * exactly as they are. `"not a contact yet"` has no other legitimate home, so
+   * THAT one is asserted absent from the whole screen.
+   *
+   * CONTROL: restore either superseded position and the matching line goes red.
+   */
+  it("neither superseded wording survives on a candidate's Transactions cell", async () => {
+    const view = makeView();
+    await renderScreen({
+      success: true,
+      view: { ...view, columns: [...view.columns, proposedColumn()] },
+    });
+
+    const cell = screen.getByTestId(`compare-row-transactions-${PROPOSED_LINK}`);
+    // D5, 6 Aug.
+    expect(cell.textContent).not.toBe("not a contact yet");
+    // The 11 Aug lookup, whose empty result printed a bare "none".
+    expect(cell.textContent).not.toBe("none");
+    // Nowhere else on the screen either — the phrase was deleted, not moved.
+    expect(screen.getByTestId("contact-compare-screen").textContent).not.toContain(
+      "not a contact yet",
+    );
+    // Paired structural assertion, so the absences above are not those of a
+    // screen that failed to render its columns.
+    for (const linkId of [CONTACT_LINK, OUTLOOK_LINK, PROPOSED_LINK]) {
+      expect(screen.getByTestId(`compare-column-${linkId}`)).toBeTruthy();
+    }
+  });
+
+  /**
+   * EMAILS AND RECENT COMMUNICATION ARE UNTOUCHED BY THIS ITEM. Asserted
+   * literally on the candidate, because "untouched" is a claim about strings and
+   * a claim about strings is checkable.
+   */
+  it("a candidate's Emails and Recent communication rows are unchanged", async () => {
+    const view = makeView();
+    await renderScreen({
+      success: true,
+      view: { ...view, columns: [...view.columns, proposedColumn()] },
+    });
+
+    // The fixture's candidate carries no address and no messages, so both read
+    // the ordinary empty text — which is exactly what they read before.
+    expect(screen.getByTestId(`compare-row-emails-${PROPOSED_LINK}`).textContent).toBe("none");
+    expect(screen.getByTestId(`compare-row-communication-${PROPOSED_LINK}`).textContent).toBe(
+      "none",
+    );
+    // And the phone it DOES carry is still printed and still marked.
+    expect(screen.getByTestId(`compare-row-phone-${PROPOSED_LINK}`).textContent).toBe(
+      "+1 (206) 555-0142match",
+    );
   });
 
   it("each column lists its own messages", async () => {

@@ -27,27 +27,26 @@ import type {
  * row below it out of line with its neighbours.
  *
  * ===========================================================================
- * TWO CELL TREATMENTS COME STRAIGHT FROM FOUNDER DECISION D5 (2026-08-06),
- * AND THEY BELONG TO A RECORD THAT BELONGS TO NOBODY
+ * TWO CELL TREATMENTS BELONG TO A RECORD THAT BELONGS TO NOBODY
  * ===========================================================================
- *   Transactions, on a PROPOSED record  -> "not a contact yet", muted italic.
+ *   Transactions, on a PROPOSED record  -> "not imported yet", muted italic
+ *                                          (founder, 11 Aug — see the constant).
  *   Recent communication, on a PROPOSED -> that record's OWN messages, under a
- *                                          heading tagged "not linked".
- * Neither is a placeholder for missing data. A record no contact has claimed
- * genuinely is on no deals, and its messages genuinely are not attributed to
- * anybody yet.
+ *                                          heading tagged "not linked" (D5).
+ * Neither is a placeholder for missing data. A record nobody has imported is not
+ * a party to a deal, and its messages genuinely reach nobody yet.
  *
  * BACKLOG-2628 — THE DISCRIMINATOR IS `proposed`, NOT `source`, AND THAT IS THE
  * WHOLE FIX. Both treatments used to hang off `kind === "source"`, which is the
  * same boolean that draws the `linked record` tag and the `Unlink` button. So a
- * record the user had just confirmed as the same person read: `linked record`,
- * `Unlink` — and, two rows down, "not a contact yet" and "not linked". One
+ * record the founder had just confirmed as the same person read: `linked
+ * record`, `Unlink` — and, two rows down, that it belonged to nobody. One
  * column, two opposite claims about one record.
  *
  * Once a record IS linked both rows say the plainest true thing instead: the
  * contact's transactions (it is on those deals, through the contact), and its
  * own messages with no tag (they reach the contact now — that is what linking
- * did). D5 is not overturned; it keeps the case it was written for.
+ * did).
  */
 
 const FIELD_LABELS = {
@@ -60,9 +59,24 @@ const FIELD_LABELS = {
 
 /** The literal the mock uses for a value a record does not carry. */
 const NONE = "none";
-/** D5, verbatim. A record no contact has claimed is on no deals. */
-const NOT_A_CONTACT_YET = "not a contact yet";
-/** D5, verbatim. */
+/**
+ * A candidate's Transactions row. FOUNDER DECISION, 11 Aug (BACKLOG-2628).
+ *
+ * THREE POSITIONS WERE TAKEN ON THIS ONE CELL IN FIVE DAYS. Recording all three
+ * so no later reader restores an earlier one believing it is the live decision:
+ *
+ *   D5, 6 Aug          "not a contact yet"        SUPERSEDED
+ *   11 Aug, earlier    a real lookup, else "none" SUPERSEDED — built, discarded
+ *   11 Aug, current    "not imported yet"         THIS
+ *
+ * The founder's reasoning, and the reason this is the one that lasts: **import**
+ * is the word he uses for the action that turns an address-book record into a
+ * contact, so this names what the user actually DOES. "not a contact yet"
+ * described an internal state, and "none" reported a count for something that
+ * cannot have one.
+ */
+const NOT_IMPORTED_YET = "not imported yet";
+/** D5, verbatim, and still in force — the founder changed only the row above. */
 const NOT_LINKED = "not linked";
 /**
  * BACKLOG-2502 — the review queue's candidate. Deliberately NOT the same string
@@ -304,12 +318,18 @@ const Column: React.FC<{
         testId={`compare-row-transactions-${column.linkId}`}
         values={column.transactions.map((value) => ({ value, matched: false }))}
         /*
-          D5: on a record NOBODY has claimed this is a statement, not an empty
-          state. On a linked record the cell prints the contact's deals — it is
-          on them, through the contact — and falls back to the ordinary "none"
-          when the contact is on none (BACKLOG-2628).
+          On a record nobody has imported this is a STATEMENT, not an empty
+          state — "not imported yet" (BACKLOG-2628, founder, 11 Aug). On a LINKED
+          record the cell prints the contact's deals, because it is on them
+          through that contact, and falls back to the ordinary "none" when the
+          contact is on none.
+
+          THE DISCRIMINATOR IS `isProposed`, AND THAT IS THIS ITEM'S FIX. It was
+          `isSource` — the same boolean that draws the `linked record` tag and
+          `Unlink` — so a record the user had just confirmed as the same person
+          was told two rows below that it belonged to nobody.
         */
-        emptyText={isProposed ? NOT_A_CONTACT_YET : NONE}
+        emptyText={isProposed ? NOT_IMPORTED_YET : NONE}
       />
 
       <div className="mt-3 pt-2 border-t border-gray-200">

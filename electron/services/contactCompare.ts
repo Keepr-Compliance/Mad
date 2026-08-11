@@ -109,7 +109,7 @@ export interface ContactCompareColumn {
    * `"contact"` and `"source"` both carry THE CONTACT'S transactions, because a
    * linked record is on those deals — through the contact it belongs to
    * (BACKLOG-2628). Only `"proposed"` is empty, and it is empty for a reason the
-   * renderer states in words: that record belongs to nobody yet.
+   * renderer states in words: nobody has imported that record yet.
    *
    * No column ever carries transactions "of its own". Deals hang off contacts;
    * an `external_contacts` row is never a party to one.
@@ -770,11 +770,18 @@ export async function getContactCompareColumns(
       /*
         EMPTY, AND THE ONLY COLUMN THAT IS (BACKLOG-2628).
 
-        The candidate belongs to no contact, so there are no deals to name — the
-        renderer writes FOUNDER DECISION D5's "not a contact yet" here, which is
-        the statement this emptiness carries. Do not "fix" this to match the
-        source rows above: they are linked and this one is not, and that
-        difference is the entire question this screen asks.
+        Nobody has imported this record, so it is not a party to a deal — the
+        renderer writes "not imported yet" over this emptiness, which is the
+        statement it carries. Do not "fix" this to match the source rows above:
+        they are linked and this one is not, and that difference is the entire
+        question this screen asks.
+
+        A LOOKUP THROUGH THE CONTACT THAT CLAIMS THIS RECORD WAS BUILT AND
+        DISCARDED (11 Aug). It is genuinely reachable — `duplicate_source_record`
+        (`contactSourceLinker.ts:678`) proposes records another contact holds,
+        and `contactLinkReview.ts:360` handles confirming one — so the query
+        would have had real answers. The founder chose the static label over it.
+        Recorded so nobody rebuilds it from the intermediate decision.
       */
       transactions: [] as string[],
       sourceRecordPresent: true,

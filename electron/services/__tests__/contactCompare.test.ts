@@ -519,9 +519,11 @@ describe("founder decision D5 — what a source column shows", () => {
    * CONTROL, run: put `transactions: [] as string[]` back on the source-row
    * mapping in `contactCompare.ts` and this goes red on the address.
    *
-   * The assertion names the VALUE, never the absence of the old string — an
-   * `expect(...).not.toContain("not a contact yet")` would pass just as happily
-   * against `[]`, which is the state being fixed.
+   * The assertion names the VALUE, never the absence of a string — an
+   * `expect(...).not.toContain(<any wording>)` would pass just as happily
+   * against `[]`, which is the state being fixed. The wording itself belongs to
+   * the renderer and is pinned in `ContactCompareSources.test.tsx`; it has
+   * changed twice since D5 and this suite is deliberately indifferent to it.
    */
   it("a linked record carries the contact's transactions — it is on those deals, through the contact", async () => {
     const view = await getContactCompareColumns(USER, "d5");
@@ -1216,8 +1218,8 @@ describe("linked, then unlinked, reads as unlinked again", () => {
     const asProposed = proposed!.columns.find(
       (c) => c.linkId === "proposed:outlook:out-rt",
     )!;
-    // The unlinked wording's INPUT, restored: it belongs to nobody, so it is on
-    // no deals, and the renderer writes "not a contact yet" over this `[]`.
+    // The unimported wording's INPUT, restored: nobody has imported it, so it
+    // is on no deals, and the renderer writes "not imported yet" over this `[]`.
     expect({ kind: asProposed.kind, txns: asProposed.transactions }).toEqual({
       kind: "proposed",
       txns: [],
