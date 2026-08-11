@@ -75,7 +75,9 @@ jest.mock("../services/databaseService", () => ({
     isInitialized: jest.fn().mockReturnValue(true),
     backfillContactEmails: jest.fn(),
     backfillContactPhones: jest.fn(),
-    findContactByName: jest.fn(),
+    // BACKLOG-2617: `findContactByName` is deleted from the facade, so the mock
+    // key for it goes too. A stale key is a standing invitation to write a test
+    // against a method production no longer has.
     searchContactsForSelection: jest.fn().mockReturnValue([]),
     getContactNamesByPhones: jest.fn().mockResolvedValue(new Map()),
     getLastMessageDatesForPhones: jest.fn().mockReturnValue(new Map()),
@@ -800,9 +802,15 @@ describe("Contact Handlers", () => {
     // dropped distinct people who merely share a name string (e.g. multiple
     // "Margaret"s). Two records that share ONLY a name (no email, no shared
     // phone) must both survive. Genuine same-person duplicates still collapse
-    // via email or a shared phone + compatible name (covered elsewhere), and a
-    // re-import of a same-named contact is still de-duplicated at write time by
-    // contacts:create (findContactByName).
+    // via email or a shared phone + compatible name (covered elsewhere).
+    //
+    // BACKLOG-2617 CORRECTED THE LAST SENTENCE THAT USED TO SIT HERE. It read
+    // "a re-import of a same-named contact is still de-duplicated at write time
+    // by contacts:create (findContactByName)" — offered as reassurance that
+    // removing name matching from the picker left a safety net behind it. That
+    // net was the defect: `contacts:create` returned the OTHER person's contact
+    // and reported success. It is deleted, along with `findContactByName`.
+    // Name-only matching now exists nowhere: not in the picker, not on create.
     describe("name-only matches do NOT dedupe (BACKLOG-2316)", () => {
       it("keeps both contacts that share only a name (no email/phone overlap)", async () => {
         // db stub (name only) in STEP 1; the fuller record with a distinct

@@ -148,7 +148,9 @@ jest.mock("../services/databaseService", () => {
     updateContactSync: (id: string, updates: any) => contactDb.updateContactSync(id, updates),
       getContactById: (id: string) => contactDb.getContactById(id),
       createContact: (data: any, origin: any) => contactDb.createContact(data, origin),
-      findContactByName: () => Promise.resolve(null),
+      // BACKLOG-2617: `findContactByName` is deleted from production. This stub
+      // returned null to keep the duplicate-by-name branch out of the way — a
+      // fixture that made the create path look unconditional when it was not.
       getUserById: (id: string) => Promise.resolve({ id }),
       isInitialized: () => true,
       getImportedContactsByUserIdAsync: () => Promise.resolve([]),

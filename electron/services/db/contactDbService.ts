@@ -334,11 +334,14 @@ function normalizeToE164(phone: string): string {
  *     then read it as "this address-book entry is unclaimed" and made a
  *     duplicate on the next import.
  *
- *   CONTACT WITH ONLY SOME OF ITS ADDRESSES — and this one was PERMANENT.
- *     Retrying the create hits the duplicate-by-name guard in `contacts:create`,
- *     which returns the existing contact and never re-runs the address backfill.
- *     The addresses the user typed were gone for good, with the save reported
- *     as successful.
+ *   CONTACT WITH ONLY SOME OF ITS ADDRESSES — and this one was PERMANENT AT THE
+ *     TIME. Retrying the create hit the duplicate-by-name guard in
+ *     `contacts:create`, which returned the existing contact and never re-ran
+ *     the address backfill. The addresses the user typed were gone for good,
+ *     with the save reported as successful. (That guard is itself deleted now —
+ *     BACKLOG-2617 — so a retry would reach the backfill; the atomicity below
+ *     is what makes the half-written state unreachable in the first place, and
+ *     is the property this paragraph is really about.)
  *
  * Neither state is expressible now: one transaction, so either the contact,
  * every address, and the origin row all land, or none of them do.
@@ -643,21 +646,26 @@ export async function getContactById(contactId: string): Promise<Contact | null>
   return validateResponse(ContactSchema, contact, 'contactDbService.getContactById') as Contact;
 }
 
-/**
- * Find an imported contact by display name (case-insensitive)
- * Used to prevent duplicate imports of message-derived contacts
+/*
+ * `findContactByName` USED TO LIVE HERE. IT IS DELETED (BACKLOG-2617).
+ *
+ *     SELECT * FROM contacts
+ *      WHERE user_id = ? AND LOWER(display_name) = LOWER(?) AND is_imported = 1
+ *
+ * Name only. No email, no phone, no `removed_at` filter — the loosest identity
+ * rule this codebase has held. Every other heuristic here requires at least a
+ * shared identifier; this one asked whether two strings matched and answered
+ * "same person".
+ *
+ * Its single production caller was `contacts:create`, which on a hit returned
+ * the OTHER person's contact and reported success, having created nothing. The
+ * handler carries the founder's decision and what the branch cost a user.
+ *
+ * It is deleted rather than left callable, on purpose. A helper kept "in case"
+ * is how a deleted rule grows a second call site. If some future caller
+ * genuinely needs to find people by name, it will need a rule that says what to
+ * do about the SECOND person with that name — a product question, not a lookup.
  */
-export async function findContactByName(userId: string, name: string): Promise<Contact | null> {
-  const sql = `
-    SELECT * FROM contacts
-    WHERE user_id = ?
-      AND LOWER(display_name) = LOWER(?)
-      AND is_imported = 1
-    LIMIT 1
-  `;
-  const contact = dbGet<Contact>(sql, [userId, name]);
-  return contact || null;
-}
 
 /**
  * Get all contacts for a user
