@@ -45,6 +45,32 @@ BRANCH=$(grep -oE '(fix|feat|chore|feature)/BACKLOG-[0-9A-Za-z._-]+' <<<"$PROMPT
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 HEAD_SHA=$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || true)
 
+# --- BACKLOG-1693: bind task identity to THIS agent_id, at spawn -------------
+# The SubagentStop hook used to re-read .claude/.current-task, a single shared
+# file that every concurrent agent overwrote. Observed on 2026-08-11: five
+# consecutive agents all stamped BACKLOG-2617 while the file already said
+# BACKLOG-2628.
+#
+# One file per agent_id has no such race. It is written HERE, above the
+# credential check below, so the primary binding never depends on the network.
+AGENT_TASK_DIR="${HOME}/.claude/agent-tasks"
+if mkdir -p "$AGENT_TASK_DIR" 2>/dev/null; then
+  jq -n \
+    --arg agent_id "$AGENT_ID" \
+    --arg agent_type "$AGENT_TYPE" \
+    --arg legacy_id "$LEGACY_ID" \
+    --arg description "$DESCRIPTION" \
+    --arg session_id "$SESSION_ID" \
+    --arg spawned_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{agent_id:$agent_id, agent_type:$agent_type, legacy_id:$legacy_id,
+      description:$description, session_id:$session_id, spawned_at:$spawned_at}' \
+    > "${AGENT_TASK_DIR}/${AGENT_ID}.json" 2>/dev/null || true
+
+  # A sidecar is only useful until its agent stops; prune after a week so the
+  # directory cannot grow without bound.
+  find "$AGENT_TASK_DIR" -name '*.json' -type f -mtime +7 -delete 2>/dev/null || true
+fi
+
 SUPABASE_URL="${PM_SUPABASE_URL:-}"
 SUPABASE_KEY="${PM_SUPABASE_KEY:-}"
 if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
