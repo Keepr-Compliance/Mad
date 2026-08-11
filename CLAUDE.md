@@ -125,6 +125,16 @@ When verifying a fix or process (sync jobs, reindexing, CI automations), confirm
 
 **Incident Reference:** BACKLOG-1875 — pm-task-sync ran "successfully" while every RPC call was rejected; the error was masked as "task not found".
 
+### Prove the mutation applied before you count its result (MANDATORY)
+
+**An unverified mutation is an unrun control.** When you break your own code on purpose to prove a test can see the break, you apply the break as a text replacement — and **if the pattern does not match, nothing is replaced**. The code is untouched, the suite passes, and the green run gets written down as *"I broke it and the tests did not catch it."* Nothing was ever broken. The record then points at the wrong thing: it reads as a weak test when it is a broken harness, and the next person "fixes" a test that was fine.
+
+1. **A mutation's result does not count until the mutation is proven to have applied.** Use an exact-string replace that raises when it matches nothing, or check `git diff --numstat`, and print `MUTATION APPLIED` plus the mutated line before running anything.
+2. **`Tests: 0 total` is a FAILURE.** Jest exits 0 when it matches no test files, so zero tests passing is indistinguishable from all tests passing if only the exit code is read. Assert a non-zero test count and report the counts.
+3. **Commit the fix BEFORE running any control that reverts with `git checkout --`.** On 2026-08-11 an agent discarded its own uncommitted fix that way and nearly shipped the bug it had just proven.
+
+Three occurrences in one night, 10–11 Aug 2026 (BACKLOG-2645). Worked example: `.claude/docs/PR-SOP.md` → §4.4.
+
 ---
 
 ## MANDATORY: Follow Instructions Exactly
