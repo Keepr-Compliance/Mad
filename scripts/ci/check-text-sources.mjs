@@ -213,7 +213,7 @@ for (const path of tracked) {
 // Separate pass for one state the worktree cannot show: the STAGED blob is
 // binary while the file on disk is already clean. That is a developer who fixed
 // the file and staged the wrong version, and it is what a commit would carry.
-const clean = new Set(failures.map((f) => f.path));
+const alreadyReported = new Set(failures.map((f) => f.path));
 const stagedOnly = [];
 for (const row of execFileSync("git", ["ls-files", "--eol", "--", ...PATHSPECS], {
   encoding: "utf8",
@@ -225,7 +225,7 @@ for (const row of execFileSync("git", ["ls-files", "--eol", "--", ...PATHSPECS],
   if (tab === -1) continue;
   const [index] = row.slice(0, tab).trim().split(/\s+/);
   const path = row.slice(tab + 1);
-  if (index !== "i/-text" || clean.has(path)) continue;
+  if (index !== "i/-text" || alreadyReported.has(path)) continue;
   let blob;
   try {
     blob = execFileSync("git", ["cat-file", "blob", `:${path}`], {
@@ -263,17 +263,29 @@ if (failures.length > 0 || stagedOnly.length > 0) {
 
     let body = `  - ${path}\n${why}`;
     if (sites.length > 0) {
-      body += `\n      ${sites.length} offending byte(s):\n${listSites(sites)}\n`;
+      // Label the list by what it actually holds. A file can be invalid UTF-8
+      // AND carry a lone CR, and printing a CR offset under an invalid-UTF-8
+      // heading reads as though the CR were the encoding fault.
+      const kinds = [];
+      if (faults.has(NUL)) kinds.push("NUL");
+      if (faults.has(LONE_CR)) kinds.push("lone CR");
+      body += `\n      ${sites.length} located byte(s) — ${kinds.join(" and ")}:\n${listSites(sites)}\n`;
     }
-    if (faults.has(BAD_UTF8) && sites.length === 0) {
-      body += `\n      (no control byte — the fault is a byte sequence that is not UTF-8)\n`;
+    if (faults.has(BAD_UTF8)) {
+      body +=
+        `\n      The encoding fault has no single offset: it is a byte sequence that is\n` +
+        `      not valid UTF-8. Decode the file with a strict decoder to locate it.\n`;
     }
     if (context.length > 0) {
       body +=
         `\n      For context, ${context.length} other C0 byte(s) are present. Those alone\n` +
         `      make no tool skip a file and are not why this failed.\n`;
     }
-    body += faults.has(LONE_CR) && !faults.has(NUL) ? "" : `\n${FIX_ESCAPE}`;
+    // The escape advice fits a control character deliberately placed in source.
+    // It does not fit a stray line ending, so it is suppressed only when a lone
+    // CR is the ONLY thing wrong — not merely when one is present.
+    const loneCrOnly = faults.size === 1 && faults.has(LONE_CR);
+    body += loneCrOnly ? "" : `\n${FIX_ESCAPE}`;
     console.error(body);
   }
 
