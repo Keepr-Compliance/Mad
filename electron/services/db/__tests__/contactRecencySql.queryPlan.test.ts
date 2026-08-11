@@ -369,6 +369,82 @@ describe.each([false, true])("BACKLOG-2633 query plans (ANALYZE=%s)", (analyze) 
   });
 });
 
+/**
+ * THE IMPORTED FRAGMENT'S `CROSS JOIN` IS REDUNDANT GIVEN THE INDEX — MEASURED,
+ * AND THIS IS THE ONLY PLACE THAT FACT IS OBSERVABLE.
+ *
+ * Reverting the imported fragment's `CROSS JOIN`s to plain `JOIN`s does NOT turn
+ * any assertion above red. That is not a gap in those assertions; it is a real
+ * difference between the two fragments, and it needs to be written down rather
+ * than left as an unexplained asymmetry in the source file.
+ *
+ * The external fragment starts at `json_each` — a virtual table with no cost
+ * estimate, which the planner therefore ranks LAST no matter what. The imported
+ * fragment starts at `contact_emails` constrained by `contact_id = c.id`, served
+ * by a UNIQUE covering index, which the planner already recognises as a cheap and
+ * selective entry point. So once `idx_email_participants_lower_address` exists,
+ * the imported fragment gets the right order on its own and the pin changes
+ * nothing.
+ *
+ * Measured at the founder's record count (1,162 contacts / 3,073 emails /
+ * 9,219 participants), all four combinations:
+ *
+ *     index  ANALYZE  join         time      drives from
+ *     ---------------------------------------------------------------
+ *     no     no       JOIN       3,859 ms    emails  (THE DEFECT)
+ *     no     no       CROSS      1,450 ms    contact_emails
+ *     no     yes      JOIN       2,536 ms    contact_emails
+ *     no     yes      CROSS      1,460 ms    contact_emails
+ *     yes    no       JOIN           5.1 ms  contact_emails
+ *     yes    no       CROSS          5.2 ms  contact_emails
+ *     yes    yes      JOIN           4.9 ms  contact_emails
+ *     yes    yes      CROSS          4.9 ms  contact_emails
+ *
+ * Two things follow. FIRST, the item's suspicion was right: this fragment has the
+ * same defect (top row), and is cheap today only because the founder has 4
+ * imported contacts rather than 1,162 — it would have surfaced the moment an
+ * address book was imported. SECOND, the index alone closes it here, unlike on
+ * the external path where the index alone is worth 1.0x.
+ *
+ * The pin is kept anyway, and this test is what stops it being unfalsifiable
+ * decoration: it asserts the pin carries INDEPENDENT weight by removing the
+ * index and checking the plan still refuses to fall back to the mailbox. Revert
+ * the imported fragment's CROSS JOINs and this goes red; nothing else does.
+ */
+describe("BACKLOG-2633 — the imported fragment's pin holds even with the index gone", () => {
+  let db: DatabaseType;
+  let dir: string;
+
+  beforeAll(() => {
+    ({ db, dir } = makeDb({ analyze: false, emails: 1200 }));
+    // Express a database that does not have the index — the regime in which the
+    // pin is the only thing standing between this fragment and a whole-mailbox
+    // scan per contact.
+    db.exec(`DROP INDEX ${LOWER_ADDRESS_INDEX}`);
+  });
+
+  afterAll(() => {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("still drives from contact_emails, not from the mailbox", () => {
+    const nest = subqueryNest(plan(db, IMPORTED_QUERY, USER_ID), 2);
+
+    expect(nest[0]).toContain("ce_lc");
+    // With plain JOINs and no index this line reads
+    // `SEARCH em USING INDEX idx_emails_user_sent (user_id=?)` — 3,859 ms.
+    expect(nest[0]).not.toContain("idx_emails_user_sent");
+    expect(nest.join("\n")).not.toContain("idx_emails_user_sent");
+  });
+
+  it("the external fragment does too — for the same reason, on its own shape", () => {
+    const nest = subqueryNest(plan(db, EXTERNAL_CONTACTS_GET_ALL_SQL, USER_ID), 2);
+    expect(nest[0]).toContain("e_lc");
+    expect(nest.join("\n")).not.toContain("idx_emails_user_sent");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // IDENTITY — only the plan may change
 // ---------------------------------------------------------------------------

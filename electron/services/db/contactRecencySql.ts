@@ -35,26 +35,36 @@
  * Electron main process (contactDbService) AND the query worker thread
  * (contactQueryWorker) without either copy drifting.
  *
- * ## BACKLOG-2633 — every JOIN below is a CROSS JOIN, and that is not decoration
+ * ## BACKLOG-2633 — this fragment has the same defect, and needs the same index
  * "Scoped to the contact's own few emails/phones" is a statement about what the
- * subquery MEANS, not about what SQLite executes. Written with plain `JOIN`s,
- * the email half is free to start from `emails` — the whole mailbox — and probe
- * back to the contact's addresses last, which makes the cost
- * `contacts x mailbox`. That is what it did on the external path, where it cost
- * the founder 7.4 seconds per picker load; this fragment has the same shape
- * against `contact_emails` and is cheap today only because he has 4 imported
- * contacts. In SQLite `CROSS JOIN` is the documented way to pin join order
- * (it suppresses the reordering, nothing else), so the row set is unchanged and
- * the leftmost table — the contact's own values — always drives.
+ * subquery MEANS, not about what SQLite executes. `LOWER(ep_lc.email_address)`
+ * makes `idx_email_participants_email_address` unusable, so with no by-address
+ * path the planner drives the email half from `emails` — the whole mailbox, once
+ * per contact. Measured at 1,162 contacts / 3,073 emails, no
+ * `idx_email_participants_lower_address`, plain `JOIN`s: **3,859 ms**, driving
+ * from `emails`. With the index: 5.1 ms. It is cheap in the founder's database
+ * today ONLY because he has 4 imported contacts, and would have surfaced the
+ * moment an address book was imported.
  *
- * The pin needs the SAME index the external fragment needs —
- * `idx_email_participants_lower_address` (BACKLOG-2633, schema.sql) — because
- * both probe `email_participants` under `LOWER(email_address)`. It is the
- * leftmost tables that differ: `contact_emails`/`contact_phones` by contact_id
- * here (served by idx_contact_emails_contact_id / idx_contact_phones_contact_id),
- * `json_each` over the row's own JSON there. Order without an index, or an index
- * without the order, is worth ~1x-2x; the pair is worth ~600x. Measured, both
- * ways round, on the external path — see EXTERNAL_CONTACT_LAST_MESSAGE_EXPR.
+ * The index that fixes it is the one the external fragment needs —
+ * `idx_email_participants_lower_address`, in schema.sql — because both probe
+ * `email_participants` under `LOWER(email_address)`.
+ *
+ * ## Honest note: GIVEN the index, the CROSS JOINs below change nothing here
+ * Unlike the external fragment — where the index alone is worth 1.0x and the
+ * pin is the whole fix — the index alone closes this one, and the plan is
+ * identical with or without the pin. The two differ in what sits leftmost:
+ * `json_each` is a virtual table with no cost estimate and is always ranked
+ * LAST, whereas `contact_emails` constrained by `contact_id = c.id` is served by
+ * a UNIQUE covering index the planner already treats as a cheap entry point.
+ *
+ * The pin is kept for defence in depth — the external half is the standing proof
+ * that "the index will save us" is not a general truth — and it is NOT left as
+ * unfalsifiable decoration. `contactRecencySql.queryPlan.test.ts` asserts it
+ * carries independent weight by REMOVING the index and checking the plan still
+ * refuses to fall back to the mailbox (CROSS: 1,450 ms from contact_emails;
+ * plain JOIN: 3,859 ms from emails). Revert these `CROSS JOIN`s and that test,
+ * and only that test, goes red.
  */
 export const IMPORTED_CONTACT_LAST_COMMUNICATION_SQL = `
       NULLIF(
