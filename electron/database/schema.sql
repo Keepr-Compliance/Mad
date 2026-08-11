@@ -492,6 +492,39 @@ CREATE INDEX IF NOT EXISTS idx_email_participants_address_role
 CREATE INDEX IF NOT EXISTS idx_email_participants_email_id
   ON email_participants(email_id);
 
+-- BACKLOG-2633 — the index the contacts picker's recency subquery probes by.
+--
+-- WHAT IT SERVES. `EXTERNAL_CONTACT_LAST_MESSAGE_EXPR` and
+-- `IMPORTED_CONTACT_LAST_COMMUNICATION_SQL` (db/contactRecencySql.ts) both look a
+-- contact's own addresses up in this table under `LOWER(ep.email_address) =
+-- LOWER(<the contact's address>)`. `LOWER()` on the left makes
+-- `idx_email_participants_email_address` above unusable, so without this index
+-- there is NO access path by address and the planner falls back to driving the
+-- subquery from `emails` — cost `contacts x mailbox` rather than
+-- `contacts x that contact's own addresses`. Measured at the founder's record
+-- count (1,162 external contacts, 3,073 emails): 7,410 ms -> 12 ms.
+--
+-- IT IS HALF OF A FIX AND USELESS ALONE. Measured: adding this index and
+-- changing nothing else is worth 1.0x on a database with no `sqlite_stat1` —
+-- the planner keeps the mailbox-first order and never probes by address. The
+-- other half is the `CROSS JOIN` that pins the order, in contactRecencySql.ts.
+-- Do not delete one believing the other covers it; see that file's docblock.
+--
+-- WHY NO MIGRATION ACCOMPANIES IT. `runMigrations()` execs this file
+-- UNCONDITIONALLY (databaseService.ts) before the versioned chain, so
+-- `CREATE INDEX IF NOT EXISTS` is reached on every start including installs with
+-- nothing pending — the same reasoning BACKLOG-2621 shipped
+-- `idx_contact_emails_email_lower` on, and guarded with a real on-disk test
+-- (databaseService.onDiskUpgrade.test.ts) because neutering that one exec left
+-- the whole suite green. A sibling test guards this index the same way.
+--
+-- It is safe as a standalone CREATE INDEX ONLY because both `email_participants`
+-- and `email_address` are declared ABOVE in this same file. The BACKLOG-2298/2300
+-- failure — "no such column" on every real upgrade — bites an index on a column a
+-- LATER migration adds, since this file runs first. That is not the case here.
+CREATE INDEX IF NOT EXISTS idx_email_participants_lower_address
+  ON email_participants(LOWER(email_address));
+
 -- Backfill error table — populated by migration v41 for rows whose denormalized
 -- headers cannot be parsed. Used by support to triage edge cases.
 CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
