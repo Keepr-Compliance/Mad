@@ -528,8 +528,16 @@ describe("BACKLOG-2664 — the copy is a consequence of the link, never a siblin
      * would answer differently on exactly the shapes nobody remembers to copy —
      * the direct FK columns and the `other_contacts` JSON array.
      *
-     * NEGATIVE CONTROL RUN: replacing the fragment's three-way body with the
-     * junction check alone fails the FK and JSON rows here.
+     * NEGATIVE CONTROL RUN: reduced the fragment's three-way body to the
+     * junction check alone. Observed 1 failed / 7 passed, on
+     * `[true, true, true]` receiving `[true, false, false]` — the FK and JSON
+     * rows.
+     *
+     * AND NOTE WHICH ASSERTION CAUGHT IT. The agreement loop DID NOT FAIL, and
+     * cannot: both sides are built from the one constant, so mutating it moves
+     * them together and they keep agreeing — about the wrong answer. Only the
+     * absolute expectations below it go red. A parity test over a shared
+     * constant needs both halves, and the equality half is the weaker one.
      */
     const sqlSaysFrozen = (contactId: string): boolean =>
       db.prepare(`SELECT 1 AS hit WHERE ${FROZEN_CONTACT_EXISTS_SQL}`).get({ contactId }) !==
