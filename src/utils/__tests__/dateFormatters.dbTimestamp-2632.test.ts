@@ -24,53 +24,68 @@
  * The ISO shape is `emailSyncService.ts`'s `toISOString()` output.
  *
  * ===========================================================================
- * THE TZ GUARD IS PART OF THE TEST
+ * WHY THIS SUITE DOES NOT SET process.env.TZ
  * ===========================================================================
- * Every assertion here is meaningless at UTC — the skew is zero and the whole
- * suite would pass against the UNFIXED code. `describe("TZ guard")` fails LOUD
- * if the process is not actually at UTC-6, so this suite cannot go green for
- * the wrong reason.
+ * The obvious way to write this is `process.env.TZ = "America/Costa_Rica"` at
+ * module scope. It DOES NOT WORK under jest's jsdom environment: the file runs
+ * in a separate vm context whose `Date` came from the parent realm, and Node's
+ * timezone-change notification never reaches it. Measured — with ambient
+ * `TZ=UTC`, plain `node` honours the assignment (offset 360) and jest does not
+ * (offset stays 0). A suite written that way is green only on a machine
+ * PHYSICALLY at UTC-6 and red on a UTC CI runner.
  *
- * Locales are PINNED to "en-US" wherever a formatted string is asserted; the
- * runner's default locale is not ours to assume.
+ * So the founder's zone is pinned per assertion via Intl's `timeZone` option,
+ * and every parser assertion compares absolute instants (`toISOString()`), which
+ * have no ambient dependency at all. This suite gives the same answer on any
+ * runner in any zone.
  */
-
-// Must precede any Date use. Node >= 16 picks up a runtime TZ change; the guard
-// below is what proves it actually took effect on THIS runner.
-process.env.TZ = "America/Costa_Rica";
 
 import { parseDbTimestamp, formatDbDate, parseDateSafe } from "../dateFormatters";
 
-/** Costa Rica is UTC-6 year round. getTimezoneOffset() reports minutes WEST. */
-const CR_OFFSET_MINUTES = 360;
+/** The founder's zone. Pinned explicitly — never inherited from the runner. */
+const CR = "America/Costa_Rica";
 
-/** The exact skew the defect introduced: 6h. */
+/** Locale pinned too; the runner's default is not ours to assume. */
+const LOCALE = "en-US";
+
+const DAY_OPTS: Intl.DateTimeFormatOptions = {
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  timeZone: CR,
+};
+
+/** The exact skew the defect introduced at UTC-6: 6h. */
 const SKEW_MS = 21_600_000;
 
-/** Calendar day of a Date in the process's local zone — never a formatted string. */
-function localParts(d: Date): { y: number; m: number; day: number } {
-  return { y: d.getFullYear(), m: d.getMonth() + 1, day: d.getDate() };
+/** What the founder's screen shows for a stored value, on any runner. */
+function displayedInCostaRica(value: string): string | null {
+  return formatDbDate(value, DAY_OPTS, LOCALE);
 }
 
-describe("TZ guard (this suite is void at UTC)", () => {
-  it("runs at UTC-6 with no DST, so the 6h skew is actually exercised", () => {
-    const probe = new Date("2026-08-10T01:00:00Z");
-    expect(probe.getTimezoneOffset()).toBe(CR_OFFSET_MINUTES);
-    // 01:00 UTC on Aug 10 is 19:00 on Aug 9 in Costa Rica.
-    expect(probe.getHours()).toBe(19);
-    expect(probe.getDate()).toBe(9);
-    // January too — no DST anywhere in the year.
-    expect(new Date("2026-01-10T01:00:00Z").getTimezoneOffset()).toBe(CR_OFFSET_MINUTES);
+/** What the UNFIXED code produced: the naive string read as Costa Rica local time. */
+function displayedByTheBug(naive: string): string {
+  // `new Date(naive)` at UTC-6 lands on this instant. Expressed absolutely so
+  // the comparison does not depend on where the runner is.
+  const asIfLocal = new Date(`${naive.replace(" ", "T")}.000Z`).getTime() + SKEW_MS;
+  return new Date(asIfLocal).toLocaleDateString(LOCALE, DAY_OPTS);
+}
+
+describe("Fixture guard (this suite is void if these do not hold)", () => {
+  it("has Costa Rica zone data, at UTC-6 with no DST", () => {
+    // If the runner's ICU lacked the zone, Intl would silently fall back to UTC
+    // and every assertion below would be measuring the wrong thing.
+    const hourIn = (iso: string): string =>
+      new Date(iso).toLocaleString("en-US", { timeZone: CR, hour12: false, hour: "2-digit" });
+    expect(hourIn("2026-08-10T01:00:00Z")).toBe("19"); // 01:00 UTC == 19:00 previous day
+    expect(hourIn("2026-01-10T01:00:00Z")).toBe("19"); // same in winter — no DST
   });
 
-  it("reproduces the unfixed behaviour, so the fix has something to fix", () => {
-    const naive = "2026-08-10 01:00:00";
-    const unfixed = new Date(naive); // what every call site used to do
-    const fixed = parseDbTimestamp(naive)!;
-
-    expect(unfixed.getTime() - fixed.getTime()).toBe(SKEW_MS);
-    expect(localParts(unfixed).day).toBe(10); // the bug: tomorrow
-    expect(localParts(fixed).day).toBe(9); // the fix: today
+  it("the right and wrong renderings are actually distinguishable", () => {
+    // If these collapsed to one string the suite could not tell pass from fail
+    // and would be green against the unfixed code.
+    expect(displayedByTheBug("2026-08-10 01:00:00")).toBe("Aug 10, 2026");
+    expect(displayedByTheBug("2026-08-10 01:00:00")).not.toBe("Aug 9, 2026");
   });
 });
 
@@ -80,15 +95,22 @@ describe("TZ guard (this suite is void at UTC)", () => {
  */
 describe("Control 1 — 19:00 local displays today, not tomorrow", () => {
   it("renders Aug 9 for a naive '2026-08-10 01:00:00'", () => {
-    expect(formatDbDate("2026-08-10 01:00:00", undefined, "en-US")).toBe("Aug 9, 2026");
+    expect(displayedInCostaRica("2026-08-10 01:00:00")).toBe("Aug 9, 2026");
+  });
+
+  it("produces the right INSTANT, which is SKEW_MS from what the bug produced", () => {
+    const fixed = parseDbTimestamp("2026-08-10 01:00:00")!;
+    // toISOString() is absolute — no ambient timezone in the assertion at all.
+    expect(fixed.toISOString()).toBe("2026-08-10T01:00:00.000Z");
+    expect(new Date(fixed.getTime() + SKEW_MS).toISOString()).toBe("2026-08-10T07:00:00.000Z");
   });
 
   it("renders Aug 9 in the 'Added <date>' shape used by the contact card", () => {
     expect(
       formatDbDate(
         "2026-08-10 01:00:00",
-        { year: "numeric", month: "short", day: "numeric" },
-        "en-US",
+        { year: "numeric", month: "short", day: "numeric", timeZone: CR },
+        LOCALE,
       ),
     ).toBe("Aug 9, 2026");
   });
@@ -101,10 +123,10 @@ describe("Control 1 — 19:00 local displays today, not tomorrow", () => {
 describe("Control 2 — an already-stored naive row renders correctly", () => {
   it("handles the transcribed getRemovedContacts value", () => {
     // "2026-08-05 03:08:06" UTC == 2026-08-04 21:08:06 in Costa Rica.
-    const parsed = parseDbTimestamp("2026-08-05 03:08:06")!;
-    expect(parsed.toISOString()).toBe("2026-08-05T03:08:06.000Z");
-    expect(localParts(parsed)).toEqual({ y: 2026, m: 8, day: 4 });
-    expect(formatDbDate("2026-08-05 03:08:06", undefined, "en-US")).toBe("Aug 4, 2026");
+    expect(parseDbTimestamp("2026-08-05 03:08:06")!.toISOString()).toBe(
+      "2026-08-05T03:08:06.000Z",
+    );
+    expect(displayedInCostaRica("2026-08-05 03:08:06")).toBe("Aug 4, 2026");
   });
 
   it("handles the naive shape with a T separator and with fractional seconds", () => {
@@ -115,7 +137,7 @@ describe("Control 2 — an already-stored naive row renders correctly", () => {
     expect(parseDbTimestamp("2026-08-10 01:00:00.500")!.toISOString()).toBe(
       "2026-08-10T01:00:00.500Z",
     );
-    // datetime('now') without seconds, and strftime with 6-digit fraction.
+    // datetime('now') without seconds, and strftime with a 6-digit fraction.
     expect(parseDbTimestamp("2026-08-10 01:00")!.toISOString()).toBe(
       "2026-08-10T01:00:00.000Z",
     );
@@ -143,9 +165,9 @@ describe("Control 4 — zone-carrying values are untouched", () => {
 
   it("keeps the ISO writer's day correct (emails.sent_at)", () => {
     // The same row renders sent_at (ISO) and ignored_at (naive) side by side in
-    // RemovedEmailsSection; both must now land on Aug 9.
-    expect(formatDbDate("2026-08-10T01:00:00.000Z", undefined, "en-US")).toBe("Aug 9, 2026");
-    expect(formatDbDate("2026-08-10 01:00:00", undefined, "en-US")).toBe("Aug 9, 2026");
+    // RemovedEmailsSection; both must land on Aug 9 for the founder.
+    expect(displayedInCostaRica("2026-08-10T01:00:00.000Z")).toBe("Aug 9, 2026");
+    expect(displayedInCostaRica("2026-08-10 01:00:00")).toBe("Aug 9, 2026");
   });
 
   it("does not change parseDateSafe's behaviour", () => {
@@ -158,41 +180,51 @@ describe("Control 4 — zone-carrying values are untouched", () => {
 /**
  * CONTROL 5 — sweep the boundary, do not sample it.
  * Every local hour boundary that can flip a calendar day at UTC-6, plus both
- * sides of the UTC day boundary. One case per branch cannot catch an off-by-one.
+ * sides of the UTC day boundary. One input per branch cannot catch an off-by-one.
  */
 describe("Control 5 — day boundaries, swept", () => {
-  const cases: Array<{ label: string; naive: string; expectDay: number }> = [
+  const cases: Array<{ label: string; naive: string; expected: string }> = [
     // ---- Aug 9 local, all of it ----
-    { label: "00:00:00 local Aug 9", naive: "2026-08-09 06:00:00", expectDay: 9 },
-    { label: "00:00:01 local Aug 9", naive: "2026-08-09 06:00:01", expectDay: 9 },
-    { label: "11:59:59 local Aug 9", naive: "2026-08-09 17:59:59", expectDay: 9 },
-    { label: "17:59:59 local Aug 9", naive: "2026-08-09 23:59:59", expectDay: 9 },
+    { label: "00:00:00 local Aug 9", naive: "2026-08-09 06:00:00", expected: "Aug 9, 2026" },
+    { label: "00:00:01 local Aug 9", naive: "2026-08-09 06:00:01", expected: "Aug 9, 2026" },
+    { label: "11:59:59 local Aug 9", naive: "2026-08-09 17:59:59", expected: "Aug 9, 2026" },
+    { label: "17:59:59 local Aug 9", naive: "2026-08-09 23:59:59", expected: "Aug 9, 2026" },
     // ---- the UTC day boundary falls INSIDE local Aug 9 ----
-    { label: "18:00:00 local Aug 9 (= 00:00:00 UTC Aug 10)", naive: "2026-08-10 00:00:00", expectDay: 9 },
-    { label: "18:00:01 local Aug 9", naive: "2026-08-10 00:00:01", expectDay: 9 },
-    { label: "19:00:00 local Aug 9 (founder's measured case)", naive: "2026-08-10 01:00:00", expectDay: 9 },
-    { label: "23:59:59 local Aug 9", naive: "2026-08-10 05:59:59", expectDay: 9 },
+    { label: "18:00:00 local Aug 9 (= 00:00:00 UTC Aug 10)", naive: "2026-08-10 00:00:00", expected: "Aug 9, 2026" },
+    { label: "18:00:01 local Aug 9", naive: "2026-08-10 00:00:01", expected: "Aug 9, 2026" },
+    { label: "19:00:00 local Aug 9 (founder's measured case)", naive: "2026-08-10 01:00:00", expected: "Aug 9, 2026" },
+    { label: "23:59:59 local Aug 9", naive: "2026-08-10 05:59:59", expected: "Aug 9, 2026" },
     // ---- and here the local day finally rolls ----
-    { label: "00:00:00 local Aug 10", naive: "2026-08-10 06:00:00", expectDay: 10 },
-    { label: "00:00:01 local Aug 10", naive: "2026-08-10 06:00:01", expectDay: 10 },
+    { label: "00:00:00 local Aug 10", naive: "2026-08-10 06:00:00", expected: "Aug 10, 2026" },
+    { label: "00:00:01 local Aug 10", naive: "2026-08-10 06:00:01", expected: "Aug 10, 2026" },
   ];
 
-  it.each(cases)("$label renders Aug $expectDay", ({ naive, expectDay }) => {
-    expect(localParts(parseDbTimestamp(naive)!)).toEqual({ y: 2026, m: 8, day: expectDay });
-    expect(formatDbDate(naive, undefined, "en-US")).toBe(`Aug ${expectDay}, 2026`);
+  it.each(cases)("$label renders $expected", ({ naive, expected }) => {
+    expect(displayedInCostaRica(naive)).toBe(expected);
   });
 
-  it("crosses a month boundary the same way", () => {
+  it("crosses month and year boundaries the same way", () => {
     // 19:00 local Aug 31 == 01:00 UTC Sep 1.
-    expect(formatDbDate("2026-09-01 01:00:00", undefined, "en-US")).toBe("Aug 31, 2026");
+    expect(displayedInCostaRica("2026-09-01 01:00:00")).toBe("Aug 31, 2026");
     // 18:00 local Dec 31 == 00:00 UTC Jan 1 — the year must not roll early.
-    expect(formatDbDate("2027-01-01 00:00:00", undefined, "en-US")).toBe("Dec 31, 2026");
+    expect(displayedInCostaRica("2027-01-01 00:00:00")).toBe("Dec 31, 2026");
   });
 
   it("never disagrees with the ISO value for the same instant", () => {
     for (const { naive } of cases) {
       const iso = `${naive.replace(" ", "T")}.000Z`;
       expect(parseDbTimestamp(naive)!.getTime()).toBe(new Date(iso).getTime());
+      expect(displayedInCostaRica(naive)).toBe(displayedInCostaRica(iso));
+    }
+  });
+
+  it("goes wrong in exactly the 18:00-23:59 window and nowhere else", () => {
+    // The user-visible rule from the report, asserted rather than stated: the
+    // bug is invisible for 18 hours a day, which is why it went unnoticed.
+    for (const { naive, expected } of cases) {
+      const hourUtc = Number(naive.slice(11, 13));
+      const inEveningWindow = hourUtc < 6; // 00:00-05:59 UTC == 18:00-23:59 at UTC-6
+      expect(displayedByTheBug(naive) !== expected).toBe(inEveningWindow);
     }
   });
 });
