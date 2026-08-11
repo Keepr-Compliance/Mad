@@ -71,6 +71,7 @@ jest.mock("../logService", () => {
 });
 
 import { runUniqueNameAutoLink, type AskPair } from "../contactNameAutoLink";
+import { confirmProposal } from "../contactLinkReview";
 import { createLink, getLinksForContact } from "../db/contactSourceLinkDbService";
 import {
   listPendingProposals,
@@ -499,5 +500,70 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
     expect(linkSet("c-frozen")).toEqual(["macos|mac-1|source_id"]);
     expect(phoneSet("c-frozen")).toEqual([MAC_PHONE]);
     expect(emailSet("c-frozen")).toEqual([MAC_EMAIL]);
+  });
+
+  // -------------------------------------------------------------------------
+  // CONTROL 5 — THE OTHER HALF OF THE RULE, AND THE ONE THAT WAS ONLY A READING
+  // -------------------------------------------------------------------------
+  /**
+   * "MANUAL UNGATED" IS HALF OF THIS PR'S ARGUMENT AND NOTHING TESTED IT.
+   *
+   * Every test above proves the machine does not act. That is worthless on its
+   * own: refusing the auto-link is only correct because the human can still say
+   * yes. If `confirmProposal` refused a frozen contact too, this PR would have
+   * turned "her card silently gets a stranger's number" into "her card can
+   * never be corrected, whatever she answers" — and every assertion above would
+   * still be green, because none of them answers a question.
+   *
+   * SR raised the gap on PR #2294. **This test is written and run here rather
+   * than copied from SR's account** — an inherited result is not an observation.
+   *
+   * BACKLOG-2664's suite covers the same handoff for the LINKER route, and does
+   * not cover this one: that route's proposals carry `matched_on = 'record'`
+   * and `cluster_key = 'record:…'`, the name route's carry `'name'` and
+   * `'name:…'`, and `confirmProposal` branches on `cluster_key` for
+   * `rejectSiblings`. Two routes into one function is exactly where a reading
+   * substitutes for a run.
+   */
+  it("a human answering the question DOES link and DOES bring the values across", () => {
+    seedFrozenPair();
+    runUniqueNameAutoLink(USER, fileNameQuestion);
+
+    // Precondition — the machine refused, so there is something to answer.
+    expect(linkSet("c-frozen")).toEqual(["macos|mac-1|source_id"]);
+    expect(phoneSet("c-frozen")).toEqual([MAC_PHONE]);
+
+    const [proposal] = listPendingProposals(USER);
+    // The question really is the NAME route's, not the linker's. If this ever
+    // reads `record:…` the test has stopped covering what it claims to.
+    expect(proposal.matched_on).toBe("name");
+    expect(proposal.cluster_key).toBe(`name:${FROZEN_NAME.toLowerCase()}`);
+
+    const outcome = confirmProposal(USER, proposal.id);
+
+    expect(outcome).toEqual({ ok: true, linked: true, alsoRejected: 0 });
+    expect(linkSet("c-frozen")).toEqual([
+      "macos|mac-1|source_id",
+      "outlook|out-1|manual",
+    ]);
+  });
+
+  /**
+   * The value half of the confirm, in its own test for the same reason the
+   * frozen case is split — so it can fail alone.
+   *
+   * CONTROL (break -> observed): comment out `applyLinkedSourceValues(userId,
+   * proposal.contact_id)` at `contactLinkReview.ts:379`. This goes red on the
+   * phone and email sets while the link test above stays green.
+   */
+  it("and the values she confirmed actually arrive on her card", () => {
+    seedFrozenPair();
+    runUniqueNameAutoLink(USER, fileNameQuestion);
+
+    const [proposal] = listPendingProposals(USER);
+    confirmProposal(USER, proposal.id);
+
+    expect(phoneSet("c-frozen")).toEqual([MAC_PHONE, OUT_PHONE].sort());
+    expect(emailSet("c-frozen")).toEqual([MAC_EMAIL, OUT_EMAIL].sort());
   });
 });
