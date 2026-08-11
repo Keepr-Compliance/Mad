@@ -85,11 +85,33 @@ const USER = "user-frozen-name-2666";
 
 // ---------------------------------------------------------------------------
 // FIXTURE VALUES — RFC 2606 domains, NANP reserved 555-0100..0199 range.
+//
+// PROVENANCE, STATED SO NOBODY HAS TO ASK AGAIN (BACKLOG-2666):
+//
+//   - `Priya Raman` is this repo's ESTABLISHED name for a saved contact that a
+//     record content-matches but is not the same person. She is named in
+//     `contactSourceLinker.ts`'s docblock and in three suites already
+//     (`contactSourceLinker.nameGuard-2619`, `autoLinkNameGuard-2624`,
+//     `contact-handlers.foldDeleted-2556`). Reused deliberately: two suites
+//     naming one person is how a reader connects them.
+//   - `Rosalind Farquharson` is INVENTED for this suite. The surname was made
+//     up; it is not derived from any record, card, database or message. She is
+//     NOT the `Rosalind Vance` of `contact-handlers.stopHidingRecords-2608` — a
+//     different fixture person in a different scenario. Her address is spelled
+//     out in full below precisely so the two cannot be confused: that suite
+//     owns the bare `rosalind@example.com`, and this one must not borrow it.
+//
+// Neither name is in `FICTIONAL_NAMES` (`scripts/ci/check-fixture-pii.mjs`) and
+// neither needs to be: the guard pairs a quoted name with an identifier ON THE
+// SAME LINE, and every name here sits alone on its own `const`. That is a
+// documented deliberate gap in the guard, not a hole these fixtures found — see
+// the note at `check-fixture-pii.mjs:200-203`. Closing it is one deliberate
+// repo-wide pass with SR's agreement, not two engineers tidying their corners.
 // ---------------------------------------------------------------------------
 const MAC_PHONE = "+15035550140";
 const OUT_PHONE = "+15035550141"; // differs from MAC_PHONE in the last digit only
 const TWIN_OUT_PHONE = "+15035550142";
-const MAC_EMAIL = "rosalind@example.com";
+const MAC_EMAIL = "rosalind.farquharson@example.com";
 const OUT_EMAIL = "r.farquharson@example.net";
 const TWIN_OUT_EMAIL = "priya.twin@example.net";
 
