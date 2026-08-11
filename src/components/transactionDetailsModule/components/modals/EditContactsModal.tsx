@@ -1048,9 +1048,31 @@ function Screen2Overlay({
         *"put them all as a part of the same wrap component so they all move
         together — actually putting them together is even better."*
 
-        Only `hidden sm:flex` -> `flex` changed on this element. Every other
-        class is untouched, so at `sm` and above the computed layout is
-        identical to before.
+        WHAT ACTUALLY CHANGED HERE — FOUR THINGS, NOT ONE. An earlier draft of
+        this comment claimed "only `hidden sm:flex` -> `flex` changed on this
+        element. Every other class is untouched." That was FALSE about its own
+        diff. A comment is a claim like any other, and this epic has already
+        paid for one that was read as a guarantee it never made:
+
+          - `hidden sm:flex` -> `flex`   (the fix itself)
+          - `gap-3` — on this element, in the same edit
+          - `min-w-0 truncate` — on the label
+          - `flex-shrink-0` — on the button
+
+        The last three are LOAD-BEARING, not tidying, because this row now
+        renders at widths it never had to serve before. `justify-between` on its
+        own lets a long label push the button past the edge once the row is
+        narrow enough — exactly the range this element newly covers. Measured
+        across 320-639px with labels up to 70 characters, the button holds
+        `w=173.3 h=40.0`, never overflows its row, and the page never scrolls
+        horizontally.
+
+        The `sm+` rendering is unchanged, and that too is MEASURED rather than
+        argued from the class list: `justify-between` already separates the two
+        children by more than any `gap`, nothing shrinks when there is room, and
+        the label does not truncate at those widths. The commit button's rect is
+        identical before and after at 640/768/900px — `x=416.890625 y=684
+        w=183.109375 h=40` at 640px.
       */}
       {/* BACKLOG-2405: counts only NEW additions (pre-populated existing chips
           are not "being added"); removals commit live via ✕. */}

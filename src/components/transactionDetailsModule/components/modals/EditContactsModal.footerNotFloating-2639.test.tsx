@@ -29,7 +29,26 @@
  * The structural rule this guards is deliberately about the CONTAINER, not
  * about any button's name: a control that participates in layout cannot paint
  * over anything, at any z-index. Add a second action to the footer and the
- * guard still holds. Add one as a new floating corner pill and it fails.
+ * guard still holds. Add one as a new floating pill and it fails.
+ *
+ * ---------------------------------------------------------------------------
+ * THE GUARD'S TRUE SCOPE — stated so it is not read as broader than it is
+ * ---------------------------------------------------------------------------
+ * The floating-control check flags any element whose CLASS LIST carries
+ * Tailwind's `fixed` without also covering the whole viewport (`inset-0`, or
+ * `inset-x-0` + `inset-y-0`). It scans the whole document, so a portaled pill
+ * is caught. Within those terms it is general — it does not name
+ * `add-selected-button`, and it caught both shapes SR review threw at it
+ * (`fixed inset-x-0 bottom-0 z-[71]` and `fixed bottom-0 left-0 right-0`),
+ * which an earlier non-zero-inset version let through.
+ *
+ * It still does NOT cover:
+ *   - `position: fixed` applied by anything other than that class — a plain
+ *     stylesheet rule, an inline style, or a CSS-in-JS override. It reads class
+ *     strings, not computed styles, because jsdom computes none.
+ *   - elements that are not MOUNTED in the states this suite drives. It sees
+ *     the Add Contacts overlay with the list loaded; a control that appears
+ *     only once some other overlay is open is outside what it can observe.
  */
 
 import React from "react";
@@ -148,10 +167,23 @@ const createDefaultProps = (): EditContactsModalProps => ({
  *  other variant prefix is caught too. */
 const FIXED = /(?:^|\s)(?:[a-z0-9-]+:)*fixed(?:\s|$)/;
 
-/** A corner anchor: an edge inset with a value (`bottom-4`, `right-4`, ...).
- *  `inset-0` — how a legitimate full-screen modal backdrop covers the window —
- *  is deliberately NOT matched. */
-const CORNER = /(?:^|\s)(?:[a-z0-9-]+:)*(?:top|bottom|left|right)-(?!0(?:\s|$))[^\s]+/;
+/**
+ * A FULL-SCREEN layer — how every `ResponsiveModal` (and so `ContactFormModal`,
+ * `ContactPreview`, `ReviewDuplicatesModal`) covers the window. Legitimate, and
+ * the only `fixed` shape allowed through.
+ *
+ * This replaced a narrower "corner-anchored" test that keyed on an edge inset
+ * with a NON-ZERO value (`bottom-4`, `right-4`). SR review found two real
+ * offenders that walked straight past it — `fixed inset-x-0 bottom-0 z-[71]`
+ * and `fixed bottom-0 left-0 right-0`, both of which steal the click across
+ * the identical 360–639px band. Zero insets and axis insets are exactly as
+ * dangerous as `bottom-4`, so the rule is now inverted: ANY `fixed` element is
+ * an offender UNLESS it covers the whole viewport.
+ */
+const isFullScreenLayer = (c: string): boolean =>
+  /(?:^|\s)(?:[a-z0-9-]+:)*inset-0(?:\s|$)/.test(c) ||
+  (/(?:^|\s)(?:[a-z0-9-]+:)*inset-x-0(?:\s|$)/.test(c) &&
+    /(?:^|\s)(?:[a-z0-9-]+:)*inset-y-0(?:\s|$)/.test(c));
 
 const cls = (el: Element): string =>
   typeof el.className === "string" ? el.className : "";
@@ -240,16 +272,17 @@ describe("BACKLOG-2639 — the Add Contacts commit control participates in layou
     expect(cls(footer)).toMatch(/(?:^|\s)flex-shrink-0(?:\s|$)/);
   });
 
-  it("no corner-anchored floating control exists anywhere in the overlay", async () => {
-    const overlay = await openAddContactsOverlay();
+  it("no floating control exists anywhere on the page while this screen is open", async () => {
+    await openAddContactsOverlay();
 
     // The generalized rule, and the reason this guard is about the container
-    // rather than about `add-selected-button`: ANY element here that is both
-    // taken out of flow and pinned to a corner can cover a control beneath it.
-    // Full-screen layers (`fixed inset-0`, how ContactFormModal and every other
-    // ResponsiveModal covers the window) are legitimate and excluded.
-    const offenders = [overlay, ...Array.from(overlay.querySelectorAll("*"))]
-      .filter((el) => FIXED.test(cls(el)) && CORNER.test(cls(el)))
+    // rather than about `add-selected-button`: ANY element taken out of flow
+    // that does not cover the whole viewport can paint over a control beneath
+    // it. Scanned across the WHOLE DOCUMENT, not the overlay's subtree, so a
+    // pill rendered through a portal is caught too — the subtree scan this
+    // replaced would have missed one.
+    const offenders = Array.from(document.body.querySelectorAll("*"))
+      .filter((el) => FIXED.test(cls(el)) && !isFullScreenLayer(cls(el)))
       .map((el) => `<${el.tagName.toLowerCase()} class="${cls(el)}">`);
 
     expect(offenders).toEqual([]);
