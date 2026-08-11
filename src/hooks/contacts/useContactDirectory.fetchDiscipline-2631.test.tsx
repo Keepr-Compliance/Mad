@@ -206,6 +206,82 @@ describe("useContactDirectory — fetch discipline (BACKLOG-2631)", () => {
   });
 
   /**
+   * CONTROL — STRICTMODE'S DOUBLE-INVOKE COSTS ONE ADDRESS-BOOK READ, NOT TWO.
+   *
+   * THE APP RENDERS UNDER STRICTMODE (`src/main.tsx:81`) AND NOTHING ELSE IN
+   * THIS FILE DOES. Without this case, the stated reason for
+   * `externalInFlightRef` existing — that a success-only flag is still false when
+   * React invokes the mount effect a second time in the same tick — is a claim
+   * no assertion here can make go red. Deleting the ref would leave every other
+   * count in this file reading 1.
+   *
+   * That is the shape the founder named on 2026-08-04: a check whose inputs
+   * cannot separate pass from fail. So the input is supplied.
+   *
+   * OBSERVED RED: delete `externalInFlightRef` (leaving only the success-set
+   * `externalLoadedRef`, which is what base `useAuditContactAssignment:141` and
+   * base `useContactList` had) and this reads 2 — the whole address book, twice,
+   * on every mount.
+   *
+   * THE SAVED HALF IS ASSERTED SEPARATELY AND MORE WEAKLY ON PURPOSE. Its mount
+   * effect is deliberately ungated so a `userId`/`propertyAddress` change
+   * replaces a list read for the wrong deal, which is exactly what shipped
+   * `useContactList` did (base `:268-274`). Under StrictMode that costs a second
+   * saved-contact read on mount — PRE-EXISTING on both surfaces, out of scope
+   * here, and recorded as BACKLOG-2660 rather than fixed in a refactor PR. The
+   * assertion below pins it at its current value so a future change to it is a
+   * decision and not a drift.
+   */
+  it("reads the address book once under StrictMode's double-invoke", async () => {
+    render(
+      <React.StrictMode>
+        <Harness />
+      </React.StrictMode>,
+    );
+    await settle();
+
+    expect(availableCalls()).toBe(1);
+    expect(idsIn("external")).toEqual([addressBookRecord.id]);
+    expect(idsIn("saved")).toEqual([savedContact.id]);
+
+    // The saved half, at its inherited value. See the docblock: not this PR's
+    // to change, and pinned so that changing it is deliberate.
+    expect(getAllCalls()).toBe(2);
+  });
+
+  /**
+   * CONTROL — AND THE LAZY PATH HOLDS UNDER STRICTMODE TOO.
+   *
+   * `Screen2Overlay` triggers its load from an effect, so it takes the same
+   * double-invoke — and this is the path base `useAuditContactAssignment` did
+   * NOT protect at all (its check was on a ref set only on success).
+   */
+  it("reads each half once under StrictMode when the load is lazy", async () => {
+    function LazyHarness(): React.ReactElement {
+      const directory = useContactDirectory({
+        userId: USER_ID,
+        autoLoadSaved: false,
+        autoLoadExternal: false,
+      });
+      latest = directory;
+      React.useEffect(() => {
+        directory.triggerLazyLoad();
+      }, [directory.triggerLazyLoad]); // eslint-disable-line react-hooks/exhaustive-deps
+      return <span data-testid="external">{directory.externalContacts.map((c) => c.id).join(",")}</span>;
+    }
+
+    render(
+      <React.StrictMode>
+        <LazyHarness />
+      </React.StrictMode>,
+    );
+    await settle();
+
+    expect(availableCalls()).toBe(1);
+    expect(getAllCalls()).toBe(1);
+  });
+
+  /**
    * CONTROL — A FAILED FIRST READ IS RETRIED, NOT SEALED IN.
    *
    * The guard is set on SUCCESS, and this is why. A flag claimed before the

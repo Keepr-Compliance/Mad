@@ -494,9 +494,10 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
           `contacts:get-available` suppresses on
           (`contact-handlers.stopHidingRecords-2608.test.ts`, CONTROL 2). So the
           record the user just detached should REAPPEAR as its own row in the
-          address-book half, and `loadExternalContacts` holds a once-per-mount
-          guard (`useContactList.ts` — `externalContactsLoadedRef`), so that half
-          was never asked again for the life of the mount.
+          address-book half, and the address-book load holds an initial-load
+          guard (BACKLOG-2631: `useContactDirectory.ts` — `externalLoadedRef`,
+          which `refreshBothLists` BYPASSES rather than being blocked by), so
+          that half was never asked again for the life of the mount.
 
           The saved half still matters for its original reason (kept above): the
           list carries the emails and phones this may have just taken back.
@@ -1510,9 +1511,10 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             `contact_source_links` row, and that table is what
             `contacts:get-available` suppresses on
             (`contact-handlers.stopHidingRecords-2608.test.ts`, CONTROL 2).
-            `loadExternalContacts` holds a once-per-mount guard
-            (`useContactList.ts` — `externalContactsLoadedRef`), so that half was
-            never asked again for the life of the mount.
+            The address-book load holds an initial-load guard (BACKLOG-2631:
+            `useContactDirectory.ts` — `externalLoadedRef`, which
+            `refreshBothLists` BYPASSES rather than being blocked by), so that
+            half was never asked again for the life of the mount.
 
             The founder answered two questions and searched Clients & Contacts;
             the list showed the pre-answer state until he navigated away and
