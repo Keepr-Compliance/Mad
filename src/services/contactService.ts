@@ -72,57 +72,26 @@ export interface ContactDeleteCheck {
  * Contact Service
  * Provides a clean abstraction over window.api.contacts
  */
+/**
+ * BACKLOG-2631 — THE THREE READ METHODS ARE GONE, AND THEIR ABSENCE IS THE
+ * POINT.
+ *
+ * `getAll`, `getSortedByActivity` and `getAvailable` lived here as
+ * `{success, contacts}` -> `{success, data}` rewraps and nothing else.
+ * `getAvailable` had already had no application caller for some time;
+ * `ContactsContext` was the last caller of the other two, and it now reads the
+ * picker's data through `useContactDirectory` along with the other two
+ * containers.
+ *
+ * DELETED RATHER THAN LEFT SITTING: three exported functions named exactly what
+ * the next person will search for is a trap, not dead weight. They would fix
+ * `contactService.getAvailable` — the obvious-looking place — and nothing would
+ * happen, because nothing calls it. BACKLOG-2511 was itself caused by a refresh
+ * function sitting exported with zero callers.
+ *
+ * The one place these channels are read is `src/hooks/contacts/useContactDirectory.ts`.
+ */
 export const contactService = {
-  /**
-   * Get all contacts for a user
-   */
-  async getAll(userId: string): Promise<ApiResult<Contact[]>> {
-    try {
-      const result = await window.api.contacts.getAll(userId);
-      if (result.success) {
-        return { success: true, data: result.contacts || [] };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * Get contacts sorted by recent activity
-   */
-  async getSortedByActivity(
-    userId: string,
-    propertyAddress?: string
-  ): Promise<ApiResult<Contact[]>> {
-    try {
-      const result = await window.api.contacts.getSortedByActivity(
-        userId,
-        propertyAddress
-      );
-      if (result.success) {
-        return { success: true, data: result.contacts || [] };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * Get available contacts (not linked to any transaction)
-   */
-  async getAvailable(userId: string): Promise<ApiResult<Contact[]>> {
-    try {
-      const result = await window.api.contacts.getAvailable(userId);
-      if (result.success) {
-        return { success: true, data: result.contacts || [] };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
 
   /**
    * Create a new contact

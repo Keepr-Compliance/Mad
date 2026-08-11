@@ -82,7 +82,7 @@ describe("ContactAssignmentStep", () => {
     contactsLoading: false,
     contactsError: null,
     onRefreshContacts: jest.fn(),
-    onSilentRefreshContacts: jest.fn(),
+    onRefreshBothLists: jest.fn(),
     externalContacts: [] as Contact[],
     externalContactsLoading: false,
   };
@@ -317,7 +317,7 @@ describe("ContactAssignmentStep", () => {
           selectedContactIds={selected}
           onSelectedContactIdsChange={setSelected}
           externalContacts={externalContacts}
-          onSilentRefreshContacts={jest.fn().mockResolvedValue(undefined)}
+          onRefreshBothLists={jest.fn().mockResolvedValue(undefined)}
         />
       );
     }

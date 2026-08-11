@@ -131,7 +131,7 @@ const defaultProps = {
   contactsLoading: false,
   contactsError: null,
   onRefreshContacts: jest.fn(),
-  onSilentRefreshContacts: jest.fn().mockResolvedValue(undefined),
+  onRefreshBothLists: jest.fn().mockResolvedValue(undefined),
   externalContacts: [BEA_UNIMPORTED],
   externalContactsLoading: false,
 };
@@ -422,13 +422,13 @@ describe("the wizard renders the same signals as Clients & Contacts (BACKLOG-260
     jest.mocked(window.api.contacts.rejectLink).mockResolvedValue({
       success: true,
     } as never);
-    const onSilentRefreshContacts = jest.fn().mockResolvedValue(undefined);
+    const onRefreshBothLists = jest.fn().mockResolvedValue(undefined);
     const onRefreshContacts = jest.fn();
 
     render(
       <ContactAssignmentStep
         {...defaultProps}
-        onSilentRefreshContacts={onSilentRefreshContacts}
+        onRefreshBothLists={onRefreshBothLists}
         onRefreshContacts={onRefreshContacts}
       />,
     );
@@ -438,7 +438,7 @@ describe("the wizard renders the same signals as Clients & Contacts (BACKLOG-260
     );
     await userEvent.click(await screen.findByTestId("review-reject-p-bianca-1"));
 
-    await waitFor(() => expect(onSilentRefreshContacts).toHaveBeenCalled());
+    await waitFor(() => expect(onRefreshBothLists).toHaveBeenCalled());
     // SILENT means silent: the loud refresh raises `contactsLoading` and
     // replaces the list with a spinner, losing the user's place mid-selection.
     expect(onRefreshContacts).not.toHaveBeenCalled();

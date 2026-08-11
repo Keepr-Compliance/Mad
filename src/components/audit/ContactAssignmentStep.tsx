@@ -56,7 +56,24 @@ interface ContactAssignmentStepProps {
   contactsLoading: boolean;
   contactsError: string | null;
   onRefreshContacts: () => Promise<void>;
-  onSilentRefreshContacts: () => Promise<void>;
+  /**
+   * BACKLOG-2631 — ONE REFRESH, BOTH HALVES, FROM EVERY CONTAINER.
+   *
+   * This prop was `onSilentRefreshContacts`, and both containers wired it to a
+   * reload of the SAVED half only. Every action that reaches it — importing a
+   * record, answering "yes, same person" — writes a `contact_source_links` row,
+   * and that table is precisely what `contacts:get-available` suppresses on. So
+   * the half that MOVED was the half nobody re-read, and the merged-away record
+   * stayed on screen as a selectable row for the life of the modal.
+   *
+   * Both containers now pass `useContactDirectory`'s `refreshBothLists`: both
+   * halves fetched in parallel, committed in one render, never raising the
+   * external loading flag (which would replace the list with a spinner and cost
+   * the user their place mid-selection).
+   *
+   * The name says which lists move. The old one said only that it was quiet.
+   */
+  onRefreshBothLists: () => Promise<void>;
   // External contacts (from macOS Contacts app, etc.)
   externalContacts: Contact[];
   externalContactsLoading: boolean;
@@ -169,7 +186,7 @@ function ContactAssignmentStep({
   contactsLoading,
   contactsError,
   onRefreshContacts,
-  onSilentRefreshContacts,
+  onRefreshBothLists,
   // External contacts (from macOS Contacts app, etc.)
   externalContacts,
   externalContactsLoading,
@@ -545,8 +562,20 @@ function ContactAssignmentStep({
               : [...prev, { externalId: contact.id, imported: newContact }]
           );
           onSelectedContactIdsChange([...selectedContactIds, newContact.id]);
-          // Silent refresh to pick up newly imported contact in DB
-          await onSilentRefreshContacts();
+          /*
+            BACKLOG-2631 — BOTH halves, because an import changes both.
+
+            This awaited a saved-half-only reload. The import writes a crosswalk
+            row for the record it saved, so the address-book half stops offering
+            that record — and it was never re-read here. `importedTwins` above
+            hid the twin by hand instead, per-action, which is the workaround
+            this replaces the need for rather than removes: it still supplies the
+            Added chip's row data in the window before the refresh lands.
+
+            Clients & Contacts' import path has refreshed both halves since
+            BACKLOG-2526; this is the same call.
+          */
+          await onRefreshBothLists();
           return newContact;
         }
 
@@ -559,7 +588,7 @@ function ContactAssignmentStep({
         return contact;
       }
     },
-    [userId, onSilentRefreshContacts, selectedContactIds, onSelectedContactIdsChange, contacts]
+    [userId, onRefreshBothLists, selectedContactIds, onSelectedContactIdsChange, contacts]
   );
 
   // Handle importing from preview (needs to be after handleImportContact)
@@ -791,9 +820,20 @@ function ContactAssignmentStep({
             count lives on `review_state`, which is stamped by the same producer
             this re-reads, so an answered question leaves the row on its own
             rather than by a second rule kept in step by hand.
+
+            BACKLOG-2631 — AND IT IS BOTH HALVES, WHICH IS THE REPORTED DEFECT.
+
+            This called a saved-half-only reload. Answering "yes, same person"
+            writes a `contact_source_links` row (`confirmProposal` ->
+            `createLink`), and `contacts:get-available` suppresses on exactly
+            that table — so the record the user just merged away should stop
+            being offered. It did not: the address-book half was never asked
+            again, and the merged-away record sat in the list AS A SELECTABLE ROW
+            for the life of this modal. Madison could add, as a second party on
+            the same deal, the person she had just said was the first one.
           */
           onResolved={() => {
-            void onSilentRefreshContacts();
+            void onRefreshBothLists();
           }}
         />
       )}

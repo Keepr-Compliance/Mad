@@ -810,12 +810,32 @@ function Screen2Overlay({
   onAddContact,
   onRemoveExisting,
 }: Screen2OverlayProps): React.ReactElement {
-  const { contacts, loading, error, refreshContacts, silentRefresh } = useContacts();
-
-  // External contacts from macOS Contacts app (lazy-loaded)
-  const [externalContacts, setExternalContacts] = useState<ExtendedContact[]>([]);
-  const [externalLoading, setExternalLoading] = useState(false);
-  const [externalLoaded, setExternalLoaded] = useState(false);
+  /**
+   * BACKLOG-2631 — BOTH HALVES FROM THE PROVIDER, AND ONE REFRESH FOR THEM.
+   *
+   * This overlay used to hold its own `externalContacts` / `externalLoading` /
+   * `externalLoaded` state and its own `contacts:get-available` call, guarded so
+   * it ran once per mount and never again. That guard is the reported defect:
+   * answering "yes, same person" in the questions modal writes a
+   * `contact_source_links` row, `contacts:get-available` suppresses on exactly
+   * that table, and this overlay never asked it a second time — so the record
+   * just merged away stayed in the list as a SELECTABLE row until the overlay
+   * was closed and reopened.
+   *
+   * Both halves and the refresh now come from `useContactDirectory` through the
+   * provider — the same hook Clients & Contacts and the new-transaction wizard
+   * compose.
+   */
+  const {
+    contacts,
+    loading,
+    error,
+    refreshContacts,
+    refreshBothLists,
+    externalContacts,
+    externalContactsLoading,
+    triggerLazyLoad,
+  } = useContacts();
 
   // Selected contact IDs — passed to ContactAssignmentStep. BACKLOG-2405: SEEDED
   // with the deal's existing contacts so the two-pane "Added" column pre-shows
@@ -833,31 +853,23 @@ function Screen2Overlay({
   // Get userId from contacts context
   const userId = contacts.length > 0 ? contacts[0].user_id : "";
 
-  // Load external contacts from Contacts app when component mounts
+  /**
+   * BACKLOG-2631 — the address-book half is fetched WHEN THIS OVERLAY OPENS, not
+   * when `EditContactsModal` opens.
+   *
+   * The provider wraps Screen 1 as well, and `contacts:get-available` is a
+   * whole-corpus read. Loading it with the provider would put an address-book
+   * query on every open of the modal, including the many that never touch Add
+   * Contacts — a cost the unification is not entitled to introduce. This
+   * overlay is conditionally rendered, so its mount IS the moment the picker is
+   * opened, which is exactly when the old private fetch ran.
+   *
+   * Idempotent by contract: `triggerLazyLoad` is a no-op once the half has
+   * loaded, and refreshes bypass it rather than being blocked by it.
+   */
   useEffect(() => {
-    const loadExternalContacts = async () => {
-      if (!userId || externalLoaded) return;
-
-      setExternalLoading(true);
-      try {
-        const result = await window.api.contacts.getAvailable(userId);
-        if (result.success && result.contacts) {
-          const external: ExtendedContact[] = result.contacts.map((c: ExtendedContact) => ({
-            ...c,
-            is_message_derived: true,
-          }));
-          setExternalContacts(external);
-        }
-      } catch (err) {
-        logger.error("Failed to load external contacts:", err);
-      } finally {
-        setExternalLoading(false);
-        setExternalLoaded(true);
-      }
-    };
-
-    loadExternalContacts();
-  }, [userId, externalLoaded]);
+    triggerLazyLoad();
+  }, [triggerLazyLoad]);
 
   // BACKLOG-2405: the deal's EXISTING contacts stay in `contacts` (not stripped)
   // so the two-pane can show them as pre-populated Added chips. The OLD code
@@ -995,9 +1007,13 @@ function Screen2Overlay({
           contactsLoading={loading}
           contactsError={error}
           onRefreshContacts={refreshContacts}
-          onSilentRefreshContacts={silentRefresh}
+          // BACKLOG-2631 — the ONE refresh path, shared with Clients & Contacts and
+          // the new-transaction wizard. Answering a duplicate question here now
+          // re-reads the address-book half too, so the merged-away record leaves
+          // the list without closing the overlay.
+          onRefreshBothLists={refreshBothLists}
           externalContacts={externalContacts}
-          externalContactsLoading={externalLoading}
+          externalContactsLoading={externalContactsLoading}
         />
       </div>
 

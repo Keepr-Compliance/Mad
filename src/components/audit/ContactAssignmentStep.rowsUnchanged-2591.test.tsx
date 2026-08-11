@@ -111,7 +111,7 @@ const defaultProps = {
   contactsLoading: false,
   contactsError: null,
   onRefreshContacts: jest.fn(),
-  onSilentRefreshContacts: jest.fn(),
+  onRefreshBothLists: jest.fn(),
   externalContacts: EXTERNAL,
   externalContactsLoading: false,
 };
