@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useContext, useRef } from "react";
+import React, { useState, useCallback, useContext, useMemo, useRef } from "react";
 import {
   ContactFormModal,
   RemoveConfirmationModal,
@@ -22,6 +22,12 @@ import {
   type ContactTransaction,
 } from "./shared/ContactPreview";
 import type { ContactListAnchor } from "../utils/contactListAnchor";
+import { assembleContacts } from "../utils/contactPickerList";
+import {
+  summariseContactSources,
+  formatContactSourceSummary,
+  type ContactSourceSegment,
+} from "../utils/contactSourceBreakdown";
 import { useContactComms } from "../hooks/useContactComms";
 import { useContactCommViewers } from "../hooks/useContactCommViewers";
 import logger from '../utils/logger';
@@ -351,6 +357,28 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
   // reports (falls back to the raw total below).
   const [visibleCount, setVisibleCount] = useState<number | null>(null);
 
+  /**
+   * BACKLOG-2662 — the header's parenthetical, partitioned from the SAME rows
+   * that produce the count above it.
+   *
+   * It used to be `externalContacts.length` under the hard-coded words "from
+   * Contacts App", which was wrong twice over: it named one provider for records
+   * of every source (the founder's five Outlook records were credited to the Mac
+   * address book), and it counted a DIFFERENT population from the total beside
+   * it — the raw `get-available` array against the filtered, searched, rendered
+   * row count. That mismatch is where his unexplained "1173 against 1171" came
+   * from: the saved half (`contacts:get-all`, which is imported rows PLUS
+   * message-derived pseudo-contacts) is in the total and was in no part of the
+   * breakdown. Reported up from the list, the parts now sum to the total because
+   * they are a partition OF the total.
+   *
+   * `null` until the list reports, exactly like `visibleCount`, and falls back
+   * the same way — see `headerSourceBreakdown` below.
+   */
+  const [visibleSourceBreakdown, setVisibleSourceBreakdown] = useState<
+    ContactSourceSegment[] | null
+  >(null);
+
   // Clear stale imported IDs when a contact is deleted
   // BACKLOG-2367: removed-contacts section state. Open state is lifted here so
   // it survives the list's loading remount — a restore never collapses it.
@@ -388,6 +416,26 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
     externalContactsLoading,
     refreshBothLists,
   } = useContactList(userId, { onContactDeleted: handleContactDeleted });
+
+  /**
+   * BACKLOG-2662 — what the header actually renders.
+   *
+   * The list's report when it has one; otherwise the same partition computed
+   * over `assembleContacts(contacts, externalContacts)` — which is the exact
+   * expression the count beside it falls back to (`contacts.length +
+   * externalContacts.length` is that array's length, since `assembleContacts`
+   * drops only exactly-repeated ids). Total and parts therefore fall back
+   * TOGETHER, and the first paint cannot show a total from one population and a
+   * breakdown from another. Leaving the fallback out would have shown a bare
+   * count for a frame and then grown a parenthetical, which reads as a number
+   * changing under the user.
+   */
+  const headerSourceBreakdown = useMemo(
+    () =>
+      visibleSourceBreakdown ??
+      summariseContactSources(assembleContacts(contacts, externalContacts)),
+    [visibleSourceBreakdown, contacts, externalContacts],
+  );
 
   /**
    * BACKLOG-2367: toasts for the removed-contacts restore path. The rest of this
@@ -1216,10 +1264,12 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
             <h2 className="text-lg sm:text-2xl font-bold text-white">
               Clients &amp; Contacts
             </h2>
-            <p className="text-purple-100 text-xs sm:text-sm">
+            <p
+              className="text-purple-100 text-xs sm:text-sm"
+              data-testid="contacts-header-count"
+            >
               {visibleCount ?? contacts.length + externalContacts.length} contacts
-              {externalContacts.length > 0 &&
-                ` (${externalContacts.length} from Contacts App)`}
+              {formatContactSourceSummary(headerSourceBreakdown)}
             </p>
           </div>
         </div>
@@ -1315,6 +1365,7 @@ function Contacts({ userId, onClose, onOpenTransaction }: ContactsProps) {
               className="h-full"
               compact
               onVisibleCountChange={setVisibleCount}
+              onVisibleSourceBreakdownChange={setVisibleSourceBreakdown}
               // BACKLOG-2459: keep the user's place across open/close, anchored
               // on the contact rather than a scroll offset.
               onAnchorCapture={handleAnchorCapture}
