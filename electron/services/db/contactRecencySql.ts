@@ -58,13 +58,32 @@
  * LAST, whereas `contact_emails` constrained by `contact_id = c.id` is served by
  * a UNIQUE covering index the planner already treats as a cheap entry point.
  *
- * The pin is kept for defence in depth — the external half is the standing proof
- * that "the index will save us" is not a general truth — and it is NOT left as
- * unfalsifiable decoration. `contactRecencySql.queryPlan.test.ts` asserts it
- * carries independent weight by REMOVING the index and checking the plan still
- * refuses to fall back to the mailbox (CROSS: 1,450 ms from contact_emails;
- * plain JOIN: 3,859 ms from emails). Revert these `CROSS JOIN`s and that test,
- * and only that test, goes red.
+ * The pins are kept for defence in depth — the external half is the standing
+ * proof that "the index will save us" is not a general truth. But BE PRECISE
+ * ABOUT WHICH OF THEM A TEST CAN CATCH, because the answer differs per join and
+ * an over-broad claim here is worse than no claim: it teaches the next engineer
+ * to distrust a suite that is working correctly.
+ *
+ *   EMAIL half (`ce_lc` -> `ep_lc` -> `em`) — FALSIFIABLE.
+ *     `contactRecencySql.queryPlan.test.ts` removes
+ *     `idx_email_participants_lower_address` and asserts the plan still refuses
+ *     to fall back to the mailbox (CROSS: 1,450 ms from contact_emails; plain
+ *     JOIN: 3,859 ms from emails). Revert those two `CROSS JOIN`s and that test,
+ *     and only that test, goes red. Confirmed by running exactly that.
+ *
+ *   PHONE half (`cp_lc` -> `plm`) — NOT FALSIFIABLE. THE SUITE CANNOT SEE IT.
+ *     Reverting this one `CROSS JOIN` to a plain `JOIN` leaves every test green,
+ *     and that is correct rather than a weak test: `contact_phones` constrained
+ *     by `contact_id = c.id` resolves through an index regardless of join order,
+ *     so the plan and the timing are IDENTICAL either way. Measured at 1,162
+ *     contacts against a 5,000-row phone cache, all EIGHT combinations of
+ *     {idx_contact_phones_contact_id present / dropped} x {ANALYZE on / off} x
+ *     {JOIN / CROSS JOIN}: always `SEARCH cp_lc USING INDEX ... (contact_id=?)`,
+ *     always 1.1-1.3 ms. Dropping the named index does not change it either —
+ *     the UNIQUE(contact_id, phone_e164) autoindex serves it.
+ *     This pin is therefore DEFENSIVE ONLY, kept for consistency with its
+ *     neighbours. If you revert it and see green, the suite is not failing you;
+ *     there is genuinely nothing there to catch.
  */
 export const IMPORTED_CONTACT_LAST_COMMUNICATION_SQL = `
       NULLIF(

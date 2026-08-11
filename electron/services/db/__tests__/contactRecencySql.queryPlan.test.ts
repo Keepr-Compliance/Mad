@@ -15,22 +15,32 @@
  * (the results were always right). What must be pinned is the JOIN ORDER and the
  * INDEX each probe uses. Hence `EXPLAIN QUERY PLAN`.
  *
- * ## Two regimes, because the fix must not depend on statistics
+ * ## DO NOT COLLAPSE THIS SUITE TO ONE `ANALYZE` REGIME
  *
- * Every case runs twice: with and without `ANALYZE`. This is not thoroughness
- * for its own sake — it is the difference between a real fix and an accident.
- * Measured on this corpus:
+ * Every case runs twice: with and without `ANALYZE`. That doubling reads like
+ * thoroughness for its own sake and it is not — it is the most surprising fact
+ * in this item, and deleting half of it silently deletes the coverage.
  *
- *   - WITH sqlite_stat1, the planner flips to the right order ON ITS OWN once
- *     the expression index exists. Reverting the CROSS JOINs stays FAST and a
- *     test run only in that regime would stay GREEN.
- *   - WITHOUT sqlite_stat1, the expression index alone is worth 1.0x. The
- *     CROSS JOINs are the only thing that moves it.
+ * **The revert control for the email join pin is RED without stats and GREEN
+ * with them.** A suite run only in the `ANALYZE=true` regime would have passed
+ * this entire change with the join pin removed. Measured on this corpus:
  *
- * `ANALYZE` runs only from `maintenanceDbService`, never at startup, so real
- * databases generally have NO stats and the no-ANALYZE regime is the one the
- * founder is in. `matchingIndexUsage.test.ts` (BACKLOG-2621) parameterises the
- * same way for the same reason.
+ *   - WITHOUT sqlite_stat1: the expression index alone is worth 1.0x. The
+ *     CROSS JOINs are the only thing that moves the plan.
+ *   - WITH sqlite_stat1: the planner flips to the right order ON ITS OWN once
+ *     the index exists, so reverting the CROSS JOINs stays fast and stays green.
+ *
+ * **NO-STATS IS THE PRODUCTION REGIME.** `ANALYZE` is not run at startup, on
+ * migration, or on any schedule. Its only caller is `maintenanceDbService.ts:63`
+ * ("Optimize database"), reached from `diagnosticHandlers.ts:386`, reached from
+ * `DataPrivacySettings.tsx:183` — a manual button behind a confirm dialog that a
+ * user may never press. So `sqlite_stat1` is absent on a normal install, the
+ * no-ANALYZE column is the real one, and the regime in which this fix is
+ * load-bearing is the regime every user is actually in.
+ *
+ * `matchingIndexUsage.test.ts` (BACKLOG-2621) parameterises the same way for the
+ * same reason. If you are tempted to simplify either suite to one regime, this
+ * paragraph is the reason not to.
  *
  * ## The schema is the REAL schema.sql
  *
