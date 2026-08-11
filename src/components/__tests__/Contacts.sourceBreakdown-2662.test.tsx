@@ -306,6 +306,51 @@ describe("BACKLOG-2662 — the header names each source with its own count", () 
   });
 
   /**
+   * A DELIBERATE BEHAVIOUR CHANGE OUTSIDE THE REPORTED SYMPTOM — PINNED SO IT
+   * READS AS A CHOICE AND NOT AS AN ACCIDENT.
+   *
+   * The old gate was `externalContacts.length > 0`, so a user with saved
+   * contacts and no address book connected saw a bare `2 contacts`. The gate is
+   * now "any rows at all", and that user sees `2 contacts (2 from Manual)`.
+   *
+   * Chosen for consistency: it is the same sentence the founder already reads
+   * and accepted (`1166 contacts (1166 from Contacts App)`), and suppressing it
+   * would mean special-casing which sources are worth naming — the exact class
+   * of judgement that produced this bug, where one source was quietly decided to
+   * stand for all of them.
+   *
+   * NO CONTROL REVERTS THIS. It is not a defect being fixed, it is a delta being
+   * recorded. Without this test the change is indistinguishable, six months from
+   * now, from someone having dropped the old gate by mistake.
+   */
+  it("names the source even when no address book is connected [DELIBERATE DELTA]", async () => {
+    await renderScreen({
+      saved: [
+        savedRow("saved-1", "Madison Reeves", "manual"),
+        savedRow("saved-2", "Tad Brennan", "manual"),
+      ],
+      available: [],
+    });
+
+    await waitFor(() => {
+      expect(headerText()).toBe("2 contacts (2 from Manual)");
+    });
+  });
+
+  /**
+   * The one state that still says nothing: no contacts at all. Pinned beside the
+   * case above so "no parenthetical" is not read as the general rule for an
+   * empty address book.
+   */
+  it("says nothing about sources when there are no contacts at all", async () => {
+    await renderScreen({ saved: [], available: [] });
+
+    await waitFor(() => {
+      expect(headerText()).toBe("0 contacts");
+    });
+  });
+
+  /**
    * The header's total already honoured search and filters; its parenthetical
    * did not. Pinned because it is the second half of the same defect and the
    * cheapest way for it to come back.
