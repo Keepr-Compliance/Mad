@@ -27,10 +27,14 @@
  * ===========================================================================
  * `ignored_at` is sorted as a STRING by four queries
  * (`communicationDbService` getIgnoredCommunicationsBy{Transaction,User}, and
- * `emailLinkingHandlers.ts:634/693`). A space (0x20) sorts before a `T` (0x54),
- * so writing ISO into a column that already holds naive rows would silently
- * reorder same-day rows, and backfilling the old rows is not safe. The renderers
- * were taught to read the naive shape instead (`parseDbTimestamp`); this write
+ * `emailLinkingHandlers.ts:634/693`), and `removed_at` by two more.
+ *
+ * A space (0x20) sorts before a `T` (0x54). Measured against real SQLite during
+ * SR review (BACKLOG-2632): with both shapes in one column, `ORDER BY ... DESC`
+ * puts EVERY ISO row above EVERY naive row regardless of time — an ISO 01:00
+ * outranks a naive 23:00. It does not reorder within a day; it INVERTS the
+ * column. Backfilling the old rows is not safe either, so the renderers were
+ * taught to read the naive shape instead (`parseDbTimestamp`) and this write
  * site only had to stop disagreeing with itself.
  *
  * `dbRun` is mocked, so this suite never loads the native sqlite binary and runs
@@ -48,6 +52,7 @@ jest.mock("../core/dbConnection", () => ({
 }));
 
 import { addIgnoredCommunication } from "../communicationDbService";
+import type { NewIgnoredCommunication } from "../../../types";
 import { dbTimestampNow } from "../../../utils/dbTimestamp";
 
 /** The INSERT's SQL text and bound params from the single dbRun call. */
@@ -66,7 +71,20 @@ function columnIndex(sql: string, column: string): number {
   return index;
 }
 
-const NEW_IGNORED = {
+/**
+ * TRANSCRIBED from the richest real caller, `transactionService.ts:1600-1615`.
+ *
+ * The first version of this fixture used `null` for the optional string fields.
+ * No caller does that — `NewIgnoredCommunication` types them `string | undefined`
+ * and all three call sites (`transactionService.ts:1600`, `:2166`, `:2196`) pass
+ * a string or omit the key entirely, with `thread_id: siblingRec.thread_id ||
+ * undefined` and `match_reason: sibling.match_reason ?? undefined` written
+ * explicitly to avoid null. The invented shape described a state the production
+ * code cannot emit, and `tsc -p tsconfig.test.json` rejected it (BACKLOG-2632
+ * SR review). `undefined` here, and the writer's own `data.x || null` still turns
+ * it into a NULL bind — so no assertion below changes.
+ */
+const NEW_IGNORED: NewIgnoredCommunication = {
   user_id: "user-2632",
   transaction_id: "txn-2632",
   email_subject: "Closing disclosure",
@@ -74,9 +92,22 @@ const NEW_IGNORED = {
   email_sent_at: "2026-08-10T00:30:00.000Z",
   thread_id: "thread-2632",
   email_id: "email-2632",
-  original_communication_id: null,
-  reason: null,
-  match_reason: null,
+  original_communication_id: "comm-2632",
+  reason: "Manually unlinked by user",
+  match_reason: "user_confirmed",
+};
+
+/**
+ * TRANSCRIBED from `transactionService.ts:2166` — the minimal caller, which
+ * OMITS every optional key rather than passing a falsy value. Included because
+ * `ignored_at` must be bound explicitly on that path too: it is the path where
+ * leaning on `DEFAULT CURRENT_TIMESTAMP` would be easiest to reintroduce.
+ */
+const MINIMAL_IGNORED: NewIgnoredCommunication = {
+  user_id: "user-2632",
+  transaction_id: "txn-2632",
+  thread_id: "thread-2632",
+  reason: "Manually unlinked by user",
 };
 
 describe("dbTimestampNow", () => {
@@ -124,7 +155,8 @@ describe("Control 3 — addIgnoredCommunication persists what it returns", () =>
     const returned = await addIgnoredCommunication(NEW_IGNORED);
 
     // `ORDER BY ignored_at DESC` is a string sort. An ISO value here would sort
-    // above every same-day naive row regardless of its actual time.
+    // above every naive row in the column, at any time of day — measured, not
+    // reasoned: a `T` (0x54) beats a space (0x20) at the separator position.
     expect(returned.ignored_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
     expect(returned.ignored_at).not.toContain("T");
     expect(returned.ignored_at).not.toContain("Z");
@@ -141,6 +173,17 @@ describe("Control 3 — addIgnoredCommunication persists what it returns", () =>
 
     expect(placeholderCount).toBe(columnCount);
     expect(params).toHaveLength(columnCount);
+  });
+
+  it("binds ignored_at on the minimal caller path too, which omits every optional key", async () => {
+    const returned = await addIgnoredCommunication(MINIMAL_IGNORED);
+
+    const { sql, params } = capturedInsert();
+    expect(params[columnIndex(sql, "ignored_at")]).toBe(returned.ignored_at);
+    expect(returned.ignored_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    // The omitted keys still bind NULL via the writer's `data.x || null`.
+    expect(params[columnIndex(sql, "email_id")]).toBeNull();
+    expect(params[columnIndex(sql, "original_communication_id")]).toBeNull();
   });
 
   it("still carries the other fields through unchanged", async () => {

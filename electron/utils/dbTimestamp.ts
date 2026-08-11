@@ -8,13 +8,17 @@
  *
  *     2026-08-10 22:09:57
  *
- * Every existing row in those columns carries that shape, and several queries
- * sort those columns as **strings** (`ORDER BY ignored_at DESC`,
- * `ORDER BY c.removed_at DESC`, `ORDER BY tc.removed_at DESC`). A space (0x20)
- * sorts before a `T` (0x54), so writing `toISOString()` into a column that
- * already holds naive rows silently reorders same-day rows. Backfilling the old
- * rows is not an option either — a naive value written at an unknown clock
- * offset is not safely convertible.
+ * Every existing row in those columns carries that shape, and six queries sort
+ * those columns as **strings** (`ORDER BY ignored_at DESC`,
+ * `ORDER BY c.removed_at DESC`, `ORDER BY tc.removed_at DESC`, and
+ * `emailLinkingHandlers.ts:634/693`).
+ *
+ * A space (0x20) sorts before a `T` (0x54). Measured against real SQLite during
+ * SR review: with both shapes present, `ORDER BY ... DESC` puts EVERY ISO row
+ * above EVERY naive row regardless of time — an ISO 01:00 outranks a naive
+ * 23:00. Writing `toISOString()` into these columns does not reorder within a
+ * day, it INVERTS the column. Backfilling the old rows is not an option either
+ * — a naive value written at an unknown clock offset is not safely convertible.
  *
  * So the format stays naive-UTC and the RENDERERS learned to read it
  * (`parseDbTimestamp` in `src/utils/dateFormatters.ts`). This helper exists for
