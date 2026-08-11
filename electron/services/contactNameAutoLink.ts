@@ -71,12 +71,43 @@
  * "John A. Smith" requires dropping the "A", which is removing a token. The
  * looser reading can be adopted later by one change here; the merges the looser
  * reading would have made cannot be undone later. FLAGGED FOR THE FOUNDER.
+ *
+ * ===========================================================================
+ * A CONTACT ON A FILED AUDIT IS NEVER LINKED BY THIS RULE — BACKLOG-2666
+ * ===========================================================================
+ * This rule is AUTOMATIC, and the founder's standing rule for the epic is
+ * "manual ungated, auto gated": a person may do what they like to their own
+ * contacts, the machine must ask before acting. Until BACKLOG-2666 this file
+ * contained no freeze check at all — it honoured a prior "different people"
+ * verdict and nothing about whether the contact's details had already gone out
+ * in an exported audit.
+ *
+ * It was the THIRD route past that guard found in one evening. The other two:
+ * the linker's content fallback, which refuses correctly
+ * (`contactSourceLinker.ts` — it files a `frozen_audit_contact` question); and
+ * the backfill's content fallback, which copied values with no link at all
+ * (BACKLOG-2664, gated inside `CONTACT_SOURCE_RECORDS_SQL`). Three doors, and
+ * only the first one was locked.
+ *
+ * The refusal here FILES THE SAME QUESTION the content path files, rather than
+ * going quiet: the pair is still probably one person, and a rule that silently
+ * dropped it would leave the user with no way to reach a link the freeze is not
+ * actually an objection to. A human answering that question links through
+ * `contactLinkReview.confirmProposal`, which is manual and therefore ungated —
+ * which is the whole shape of the rule.
  */
 
 import { dbAll } from "./db/core/dbConnection";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import { createLink, findContactIdBySourceRecord } from "./db/contactSourceLinkDbService";
 import { hasCannotLink, type LinkProposalReason } from "./db/contactLinkReviewDbService";
+// BACKLOG-2666 — the LEAF, deliberately, not `contactSourceLinker`'s re-export.
+// The predicate itself is one string in `db/frozenContactSql.ts` (BACKLOG-2664)
+// and this function is one of its two consumers, so the gate here cannot drift
+// from the gate in the backfill query. Importing the linker instead would
+// rebuild the require cycle that leaf module exists to prevent
+// (`contactSourceLinker` -> `contactSourceValues` -> `contactSourceLinker`).
+import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
 import { sourceFamily } from "./contactLinkEvidence";
 import { applyLinkedSourceValues } from "./contactSourceValues";
 import logService from "./logService";
@@ -346,6 +377,15 @@ export interface NameAutoLinkSummary {
   askOverflow: number;
   /** Pairs skipped because the user has already said "different people". */
   barredByVerdict: number;
+  /**
+   * Auto-links refused because the contact appears on an EXPORTED audit
+   * (BACKLOG-2666). Counted separately from `barredByVerdict` because the two
+   * mean opposite things: a verdict is the user having decided, a freeze is the
+   * user never having been asked. Each of these also produces a question, so
+   * these rows appear in `asked`/`askPairs` too unless the per-pass cap was
+   * already spent.
+   */
+  barredByFreeze: number;
   /** Exact actions taken, for assertions. */
   actions: AutoLinkAction[];
   /** Exact pairs handed to the queue, for assertions. */
@@ -383,8 +423,30 @@ export function runUniqueNameAutoLink(
     asked: 0,
     askOverflow: 0,
     barredByVerdict: 0,
+    barredByFreeze: 0,
     actions: [],
     askPairs: [],
+  };
+
+  /**
+   * File one question, honouring the per-pass cap.
+   *
+   * Shared by the ask band and by the frozen-contact refusal (BACKLOG-2666) so
+   * the cap, the accounting and the callback cannot disagree between them. A
+   * refusal that skipped the cap would be a second, uncounted queue producer —
+   * which is exactly the thing this rule was already criticised for being once.
+   */
+  const emitAsk = (
+    pair: AskPair,
+    ctx: { reason: LinkProposalReason; holderCount: number; displayName: string },
+  ): void => {
+    if (summary.asked >= NAME_ASK_CAP_PER_PASS) {
+      summary.askOverflow++;
+      return;
+    }
+    summary.asked++;
+    summary.askPairs.push({ ...pair, ...ctx });
+    onAsk?.(pair, ctx);
   };
 
   const groups = collectNameGroups(userId);
@@ -401,6 +463,26 @@ export function runUniqueNameAutoLink(
         // constraint that only bound one route would not be a constraint.
         if (hasCannotLink(userId, contactId, sourceType, sourceRecordId)) {
           summary.barredByVerdict++;
+          break;
+        }
+        // BACKLOG-2666 — a contact whose details went out in a filed audit is
+        // never bound by a rule the user did not run. Placed AFTER the verdict
+        // check on purpose: a pair the user has already called different people
+        // must not come back as a question just because the contact is frozen.
+        //
+        // Refuse the link, refuse the copy, ASK. The content fallback files the
+        // same reason from `contactSourceLinker`, so the queue renders one
+        // sentence for both routes and answering it links by hand.
+        if (isContactOnFrozenTransaction(contactId)) {
+          summary.barredByFreeze++;
+          emitAsk(
+            { contactId, sourceType, sourceRecordId },
+            {
+              reason: "frozen_audit_contact",
+              holderCount: decision.holderCount,
+              displayName: group.displayName,
+            },
+          );
           break;
         }
         const result = createLink({
@@ -434,18 +516,11 @@ export function runUniqueNameAutoLink(
             summary.barredByVerdict++;
             continue;
           }
-          if (summary.asked >= NAME_ASK_CAP_PER_PASS) {
-            summary.askOverflow++;
-            continue;
-          }
-          summary.asked++;
-          const ctx = {
+          emitAsk(pair, {
             reason: decision.reason,
             holderCount: decision.holderCount,
             displayName: group.displayName,
-          };
-          summary.askPairs.push({ ...pair, ...ctx });
-          onAsk?.(pair, ctx);
+          });
         }
         break;
       }
