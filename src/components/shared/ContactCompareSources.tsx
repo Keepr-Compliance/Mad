@@ -27,14 +27,27 @@ import type {
  * row below it out of line with its neighbours.
  *
  * ===========================================================================
- * TWO CELL TREATMENTS COME STRAIGHT FROM FOUNDER DECISION D5 (2026-08-06)
+ * TWO CELL TREATMENTS COME STRAIGHT FROM FOUNDER DECISION D5 (2026-08-06),
+ * AND THEY BELONG TO A RECORD THAT BELONGS TO NOBODY
  * ===========================================================================
- *   Transactions, on a source record  -> "not a contact yet", muted italic.
- *   Recent communication, on a source -> that record's OWN messages, under a
- *                                        heading tagged "not linked".
- * Neither is a placeholder for missing data. A source record genuinely has no
- * transactions — only the saved contact does — and its messages genuinely are
- * not attributed to the contact yet.
+ *   Transactions, on a PROPOSED record  -> "not a contact yet", muted italic.
+ *   Recent communication, on a PROPOSED -> that record's OWN messages, under a
+ *                                          heading tagged "not linked".
+ * Neither is a placeholder for missing data. A record no contact has claimed
+ * genuinely is on no deals, and its messages genuinely are not attributed to
+ * anybody yet.
+ *
+ * BACKLOG-2628 — THE DISCRIMINATOR IS `proposed`, NOT `source`, AND THAT IS THE
+ * WHOLE FIX. Both treatments used to hang off `kind === "source"`, which is the
+ * same boolean that draws the `linked record` tag and the `Unlink` button. So a
+ * record the user had just confirmed as the same person read: `linked record`,
+ * `Unlink` — and, two rows down, "not a contact yet" and "not linked". One
+ * column, two opposite claims about one record.
+ *
+ * Once a record IS linked both rows say the plainest true thing instead: the
+ * contact's transactions (it is on those deals, through the contact), and its
+ * own messages with no tag (they reach the contact now — that is what linking
+ * did). D5 is not overturned; it keeps the case it was written for.
  */
 
 const FIELD_LABELS = {
@@ -47,15 +60,19 @@ const FIELD_LABELS = {
 
 /** The literal the mock uses for a value a record does not carry. */
 const NONE = "none";
-/** D5, verbatim. A source record has no transactions of its own. */
+/** D5, verbatim. A record no contact has claimed is on no deals. */
 const NOT_A_CONTACT_YET = "not a contact yet";
 /** D5, verbatim. */
 const NOT_LINKED = "not linked";
 /**
  * BACKLOG-2502 — the review queue's candidate. Deliberately NOT the same string
- * as `NOT_LINKED` above, which sits on a source column's communication heading
- * and is about the messages rather than the record. Two different claims must
- * not share one word.
+ * as `NOT_LINKED` above, which is about that record's MESSAGES rather than the
+ * record itself. Two different claims must not share one word.
+ *
+ * Since BACKLOG-2628 both appear on the same column — this one in the header,
+ * `NOT_LINKED` on the communication heading — so the distinction is now visible
+ * rather than merely stated. That is not a duplication to collapse: the header
+ * says the RECORD is unclaimed, the heading says those MESSAGES reach nobody.
  */
 const NOT_LINKED_YET = "not linked yet";
 
@@ -207,7 +224,18 @@ const Column: React.FC<{
   onUnlinkSource?: (linkId: string) => void;
   unlinkingLinkId?: string | null;
 }> = ({ column, onUnlinkSource, unlinkingLinkId }) => {
+  /** Linked. Draws the amber column, the `linked record` tag and `Unlink`. */
   const isSource = column.kind === "source";
+  /**
+   * Claimed by nobody — the review queue's candidate, and the ONLY column the
+   * two D5 treatments belong on (BACKLOG-2628).
+   *
+   * Kept as its own boolean rather than folded into the JSX conditions: these
+   * two rows and `isSource`'s three affordances answer opposite questions, and
+   * one column previously read both ways because a single boolean was asked
+   * both.
+   */
+  const isProposed = column.kind === "proposed";
 
   return (
     <div
@@ -275,14 +303,25 @@ const Column: React.FC<{
       <Row
         testId={`compare-row-transactions-${column.linkId}`}
         values={column.transactions.map((value) => ({ value, matched: false }))}
-        // D5: on a source record this is a statement, not an empty state.
-        emptyText={isSource ? NOT_A_CONTACT_YET : NONE}
+        /*
+          D5: on a record NOBODY has claimed this is a statement, not an empty
+          state. On a linked record the cell prints the contact's deals — it is
+          on them, through the contact — and falls back to the ordinary "none"
+          when the contact is on none (BACKLOG-2628).
+        */
+        emptyText={isProposed ? NOT_A_CONTACT_YET : NONE}
       />
 
       <div className="mt-3 pt-2 border-t border-gray-200">
         <SectionHeading>
           Recent communication
-          {isSource && (
+          {/*
+            D5's tag, on the column it was written for. A LINKED record's
+            messages reach the contact — that is what linking did — so tagging
+            them "not linked" contradicted the `linked record` tag in the same
+            column's header (BACKLOG-2628).
+          */}
+          {isProposed && (
             <span
               data-testid={`compare-notlinked-${column.linkId}`}
               className="font-sans text-[10px] font-bold uppercase tracking-wide rounded px-1 py-px bg-amber-50 text-amber-800 border border-amber-300"
