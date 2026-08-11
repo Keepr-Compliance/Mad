@@ -59,7 +59,10 @@ import { getContactCompareColumns, confirmContactSources } from "../contactCompa
 import { createLink } from "../db/contactSourceLinkDbService";
 import { recordContactOrigin, originRecordId } from "../db/contactOriginLink";
 import { showSourcesPanel } from "../../../src/utils/contactSourceAffordances";
-import { getContactProvenance } from "../contactProvenance";
+// BACKLOG-2628 control #4 — the REAL unlink. It writes the `different_people`
+// verdict and takes back the record's copied values in one transaction; a
+// hand-rolled DELETE would describe a state the app never reaches.
+import { getContactProvenance, unlinkContactSource } from "../contactProvenance";
 import { proposeLink } from "../db/contactLinkReviewDbService";
 import { countReviewQueue, getReviewQueue } from "../contactLinkReview";
 import { canUnlinkSource } from "../../../src/utils/contactSourceAffordances";
@@ -456,6 +459,8 @@ describe("founder decision D5 — what a source column shows", () => {
   /** Set by the fixture so every assertion selects a column BY ID. */
   let macLinkId = "";
   let outlookLinkId = "";
+  /** BACKLOG-2628 control #3 — a link the user made BY HAND, not by matching. */
+  let manualLinkId = "";
 
   beforeEach(() => {
     addContact("d5", "Paul Dorian", {
@@ -475,6 +480,20 @@ describe("founder decision D5 — what a source column shows", () => {
       company: "Example Realty",
     });
     outlookLinkId = link("d5", "outlook", "out-d5", "email");
+    /*
+      BACKLOG-2628 control #3 — LINKED BY HAND.
+
+      `manual` is a `ContactMatchMethod`, not a source: the user searched for
+      this record and attached it. The two above were attached by the matcher on
+      a phone and an email. The wording must key off BEING linked, so all three
+      read the same — and `match_method` is the only thing that differs.
+
+      NOT `source_id`: that method is what column 1 absorbs, so such a record
+      never renders as a column of its own and the control would be asserting
+      about a column that is not on screen.
+    */
+    addExternal("goo-d5", "Paul Dorian", "google_contacts", { emails: [SHARED_EMAIL] });
+    manualLinkId = link("d5", "google_contacts", "goo-d5", "manual");
 
     addTransaction("txn-1", "571 Dale St N", "d5");
 
@@ -489,13 +508,84 @@ describe("founder decision D5 — what a source column shows", () => {
     addText("tx-2", "Re: inspection scheduling", "2026-08-02T09:00:00Z", SHARED_PHONE);
   });
 
-  it("a source record's Transactions cell is empty — the renderer writes 'not a contact yet'", async () => {
+  /**
+   * BACKLOG-2628 CONTROL #1b — A LINKED RECORD IS ON THE CONTACT'S DEALS.
+   *
+   * This test used to assert the opposite (`source.transactions` is `[]`, "the
+   * renderer writes 'not a contact yet'"). That WAS D5's reading, and the
+   * founder saw where it led: a column tagged `linked record`, offering
+   * `Unlink`, whose Transactions cell said the record belonged to nobody.
+   *
+   * CONTROL, run: put `transactions: [] as string[]` back on the source-row
+   * mapping in `contactCompare.ts` and this goes red on the address.
+   *
+   * The assertion names the VALUE, never the absence of a string — an
+   * `expect(...).not.toContain(<any wording>)` would pass just as happily
+   * against `[]`, which is the state being fixed. The wording itself belongs to
+   * the renderer and is pinned in `ContactCompareSources.test.tsx`; it has
+   * changed twice since D5 and this suite is deliberately indifferent to it.
+   */
+  it("a linked record carries the contact's transactions — it is on those deals, through the contact", async () => {
     const view = await getContactCompareColumns(USER, "d5");
-    const source = view!.columns.find((c) => c.kind === "source")!;
+    const source = view!.columns.find((c) => c.linkId === outlookLinkId)!;
 
-    expect(source.transactions).toEqual([]);
-    // and the contact's column carries the real one
+    expect(source.kind).toBe("source");
+    expect(source.transactions).toEqual(["571 Dale St N"]);
+    // and the contact's own column carries the same deal, because it is one deal
     expect(view!.columns[0].transactions).toEqual(["571 Dale St N"]);
+  });
+
+  /**
+   * BACKLOG-2628 CONTROL #3 — THE WORDING KEYS OFF LINK STATE, NOT OFF HOW THE
+   * LINK WAS MADE.
+   *
+   * Three records on one contact: attached on a matching phone, on a matching
+   * email, and BY HAND. All three are linked, so all three read as linked. If
+   * anything ever gates this on `match_method` — "only records the user chose
+   * are really linked" is the plausible mistake — this table separates them.
+   *
+   * EXACT ID SET, not a count: a count of 3 would pass while the manual link
+   * rendered as some other column.
+   */
+  it("a hand-made link and a matcher-made link both read as linked", async () => {
+    const view = await getContactCompareColumns(USER, "d5");
+    const byId = new Map(view!.columns.map((c) => [c.linkId, c]));
+
+    expect(new Set(byId.keys())).toEqual(
+      new Set([view!.columns[0].linkId, macLinkId, outlookLinkId, manualLinkId]),
+    );
+    for (const linkId of [macLinkId, outlookLinkId, manualLinkId]) {
+      expect({ linkId, kind: byId.get(linkId)!.kind, txns: byId.get(linkId)!.transactions }).toEqual(
+        { linkId, kind: "source", txns: ["571 Dale St N"] },
+      );
+    }
+  });
+
+  /**
+   * BACKLOG-2628 — a linked record on a contact with NO deals reads the ordinary
+   * empty state, not the unlinked statement.
+   *
+   * The `emptyText` branch is the renderer's, so what this pins is the input it
+   * branches on: `[]` reaching a `source` column must come from the contact
+   * genuinely being on no transactions, and NOT from the hard-coded `[]` this
+   * item removed. Those two are indistinguishable in the payload, which is why
+   * the test above asserts the populated case by value.
+   */
+  it("a linked record on a contact with no deals carries no transactions", async () => {
+    // `robin marsh` is on this repo's FICTIONAL_NAMES allow-list
+    // (`scripts/ci/check-fixture-pii.mjs`) — the repo is public and the name
+    // shares a line with an address here.
+    addContact("d5b", "Robin Marsh");
+    origin("d5b", "contacts_app");
+    addExternal("out-d5b", "Robin Marsh", "outlook", { emails: ["robin@example.net"] });
+    const linkId = link("d5b", "outlook", "out-d5b", "email");
+
+    const view = await getContactCompareColumns(USER, "d5b");
+    const source = view!.columns.find((c) => c.linkId === linkId)!;
+
+    expect(source.kind).toBe("source");
+    expect(source.transactions).toEqual([]);
+    expect(view!.columns[0].transactions).toEqual([]);
   });
 
   /**
@@ -1066,6 +1156,76 @@ describe("the proposed column", () => {
   it("leaves the view untouched when no candidate is passed", async () => {
     const plain = await getContactCompareColumns(USER, "pc");
     expect(plain!.columns.map((c) => c.kind)).toEqual(["contact", "source"]);
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2628 — THE ROUND TRIP
+// ===========================================================================
+
+/**
+ * CONTROL #4 — a record that was linked and then UNLINKED returns to the
+ * unlinked wording.
+ *
+ * WHY THIS IS A SERVICE TEST AND NOT A RENDERER ONE. Unlinking does not change
+ * a column's wording; it removes the column. The record only becomes VISIBLE
+ * again as the queue's candidate, and it is the same record either way — so the
+ * only place the round trip can be observed is here, where `kind` is decided.
+ * A renderer test would just be controls #1 and #2 again with a different name.
+ *
+ * THROUGH THE REAL `unlinkContactSource`, not a `DELETE FROM
+ * contact_source_links`. A hand-rolled delete would leave out the
+ * `different_people` verdict and the value take-back that the real path writes
+ * in the same transaction, and this test's whole claim is about what the app
+ * does — the shape of a state it can actually reach.
+ */
+describe("linked, then unlinked, reads as unlinked again", () => {
+  it("the same record goes source -> gone -> proposed, and its transactions with it", async () => {
+    addContact("rt", "Paul Dorian", { phones: [SHARED_PHONE] });
+    origin("rt", "contacts_app");
+    // Two attached records, so unlinking one still leaves something to compare
+    // and the view does not collapse to null for an unrelated reason.
+    addExternal("mac-rt", "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+    link("rt", "macos", "mac-rt", "phone");
+    addExternal("out-rt", "Paul Dorian", "outlook", { emails: [SHARED_EMAIL] });
+    const outLinkId = link("rt", "outlook", "out-rt", "email");
+    addTransaction("txn-rt", "571 Dale St N", "rt");
+
+    // ---- linked -----------------------------------------------------------
+    const linked = await getContactCompareColumns(USER, "rt");
+    const asSource = linked!.columns.find((c) => c.linkId === outLinkId)!;
+    expect({ kind: asSource.kind, txns: asSource.transactions }).toEqual({
+      kind: "source",
+      txns: ["571 Dale St N"],
+    });
+
+    // ---- unlinked, through the shipped path --------------------------------
+    expect(unlinkContactSource(USER, "rt", outLinkId).ok).toBe(true);
+
+    const detached = await getContactCompareColumns(USER, "rt");
+    // Gone from the comparison entirely — EXACT id set, so a column merely
+    // renamed or re-keyed would fail here rather than pass a count.
+    expect(new Set(columnIds(detached))).toEqual(
+      new Set(detached!.columns.filter((c) => c.linkId !== outLinkId).map((c) => c.linkId)),
+    );
+    expect(columnIds(detached)).not.toContain(outLinkId);
+
+    // ---- offered back as the queue's candidate ------------------------------
+    const proposed = await getContactCompareColumns(USER, "rt", {
+      sourceType: "outlook",
+      sourceRecordId: "out-rt",
+    });
+    const asProposed = proposed!.columns.find(
+      (c) => c.linkId === "proposed:outlook:out-rt",
+    )!;
+    // The unimported wording's INPUT, restored: nobody has imported it, so it
+    // is on no deals, and the renderer writes "not imported yet" over this `[]`.
+    expect({ kind: asProposed.kind, txns: asProposed.transactions }).toEqual({
+      kind: "proposed",
+      txns: [],
+    });
+    // The contact still holds the deal — the record left, the transaction did not.
+    expect(proposed!.columns[0].transactions).toEqual(["571 Dale St N"]);
   });
 });
 

@@ -103,7 +103,17 @@ export interface ContactCompareColumn {
   emails: CompareValue[];
   phones: CompareValue[];
   company: string | null;
-  /** Kind "source" is ALWAYS empty — a source record has no transactions. */
+  /**
+   * The deals this column's person is on.
+   *
+   * `"contact"` and `"source"` both carry THE CONTACT'S transactions, because a
+   * linked record is on those deals — through the contact it belongs to
+   * (BACKLOG-2628). Only `"proposed"` is empty, and it is empty for a reason the
+   * renderer states in words: nobody has imported that record yet.
+   *
+   * No column ever carries transactions "of its own". Deals hang off contacts;
+   * an `external_contacts` row is never a party to one.
+   */
   transactions: string[];
   recentCommunication: CompareCommItem[];
   /** False when the crosswalk row outlived its `external_contacts` row. */
@@ -613,6 +623,18 @@ export async function getContactCompareColumns(
   const contactEmails = getContactEmailEntries(contactId).map((e) => e.email);
   const contactPhones = getContactPhoneEntries(contactId).map((p) => p.phone);
   const transactions = await getTransactionsByContact(contactId);
+  /**
+   * The contact's deals, addressed. ONE projection, read by column 1 and by
+   * every LINKED record's column (BACKLOG-2628).
+   *
+   * Hoisted rather than repeated: the defect this fixes was one screen making
+   * two different claims about one record, and two `.map(...).filter(...)`
+   * expressions is how that comes back. A record that is linked is on these
+   * deals; there is no second list to derive.
+   */
+  const transactionAddresses = transactions
+    .map((t) => t.property_address)
+    .filter((a): a is string => !!a);
 
   /*
     THE UNION, NOT THE FIRST ONE FOUND.
@@ -693,7 +715,7 @@ export async function getContactCompareColumns(
       emails: collapsedEmails,
       phones: collapsedPhones,
       company: collapsedCompany,
-      transactions: transactions.map((t) => t.property_address).filter((a): a is string => !!a),
+      transactions: transactionAddresses,
       sourceRecordPresent: true,
     },
     ...sourceRows.map((r) => ({
@@ -704,10 +726,22 @@ export async function getContactCompareColumns(
       emails: dedupeEmailValues(parseValueArray(r.ec_emails_json)),
       phones: dedupePhoneValues(parseValueArray(r.ec_phones_json)),
       company: r.ec_company?.trim() || null,
-      // A source record has no transactions of its own — only the saved contact
-      // does. FOUNDER DECISION D5: the cell says so in words rather than sitting
-      // empty, and the renderer owns that string.
-      transactions: [] as string[],
+      /*
+        A LINKED RECORD IS ON THE CONTACT'S DEALS (BACKLOG-2628).
+
+        This was `[]`, under FOUNDER DECISION D5's reading that a source record
+        "has no transactions of its own". That sentence is still true and is no
+        longer the right one to act on: the founder saw a column tagged `linked
+        record`, offering `Unlink`, whose Transactions cell read "not a contact
+        yet" two rows below — one column asserting two opposite things about one
+        record. D5's wording was written for a record belonging to NOBODY, and it
+        keeps that job on the `proposed` column below.
+
+        A linked record does not hold deals independently; it is on these deals,
+        through the contact. That is what the same list in both columns says, and
+        it is what linking did.
+      */
+      transactions: transactionAddresses,
       sourceRecordPresent: !!r.ec_id,
     })),
   ];
@@ -733,6 +767,22 @@ export async function getContactCompareColumns(
       emails: dedupeEmailValues(parseValueArray(proposedRecord.emails_json)),
       phones: dedupePhoneValues(parseValueArray(proposedRecord.phones_json)),
       company: proposedRecord.company?.trim() || null,
+      /*
+        EMPTY, AND THE ONLY COLUMN THAT IS (BACKLOG-2628).
+
+        Nobody has imported this record, so it is not a party to a deal — the
+        renderer writes "not imported yet" over this emptiness, which is the
+        statement it carries. Do not "fix" this to match the source rows above:
+        they are linked and this one is not, and that difference is the entire
+        question this screen asks.
+
+        A LOOKUP THROUGH THE CONTACT THAT CLAIMS THIS RECORD WAS BUILT AND
+        DISCARDED (11 Aug). It is genuinely reachable — `duplicate_source_record`
+        (`contactSourceLinker.ts:678`) proposes records another contact holds,
+        and `contactLinkReview.ts:360` handles confirming one — so the query
+        would have had real answers. The founder chose the static label over it.
+        Recorded so nobody rebuilds it from the intermediate decision.
+      */
       transactions: [] as string[],
       sourceRecordPresent: true,
     });

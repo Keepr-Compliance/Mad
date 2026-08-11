@@ -27,14 +27,27 @@ import type {
  * row below it out of line with its neighbours.
  *
  * ===========================================================================
- * TWO CELL TREATMENTS COME STRAIGHT FROM FOUNDER DECISION D5 (2026-08-06)
+ * THREE LABELS ON A CANDIDATE COLUMN, AND THEY ALL SAY "not imported yet"
  * ===========================================================================
- *   Transactions, on a source record  -> "not a contact yet", muted italic.
- *   Recent communication, on a source -> that record's OWN messages, under a
- *                                        heading tagged "not linked".
- * Neither is a placeholder for missing data. A source record genuinely has no
- * transactions — only the saved contact does — and its messages genuinely are
- * not attributed to the contact yet.
+ *   the column header pill               -> "not imported yet"
+ *   Transactions, on a PROPOSED record   -> "not imported yet", muted italic
+ *   Recent communication, on a PROPOSED  -> that record's OWN messages, under a
+ *                                           heading tagged "not imported yet"
+ * None is a placeholder for missing data: they are one statement about one
+ * state, repeated where the eye lands. Founder, 11 Aug — see `NOT_IMPORTED_YET`
+ * for the four positions this wording passed through and why this is the last.
+ *
+ * BACKLOG-2628 — THE DISCRIMINATOR IS `proposed`, NOT `source`, AND THAT IS THE
+ * WHOLE FIX. Both treatments used to hang off `kind === "source"`, which is the
+ * same boolean that draws the `linked record` tag and the `Unlink` button. So a
+ * record the founder had just confirmed as the same person read: `linked
+ * record`, `Unlink` — and, two rows down, that it belonged to nobody. One
+ * column, two opposite claims about one record.
+ *
+ * Once a record IS linked both rows say the plainest true thing instead: the
+ * contact's transactions (it is on those deals, through the contact), and its
+ * own messages with no tag (they reach the contact now — that is what linking
+ * did).
  */
 
 const FIELD_LABELS = {
@@ -47,17 +60,46 @@ const FIELD_LABELS = {
 
 /** The literal the mock uses for a value a record does not carry. */
 const NONE = "none";
-/** D5, verbatim. A source record has no transactions of its own. */
-const NOT_A_CONTACT_YET = "not a contact yet";
-/** D5, verbatim. */
-const NOT_LINKED = "not linked";
 /**
- * BACKLOG-2502 — the review queue's candidate. Deliberately NOT the same string
- * as `NOT_LINKED` above, which sits on a source column's communication heading
- * and is about the messages rather than the record. Two different claims must
- * not share one word.
+ * ONE PHRASE FOR ONE STATE: a candidate record nobody has imported.
+ *
+ * FOUNDER DECISION, 11 Aug (BACKLOG-2628), after seeing the screen live:
+ * *"unify them, not imported yet is clearer."* He was looking at a single
+ * candidate column saying three things about one state — `not linked yet` in
+ * the header, `not imported yet` on Transactions, `not linked` on the
+ * communication heading. ONE STATE SHOULD NOT HAVE THREE NAMES.
+ *
+ * THE COMPLETE HISTORY OF THIS WORDING, so no later reader restores a
+ * superseded decision believing it is live. Four positions in five days, each
+ * deliberate:
+ *
+ *   D5, 6 Aug    "not a contact yet" (Transactions) + "not linked"
+ *                (messages) + "not linked yet" (header)        SUPERSEDED
+ *   11 Aug #2    Transactions -> a real lookup through the owning
+ *                contact, else "none"                          SUPERSEDED
+ *                (built, then reverted — see `contactCompare.ts`)
+ *   11 Aug #3    Transactions -> "not imported yet"; the other
+ *                two left alone                                SUPERSEDED
+ *   11 Aug #4    ALL THREE -> "not imported yet"               THIS
+ *
+ * Why this is the one that lasts: IMPORT is the word the founder uses for the
+ * action that turns an address-book record into a contact, so the label names
+ * what the user actually DOES. Each superseded phrase described an internal
+ * state instead — whether a crosswalk row exists ("not linked"), or whether the
+ * record has become a contact ("not a contact yet").
+ *
+ * THREE RENDER SITES, ONE CONSTANT, AND THEY STAY THREE SITES. Each keeps its
+ * own `data-testid` so a regression at one cannot be masked by the other two:
+ * `ContactCompareSources.test.tsx` reverts each independently and requires each
+ * to go red on its own.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT TOUCH: the `match` tag on agreeing values,
+ * and the plain `NONE` above, used where a real and applicable value is simply
+ * empty. That second distinction is the entire point of the 11 Aug decision —
+ * "none" reports an empty count, this phrase reports a state — and collapsing
+ * the two would undo the decision this constant exists to serve.
  */
-const NOT_LINKED_YET = "not linked yet";
+const NOT_IMPORTED_YET = "not imported yet";
 
 interface ContactCompareSourcesProps {
   userId: string;
@@ -207,7 +249,18 @@ const Column: React.FC<{
   onUnlinkSource?: (linkId: string) => void;
   unlinkingLinkId?: string | null;
 }> = ({ column, onUnlinkSource, unlinkingLinkId }) => {
+  /** Linked. Draws the amber column, the `linked record` tag and `Unlink`. */
   const isSource = column.kind === "source";
+  /**
+   * Claimed by nobody — the review queue's candidate, and the ONLY column the
+   * two D5 treatments belong on (BACKLOG-2628).
+   *
+   * Kept as its own boolean rather than folded into the JSX conditions: these
+   * two rows and `isSource`'s three affordances answer opposite questions, and
+   * one column previously read both ways because a single boolean was asked
+   * both.
+   */
+  const isProposed = column.kind === "proposed";
 
   return (
     <div
@@ -223,12 +276,14 @@ const Column: React.FC<{
             {column.columnLabel}
           </div>
         </div>
-        {column.kind === "proposed" && (
+        {/* Site 1 of 3. Was "not linked yet" (BACKLOG-2502) until the founder
+            unified the three on 11 Aug. */}
+        {isProposed && (
           <span
             data-testid={`compare-proposed-tag-${column.linkId}`}
             className="ml-auto font-sans text-[10px] font-bold uppercase tracking-wide rounded px-1 py-px bg-blue-50 text-blue-800 border border-blue-300"
           >
-            {NOT_LINKED_YET}
+            {NOT_IMPORTED_YET}
           </span>
         )}
         {isSource && (
@@ -275,19 +330,45 @@ const Column: React.FC<{
       <Row
         testId={`compare-row-transactions-${column.linkId}`}
         values={column.transactions.map((value) => ({ value, matched: false }))}
-        // D5: on a source record this is a statement, not an empty state.
-        emptyText={isSource ? NOT_A_CONTACT_YET : NONE}
+        /*
+          On a record nobody has imported this is a STATEMENT, not an empty
+          state — "not imported yet" (BACKLOG-2628, founder, 11 Aug). On a LINKED
+          record the cell prints the contact's deals, because it is on them
+          through that contact, and falls back to the ordinary "none" when the
+          contact is on none.
+
+          THE DISCRIMINATOR IS `isProposed`, AND THAT IS THIS ITEM'S FIX. It was
+          `isSource` — the same boolean that draws the `linked record` tag and
+          `Unlink` — so a record the user had just confirmed as the same person
+          was told two rows below that it belonged to nobody.
+        */
+        emptyText={isProposed ? NOT_IMPORTED_YET : NONE}
       />
 
       <div className="mt-3 pt-2 border-t border-gray-200">
         <SectionHeading>
           Recent communication
-          {isSource && (
+          {/*
+            Site 3 of 3. Was D5's "not linked" until the founder unified the
+            three on 11 Aug.
+
+            It stays gated on `isProposed`, which is this item's fix: it was
+            `isSource` — the same boolean that draws the `linked record` tag and
+            `Unlink` — so a LINKED record's messages, which do reach the contact,
+            were tagged as reaching nobody two rows under a tag saying `linked
+            record`.
+
+            TEST ID RENAMED from `compare-notlinked-` to `compare-unimported-`,
+            the one non-string change here: an id naming a superseded phrase is a
+            fourth name for the state the founder just reduced to one. Nothing
+            outside this component's own suite selects it.
+          */}
+          {isProposed && (
             <span
-              data-testid={`compare-notlinked-${column.linkId}`}
+              data-testid={`compare-unimported-${column.linkId}`}
               className="font-sans text-[10px] font-bold uppercase tracking-wide rounded px-1 py-px bg-amber-50 text-amber-800 border border-amber-300"
             >
-              {NOT_LINKED}
+              {NOT_IMPORTED_YET}
             </span>
           )}
         </SectionHeading>

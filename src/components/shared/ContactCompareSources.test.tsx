@@ -1,10 +1,13 @@
 /**
  * BACKLOG-2471 PR C — the compare screen's columns, read-only.
  *
- * WHAT THIS FILE PINS THAT THE SERVICE SUITE CANNOT: the two FOUNDER DECISION D5
- * treatments are strings on screen, not fields in a payload. The service returns
- * `transactions: []` and `kind: "source"`; whether that reaches the user as
- * "not a contact yet" or as an empty cell is decided here, and only here.
+ * WHAT THIS FILE PINS THAT THE SERVICE SUITE CANNOT: the candidate column's
+ * three state labels are strings on screen, not fields in a payload. The service
+ * returns `transactions: []` and `kind: "proposed"`; whether that reaches the
+ * user as "not imported yet" or as an empty cell is decided here, and only here.
+ * The wording has moved four times (see `NOT_IMPORTED_YET` in the component) and
+ * the service was indifferent to every one of them — which is the boundary
+ * working, not a gap.
  *
  * The view is stubbed at `window.api` rather than mocked at the hook, so the
  * component and its hook are exercised together — the same reason
@@ -13,7 +16,7 @@
  * Every assertion names EXACT ids. A count would pass while rendering the wrong
  * column.
  *
- * NEGATIVE-CONTROL DISCIPLINE: an assertion that "not a contact yet" is on
+ * NEGATIVE-CONTROL DISCIPLINE: an assertion that "not imported yet" is on
  * screen would also pass if the whole column vanished, so each copy assertion is
  * paired with a structural one naming the column it must appear IN.
  */
@@ -21,7 +24,7 @@
 import React from "react";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { ContactCompareSources } from "./ContactCompareSources";
-import type { ContactCompareView } from "@/types/contactProvenance";
+import type { ContactCompareColumn, ContactCompareView } from "@/types/contactProvenance";
 
 const CONTACT_LINK = "link-origin";
 const OUTLOOK_LINK = "link-outlook";
@@ -71,7 +74,16 @@ function makeView(overrides: Partial<ContactCompareView> = {}): ContactCompareVi
         emails: [{ value: "pdorian@example.com", matched: false }],
         phones: [{ value: "+1 (206) 555-0142", matched: true }],
         company: "Example Realty",
-        transactions: [],
+        /*
+          BACKLOG-2628 — A LINKED RECORD CARRIES THE CONTACT'S DEALS.
+
+          This was `[]`. Transcribed from the producer at its new behaviour:
+          `contactCompare.test.ts` → "a linked record carries the contact's
+          transactions", which asserts this exact array on the `source` column
+          of a contact with one transaction, through the real writers and the
+          real driver.
+        */
+        transactions: ["571 Dale St N"],
         recentCommunication: [
           {
             id: "em-1",
@@ -350,30 +362,260 @@ describe("the columns", () => {
   });
 });
 
-describe("founder decision D5", () => {
-  it("a source record's Transactions cell reads 'not a contact yet'", async () => {
+/**
+ * BACKLOG-2628 — THE WORDING OF A RECORD THAT BELONGS TO NOBODY.
+ *
+ * Two cell treatments used to hang off `kind === "source"` — the same boolean
+ * that draws the `linked record` tag and `Unlink`. So a record the founder had
+ * just confirmed as the same person read `linked record`, offered `Unlink`, and
+ * two rows below said it belonged to nobody.
+ *
+ * FOUR POSITIONS WERE TAKEN ON THIS WORDING IN FIVE DAYS. This suite pins the
+ * LIVE one and asserts the absence of every superseded one, so a later merge
+ * cannot quietly restore a decision that was replaced:
+ *
+ *   D5, 6 Aug   "not a contact yet" + "not linked" + "not linked yet"
+ *                                              superseded — absence asserted
+ *   11 Aug #2   a real lookup, else "none"      superseded — absence asserted
+ *   11 Aug #3   Transactions -> "not imported yet", other two left
+ *                                              superseded — absence asserted
+ *   11 Aug #4   ALL THREE -> "not imported yet" asserted, per site, by id
+ *
+ * The founder's reason for #4, after seeing it live: *"unify them, not imported
+ * yet is clearer."* One state should not have three names.
+ *
+ * THE RENDERER CANNOT SEE HOW A LINK WAS MADE, and that is the point rather
+ * than a gap: `ContactCompareColumn` carries no `match_method`, so a manual link
+ * and a matcher-made one are the same `kind` here by construction. That both
+ * methods project `kind: "source"` is pinned where it is decidable —
+ * `contactCompare.test.ts` → "a hand-made link and a matcher-made link both read
+ * as linked".
+ *
+ * THE EMPTY-CELL SHAPES ARE WHAT MAKE THIS FALSIFIABLE. The wording is an
+ * `emptyText`, so a column carrying values cannot exercise it at all: the
+ * linked-case control below uses a contact with NO deals, where the branch is
+ * the only thing deciding between "none" and "not imported yet". Asserting the
+ * populated case alone would leave the renderer discriminator untested.
+ */
+describe("BACKLOG-2628 — the wording of a record that belongs to nobody", () => {
+  /** The queue's candidate. Keyed as the service keys it — not a UUID. */
+  const PROPOSED_LINK = "proposed:android_sync:and-1";
+
+  /**
+   * A candidate column, TRANSCRIBED FROM THE PRODUCER: `contactCompare.ts`
+   * pushes `kind: "proposed"` with `transactions: []` and a `linkId` of
+   * `proposed:<type>:<record>`, asserted end to end by `contactCompare.test.ts`
+   * → "the same record goes source -> gone -> proposed".
+   */
+  const proposedColumn = (): ContactCompareColumn => ({
+    linkId: PROPOSED_LINK,
+    kind: "proposed",
+    columnLabel: "Android phone",
+    displayName: "Paul Dorian",
+    name: { value: "Paul Dorian", matched: true },
+    emails: [],
+    phones: [{ value: "+1 (206) 555-0142", matched: true }],
+    company: null,
+    transactions: [],
+    recentCommunication: [],
+    sourceRecordPresent: true,
+  });
+
+  /** The same two columns, on a contact that is on no deals at all. */
+  const viewWithNoDeals = (): ContactCompareView => {
+    const view = makeView();
+    return {
+      ...view,
+      columns: view.columns.map((c) => ({ ...c, transactions: [] })),
+    };
+  };
+
+  it("a LINKED record's Transactions cell carries the contact's deals", async () => {
     await renderScreen();
 
-    const source = screen.getByTestId(`compare-row-transactions-${OUTLOOK_LINK}`);
-    // CONTROL: use the ordinary empty text and this reads "none" — which says
-    // the record has no deals rather than that it is not a contact.
-    expect(source.textContent).toBe("not a contact yet");
-    // …and the contact's own column carries the real transaction, so the string
-    // above cannot be passing because every column is empty.
+    // It is on that deal, through the contact — so both columns name it.
+    // CONTROL: put `transactions: []` back on the source-row mapping in
+    // `contactCompare.ts` and the payload this fixture transcribes goes empty.
+    expect(screen.getByTestId(`compare-row-transactions-${OUTLOOK_LINK}`).textContent).toBe(
+      "571 Dale St N",
+    );
     expect(screen.getByTestId(`compare-row-transactions-${CONTACT_LINK}`).textContent).toBe(
       "571 Dale St N",
     );
   });
 
-  it("a source column's communication heading is tagged 'not linked', and the contact's is not", async () => {
+  it("a LINKED record on a contact with no deals reads 'none', not the unimported wording", async () => {
+    await renderScreen({ success: true, view: viewWithNoDeals() });
+
+    // CONTROL: change the discriminator back to `isSource` and this reads
+    // "not imported yet" — the founder's defect, restored, on a column that
+    // says `linked record` and offers `Unlink`.
+    expect(screen.getByTestId(`compare-row-transactions-${OUTLOOK_LINK}`).textContent).toBe(
+      "none",
+    );
+    // Paired structural assertion: the row is present, so "none" is not the
+    // textContent of a column that vanished.
+    expect(screen.getByTestId(`compare-source-tag-${OUTLOOK_LINK}`).textContent).toBe(
+      "linked record",
+    );
+  });
+
+  it("a LINKED record's communication heading carries no tag", async () => {
     await renderScreen();
 
-    // CONTROL: render the tag on every column and the first assertion goes red;
-    // drop it entirely and the second does.
-    expect(screen.queryByTestId(`compare-notlinked-${CONTACT_LINK}`)).toBeNull();
-    expect(screen.getByTestId(`compare-notlinked-${OUTLOOK_LINK}`).textContent).toBe(
-      "not linked",
+    // Those messages reach the contact now — that is what linking did.
+    // CONTROL: revert to `isSource` and the tag returns to this column.
+    expect(screen.queryByTestId(`compare-unimported-${OUTLOOK_LINK}`)).toBeNull();
+    expect(screen.queryByTestId(`compare-unimported-${CONTACT_LINK}`)).toBeNull();
+    // …and the messages are still there, so the absence above is the tag's and
+    // not the whole section's.
+    expect(
+      screen
+        .getByTestId(`compare-row-communication-${OUTLOOK_LINK}`)
+        .querySelector("[data-testid='compare-comm-em-1']"),
+    ).toBeTruthy();
+  });
+
+  /**
+   * ONE PHRASE FOR ONE STATE — ALL THREE SITES, ASSERTED INDIVIDUALLY.
+   *
+   * Founder, 11 Aug: *"unify them, not imported yet is clearer."*
+   *
+   * THE THREE ARE ASSERTED SEPARATELY, BY ID, RATHER THAN AS ONE `textContent`
+   * SWEEP. A sweep over the column would pass with the phrase rendered three
+   * times in ONE place and missing from the other two, which is the failure this
+   * is guarding — the founder's complaint was about where the words sit, not how
+   * many times the string occurs.
+   *
+   * CONTROL: revert any ONE site and only its own line goes red.
+   */
+  it("all three of a candidate's state labels read 'not imported yet'", async () => {
+    const view = makeView();
+    await renderScreen({
+      success: true,
+      view: { ...view, columns: [...view.columns, proposedColumn()] },
+    });
+
+    // Site 1 — the column header pill. Was "not linked yet".
+    expect(screen.getByTestId(`compare-proposed-tag-${PROPOSED_LINK}`).textContent).toBe(
+      "not imported yet",
     );
+    // Site 2 — the Transactions cell.
+    expect(screen.getByTestId(`compare-row-transactions-${PROPOSED_LINK}`).textContent).toBe(
+      "not imported yet",
+    );
+    // Site 3 — the communication heading tag. Was D5's "not linked".
+    expect(screen.getByTestId(`compare-unimported-${PROPOSED_LINK}`).textContent).toBe(
+      "not imported yet",
+    );
+    // A candidate is not a linked record, so it carries neither affordance.
+    expect(screen.queryByTestId(`compare-source-tag-${PROPOSED_LINK}`)).toBeNull();
+  });
+
+  /**
+   * NEITHER SUPERSEDED NAME FOR THIS STATE SURVIVES ANYWHERE ON THE SCREEN.
+   *
+   * Screen-wide and unscoped, deliberately: this is the guard that stops a later
+   * merge quietly restoring an earlier decision. `"not linked"` is asserted as a
+   * SUBSTRING, so it also catches `"not linked yet"` — one assertion covering
+   * both superseded phrases, and it cannot pass by them merely having moved.
+   *
+   * The paired structural assertion matters more than usual here: an absence
+   * assertion passes trivially against a screen that failed to render.
+   */
+  it("no candidate label says 'not linked' or 'not linked yet' any more", async () => {
+    const view = makeView();
+    await renderScreen({
+      success: true,
+      view: { ...view, columns: [...view.columns, proposedColumn()] },
+    });
+
+    const body = screen.getByTestId("contact-compare-screen").textContent ?? "";
+    expect(body).not.toContain("not linked");
+    expect(body).not.toContain("not a contact yet");
+    // …on a screen that DID render all three columns and the candidate's three
+    // labels, so the absences above are real rather than vacuous.
+    for (const linkId of [CONTACT_LINK, OUTLOOK_LINK, PROPOSED_LINK]) {
+      expect(screen.getByTestId(`compare-column-${linkId}`)).toBeTruthy();
+    }
+    expect(body).toContain("not imported yet");
+  });
+
+  /**
+   * NEITHER SUPERSEDED POSITION SURVIVES ON THE CANDIDATE'S TRANSACTIONS CELL.
+   *
+   * SCOPED TO THAT CELL DELIBERATELY, and the scope is the honest part: "none"
+   * is the correct and untouched reading of a candidate's Emails, Phone and
+   * Company rows when it carries no such value, so an assertion that "none"
+   * appears nowhere in the column would be asserting a screen the founder never
+   * asked for — and would collide with the requirement that those rows stay
+   * exactly as they are. `"not a contact yet"` has no other legitimate home, so
+   * THAT one is asserted absent from the whole screen.
+   *
+   * CONTROL: restore either superseded position and the matching line goes red.
+   */
+  it("neither superseded wording survives on a candidate's Transactions cell", async () => {
+    const view = makeView();
+    await renderScreen({
+      success: true,
+      view: { ...view, columns: [...view.columns, proposedColumn()] },
+    });
+
+    const cell = screen.getByTestId(`compare-row-transactions-${PROPOSED_LINK}`);
+    // D5, 6 Aug.
+    expect(cell.textContent).not.toBe("not a contact yet");
+    // The 11 Aug lookup, whose empty result printed a bare "none".
+    expect(cell.textContent).not.toBe("none");
+    // Nowhere else on the screen either — the phrase was deleted, not moved.
+    expect(screen.getByTestId("contact-compare-screen").textContent).not.toContain(
+      "not a contact yet",
+    );
+    // Paired structural assertion, so the absences above are not those of a
+    // screen that failed to render its columns.
+    for (const linkId of [CONTACT_LINK, OUTLOOK_LINK, PROPOSED_LINK]) {
+      expect(screen.getByTestId(`compare-column-${linkId}`)).toBeTruthy();
+    }
+  });
+
+  /**
+   * `none` STILL MEANS "EMPTY BUT APPLICABLE", AND THE UNIFICATION DID NOT EAT
+   * IT. This is the regression guard for the founder's 11 Aug distinction.
+   *
+   * Two different claims live on a candidate column and must keep two different
+   * words:
+   *   - `not imported yet` — a STATE. Nobody has imported this record.
+   *   - `none`             — a real, applicable value that happens to be empty.
+   *
+   * Unifying the state labels is exactly the change that invites someone to
+   * "finish the job" by sweeping `none` into the same phrase. That would tell
+   * the user a record has no email address *because it is not imported*, which
+   * is false — an un-imported record's address is known, and is the very thing
+   * this screen exists to compare.
+   *
+   * CONTROL: break `Row`'s shared empty literal, or the communication block's
+   * own, and these go red independently.
+   */
+  it("a candidate's empty-but-applicable rows still read 'none', not the state label", async () => {
+    const view = makeView();
+    await renderScreen({
+      success: true,
+      view: { ...view, columns: [...view.columns, proposedColumn()] },
+    });
+
+    // The fixture's candidate carries no address, no company and no messages,
+    // so all three read the ordinary empty text — exactly as before.
+    expect(screen.getByTestId(`compare-row-emails-${PROPOSED_LINK}`).textContent).toBe("none");
+    expect(screen.getByTestId(`compare-row-company-${PROPOSED_LINK}`).textContent).toBe("none");
+    expect(screen.getByTestId(`compare-row-communication-${PROPOSED_LINK}`).textContent).toBe(
+      "none",
+    );
+    // And the phone it DOES carry is still printed and still MARKED — the
+    // `match` tag is untouched by the unification, which named only the labels
+    // describing the un-imported state.
+    expect(screen.getByTestId(`compare-row-phone-${PROPOSED_LINK}`).textContent).toBe(
+      "+1 (206) 555-0142match",
+    );
+    expect(screen.getByTestId(`compare-match-compare-row-phone-${PROPOSED_LINK}`)).toBeTruthy();
   });
 
   it("each column lists its own messages", async () => {
