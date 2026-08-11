@@ -97,6 +97,11 @@ describe("buildRowDisambiguators", () => {
    *
    * The assertion is the SET, so six identical lines fail even though six lines
    * exist.
+   *
+   * MEASURED: this case PASSES under BACKLOG-2625's own predicate too — with the
+   * organisation shared by all six, 2625 falls through to the phone and gets the
+   * right answer for the wrong reason. It is recorded here so nobody reads it as
+   * the discriminating case. The one that discriminates is the next test.
    */
   it("makes six rows sharing one name distinguishable FROM EACH OTHER [CONTROL 7]", () => {
     const rows = Array.from({ length: 6 }, (_, i) =>
