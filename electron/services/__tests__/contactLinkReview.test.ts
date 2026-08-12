@@ -106,7 +106,8 @@ function addContact(
 
 function addExternal(
   recordId: string,
-  name: string,
+  /** NULL is a real state — `external_contacts.name` is nullable (BACKLOG-2673). */
+  name: string | null,
   opts: {
     source?: string;
     emails?: string[];
@@ -706,6 +707,45 @@ describe("cluster-level questions", () => {
     expect(clusters[0].exclusive).toBe(true);
     expect(clusters[0].items.map((i) => i.contactId).sort()).toEqual(["c-alice", "c-bob"]);
     expect(clusters[0].question).toBe('Which of these is "A. Stone"?');
+  });
+
+  /**
+   * BACKLOG-2673 — THE NAMELESS QUESTION COMPOSES NO ARTICLE WITH THE LABEL.
+   *
+   * `clusterQuestion` read `` `a ${first.sourceLabel} entry` ``. Composed over
+   * the five `source_type` values `contact_link_proposals`' CHECK constraint
+   * admits, THREE OF THE FIVE were wrong: "a iPhone entry", "a Outlook contacts
+   * entry", "a Android phone entry". The two that were right — "a Mac address
+   * book entry", "a Google contacts entry" — are why it shipped.
+   *
+   * So the label is enumerated here rather than sampled. `macos` alone would
+   * have passed against the broken code.
+   *
+   * NOT fixed with a vowel check: article choice follows PRONUNCIATION, which a
+   * string does not carry. The article now binds to "entry", a word this file
+   * owns and which no data can change.
+   */
+  it.each([
+    ["macos", "Mac address book"],
+    ["iphone", "iPhone"],
+    ["outlook", "Outlook contacts"],
+    ["google_contacts", "Google contacts"],
+    ["android_sync", "Android phone"],
+  ])("asks about a nameless %s record without a hardcoded article", (source, label) => {
+    addContact("c-daniel", "Daniel Haim", { phones: ["+14155550134"] });
+    addExternal("rec-noname", null, { source, phones: ["+14155550134"] });
+    linkExternalContactsForUser(USER);
+
+    const clusters = getReviewQueue(USER);
+    expect(clusters.map((c) => c.items.map((i) => i.sourceRecordId)).flat()).toEqual([
+      "rec-noname",
+    ]);
+    expect(clusters[0].question).toBe(
+      `Is an entry in your ${label} the same person as Daniel Haim?`,
+    );
+    // The defect as a negative, so a reworded sentence that reintroduces the
+    // article still fails here.
+    expect(clusters[0].question).not.toMatch(new RegExp(`\\b(a|an|A|An)\\s+${label}\\b`));
   });
 
   /**
