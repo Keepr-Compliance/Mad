@@ -112,6 +112,21 @@ export interface ContactRowProps {
    */
   showAddButton?: boolean;
   /**
+   * WHY THIS ROW'S IMPORT/ADD PRESS IS REFUSED, or absent when it is allowed
+   * (BACKLOG-2672).
+   *
+   * A STRING, NOT A BOOLEAN, and that is the founder's decision rather than a
+   * style choice: *"the reason names the missing thing, not the rule"*. A
+   * boolean here would force each surface to invent its own wording, which is
+   * how "This record cannot be imported" — a sentence that tells him nothing the
+   * grey button did not — gets written three times.
+   *
+   * Computed by `ContactSearchList` via `importBlockedReason` so the predicate
+   * and the saved-contact gate live in one place. Rendered as the control's
+   * visible text AND therefore its accessible name.
+   */
+  importBlockedReason?: string | null;
+  /**
    * Compact mode (BACKLOG-1898 Phase-1 layout polish). Opt-in, default `false`
    * so shared consumers (the transaction add-contact flows) are unaffected.
    * When `true`:
@@ -278,6 +293,7 @@ export function ContactRow({
   showCheckbox = false,
   showImportButton = false,
   showAddButton = false,
+  importBlockedReason = null,
   compact = false,
   showDetailLine = false,
   disambiguator = null,
@@ -308,6 +324,9 @@ export function ContactRow({
 
   const handleImportClick = (event: React.MouseEvent) => {
     event.stopPropagation();
+    // BACKLOG-2672: `aria-disabled` is an announcement, not an enforcement —
+    // the browser still dispatches the click. The refusal has to be here.
+    if (importBlockedReason) return;
     onImport?.();
   };
 
@@ -345,8 +364,38 @@ export function ContactRow({
   // onSelect (a double-toggle that would cancel itself out).
   const handleAddClick = (event: React.MouseEvent) => {
     event.stopPropagation();
+    // BACKLOG-2672: same refusal as the import button. In the wizard "+ Add"
+    // routes through `onSelect`, which auto-imports an unsaved record — so a
+    // blocked row must not reach it here either.
+    if (importBlockedReason) return;
     onSelect?.();
   };
+
+  /**
+   * The refused control (BACKLOG-2672), rendered in place of "+ Add Contact"
+   * or "+ Add".
+   *
+   * `aria-disabled` RATHER THAN `disabled`, and the distinction is the founder's
+   * rule 2 restated in markup: a natively disabled button leaves the tab order,
+   * so a keyboard user can never land on it and never hears the reason — the
+   * same failure as the tooltip he rejected. `aria-disabled` keeps it focusable
+   * and announced; `handleImportClick` / `handleAddClick` above make the press
+   * inert.
+   *
+   * The reason is the button's own text, so it IS the accessible name. No
+   * `aria-label`, no `title`, nothing to fall out of step with what is on screen.
+   */
+  const blockedButton = (testId: string): React.ReactElement => (
+    <button
+      type="button"
+      aria-disabled="true"
+      onClick={(event) => event.stopPropagation()}
+      className="flex-shrink-0 max-w-[13rem] px-2 py-1 text-xs font-medium text-gray-400 bg-gray-50 rounded text-right leading-snug cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+      data-testid={testId}
+    >
+      {importBlockedReason}
+    </button>
+  );
 
   const baseClasses = [
     "flex items-center gap-3 px-3 py-3 sm:py-2 border-b border-gray-100",
@@ -611,6 +660,9 @@ export function ContactRow({
       {/* Add Contact Button (never rendered in compact mode — import happens
           via the detail pane's Import button instead) */}
       {!compact && !isAdding && !isAdded && showImportButton && (
+        importBlockedReason ? (
+          blockedButton("contact-row-import-blocked")
+        ) : (
         <button
           type="button"
           onClick={handleImportClick}
@@ -620,6 +672,7 @@ export function ContactRow({
         >
           + Add Contact
         </button>
+        )
       )}
 
       {/* "+ Add" affordance (BACKLOG-2400 two-pane picker). Replaces the checkbox
@@ -627,6 +680,9 @@ export function ContactRow({
           contact (imports it first if external) and moves it to the "Added"
           column. */}
       {!isAdding && !isAdded && showAddButton && (
+        importBlockedReason ? (
+          blockedButton("contact-row-add-blocked")
+        ) : (
         <button
           type="button"
           onClick={handleAddClick}
@@ -636,6 +692,7 @@ export function ContactRow({
         >
           + Add
         </button>
+        )
       )}
     </div>
   );

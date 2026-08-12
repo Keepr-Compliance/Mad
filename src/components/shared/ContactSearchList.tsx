@@ -35,6 +35,7 @@ import {
   mergeNewOrderKeys,
   type ContactSortOrder,
 } from "../../utils/contactPickerList";
+import { importBlockedReason } from "../../utils/importableRecord";
 import {
   resolveContactAnchor,
   scrollTopForAnchor,
@@ -733,6 +734,21 @@ export function ContactSearchList({
   const handleImport = useCallback(
     async (contact: ExtendedContact, autoSelect: boolean = false) => {
       if (!onImportContact || importingIds.has(contact.id)) return;
+      /*
+        BACKLOG-2672 — THE REFUSAL, not just a greyed button.
+
+        Every import on this surface funnels through here: the "+ Add Contact"
+        press, the "+ Add" press, the row click that auto-imports
+        (`handleExternalSelect` below), and Enter on a focused row. Guarding the
+        buttons alone would leave three of those four open.
+
+        `isExternal` is passed as `true` because reaching this function already
+        means the row was treated as an external one; `importBlockedReason`'s
+        saved-contact gate is satisfied by construction here, and its second leg
+        (`is_message_derived`) still runs for the message-derived rows that
+        `externalSet` does not contain.
+      */
+      if (importBlockedReason(contact, true)) return;
 
       setImportingIds((prev) => new Set(prev).add(contact.id));
       try {
@@ -831,6 +847,22 @@ export function ContactSearchList({
         onContactClick(contact);
         return;
       }
+      /*
+        BACKLOG-2672 — THE HOLE THE BUTTON GUARD DOES NOT COVER.
+
+        Placed AFTER the `onContactClick` branch on purpose. The founder's whole
+        reason for choosing option 2 over suppression was that he wants to be
+        able to investigate these records: on Clients & Contacts the row click
+        OPENS THE DETAIL PANE, and that must keep working.
+
+        Below this line the row click does something else entirely. In the
+        wizard's add-mode there is no `onContactClick`, so a click on the row
+        BODY reaches `handleSelect` and puts the record in the transaction
+        without ever passing through `handleImport`. Disabling the button and
+        leaving this open would refuse the press he can see and allow the one he
+        cannot.
+      */
+      if (importBlockedReason(contact, isExternal)) return;
       // BACKLOG-2591: `onExternalSelect` opens this branch too — without it a
       // link picker's external rows would fall through to plain `handleSelect`
       // and never reach the caller at all.
@@ -1201,6 +1233,16 @@ export function ContactSearchList({
                 // visible row is always addable.
                 showCheckbox={isAddMode ? false : isSelectionMode}
                 showAddButton={isAddMode}
+                /*
+                  BACKLOG-2672 — computed HERE, once, for both buttons.
+
+                  `isExternal` alone would miss the record this item is about:
+                  message-derived pseudo-contacts arrive in the SAVED half's
+                  array (`contacts:get-all` merges them), so `externalSet` does
+                  not contain them and `isExternal` is false. The second leg of
+                  `isUnimportedSourceRecord` is what catches them.
+                */
+                importBlockedReason={importBlockedReason(contact, isExternal)}
                 showImportButton={
                   // BACKLOG-2591: `!onExternalSelect` is the fence. In linking
                   // mode an import would CREATE a contact — the one thing this

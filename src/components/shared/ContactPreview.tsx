@@ -6,6 +6,10 @@ import type { ExtendedContact } from "../../types/components";
 import type { Communication, ContactMessageThread, Message } from "@/types";
 import type { ContactSourceProvenance } from "@/types/contactProvenance";
 import { labelForContact } from "@/utils/contactDisplayLabel";
+import {
+  hasNothingToImport,
+  NOTHING_TO_IMPORT_REASON,
+} from "@/utils/importableRecord";
 import { parseDbTimestamp } from "@/utils/dateFormatters";
 import {
   canUnlinkSource,
@@ -765,6 +769,36 @@ export function ContactPreview({
                 neither button renders unless its handler is actually wired. */}
             {isExternal
               ? onImport && (
+                /*
+                  BACKLOG-2672 — THE BUTTON THE FOUNDER PRESSED.
+
+                  This is the `[Import]` in his report. `Contacts.tsx:1190` wires
+                  `onImport` for any row whose `is_message_derived` is truthy,
+                  which is exactly the population the message-derived
+                  pseudo-contacts sit in — so this control, not the row's
+                  "+ Add Contact", is the one that would have created the empty
+                  contact.
+
+                  Computed inline rather than plumbed through a prop: this
+                  component already holds the contact and already knows whether
+                  it is external, and a new prop would be a thing each of the
+                  five call sites could forget to pass.
+                */
+                hasNothingToImport(contact) ? (
+                  /*
+                    `aria-disabled`, not `disabled` — see the note on
+                    `ContactRow.blockedButton`. The reason is the button's own
+                    text and therefore its accessible name.
+                  */
+                  <button
+                    type="button"
+                    aria-disabled="true"
+                    className="flex-shrink-0 max-w-[16rem] px-3.5 py-1.5 text-gray-500 text-sm font-semibold rounded-lg bg-gray-100 text-right leading-snug cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                    data-testid="contact-preview-import-blocked"
+                  >
+                    {NOTHING_TO_IMPORT_REASON}
+                  </button>
+                ) : (
                   /* BACKLOG-2525: `disabled` is the load-bearing attribute, not
                      the label — a disabled button fires no `onClick` at all, so
                      the founder's second and third presses reach nothing. The
@@ -784,6 +818,7 @@ export function ContactPreview({
                     {isImporting ? "Importing…" : "Import"}
                   </button>
                 )
+              )
               : (onEdit || onLinkSource || showCompareButton) && (
                   /*
                     BACKLOG-2426 — `Link` immediately LEFT of `Edit`, on SAVED
