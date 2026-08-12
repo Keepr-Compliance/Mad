@@ -61,20 +61,28 @@
  * answer for every contact, instead of being read from the crosswalk for
  * imported contacts and from the `contacts.source` scalar for everyone else.
  *
- * THE TRAP. `contactSourceLinkSql.CONTACT_SOURCE_RECORDS_SQL` enables its
- * email/phone content fallback only for a contact with NO crosswalk rows. Give
- * every contact an origin row without teaching that query the difference and
- * the fallback switches off universally — every contact that today gets its
- * addresses by content-matching against `external_contacts` silently stops.
- * That query therefore excludes `origin` explicitly. See ORIGIN_MATCH_METHOD.
+ * THE TRAP, retired by BACKLOG-2669 but recorded because it is the reason to be
+ * careful with this row. `contactSourceLinkSql.CONTACT_SOURCE_RECORDS_SQL` used
+ * to enable an email/phone content fallback for a contact with NO crosswalk
+ * rows. Giving every contact an origin row without teaching that query the
+ * difference would have switched the fallback off universally — every contact
+ * getting its addresses by content-matching against `external_contacts` would
+ * have silently stopped. That query excluded `origin` explicitly for that
+ * reason; its content branches are now deleted, so it reads linked records only
+ * and the trap has nothing left to spring on. Any query that ever asks "does
+ * this contact have a crosswalk row?" as a proxy for "is it linked to a source
+ * record?" inherits the trap. See ORIGIN_MATCH_METHOD.
  */
 
 /**
  * The `match_method` that marks a row as ORIGIN rather than record-backed.
  *
- * Read by `CONTACT_SOURCE_RECORDS_SQL` (to keep the content fallback alive) and
- * by `contactProvenance.unlinkContactSource` (to refuse the unlink). Exported as
- * a constant so those two and the migration cannot drift on the spelling.
+ * Read by `contactSourceLinker.resolveSourceRecord` (an origin row is not a
+ * claim on a source record, so it cannot conflict with one) and by
+ * `contactProvenance.unlinkContactSource` (to refuse the unlink). It was also
+ * read by `CONTACT_SOURCE_RECORDS_SQL` until BACKLOG-2669 deleted the content
+ * fallback that needed it. Exported as a constant so its readers and the
+ * migration cannot drift on the spelling.
  */
 export const ORIGIN_MATCH_METHOD = "origin";
 
