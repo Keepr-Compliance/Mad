@@ -24,6 +24,17 @@ import {
   type SentryEventLike,
 } from "../services/updateDiagnostics";
 
+/**
+ * Real Sentry exception values carry a `type` field ("Error", "TypeError", …)
+ * that the intentionally-narrow production `SentryEventLike` does not model.
+ * The fixtures below include it so they mirror a real `beforeSend` payload, so
+ * they are typed against this locally-widened shape. It is still structurally
+ * assignable to `SentryEventLike`, which is what `scrubUpdaterEventPII` requires.
+ */
+type SentryEventFixture = Omit<SentryEventLike, "exception"> & {
+  exception?: { values?: Array<{ type?: string; value?: string }> };
+};
+
 describe("classifyUpdaterError", () => {
   const cases: Array<[string, UpdaterErrorType]> = [
     // checksum
@@ -257,7 +268,7 @@ describe("extractUpdaterDiagnostics", () => {
 
 describe("scrubUpdaterEventPII [SECURITY — BACKLOG-1903]", () => {
   it("scrubs a signed-URL token from the exception value on an auto-updater event", () => {
-    const event: SentryEventLike = {
+    const event: SentryEventFixture = {
       message: "sha512 checksum mismatch",
       exception: {
         values: [
@@ -281,7 +292,7 @@ describe("scrubUpdaterEventPII [SECURITY — BACKLOG-1903]", () => {
   });
 
   it("scrubs a POSIX username path from the exception value", () => {
-    const event: SentryEventLike = {
+    const event: SentryEventFixture = {
       exception: {
         values: [
           {
@@ -301,7 +312,7 @@ describe("scrubUpdaterEventPII [SECURITY — BACKLOG-1903]", () => {
   });
 
   it("leaves a non-updater event (no component:auto-updater tag) completely untouched", () => {
-    const event: SentryEventLike = {
+    const event: SentryEventFixture = {
       message: "Some unrelated failure at /Users/bob/project/file.ts?token=secret",
       exception: {
         values: [
@@ -323,7 +334,7 @@ describe("scrubUpdaterEventPII [SECURITY — BACKLOG-1903]", () => {
   });
 
   it("preserves the fingerprint on an auto-updater event it scrubs", () => {
-    const event: SentryEventLike = {
+    const event: SentryEventFixture = {
       exception: {
         values: [{ type: "Error", value: "checksum mismatch /Users/alice/keepr.exe" }],
       },

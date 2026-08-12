@@ -16,18 +16,47 @@ interface PermissionResult {
   action?: string;
 }
 
+/** BACKLOG-2404 — mirrors `LoadStatus.coverage`; see contactsService. */
+type ContactsReadCoverage = "complete" | "partial" | "none";
+
+interface ContactsIssue {
+  type: string;
+  title: string;
+  message: string;
+  details: string;
+  action: string;
+  actionHandler: string;
+  severity: string;
+}
+
 interface ContactsLoadingResult {
   canLoadContacts: boolean;
   contactCount?: number;
-  error?: {
-    type: string;
-    title: string;
-    message: string;
-    details: string;
-    action: string;
-    actionHandler: string;
-    severity: string;
-  };
+  /**
+   * BACKLOG-2404 — "read everything" / "read some" / "read nothing", kept
+   * distinct from `canLoadContacts`.
+   *
+   * `canLoadContacts` answers "did we get any contacts at all", which is the
+   * right question for the permissions prompt and the WRONG one for "is what
+   * she is looking at complete". A user with iCloud and a locked Exchange store
+   * can load contacts and is still missing half her address book; before this
+   * field there was no way to say so.
+   */
+  coverage?: ContactsReadCoverage;
+  /** BACKLOG-2404 — address books discovered. `2 of 3` needs both numbers. */
+  booksFound?: number;
+  /** BACKLOG-2404 — address books successfully read. */
+  booksRead?: number;
+  /** BACKLOG-2404 — address books discovered but unreadable. */
+  booksFailed?: number;
+  /**
+   * BACKLOG-2404 — a non-blocking problem: the read WORKED, and something is
+   * still wrong enough that the user should be told. Separate from `error`,
+   * which means the read did not work at all. Collapsing the two is what
+   * produced a Full Disk Access prompt for a permission the user already held.
+   */
+  warning?: ContactsIssue;
+  error?: ContactsIssue;
 }
 
 interface AllPermissionsResult {
@@ -167,7 +196,31 @@ class PermissionService {
   /**
    * Check if contacts are actually loading from the Contacts app (macOS only)
    * This is a more thorough check than just checking directory access
-   * @returns {Promise<{canLoadContacts: boolean, contactCount?: number, error?: Object}>}
+   *
+   * ---------------------------------------------------------------------------
+   * BACKLOG-2404 — THREE OUTCOMES, NOT TWO
+   * ---------------------------------------------------------------------------
+   * This function decides what the user is told, so it is the place the silent
+   * partial result actually costs someone. It now branches on the reader's
+   * `coverage` rather than on a contact count:
+   *
+   *   none     -> a real failure. Full Disk Access advice, as before.
+   *   partial  -> contacts ARE loading, and some address book did not open.
+   *               `canLoadContacts: true` (she can work) + a `warning` (she is
+   *               told what is missing). Previously indistinguishable from a
+   *               clean run — she saw half her contacts, was shown nothing, and
+   *               was then told her sync had succeeded when she filed a ticket.
+   *   complete -> everything read.
+   *
+   * A ZERO CONTACT COUNT IS NO LONGER TREATED AS A FAILURE. It used to return
+   * `canLoadContacts: false` with "You may need to grant Full Disk Access",
+   * which is a wrong answer stated confidently: a successfully-read address
+   * book that happens to be empty is not a permissions problem, and BACKLOG-2392
+   * already had to fix one instance of this (a name-only book counted 0
+   * reachable identifiers and produced a false Full Disk Access prompt for a
+   * permission the user already held). "Found nothing" and "never looked" are
+   * different answers; the coverage fields are what tell them apart, so the
+   * count no longer has to stand in for a diagnosis it cannot make.
    */
   async checkContactsLoading(): Promise<ContactsLoadingResult> {
     // Windows/Linux: Contacts app is macOS-only, skip this check
@@ -187,20 +240,32 @@ class PermissionService {
       const { getContactNames } = await import("./contactsService");
 
       const result = await getContactNames();
+      const status = result.status;
 
-      if (result.status && !result.status.success) {
+      // The coverage numbers travel on EVERY return below, including the
+      // failure ones — "found 3, read 0" and "found 0, read 0" are different
+      // diagnoses and a caller that only gets `canLoadContacts: false` cannot
+      // tell them apart.
+      const coverageFields = {
+        coverage: status?.coverage,
+        booksFound: status?.booksFound,
+        booksRead: status?.booksRead,
+        booksFailed: status?.booksFailed,
+      };
+
+      if (status && !status.success) {
         return {
           canLoadContacts: false,
           contactCount: 0,
+          ...coverageFields,
           error: {
             type: "CONTACTS_LOADING_FAILED",
             title: "Cannot Load Contacts",
             message:
-              result.status.userMessage ||
+              status.userMessage ||
               "Could not load contacts from Contacts app",
-            details:
-              result.status.error || result.status.lastError || "Unknown error",
-            action: result.status.action || "Grant Full Disk Access",
+            details: status.error || status.lastError || "Unknown error",
+            action: status.action || "Grant Full Disk Access",
             actionHandler: "open-system-settings",
             severity: "error",
           },
@@ -210,17 +275,39 @@ class PermissionService {
       const contactCount =
         result.status?.contactCount || Object.keys(result.contactMap).length;
 
-      if (contactCount === 0) {
+      // PARTIAL: some address book did not open. She can still work, so this is
+      // a warning and not an error — but it must not be silent, which is the
+      // entire ticket.
+      if (status?.coverage === "partial") {
+        const found = status.booksFound;
+        const read = status.booksRead;
+        const failed = status.booksFailed;
+        // The two failure phases name different remedies; if every failure is
+        // the corrupt-store signature, do not send her to Full Disk Access.
+        const allCorrupt =
+          status.failures.length > 0 &&
+          status.failures.every((f) => f.reason === "load-error");
+
+        logService.warn(
+          `Contacts read was PARTIAL: read ${read} of ${found} address books`,
+          "PermissionService",
+          { booksFound: found, booksRead: read, booksFailed: failed },
+        );
+
         return {
-          canLoadContacts: false,
-          contactCount: 0,
-          error: {
-            type: "NO_CONTACTS_FOUND",
-            title: "No Contacts Found",
+          canLoadContacts: true,
+          contactCount,
+          ...coverageFields,
+          warning: {
+            type: "CONTACTS_PARTIAL_READ",
+            title: "Some Contacts Could Not Be Read",
             message:
-              "No contacts were found in your Contacts app. You may need to grant Full Disk Access.",
-            details: "Contact database exists but contains no contacts",
-            action: "Open System Settings",
+              `Keepr read ${read} of ${found} address books. ` +
+              `${failed} could not be opened, so some contacts may be missing.`,
+            details: allCorrupt
+              ? "An address book opened but failed mid-read — the store may be damaged."
+              : "An address book could not be opened. Full Disk Access may be required.",
+            action: allCorrupt ? "Open Contacts app to repair" : "Open System Settings",
             actionHandler: "open-system-settings",
             severity: "warning",
           },
@@ -230,6 +317,7 @@ class PermissionService {
       return {
         canLoadContacts: true,
         contactCount,
+        ...coverageFields,
       };
     } catch (error) {
       const errorMessage =

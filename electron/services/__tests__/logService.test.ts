@@ -26,10 +26,13 @@ describe("LogService", () => {
     (fs.readdirSync as jest.Mock).mockReturnValue([]);
     (fs.statSync as jest.Mock).mockReturnValue({ mtime: new Date() });
     (fs.unlinkSync as jest.Mock).mockImplementation(() => undefined);
-    (fs.appendFile as jest.Mock).mockImplementation((path, data, callback) =>
+    // fs.appendFile/fs.writeFile are overloaded and carry a `__promisify__`
+    // property, so they are not directly comparable to jest.Mock the way the
+    // single-signature fs functions above are; the extra hop is type-only.
+    (fs.appendFile as unknown as jest.Mock).mockImplementation((path, data, callback) =>
       callback(null),
     );
-    (fs.writeFile as jest.Mock).mockImplementation((path, data, callback) =>
+    (fs.writeFile as unknown as jest.Mock).mockImplementation((path, data, callback) =>
       callback(null),
     );
 
@@ -158,7 +161,7 @@ describe("LogService", () => {
     });
 
     it("should handle file write errors gracefully", async () => {
-      (fs.appendFile as jest.Mock).mockImplementation((path, data, callback) =>
+      (fs.appendFile as unknown as jest.Mock).mockImplementation((path, data, callback) =>
         callback(new Error("Write failed")),
       );
 
@@ -292,7 +295,7 @@ describe("LogService", () => {
     });
 
     it("should handle clear errors", async () => {
-      (fs.writeFile as jest.Mock).mockImplementation((path, data, callback) =>
+      (fs.writeFile as unknown as jest.Mock).mockImplementation((path, data, callback) =>
         callback(new Error("Clear failed")),
       );
 

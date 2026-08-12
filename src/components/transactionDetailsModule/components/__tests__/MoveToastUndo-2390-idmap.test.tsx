@@ -16,7 +16,19 @@
  * tests use the REAL shape: `communication_id` (c.id) DISTINCT from `id` (e.id).
  */
 import React from "react";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor, act } from "@testing-library/react";
+import { NotificationProvider } from "../../../../contexts/NotificationContext";
+
+/**
+ * BACKLOG-2447: these components now raise toasts through `useNotification`,
+ * which requires the app-level NotificationProvider that `App.tsx` supplies in
+ * production. Passing it as RTL's `wrapper` (rather than wrapping each element)
+ * means `rerender` keeps the provider too.
+ */
+const render = (
+  ui: Parameters<typeof rtlRender>[0],
+  options?: Parameters<typeof rtlRender>[1],
+) => rtlRender(ui, { wrapper: NotificationProvider, ...options });
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { TransactionEmailsTab } from "../TransactionEmailsTab";
@@ -65,7 +77,10 @@ describe("restoreRemovedEmailsByContentIds — id-space mapping", () => {
     // call already created (the UNIQUE collision). Assert exactly ONE call, from
     // a matching thread member.
     expect(api.restoreRemovedEmail).toHaveBeenCalledTimes(1);
-    const [ignoredArg, emailArg, txArg] = api.restoreRemovedEmail.mock.calls[0];
+    // BACKLOG-2414: `jest.mocked` exposes `.mock` — the intersection type resolves
+    // `restoreRemovedEmail` to the plain API signature, which has no `.mock`.
+    const [ignoredArg, emailArg, txArg] =
+      jest.mocked(api.restoreRemovedEmail).mock.calls[0];
     expect(["ie-1", "ie-2"]).toContain(ignoredArg);
     expect(["e-1", "e-2"]).toContain(emailArg);
     expect(txArg).toBe("txn-1");
@@ -186,7 +201,7 @@ describe("BACKLOG-2390 — emails bulk remove-undo with realistic id shapes", ()
     await waitFor(() =>
       expect(onShowSuccess).toHaveBeenCalledWith(
         "2 emails removed",
-        expect.objectContaining({ label: "Undo" })
+        expect.objectContaining({ action: expect.objectContaining({ label: "Undo" }) })
       )
     );
     expect(t.unlinkCommunication).toHaveBeenCalledWith("comm-1");
@@ -194,7 +209,7 @@ describe("BACKLOG-2390 — emails bulk remove-undo with realistic id shapes", ()
 
     // Invoke Undo, as clicking the toast button would.
     const call = onShowSuccess.mock.calls.find((c) => c[0] === "2 emails removed");
-    const undo = call?.[1] as { onClick: () => void } | undefined;
+    const undo = (call?.[1] as { action?: { onClick: () => void } } | undefined)?.action;
     await act(async () => {
       undo?.onClick();
     });
@@ -252,7 +267,7 @@ describe("BACKLOG-2390 — emails bulk remove-undo with realistic id shapes", ()
     });
 
     const call = onShowSuccess.mock.calls.find((c) => c[0] === "Email removed from transaction" || c[0] === "1 emails removed" || c[0]?.toString().includes("removed"));
-    const undo = call?.[1] as { onClick: () => void } | undefined;
+    const undo = (call?.[1] as { action?: { onClick: () => void } } | undefined)?.action;
     await act(async () => {
       undo?.onClick();
     });

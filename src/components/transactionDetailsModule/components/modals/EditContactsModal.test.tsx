@@ -73,6 +73,13 @@ jest.mock("../../../../contexts/ContactsContext", () => ({
     loading: false,
     error: null,
     refreshContacts: jest.fn(),
+    // BACKLOG-2631: the provider carries the address-book half and the shared
+    // both-halves refresh now. `Screen2Overlay` calls `triggerLazyLoad` on mount,
+    // so a mock without it throws before this suite's subject renders.
+    refreshBothLists: jest.fn().mockResolvedValue(undefined),
+    externalContacts: [],
+    externalContactsLoading: false,
+    triggerLazyLoad: jest.fn(),
   }),
 }));
 
@@ -120,7 +127,18 @@ jest.mock("../../../shared/ContactSearchList", () => ({
   ),
 }));
 
-// Mock ContactRoleRow
+// Mock ContactRoleRow.
+//
+// BACKLOG-2567 — READ THIS BEFORE ASSERTING ANYTHING ABOUT THE ROW'S CHROME.
+// This stub renders ONLY a name and a <select>. It has never rendered the
+// "(Auto)" badge, so NO assertion in this suite can observe whether the real
+// component still shows it: a "badge is gone" test here would pass against the
+// mock and prove nothing. That coverage lives in ContactRoleRow.test.tsx,
+// against the real component, and it must stay there.
+//
+// What this suite CAN still prove is the behaviour the founder kept — that a
+// role is assigned automatically — because the mock's value is driven by the
+// parent's `roleAssignments` state. See "auto-assignment survives" below.
 jest.mock("../../../shared/ContactRoleRow", () => ({
   ContactRoleRow: ({
     contact,
@@ -730,6 +748,90 @@ describe("EditContactsModal", () => {
       await user.click(screen.getByTestId("edit-contacts-modal-close"));
 
       expect(onClose).toHaveBeenCalled();
+    });
+  });
+  /**
+   * BACKLOG-2567 — the auto-ASSIGNMENT survives the removal of the "(Auto)"
+   * LABEL. The founder was explicit: "keep the auto assignment of role
+   * functionality i just don't want it to say auto."
+   *
+   * This is the control for the risky half of that change. Removing the badge
+   * meant deleting `autoFilledContactIds` bookkeeping that sat DIRECTLY BESIDE
+   * two live statements — `setRoleAssignments` in `handleAutoFillForContact`,
+   * and `onRoleAssignmentsChange` in `handleRoleChange`. A careless deletion
+   * that took a neighbouring line with it would not have been caught by any
+   * badge test, because a missing role is not a missing badge.
+   *
+   * Before this suite existed no test referenced the auto-fill path at all
+   * (grep for default_role / autoRole here returned zero hits), so that
+   * behaviour was entirely unverified.
+   */
+  describe("BACKLOG-2567: auto-assignment survives the badge removal", () => {
+    it("gives a newly added contact a role automatically", async () => {
+      // C2 — controls `setRoleAssignments` inside handleAutoFillForContact.
+      // Revert that call and this goes red: the new contact's role stays "".
+      //
+      // One contact is pre-assigned so the toolbar "Add Contacts" button is
+      // present (the empty state offers a different button); contact-2 is the
+      // one being newly added, and its role is what this asserts.
+      mockGetDetails.mockResolvedValue({
+        success: true,
+        transaction: {
+          contact_assignments: [
+            { id: "a1", contact_id: "contact-1", role: "client" },
+          ],
+        },
+      });
+
+      const user = userEvent.setup();
+      render(<EditContactsModal {...createDefaultProps()} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("add-contacts-button")).toBeInTheDocument();
+      });
+      await user.click(screen.getByTestId("add-contacts-button"));
+      await user.click(screen.getByTestId("search-contact-contact-2"));
+      // "Add Selected" is what commits the addition (handleAddSelected ->
+      // onAddContact -> handleAutoFillForContact) and returns to screen 1.
+      // The Back button dismisses WITHOUT adding.
+      await user.click(screen.getByTestId("add-selected-button"));
+
+      await waitFor(() => {
+        expect(screen.getByTestId("role-select-contact-2")).toBeInTheDocument();
+      });
+
+      // The role is filled in without the user choosing one. Asserted as "not
+      // empty" AND as the exact baseline value, so neither a blank nor a
+      // silently changed default can pass.
+      const select = screen.getByTestId("role-select-contact-2");
+      expect(select).not.toHaveValue("");
+      expect(select).toHaveValue("client");
+    });
+
+    it("keeps a manual role change sticking", async () => {
+      // C2b — controls `onRoleAssignmentsChange(newAssignments)` in
+      // handleRoleChange, the OTHER live statement the badge deletion sat next
+      // to. Revert that call and this goes red: the select snaps back.
+      mockGetDetails.mockResolvedValue({
+        success: true,
+        transaction: {
+          contact_assignments: [
+            { id: "a1", contact_id: "contact-1", role: "client" },
+          ],
+        },
+      });
+
+      const user = userEvent.setup();
+      render(<EditContactsModal {...createDefaultProps()} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("role-select-contact-1")).toBeInTheDocument();
+      });
+
+      const select = screen.getByTestId("role-select-contact-1");
+      await user.selectOptions(select, "inspector");
+
+      expect(select).toHaveValue("inspector");
     });
   });
 });

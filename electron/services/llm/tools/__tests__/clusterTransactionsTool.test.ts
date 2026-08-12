@@ -6,7 +6,28 @@
 import { ClusterTransactionsTool } from '../clusterTransactionsTool';
 import { BaseLLMService } from '../../baseLLMService';
 import { LLMConfig, LLMMessage, LLMResponse } from '../../types';
-import { ClusterTransactionsInput, ClusterTransactionsOutput, MessageAnalysis } from '../types';
+import {
+  ClusterTransactionsInput,
+  ClusterTransactionsOutput,
+  MessageAnalysis,
+  TransactionCluster,
+} from '../types';
+
+/**
+ * Shape of the RAW LLM JSON that `parseClusterResponse` consumes. This is NOT
+ * `ClusterTransactionsOutput`: the model emits `messageIds`, and the tool derives
+ * `clusterId`, `communicationIds`, `dateRange` and `suggestedContacts` from it.
+ * The fixtures below are fed through `JSON.stringify` as a model response, so they
+ * are typed against the model-facing shape rather than the tool's return type.
+ */
+type LlmClusterResponse = Omit<ClusterTransactionsOutput, 'clusters'> & {
+  clusters: Array<
+    Pick<
+      TransactionCluster,
+      'propertyAddress' | 'transactionType' | 'stage' | 'confidence' | 'summary'
+    > & { messageIds: string[] }
+  >;
+};
 
 // Mock uuid
 jest.mock('uuid', () => ({
@@ -216,7 +237,7 @@ describe('ClusterTransactionsTool', () => {
 
   describe('multi-address clustering (LLM path)', () => {
     it('should use LLM for messages with different addresses', async () => {
-      const mockOutput: ClusterTransactionsOutput = {
+      const mockOutput: LlmClusterResponse = {
         clusters: [
           {
             propertyAddress: '123 Main St',
@@ -283,7 +304,7 @@ describe('ClusterTransactionsTool', () => {
     });
 
     it('should handle unclustered messages', async () => {
-      const mockOutput: ClusterTransactionsOutput = {
+      const mockOutput: LlmClusterResponse = {
         clusters: [
           {
             propertyAddress: '123 Main St',
@@ -367,7 +388,7 @@ describe('ClusterTransactionsTool', () => {
 
   describe('existing transactions context', () => {
     it('should include existing transactions in LLM prompt', async () => {
-      const mockOutput: ClusterTransactionsOutput = {
+      const mockOutput: LlmClusterResponse = {
         clusters: [
           {
             propertyAddress: '123 Main St',

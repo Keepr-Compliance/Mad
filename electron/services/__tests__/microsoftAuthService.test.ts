@@ -8,6 +8,7 @@
 
 import microsoftAuthService from "../microsoftAuthService";
 import databaseService from "../databaseService";
+import type { OAuthToken } from "../../types/models";
 
 // Mock dependencies
 jest.mock("../databaseService");
@@ -39,6 +40,10 @@ describe("MicrosoftAuthService - Token Refresh", () => {
   describe("refreshAccessToken", () => {
     it("should successfully refresh an expired token", async () => {
       // Setup mocks - session-only OAuth uses unencrypted tokens
+      // Cast: this fixture carries exactly the OAuthToken columns
+      // microsoftAuthService reads. The full row type also requires
+      // token_refresh_failed_count (and mailbox_connected where omitted here);
+      // left out deliberately so the service sees only what the test supplies.
       const mockTokenRecord = {
         id: "token-id",
         user_id: mockUserId,
@@ -53,7 +58,7 @@ describe("MicrosoftAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 
@@ -96,6 +101,10 @@ describe("MicrosoftAuthService - Token Refresh", () => {
 
     it("should return error when token record has no refresh token", async () => {
       // Setup: Token record without refresh_token
+      // Cast: this fixture carries exactly the OAuthToken columns
+      // microsoftAuthService reads. The full row type also requires
+      // token_refresh_failed_count (and mailbox_connected where omitted here);
+      // left out deliberately so the service sees only what the test supplies.
       const mockTokenRecord = {
         id: "token-id",
         user_id: mockUserId,
@@ -108,7 +117,7 @@ describe("MicrosoftAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 
@@ -122,6 +131,10 @@ describe("MicrosoftAuthService - Token Refresh", () => {
 
     it("should handle Microsoft OAuth refresh failures", async () => {
       // Setup mocks
+      // Cast: this fixture carries exactly the OAuthToken columns
+      // microsoftAuthService reads. The full row type also requires
+      // token_refresh_failed_count (and mailbox_connected where omitted here);
+      // left out deliberately so the service sees only what the test supplies.
       const mockTokenRecord = {
         id: "token-id",
         user_id: mockUserId,
@@ -134,7 +147,7 @@ describe("MicrosoftAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 
@@ -154,6 +167,10 @@ describe("MicrosoftAuthService - Token Refresh", () => {
 
     it("should preserve email address and scopes when refreshing", async () => {
       // Setup mocks
+      // Cast: this fixture carries exactly the OAuthToken columns
+      // microsoftAuthService reads. The full row type also requires
+      // token_refresh_failed_count (and mailbox_connected where omitted here);
+      // left out deliberately so the service sees only what the test supplies.
       const mockTokenRecord = {
         id: "token-id",
         user_id: mockUserId,
@@ -168,7 +185,7 @@ describe("MicrosoftAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 
@@ -199,6 +216,10 @@ describe("MicrosoftAuthService - Token Refresh", () => {
 
     it("should calculate correct expiry time from expires_in", async () => {
       // Setup mocks
+      // Cast: this fixture carries exactly the OAuthToken columns
+      // microsoftAuthService reads. The full row type also requires
+      // token_refresh_failed_count (and mailbox_connected where omitted here);
+      // left out deliberately so the service sees only what the test supplies.
       const mockTokenRecord = {
         id: "token-id",
         user_id: mockUserId,
@@ -211,7 +232,7 @@ describe("MicrosoftAuthService - Token Refresh", () => {
         is_active: true,
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
-      };
+      } as OAuthToken;
 
       mockDatabaseService.getOAuthToken.mockResolvedValue(mockTokenRecord);
 

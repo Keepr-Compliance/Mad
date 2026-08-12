@@ -71,8 +71,20 @@ export async function readContacts(): Promise<SyncContact[]> {
     );
   }
 
+  // BACKLOG-2407: a missing lookupKey does NOT skip the contact — deliberately
+  // unlike the id guard above, and the difference matters. A missing id would
+  // collapse every id-less contact onto `android-{deviceId}-undefined`, one
+  // record sharing one fingerprint; a missing lookupKey costs only the capture,
+  // and dropping a real contact over it would be a far worse trade. It is null
+  // by construction for any contact with no structured-name row (see
+  // types/contacts.ts), so a non-zero count here is expected, not a fault.
+  //
+  // Counters only — never a contact id or name; these lines reach logs.
+  const withLookupKey = contacts.filter((c) => c.lookupKey !== undefined).length;
+
   console.log(
-    `[ContactReader] Read ${data.length} raw contacts -> ${contacts.length} mapped (${skipped} skipped: no id)`
+    `[ContactReader] Read ${data.length} raw contacts -> ${contacts.length} mapped ` +
+      `(${skipped} skipped: no id); lookupKey captured ${withLookupKey}/${contacts.length}`
   );
 
   return contacts;
@@ -115,13 +127,34 @@ function buildDisplayName(contact: Contacts.Contact): string {
 }
 
 /**
+ * Read `lookupKey` off a raw expo-contacts record (BACKLOG-2407).
+ *
+ * WHY AN ACCESSOR AND NOT A CAST. `lookupKey` is genuinely absent from the
+ * `expo-contacts@55.0.9` declarations — `Contacts.d.ts:377-382` declares
+ * `ExistingContact = Contact & { id: string }` and nothing more — while the
+ * native reader does supply it at runtime (`Contact.kt:335` puts it into the
+ * bridge Bundle unconditionally). A cast would assert a shape the package does
+ * not promise and would break silently if a later version renamed the field.
+ * This narrows the untyped value once, at the boundary, and treats anything that
+ * is not a non-empty string as absent.
+ */
+function readLookupKey(contact: Contacts.ExistingContact): string | undefined {
+  const raw = (contact as unknown as Record<string, unknown>).lookupKey;
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
  * Map an expo-contacts contact to our SyncContact format.
  *
  * The parameter is `ExistingContact` (not the base `Contact`) because
  * `getContactsAsync` returns `ExistingContact[]` — contacts read back from the
- * OS carry a guaranteed, immutable `id: string`. That id is the stable key the
- * desktop dedups on (`android-{deviceId}-{id}`), so it comes straight from the
- * provider rather than a synthesized fallback.
+ * OS carry a guaranteed, immutable `id: string`. That id is the key the desktop
+ * dedups on (`android-{deviceId}-{id}`), so it comes straight from the provider
+ * rather than a synthesized fallback. It is stable ON THIS DEVICE only
+ * (BACKLOG-2407); `lookupKey` below is the identifier Android designates as
+ * sync-stable, captured alongside it and matched on by nothing.
  */
 function mapToSyncContact(contact: Contacts.ExistingContact): SyncContact {
   const phones: ContactPhone[] = (contact.phoneNumbers ?? [])
@@ -140,6 +173,7 @@ function mapToSyncContact(contact: Contacts.ExistingContact): SyncContact {
 
   return {
     id: contact.id,
+    lookupKey: readLookupKey(contact),
     displayName: buildDisplayName(contact),
     phones,
     emails,

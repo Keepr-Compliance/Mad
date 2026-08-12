@@ -264,6 +264,79 @@ export interface UserLicense {
 // CONTACT MODELS
 // ============================================
 
+/**
+ * Which of the three row badges a contact carries (BACKLOG-2626).
+ *
+ * Founder, 2026-08-09, on being asked whether a fourth "Confirmed" state was
+ * wanted: no. *"Confirmed"* and *"you linked it"* are the same fact from the
+ * user's side, so `user_linked` covers both routes and there is no fourth value
+ * to add later. A contact with none of these three carries NO badge, which is
+ * `review_state: undefined` rather than a value in this union — the ordinary
+ * state needs no label, and giving it one would decorate every row.
+ */
+export type ContactLinkBadge =
+  /** A question is open on this contact. Nobody has decided yet. */
+  | "suggestion"
+  /** The app attached a record on its own and the user has not ratified it. */
+  | "autolinked"
+  /** The user decided, by either route (manual link, or confirming a proposal). */
+  | "user_linked";
+
+/**
+ * What the contact LIST knows about one combined contact (BACKLOG-2471 PR F,
+ * extended by BACKLOG-2626).
+ *
+ * Declared here rather than in `db/contactSourceSets` because `models.ts` is the
+ * shared vocabulary both the main process and the renderer read, and a type that
+ * rides on `Contact` cannot live below it.
+ */
+export interface ContactReviewState {
+  /**
+   * How many COLUMNS the compare screen will show — not how many links exist.
+   * The screen folds the record a contact was created from into the contact's
+   * own column, so two crosswalk rows show two columns, not three.
+   *
+   * Still the column count, and still only about `Compare sources`. BACKLOG-2626
+   * moved the BADGE off this number and onto `records` — see below.
+   */
+  columns: number;
+  /**
+   * How many REAL RECORDS the contact is assembled from, counted once each.
+   *
+   * Every non-origin crosswalk row is a real record; the contact's OWN record is
+   * added on top only when no link already stands for it. An imported contact's
+   * `source_id` row IS its own record, so it must not be counted twice — the
+   * founder saw `Sources 4` beside a row reading "5 records combined" on
+   * `b64da8c8`. A hand-made contact holds only a synthetic `origin:${contactId}`
+   * row, which stands for no address-book record, so there its own record IS the
+   * extra one and the `+ 1` is right.
+   *
+   * BACKLOG-2626, folding in `14617008`. The badge used to render `columns` while
+   * the sentence beside it counted records, so a contact whose second record was
+   * matched by stable id read **"1 records combined"** — accurate about columns,
+   * meaningless to the person reading it, and ungrammatical.
+   *
+   * Equal to `columns` on every shape TODAY, which is a coincidence of the
+   * compare screen folding exactly the record this declines to double-count —
+   * not a definition. Assert it against the Sources panel, never against
+   * `columns`.
+   */
+  records: number;
+  /** False once every non-origin link carries a `same_person` verdict. */
+  needsReview: boolean;
+  /**
+   * Pending `contact_link_proposals` rows against this contact — the questions
+   * the user has not answered (BACKLOG-2626).
+   *
+   * Counted with the SAME both-sides-still-exist predicate the review queue uses,
+   * so a badge can never promise a question the queue would not ask. A proposal
+   * whose source record has vanished is not askable and is not counted.
+   */
+  openQuestions: number;
+  /** Which badge the row carries. See `ContactLinkBadge`. */
+  badge: ContactLinkBadge;
+}
+
 export interface Contact {
   id: string;
   user_id: string;
@@ -275,7 +348,34 @@ export interface Contact {
   title?: string;
 
   // Source
+  /**
+   * FIRST-IMPORT provenance. One scalar, written at INSERT and never revised —
+   * NOT the whole truth about where this contact comes from once it is linked to
+   * more than one source. Read `source_types` for that (BACKLOG-2472).
+   */
   source: ContactSource;
+  /**
+   * The contact's LIVE source set: one entry per distinct `contact_source_links`
+   * row still attached to it, translated into this same display vocabulary
+   * (BACKLOG-2472).
+   *
+   * `undefined` means NO CROSSWALK ROWS WERE FOUND — a manual contact, a contact
+   * predating the v57 crosswalk, or a read path that does not populate this
+   * field. It does NOT mean "no sources", and consumers must fall back to
+   * `source` rather than treating the contact as source-less; an empty array
+   * would hide it from every source filter. `undefined` and `[]` are therefore
+   * NOT interchangeable, and nothing on the write path emits `[]`.
+   */
+  source_types?: ContactSource[];
+  /**
+   * Does this combined contact still owe the user a decision? (BACKLOG-2471 PR F)
+   *
+   * Stamped by `attachReviewState` beside `source_types`, and PRESENT ONLY for
+   * contacts the compare screen would open for. `undefined` means "nothing to
+   * compare, or not computed" — it must never be read as "reviewed", or a path
+   * that forgot to stamp would mark the whole address book settled.
+   */
+  review_state?: ContactReviewState;
 
   // Engagement Metrics (for CRM/Relationship Agent)
   last_inbound_at?: string;
@@ -298,6 +398,22 @@ export interface Contact {
   /** Last communication date (for message-derived contacts and activity tracking) */
   last_communication_at?: string | null;
 
+  // ========== Removal (tombstone) — migration v56, BACKLOG-2364/2365 ==========
+  /**
+   * When this contact was removed, or null/absent if active. A removal is a
+   * tombstone, never a DELETE: the row and all of its emails, phones and
+   * transaction roles survive it (BACKLOG-2365).
+   *
+   * Declared here because `SELECT *` reads (`dbGet<Contact>` / `dbAll<Contact>`)
+   * are unchecked assertions — the rows carry these columns at runtime whether
+   * or not the type admits it. The CCPA export ships whole contact rows to the
+   * data subject verbatim, so its disclosure of removal status was riding on
+   * fields the compiler did not know existed.
+   */
+  removed_at?: string | null;
+  /** Why it was removed. See `ContactRemovalReason` in contactDbService. */
+  removed_reason?: string | null;
+
   // ========== Array Fields (for display) ==========
   /** All emails for this contact (from contact_emails table) */
   allEmails?: string[];
@@ -315,6 +431,79 @@ export interface Contact {
   is_imported?: boolean | number;
 }
 
+/**
+ * The fields `updateContact` accepts, and the ONLY type a contact-write payload
+ * should be given (BACKLOG-2528).
+ *
+ * ===========================================================================
+ * WHY THIS EXISTS INSTEAD OF `Partial<Contact>`
+ * ===========================================================================
+ * `Contact` is the READ shape. It carries three legacy aliases —  `name`,
+ * `email`, `phone` — that are NOT columns of `contacts`; reads synthesise them
+ * (`getContactById` selects `c.display_name as name`, and pulls email/phone out
+ * of the child tables). `name` is even annotated *"Read-only. Use display_name
+ * for all writes."*
+ *
+ * A comment is not a constraint. `Partial<Contact>` made
+ * `updateContact(id, { name })` perfectly type-correct, the writer's allow-list
+ * silently skipped the unrecognised key, and renaming a contact did nothing
+ * while reporting success — founder-confirmed, P0. `tsc` had nothing to object
+ * to at any point.
+ *
+ * Naming the writable set separately is what turns the next instance of that
+ * mistake into a compile error rather than a silent no-op.
+ */
+/**
+ * ===========================================================================
+ * ONE DEFINITION OF A CONTACT'S EDITABLE FIELDS (BACKLOG-2532)
+ * ===========================================================================
+ * THE FIELD NAME THE RENDERER SENDS -> THE COLUMN IT IS WRITTEN TO.
+ *
+ * This is the ONLY place either list exists. `ContactUpdateFields` below is
+ * DERIVED from it, so the type and the writer's accepted list cannot disagree:
+ * add an entry here and both follow; a field the type accepts but the writer
+ * does not is no longer expressible.
+ *
+ * WHY IT IS ONE LIST AND NOT TWO KEPT IN STEP. There used to be an interface
+ * here and a `Map` in `contactDbService.ts`, maintained by hand. A field
+ * present on one side and absent from the other was DISCARDED IN SILENCE, and
+ * the handler still returned success — which is BACKLOG-2528: renaming a
+ * contact did nothing, and the form said it worked.
+ *
+ * Fixing that one field did not fix the arrangement that produced it. This
+ * does. The founder chose this over two alternatives on 2026-08-05: renaming
+ * the column everywhere (wide and risky, to settle a naming preference) and
+ * explicit hand-written mappers ("still two lists — you would have written down
+ * the thing that drifts instead of removing it").
+ *
+ * `name` is the renderer's spelling of `display_name`, accepted because reads
+ * hand the renderer `name` and it sends `name` back.
+ *
+ * `email` and `phone` are DELIBERATELY ABSENT. They are not columns of
+ * `contacts` — they live in `contact_emails` and `contact_phones` and are
+ * written by their own paths. A validator that accepts them does not make them
+ * updatable here, and pretending otherwise is what made BACKLOG-2534 hard to
+ * read.
+ */
+export const CONTACT_UPDATE_FIELD_TO_COLUMN = {
+  name: "display_name",
+  display_name: "display_name",
+  company: "company",
+  title: "title",
+  default_role: "default_role",
+} as const satisfies Record<string, string>;
+
+/**
+ * Derived from the mapping above — never written out by hand.
+ *
+ * CAUTION, unchanged by this item: a key that is PRESENT is written, whatever
+ * its value. `undefined` does not mean "leave this column alone". Omit the key
+ * entirely. That asymmetry is BACKLOG-2534, fixed at the handler.
+ */
+export type ContactUpdateFields = {
+  [K in keyof typeof CONTACT_UPDATE_FIELD_TO_COLUMN]?: string | null;
+};
+
 export interface ContactEmail {
   id: string;
   contact_id: string;
@@ -331,8 +520,8 @@ export interface ContactPhone {
   id: string;
   contact_id: string;
 
-  phone_e164: string; // Normalized: +14155550000
-  phone_display?: string; // Display format: (415) 555-0000
+  phone_e164: string; // Normalized: +14155550102
+  phone_display?: string; // Display format: (415) 555-0102
   is_primary: boolean;
   label?: string; // mobile, home, work, etc.
   source?: ContactInfoSource;
@@ -892,6 +1081,19 @@ export interface ContactFilters {
   has_phone?: boolean;
   /** @deprecated Derive from source field instead */
   is_imported?: boolean;
+  /**
+   * BACKLOG-2365: include contacts that have been removed (tombstoned via
+   * `contacts.removed_at`). Defaults to false — removed contacts are hidden
+   * from every ordinary list.
+   *
+   * The one caller that sets this true is the CCPA/GDPR subject-access export.
+   * A removed contact's row still physically holds that person's data, so
+   * omitting it from an "everything we hold about you" export would make the
+   * export a false statement. Hiding a contact from a picker and disclosing it
+   * to a data-subject request are different questions, and this flag is where
+   * they part company.
+   */
+  include_removed?: boolean;
 }
 
 export interface AttachmentFilters {

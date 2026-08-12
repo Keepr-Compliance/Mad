@@ -58,7 +58,8 @@ Object.defineProperty(global, 'window', {
 // Now import after mocks are set up
 // Use require to get fresh module per test via jest.isolateModules if needed
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { syncOrchestrator } = require('../SyncOrchestratorService');
+const { syncOrchestrator } =
+  require('../SyncOrchestratorService') as typeof import('../SyncOrchestratorService');
 
 describe('SyncOrchestratorService', () => {
   let stateHistory: Array<{ isRunning: boolean; currentSync: SyncType | null }>;
@@ -217,7 +218,10 @@ describe('SyncOrchestratorService', () => {
       expect(syncOrchestrator.getState().isRunning).toBe(false);
 
       // Clean up - resolve the pending promise
-      if (resolveSync) resolveSync();
+      // Cast: TypeScript narrows `resolveSync` to `null` here because the only
+      // assignment happens inside a Promise executor closure. Runtime behaviour is
+      // unchanged — the truthiness guard still gates the call.
+      if (resolveSync) (resolveSync as () => void)();
     });
 
     it('should transition isRunning to false even if sync function throws non-Error', async () => {
@@ -259,7 +263,10 @@ describe('SyncOrchestratorService', () => {
 
       // Clean up
       syncOrchestrator.cancel();
-      if (resolveSync) resolveSync();
+      // Cast: TypeScript narrows `resolveSync` to `null` here because the only
+      // assignment happens inside a Promise executor closure. Runtime behaviour is
+      // unchanged — the truthiness guard still gates the call.
+      if (resolveSync) (resolveSync as () => void)();
     });
   });
 
@@ -869,7 +876,10 @@ describe('SyncOrchestratorService', () => {
 
       // Clean up
       syncOrchestrator.cancel();
-      if (resolveSync) resolveSync();
+      // Cast: TypeScript narrows `resolveSync` to `null` here because the only
+      // assignment happens inside a Promise executor closure. Runtime behaviour is
+      // unchanged — the truthiness guard still gates the call.
+      if (resolveSync) (resolveSync as () => void)();
     });
   });
 
@@ -962,7 +972,10 @@ describe('SyncOrchestratorService', () => {
       expect(receivedSignal!.aborted).toBe(true);
 
       // Clean up
-      if (resolveSync) resolveSync();
+      // Cast: TypeScript narrows `resolveSync` to `null` here because the only
+      // assignment happens inside a Promise executor closure. Runtime behaviour is
+      // unchanged — the truthiness guard still gates the call.
+      if (resolveSync) (resolveSync as () => void)();
     });
 
     it('should skip sync function when signal is already aborted before execution', async () => {

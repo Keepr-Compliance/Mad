@@ -24,6 +24,23 @@ jest.mock('../core/dbConnection', () => ({
   dbAll: mockDbAll,
   dbRun: jest.fn().mockReturnValue({ lastInsertRowid: 0, changes: 0 }),
   dbGet: jest.fn().mockReturnValue(undefined),
+  /**
+   * DELIBERATELY NOT A REAL TRANSACTION (BACKLOG-2537), and this is the shape
+   * that needs saying out loud: this passthrough runs the body
+   * and commits every write, so a throw partway through would leave the earlier
+   * ones on disk.
+   *
+   * It is inert today because nothing here reaches one — measured, by replacing
+   * this with a throwing stub and watching every test in the file stay green.
+   * `dbAll`/`dbGet`/`dbRun` are canned `jest.fn()`s; there is NO DATABASE, so
+   * no atomicity claim can be made or mis-made here. Giving it real transaction
+   * semantics would mean giving it a database, which is a rewrite of the suite,
+   * not a fix to a mock.
+   *
+   * The sibling suites that DO open a database were converted, and
+   * `electron/__tests__/transactionMockIntegrity.guard.test.ts` now fails CI if
+   * one of them regresses.
+   */
   dbTransaction: jest.fn().mockImplementation((fn: () => unknown) => fn()),
   ensureDb: jest.fn(),
 }));

@@ -98,12 +98,12 @@ function seed(db: DatabaseType): void {
   att.run("A_t1", "M1", null, "guid-m1", "IMG_001.heic", "image/heic", 4096, "/data/img001.heic");
 
   // M2: linked via thread_id only (communications.message_id NULL)
-  message.run("M2", "TH2", "guid-m2", "2026-06-12T09:00:00.000Z", "outbound", "+15559998888");
+  message.run("M2", "TH2", "guid-m2", "2026-06-12T09:00:00.000Z", "outbound", "+15555550120");
   comm.run("c-m2", "T1", null, null, "TH2");
   att.run("A_t2", "M2", null, "guid-m2", "clip.mov", "video/quicktime", 8192, "/data/clip.mov");
 
   // M3: attachment linked ONLY by external_message_id (message_id NULL) — fallback
-  message.run("M3", "TH3", "guid-m3", "2026-06-13T09:00:00.000Z", "inbound", "+15551112222");
+  message.run("M3", "TH3", "guid-m3", "2026-06-13T09:00:00.000Z", "inbound", "+15555550104");
   comm.run("c-m3", "T1", "M3", null, "TH3");
   att.run("A_t3", null, null, "guid-m3", "voice.caf", "audio/x-caf", 512, "/data/voice.caf");
 

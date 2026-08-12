@@ -42,7 +42,12 @@ jest.mock("../../../../contexts/NetworkContext", () => ({
 
 const mockUseLicense = useLicense as jest.MockedFunction<typeof useLicense>;
 
-// Helper to create mock license context value
+// Helper to create mock license context value.
+// Deliberately partial: LicenseContextValue also requires hasInitialized,
+// validationStatus, isValid, blockReason, trialDaysRemaining, transactionCount,
+// transactionLimit and canCreateTransaction. Supplying them would change what the
+// header's LicenseGate sub-components see, so the shape these tests were written
+// against is preserved and only the static type is asserted.
 function createMockLicenseContext(licenseType: "individual" | "team" | "enterprise", hasAIAddon = false, isLoading = false) {
   return {
     licenseType,
@@ -53,7 +58,9 @@ function createMockLicenseContext(licenseType: "individual" | "team" | "enterpri
     canAutoDetect: hasAIAddon,
     isLoading,
     refresh: jest.fn(),
-  };
+    // `unknown` hop is required because `refresh: jest.fn()` is a jest.Mock, not
+    // the plain `() => Promise<void>` the context declares.
+  } as unknown as ReturnType<typeof useLicense>;
 }
 
 /**

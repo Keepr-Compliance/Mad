@@ -26,6 +26,7 @@ jest.mock("../logService", () => ({
 
 import {
   formatDiscoveryLines,
+  formatLinkLine,
   formatParseLine,
   formatPickerLine,
   formatShadowSyncLine,
@@ -37,6 +38,7 @@ import {
   redactAddressBookPath,
   resetContactIngestionFunnel,
   type DiscoveryStage,
+  type LinkStage,
   type ParseStage,
   type PickerStage,
   type ShadowSyncStage,
@@ -359,5 +361,70 @@ describe("BACKLOG-2391: structured snapshot for the diagnostics block", () => {
     expect(funnel.discovery).toBeUndefined();
     expect(funnel.parse).toBeUndefined();
     expect(funnel.shadowSync).toBeUndefined();
+  });
+});
+
+/**
+ * BACKLOG-2410 — the `declined` counter on the link stage.
+ *
+ * A decline is a content match REFUSED because the user already answered
+ * "different people" about that pair. It is counted apart from `unmatched`
+ * because the two need opposite responses from whoever reads the line: a high
+ * `unmatched` means new people, a high `declined` means the user has been
+ * rejecting suggestions.
+ */
+describe("formatLinkLine — declined (BACKLOG-2410)", () => {
+  const base: LinkStage = {
+    recordsIn: 1116,
+    idMatched: 1102,
+    contentMatched: 12,
+    flagged: 1,
+    unmatched: 1,
+  };
+
+  it("renders declined when present, in the arithmetic order", () => {
+    expect(formatLinkLine({ ...base, recordsIn: 1118, declined: 2 })).toBe(
+      "[Contacts] links: 1118 records -> id-matched 1102 -> content-matched 12" +
+        " -> flagged 1 -> declined 2 -> unmatched 1",
+    );
+  });
+
+  /**
+   * ZERO IS NOT NOTHING. A pass that ran and declined nothing must be
+   * distinguishable from a snapshot that predates the counter — the same
+   * "nothing found vs never looked" rule this whole epic is built on.
+   *
+   * NEGATIVE CONTROL RUN: changed the guard from `=== undefined` to a falsy
+   * check (`stage.declined ? ... : ""`). Observed: 1 failed / 2 passed — this
+   * test, with `declined 0` missing from the line.
+   */
+  it("renders `declined 0` rather than omitting it", () => {
+    expect(formatLinkLine({ ...base, declined: 0 })).toContain("-> declined 0 ->");
+  });
+
+  it("omits declined entirely when the field is absent", () => {
+    expect(formatLinkLine(base)).toBe(
+      "[Contacts] links: 1116 records -> id-matched 1102 -> content-matched 12" +
+        " -> flagged 1 -> unmatched 1",
+    );
+    expect(formatLinkLine(base)).not.toContain("declined");
+  });
+
+  it("closes the arithmetic: id + content + flagged + declined + unmatched = recordsIn", () => {
+    const stage: LinkStage = {
+      recordsIn: 10,
+      idMatched: 4,
+      contentMatched: 2,
+      flagged: 1,
+      declined: 2,
+      unmatched: 1,
+    };
+    expect(
+      stage.idMatched + stage.contentMatched + stage.flagged + (stage.declined ?? 0) + stage.unmatched,
+    ).toBe(stage.recordsIn);
+    expect(formatLinkLine(stage)).toBe(
+      "[Contacts] links: 10 records -> id-matched 4 -> content-matched 2" +
+        " -> flagged 1 -> declined 2 -> unmatched 1",
+    );
   });
 });

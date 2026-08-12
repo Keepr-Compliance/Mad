@@ -156,7 +156,6 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 // ---------------------------------------------------------------------------
@@ -220,26 +219,68 @@ const PRE_UPGRADE_VERSION = 55;
 /**
  * The version the chain must land on — i.e. the LAST entry in MIGRATIONS.
  *
- * BACKLOG-2401 raised this from 56 to 57 (contact_source_links). Bumping it
- * rather than pinning the suite to 56 is deliberate: this file is the only
+ * BACKLOG-2401 raised this from 56 to 57 (contact_source_links); BACKLOG-2407
+ * raises it to 58 (external_contacts.source_identity_json). Bumping it rather
+ * than pinning the suite to an older number is deliberate: this file is the only
  * place in the repo where a migration meets a REAL FILE, so every new migration
  * should be dragged across the real on-disk upgrade path. That is exactly the
  * coverage BACKLOG-2298/2300 were missing — a migration that passes every
- * in-memory suite and still throws on a genuine old→new upgrade.
+ * in-memory suite and still throws on a genuine old→new upgrade. v58 is a
+ * guarded ADD COLUMN on `external_contacts`, which is precisely the shape that
+ * incident was about.
  *
  * The v56-SPECIFIC assertions below (tombstone columns, "creates NO index") pin
  * themselves to 56 locally via runChainThrough(), so they keep their original
  * meaning as the head moves on.
  */
-const HEAD_VERSION = 57;
+const HEAD_VERSION = 62;
 /** The version whose isolated effects the BACKLOG-2364 assertions describe. */
 const TOMBSTONE_VERSION = 56;
+/**
+ * BACKLOG-2513's `emails.bulk_mail_headers` ADD COLUMN. Pinned to a literal for
+ * the same reason as TOMBSTONE_VERSION: written as `HEAD_VERSION` these
+ * assertions would silently change meaning the moment v63 lands.
+ */
+const BULK_MAIL_HEADERS_VERSION = 62;
+/**
+ * BACKLOG-2473's vocabulary rebuild. Pinned for the same reason
+ * TOMBSTONE_VERSION and REVIEW_QUEUE_VERSION are: its test asserts the state
+ * BEFORE the rebuild — the narrow five-value `source_type` CHECK — which is only
+ * reachable at v60. Written as `HEAD_VERSION` it would silently change meaning
+ * the moment a v62 lands.
+ */
+const ORIGIN_VOCABULARY_VERSION = 61;
+/**
+ * BACKLOG-2427's value-provenance relabel.
+ *
+ * PINNED, AND IT HAD TO BE. Its test previously reached its pre-migration state
+ * with `HEAD_VERSION - 1`, which meant v59 while head was 60 — and silently came
+ * to mean v60 the moment BACKLOG-2473 raised head to 61. Phase 1 then ran v60
+ * BEFORE the crosswalk rows it reads were inserted, so the relabel saw no linked
+ * source and reclassified rows the test expected it to leave alone. The suite
+ * went red for a reason that had nothing to do with the migration under test.
+ *
+ * This is the third instance of the same trap in this file (see
+ * TOMBSTONE_VERSION and REVIEW_QUEUE_VERSION). A version a test asserts the
+ * state BEFORE must be written as its own number, never as an offset from head.
+ */
+const VALUE_PROVENANCE_VERSION = 60;
+/**
+ * BACKLOG-2410's crosswalk rebuild. Pinned for the same reason TOMBSTONE_VERSION
+ * is: its test asserts the state BEFORE the rebuild, which is only reachable at
+ * v58. Written as `HEAD_VERSION - 1` it silently changed meaning when v60
+ * (BACKLOG-2427) landed and would have run its pre-rebuild CHECK assertion
+ * against a table v59 had already rebuilt.
+ */
+const REVIEW_QUEUE_VERSION = 59;
 
 const USER_ID = "user-ondisk-2364";
 const TXN_ID = "txn-ondisk-2364";
 /** Fixed ids — the exact SETS asserted before and after the upgrade. */
 const CONTACT_IDS = ["c-ondisk-alpha", "c-ondisk-beta", "c-ondisk-gamma"];
 const TC_IDS = ["tc-ondisk-alpha", "tc-ondisk-beta"];
+/** BACKLOG-2513: pre-existing email rows that must survive the v62 ADD COLUMN. */
+const EMAIL_IDS = ["e-ondisk-alpha", "e-ondisk-beta"];
 
 const TOMBSTONE_COLUMNS = ["removed_at", "removed_reason"];
 const TOMBSTONE_TABLES = ["contacts", "transaction_contacts"];
@@ -266,6 +307,13 @@ function indexNames(d: DatabaseType): string[] {
       .prepare("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
       .all() as Array<{ name: string }>
   ).map((r) => r.name);
+}
+
+/** BACKLOG-2513: column names on `emails`, for the v62 ADD COLUMN assertions. */
+function emailColumns(d: DatabaseType): string[] {
+  return (d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>).map(
+    (c) => c.name,
+  );
 }
 
 function idsIn(d: DatabaseType, table: string): string[] {
@@ -305,7 +353,7 @@ function openRealDb(file: string): DatabaseType {
  *
  * Added by BACKLOG-2401: before v57 existed, seeding at 55 and running the chain
  * happened to run ONLY v56, so the v56-specific assertions below were correct by
- * accident. They are now correct by construction, and stay correct at v58+.
+ * accident. They are now correct by construction, and stay correct at v59+.
  */
 async function runChainThrough(service: AnyService, maxVersion: number): Promise<void> {
   const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
@@ -630,6 +678,249 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
   });
 
   // -------------------------------------------------------------------------
+  // BACKLOG-2513 — emails.bulk_mail_headers, over the SAME real file
+  //
+  // This is the assertion the item body asked for by name: "start from an actual
+  // prior-version database file, run the migration, assert the column exists and
+  // existing rows survive intact." Every other migration test in the repo runs
+  // against :memory:, so this suite is the only place that claim can be made.
+  // -------------------------------------------------------------------------
+
+  it("v62 adds emails.bulk_mail_headers on the real file, NULL for every pre-existing row", async () => {
+    assertRealOnDiskTarget();
+
+    // The fixture builds its "v55" file by exec'ing the CURRENT schema.sql and
+    // then forcing schema_version back to 55 — so a column that schema.sql
+    // declares is already present, and the file does not represent a database
+    // that predates it. Drop it to get a genuinely pre-v62 shape.
+    //
+    // This is safe and faithful to what a real upgrade sees: runMigrations()
+    // re-execs schema.sql, but `CREATE TABLE IF NOT EXISTS emails` is a no-op on
+    // an existing table, so on a real user's database the column can ONLY come
+    // from the v62 ALTER. Dropping here makes the fixture express that.
+    //
+    // Without this drop the test would pass whether or not the migration did
+    // anything — a green that carries no information, and precisely the
+    // BACKLOG-2298/2300 confusion this suite exists to separate.
+    db.exec("ALTER TABLE emails DROP COLUMN bulk_mail_headers");
+
+    const colsBefore = emailColumns(db);
+    expect(colsBefore).not.toContain("bulk_mail_headers");
+
+    // Seed pre-existing email rows with fixed ids. The fixture's beforeEach
+    // seeds contacts/transactions but no emails, so this test owns its own
+    // population — the rows whose survival is the point.
+    for (const id of EMAIL_IDS) {
+      db.prepare(
+        `INSERT INTO emails (id, user_id, external_id, source, subject)
+         VALUES (?, ?, ?, 'gmail', ?)`,
+      ).run(id, USER_ID, `ext-${id}`, `Subject ${id}`);
+    }
+    expect(idsIn(db, "emails")).toEqual([...EMAIL_IDS].sort());
+
+    await service.runMigrations();
+
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // 1. The column is live on a REAL upgraded file.
+    expect(emailColumns(db)).toContain("bulk_mail_headers");
+
+    // 2. The exact id set survives — identity, not counts. A count assertion
+    //    cannot tell a dropped row from a row swapped for a different one.
+    expect(idsIn(db, "emails")).toEqual([...EMAIL_IDS].sort());
+
+    // 3. Every pre-existing row reads NULL: additive, no backfill, nothing a
+    //    user would see change on upgrade.
+    const rows = db
+      .prepare("SELECT id, bulk_mail_headers FROM emails ORDER BY id")
+      .all() as Array<{ id: string; bulk_mail_headers: string | null }>;
+    expect(rows.map((r) => r.bulk_mail_headers)).toEqual(EMAIL_IDS.map(() => null));
+
+    // 4. The rest of the row is untouched, not merely present.
+    expect(
+      (
+        db.prepare("SELECT subject FROM emails WHERE id = ?").get(EMAIL_IDS[0]) as {
+          subject: string;
+        }
+      ).subject,
+    ).toBe(`Subject ${EMAIL_IDS[0]}`);
+  });
+
+  it("v62 creates NO index — the index-name set is identical before and after", async () => {
+    assertRealOnDiskTarget();
+
+    // Clipped to 61 first so the comparison isolates v62. Running the whole
+    // chain in one go would fold in v57's idx_contact_source_links_contact and
+    // make this a statement about the chain rather than about v62.
+    //
+    // Pinned to BULK_MAIL_HEADERS_VERSION - 1, NOT HEAD_VERSION - 1: the offset
+    // form silently changes meaning when the head moves (see the header block
+    // above — it has already bitten this file twice). At v63 it would resolve to
+    // 62, running v62 BEFORE the snapshot, so `before` and `after` would both
+    // include whatever v62 did and the assertion would compare a set to itself
+    // forever — retiring the 2298/2300 index guard without failing once.
+    await runChainThrough(service, BULK_MAIL_HEADERS_VERSION - 1);
+
+    // Same reason as the test above: the fixture is built from the CURRENT
+    // schema.sql, so `bulk_mail_headers` is already present and v62's guarded
+    // body would no-op — an index created INSIDE that guard would never run and
+    // this assertion would pass no matter what v62 did. Verified by control:
+    // adding a CREATE INDEX to the migration did NOT redden this test until the
+    // column was dropped here. Drop it so the migration body genuinely executes.
+    db.exec("ALTER TABLE emails DROP COLUMN bulk_mail_headers");
+
+    const before = indexNames(db);
+    expect(before.length).toBeGreaterThan(0);
+
+    await runChainThrough(service, BULK_MAIL_HEADERS_VERSION);
+
+    expect(schemaVersionOf(db)).toBe(BULK_MAIL_HEADERS_VERSION);
+    // A standalone CREATE INDEX on bulk_mail_headers added to schema.sql would
+    // surface here — and would also throw "no such column" on a real upgrade,
+    // because runMigrations() re-execs schema.sql BEFORE the chain. That is the
+    // BACKLOG-2298/2300 failure class, shipped in July and caught only by
+    // founder live QA.
+    expect(indexNames(db)).toEqual(before);
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-2621 — an index added to schema.sql with NO migration
+  //
+  // The mirror image of the two tests above. Those protect against an index
+  // being added to schema.sql that CANNOT run on an upgrade. This one protects
+  // the opposite assumption — that an index added to schema.sql with no
+  // migration behind it DOES reach a database that has no migration pending.
+  //
+  // BACKLOG-2621 rests entirely on that: it adds
+  // `idx_contact_emails_email_lower` to schema.sql and deliberately writes no
+  // migration, on the reasoning that `runMigrations()` execs schema.sql
+  // UNCONDITIONALLY (databaseService.ts:776) and `CREATE INDEX IF NOT EXISTS`
+  // is therefore reached on every start.
+  //
+  // SR review found that mechanism unguarded: changing that one line to
+  // `if (willRunMigration) currentDb.exec(schemaSql)` — which would deny the
+  // index to EVERY existing install, the founder's included — left 96 suites
+  // and 1,388 tests green. Nothing in the repo observed it. This test does.
+  // -------------------------------------------------------------------------
+
+  it("BACKLOG-2621: a database ALREADY AT HEAD still gains idx_contact_emails_email_lower", async () => {
+    assertRealOnDiskTarget();
+
+    // Step 1 — bring the file to head, the way an install that upgraded BEFORE
+    // this change did. After this, `willRunMigration` is false.
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // Step 2 — the fixture builds its "v55" file by exec'ing the CURRENT
+    // schema.sql, so the index is already present and the assertion below would
+    // pass no matter what runMigrations() did. Drop it, exactly as the v62 test
+    // above drops its column and for the same reason: to make the fixture
+    // express a database that predates the change rather than one that already
+    // contains it.
+    db.exec("DROP INDEX IF EXISTS idx_contact_emails_email_lower");
+    expect(indexNames(db)).not.toContain("idx_contact_emails_email_lower");
+
+    // Step 3 — run again with NOTHING pending. Every version-gated branch is
+    // skipped (no backup, no chain body, no retention prune). The only thing
+    // left that can deliver the index is the unconditional schema.sql exec.
+    const versionBefore = schemaVersionOf(db);
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(versionBefore);
+
+    expect(indexNames(db)).toContain("idx_contact_emails_email_lower");
+
+    // Step 4 — present is not the same as reached. Assert the matching
+    // predicate is actually served by it, so an index that arrives under a
+    // different definition (a plain `email` index, say) does not pass.
+    const plan = (
+      db
+        .prepare(
+          `EXPLAIN QUERY PLAN
+             SELECT DISTINCT c.id FROM contacts c
+               JOIN contact_emails ce ON ce.contact_id = c.id
+              WHERE +c.user_id = ? AND LOWER(ce.email) IN (?, ?, ?)
+              ORDER BY c.id`,
+        )
+        .all("u", "a@example.com", "b@example.com", "c@example.com") as Array<{ detail: string }>
+    ).map((r) => r.detail);
+
+    expect(plan[0]).toBe("SEARCH ce USING INDEX idx_contact_emails_email_lower (<expr>=?)");
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-2633 — the same mechanism, for the contacts picker's index
+  //
+  // The picker's recency subqueries look a contact's own addresses up in
+  // `email_participants` under `LOWER(email_address)`, which no shipped index
+  // could serve. Without a by-address path the planner drove the subquery from
+  // `emails` — the whole mailbox, once per contact — and the picker took 7.4
+  // seconds at the founder's record count.
+  //
+  // Like BACKLOG-2621, `idx_email_participants_lower_address` ships in
+  // schema.sql with NO migration behind it, because `runMigrations()` execs
+  // schema.sql unconditionally. That reasoning is only worth anything if
+  // something observes it, and the founder's own database is the case that
+  // matters: he is already at head, so every version-gated branch is skipped and
+  // the unconditional exec is the ONLY thing that can deliver the index to him.
+  //
+  // Safe as a standalone CREATE INDEX because `email_participants` and
+  // `email_address` are declared in schema.sql itself — the BACKLOG-2298/2300
+  // "no such column" failure bites an index on a MIGRATION-added column, which
+  // this is not. The two tests above cover that direction.
+  // -------------------------------------------------------------------------
+
+  it("BACKLOG-2633: a database ALREADY AT HEAD still gains idx_email_participants_lower_address", async () => {
+    assertRealOnDiskTarget();
+
+    // Step 1 — bring the file to head, as an install that upgraded BEFORE this
+    // change did. After this, `willRunMigration` is false.
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // Step 2 — the fixture builds its file by exec'ing the CURRENT schema.sql,
+    // so the index is already there and the assertion below would pass no matter
+    // what runMigrations() did. Drop it, so the fixture expresses a database
+    // that predates the change rather than one that already contains it.
+    db.exec("DROP INDEX IF EXISTS idx_email_participants_lower_address");
+    expect(indexNames(db)).not.toContain("idx_email_participants_lower_address");
+
+    // Step 3 — run again with NOTHING pending. No backup, no chain body, no
+    // retention prune. The unconditional schema.sql exec is all that is left.
+    const versionBefore = schemaVersionOf(db);
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(versionBefore);
+
+    expect(indexNames(db)).toContain("idx_email_participants_lower_address");
+
+    // Step 4 — present is not the same as reached, and this index in particular
+    // is worthless unless the plan probes THROUGH it: measured, adding it and
+    // changing nothing else is worth 1.0x, because the planner keeps its
+    // mailbox-first join order. `(<expr>=?)` is SQLite reporting an EXPRESSION
+    // index probe, so an index that arrived under this name over the plain
+    // `email_address` column would NOT pass this line.
+    const plan = (
+      db
+        .prepare(
+          `EXPLAIN QUERY PLAN
+             SELECT MAX(COALESCE(em.sent_at, em.received_at))
+               FROM json_each(?) AS e_lc
+               CROSS JOIN email_participants ep_lc
+                 ON LOWER(ep_lc.email_address) = LOWER(e_lc.value)
+               CROSS JOIN emails em
+                 ON em.id = ep_lc.email_id
+                AND em.user_id = ?`,
+        )
+        .all(JSON.stringify(["a@example.com"]), USER_ID) as Array<{ detail: string }>
+    ).map((r) => r.detail);
+
+    expect(plan).toContain(
+      "SEARCH ep_lc USING INDEX idx_email_participants_lower_address (<expr>=?)",
+    );
+    // And the mailbox is reached last, by primary key — never scanned.
+    expect(plan.join("\n")).not.toContain("idx_emails_user_sent");
+  });
+
+  // -------------------------------------------------------------------------
   // BACKLOG-2401 — the crosswalk, over the SAME real file
   // -------------------------------------------------------------------------
 
@@ -678,6 +969,497 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
         .all() as Array<{ id: string; contact_id: string }>
     ).map((r) => `${r.id}:${r.contact_id}`);
     expect(linked).toEqual([`csl-ondisk-1:${CONTACT_IDS[0]}`]);
+  });
+
+  /**
+   * BACKLOG-2473 — THE v61 VOCABULARY REBUILD, ON A REAL OLD DATABASE.
+   *
+   * WHY THIS TEST HAD TO EXIST, IN THE WORDS OF THE INCIDENT IT ANSWERS.
+   * BACKLOG-2298: a migration added a column plus a standalone `CREATE INDEX` on
+   * it in schema.sql, passed EVERY CI suite, and still broke real upgrades with
+   * "no such column" — because no test starts from a real prior-version on-disk
+   * database. The in-memory migration tests call `_runVersionedMigrations`
+   * directly; the parity tests seed schema.sql on an empty DB; E2E seeds at HEAD.
+   * None of them upgrade a real old database. This one does.
+   *
+   * THE FOUR POPULATIONS SEEDED BEFORE THE UPGRADE, and what each is here to
+   * prove survives:
+   *
+   *   a manual contact            — the population v61 exists to serve. Before
+   *                                 the migration it CANNOT have a crosswalk row
+   *                                 at all; after it, `manual` is admitted.
+   *   a message-derived contact   — same, via `sms`.
+   *   a macOS-linked contact      — has a REAL record-backed crosswalk row that
+   *                                 the rebuild has to carry across intact.
+   *   a contact with no links     — the pre-v57 shape. It must come out of the
+   *                                 upgrade EXACTLY as it went in, because v61
+   *                                 deliberately ships no backfill.
+   *
+   * Two-phase for the same reason the v59 test above is: the crosswalk row has
+   * to exist on disk BEFORE the rebuild runs, so the chain is clipped at v60,
+   * rows are inserted through the real file, then the chain is restored and run
+   * to head. Both halves go through the PUBLIC `runMigrations()` — WAL, backup
+   * branch, schema.sql re-exec and all.
+   */
+  it("v61 widens the crosswalk vocabulary on a REAL old database without disturbing a row", async () => {
+    assertRealOnDiskTarget();
+
+    const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const allMigrations = klass.MIGRATIONS;
+
+    // --- phase 1: reach v60, the real pre-migration state.
+    klass.MIGRATIONS = allMigrations.filter(
+      (m) => m.version <= ORIGIN_VOCABULARY_VERSION - 1,
+    );
+    try {
+      await service.runMigrations();
+    } finally {
+      klass.MIGRATIONS = allMigrations;
+    }
+    expect(schemaVersionOf(db)).toBe(ORIGIN_VOCABULARY_VERSION - 1);
+
+    // ---------------------------------------------------------------------
+    // RESTORE THE GENUINE v60 SHAPE — this is what a real user's file holds.
+    // ---------------------------------------------------------------------
+    // A REPLAYED chain does not reproduce it, and the reason is worth stating
+    // because it looks like a bug and is not.
+    //
+    // v59 and v61 both rebuild this table through the SAME shared DDL constant
+    // (`contactSourceLinksRebuildTableSql`), which always describes the CURRENT
+    // shape. So replaying the chain with today's code gives v59's rebuild the
+    // v61-wide CHECK, and v61 then correctly no-ops. Every route converges on
+    // one final shape, which is the property the parity tests enforce — but it
+    // means the replayed fixture is NOT the database a shipped v2.x install has.
+    //
+    // A REAL v60 install ran v59 against the code as it was THEN, so its
+    // crosswalk carries the narrow five-value `source_type` CHECK and no
+    // `origin` match method. That is the database v61 has to upgrade in the
+    // field, and BACKLOG-2298 is precisely the incident where the difference
+    // between "the fixture the chain produces" and "the file the user has"
+    // hid a migration defect through every CI suite. So it is reconstructed
+    // here, on the real file, from the historical DDL verbatim.
+    db.exec(`
+      DROP TABLE contact_source_links;
+      CREATE TABLE contact_source_links (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        contact_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (
+          source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+        ),
+        source_record_id TEXT NOT NULL,
+        external_uuid TEXT,
+        match_method TEXT NOT NULL CHECK (
+          match_method IN ('source_id', 'email', 'phone', 'unique_name', 'manual', 'scored')
+        ),
+        confidence REAL,
+        matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        evidence_ref TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+        UNIQUE (user_id, source_type, source_record_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_contact_source_links_contact
+        ON contact_source_links(contact_id);
+    `);
+
+    // The four populations. `contacts.source` is what an origin row would be
+    // derived from, so it is set deliberately per contact rather than defaulted.
+    const setSource = db.prepare("UPDATE contacts SET source = ? WHERE id = ?");
+    setSource.run("manual", CONTACT_IDS[0]); // typed in by hand
+    setSource.run("sms", CONTACT_IDS[1]); // inferred from a text thread
+    setSource.run("contacts_app", CONTACT_IDS[2]); // imported from the Mac
+
+    // PRE-MIGRATION PROOF: the narrow CHECK is live, so the two populations
+    // this work is about genuinely cannot be recorded yet. Without this the
+    // "admits it after" assertions below prove nothing.
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_source_links
+             (id, user_id, contact_id, source_type, source_record_id, match_method)
+           VALUES ('csl-pre-manual', ?, ?, 'manual', 'origin:pre', 'manual')`,
+        )
+        .run(USER_ID, CONTACT_IDS[0]),
+    ).toThrow(/CHECK/i);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_source_links
+             (id, user_id, contact_id, source_type, source_record_id, match_method)
+           VALUES ('csl-pre-origin', ?, ?, 'macos', 'origin:pre2', 'origin')`,
+        )
+        .run(USER_ID, CONTACT_IDS[0]),
+    ).toThrow(/CHECK/i);
+
+    // The record-backed row that must cross the rebuild untouched. Every
+    // nullable field is populated distinctly so a positional copy cannot land
+    // correctly by coincidence.
+    db.prepare(
+      `INSERT INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, external_uuid,
+          match_method, confidence, matched_at, evidence_ref, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "csl-v61-book", USER_ID, CONTACT_IDS[2], "macos", "UUID-BOOK:ABPerson", "ext-uuid-book",
+      "source_id", null, "2026-06-01 00:00:00", "ev-book",
+      "2026-06-01 00:00:00", "2026-06-02 00:00:00",
+    );
+
+    const contactsBefore = idsIn(db, "contacts");
+
+    // --- phase 2: the real chain to head, over the real file, with rows present.
+    await service.runMigrations();
+
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // (1) THE RECORD-BACKED ROW SURVIVED, FIELD FOR FIELD. Not a count — a count
+    //     passes while every row holds its neighbour's value, which is the whole
+    //     failure mode of a table rebuild.
+    expect(
+      db
+        .prepare(
+          `SELECT id, user_id, contact_id, source_type, source_record_id, external_uuid,
+                  match_method, confidence, matched_at, evidence_ref, created_at, updated_at
+             FROM contact_source_links ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "csl-v61-book",
+        user_id: USER_ID,
+        contact_id: CONTACT_IDS[2],
+        source_type: "macos",
+        source_record_id: "UUID-BOOK:ABPerson",
+        external_uuid: "ext-uuid-book",
+        match_method: "source_id",
+        confidence: null,
+        matched_at: "2026-06-01 00:00:00",
+        evidence_ref: "ev-book",
+        created_at: "2026-06-01 00:00:00",
+        updated_at: "2026-06-02 00:00:00",
+      },
+    ]);
+
+    // (2) THE CONTACTS ARE UNTOUCHED — exact id SET, and the source column each
+    //     went in with. v61 is schema-only; it must not have rewritten a row.
+    expect(idsIn(db, "contacts")).toEqual(contactsBefore);
+    expect(
+      db
+        .prepare("SELECT id, source FROM contacts ORDER BY id")
+        .all() as Array<{ id: string; source: string }>,
+    ).toEqual([
+      { id: CONTACT_IDS[0], source: "manual" },
+      { id: CONTACT_IDS[1], source: "sms" },
+      { id: CONTACT_IDS[2], source: "contacts_app" },
+    ]);
+
+    // (3) NO BACKFILL RAN. The two link-less contacts are still link-less —
+    //     founder decision 2026-08-04, pinned so a later "helpful" backfill
+    //     cannot be added without this going red.
+    expect(
+      (db
+        .prepare("SELECT DISTINCT contact_id FROM contact_source_links ORDER BY contact_id")
+        .all() as Array<{ contact_id: string }>).map((r) => r.contact_id),
+    ).toEqual([CONTACT_IDS[2]]);
+
+    // (4) THE WIDENED VOCABULARY IS LIVE ON THE REAL FILE — the whole point.
+    //     Both populations can now be recorded, having been refused above.
+    const insertOrigin = db.prepare(
+      `INSERT INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, match_method)
+       VALUES (?, ?, ?, ?, ?, 'origin')`,
+    );
+    expect(() =>
+      insertOrigin.run("csl-v61-manual", USER_ID, CONTACT_IDS[0], "manual", `origin:${CONTACT_IDS[0]}`),
+    ).not.toThrow();
+    expect(() =>
+      insertOrigin.run("csl-v61-sms", USER_ID, CONTACT_IDS[1], "sms", `origin:${CONTACT_IDS[1]}`),
+    ).not.toThrow();
+
+    // (5) STILL A CONSTRAINT, NOT A FREE-FOR-ALL. A widened CHECK that admits
+    //     anything would satisfy (4) while being useless.
+    expect(() =>
+      insertOrigin.run("csl-v61-bad", USER_ID, CONTACT_IDS[0], "whatsapp", "origin:bad"),
+    ).toThrow(/CHECK/i);
+
+    // (6) THE UNIQUE, THE FK CASCADE AND THE INDEX ALL SURVIVED THE DROP/RENAME.
+    expect(indexNames(db)).toContain("idx_contact_source_links_contact");
+    expect(() =>
+      insertOrigin.run("csl-v61-dup", USER_ID, CONTACT_IDS[1], "manual", `origin:${CONTACT_IDS[0]}`),
+    ).toThrow(/UNIQUE/i);
+
+    db.prepare("DELETE FROM contacts WHERE id = ?").run(CONTACT_IDS[0]);
+    expect(
+      (db
+        .prepare("SELECT id FROM contact_source_links ORDER BY id")
+        .all() as Array<{ id: string }>).map((r) => r.id),
+    ).toEqual(["csl-v61-book", "csl-v61-sms"]);
+  });
+
+  /**
+   * BACKLOG-2410 — THE v59 REBUILD, CARRYING REAL ROWS, ON A REAL FILE.
+   *
+   * WHY THIS TEST HAD TO EXIST. v59 rebuilds `contact_source_links` to widen a
+   * CHECK, and a rebuild is the highest-risk shape of migration there is. Until
+   * this test, row-copy fidelity was asserted ONLY in memory
+   * (`databaseService.migration-v59.test.ts`, via `createMigrationHarness` —
+   * `:memory:`, `dbPath = null`, calling `_runVersionedMigrations()` directly).
+   * That is exactly the synthetic pattern BACKLOG-2298 warns about.
+   *
+   * On the ordinary path through this file the rebuild runs but copies ZERO
+   * rows: the fixture starts at v55, v57 creates the crosswalk empty, and v57
+   * deliberately ships no backfill. So the migration that could scramble every
+   * row was never once observed moving a row across a real file.
+   *
+   * THE TWO-PHASE RUN IS THE POINT. Clip the chain at 58, run the PUBLIC
+   * `runMigrations()` so the crosswalk exists on disk, insert rows through the
+   * real file, restore the chain, and run again so v59 rebuilds a POPULATED
+   * table. Both halves go through the same public entry point a user's app
+   * calls — WAL, backup branch, schema.sql re-exec and all.
+   */
+  it("v59 rebuilds a POPULATED crosswalk on the real file without scrambling a row", async () => {
+    assertRealOnDiskTarget();
+
+    const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const allMigrations = klass.MIGRATIONS;
+
+    // --- phase 1: reach v58, so the crosswalk exists at its PRE-rebuild shape.
+    klass.MIGRATIONS = allMigrations.filter((m) => m.version <= REVIEW_QUEUE_VERSION - 1);
+    try {
+      await service.runMigrations();
+    } finally {
+      klass.MIGRATIONS = allMigrations;
+    }
+    expect(schemaVersionOf(db)).toBe(REVIEW_QUEUE_VERSION - 1);
+    // Pre-rebuild: the v57 CHECK is still in force, so `unique_name` is refused.
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_source_links
+             (id, user_id, contact_id, source_type, source_record_id, match_method)
+           VALUES ('csl-pre', ?, ?, 'macos', 'PRE:ABPerson', 'unique_name')`,
+        )
+        .run(USER_ID, CONTACT_IDS[0]),
+    ).toThrow(/CHECK/i);
+
+    // Two rows with every nullable field populated differently, so a positional
+    // copy cannot land correctly by coincidence.
+    const insert = db.prepare(
+      `INSERT INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, external_uuid,
+          match_method, confidence, matched_at, evidence_ref, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run(
+      "csl-rebuild-1", USER_ID, CONTACT_IDS[0], "macos", "UUID-R1:ABPerson", "ext-uuid-r1",
+      "source_id", null, "2026-04-01 00:00:00", null, "2026-04-01 00:00:00", "2026-04-02 00:00:00",
+    );
+    insert.run(
+      "csl-rebuild-2", USER_ID, CONTACT_IDS[1], "outlook", "GRAPH-R2", null,
+      "email", null, "2026-05-01 00:00:00", "ev-r2", "2026-05-01 00:00:00", "2026-05-02 00:00:00",
+    );
+
+    // --- phase 2: the real chain, over the real file, with rows present.
+    await service.runMigrations();
+
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // Field for field, both rows. Not a count — a count passes while every row
+    // holds its neighbour's value, which is the whole failure mode.
+    expect(
+      db
+        .prepare(
+          `SELECT id, user_id, contact_id, source_type, source_record_id, external_uuid,
+                  match_method, confidence, matched_at, evidence_ref, created_at, updated_at
+             FROM contact_source_links ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "csl-rebuild-1",
+        user_id: USER_ID,
+        contact_id: CONTACT_IDS[0],
+        source_type: "macos",
+        source_record_id: "UUID-R1:ABPerson",
+        external_uuid: "ext-uuid-r1",
+        match_method: "source_id",
+        confidence: null,
+        matched_at: "2026-04-01 00:00:00",
+        evidence_ref: null,
+        created_at: "2026-04-01 00:00:00",
+        updated_at: "2026-04-02 00:00:00",
+      },
+      {
+        id: "csl-rebuild-2",
+        user_id: USER_ID,
+        contact_id: CONTACT_IDS[1],
+        source_type: "outlook",
+        source_record_id: "GRAPH-R2",
+        external_uuid: null,
+        match_method: "email",
+        confidence: null,
+        matched_at: "2026-05-01 00:00:00",
+        evidence_ref: "ev-r2",
+        created_at: "2026-05-01 00:00:00",
+        updated_at: "2026-05-02 00:00:00",
+      },
+    ]);
+
+    // The widened CHECK is live on the rebuilt table, the dropped index is back,
+    // and the UNIQUE survived the DROP/RENAME.
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_source_links
+             (id, user_id, contact_id, source_type, source_record_id, match_method)
+           VALUES ('csl-rebuild-3', ?, ?, 'iphone', 'IPH-R3', 'unique_name')`,
+        )
+        .run(USER_ID, CONTACT_IDS[2]),
+    ).not.toThrow();
+    expect(indexNames(db)).toContain("idx_contact_source_links_contact");
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_source_links
+             (id, user_id, contact_id, source_type, source_record_id, match_method)
+           VALUES ('csl-rebuild-4', ?, ?, 'outlook', 'GRAPH-R2', 'email')`,
+        )
+        .run(USER_ID, CONTACT_IDS[2]),
+    ).toThrow(/UNIQUE/i);
+
+    // And the review-queue tables landed on the real file too, usable.
+    expect(
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('contact_link_proposals','contact_link_verdicts') ORDER BY name",
+        )
+        .all(),
+    ).toEqual([{ name: "contact_link_proposals" }, { name: "contact_link_verdicts" }]);
+  });
+
+  /**
+   * v60 (BACKLOG-2427) — RECLASSIFYING USER DATA, ON THE REAL DRIVER.
+   *
+   * The rule itself is unit-tested against `node:sqlite` in
+   * `db/__tests__/contactValueProvenanceBackfill.test.ts`, because the
+   * better-sqlite3 binary in this repo is an Electron build (ABI 139) and
+   * cannot be loaded by plain node — so that suite is the only one that can be
+   * EXECUTED on a developer machine.
+   *
+   * SR review of PR #2186 required this second, real-driver run before a
+   * user-data reclassification ships, and was right to: `node:sqlite` and
+   * better-sqlite3 are different engines, and "the SQL is portable" is an
+   * argument, not evidence. Without seeded rows this file would prove only that
+   * v60 did not throw.
+   *
+   * TWO-PHASE, for the same reason the v59 test above is: `contact_source_links`
+   * does not exist until v57, so the crosswalk rows v60 reads have to be
+   * inserted after the chain reaches v59 and before v60 runs. Both halves go
+   * through the PUBLIC `runMigrations()` on the real file.
+   *
+   * The three branches, on one contact so a per-row rule cannot pass by
+   * accident of grouping:
+   *   carried by a linked source  -> stays 'import'  (still removable)
+   *   carried by nothing          -> becomes 'manual' (never removable)
+   *   already 'manual'            -> untouched
+   */
+  it("v60 reclassifies ONLY the values no linked source carries, on the real file", async () => {
+    assertRealOnDiskTarget();
+
+    const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const allMigrations = klass.MIGRATIONS;
+
+    // --- phase 1: reach v59, so the crosswalk exists at its post-rebuild shape.
+    //     Pinned to VALUE_PROVENANCE_VERSION - 1, NOT HEAD_VERSION - 1: as an
+    //     offset from head this silently came to mean "run v60 first" when v61
+    //     landed, which is the opposite of what this phase is for.
+    klass.MIGRATIONS = allMigrations.filter(
+      (m) => m.version <= VALUE_PROVENANCE_VERSION - 1,
+    );
+    try {
+      await service.runMigrations();
+    } finally {
+      klass.MIGRATIONS = allMigrations;
+    }
+    expect(schemaVersionOf(db)).toBe(VALUE_PROVENANCE_VERSION - 1);
+
+    // A source record that genuinely carries one email and one phone. Its phone
+    // is spelled differently from the stored E.164 form, so the normalized-key
+    // match is exercised rather than string equality.
+    db.prepare(
+      `INSERT INTO external_contacts
+         (id, user_id, name, phones_json, phones_normalized_json, emails_json,
+          external_record_id, source, synced_at)
+       VALUES ('ec-v60', ?, 'Carried By Source', '["(408) 555-0101"]', '["4085550101"]',
+               '["carried@bysource.com"]', 'MAC-V60', 'macos', '2026-08-03 00:00:00')`,
+    ).run(USER_ID);
+    db.prepare(
+      `INSERT INTO contact_source_links
+         (id, user_id, contact_id, source_type, source_record_id, match_method)
+       VALUES ('csl-v60', ?, ?, 'macos', 'MAC-V60', 'source_id')`,
+    ).run(USER_ID, CONTACT_IDS[0]);
+
+    // Every value below says 'import' — which is exactly the problem v60 exists
+    // to clean up: before BACKLOG-2427 threaded real provenance, a typed value
+    // and an imported one were indistinguishable.
+    const insEmail = db.prepare(
+      "INSERT INTO contact_emails (id, contact_id, email, is_primary, source) VALUES (?, ?, ?, ?, ?)",
+    );
+    insEmail.run("ce-v60-carried", CONTACT_IDS[0], "carried@bysource.com", 1, "import");
+    insEmail.run("ce-v60-typed", CONTACT_IDS[0], "typed@byhand.com", 0, "import");
+    insEmail.run("ce-v60-manual", CONTACT_IDS[0], "already@manual.com", 0, "manual");
+
+    const insPhone = db.prepare(
+      `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    insPhone.run("cp-v60-carried", CONTACT_IDS[0], "+14085550101", "4085550101", 1, "import");
+    insPhone.run("cp-v60-typed", CONTACT_IDS[0], "+14155550109", "4155550109", 0, "import");
+
+    // A SECOND contact's value that only the FIRST contact's source carries.
+    // The NOT EXISTS is correlated on contact_id; dropping that correlation
+    // would spare this row, and the unlink would then be free to delete it.
+    insEmail.run("ce-v60-other", CONTACT_IDS[1], "carried@bysource.com", 1, "import");
+
+    // --- phase 2: the real chain runs v60 over the seeded rows.
+    await service.runMigrations();
+
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // Exact value -> source pairs. A count would pass while the WRONG row was
+    // reclassified, which is the entire failure mode of a data migration.
+    expect(
+      db
+        .prepare(
+          `SELECT id, email, source FROM contact_emails
+            WHERE contact_id IN (?, ?) ORDER BY id`,
+        )
+        .all(CONTACT_IDS[0], CONTACT_IDS[1]),
+    ).toEqual([
+      { id: "ce-v60-carried", email: "carried@bysource.com", source: "import" },
+      { id: "ce-v60-manual", email: "already@manual.com", source: "manual" },
+      { id: "ce-v60-other", email: "carried@bysource.com", source: "manual" },
+      { id: "ce-v60-typed", email: "typed@byhand.com", source: "manual" },
+    ]);
+
+    expect(
+      db
+        .prepare("SELECT id, phone_e164, source FROM contact_phones WHERE contact_id = ? ORDER BY id")
+        .all(CONTACT_IDS[0]),
+    ).toEqual([
+      { id: "cp-v60-carried", phone_e164: "+14085550101", source: "import" },
+      { id: "cp-v60-typed", phone_e164: "+14155550109", source: "manual" },
+    ]);
+
+    // v60 CLASSIFIES; it must never delete. Same row ids, same count.
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM contact_emails").get() as { n: number }).n,
+    ).toBe(4);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS n FROM contact_phones").get() as { n: number }).n,
+    ).toBe(2);
   });
 
   it("v57 leaves the pre-existing contact id set untouched (no row is rewritten by the crosswalk)", async () => {

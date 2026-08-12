@@ -63,9 +63,49 @@ jest.mock("google-auth-library");
 import databaseService from "../databaseService";
 import gmailFetchService from "../gmailFetchService";
 import { google } from "googleapis";
-import type { Message } from "../../types";
+import type { Message, OAuthToken } from "../../types";
 
 const mockDatabaseService = databaseService as jest.Mocked<typeof databaseService>;
+
+/**
+ * Row shape this suite simulates for the in-memory `messages` store.
+ *
+ * It is deliberately NOT `Message`:
+ *  - it models nullable SQLite columns as `| null` (the NULL filtering is precisely
+ *    what these tests exercise) whereas `Message` models them as optional; and
+ *  - it still carries the pre-migration column names this suite was written against
+ *    (provider / sender / recipients / transaction_confidence /
+ *    assigned_transaction_id / llm_analyzed_at / updated_at), which have since been
+ *    renamed or dropped from the `Message` model.
+ *
+ * Declaring it locally lets the fixtures type-check without changing a single value
+ * the mocked databaseService hands back to the assertions.
+ */
+interface SimulatedMessageRow {
+  id: string;
+  user_id: string;
+  external_id: string | null;
+  provider: string;
+  thread_id: string | null;
+  subject: string;
+  sender: string;
+  recipients: string[];
+  participants_flat: string | null;
+  body_text: string;
+  body_html: string | null;
+  received_at: string;
+  sent_at: string | null;
+  has_attachments: boolean;
+  is_transaction_related: boolean | null;
+  transaction_confidence: number | null;
+  assigned_transaction_id: string | null;
+  message_id_header: string | null;
+  content_hash: string | null;
+  duplicate_of: string | null;
+  llm_analyzed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 describe("Email Deduplication Integration (SPRINT-014)", () => {
   const mockUserId = "test-user-dedup";
@@ -77,6 +117,9 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
   const mockSetCredentials = jest.fn();
   const mockOn = jest.fn();
 
+  // Fixture deliberately omits oauth_tokens columns this suite never reads
+  // (mailbox_connected, token_refresh_failed_count); asserted to OAuthToken so the
+  // mock boundary type-checks without inventing values the service could branch on.
   const mockTokenRecord = {
     id: "token-id",
     user_id: mockUserId,
@@ -89,7 +132,7 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
     is_active: true,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  };
+  } as OAuthToken;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -312,7 +355,7 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
 
   describe("LLM Analysis Filter (TASK-911)", () => {
     // In-memory message storage for testing
-    let messageStorage: Message[];
+    let messageStorage: SimulatedMessageRow[];
 
     beforeEach(() => {
       messageStorage = [];
@@ -327,7 +370,7 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
                 msg.is_transaction_related === null &&
                 msg.duplicate_of === null
             )
-            .slice(0, limit);
+            .slice(0, limit) as unknown as Message[]; // simulated rows, see SimulatedMessageRow
         }
       );
     });
@@ -335,8 +378,8 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
     /**
      * Helper to insert a test message
      */
-    function insertMessage(msg: Partial<Message>): Message {
-      const message: Message = {
+    function insertMessage(msg: Partial<SimulatedMessageRow>): SimulatedMessageRow {
+      const message: SimulatedMessageRow = {
         id: msg.id || `msg-${Date.now()}`,
         user_id: msg.user_id || mockUserId,
         external_id: msg.external_id || null,
@@ -547,7 +590,7 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
       // 4. Filter out duplicates from LLM analysis
 
       // In-memory storage
-      const messages: Message[] = [];
+      const messages: SimulatedMessageRow[] = [];
 
       // Mock database operations
       mockDatabaseService.getMessagesForLLMAnalysis.mockImplementation(
@@ -557,26 +600,26 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
               m.user_id === userId &&
               m.is_transaction_related === null &&
               m.duplicate_of === null
-          );
+          ) as unknown as Message[]; // simulated rows, see SimulatedMessageRow
         }
       );
 
       // Step 1: Simulate fetched emails with same Message-ID
-      const email1: Partial<Message> = {
+      const email1: Partial<SimulatedMessageRow> = {
         id: "gmail-123",
         user_id: mockUserId,
         message_id_header: "<same-message@example.com>",
         is_transaction_related: null,
         duplicate_of: null,
       };
-      const email2: Partial<Message> = {
+      const email2: Partial<SimulatedMessageRow> = {
         id: "gmail-456",
         user_id: mockUserId,
         message_id_header: "<same-message@example.com>", // Same Message-ID
         is_transaction_related: null,
         duplicate_of: null,
       };
-      const email3: Partial<Message> = {
+      const email3: Partial<SimulatedMessageRow> = {
         id: "gmail-789",
         user_id: mockUserId,
         message_id_header: "<different-message@example.com>",
@@ -596,7 +639,7 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
         received_at: new Date().toISOString(),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      } as Message);
+      } as SimulatedMessageRow);
 
       messages.push({
         ...email2,
@@ -609,7 +652,7 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         duplicate_of: "gmail-123", // Marked as duplicate
-      } as Message);
+      } as SimulatedMessageRow);
 
       messages.push({
         ...email3,
@@ -621,7 +664,7 @@ describe("Email Deduplication Integration (SPRINT-014)", () => {
         received_at: new Date().toISOString(),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
-      } as Message);
+      } as SimulatedMessageRow);
 
       // Step 3: Get messages for LLM analysis
       const llmMessages = await mockDatabaseService.getMessagesForLLMAnalysis(mockUserId);

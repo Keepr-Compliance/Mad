@@ -188,7 +188,7 @@ describe("AndroidComingSoonStep", () => {
       // Reveal the QR (starts the poll + sync server), then advance one poll
       // with a paired status so the step flips to its "Connected" branch.
       const driveToPaired = async () => {
-        window.api.pairing.getStatus.mockResolvedValue({
+        jest.mocked(window.api.pairing.getStatus).mockResolvedValue({
           success: true,
           status: {
             isPaired: true,
@@ -257,7 +257,7 @@ describe("AndroidComingSoonStep", () => {
   // -------------------------------------------------------------------------
   describe("Windows network-permission pre-warn (BACKLOG-2348)", () => {
     it("shows the pre-warn (and does NOT start the server) when firewall is not yet allowed", async () => {
-      window.api.localSync.checkFirewallAllowed.mockResolvedValue({
+      jest.mocked(window.api.localSync.checkFirewallAllowed).mockResolvedValue({
         allowed: false,
         checked: true,
       });
@@ -282,7 +282,7 @@ describe("AndroidComingSoonStep", () => {
     });
 
     it("starts the server after the user acknowledges the pre-warn", async () => {
-      window.api.localSync.checkFirewallAllowed.mockResolvedValue({
+      jest.mocked(window.api.localSync.checkFirewallAllowed).mockResolvedValue({
         allowed: false,
         checked: true,
       });
@@ -306,7 +306,7 @@ describe("AndroidComingSoonStep", () => {
     });
 
     it("shows the pre-warn (renderer safe-default) when the firewall check itself rejects", async () => {
-      window.api.localSync.checkFirewallAllowed.mockRejectedValue(
+      jest.mocked(window.api.localSync.checkFirewallAllowed).mockRejectedValue(
         new Error("IPC failure")
       );
       const user = userEvent.setup();
@@ -328,7 +328,7 @@ describe("AndroidComingSoonStep", () => {
     });
 
     it("skips the pre-warn and goes straight to the QR when firewall is already allowed", async () => {
-      window.api.localSync.checkFirewallAllowed.mockResolvedValue({
+      jest.mocked(window.api.localSync.checkFirewallAllowed).mockResolvedValue({
         allowed: true,
         checked: true,
       });
@@ -366,7 +366,7 @@ describe("AndroidComingSoonStep", () => {
     });
 
     it("cancelling the pre-warn dismisses it without starting the server", async () => {
-      window.api.localSync.checkFirewallAllowed.mockResolvedValue({
+      jest.mocked(window.api.localSync.checkFirewallAllowed).mockResolvedValue({
         allowed: false,
         checked: true,
       });

@@ -1,0 +1,1058 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ResponsiveModal } from "../../common/ResponsiveModal";
+import { ContactCompareSources } from "../../shared/ContactCompareSources";
+import type {
+  ContactReviewCluster,
+  ContactReviewItem,
+} from "@/types/contactProvenance";
+
+/**
+ * Review possible duplicates (BACKLOG-2410)
+ *
+ * ===========================================================================
+ * WHAT THIS SCREEN IS
+ * ===========================================================================
+ * The linker refuses to guess. When a match would reassign an identifier
+ * already held by someone else — or when a name is not unique enough to trust —
+ * the link is withheld. Before this screen, "withheld" meant counted, logged,
+ * and then nothing: the one band where a human adds information was discarded on
+ * every sync.
+ *
+ * It is also the only place a WRONG merge can be reported. No product in the
+ * public record proactively detects a false merge; the person harmed by it does.
+ * That only works if we ask.
+ *
+ * ===========================================================================
+ * THE TUCKED REVIEW CARD (BACKLOG-2502 R2)
+ * ===========================================================================
+ * Founder design, 7 Aug. The contact is a card; the question is an amber card
+ * tucked directly under it, always open, no strip and no caret. THE REASON IS
+ * THE HEADING — "Possible duplicate 1" named the row without telling anyone what
+ * to weigh, and at five candidates it was five labels and no information.
+ *
+ * The list therefore groups by CONTACT, not by cluster. A cluster is a fact
+ * about the linker's reasoning (which records competed for which name); a card
+ * is a question put to a person, and the person is answering about one contact
+ * at a time. Every candidate under a card answers INDEPENDENTLY — accepting the
+ * Outlook record must not decide the Mac one, because with two records that
+ * could both be him, they usually both are.
+ *
+ * ===========================================================================
+ * WHY THE CORRECTION IS HERE AND NOT AT THE SOURCE
+ * ===========================================================================
+ * Four of the six prose blocks this card replaces are frozen into
+ * `contact_link_proposals.evidence_json` when the proposal is written, and that
+ * freeze is deliberate — `databaseService.ts:3150`: *"a verdict is a labelled
+ * training/regression example and a label is only usable with the features AS
+ * THEY WERE WHEN THE HUMAN SAW THEM"*. Recomputing a proposal's evidence would
+ * relabel history, and rows already sitting in the founder's queue carry the old
+ * strings either way. So every correction across 2502 lands in what this screen
+ * RENDERS. NOTHING in this file may write back to an evidence producer.
+ *
+ * The frozen prose is not deleted: it is still reachable behind the compare
+ * screen's "How we decided this", which is where a reader who wants the full
+ * argument goes.
+ *
+ * ===========================================================================
+ * AMBER, LIKE THE OTHER REVIEW SURFACE
+ * ===========================================================================
+ * Matches the palette and icon grammar of `NeedsReviewSection` (BACKLOG-2319) so
+ * the two review surfaces read as one system — `text-gray-400` icon buttons
+ * going green on accept and red on reject — while staying strictly separate:
+ * that one is emails↔transaction, this one is contacts↔source records. Its
+ * `needs-review-*` test ids are deliberately not reused.
+ */
+
+interface ReviewDuplicatesModalProps {
+  userId: string;
+  onClose: () => void;
+  /**
+   * BACKLOG-2626 — SHOW ONLY THIS CONTACT'S OUTSTANDING QUESTIONS.
+   *
+   * Founder, 2026-08-10, on what should happen when a contact with open
+   * questions is clicked: *"we should reuse the Possible duplicates [screen] and
+   * only filter for that contact."* Undefined is the whole queue, which is the
+   * header button's state and the behaviour this screen has always had.
+   *
+   * A FILTER, not a mode. Nothing else changes: the same tucked card, the same
+   * per-candidate eye / check / ×, the same independent answers, the same
+   * compare overlay. That sameness is the point — the alternative was a second
+   * review surface to keep in step with this one, and his standing instruction
+   * is *"as similar as we can, to have less to maintain"*. The post-import flow
+   * and BACKLOG-2603 take the same parameter.
+   *
+   * Applied to the GROUPS rather than to the fetch: the queue's reader is
+   * user-wide, its cluster `exclusive` flag is computed across contacts, and a
+   * contact-scoped query would have to reproduce that. Filtering after the
+   * regroup keeps one predicate — `PENDING_JOIN` — deciding what is askable.
+   */
+  filterContactId?: string;
+  /** Fired after any answer, so the caller can refresh the count and the list. */
+  onResolved?: () => void;
+  /**
+   * BACKLOG-2502 — `Confirm & edit`, which LEAVES this screen.
+   *
+   * Founder ruling, 2026-08-09: the two entry paths land in different places on
+   * purpose. `Confirm` keeps the user in the queue (the answered row is gone
+   * when the list reloads); `Confirm & edit` opens the contact card and its
+   * form, *"exactly as confirm-and-edit does when a contact is opened from the
+   * main list. Same destination, same behaviour — not a variant."*
+   *
+   * Which is why this is a callback and not a destination built here: the owner
+   * of the card is `Contacts.tsx`, and it hands BOTH routes the same function,
+   * so there is no second implementation to drift from the first.
+   */
+  onConfirmedAndEdit?: (contactId: string) => void;
+}
+
+/**
+ * One contact card and everything still to answer about it.
+ *
+ * `exclusive` is carried down from the CLUSTER because grouping by contact would
+ * otherwise drop it: a `record:` cluster is one source record several contacts
+ * are competing for, so after regrouping its members land on different cards and
+ * the fact that answering one settles the rest has nowhere else to live.
+ */
+interface ContactGroup {
+  contactId: string;
+  contactName: string;
+  contactCompany: string | null;
+  items: ContactReviewItem[];
+  exclusive: boolean;
+}
+
+export function ReviewDuplicatesModal({
+  userId,
+  onClose,
+  filterContactId,
+  onResolved,
+  onConfirmedAndEdit,
+}: ReviewDuplicatesModalProps): React.ReactElement {
+  const [clusters, setClusters] = useState<ContactReviewCluster[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  /**
+   * BACKLOG-2502 — the candidate whose compare screen is open, if any.
+   *
+   * The card settles what it can; this is where the rest goes. The compare
+   * screen is the SHIPPED component (BACKLOG-2471), given the candidate as one
+   * more column — not a second detail view built here.
+   */
+  const [comparing, setComparing] = useState<ContactReviewItem | null>(null);
+  /**
+   * An OUTCOME to report, not a load failure — kept apart from `error` because
+   * the answer succeeded and the list is about to reload, and `load()` clears
+   * `error`. A message that a successful reload wipes is a message nobody reads.
+   */
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const result = await window.api.contacts.getReviewQueue(userId);
+      if (result.success) {
+        setClusters(result.clusters ?? []);
+        setError(null);
+      } else {
+        setError(result.error ?? "Could not load the review list.");
+        setClusters([]);
+      }
+    } catch {
+      setError("Could not load the review list.");
+      setClusters([]);
+    }
+  }, [userId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const answer = useCallback(
+    async (item: ContactReviewItem, verdict: "same" | "different") => {
+      setBusyId(item.proposalId);
+      setNotice(null);
+      try {
+        // The two channels are called on separate branches rather than through
+        // one ternary because their response shapes DIFFER: `contacts:reject-link`
+        // returns `{ success, error }` and carries no `linked`. Collapsing them
+        // into a union is what hides that difference.
+        const result =
+          verdict === "same"
+            ? await window.api.contacts.confirmLink(userId, item.proposalId)
+            : {
+                ...(await window.api.contacts.rejectLink(
+                  userId,
+                  item.proposalId,
+                )),
+                linked: true,
+              };
+        if (!result.success) {
+          setError(result.error ?? "That answer could not be saved.");
+        } else if (verdict === "same" && result.linked === false) {
+          /*
+            BACKLOG-2502 — `ok: true` DOES NOT MEAN LINKED.
+
+            `confirmProposal` returns `{ ok: true, linked: false }` when the
+            record is already claimed by a DIFFERENT contact: it records the
+            verdict, creates no link, and skips the sibling rejection. That is
+            the merge guard working — re-pointing a claimed record is out of
+            scope across this whole epic — but a caller that reads `success`
+            alone tells the user two records were joined when they were not.
+
+            The card still leaves the queue (the proposal IS resolved), so the
+            list reloads; the sentence is what stops it being a silent no-op.
+          */
+          setNotice(
+            "That record is already saved to a different contact, so it was not joined here.",
+          );
+          onResolved?.();
+          await load();
+        } else {
+          setError(null);
+          onResolved?.();
+          // Reload rather than splice the answered row out locally: confirming
+          // one option in a multiple-choice cluster also answers its siblings,
+          // and only the main process knows which. A local splice would leave
+          // questions on screen that have already been settled.
+          await load();
+        }
+      } catch {
+        setError("That answer could not be saved.");
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [userId, onResolved, load],
+  );
+
+  /**
+   * Clusters in, contact cards out.
+   *
+   * Insertion order is preserved (a `Map` keyed by contact id) so the list does
+   * not reshuffle under the user between reloads — the queue's own ORDER BY is
+   * stable, and re-sorting here would undo it.
+   */
+  const groups = useMemo<ContactGroup[]>(() => {
+    const byContact = new Map<string, ContactGroup>();
+    for (const cluster of clusters ?? []) {
+      const clusterIsExclusive = cluster.exclusive && cluster.items.length > 1;
+      for (const item of cluster.items) {
+        // BACKLOG-2626 — the filter, applied to the ITEMS so a cluster spanning
+        // several contacts contributes only the part that belongs to this one.
+        // Dropping whole clusters instead would take a question away from the
+        // contact being asked about, because a `record:` cluster is one source
+        // record several contacts are competing for.
+        if (filterContactId && item.contactId !== filterContactId) continue;
+        let group = byContact.get(item.contactId);
+        if (!group) {
+          group = {
+            contactId: item.contactId,
+            contactName: item.contactName,
+            contactCompany: item.contactCompany ?? null,
+            items: [],
+            exclusive: false,
+          };
+          byContact.set(item.contactId, group);
+        }
+        group.items.push(item);
+        group.exclusive = group.exclusive || clusterIsExclusive;
+      }
+    }
+    return [...byContact.values()];
+  }, [clusters, filterContactId]);
+
+  /**
+   * The number this screen reports, counted from the GROUPS it is about to
+   * render rather than from the clusters it fetched.
+   *
+   * BACKLOG-2626: filtered, the two differ, and the one the user can check is
+   * the rendered one. "Review 12 possible duplicates" opening onto 3 is the same
+   * small lie the queue's own count rule was written to prevent — it just moves
+   * inside this component once a filter exists.
+   */
+  const total = groups.reduce((sum, g) => sum + g.items.length, 0);
+
+  /**
+   * ANSWER THEM ALL AND THE SCREEN LEAVES — filtered only (BACKLOG-2626).
+   *
+   * The founder's sentence is *"answer the last, land on the contact card"*, and
+   * the card is already mounted underneath: `handleContactClick` opened it
+   * before this screen went over it. So closing IS landing on it, and holding an
+   * empty review screen open in front of it would be a dead surface asking
+   * nothing.
+   *
+   * Deliberately NOT done for the unfiltered queue. There, an empty list is a
+   * finished inbox and the founder gets to see that he has finished it; here,
+   * there is a card behind waiting to be read.
+   *
+   * Gated on `clusters !== null` so the FIRST render — before the queue has been
+   * read at all — cannot be mistaken for an empty one and close the screen
+   * instantly. `null` is "not yet known" and is distinct from `[]` throughout
+   * this feature.
+   */
+  useEffect(() => {
+    if (!filterContactId || clusters === null || comparing) return;
+    if (total === 0) onClose();
+  }, [filterContactId, clusters, comparing, total, onClose]);
+
+  return (
+    <>
+      <ResponsiveModal
+        onClose={onClose}
+        panelClassName="max-w-2xl max-h-[80vh]"
+        testId="review-duplicates-modal"
+      >
+        {/*
+        BACKLOG-2502 — A LIFO STACK OF LAYERS, AND THE `×` POPS ONE OF THEM.
+
+        Founder model, 2026-08-09, in his own words: *"just like the texts
+        preview on transaction details"*. Last in, first out. The compare screen
+        renders INSIDE this modal, so these two are a stack of two, and the `×`
+        belonging to the TOP layer is the one that acts:
+
+          list only         -> this `×` closes the list
+          compare, over it  -> COMPARE's `×` closes compare, and the list is
+                               still underneath, exactly as the user left it
+
+        Which is why this one is gated on `!comparing`: it is the LIST's control,
+        not the modal's. Rendering it under an open compare screen would put two
+        dismissals on screen meaning two different things — the confusion that
+        made him ask for one in the first place. There is still exactly one `×`
+        at any moment; it just belongs to whichever layer is on top.
+
+        `useContactCommViewers` already makes this promise on the transaction
+        card: the viewer mounted over the card owns its own close, and closing it
+        returns the card rather than dismissing everything. This is that rule,
+        not a second mechanism — the layer that renders the control is the layer
+        the control pops.
+
+        What is NOT here any more: the `Done` footer (it held nothing but `Done`;
+        the decision buttons live in the compare screen's own footer and in each
+        candidate row, and none of them moved) and `← Back to the list`, whose
+        behaviour this rule restores without needing a second control.
+      */}
+        <div className="px-6 py-4 border-b border-gray-200 flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg font-bold text-gray-900">
+              Possible duplicates
+            </h2>
+            {/*
+            BACKLOG-2502 — THE PROMISE IS MADE ONCE, HERE.
+
+            The founder got it per candidate: a frozen-audit sentence repeated
+            verbatim on every row, plus a "nothing has been linked" sentence the
+            header already made. At five candidates that is ten sentences saying
+            what these two say. Both still exist, frozen in each proposal's
+            evidence, and both are reachable from the compare screen's
+            "How we decided this" — they are no longer the default view.
+          */}
+            <p
+              className="text-sm text-gray-600 mt-1"
+              data-testid="review-duplicates-subtext"
+            >
+              These were <span className="font-semibold">not</span> linked
+              automatically because we could not tell. Nothing changes until you
+              answer.
+            </p>
+          </div>
+          {!comparing && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close possible duplicates"
+              data-testid="review-duplicates-close"
+              className="flex-shrink-0 rounded px-1.5 text-xl leading-none text-gray-400 transition-colors hover:text-gray-900"
+            >
+              ×
+            </button>
+          )}
+        </div>
+
+        {/*
+        THE LIST BODY IS NOT HIDDEN WHILE COMPARE IS OPEN. Compare is a separate
+        overlay now (below, outside this modal), so the queue stays visible and
+        dimmed behind it — which is what makes the two-layer model readable
+        rather than looking like one window whose contents changed.
+      */}
+        <div className="px-6 py-4 overflow-y-auto">
+          {notice && (
+            <div
+              className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-900"
+              data-testid="review-duplicates-notice"
+            >
+              {notice}
+            </div>
+          )}
+          {error && (
+            <div
+              className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-800"
+              data-testid="review-duplicates-error"
+            >
+              {error}
+            </div>
+          )}
+
+          {clusters === null && (
+            <div
+              className="text-center py-8"
+              data-testid="review-duplicates-loading"
+            >
+              <div className="w-6 h-6 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto" />
+            </div>
+          )}
+
+          {clusters !== null && total === 0 && (
+            <div
+              className="text-center py-8 text-sm text-gray-500"
+              data-testid="review-duplicates-empty"
+            >
+              Nothing to review. Every contact link we made was one we were sure
+              about.
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {groups.map((group) => (
+              <ContactReviewCard
+                key={group.contactId}
+                group={group}
+                busyId={busyId}
+                onCompare={setComparing}
+                onSame={(item) => void answer(item, "same")}
+                onDifferent={(item) => void answer(item, "different")}
+              />
+            ))}
+          </div>
+        </div>
+      </ResponsiveModal>
+
+      {/*
+        BACKLOG-2502 ROUND 4 — COMPARE IS ITS OWN POPUP, ABOVE THE LIST.
+
+        Founder, 2026-08-09, testing `223be9fb`: *"I still see the compare screen
+        within the 'Possible duplicates / These were not linked automatically…'
+        screen, rather than its own popup."* The layer BEHAVIOUR was right; the
+        rendering was not. It sat in the list modal's body, under the list's
+        heading, so it read as one window whose contents had changed.
+
+        It is now a SIBLING overlay at `z-[60]`, which is how every other stacked
+        layer in this app is built — `ResponsiveModal` with a `zIndex`, rendered
+        beside the layer it covers, not inside it. It is the same construction
+        `useContactCommViewers` uses for the email and text viewers it mounts
+        over the contact card (`z-[90]` / `z-[80]`), which is the surface the
+        founder named as the reference.
+
+        `z-[60]` places it above the list (`z-50`, ResponsiveModal's default) and
+        below `ContactFormModal` (`z-[70]`), which `Confirm & edit` opens once
+        BOTH of these layers are gone.
+
+        `panelBg="bg-transparent"` because `ContactCompareSources` draws its own
+        white rounded frame — a white panel around it would be a card inside a
+        card. `panelClassName` is WIDTH-ONLY on purpose: it keeps
+        `ResponsiveModal`'s centred-card defaults (`sm:h-auto sm:max-h-[90vh]
+        sm:overflow-y-auto`), which a `max-h-` of our own would suppress and
+        leave the panel stretched full height (the BACKLOG-2292 trap).
+
+        `proposalId` present routes its Confirm to the SHIPPED
+        `contacts:confirm-link`, and its `Different people` to
+        `contacts:reject-link` — the same two channels the cards use, so there is
+        one resolution path and not three.
+      */}
+      {comparing && (
+        <ResponsiveModal
+          /*
+            POPS ONE LAYER, NOT THE STACK — the backdrop click and the compare
+            screen's own `×` are the same action, and both land back on the list,
+            which is still mounted with its clusters in state and is deliberately
+            NOT re-read: nothing was answered, so there is nothing to re-read, and
+            a reload here would reshuffle a queue the user is part-way through.
+          */
+          onClose={() => setComparing(null)}
+          zIndex="z-[60]"
+          panelBg="bg-transparent"
+          panelClassName="max-w-4xl"
+          testId="review-compare-overlay"
+        >
+          <div data-testid="review-compare-pane">
+            <ContactCompareSources
+              userId={userId}
+              contactId={comparing.contactId}
+              proposedSource={{
+                sourceType: comparing.sourceType,
+                sourceRecordId: comparing.sourceRecordId,
+              }}
+              proposalId={comparing.proposalId}
+              /*
+                R8 — ONE QUESTION, TWO COLUMNS. The founder opened a contact with
+                two linked records and one candidate and got four columns: three
+                of them his own records, arranged as if he were being asked to
+                choose between them. He is not — he is being asked whether the
+                candidate is this person. So the contact side is drawn as one
+                column carrying everything it is already made of.
+
+                Not set from a contact card, where one column per source IS the
+                feature: that screen exists to show which record contributed what
+                and to unlink the wrong one.
+              */
+              collapseContactSources
+              why={
+                comparing.evidence
+                  ? {
+                      summary: comparing.evidence.summary,
+                      details: comparing.evidence.details ?? [],
+                    }
+                  : undefined
+              }
+              onClose={() => setComparing(null)}
+              /*
+                BACKLOG-2502 — CONFIRM RETURNS TO THE QUEUE, and the answered row
+                is gone from it.
+
+                `setComparing(null)` takes this overlay down and `load()` re-reads
+                the list underneath, which is what removes the row — deliberately
+                not a local splice: confirming one option in an exclusive cluster
+                also answers its siblings, and only the main process knows which.
+              */
+              onConfirmed={() => {
+                setComparing(null);
+                onResolved?.();
+                void load();
+              }}
+              /*
+                `Confirm & edit` LEAVES the queue for the contact card. The write
+                has already happened by the time this fires, so the caller is only
+                being told where to go; it owns closing this modal.
+              */
+              onConfirmedAndEdit={() => {
+                const { contactId } = comparing;
+                setComparing(null);
+                onResolved?.();
+                onConfirmedAndEdit?.(contactId);
+              }}
+              onRejected={() => {
+                setComparing(null);
+                onResolved?.();
+                void load();
+              }}
+            />
+          </div>
+        </ResponsiveModal>
+      )}
+    </>
+  );
+}
+
+/** The letter in the avatar. Empty names fall back rather than render a blank circle. */
+function initialOf(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? trimmed.charAt(0).toUpperCase() : "?";
+}
+
+/** "Paul Dorian" → "Paul", for "Accept the ones that are this Paul." */
+function firstNameOf(name: string): string {
+  const first = name.trim().split(/\s+/)[0];
+  return first || name.trim();
+}
+
+const NUMBER_WORDS = [
+  "",
+  "One",
+  "Two",
+  "Three",
+  "Four",
+  "Five",
+  "Six",
+  "Seven",
+  "Eight",
+  "Nine",
+];
+
+/**
+ * THE REASON, WHICH IS THE HEADING.
+ *
+ * Written ONLY from what the queue can prove — the number of candidates and
+ * `matched_on`, the field the rule actually compared. The founder's design reads
+ * *"Your Outlook has a Jane Seller with an email address you don't have for this
+ * contact"*; the queue does not project the contact's own addresses, so that
+ * exact claim is not checkable here and is not made. `matched_on === "name"`
+ * does prove the narrower statement these sentences make: the name is the field
+ * that matched.
+ *
+ * A sentence that overstates is the failure mode this whole epic exists to
+ * avoid — the review queue's credibility is the only thing that makes a user
+ * answer it a second time.
+ */
+function reasonFor(group: ContactGroup): string {
+  const items = group.items;
+  const nameOnly = (m: string | null): boolean =>
+    m === "name" || m === "unique_name";
+
+  if (items.length > 1) {
+    const count = NUMBER_WORDS[items.length] ?? String(items.length);
+    if (items.every((i) => nameOnly(i.matchedOn))) {
+      return `${count} records share this name. Accept the ones that are this ${firstNameOf(group.contactName)}.`;
+    }
+    return `${count} records could be this contact. Answer each one on its own.`;
+  }
+
+  const first = items[0];
+
+  /*
+    NO ARTICLE BEFORE AN INTERPOLATED VALUE — BACKLOG-2673.
+
+    This read `a ${first.sourceName}`, which the founder hit at gate 4 as
+    *"Your Mac address book has a Ingrid Halvorsen"*. `sourceName` is a person's
+    name off the user's own address book: an unbounded set, so no hardcoded
+    article can be right for all of it.
+
+    THE FIX IS NOT A VOWEL CHECK. `/^[aeiou]/i` is the obvious repair and it is
+    wrong often enough to be worse than the bug — "a European buyer", "an hour",
+    "an MBA", and every name whose sound does not follow its spelling. English
+    article selection depends on PRONUNCIATION, which is not recoverable from a
+    string, and a rule that is right 90% of the time still reads as carelessness
+    on the 10%.
+
+    So the sentence is rewritten to need no article: it LEADS WITH THE NAME,
+    which is what the user is actually deciding about, and states the event
+    before the reason. Where there is no name the subject is the hardcoded
+    "A record" — the article binds to `record`, a word this code owns.
+
+    IT ALSO FIXES A SECOND DISAGREEMENT. The old frame was `Your ${label} has`,
+    and two of the five labels this screen can show are plural — "Outlook
+    contacts", "Google contacts" — so it read *"Your Outlook contacts has"*. The
+    verb now agrees with the singular subject instead of with the label.
+
+    `in your ${label}` is the house frame, not a new one: `contactLinkEvidence`
+    already ships "A record in your ${sourceLabel} carries ..." and the label map
+    is documented as possessive-ready for exactly this position.
+  */
+  const named = first.sourceName?.trim();
+  const subject = named || "A record";
+  const where = `${subject} in your ${first.sourceLabel}`;
+  switch (first.matchedOn) {
+    case "email":
+      return `${where} has the same email address as this contact.`;
+    case "phone":
+      return `${where} has the same phone number as this contact.`;
+    case "name":
+    case "unique_name":
+      return `${where} has the same full name as this contact. The name is all that matched.`;
+    default:
+      return `${where} could be this contact.`;
+  }
+}
+
+/**
+ * The value under the source label — an email or a phone, in the user's own
+ * data rather than a description of it.
+ *
+ * When the rule compared a specific identifier, that identifier is what the user
+ * is being asked to judge, so it wins. On a name match neither list matched, and
+ * the record's first address is simply what tells one candidate from another —
+ * which is exactly the job this line does on a card with two of them.
+ */
+function candidateValue(item: ContactReviewItem): string | null {
+  const emails = item.recordEmails ?? [];
+  const phones = item.recordPhones ?? [];
+  if (item.matchedOn === "email" && emails.length > 0) return emails[0];
+  if (item.matchedOn === "phone" && phones.length > 0) return phones[0];
+  return emails[0] ?? phones[0] ?? item.sourceName ?? null;
+}
+
+/**
+ * The name on the row — BACKLOG-2625.
+ *
+ * `sourceName` is the CANDIDATE RECORD's name, and it is the field that differs
+ * across the founder's four. It has been selected since the queue was written
+ * (`contactLinkReview.ts` — `ec.name AS source_name`) and reached this file
+ * unrendered: the row drew the source label and a value, which is enough only
+ * while candidates come from DIFFERENT sources with DIFFERENT values, as his own
+ * mock did. Four records from one address book matching on two shared values
+ * collapses that identifier, and four different people rendered as two
+ * byte-identical pairs.
+ *
+ * Falls back to the CONTACT's name rather than a placeholder: a nameless record
+ * is 18-in-1,124 on a verified store (BACKLOG-2461) and "the Bianca Okafor this
+ * might be" is still truer than "Unknown".
+ */
+function candidateName(item: ContactReviewItem): string {
+  return item.sourceName?.trim() || item.contactName;
+}
+
+/**
+ * THE SECOND FIELD, AND ONLY WHEN IT IS NEEDED — BACKLOG-2625, `3feb4bc3`.
+ *
+ * > *"When two candidate rows would otherwise be identical — same name, same
+ * > source, matching on the same value — show a second value that differs."*
+ *
+ * A FALLBACK, NOT A DEFAULT. He rejected both ends of this: showing everything
+ * (*"the card gets tall fast at four candidates"*) and leaving identical rows
+ * identical. So the row's triple — name, source, matched value — is tested for
+ * uniqueness AMONG THE CANDIDATES ON SCREEN, and only a colliding row gains a
+ * field. The single-candidate case can never collide and so can never gain one,
+ * which is the control that keeps the common shape quiet.
+ *
+ * ORDER: organisation first, then the identifier the matched value is NOT — he
+ * named both (*"they differ by organisation... and by phone"*) and organisation
+ * is the one that reads as a fact about the person rather than another string of
+ * digits to compare. Within the same kind, later entries are tried, so two
+ * records sharing a first email but differing on a second still separate.
+ *
+ * A VALUE, NEVER A SENTENCE. He has rejected per-candidate prose twice: *"at
+ * five candidates that is ten sentences saying what the header already made."*
+ *
+ * GENUINELY IDENTICAL RECORDS RETURN `null`, and the row says so rather than
+ * inventing a difference (his control 3). Two address-book entries alike in
+ * name, organisation, every email and every phone are indistinguishable
+ * BECAUSE THEY ARE — a disambiguator that implied otherwise would be the screen
+ * lying about the only thing it is for.
+ */
+/**
+ * Joins the row's three fields into a comparison key.
+ *
+ * A character no address book can hold, so a record named `"Vance"` with source
+ * `"Mac address book"` cannot key-collide with one named `"Vance Mac"` — the
+ * kind of accidental match that would suppress a disambiguator exactly where one
+ * is needed.
+ */
+const KEY_SEP = "\u001f";
+
+function disambiguate(
+  item: ContactReviewItem,
+  siblings: ContactReviewItem[],
+): string | null {
+  const key = (c: ContactReviewItem): string =>
+    [candidateName(c), c.sourceLabel, candidateValue(c) ?? ""].join(KEY_SEP);
+  const mine = key(item);
+  const collides = siblings.some((c) => c.proposalId !== item.proposalId && key(c) === mine);
+  if (!collides) return null;
+
+  const colliding = siblings.filter((c) => key(c) === mine);
+  const differsFromAColliding = (value: string | null, pick: (c: ContactReviewItem) => string | null): boolean =>
+    value !== null &&
+    colliding.some((c) => c.proposalId !== item.proposalId && (pick(c) ?? null) !== value);
+
+  // Organisation first.
+  const company = item.sourceCompany?.trim() || null;
+  if (differsFromAColliding(company, (c) => c.sourceCompany?.trim() || null)) return company;
+
+  // Then the identifier the matched value is not, then any other value that
+  // separates this row from a record it currently reads the same as.
+  const shown = candidateValue(item);
+  const others = [
+    ...(item.matchedOn === "email" ? item.recordPhones ?? [] : item.recordEmails ?? []),
+    ...(item.matchedOn === "email" ? item.recordEmails ?? [] : item.recordPhones ?? []),
+  ].filter((v) => v.trim() !== "" && v !== shown);
+
+  for (const candidate of others) {
+    const held = (c: ContactReviewItem): boolean =>
+      [...(c.recordEmails ?? []), ...(c.recordPhones ?? [])].includes(candidate);
+    if (colliding.some((c) => c.proposalId !== item.proposalId && !held(c))) return candidate;
+  }
+
+  return null;
+}
+
+function ContactReviewCard({
+  group,
+  busyId,
+  onCompare,
+  onSame,
+  onDifferent,
+}: {
+  group: ContactGroup;
+  busyId: string | null;
+  onCompare: (item: ContactReviewItem) => void;
+  onSame: (item: ContactReviewItem) => void;
+  onDifferent: (item: ContactReviewItem) => void;
+}): React.ReactElement {
+  return (
+    // `relative` on the wrapper gives the two children one stacking context, so
+    // the negative margin below reads as "tucked under" rather than "overlapped
+    // by".
+    <div className="relative" data-testid={`review-contact-${group.contactId}`}>
+      <div className="relative z-10 flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-3">
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-purple-500 to-pink-600 text-sm font-bold text-white">
+          {initialOf(group.contactName)}
+        </div>
+        <div className="min-w-0 flex-1">
+          {/*
+            BACKLOG-2502 R7 — THE CONTACT'S NAME NAMES THE CONTACT. IT IS NOT A
+            WAY IN.
+
+            It used to open the comparison, and it opened it for `items[0]` — an
+            arbitrary one of the four when there are four. That is the same
+            defect as the `Compare` button removed below, wearing the contact's
+            name instead of a label, so removing one and keeping the other would
+            have left the ambiguity exactly where it was and only made it harder
+            to find. The eye on each candidate is the way in.
+          */}
+          <div
+            className="block truncate text-left text-sm font-medium text-gray-900"
+            data-testid={`review-contact-name-${group.contactId}`}
+          >
+            {group.contactName}
+          </div>
+          {group.contactCompany && (
+            <div
+              className="truncate text-xs text-gray-400"
+              data-testid={`review-contact-company-${group.contactId}`}
+            >
+              {group.contactCompany}
+            </div>
+          )}
+        </div>
+        {/*
+          BACKLOG-2502 R7 — `Compare` IS GONE FROM THIS ROW, AND THE EYE ON EACH
+          CANDIDATE IS THE ONLY WAY INTO THE COMPARISON FROM HERE.
+
+          A REVERSAL AFTER OBSERVATION, NOT A DEFECT BEING FIXED. Round 2's rule
+          — *"Compare sits on the main contact row, outside the amber area, not
+          on the candidate rows"* — was right for the card it was written
+          against, which had one candidate: a contact-level control and a
+          candidate-level control pointed at the same single question, so putting
+          it on the row kept it out of the amber area and cost nothing.
+
+          Four candidates broke that. A control on the contact row has to choose
+          one of them, and it chose `group.items[0]` — the first, for no reason
+          the user can see. The founder removed it rather than have it guess.
+
+          THE COMPARISON IS NOT LESS REACHABLE FOR IT. Every candidate keeps its
+          own eye, one click, and that one is unambiguous by construction: it
+          compares the record whose row it sits on. What is gone is a second way
+          in that could not say what it was about to show.
+
+          Not to be confused with `Compare sources` on the contact card in
+          Clients & Contacts, which stays. That one compares a contact's OWN
+          linked records — there is no candidate for it to pick between, so it
+          has never had this problem.
+        */}
+      </div>
+
+      {/*
+        THE TUCK. `-mt-2` pulls the amber card under the white one, which is
+        below it in z-order, so the question reads as belonging to the contact
+        above rather than as the next item in a list.
+      */}
+      <div
+        className="relative z-0 -mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 pb-2.5 pt-2"
+        data-testid={`review-tuck-${group.contactId}`}
+      >
+        <p
+          className="mb-2 mt-1.5 text-[0.82rem] leading-snug text-amber-900"
+          data-testid={`review-reason-${group.contactId}`}
+        >
+          {reasonFor(group)}
+        </p>
+
+        {group.exclusive && (
+          <p
+            className="mb-2 text-xs text-amber-800"
+            data-testid={`review-exclusive-${group.contactId}`}
+          >
+            Only one contact can be this record — answering here answers the
+            others.
+          </p>
+        )}
+
+        {group.items.map((item) => (
+          <CandidateRow
+            key={item.proposalId}
+            item={item}
+            // BACKLOG-2625 — the whole card's candidates, so a row can tell
+            // whether it reads the same as another ON THIS CARD. Answered rows
+            // are already gone from `group.items` (the queue reloads on every
+            // answer), so a disambiguator never survives the collision that
+            // justified it.
+            siblings={group.items}
+            busy={busyId === item.proposalId}
+            onView={() => onCompare(item)}
+            onSame={() => onSame(item)}
+            onDifferent={() => onDifferent(item)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Shared shell for the three icon buttons, so hover/focus/disabled are stated once. */
+function IconButton({
+  title,
+  ariaLabel,
+  onClick,
+  disabled,
+  hoverClass,
+  testId,
+  children,
+}: {
+  title: string;
+  ariaLabel: string;
+  onClick: () => void;
+  disabled: boolean;
+  hoverClass: string;
+  testId: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={ariaLabel}
+      onClick={onClick}
+      disabled={disabled}
+      className={`flex items-center justify-center rounded p-1 text-gray-400 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-amber-500 disabled:opacity-50 ${hoverClass}`}
+      data-testid={testId}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-4 w-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        {children}
+      </svg>
+    </button>
+  );
+}
+
+/**
+ * One candidate record, answered on its own.
+ *
+ * The three buttons are icon-only and share the email needs-review card's
+ * grammar — `text-gray-400` at rest, green on accept, red on reject — so a user
+ * who has answered one review surface already knows this one. Words instead of
+ * icons would double the height of a two-candidate card, which is exactly the
+ * case where a wall of choices is worst.
+ *
+ * "Same person" and "Not this person", never "approve": approve reads like
+ * sign-off on a document, and "Not this person" is already the phrase the
+ * contact card uses to detach a source. One phrase for one concept.
+ */
+function CandidateRow({
+  item,
+  siblings,
+  busy,
+  onView,
+  onSame,
+  onDifferent,
+}: {
+  item: ContactReviewItem;
+  /**
+   * BACKLOG-2625 — every candidate ON SCREEN WITH THIS ONE, itself included.
+   *
+   * The row cannot decide alone whether it needs a second field: "identical" is
+   * a property of a PAIR, and the pair is only visible from the card. Passing
+   * the group down keeps the rule where the collision is observable instead of
+   * guessing from the record.
+   */
+  siblings: ContactReviewItem[];
+  busy: boolean;
+  onView: () => void;
+  onSame: () => void;
+  onDifferent: () => void;
+}): React.ReactElement {
+  const value = candidateValue(item);
+  const name = candidateName(item);
+  const extra = disambiguate(item, siblings);
+  return (
+    <div
+      className="mb-1.5 flex items-center gap-2.5 rounded-md border border-amber-300 bg-white px-2 py-2 last:mb-0"
+      data-testid={`review-item-${item.proposalId}`}
+    >
+      <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-xs font-bold text-white">
+        {initialOf(item.sourceName ?? item.contactName)}
+      </div>
+      <div className="min-w-0 flex-1">
+        {/*
+          BACKLOG-2625 — WHO THIS RECORD IS, FIRST.
+
+          The founder was asked to answer four questions *"each one on its own"*
+          while being given nothing to tell the four apart. The name is the field
+          that differs across them and it was already on the object. It leads the
+          row because it is what a person is identified by; the source and the
+          value below it say WHERE the record lives and WHAT matched.
+        */}
+        <div
+          className="truncate text-[0.8rem] font-semibold text-gray-900"
+          data-testid={`review-name-${item.proposalId}`}
+        >
+          {name}
+        </div>
+        {/*
+          `sourceLabel` verbatim, even where the design draws the shorter
+          "Outlook" and the shipped vocabulary says "Outlook contacts". ONE
+          VOCABULARY BEATS A DRAWING — the Sources panel two clicks away already
+          uses these words, and a second set of names is how two screens start
+          disagreeing about what the user's address book is called.
+        */}
+        <div
+          className="font-mono text-[0.64rem] uppercase tracking-[0.05em] text-gray-400"
+          data-testid={`review-source-${item.proposalId}`}
+        >
+          {item.sourceLabel}
+        </div>
+        {value && (
+          <div
+            className="break-all font-mono text-[0.73rem] text-gray-600"
+            data-testid={`review-value-${item.proposalId}`}
+          >
+            {value}
+          </div>
+        )}
+        {/*
+          BACKLOG-2625 — the second field, present ONLY where the row would
+          otherwise read the same as another on this card. `disambiguate` returns
+          `null` for every unique row, so this element does not exist on the
+          common shape rather than existing empty — a test asserting the fields a
+          row renders can therefore tell "not needed" from "needed and blank".
+        */}
+        {extra && (
+          <div
+            className="truncate text-[0.73rem] text-gray-500"
+            data-testid={`review-extra-${item.proposalId}`}
+          >
+            {extra}
+          </div>
+        )}
+      </div>
+      <div className="flex flex-shrink-0 gap-0.5">
+        <IconButton
+          title="View this record in full"
+          ariaLabel="View this record in full"
+          onClick={onView}
+          disabled={busy}
+          hoverClass="hover:bg-purple-50 hover:text-purple-600"
+          testId={`review-view-${item.proposalId}`}
+        >
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+          <circle cx="12" cy="12" r="3" />
+        </IconButton>
+        <IconButton
+          title="Same person — link them"
+          ariaLabel="Same person, link them"
+          onClick={onSame}
+          disabled={busy}
+          hoverClass="hover:bg-green-50 hover:text-green-600"
+          testId={`review-confirm-${item.proposalId}`}
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </IconButton>
+        <IconButton
+          title="Not this person"
+          ariaLabel="Not this person"
+          onClick={onDifferent}
+          disabled={busy}
+          hoverClass="hover:bg-red-50 hover:text-red-600"
+          testId={`review-reject-${item.proposalId}`}
+        >
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </IconButton>
+      </div>
+    </div>
+  );
+}

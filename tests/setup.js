@@ -157,6 +157,24 @@ if (typeof window !== 'undefined') {
       // sections; individual tests override with fixtures.
       getEmailsForContact: jest.fn().mockResolvedValue({ success: true, emails: [] }),
       getMessagesForContact: jest.fn().mockResolvedValue({ success: true, messages: [] }),
+      // BACKLOG-2410: contact-level review queue + provenance. Defaults are the
+      // EMPTY-SUCCESS shape so every existing Contacts test renders unchanged —
+      // an empty queue hides the button and an empty source list hides the
+      // Sources section, which is exactly the pre-2410 output.
+      getReviewQueueCount: jest.fn().mockResolvedValue({ success: true, count: 0 }),
+      getReviewQueue: jest.fn().mockResolvedValue({ success: true, clusters: [] }),
+      confirmLink: jest.fn().mockResolvedValue({ success: true, linked: true, alsoRejected: 0 }),
+      rejectLink: jest.fn().mockResolvedValue({ success: true }),
+      getSources: jest.fn().mockResolvedValue({ success: true, sources: [] }),
+      unlinkSource: jest.fn().mockResolvedValue({ success: true, remaining: 0 }),
+      // BACKLOG-2426/2591: manual linking, added by BACKLOG-2629's suite.
+      // Same EMPTY-SUCCESS convention as the block above — no linkable records
+      // renders the picker's empty state, so every existing test is unchanged.
+      // They were absent here entirely, which meant a test could reach these
+      // channels only by hand-installing them; `jest.mocked(...)` read
+      // `undefined` and failed inside the helper rather than in an assertion.
+      findLinkableSources: jest.fn().mockResolvedValue({ success: true, records: [] }),
+      linkSource: jest.fn().mockResolvedValue({ success: true, outcomes: [] }),
     },
     system: {
       // Platform detection (migrated from window.electron.platform)

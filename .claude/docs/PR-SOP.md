@@ -276,6 +276,47 @@ All tests must pass. No skipped tests without justification.
 
 🤖 **LLM Assist**: If tests fail, Claude can analyze failures and suggest fixes.
 
+### 4.4 Controls — prove the mutation applied (MANDATORY for every control you report)
+
+A **control** is: break the code on purpose, watch a test go red. Agents apply the break as a text
+replacement. **If the pattern does not match — one space differs, an earlier commit reworded the
+line — nothing is replaced.** The file is byte-identical, the suite passes, and the green result is
+recorded as *"I broke it and the tests did not catch it."* Nothing was ever broken, and the record
+now points at the wrong thing: it reads as a gap in the tests when it is a gap in the harness.
+Someone then "fixes" a test that was fine.
+
+**An unverified mutation is an unrun control.**
+
+- [ ] **1. A mutation's result does not count until the mutation is proven to have applied.**
+      An exact-string replace that **raises on no-match**, or a `git diff --numstat` check on the
+      file. **Print `MUTATION APPLIED` and the mutated line before running anything.**
+- [ ] **2. `Tests: 0 total` is a FAILURE.** Jest exits 0 when it matches no test files — **zero
+      tests passing is indistinguishable from all tests passing if only the exit code is read.**
+      Assert a non-zero count, and report counts (`RED ×3`), not "went red".
+- [ ] **3. Commit the fix BEFORE any control that reverts with `git checkout --`.** That command
+      discards uncommitted work, and until you commit, the fix *is* uncommitted work.
+
+**Worked example — PR #2279 (BACKLOG-2628), 11 Aug 2026. Both shapes, one PR.**
+
+| | Reported | What had actually happened | How it was caught |
+|---|---|---|---|
+| Occurrence 1 | control green → "the suite does not cover this" | the replacement never matched; the file was unchanged | someone opened the file and read the mutated line — it still held the original text |
+| Occurrence 2 | control green, jest exited 0 | `Tests: 0 total` — jest matched no test files | the test count was read instead of the exit code |
+
+Both were written down as evidence *about the tests*. Neither said anything about the tests.
+
+**Rule 3's incident, same night:** in PR #2278 (BACKLOG-2639) a control reverted the engineer's
+**own uncommitted fix** with `git checkout --`. It surfaced only because `git diff --stat` showed
+two changed files where three were expected — the bug the PR had just proven nearly shipped
+unfixed.
+
+**Reviewer's heuristic (not a substitute for rule 1):** an unapplied mutation can only ever report
+**green**. In an all-red control table it announces itself; in a mixed table it hides completely.
+The engineer proves the mutation applied; the reviewer never infers it from the colour.
+
+**In the handoff**, state each control as *break applied → mutation proven applied → observed
+result with counts*. A control reported without its mutation proof is an unrun control.
+
 ---
 
 ## Phase 5: Static Analysis

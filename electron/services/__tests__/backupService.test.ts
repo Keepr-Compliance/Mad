@@ -72,7 +72,14 @@ jest.mock("child_process", () => ({
       on: jest.fn(),
     };
 
-    const mockProcess = {
+    // Explicit annotation: `on` returns mockProcess, so inference would be circular
+    // (TS7022/TS7024). Shape is unchanged.
+    const mockProcess: {
+      stdout: typeof mockStdout;
+      stderr: typeof mockStderr;
+      on: jest.Mock;
+      kill: jest.Mock;
+    } = {
       stdout: mockStdout,
       stderr: mockStderr,
       on: jest.fn((event: string, callback: Function) => {

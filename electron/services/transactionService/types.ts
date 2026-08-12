@@ -133,13 +133,6 @@ export interface AuditedTransactionData {
   closing_deadline?: string;
 }
 
-export interface ContactRoleUpdate {
-  role?: string;
-  role_category?: string;
-  is_primary?: boolean;
-  notes?: string;
-}
-
 /**
  * Transaction with communications and contact assignments populated.
  * Returned by getTransactionDetails and getTransactionWithContacts.

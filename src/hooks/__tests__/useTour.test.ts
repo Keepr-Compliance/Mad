@@ -129,6 +129,9 @@ describe("useTour", () => {
             step: { target: "body", content: "test" },
             controlled: false,
             lifecycle: "complete",
+            // Required by CallBackProps; useTour reads only status/action, so this
+            // is structural filler (null = "no triggering element").
+            origin: null,
           });
         });
 
@@ -157,6 +160,9 @@ describe("useTour", () => {
             step: { target: "body", content: "test" },
             controlled: false,
             lifecycle: "complete",
+            // Required by CallBackProps; useTour reads only status/action, so this
+            // is structural filler (null = "no triggering element").
+            origin: null,
           });
         });
 
@@ -186,6 +192,9 @@ describe("useTour", () => {
             step: { target: "body", content: "test" },
             controlled: false,
             lifecycle: "complete",
+            // Required by CallBackProps; useTour reads only status/action, so this
+            // is structural filler (null = "no triggering element").
+            origin: null,
           });
         });
 
@@ -214,6 +223,9 @@ describe("useTour", () => {
             step: { target: "body", content: "test" },
             controlled: false,
             lifecycle: "complete",
+            // Required by CallBackProps; useTour reads only status/action, so this
+            // is structural filler (null = "no triggering element").
+            origin: null,
           });
         });
 
@@ -241,6 +253,9 @@ describe("useTour", () => {
             step: { target: "body", content: "test" },
             controlled: false,
             lifecycle: "complete",
+            // Required by CallBackProps; useTour reads only status/action, so this
+            // is structural filler (null = "no triggering element").
+            origin: null,
           });
         });
 
@@ -269,6 +284,9 @@ describe("useTour", () => {
             step: { target: "body", content: "test" },
             controlled: false,
             lifecycle: "complete",
+            // Required by CallBackProps; useTour reads only status/action, so this
+            // is structural filler (null = "no triggering element").
+            origin: null,
           });
         });
 
@@ -293,6 +311,9 @@ describe("useTour", () => {
             step: { target: '[data-tour="test"]', content: "test step" },
             controlled: false,
             lifecycle: "complete",
+            // Required by CallBackProps; useTour reads only status/action, so this
+            // is structural filler (null = "no triggering element").
+            origin: null,
           });
         });
 
@@ -324,6 +345,9 @@ describe("useTour", () => {
             step: { target: "body", content: "test" },
             controlled: false,
             lifecycle: "complete",
+            // Required by CallBackProps; useTour reads only status/action, so this
+            // is structural filler (null = "no triggering element").
+            origin: null,
           });
         });
 
@@ -348,6 +372,9 @@ describe("useTour", () => {
             step: { target: "body", content: "test" },
             controlled: false,
             lifecycle: "complete",
+            // Required by CallBackProps; useTour reads only status/action, so this
+            // is structural filler (null = "no triggering element").
+            origin: null,
           });
         });
 

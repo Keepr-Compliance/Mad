@@ -418,7 +418,7 @@ function ContactFormModal({
                       value={entry.phone}
                       onChange={(e) => handlePhoneChange(index, e.target.value)}
                       className="flex-1 px-3 py-2.5 sm:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-sm text-gray-900 bg-white min-h-[44px]"
-                      placeholder="(555) 123-4567"
+                      placeholder="(555) 555-0112"
                     />
                     <button
                       type="button"
@@ -468,7 +468,7 @@ function ContactFormModal({
                 value={formData.phone}
                 onChange={(e) => handleChange("phone", e.target.value)}
                 className={inputClass}
-                placeholder="(555) 123-4567"
+                placeholder="(555) 555-0112"
               />
             </div>
           )}

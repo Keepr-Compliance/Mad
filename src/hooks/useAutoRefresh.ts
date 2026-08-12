@@ -49,12 +49,30 @@ let hasTriggeredAutoRefresh = false;
 const DASHBOARD_SYNC_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 const lastAutoSyncAtByUser = new Map<string, number>();
 
+// BACKLOG-2420: the user id the session guards were last armed for.
+//
+// useAppStateMachine is a plain hook, not a context, and four screens
+// (Contacts, Transactions, TransactionList, AuditTransactionModal) call it just
+// to read `isDatabaseInitialized` — each call instantiating a whole SECOND
+// useAutoRefresh. Without this, that second instance's mount effect cleared
+// `hasTriggeredAutoRefresh` and the per-user cooldown above, so opening Clients &
+// Contacts re-armed the BACKLOG-2314 guards and fired a full sync every time.
+//
+// Comparing the value instead of firing on mount distinguishes "a duplicate hook
+// instance mounted" (same id → no-op) from "a new login" (different id, or null
+// after logout → re-arm). Same reason the auto-trigger effect below uses a
+// value-comparison gate rather than a didMount guard: StrictMode is on.
+let lastResetUserId: string | null = null;
+
 /**
  * Reset the auto-refresh trigger (for testing or logout)
  */
 export function resetAutoRefreshTrigger(): void {
   hasTriggeredAutoRefresh = false;
   lastAutoSyncAtByUser.clear();
+  // BACKLOG-2420: must clear too, or a deliberate reset for the SAME user is
+  // swallowed by the duplicate-mount guard and never re-arms.
+  lastResetUserId = null;
 }
 
 /**
@@ -310,11 +328,23 @@ export function useAutoRefresh({
   // so email precache runs after re-login, not just on app restart.
   // BACKLOG-2314: also clear the per-user cooldown so a genuine (re-)login triggers
   // a fresh sync rather than being throttled by a prior session's timestamp.
+  // BACKLOG-2420: gate on the VALUE of userId, not on mount. This effect runs once
+  // per hook instance, and four screens instantiate a duplicate useAutoRefresh via
+  // useAppStateMachine — so an unconditional reset here let every visit to Clients &
+  // Contacts wipe the guards above and re-fire the full sync.
   useEffect(() => {
-    if (userId) {
-      hasTriggeredAutoRefresh = false;
-      lastAutoSyncAtByUser.delete(userId);
+    // Logged out: clear the marker so the SAME user logging back in is treated as
+    // a genuine new session and still syncs.
+    if (!userId) {
+      lastResetUserId = null;
+      return;
     }
+    // Already armed for this user — a duplicate hook instance mounted, not a login.
+    if (userId === lastResetUserId) return;
+
+    lastResetUserId = userId;
+    hasTriggeredAutoRefresh = false;
+    lastAutoSyncAtByUser.delete(userId);
   }, [userId]);
 
   // BACKLOG-1559: Email precache is now triggered from the main process

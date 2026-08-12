@@ -47,8 +47,9 @@ const defaultOptions = {
   isMacOS: true,
   pendingOAuthData: null,
   pendingOnboardingData: {
+    termsAccepted: false,
     phoneType: null as "iphone" | "android" | null,
-    emailProvider: null as string | null,
+    emailProvider: null as "google" | "microsoft" | null,
     emailConnected: false,
   },
   isAuthenticated: false,

@@ -12,7 +12,6 @@
  * only when first accessed, ensuring app.getPath() is called after app.whenReady().
  */
 
-import { jest } from "@jest/globals";
 import path from "path";
 
 // Mock Electron app and safeStorage modules

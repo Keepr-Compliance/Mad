@@ -13,12 +13,19 @@ import {
   type ContactTransaction,
 } from "../../shared/ContactPreview";
 import { ContactFormModal } from "../../contact";
+import { ContactTombstonePill } from "../../shared/ContactTombstonePill";
 import type { ExtendedContact } from "../../../types/components";
 import { useContactComms } from "../../../hooks/useContactComms";
 import { useContactCommViewers } from "../../../hooks/useContactCommViewers";
 import { LinkedContentSearch } from "./LinkedContentSearch";
+import { RemovedTransactionContactsSection } from "./RemovedTransactionContactsSection";
 import type { TransactionTab, HighlightTarget } from "../types";
 import logger from "../../../utils/logger";
+import {
+  labelForTransactionContact,
+  labelForContact,
+  UNRESOLVED_CONTACT_LABEL,
+} from "../../../utils/contactDisplayLabel";
 
 interface TransactionDetailsTabProps {
   transaction: Transaction;
@@ -56,6 +63,22 @@ interface TransactionDetailsTabProps {
    * the matching conversation card.
    */
   onNavigateToTab?: (payload: { tab: TransactionTab; highlight?: HighlightTarget }) => void;
+
+  // BACKLOG-2367 — removed-contacts restore section under Key Contacts.
+  /**
+   * SILENT refresh of the contact assignments after a restore. Must not set a
+   * loading flag: `useTransactionDetails.refreshContactsSilently` is the one
+   * built for this. Anything that flips `loading` unmounts the list behind a
+   * spinner and collapses the expanded section mid-click.
+   */
+  onContactRestoreComplete?: () => Promise<void>;
+  onShowSuccess?: (message: string) => void;
+  onShowError?: (message: string) => void;
+  /** Lifted open state, so a parent refetch never collapses the section. */
+  removedContactsOpen?: boolean;
+  onRemovedContactsOpenChange?: (open: boolean) => void;
+  /** Bump after a party is removed so the count updates with no spinner. */
+  removedContactsRefreshKey?: number;
 }
 
 // Helper function to format date in readable format
@@ -109,6 +132,12 @@ export function TransactionDetailsTab({
   isOnline = true,
   onContactUpdated,
   onNavigateToTab,
+  onContactRestoreComplete,
+  onShowSuccess,
+  onShowError,
+  removedContactsOpen,
+  onRemovedContactsOpenChange,
+  removedContactsRefreshKey,
 }: TransactionDetailsTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running
   const syncDisabled = !isOnline || syncingCommunications || globalSyncRunning;
@@ -193,8 +222,11 @@ export function TransactionDetailsTab({
     // Build a minimal contact immediately for fast display
     const contact: ExtendedContact = {
       id: assignment.contact_id,
-      name: assignment.contact_name || "Unknown Contact",
-      display_name: assignment.contact_name || "Unknown Contact",
+      // BACKLOG-2461: deliberately NOT defaulted to a placeholder. This is an
+      // ephemeral object built for display; leaving the name empty lets
+      // labelForContact fall through to company/phone/email downstream.
+      name: assignment.contact_name || "",
+      display_name: assignment.contact_name || "",
       email: assignment.contact_email || "",
       phone: assignment.contact_phone || "",
       company: assignment.contact_company || "",
@@ -208,15 +240,37 @@ export function TransactionDetailsTab({
     setPreviewTransactions([]);
     void loadContactTransactions(assignment.contact_id);
 
-    // Fetch full email/phone entries to populate allEmails/allPhones
+    // Fetch full email/phone entries to populate allEmails/allPhones, and the
+    // live source set (BACKLOG-2493 — see below).
     try {
       const editData = await window.api.contacts.getEditData(assignment.contact_id);
       if (editData.success) {
         const allEmails = (editData.emails || []).map((e: { email: string }) => e.email);
         const allPhones = (editData.phones || []).map((p: { phone: string }) => p.phone);
+        /**
+         * BACKLOG-2493: the contact object above is built by hand from the
+         * transaction assignment, so its `source` is the stale INSERT-time
+         * scalar — the field that made the founder's Paul Dorian read "Outlook"
+         * after his Outlook link was removed. This pane mounts the SAME
+         * `ContactPreview` as the Clients & Contacts card, so without the live
+         * set the two would name different sources for the same person on the
+         * same screen.
+         *
+         * Spread conditionally: the handler OMITS `source_types` when the
+         * contact has no links, and an unconditional spread would write
+         * `source_types: undefined` — which is the same value, but writing it
+         * explicitly invites the next reader to "tidy" it into `[]`, the one
+         * value this field must never hold. Absent stays absent, and
+         * `mapToSourcePillSources` falls back to the scalar.
+         */
         setPreviewContact((prev) =>
           prev && prev.id === assignment.contact_id
-            ? { ...prev, allEmails, allPhones }
+            ? {
+                ...prev,
+                allEmails,
+                allPhones,
+                ...(editData.source_types ? { source_types: editData.source_types } : {}),
+              }
             : prev,
         );
       }
@@ -622,6 +676,23 @@ export function TransactionDetailsTab({
             )}
           </div>
         )}
+
+        {/*
+          BACKLOG-2367: parties removed from THIS deal, and the button that puts
+          them back. Sits outside the loading ternary on purpose — the section
+          owns its own loading state, and hiding it behind the list's spinner
+          would make it disappear on every refresh.
+        */}
+        <RemovedTransactionContactsSection
+          transactionId={transaction.id}
+          transactionType={(transaction.transaction_type as TransactionType) || "other"}
+          onRestoreComplete={onContactRestoreComplete}
+          onShowSuccess={onShowSuccess}
+          onShowError={onShowError}
+          isOpen={removedContactsOpen}
+          onOpenChange={onRemovedContactsOpenChange}
+          refreshKey={removedContactsRefreshKey}
+        />
       </div>
 
       {/* Delete Transaction Button */}
@@ -655,8 +726,8 @@ export function TransactionDetailsTab({
         sections and the same in-place viewers. Key Contacts are always imported
         contacts (they're assigned to this transaction), so isExternal={false} and
         the comms props are always supplied — matching the Contacts card. The
-        other ContactPreview consumers (ContactSelectModal, ContactAssignmentStep,
-        EditContactsModal) still omit these props, so their sections stay hidden.
+        other ContactPreview consumers (ContactAssignmentStep, EditContactsModal)
+        still omit these props, so their sections stay hidden.
       */}
       {previewContact && (
         <ContactPreview
@@ -714,13 +785,26 @@ function ContactSummaryCard({
   onClick?: () => void;
 }) {
   const role = assignment.specific_role || assignment.role || "Unknown Role";
-  const name = assignment.contact_name || "Unknown Contact";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  const name = labelForTransactionContact(assignment);
   const email = assignment.contact_email;
   const phone = assignment.contact_phone;
   const company = assignment.contact_company;
   const isPrimary = assignment.is_primary === 1;
   const emailCount = Number(assignment.contact_email_count) || 0;
   const phoneCount = Number(assignment.contact_phone_count) || 0;
+  /*
+   * BACKLOG-2568: this person was deleted from Clients & Contacts but is still
+   * party to this deal, so the audit record keeps them. Every assignment on
+   * this list is LIVE on the deal (the query filters `tc.removed_at IS NULL`),
+   * so the only tombstone reachable here is the contact-level one — the
+   * deal-level label belongs to RemovedTransactionContactsSection.
+   */
+  // Truthiness, not `!= null`: SQLite returns NULL for a live contact, but an
+  // empty string is not a timestamp either and must not light the pill. Found
+  // by the boundary case in TransactionDetailsTab.tombstonePills-2568.test.tsx,
+  // which went red against a `!= null` guard.
+  const isContactDeleted = Boolean(assignment.contact_removed_at);
 
   return (
     <div
@@ -747,6 +831,10 @@ function ContactSummaryCard({
                 <span className="inline-block px-2 py-0.5 bg-blue-100 text-blue-800 text-xs font-medium rounded-full flex-shrink-0">
                   Primary
                 </span>
+              )}
+              {/* BACKLOG-2568 — why a person you removed is still on this deal. */}
+              {isContactDeleted && (
+                <ContactTombstonePill variant="contact-removed" className="flex-shrink-0" />
               )}
             </div>
             {/* Role badge */}
@@ -799,7 +887,10 @@ function SuggestedContactCard({
   onReject: () => void;
 }) {
   const contact = suggestion.contact;
-  const displayName = contact?.display_name || contact?.name || "Unknown Contact";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  // BACKLOG-2461: an ABSENT record is a different condition from a record
+  // with an empty name — see UNRESOLVED_CONTACT_LABEL.
+  const displayName = contact ? labelForContact(contact) : UNRESOLVED_CONTACT_LABEL;
   const displayEmail = contact?.email || "";
   const displayCompany = contact?.company || "";
 

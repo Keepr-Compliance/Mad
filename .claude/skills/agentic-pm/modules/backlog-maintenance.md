@@ -49,6 +49,11 @@ SELECT pm_get_item_detail('<uuid>');
 | QA passed | `pm_update_item_status('<uuid>', 'completed')` |
 | Sprint closed | Verify all items have correct status via `pm_list_items` |
 
+> **When the new item came out of work on another item, link it in the same step.** Insert a
+> `pm_task_links` row with `link_type = 'introduced_by'` (source = the new item, target = the
+> originator). Prose in the body is not a link. Full rules, SQL and worked examples:
+> `.claude/skills/backlog-management/SKILL.md` → "Linking a New Item (MANDATORY)".
+
 ### Example Operations
 
 **New item created:**

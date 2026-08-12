@@ -8,7 +8,6 @@
  * phone numbers and email handles during export.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock the database layer
 jest.mock("../../services/db/core/dbConnection", () => ({
@@ -120,36 +119,36 @@ describe("exportUtils - contact resolution", () => {
     it("resolves phone numbers to contact names", () => {
       mockDbAll.mockReturnValue([
         {
-          phone_e164: "+15551234567",
-          phone_display: "(555) 123-4567",
-          display_name: "Madison Smith",
+          phone_e164: "+15555550112",
+          phone_display: "(555) 555-0112",
+          display_name: "Morgan Reed",
         },
       ]);
 
-      const result = getContactNamesByPhones(["+15551234567"]);
+      const result = getContactNamesByPhones(["+15555550112"]);
 
-      expect(result["5551234567"]).toBe("Madison Smith");
-      expect(result["+15551234567"]).toBe("Madison Smith");
+      expect(result["5555550112"]).toBe("Morgan Reed");
+      expect(result["+15555550112"]).toBe("Morgan Reed");
     });
 
     it("handles multiple phone numbers", () => {
       mockDbAll.mockReturnValue([
         {
-          phone_e164: "+15551234567",
-          phone_display: "(555) 123-4567",
-          display_name: "Madison Smith",
+          phone_e164: "+15555550112",
+          phone_display: "(555) 555-0112",
+          display_name: "Morgan Reed",
         },
         {
-          phone_e164: "+15559876543",
-          phone_display: "555-987-6543",
+          phone_e164: "+15555550121",
+          phone_display: "555-555-0121",
           display_name: "John Doe",
         },
       ]);
 
-      const result = getContactNamesByPhones(["+15551234567", "+15559876543"]);
+      const result = getContactNamesByPhones(["+15555550112", "+15555550121"]);
 
-      expect(result["5551234567"]).toBe("Madison Smith");
-      expect(result["5559876543"]).toBe("John Doe");
+      expect(result["5555550112"]).toBe("Morgan Reed");
+      expect(result["5555550121"]).toBe("John Doe");
     });
 
     it("handles database errors gracefully", () => {
@@ -157,7 +156,7 @@ describe("exportUtils - contact resolution", () => {
         throw new Error("Database not initialized");
       });
 
-      const result = getContactNamesByPhones(["+15551234567"]);
+      const result = getContactNamesByPhones(["+15555550112"]);
       expect(result).toEqual({});
     });
   });
@@ -173,28 +172,28 @@ describe("exportUtils - contact resolution", () => {
       mockDbAll.mockReturnValue([
         {
           email: "madison@gmail.com",
-          display_name: "Madison Smith",
+          display_name: "Morgan Reed",
         },
       ]);
 
       const result = getContactNamesByEmails(["madison@gmail.com"]);
 
-      expect(result["madison@gmail.com"]).toBe("Madison Smith");
+      expect(result["madison@gmail.com"]).toBe("Morgan Reed");
     });
 
     it("handles case-insensitive email lookup", () => {
       mockDbAll.mockReturnValue([
         {
           email: "madison@gmail.com",
-          display_name: "Madison Smith",
+          display_name: "Morgan Reed",
         },
       ]);
 
       const result = getContactNamesByEmails(["Madison@Gmail.com"]);
 
       // Should store under both lowercase and original case
-      expect(result["madison@gmail.com"]).toBe("Madison Smith");
-      expect(result["Madison@Gmail.com"]).toBe("Madison Smith");
+      expect(result["madison@gmail.com"]).toBe("Morgan Reed");
+      expect(result["Madison@Gmail.com"]).toBe("Morgan Reed");
     });
 
     it("handles database errors gracefully", () => {
@@ -218,8 +217,8 @@ describe("exportUtils - contact resolution", () => {
       mockDbAll
         .mockReturnValueOnce([
           {
-            phone_e164: "+15551234567",
-            phone_display: "(555) 123-4567",
+            phone_e164: "+15555550112",
+            phone_display: "(555) 555-0112",
             display_name: "Phone Contact",
           },
         ])
@@ -231,11 +230,11 @@ describe("exportUtils - contact resolution", () => {
         ]);
 
       const result = getContactNamesByHandles([
-        "+15551234567",
+        "+15555550112",
         "email@example.com",
       ]);
 
-      expect(result["5551234567"]).toBe("Phone Contact");
+      expect(result["5555550112"]).toBe("Phone Contact");
       expect(result["email@example.com"]).toBe("Email Contact");
     });
 
@@ -244,7 +243,7 @@ describe("exportUtils - contact resolution", () => {
       mockDbAll
         .mockReturnValueOnce([
           {
-            phone_e164: "+15551234567",
+            phone_e164: "+15555550112",
             phone_display: "",
             display_name: "Known Contact",
           },
@@ -253,18 +252,18 @@ describe("exportUtils - contact resolution", () => {
         .mockReturnValueOnce([]);
 
       const result = getContactNamesByHandles([
-        "+15551234567",
+        "+15555550112",
         "unknown@nowhere.com",
       ]);
 
-      expect(result["5551234567"]).toBe("Known Contact");
+      expect(result["5555550112"]).toBe("Known Contact");
       expect(result["unknown@nowhere.com"]).toBeUndefined();
     });
 
     it("skips empty and whitespace-only handles", () => {
       mockDbAll.mockReturnValue([]);
 
-      getContactNamesByHandles(["", "  ", "+15551234567"]);
+      getContactNamesByHandles(["", "  ", "+15555550112"]);
 
       // Should still call dbAll for the one valid phone
       expect(mockDbAll).toHaveBeenCalled();
@@ -276,13 +275,13 @@ describe("exportUtils - contact resolution", () => {
       mockDbAll
         .mockReturnValueOnce([
           {
-            phone_e164: "+15551234567",
-            phone_display: "(555) 123-4567",
-            display_name: "Madison Smith",
+            phone_e164: "+15555550112",
+            phone_display: "(555) 555-0112",
+            display_name: "Morgan Reed",
           },
           {
-            phone_e164: "+15559876543",
-            phone_display: "555-987-6543",
+            phone_e164: "+15555550121",
+            phone_display: "555-555-0121",
             display_name: "John Doe",
           },
         ])
@@ -294,15 +293,15 @@ describe("exportUtils - contact resolution", () => {
         ]);
 
       const handles = [
-        "+15551234567",
-        "+15559876543",
+        "+15555550112",
+        "+15555550121",
         "paul@icloud.com",
       ];
 
       const result = getContactNamesByHandles(handles);
 
-      expect(result["5551234567"]).toBe("Madison Smith");
-      expect(result["5559876543"]).toBe("John Doe");
+      expect(result["5555550112"]).toBe("Morgan Reed");
+      expect(result["5555550121"]).toBe("John Doe");
       expect(result["paul@icloud.com"]).toBe("Paul Johnson");
     });
   });

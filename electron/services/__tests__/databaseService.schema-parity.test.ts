@@ -66,7 +66,6 @@
 
 import fs from "fs";
 import path from "path";
-import { jest } from "@jest/globals";
 
 // ---------------------------------------------------------------------------
 // MOCKS — identical shape to databaseService.migration-v41.test.ts so the

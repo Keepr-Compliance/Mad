@@ -86,6 +86,26 @@ const SIZE_STYLES: Record<"sm" | "md", string> = {
 };
 
 /**
+ * The PILL'S OWN WORDS, as plain text (BACKLOG-2591).
+ *
+ * `ContactRow`'s opt-in detail line names where a record came from, and it must
+ * say it in the SAME words the pill does — "Outlook", not "outlook", and
+ * "Contacts App", not "macos". Reading the label off `VARIANT_STYLES` rather
+ * than writing a second map is the point: a third vocabulary for the same five
+ * sources is how the pill and the row come to disagree about what a record is.
+ *
+ * Returns `null` for a source with no variant, so a caller renders nothing
+ * rather than the string "undefined".
+ */
+export function sourceDisplayLabel(
+  source: ModelContactSource | string | undefined,
+  isExternal: boolean,
+): string | null {
+  const variant = mapToSourcePillSource(source, isExternal);
+  return VARIANT_STYLES[variant as Variant]?.label ?? null;
+}
+
+/**
  * Maps a contact source to its display variant (origin).
  * Import status is shown separately by ImportStatusPill.
  * - manual -> 'manual' (green)
@@ -215,6 +235,60 @@ export function mapToSourcePillSource(
     default:
       return "email";
   }
+}
+
+/**
+ * Every source pill a contact should show — one per LIVE source, not one per
+ * contact (BACKLOG-2472).
+ *
+ * The singular `mapToSourcePillSource` reads `contact.source`, a scalar written
+ * once at INSERT that no unlink revises. That made the card assert a single
+ * origin it could not support: the founder's Casey Lane was labelled "Outlook"
+ * while every address and number on the card had come from the Mac address book,
+ * because Outlook merely imported him first and the label never moved when the
+ * Outlook link was removed.
+ *
+ * `sourceTypes` is the contact's live crosswalk set. When present it replaces
+ * the scalar outright — the union is NOT taken, or the removed source would be
+ * displayed forever, which is the defect.
+ *
+ * Order is preserved from `sourceTypes` (the read path sorts it) and duplicates
+ * are collapsed, since two distinct source types can map to one pill variant.
+ *
+ * BACKLOG-2493 — THIS FUNCTION IS NOW THE ONLY PRODUCTION ENTRY POINT.
+ *
+ * The sentence here used to read: *"The singular function is kept and unchanged:
+ * `ContactPreview` and the external (not-yet-imported) picker rows describe ONE
+ * source record each and have no crosswalk set to read."* Both halves of that
+ * are false, and leaving either standing is what let the card keep its stale
+ * label for a whole release:
+ *
+ *   - `ContactPreview` was the ONE production caller of the singular still
+ *     left after BACKLOG-2472 moved the row and the filter. That is exactly the
+ *     defect BACKLOG-2493 fixed; it now calls this function.
+ *   - The "picker rows" are not separate callers at all. `ContactAssignmentStep`
+ *     and `EditContactsModal` both mount `ContactPreview` itself, so they reach
+ *     THIS function too and fall back inside it. Having no
+ *     crosswalk set is not a reason to call a different function — it is the
+ *     `!sourceTypes` branch below, which returns exactly the singular answer.
+ *
+ * `mapToSourcePillSource` is retained as the internal fallback implementation,
+ * called at the two sites below and unit-tested directly across the whole source
+ * vocabulary in `SourcePill.test.tsx`. It has no caller outside this file.
+ */
+export function mapToSourcePillSources(
+  source: ModelContactSource | string | undefined,
+  sourceTypes: readonly (ModelContactSource | string)[] | undefined,
+  isExternal: boolean
+): ContactSource[] {
+  if (!sourceTypes || sourceTypes.length === 0) {
+    return [mapToSourcePillSource(source, isExternal)];
+  }
+  const seen = new Set<ContactSource>();
+  for (const type of sourceTypes) {
+    seen.add(mapToSourcePillSource(type, isExternal));
+  }
+  return [...seen];
 }
 
 export default SourcePill;

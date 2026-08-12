@@ -8,7 +8,6 @@
  * Extracted components:
  * - DetectionBadges (DetectionSourceBadge, ConfidencePill, PendingReviewBadge)
  * - TransactionDetails (modal for viewing/editing transaction details)
- * - EditTransactionModal (modal for editing transactions)
  *
  * State management via custom hooks:
  * - useTransactionList: transactions, loading, error, filtering
@@ -29,8 +28,7 @@ import { useSelection } from "../hooks/useSelection";
 import { useBulkSubmit } from "../hooks/useBulkSubmit";
 import { useSubmissionSync } from "../hooks/useSubmissionSync";
 import { useAppStateMachine } from "../appCore";
-import { useToast } from "../hooks/useToast";
-import { ToastContainer } from "./Toast";
+import { useNotification } from "../hooks/useNotification";
 import TransactionDetails from "./TransactionDetails";
 import {
   TransactionsToolbar,
@@ -74,8 +72,9 @@ function Transactions({
   // Database initialization guard (belt-and-suspenders defense)
   const { isDatabaseInitialized } = useAppStateMachine();
 
-  // Toast notifications
-  const { toasts, showSuccess, showError, removeToast } = useToast();
+  // Toast notifications (BACKLOG-2447: single app-wide system; the container
+  // is rendered once by NotificationProvider, not here).
+  const { notify } = useNotification();
 
   // UI state (local to component)
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -440,8 +439,8 @@ function Transactions({
           transaction={selectedTransaction}
           onClose={() => setSelectedTransaction(null)}
           onTransactionUpdated={handleTransactionUpdated}
-          onShowSuccess={showSuccess}
-          onShowError={showError}
+          onShowSuccess={notify.success}
+          onShowError={notify.error}
           initialTab={initialTab}
         />
       )}
@@ -531,9 +530,6 @@ function Transactions({
           onClose={handleBulkSubmitComplete}
         />
       )}
-
-      {/* Toast Notifications */}
-      <ToastContainer toasts={toasts} onDismiss={removeToast} />
     </div>
   );
 }

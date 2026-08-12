@@ -42,7 +42,7 @@ const parent = msg({
   body_text: "Are we still on for Friday?",
   thread_id: "th-1",
   sent_at: "2026-01-01T10:00:00.000Z",
-  sender: "+12065551234",
+  sender: "+12065550103",
 });
 
 // "me" reacted with a heart on the parent (outbound tapback).
@@ -58,7 +58,7 @@ const reaction = msg({
 });
 
 describe("generateTextThreadHTML — reactions (BACKLOG-2280)", () => {
-  const contact = { phone: "+12065551234", name: "Jane" };
+  const contact = { phone: "+12065550103", name: "Jane" };
 
   it("renders exactly one evidentiary reactions line, and no empty reaction bubble", () => {
     const html = generateTextThreadHTML([parent, reaction], contact, {}, false, 0);

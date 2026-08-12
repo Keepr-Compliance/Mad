@@ -161,14 +161,14 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
 
   describe("contact_phones JOIN to phone_last_message", () => {
     it("matches US-formatted contact phone against clean writer key", () => {
-      // Writer stored a clean E.164 key: messages came in as "+14155551234".
-      // normalizePhoneLookupKey("+14155551234") === "4155551234".
+      // Writer stored a clean E.164 key: messages came in as "+14155550109".
+      // normalizePhoneLookupKey("+14155550109") === "4155550109".
       db.prepare(
         "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
-      ).run("4155551234", userId, "2026-05-15T10:00:00Z");
+      ).run("4155550109", userId, "2026-05-15T10:00:00Z");
 
-      // Contact came in formatted: "+1 (415) 555-1234"
-      insertContactWithPhone(db, userId, "Alice", "+1 (415) 555-1234");
+      // Contact came in formatted: "+1 (415) 555-0109"
+      insertContactWithPhone(db, userId, "Alice", "+1 (415) 555-0109");
 
       const row = db.prepare(READER_SQL).get(userId) as { last_communication_at: string | null };
       expect(row.last_communication_at).toBe("2026-05-15T10:00:00Z");
@@ -186,7 +186,7 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
     });
 
     it("returns NULL when no message exists for the phone", () => {
-      insertContactWithPhone(db, userId, "Carol", "+1 (415) 555-9999");
+      insertContactWithPhone(db, userId, "Carol", "+1 (415) 555-0105");
 
       const row = db.prepare(READER_SQL).get(userId) as { last_communication_at: string | null };
       expect(row.last_communication_at).toBeNull();
@@ -246,9 +246,9 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
     it("populates last_message_at for US-formatted phones in phones_json", () => {
       db.prepare(
         "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
-      ).run("4155551234", userId, "2026-05-15T10:00:00Z");
+      ).run("4155550109", userId, "2026-05-15T10:00:00Z");
 
-      insertExternalContact(db, userId, "Alice", ["+1 (415) 555-1234"]);
+      insertExternalContact(db, userId, "Alice", ["+1 (415) 555-0109"]);
 
       refreshExternalLastMessageAt();
       const row = db.prepare(EXTERNAL_READER_SQL).get(userId) as { last_message_at: string | null };
@@ -274,7 +274,7 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
         "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
       ).run("9999999999", userId, "2026-05-15T10:00:00Z");
 
-      insertExternalContact(db, userId, "Lonely", ["+1 (415) 555-1234"]);
+      insertExternalContact(db, userId, "Lonely", ["+1 (415) 555-0109"]);
 
       refreshExternalLastMessageAt();
       const row = db.prepare(EXTERNAL_READER_SQL).get(userId) as { last_message_at: string | null };

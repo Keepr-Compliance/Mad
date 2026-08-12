@@ -219,7 +219,7 @@ describe('batchLLMService', () => {
         emails: [
           createEmail({
             id: 'email-1',
-            subject: 'Call me at 555-123-4567',
+            subject: 'Call me at 555-555-0112',
             sender: 'john.doe@company.com',
             recipients: ['jane.doe@client.org'],
             date: '2024-01-15T10:00:00Z',
@@ -241,7 +241,7 @@ describe('batchLLMService', () => {
       expect(prompt).not.toContain('john.doe@company.com');
       expect(prompt).not.toContain('jane.doe@client.org');
       expect(prompt).not.toContain('123-45-6789');
-      expect(prompt).not.toContain('555-123-4567');
+      expect(prompt).not.toContain('555-555-0112');
     });
 
     it('should preserve property addresses in email content', () => {

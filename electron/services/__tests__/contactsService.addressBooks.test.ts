@@ -74,14 +74,14 @@ const SOURCE_B_DIR = "1DB81D2E-2345-6789-ABCD-EF0123456789";
 
 /** "On My Mac" — 3 rows, BELOW the old >10 threshold that discarded it. */
 const LOCAL_BOOK: FixtureRecord[] = [
-  { pk: 1, uid: "LOCAL-0001:ABPerson", first: "Homer", last: "Local", phones: ["+15551110001"] },
+  { pk: 1, uid: "LOCAL-0001:ABPerson", first: "Homer", last: "Local", phones: ["+15555550114"] },
   { pk: 7, uid: "LOCAL-0002:ABPerson", first: "Marge", last: "Local", emails: ["marge.local@example.com"] },
-  { pk: 42, uid: "LOCAL-0003:ABPerson", first: "Bart", last: "Local", phones: ["+15551110003"] },
+  { pk: 42, uid: "LOCAL-0003:ABPerson", first: "Bart", last: "Local", phones: ["+15555550128"] },
 ];
 
 /** iCloud account. Includes the non-person rows a real store carries. */
 const ICLOUD_BOOK: FixtureRecord[] = [
-  { pk: 1, uid: "ICLOUD-0001:ABPerson", first: "Ada", last: "Cloud", phones: ["+15552220001"] },
+  { pk: 1, uid: "ICLOUD-0001:ABPerson", first: "Ada", last: "Cloud", phones: ["+15555550124"] },
   { pk: 2, uid: "ICLOUD-0002:ABPerson", first: "Grace", last: "Cloud", emails: ["grace.cloud@example.com"] },
   { pk: 3, uid: "ICLOUD-0003:ABPerson", first: "Alan", last: "Cloud" },
   // Non-person rows: groups, an info row and a container, exactly as macOS
@@ -95,14 +95,15 @@ const ICLOUD_BOOK: FixtureRecord[] = [
 
 /** Exchange account. Carries the label edge cases. */
 const EXCHANGE_BOOK: FixtureRecord[] = [
-  { pk: 1, uid: "EXCH-0001:ABPerson", first: "Ruth", last: "Work", phones: ["+15553330001"] },
+  { pk: 1, uid: "EXCH-0001:ABPerson", first: "Ruth", last: "Work", phones: ["+15555550123"] },
   // No name at all, but a real email — 18 of 1123 people on the reporter's
   // machine looked like this and were dropped without a log line.
   { pk: 2, uid: "EXCH-0002:ABPerson", emails: ["nameless@example.com"] },
   // No name and no email — only a phone.
   { pk: 3, uid: "EXCH-0003:ABPerson", phones: ["+15553330003"] },
-  // First name + organisation, NO surname. See the precedence test.
-  { pk: 4, uid: "EXCH-0004:ABPerson", first: "Jane", org: "Acme Corp", phones: ["+15553330004"] },
+  // First name + organisation, NO surname — the realtor-style
+  // "FirstName / Role-in-Org" card. See the precedence test (BACKLOG-2399).
+  { pk: 4, uid: "EXCH-0004:ABPerson", first: "Margaret", org: "Miller - Seller", phones: ["+15555550111"] },
   // Organisation only — a genuine company record.
   { pk: 5, uid: "EXCH-0005:ABPerson", org: "Title Co", emails: ["escrow@titleco.example.com"] },
 ];
@@ -132,7 +133,9 @@ describe("BACKLOG-2392: every address book is read", () => {
   const allLogOutput = (): string =>
     [mockLogInfo, mockLogWarn, mockLogError, mockLogDebug]
       .flatMap((m) => m.mock.calls)
-      .map((call) => call.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "))
+      .map((call: unknown[]) =>
+        call.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")
+      )
       .join("\n");
 
   /** recordIds of everything the reader returned, sorted for comparison. */
@@ -277,7 +280,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       expect(emitted).not.toContain(SOURCE_A_DIR);
       expect(emitted).not.toContain("Ada");
       expect(emitted).not.toContain("grace.cloud@example.com");
-      expect(emitted).not.toContain("+15552220001");
+      expect(emitted).not.toContain("+15555550124");
     });
 
     it("keeps absolute paths out of the FAILURE logs too, not just the funnel", async () => {
@@ -560,36 +563,75 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
   });
 
-  describe("display-name precedence (pinned here; fixed in BACKLOG-2401 -> 2399)", () => {
-    it("PINS the known-wrong behaviour: 'Jane' at 'Acme Corp' shows as Acme Corp", async () => {
-      // This is a real bug and it is deliberately NOT fixed in BACKLOG-2392.
-      //
-      // `contacts` has no source-identity column: the only bridge from an
-      // imported contact back to its address-book row is display-name string
-      // equality (contactHandlers backfill, `WHERE user_id = ? AND name = ?`).
-      // Changing this string orphans every contact already stored under an
-      // organisation name, on the release that ships it — in the release whose
-      // whole purpose is restoring this user's contacts.
-      //
-      // BACKLOG-2401 replaces that name join with a real source identity;
-      // BACKLOG-2399 then flips the precedence.
-      // WHEN YOU FIX IT, THIS TEST SHOULD FAIL. Change it deliberately.
+  describe("display-name precedence (BACKLOG-2399 — a name outranks an org)", () => {
+    /**
+     * THIS TEST WAS DELIBERATELY INVERTED BY BACKLOG-2399.
+     *
+     * BACKLOG-2392 pinned the KNOWN-WRONG behaviour here on purpose — "Margaret"
+     * at "Miller - Seller" displayed as "Miller - Seller" — and left a note
+     * saying the fix would have to change this assertion deliberately. It did.
+     *
+     * The reason 2392 could not simply fix it: at the time the ONLY bridge from
+     * a saved contact back to its address-book row was display-name string
+     * equality (`... FROM external_contacts WHERE user_id = ? AND name = ?`).
+     * Relabelling orphaned every contact stored under an organisation name, all
+     * on one release. BACKLOG-2401 replaced that join with the
+     * `contact_source_links` crosswalk, which is keyed on the source RECORD;
+     * contactsService.relabelSafety.test.ts proves the link survives this
+     * relabel by exact id.
+     */
+    it("shows 'Margaret', not her organisation, when she has no surname", async () => {
       buildThreeAccountTree();
 
       const result = await getContactNames();
-      const jane = result.contacts!.find((c) => c.recordId === "EXCH-0004:ABPerson");
+      const margaret = result.contacts!.find((c) => c.recordId === "EXCH-0004:ABPerson");
 
-      expect(jane!.name).toBe("Acme Corp");
-      expect(jane!.company).toBe("Acme Corp");
+      expect(margaret!.name).toBe("Margaret");
+      // THE COMPANY IS NOT LOST. It has its own field and always did — which is
+      // why the old fallback was discarding a real name to store a string that
+      // was already stored one column over. There was never a trade-off here.
+      expect(margaret!.company).toBe("Miller - Seller");
     });
 
     it("an organisation-only record is still labelled by its organisation", async () => {
+      // The org fallback STAYS — it moves to last resort, it does not go away.
+      // A vendor card like this has no person on it and the organisation is the
+      // only label it has.
       buildThreeAccountTree();
 
       const result = await getContactNames();
       const titleCo = result.contacts!.find((c) => c.recordId === "EXCH-0005:ABPerson");
 
       expect(titleCo!.name).toBe("Title Co");
+      expect(titleCo!.company).toBe("Title Co");
+    });
+
+    it("prefers a surname to an organisation when there is no first name", async () => {
+      // The middle of the chain, which no fixture covered before: last-only
+      // must beat org for the same reason first-only does.
+      writeAddressBook(localPath(), [
+        { pk: 1, uid: "LASTONLY-1:ABPerson", last: "Okonkwo", org: "Bridgeview Realty" },
+      ]);
+
+      const result = await getContactNames();
+
+      expect(result.contacts![0].name).toBe("Okonkwo");
+      expect(result.contacts![0].company).toBe("Bridgeview Realty");
+    });
+
+    it("still falls back to email, then phone, when there is no name AND no org", async () => {
+      // Import-everything (catalogue A11) is unchanged by the precedence flip.
+      writeAddressBook(localPath(), [
+        { pk: 1, uid: "FALLBACK-1:ABPerson", emails: ["only.email@example.com"] },
+        { pk: 2, uid: "FALLBACK-2:ABPerson", phones: ["+15555550122"] },
+      ]);
+
+      const result = await getContactNames();
+      const byId = Object.fromEntries(result.contacts!.map((c) => [c.recordId!, c.name]));
+
+      expect(byId["FALLBACK-1:ABPerson"]).toBe("only.email@example.com");
+      expect(byId["FALLBACK-2:ABPerson"]).toBeTruthy();
+      expect(byId["FALLBACK-2:ABPerson"]).not.toBe("");
     });
   });
 
@@ -599,9 +641,9 @@ describe("BACKLOG-2392: every address book is read", () => {
 
       const { contactMap } = await getContactNames();
 
-      expect(contactMap["+15551110001"]).toBe("Homer Local");     // local
-      expect(contactMap["+15552220001"]).toBe("Ada Cloud");       // iCloud
-      expect(contactMap["+15553330001"]).toBe("Ruth Work");       // Exchange
+      expect(contactMap["+15555550114"]).toBe("Homer Local");     // local
+      expect(contactMap["+15555550124"]).toBe("Ada Cloud");       // iCloud
+      expect(contactMap["+15555550123"]).toBe("Ruth Work");       // Exchange
       expect(contactMap["grace.cloud@example.com"]).toBe("Grace Cloud");
     });
   });

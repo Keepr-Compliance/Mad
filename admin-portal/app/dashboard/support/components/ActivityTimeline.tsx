@@ -82,7 +82,7 @@ function AttachmentThumbnail({
 
   useEffect(() => {
     if (isImage) {
-      getAttachmentUrl(attachment.storage_path)
+      getAttachmentUrl(attachment.storage_path, attachment.id)
         .then(setUrl)
         .catch(() => setLoadError(true));
     }
@@ -95,7 +95,7 @@ function AttachmentThumbnail({
     }
     setLoading(true);
     try {
-      const signedUrl = await getAttachmentUrl(attachment.storage_path);
+      const signedUrl = await getAttachmentUrl(attachment.storage_path, attachment.id);
       setUrl(signedUrl);
       onPreview(signedUrl);
     } catch {

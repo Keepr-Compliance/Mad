@@ -85,7 +85,12 @@ beforeEach(() => {
 // TEST FIXTURES
 // ============================================
 
-const mockUser: User = {
+// These fixtures are opaque round-trip payloads: they go into the IPC mock and
+// come straight back out via toEqual, so no assertion depends on their shape.
+// They are modelled on a camelCase API that does not match the snake_case
+// `User` row type, nor the computed `Subscription` shape (tier/isActive/...),
+// hence the double assertions rather than annotations.
+const mockUser = {
   id: "user-123",
   email: "test@example.com",
   name: "Test User",
@@ -93,16 +98,16 @@ const mockUser: User = {
   createdAt: "2024-01-01T00:00:00Z",
   updatedAt: "2024-01-01T00:00:00Z",
   termsAcceptedAt: "2024-01-01T00:00:00Z",
-};
+} as unknown as User;
 
-const mockSubscription: Subscription = {
+const mockSubscription = {
   id: "sub-123",
   userId: "user-123",
   plan: "pro",
   status: "active",
   currentPeriodStart: "2024-01-01T00:00:00Z",
   currentPeriodEnd: "2024-12-31T23:59:59Z",
-};
+} as unknown as Subscription;
 
 const mockSessionToken = "session-token-abc123";
 

@@ -21,8 +21,8 @@
  */
 
 import path from "path";
-import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
+import { CONTACT_IDENTITY_SCHEMA } from "./helpers/contactIdentitySchema";
 
 // ---------------------------------------------------------------------------
 // REAL DRIVER + dbConnection MOCK (pattern from
@@ -85,91 +85,13 @@ const OTHER_USER = "user-other";
 // v57 crosswalk and the v57 external_contacts.external_uuid column.
 // ---------------------------------------------------------------------------
 
-const SCHEMA = `
-  CREATE TABLE contacts (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    company TEXT,
-    source TEXT DEFAULT 'manual',
-    is_imported INTEGER DEFAULT 1,
-    removed_at DATETIME,
-    removed_reason TEXT
-  );
-
-  CREATE TABLE contact_emails (
-    id TEXT PRIMARY KEY,
-    contact_id TEXT NOT NULL,
-    email TEXT NOT NULL,
-    is_primary INTEGER DEFAULT 0,
-    UNIQUE(contact_id, email)
-  );
-
-  CREATE TABLE contact_phones (
-    id TEXT PRIMARY KEY,
-    contact_id TEXT NOT NULL,
-    phone_e164 TEXT NOT NULL,
-    phone_normalized TEXT,
-    is_primary INTEGER DEFAULT 0,
-    UNIQUE(contact_id, phone_e164)
-  );
-
-  CREATE TABLE external_contacts (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    name TEXT,
-    phones_json TEXT,
-    phones_normalized_json TEXT,
-    emails_json TEXT,
-    company TEXT,
-    external_record_id TEXT,
-    source TEXT DEFAULT 'macos',
-    synced_at DATETIME,
-    external_uuid TEXT,
-    UNIQUE(user_id, source, external_record_id)
-  );
-
-  CREATE TABLE transactions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT,
-    first_exported_at DATETIME,
-    buyer_agent_id TEXT,
-    seller_agent_id TEXT,
-    escrow_officer_id TEXT,
-    inspector_id TEXT,
-    other_contacts TEXT
-  );
-
-  CREATE TABLE transaction_contacts (
-    id TEXT PRIMARY KEY,
-    transaction_id TEXT NOT NULL,
-    contact_id TEXT NOT NULL,
-    role TEXT,
-    UNIQUE(transaction_id, contact_id)
-  );
-
-  CREATE TABLE contact_source_links (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    contact_id TEXT NOT NULL,
-    source_type TEXT NOT NULL CHECK (
-      source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
-    ),
-    source_record_id TEXT NOT NULL,
-    external_uuid TEXT,
-    match_method TEXT NOT NULL CHECK (
-      match_method IN ('source_id', 'email', 'phone', 'manual', 'scored')
-    ),
-    confidence REAL,
-    matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    evidence_ref TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-    UNIQUE (user_id, source_type, source_record_id)
-  );
-  CREATE INDEX idx_contact_source_links_contact ON contact_source_links(contact_id);
-`;
+/**
+ * BACKLOG-2410: the schema moved to a shared fixture so this suite, the review
+ * queue, the name rule and the provenance suite all run against ONE transcript
+ * of the migrations. Four hand-copied schemas drift, and a suite testing a shape
+ * the migration does not produce passes for the wrong reason.
+ */
+const SCHEMA = CONTACT_IDENTITY_SCHEMA;
 
 // ---------------------------------------------------------------------------
 // SEED HELPERS
@@ -426,7 +348,7 @@ describe("C7 — an identifier that moved between people, both sides id-matched"
   const LILLY = "c-lilly";
   const DANIEL_UID = "UUID-DANIEL:ABPerson";
   const LILLY_UID = "UUID-LILLY:ABPerson";
-  const MOVED_PHONE = "+14155559999";
+  const MOVED_PHONE = "+14155550105";
 
   beforeEach(() => {
     // Daniel's SAVED contact still carries the number from the first import.
@@ -509,7 +431,7 @@ describe("C8 / C9 — a content match that would REASSIGN an identifier is flagg
   const DANIEL = "c-daniel";
   const DANIEL_UID = "UUID-DANIEL:ABPerson";
   const LILLY_NEW_UID = "UUID-LILLY-NEW:ABPerson";
-  const MOVED_PHONE = "+14155559999";
+  const MOVED_PHONE = "+14155550105";
 
   beforeEach(() => {
     addContact(DANIEL, "Daniel", { phones: [MOVED_PHONE] });
@@ -686,7 +608,7 @@ describe("C6 — device swap: every id changed, content fallback re-links", () =
   const JON = "c-jon";
   const OLD_UID = "old-iphone-1";
   const NEW_UID = "new-iphone-9";
-  const PHONE = "+14155551234";
+  const PHONE = "+14155550109";
   const OLD_SYNC = "2026-01-01T00:00:00.000Z";
   const NEW_SYNC = "2026-08-02T00:00:00.000Z";
 
@@ -894,6 +816,66 @@ describe("one person in TWO address books of the SAME source (BACKLOG-2392)", ()
     });
   });
 
+  /**
+   * BACKLOG-2473 — AN ORIGIN ROW IS NOT A COMPETING CLAIM.
+   *
+   * `getLinksForContactBySource` returns origin rows now, because a
+   * `contacts_app`/`iphone`/`outlook` contact's origin row carries the same
+   * external spelling in `source_type`. Treat one as an incumbent and EVERY
+   * address-book contact created through `contacts:create` gets reported as a
+   * reassignment conflict against itself.
+   *
+   * SR observed the guard was protected only INCIDENTALLY: `sourceRecordIsCurrent`
+   * happens to fail on `origin:<contactId>` because nothing in
+   * `external_contacts` carries that id. That is a lucky consequence of an
+   * unrelated lookup, not a decision — so this test DELIBERATELY REMOVES THE
+   * LUCK. It plants an `external_contacts` row whose `external_record_id` IS the
+   * synthetic origin id, so the incumbent lookup succeeds and the only thing
+   * left standing between the user and a false conflict is the explicit
+   * `match_method !== ORIGIN_MATCH_METHOD` check.
+   *
+   * NEGATIVE CONTROL RUN: removed that one line from `contactSourceLinker.ts`.
+   * Observed: this test fails — `outcome: "flagged"`,
+   * `reason: "identifier_reassigned"`, the contact conflicting with its own
+   * statement of where it came from.
+   */
+  it("an origin row is never a conflicting incumbent, even when its record resolves", () => {
+    const TYPED = addContact("c-typed-origin", "Typed Person", {
+      phones: ["+14155550115"],
+    });
+    // The contact's own origin row, carrying the external spelling.
+    createLink({
+      userId: USER,
+      contactId: TYPED,
+      sourceType: "macos",
+      sourceRecordId: `origin:${TYPED}`,
+      matchMethod: "origin",
+    });
+    // Break the incidental protection: make the origin id genuinely resolvable.
+    addExternal(`origin:${TYPED}`, "Typed Person", { phones: [] });
+
+    // A real macOS card for the same person now arrives.
+    addExternal("UUID-TYPED-REAL:ABPerson", "Typed Person", {
+      phones: ["+14155550115"],
+    });
+
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "macos",
+      sourceRecordId: "UUID-TYPED-REAL:ABPerson",
+      phones: ["+14155550115"],
+    });
+
+    // It LINKS. It is not flagged as a reassignment against the contact's own
+    // statement of where it came from.
+    expect(resolution).toMatchObject({ outcome: "linked", contactId: TYPED });
+    expect(linkTriples(TYPED).sort()).toEqual(
+      [
+        `macos origin:${TYPED} -> ${TYPED} (origin)`,
+        `macos UUID-TYPED-REAL:ABPerson -> ${TYPED} (phone)`,
+      ].sort(),
+    );
+  });
+
   it("ACROSS sources the same person links to BOTH — this is only a same-source rule", () => {
     const CROSS = addContact("c-cross", "Cross", { emails: ["cross@example.com"] });
     addExternal("UUID-CROSS:ABPerson", "Cross", { emails: ["cross@example.com"] });
@@ -996,10 +978,25 @@ describe("android_sync INCREMENTAL diff — the guard must not go quietly dead",
     ]);
   });
 
-  it("DEMONSTRATES the defect without the re-stamp: Lilly's record binds to Daniel", () => {
-    // Exactly the state an unpatched incremental diff leaves behind. Pinned so
-    // the regression is legible rather than hypothetical, and so the fix has
-    // something concrete to be the fix OF.
+  /**
+   * BACKLOG-2619 CHANGED THIS TEST'S OUTCOME, AND THE REASON MATTERS.
+   *
+   * It used to assert a silent LINK — the state an unpatched incremental diff
+   * leaves behind — pinned so the regression was legible rather than
+   * hypothetical. The name veto now catches the same case one step later, so the
+   * outcome is `flagged`.
+   *
+   * The DISCRIMINATION IS PRESERVED, and it is the whole point of this block:
+   * with the re-stamp the reason is `duplicate_source_record` (the incumbent
+   * check fired); without it the reason is `name_mismatch` (the incumbent check
+   * did NOT fire, and the last line of defence caught it instead). Two different
+   * reasons still tell the two states apart.
+   *
+   * THE UNDERLYING DEFECT IS NOT FIXED BY THE NAME VETO — see the test below,
+   * which is the same shape with names that agree and still links silently. The
+   * re-stamp is still load-bearing.
+   */
+  it("WITHOUT the re-stamp the incumbent check does not fire — the name veto catches it instead", () => {
     const resolution = resolveSourceRecord(USER, {
       sourceType: "android_sync",
       sourceRecordId: LILLY_REC,
@@ -1007,9 +1004,66 @@ describe("android_sync INCREMENTAL diff — the guard must not go quietly dead",
     });
 
     expect(resolution).toEqual({
-      outcome: "linked",
-      contactId: DANIEL,
+      outcome: "flagged",
       sourceRecordId: LILLY_REC,
+      candidateContactId: DANIEL,
+      // Empty, NOT `DANIEL_REC` — which is the tell that the incumbent branch
+      // never ran. With the re-stamp the test above names the incumbent.
+      conflictingSourceRecordId: "",
+      matchedOn: "phone",
+      reason: "name_mismatch",
+    });
+    expect(linkTriples(DANIEL)).toEqual([
+      `android_sync ${DANIEL_REC} -> ${DANIEL} (source_id)`,
+    ]);
+  });
+
+  /**
+   * DEMONSTRATES the defect the re-stamp fixes, with the name veto in place.
+   *
+   * Two people who share a name AND a number — the father/son shape this
+   * codebase already names as the credit-bureau mixed-file pattern, and the
+   * reason `name_generational_suffix` exists. The names agree, so the veto
+   * cannot help, and the record still binds to the wrong contact silently.
+   *
+   * NEGATIVE CONTROL (run, observed): call `markSourceRecordsCurrent` here and
+   * this goes red — it flags instead, which is the re-stamp doing its job.
+   */
+  it("the defect survives the name veto whenever the two names agree", () => {
+    const ROB = "c-and-rob";
+    const ROB_OLD = "and-rob-senior";
+    const ROB_NEW = "and-rob-junior";
+    const SHARED_LINE = "+14155550179";
+
+    addContact(ROB, "Robert Chen", { phones: [SHARED_LINE] });
+    addExternal(ROB_OLD, "Robert Chen", {
+      source: "android_sync",
+      phones: [SHARED_LINE],
+      syncedAt: OLD_DIFF,
+    });
+    createLink({
+      userId: USER,
+      contactId: ROB,
+      sourceType: "android_sync",
+      sourceRecordId: ROB_OLD,
+      matchMethod: "source_id",
+    });
+    addExternal(ROB_NEW, "Robert Chen", {
+      source: "android_sync",
+      phones: [SHARED_LINE],
+      syncedAt: NEW_DIFF,
+    });
+
+    const resolution = resolveSourceRecord(USER, {
+      sourceType: "android_sync",
+      sourceRecordId: ROB_NEW,
+      phones: [SHARED_LINE],
+    });
+
+    expect(resolution).toEqual({
+      outcome: "linked",
+      contactId: ROB,
+      sourceRecordId: ROB_NEW,
       method: "phone",
     });
   });
@@ -1070,9 +1124,22 @@ describe("C10 — a contact imported before the crosswalk existed", () => {
    */
   const OLD = "c-legacy";
 
+  /**
+   * BACKLOG-2619 CHANGED THIS FIXTURE, NOT THIS RULE.
+   *
+   * The record used to be called "Completely Different Name" — chosen to make
+   * the point that the content fallback consults no name at all. That is no
+   * longer true: a name cannot CREATE a link, but it can now veto one, so a
+   * fixture built to be name-blind was testing a path the app no longer takes.
+   *
+   * The ordinary C10 shape is a contact whose `display_name` came from this very
+   * record, so the two agree. That is what is transcribed here. The
+   * differing-name variant is not deleted — it is the test below, with its new
+   * outcome.
+   */
   it("links opportunistically by EMAIL, recording match_method='email'", () => {
     addContact(OLD, "Legacy Person", { emails: ["legacy@example.com"] });
-    addExternal("UUID-LEGACY:ABPerson", "Completely Different Name", {
+    addExternal("UUID-LEGACY:ABPerson", "Legacy Person", {
       emails: ["legacy@example.com"],
     });
 
@@ -1082,14 +1149,36 @@ describe("C10 — a contact imported before the crosswalk existed", () => {
     expect(linkTriples(OLD)).toEqual([`macos UUID-LEGACY:ABPerson -> ${OLD} (email)`]);
   });
 
+  /**
+   * BACKLOG-2619 — the honest cost of the name veto, stated rather than hidden.
+   *
+   * A pre-crosswalk contact the user RENAMED ("Bob" -> "Robert Chen") no longer
+   * re-acquires its link silently: it becomes one question, answered once. That
+   * is the founder's rule — a shared identifier with names that disagree is
+   * exactly what a person should see — but it is a behaviour change for existing
+   * data and it belongs in a test rather than in a release note nobody reads.
+   */
+  it("but a pre-crosswalk contact saved under a DIFFERENT name is asked about, not linked", () => {
+    addContact(OLD, "Legacy Person", { emails: ["legacy@example.com"] });
+    addExternal("UUID-LEGACY:ABPerson", "Completely Different Name", {
+      emails: ["legacy@example.com"],
+    });
+
+    const summary = linkExternalContactsForUser(USER);
+
+    expect(summary.contentMatched).toBe(0);
+    expect(summary.flagged).toBe(1);
+    expect(linkTriples(OLD)).toEqual([]);
+  });
+
   it("prefers EMAIL over phone when both would match", () => {
     addContact(OLD, "Legacy Person", {
       emails: ["legacy@example.com"],
-      phones: ["+14155550000"],
+      phones: ["+14155550102"],
     });
     addExternal("UUID-LEGACY:ABPerson", "Legacy Person", {
       emails: ["legacy@example.com"],
-      phones: ["+14155550000"],
+      phones: ["+14155550102"],
     });
 
     linkExternalContactsForUser(USER);

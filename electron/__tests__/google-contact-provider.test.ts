@@ -105,7 +105,7 @@ function createMockPerson(overrides: Record<string, unknown> = {}) {
       { value: 'johndoe@work.com' },
     ],
     phoneNumbers: [
-      { value: '+15551234567' },
+      { value: '+15555550112' },
     ],
     organizations: [
       {
@@ -248,7 +248,7 @@ describe('GoogleContactProvider', () => {
         external_record_id: 'people/c123456',
         name: 'John Doe',
         emails: ['john@example.com', 'johndoe@work.com'],
-        phones: ['+15551234567'],
+        phones: ['+15555550112'],
         company: 'Acme Corp',
       });
     });
@@ -295,8 +295,8 @@ describe('GoogleContactProvider', () => {
           { value: 'js@personal.com' },
         ],
         phoneNumbers: [
-          { value: '+15559876543' },
-          { value: '+15551112222' },
+          { value: '+15555550121' },
+          { value: '+15555550104' },
         ],
         organizations: [
           { name: 'Big Corp', metadata: { primary: true } },
@@ -318,7 +318,7 @@ describe('GoogleContactProvider', () => {
         external_record_id: 'people/c789',
         name: 'Jane Smith', // Primary name
         emails: ['jane@example.com', 'jane.smith@company.com', 'js@personal.com'],
-        phones: ['+15559876543', '+15551112222'],
+        phones: ['+15555550121', '+15555550104'],
         company: 'Big Corp', // Primary org
       });
     });

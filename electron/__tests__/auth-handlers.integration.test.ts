@@ -7,6 +7,11 @@
  * - Error handling and recovery
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
 
 // Store original setTimeout for async operations (prefixed with _ to indicate intentionally unused)
@@ -235,7 +240,7 @@ const TEST_SESSION_TOKEN = "test-session-token-" + Date.now();
 const TEST_AUTH_CODE = "valid-authorization-code-12345";
 
 describe("Auth Handlers Integration Tests", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
   const mockMainWindow = {
     webContents: {
@@ -245,8 +250,8 @@ describe("Auth Handlers Integration Tests", () => {
 
   beforeAll(() => {
     // Capture registered handlers
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
 

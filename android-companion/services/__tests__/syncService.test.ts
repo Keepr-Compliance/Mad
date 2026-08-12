@@ -206,10 +206,10 @@ describe('registerDevice (BACKLOG-2224 identity)', () => {
 
 describe('sendMessages / sendContacts (BACKLOG-2224 soft backstop)', () => {
   const messages: SyncMessage[] = [
-    { sender: '+15551234567', body: 'hi', timestamp: 1, direction: 'inbound' },
+    { sender: '+15555550112', body: 'hi', timestamp: 1, direction: 'inbound' },
   ];
   const contacts: SyncContact[] = [
-    { id: 'c1', displayName: 'Jane', phones: [{ number: '+15551234567' }], emails: [] },
+    { id: 'c1', displayName: 'Jane', phones: [{ number: '+15555550112' }], emails: [] },
   ];
 
   it('embeds supabaseUserId in the encrypted message payload', async () => {

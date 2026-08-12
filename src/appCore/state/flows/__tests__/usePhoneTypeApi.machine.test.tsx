@@ -390,8 +390,14 @@ describe("usePhoneTypeApi - State Machine Path", () => {
       });
     });
 
-    it("does NOT touch messages.source when iPhone is selected (macos-native stays correct)", async () => {
+    // BACKLOG-2408: the phone-type step is required and offers exactly two
+    // options, so gating the write on Android discarded half of all answers and
+    // left "chose iPhone" indistinguishable from "never asked". Every answer now
+    // writes — and for iPhone it writes precisely the value the platform default
+    // would otherwise have produced, so no user's effective source changes.
+    it("persists messages.source='macos-native' when iPhone is selected on macOS", async () => {
       const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
+        // onboardingStatePhoneType is platform { isMacOS: true, isWindows: false }
         wrapper: createWrapper(onboardingStatePhoneType),
       });
 
@@ -399,7 +405,91 @@ describe("usePhoneTypeApi - State Machine Path", () => {
         await result.current.savePhoneType("iphone");
       });
 
-      expect(mockUpdatePreferences).not.toHaveBeenCalled();
+      expect(mockUpdatePreferences).toHaveBeenCalledWith("test-user", {
+        messages: { source: "macos-native" },
+      });
+    });
+
+    it("persists messages.source='iphone-sync' when iPhone is selected on Windows", async () => {
+      const onboardingWindowsPhoneType: OnboardingState = {
+        ...onboardingStatePhoneType,
+        platform: { isMacOS: false, isWindows: true, hasIPhone: true },
+      };
+
+      const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
+        wrapper: createWrapper(onboardingWindowsPhoneType),
+      });
+
+      await act(async () => {
+        await result.current.savePhoneType("iphone");
+      });
+
+      expect(mockUpdatePreferences).toHaveBeenCalledWith("test-user", {
+        messages: { source: "iphone-sync" },
+      });
+    });
+
+    // BACKLOG-2408: `!isWindows` is NOT a proxy for macOS. The default this
+    // write replaces is `isMacOS ? "macos-native" : "iphone-sync"`, so a Linux
+    // user must land on iphone-sync, not macos-native.
+    it("persists messages.source='iphone-sync' when iPhone is selected on neither macOS nor Windows", async () => {
+      const onboardingLinuxPhoneType: OnboardingState = {
+        ...onboardingStatePhoneType,
+        platform: { isMacOS: false, isWindows: false, hasIPhone: true },
+      };
+
+      const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
+        wrapper: createWrapper(onboardingLinuxPhoneType),
+      });
+
+      await act(async () => {
+        await result.current.savePhoneType("iphone");
+      });
+
+      expect(mockUpdatePreferences).toHaveBeenCalledWith("test-user", {
+        messages: { source: "iphone-sync" },
+      });
+    });
+
+    // BACKLOG-2408: the whole point is that a preference EXISTS after either
+    // answer. Absence must no longer be reachable through onboarding.
+    it("writes a messages source for both answers, never leaving it unset", async () => {
+      for (const phoneType of ["iphone", "android"] as const) {
+        mockUpdatePreferences.mockClear();
+
+        const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
+          wrapper: createWrapper(onboardingStatePhoneType),
+        });
+
+        await act(async () => {
+          await result.current.savePhoneType(phoneType);
+        });
+
+        expect(mockUpdatePreferences).toHaveBeenCalledTimes(1);
+        const [, written] = mockUpdatePreferences.mock.calls[0] as [
+          string,
+          { messages?: { source?: string } },
+        ];
+        expect(written.messages?.source).toEqual(expect.any(String));
+      }
+    });
+
+    it("still succeeds when the iPhone messages.source write fails (graceful degradation)", async () => {
+      mockUpdatePreferences.mockRejectedValueOnce(new Error("pref error"));
+
+      const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
+        wrapper: createWrapper(onboardingStatePhoneType),
+      });
+
+      let saveResult: boolean | undefined;
+      await act(async () => {
+        saveResult = await result.current.savePhoneType("iphone");
+      });
+
+      // The preference write is best-effort; the phone-type save still succeeds.
+      expect(saveResult).toBe(true);
+      // And the phone type itself is still persisted.
+      expect(mockSetPhoneTypeCloud).toHaveBeenCalledWith("test-user", "iphone");
     });
 
     it("still succeeds when the Android messages.source write fails (graceful degradation)", async () => {

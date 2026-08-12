@@ -27,6 +27,14 @@
  *   4. NEVER FALL BACK TO NAME. That is the mechanism being replaced. A rename
  *      in Contacts.app must not create a second person.
  *
+ *   5. A NAME IS STILL A VETO — BACKLOG-2619. Rule 4 says a name may never
+ *      CREATE a link. It has been read as though it also said a name may never
+ *      PREVENT one, and for three months that reading was the code: this file
+ *      contained no name logic of any kind, so the content fallback linked
+ *      "Marcus Ord" to a saved contact called "Priya Raman" on the strength of a
+ *      shared office line, silently, and copied Marcus's addresses onto Priya as
+ *      it went. See the section on the name veto below.
+ *
  * ===========================================================================
  * WHY STEP 3 EXISTS — the Daniel/Lilly case
  * ===========================================================================
@@ -61,17 +69,54 @@
  * this: both resolve at step 1 and the content fallback never fires at all.
  *
  * ===========================================================================
- * WHAT "FLAGGED" MEANS TODAY — and what it does NOT
+ * WHAT "FLAGGED" MEANS — BACKLOG-2410 GAVE IT SOMEWHERE TO GO
  * ===========================================================================
- * The link is NOT created, the conflict is counted in the ingestion funnel, and
- * it is returned to the caller so it can be surfaced and asserted on.
+ * The link is NOT created, the conflict is counted in the ingestion funnel, it
+ * is returned to the caller, AND it is written to the contact-level review queue
+ * (`contact_link_proposals`) with its evidence in words. Before BACKLOG-2410 the
+ * last of those did not exist: a flag was counted, logged, and then nothing
+ * happened, so the one band where a human adds information was discarded on
+ * every sync.
  *
- * There is NO durable review queue for contact links, because no such substrate
- * exists: BACKLOG-2319's "Needs review" is a `match_reason` column on
- * `communications` / `ignored_communications` and is about EMAILS, not
- * contacts. Building a contact-level review surface is its own item. Until then
- * the guarantee this module makes is the important half — a suspect link is
- * never silently applied.
+ * The queue write is best-effort and never throws into a sync — a sync that
+ * succeeded must not be reported as failed because a question could not be
+ * filed, and the next pass re-files it.
+ *
+ * ===========================================================================
+ * THE NAME VETO — BACKLOG-2619 / BACKLOG-2624
+ * ===========================================================================
+ * The picker has always gated phone-based dedup on name compatibility. This
+ * module never did, and the two layers therefore answered the same question
+ * differently: `contacts:get-available` showed Marcus Ord and Priya Raman as two
+ * separate people, correctly, while `resolveSourceRecord` merged them.
+ *
+ * `nameSupportForAutoLink` is consulted LAST, immediately before the link is
+ * written, and it can only ever turn a would-be SILENT LINK into a QUESTION:
+ *
+ *   - it is not consulted at STEP 1 at all. A source-id match is knowledge, and
+ *     a person who renames a card in Contacts.app must not be re-asked about it;
+ *   - it runs AFTER the conflict and frozen-audit branches, so every match those
+ *     already withhold keeps its own, more specific reason;
+ *   - it adds no link anywhere. It is purely subtractive on the act band.
+ *
+ * A MISSING NAME IS ASK, NOT ACT (BACKLOG-2624). `namesAreCompatible("", x)` is
+ * TRUE — an empty name cannot contradict — which would disable the veto for
+ * precisely the records with the least evidence behind them. The guard module
+ * states that rule, together with what else counts as "no name": the "Unknown"
+ * literal five live paths still write, and the email/phone label
+ * `buildContactLabel` bakes into a nameless record's name field.
+ *
+ * ===========================================================================
+ * A REJECTED PAIR IS NEVER LINKED AND NEVER RE-ASKED
+ * ===========================================================================
+ * `hasCannotLink` is consulted BEFORE this module links or proposes anything on
+ * the content path. A `different_people` verdict — recorded by the review queue,
+ * or by unlinking a source on the contact's provenance panel — is a hard
+ * constraint that outlives the rule that produced the original suggestion.
+ *
+ * IT MUST BAR THE LINK, NOT MERELY THE QUESTION. Suppressing only the re-ask
+ * would leave the pair free to be silently LINKED the next time any rule reaches
+ * it by another route, which is a worse outcome than the nagging it prevents.
  *
  * ===========================================================================
  * FROZEN AUDITS
@@ -90,15 +135,23 @@
 
 import { dbAll, dbGet } from "./db/core/dbConnection";
 import type { ExternalContactSource } from "./db/externalContactDbService";
+import { createLink, getLinksForContactBySource } from "./db/contactSourceLinkDbService";
 import {
-  createLink,
-  findContactIdBySourceRecord,
-  getLinksForContactBySource,
-} from "./db/contactSourceLinkDbService";
+  liveContactMatchIndex,
+  loadContactMatchIndex,
+  type ContactMatchIndex,
+} from "./db/contactMatchIndex";
+import { hasCannotLink, proposeLink } from "./db/contactLinkReviewDbService";
+import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
+import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
+import { buildEvidence, sourceRecordName } from "./contactLinkEvidence";
+import { applyLinkedSourceValues } from "./contactSourceValues";
 import { toLookupKey } from "../utils/phoneNormalization";
+import { realContactName } from "../utils/contactDisplayLabel";
+import { nameSupportForAutoLink } from "../utils/autoLinkNameGuard";
 import logService from "./logService";
 
-/** A source record offered for linking. Names are deliberately absent. */
+/** A source record offered for linking. */
 export interface SourceRecordCandidate {
   sourceType: ExternalContactSource;
   sourceRecordId: string;
@@ -106,6 +159,16 @@ export interface SourceRecordCandidate {
   externalUuid?: string | null;
   emails?: string[];
   phones?: string[];
+  /**
+   * The record's name, for the VETO only — never to match on (BACKLOG-2619).
+   *
+   * OPTIONAL, AND THE OMISSION IS NOT A BYPASS. A caller that leaves it out gets
+   * the name read from `external_contacts` instead (see `resolveSourceRecord`),
+   * so the guard cannot be switched off by forgetting a field — which is exactly
+   * how the `sourceRecordIsCurrent` precondition went quietly dead for one source
+   * and is documented at length below.
+   */
+  name?: string | null;
 }
 
 /**
@@ -129,7 +192,17 @@ export type FlagReason =
   /** The identifier is held by more than one saved contact; picking is guessing. */
   | "ambiguous_identifier"
   /** The candidate contact is referenced by an exported (frozen) audit. */
-  | "frozen_audit_contact";
+  | "frozen_audit_contact"
+  /**
+   * BACKLOG-2619 — the identifier is shared, but the two are saved under names
+   * that disagree. The office line, the household, the reassigned number.
+   */
+  | "name_mismatch"
+  /**
+   * BACKLOG-2624 — the identifier is shared and one of the two has no name to
+   * check it against. Absence of evidence, not evidence of a match.
+   */
+  | "name_unknown";
 
 export type LinkResolution =
   /** Step 1 — the crosswalk already claims this record. */
@@ -150,6 +223,21 @@ export type LinkResolution =
       matchedOn: "email" | "phone";
       reason: FlagReason;
     }
+  /**
+   * BACKLOG-2410 — the user has already said these are different people.
+   *
+   * Distinct from `no_match` (nothing matched) and from `flagged` (we do not
+   * know): here we DO know, because we were told. Reporting it as `no_match`
+   * would lose the distinction between "never asked" and "asked and answered",
+   * which is the same "nothing found vs never looked" ambiguity that runs
+   * through this whole epic.
+   */
+  | {
+      outcome: "declined";
+      sourceRecordId: string;
+      contactId: string;
+      matchedOn: "email" | "phone";
+    }
   /** No id match and no content match — a genuinely new person. */
   | { outcome: "no_match"; sourceRecordId: string };
 
@@ -162,76 +250,47 @@ export interface LinkRunSummary {
   flagged: number;
   /** Records that matched nothing. */
   unmatched: number;
+  /**
+   * BACKLOG-2410 — content matches refused because the user has already said
+   * "different people". Counted separately from `unmatched` so the funnel can
+   * tell a question nobody has been asked from one that has been answered.
+   */
+  declined: number;
   resolutions: LinkResolution[];
 }
 
 /**
  * Is this contact referenced by an EXPORTED (frozen) transaction?
  *
- * `transactions.first_exported_at IS NOT NULL` is the freeze boundary
- * (BACKLOG-2013). The contact→transaction relationship is THREE-WAY and a
- * predicate that checks only the junction table under-reports:
- *   1. direct FK columns on `transactions` (buyer_agent_id, ...)
- *   2. the `transaction_contacts` junction
- *   3. the `other_contacts` JSON array
+ * MOVED to `db/frozenContactDbService.ts` (BACKLOG-2427) and re-exported here so
+ * every existing import keeps working. It now has a second caller —
+ * `contactSourceValues`, which refuses to REMOVE an address from a contact an
+ * exported document depends on — and this module imports that one, so leaving
+ * the predicate here would have made the two require each other.
  */
-export function isContactOnFrozenTransaction(contactId: string): boolean {
-  // Named parameter: `contactId` appears six times and better-sqlite3 rejects
-  // `?N` numbered placeholders, while six positional `?` would be an ordering
-  // hazard on every future edit.
-  const row = dbGet<{ hit: number }>(
-    `SELECT 1 AS hit FROM transactions t
-      WHERE t.first_exported_at IS NOT NULL
-        AND (
-          t.buyer_agent_id = @contactId
-          OR t.seller_agent_id = @contactId
-          OR t.escrow_officer_id = @contactId
-          OR t.inspector_id = @contactId
-          OR EXISTS (
-            SELECT 1 FROM transaction_contacts tc
-             WHERE tc.transaction_id = t.id AND tc.contact_id = @contactId
-          )
-          OR (
-            t.other_contacts IS NOT NULL
-            AND EXISTS (
-              SELECT 1 FROM json_each(t.other_contacts) j WHERE j.value = @contactId
-            )
-          )
-        )
-      LIMIT 1`,
-    [{ contactId }],
-  );
-  return row !== undefined && row !== null;
-}
+export { isContactOnFrozenTransaction };
 
-/** Imported contacts carrying any of these emails. Exact, case-insensitive. */
-function contactIdsByEmail(userId: string, emails: string[]): string[] {
-  const cleaned = emails.map((e) => e?.trim().toLowerCase()).filter((e): e is string => !!e);
-  if (cleaned.length === 0) return [];
-  const placeholders = cleaned.map(() => "?").join(", ");
-  return dbAll<{ id: string }>(
-    `SELECT DISTINCT c.id FROM contacts c
-       JOIN contact_emails ce ON ce.contact_id = c.id
-      WHERE c.user_id = ? AND LOWER(ce.email) IN (${placeholders})
-      ORDER BY c.id`,
-    [userId, ...cleaned],
-  ).map((r) => r.id);
-}
-
-/** Imported contacts carrying any of these phones, compared as lookup keys. */
-function contactIdsByPhone(userId: string, phones: string[]): string[] {
-  const keys = phones.map((p) => toLookupKey(p)).filter((k) => k.length > 0);
-  if (keys.length === 0) return [];
-  const placeholders = keys.map(() => "?").join(", ");
-  return dbAll<{ id: string }>(
-    `SELECT DISTINCT c.id FROM contacts c
-       JOIN contact_phones cp ON cp.contact_id = c.id
-      WHERE c.user_id = ?
-        AND COALESCE(NULLIF(cp.phone_normalized, ''), cp.phone_e164) IN (${placeholders})
-      ORDER BY c.id`,
-    [userId, ...keys],
-  ).map((r) => r.id);
-}
+/**
+ * ===========================================================================
+ * THE THREE PROBES MOVED TO `db/contactMatchIndex.ts` — BACKLOG-2620
+ * ===========================================================================
+ * `contactIdsByEmail`, `contactIdsByPhone` and the crosswalk lookup used to
+ * live here as three per-record queries. They now sit behind a
+ * `ContactMatchIndex`, which has two implementations:
+ *
+ *   - the LIVE one, one statement per probe — what `resolveSourceRecord` uses
+ *     when it is called for a single record, which is unchanged behaviour;
+ *   - the BATCH one, which reads each relation ONCE for a whole pass.
+ *
+ * The queries themselves are transcribed verbatim into that module, including
+ * the unary `+c.user_id` from BACKLOG-2621 and the reasoning for it.
+ *
+ * WHY: this module fed every row of `external_contacts` to a per-record
+ * resolver on every sync, and 1,153 of the founder's 1,169 records matched
+ * nothing and so paid three statements each, every pass, permanently. Read
+ * `contactMatchIndex.ts`'s header for why the fix is batch recomputation rather
+ * than a remembered "no match".
+ */
 
 /**
  * Does this source record still carry any of `values` in its email/phone list?
@@ -370,23 +429,117 @@ function sourceRecordIsCurrent(
 }
 
 /**
+ * File a withheld match as a question, with its evidence in words.
+ *
+ * NEVER THROWS. A sync that succeeded must not be reported as failed because a
+ * question could not be filed, and the pass is idempotent — the pair is re-offered
+ * on the next sync, where `proposeLink`'s INSERT OR IGNORE makes a retry free.
+ * This is the same stance `runOpportunisticLinking` takes one level up, for the
+ * same reason.
+ */
+function recordProposal(args: {
+  userId: string;
+  contactId: string;
+  sourceType: ExternalContactSource;
+  sourceRecordId: string;
+  reason: FlagReason;
+  matchedOn: "email" | "phone";
+  matchedValues: string[];
+  clusterKey: string;
+  relatedContactIds?: string[];
+}): void {
+  try {
+    const built = buildEvidence({
+      userId: args.userId,
+      contactId: args.contactId,
+      sourceType: args.sourceType,
+      sourceRecordId: args.sourceRecordId,
+      reason: args.reason,
+      matchedOn: args.matchedOn,
+      matchedValues: args.matchedValues,
+      relatedContactIds: args.relatedContactIds ?? [],
+    });
+    proposeLink({
+      userId: args.userId,
+      contactId: args.contactId,
+      sourceType: args.sourceType,
+      sourceRecordId: args.sourceRecordId,
+      reason: args.reason,
+      matchedOn: args.matchedOn,
+      identityAssessment: built.identityAssessment,
+      relationshipAssessment: built.relationshipAssessment,
+      clusterKey: args.clusterKey,
+      evidence: built.evidence,
+    });
+  } catch (error) {
+    logService.warn(
+      `[Contacts] could not file a link review question: ${error}`,
+      "Contacts",
+    );
+  }
+}
+
+/**
+ * The saved contact's `display_name`, raw.
+ *
+ * DELIBERATELY NOT `contactLinkEvidence.contactDisplayName`, which substitutes
+ * the words "this contact" when the column is empty. That substitution is
+ * correct for a sentence and catastrophic for a comparison: it would turn every
+ * nameless contact into one called "this contact", and two of them would then
+ * read as an exact name match. The guard needs the truth, including its absence.
+ */
+function savedContactName(contactId: string): string | null {
+  const row = dbGet<{ display_name: string | null }>(
+    `SELECT display_name FROM contacts WHERE id = ?`,
+    [contactId],
+  );
+  return row?.display_name ?? null;
+}
+
+/**
  * Resolve ONE source record to a contact, applying the full matching order.
  *
  * Pure decision + at most one INSERT. Never deletes, never re-points, never
  * touches the contact row.
+ *
+ * `index` (BACKLOG-2620) is where the three identifier probes come from. Omit
+ * it and every probe is a live query, which is what a single-record caller
+ * wants; `linkSourceRecords` passes a batch index it loaded once for the whole
+ * pass. The two are pinned to identical answers by the parity control in
+ * `contactSourceLinker.convergence-2620.test.ts`.
  */
 export function resolveSourceRecord(
   userId: string,
   candidate: SourceRecordCandidate,
+  index: ContactMatchIndex = liveContactMatchIndex(),
 ): LinkResolution {
   const { sourceType, sourceRecordId, externalUuid = null } = candidate;
 
   // ---- STEP 1: source id. Always wins. -----------------------------------
-  const linkedContactId = findContactIdBySourceRecord(userId, sourceType, sourceRecordId);
+  const linkedRecord = index.linkedRecord(userId, sourceType, sourceRecordId);
+  const linkedContactId = linkedRecord?.contactId ?? null;
   if (linkedContactId) {
     // Opportunistically capture the portable identifier on a row that predates
     // it. Does not change the link or how it was made.
-    if (externalUuid) {
+    //
+    // THIS CALL DELIBERATELY DOES NOT SET `assertMethod` (BACKLOG-2419). The
+    // `source_id` below describes THE CALL — "found by looking the record up by
+    // its id" — not how the LINK was made; the pair is already linked, by
+    // whatever rule made it. Asserting it here would relabel every
+    // content-matched link as `source_id` on the next sync pass, which prints a
+    // more certain provenance sentence than the truth AND, through
+    // `contactSourceAffordances.isAttachedSource`, withdraws the Unlink button
+    // and the whole Sources panel from single-source contacts. See the
+    // `assertMethod` docblock in contactSourceLinkDbService.ts.
+    //
+    // BACKLOG-2620 — AND ONLY WHEN IT WOULD ADD SOMETHING. `createLink` on an
+    // existing row is a SELECT plus, when a uuid is supplied, an UPDATE whose
+    // `external_uuid` is COALESCE'd: on a row that already carries one the
+    // write changes nothing but `updated_at`, which no query in this repo
+    // reads. Skipping it removes two statements INCLUDING A WRITE per
+    // id-matched record per pass — and in the healthy steady state every record
+    // is id-matched, so that is the cost this feature settles into.
+    if (externalUuid && !linkedRecord?.hasExternalUuid) {
       createLink({
         userId,
         contactId: linkedContactId,
@@ -402,18 +555,66 @@ export function resolveSourceRecord(
   // ---- STEP 2: content fallback, email THEN phone. -----------------------
   // Email first: it is the stronger identifier of the two and far less prone to
   // being reassigned between people than a phone number.
-  const byEmail = contactIdsByEmail(userId, candidate.emails ?? []);
-  const byPhone = byEmail.length > 0 ? [] : contactIdsByPhone(userId, candidate.phones ?? []);
+  const byEmail = index.contactIdsByEmail(userId, candidate.emails ?? []);
+  const byPhone = byEmail.length > 0 ? [] : index.contactIdsByPhone(userId, candidate.phones ?? []);
   const matchedOn: "email" | "phone" = byEmail.length > 0 ? "email" : "phone";
-  const matches = byEmail.length > 0 ? byEmail : byPhone;
+  const allMatches = byEmail.length > 0 ? byEmail : byPhone;
+  const matchedValues = matchedOn === "email" ? (candidate.emails ?? []) : (candidate.phones ?? []);
+
+  if (allMatches.length === 0) {
+    return { outcome: "no_match", sourceRecordId };
+  }
+
+  // ---- BACKLOG-2410: honour the user's own answers before anything else. ----
+  //
+  // A `different_people` verdict removes that contact from consideration
+  // entirely — it is not a tiebreaker, it is a deletion from the candidate set.
+  // Doing it HERE, before the ambiguity test, means a rejection is not merely
+  // remembered but USEFUL: rejecting one of two contacts that share a phone
+  // number leaves one candidate, and the record can finally be resolved instead
+  // of being flagged forever.
+  const matches = allMatches.filter(
+    (contactId) => !hasCannotLink(userId, contactId, sourceType, sourceRecordId),
+  );
 
   if (matches.length === 0) {
-    return { outcome: "no_match", sourceRecordId };
+    // Everything this record could have matched has been ruled out by hand.
+    //
+    // `contactId` names `allMatches[0]` — AN ARBITRARY PICK when several
+    // candidates were each rejected, because there is no "the" contact to name.
+    // Nothing consumes the field today (the funnel counts declines; the queue
+    // reads verdicts), and the honest alternative would be to return the whole
+    // set. Kept as one id for shape-compatibility with the other outcomes; if a
+    // caller ever needs to know WHICH contacts were ruled out, widen it rather
+    // than trusting this one.
+    return { outcome: "declined", sourceRecordId, contactId: allMatches[0], matchedOn };
   }
 
   // An identifier shared by several saved contacts cannot pick one of them
   // without guessing, and guessing is what this design refuses to do.
   if (matches.length > 1) {
+    // Every candidate is offered, sharing ONE cluster key, so the user answers
+    // "which of these is it?" once rather than being asked the same question
+    // once per candidate. The resolution still names matches[0] — the caller's
+    // contract from BACKLOG-2401 is one resolution per record, and the queue,
+    // not the resolution, is where the full candidate set lives.
+    const clusterKey = `record:${sourceType}:${sourceRecordId}`;
+    for (const contactId of matches) {
+      recordProposal({
+        userId,
+        contactId,
+        sourceType,
+        sourceRecordId,
+        reason: "ambiguous_identifier",
+        matchedOn,
+        matchedValues,
+        clusterKey,
+        // The rival candidates. If two of them are a buyer and a seller on one
+        // deal, the queue must say CONNECTED and DIFFERENT PEOPLE rather than
+        // letting the shared identifier read as evidence of sameness.
+        relatedContactIds: matches.filter((id) => id !== contactId),
+      });
+    }
     return {
       outcome: "flagged",
       sourceRecordId,
@@ -430,6 +631,19 @@ export function resolveSourceRecord(
   const existingLinks = getLinksForContactBySource(candidateContactId, sourceType);
   const liveConflict = existingLinks.find(
     (l) =>
+      // BACKLOG-2473 — an ORIGIN row is not a claim on a source record, so it
+      // cannot conflict with one. It reaches this list at all because a
+      // `contacts_app`/`iphone`/`outlook` contact's origin row carries the same
+      // external spelling in `source_type`.
+      //
+      // EXPLICIT, NOT INCIDENTAL. Today `sourceRecordIsCurrent` below already
+      // excludes it, because `origin:<contactId>` matches nothing in
+      // `external_contacts` — but that is a lucky consequence of an unrelated
+      // lookup, not a decision. Relax or reorder that check and every
+      // address-book contact created through `contacts:create` starts being
+      // reported as a reassignment conflict against itself. One line, and it
+      // does not depend on another function's failure mode.
+      l.match_method !== ORIGIN_MATCH_METHOD &&
       l.source_record_id !== sourceRecordId &&
       sourceRecordIsCurrent(userId, sourceType, l.source_record_id),
   );
@@ -469,6 +683,17 @@ export function resolveSourceRecord(
         `content-matched a contact whose ${sourceType} identity is already current`,
       "Contacts",
     );
+    recordProposal({
+      userId,
+      contactId: candidateContactId,
+      sourceType,
+      sourceRecordId,
+      reason,
+      matchedOn,
+      matchedValues,
+      // One contact, several source records wanting to be it: one question.
+      clusterKey: `contact:${candidateContactId}`,
+    });
     return {
       outcome: "flagged",
       sourceRecordId,
@@ -483,6 +708,16 @@ export function resolveSourceRecord(
   // depends on. Per the in-place rule those contacts always have an id match,
   // so reaching here means an assumption broke — withhold rather than guess.
   if (isContactOnFrozenTransaction(candidateContactId)) {
+    recordProposal({
+      userId,
+      contactId: candidateContactId,
+      sourceType,
+      sourceRecordId,
+      reason: "frozen_audit_contact",
+      matchedOn,
+      matchedValues,
+      clusterKey: `contact:${candidateContactId}`,
+    });
     return {
       outcome: "flagged",
       sourceRecordId,
@@ -490,6 +725,60 @@ export function resolveSourceRecord(
       conflictingSourceRecordId: "",
       matchedOn,
       reason: "frozen_audit_contact",
+    };
+  }
+
+  // ---- STEP 4: the names have to agree. BACKLOG-2619 / BACKLOG-2624. -------
+  //
+  // Everything above this line decided that ONE saved contact holds the
+  // identifier this record carries, that nobody has ruled the pair out, that no
+  // other current record of this source is claiming that contact, and that no
+  // exported audit depends on them. All of which is true of Marcus Ord and Priya
+  // Raman, who are not the same person and merely share an office line.
+  //
+  // The record's own name is preferred, but a candidate that carries none falls
+  // back to the shadow table rather than to a free pass — see the field's
+  // docblock. `realContactName` is applied first so a candidate carrying the
+  // "Unknown" literal consults the row too, instead of being taken at its word.
+  const recordName =
+    realContactName(candidate.name) ||
+    sourceRecordName(userId, sourceType, sourceRecordId);
+
+  const nameSupport = nameSupportForAutoLink({
+    recordName,
+    contactName: savedContactName(candidateContactId),
+    // The record's own identifiers, so a label baked out of one of them is
+    // recognised as the absence of a name rather than read as one.
+    identifiers: { emails: candidate.emails, phones: candidate.phones },
+  });
+
+  if (!nameSupport.supportsLink) {
+    logService.info(
+      `[Contacts] link withheld for review (${nameSupport.reason}): a ${sourceType} record ` +
+        `content-matched a contact on ${matchedOn}, but the names do not support linking them`,
+      "Contacts",
+    );
+    recordProposal({
+      userId,
+      contactId: candidateContactId,
+      sourceType,
+      sourceRecordId,
+      reason: nameSupport.reason,
+      matchedOn,
+      matchedValues,
+      // One contact, several source records wanting to be it: one question.
+      clusterKey: `contact:${candidateContactId}`,
+    });
+    return {
+      outcome: "flagged",
+      sourceRecordId,
+      candidateContactId,
+      // No incumbent record is involved — nothing else is claiming this contact.
+      // The other single-pair branches (`ambiguous_identifier`,
+      // `frozen_audit_contact`) report the same empty string for the same reason.
+      conflictingSourceRecordId: "",
+      matchedOn,
+      reason: nameSupport.reason,
     };
   }
 
@@ -501,6 +790,23 @@ export function resolveSourceRecord(
     matchMethod: matchedOn,
     externalUuid,
   });
+
+  // BACKLOG-2423 — the copy happens AT THE LINK, not at the next app start.
+  //
+  // The session-gated `backfillImportedContactsFromExternal` used to be the only
+  // thing that moved a source's addresses onto a contact, and it runs once per
+  // user per session. A source linked after it had run contributed nothing until
+  // the next launch: a transaction created in that window swept an incomplete
+  // address set, and nothing re-swept when the addresses later arrived.
+  applyLinkedSourceValues(userId, candidateContactId);
+
+  // BACKLOG-2620 — THE COPY ABOVE JUST CHANGED A RELATION THE INDEX IS BUILT
+  // FROM, and a later record in this same pass may legitimately match this
+  // contact through an address the pass itself added. With per-record queries
+  // that came for free; with a batch index it has to be said. This is the only
+  // in-pass invalidation there is: linking writes crosswalk rows, review-queue
+  // rows and these values, and only these values are read by the index.
+  index.noteContactValuesChanged(candidateContactId);
 
   return { outcome: "linked", contactId: candidateContactId, sourceRecordId, method: matchedOn };
 }
@@ -514,22 +820,30 @@ export function resolveSourceRecord(
  * code, no upgrade path to get wrong, self-healing as syncs run, and it also
  * covers contacts created AFTER this ships that somehow lack a link — which a
  * one-time migration would not.
+ *
+ * BACKLOG-2620 — the identifier probes come from ONE `ContactMatchIndex` loaded
+ * for the whole batch, so their SQL cost is four statements for the pass rather
+ * than three per record. Pass an index in to share one across several batches;
+ * the default loads a fresh one, which is what makes every pass see the current
+ * contact set rather than a remembered verdict.
  */
 export function linkSourceRecords(
   userId: string,
   candidates: SourceRecordCandidate[],
+  index: ContactMatchIndex = loadContactMatchIndex(userId),
 ): LinkRunSummary {
   const summary: LinkRunSummary = {
     idMatched: 0,
     contentMatched: 0,
     flagged: 0,
     unmatched: 0,
+    declined: 0,
     resolutions: [],
   };
 
   for (const candidate of candidates) {
     if (!candidate.sourceRecordId) continue;
-    const resolution = resolveSourceRecord(userId, candidate);
+    const resolution = resolveSourceRecord(userId, candidate, index);
     summary.resolutions.push(resolution);
     switch (resolution.outcome) {
       case "already_linked":
@@ -540,6 +854,9 @@ export function linkSourceRecords(
         break;
       case "flagged":
         summary.flagged++;
+        break;
+      case "declined":
+        summary.declined++;
         break;
       default:
         summary.unmatched++;
@@ -553,19 +870,41 @@ export function linkSourceRecords(
  * The opportunistic pass, run after a sync has refreshed the shadow table.
  *
  * `external_contacts` IS the current source set, so every row in it is a
- * candidate. Records already claimed by the crosswalk resolve on one indexed
- * lookup and cost nothing more; only the genuinely unlinked ones reach the
- * content fallback, and only until they converge.
+ * candidate.
+ *
+ * ===========================================================================
+ * THE COST MODEL — the old one here was FALSE, and BACKLOG-2620 is the bill
+ * ===========================================================================
+ * This docblock used to say: "Records already claimed by the crosswalk resolve
+ * on one indexed lookup and cost nothing more; only the genuinely unlinked ones
+ * reach the content fallback, AND ONLY UNTIL THEY CONVERGE."
+ *
+ * The last clause was wrong, and it was wrong in the direction that hurts. A
+ * record that matches nothing has nothing written about it, so it converges on
+ * nothing: it re-enters the content fallback on the next pass and on every pass
+ * after, forever. The founder's log at `71ddcbb0` — 1,169 records, 10
+ * id-matched, 1,153 unmatched — is 1,153 records paying three statements each
+ * per pass, and passes are frequent.
+ *
+ * What is true now: the pass reads its three relations ONCE
+ * (`loadContactMatchIndex`), so the identifier SQL is **four statements per
+ * pass, independent of how many records match nothing**. Records still all get
+ * looked at — the per-record work is a `Map.get`, not a query. Nothing is
+ * remembered between passes, which is deliberate: a remembered "no match" is
+ * only correct with an invalidation signal, and the honest ones cost as much as
+ * simply reading the data again. `contactMatchIndex.ts` argues that out in full.
  */
 export function linkExternalContactsForUser(userId: string): LinkRunSummary {
   const rows = dbAll<{
     external_record_id: string;
     source: ExternalContactSource;
+    name: string | null;
     emails_json: string | null;
     phones_json: string | null;
     external_uuid: string | null;
   }>(
-    `SELECT external_record_id, source, emails_json, phones_json, external_uuid
+    // BACKLOG-2619 added `name`, for the veto only. It is never matched on.
+    `SELECT external_record_id, source, name, emails_json, phones_json, external_uuid
        FROM external_contacts
       WHERE user_id = ? AND external_record_id IS NOT NULL
       ORDER BY source, external_record_id`,
@@ -576,6 +915,7 @@ export function linkExternalContactsForUser(userId: string): LinkRunSummary {
     sourceType: r.source,
     sourceRecordId: r.external_record_id,
     externalUuid: r.external_uuid,
+    name: r.name,
     emails: safeJsonArray(r.emails_json),
     phones: safeJsonArray(r.phones_json),
   }));

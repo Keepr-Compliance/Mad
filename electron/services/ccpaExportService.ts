@@ -142,7 +142,12 @@ export async function exportUserData(
   reportProgress("commercial_information");
 
   // 3. Contacts
-  const contacts = await getContacts({ user_id: userId });
+  // BACKLOG-2365: include_removed. A removed contact is tombstoned, not erased —
+  // the row still holds that person's name, company and title. This is the
+  // "all personal information we hold about you" export, so omitting tombstoned
+  // rows would make it a false statement. Every other caller takes the filtered
+  // default.
+  const contacts = await getContacts({ user_id: userId, include_removed: true });
   reportProgress("contacts");
 
   // 4. Electronic Activity (messages + emails)

@@ -8,6 +8,11 @@
  * - Address validation
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
 
 // Mock electron module
@@ -39,13 +44,13 @@ import { registerAddressHandlers } from "../handlers/addressHandlers";
 const TEST_SESSION_TOKEN = "550e8400-e29b-41d4-a716-446655440001";
 
 describe("Address Handlers", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
 
   beforeAll(() => {
     // Capture registered handlers
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
 

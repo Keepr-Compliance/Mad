@@ -17,14 +17,19 @@
 
 import path from "path";
 import fs from "fs/promises";
-import sqlite3 from "sqlite3";
-import { promisify } from "util";
 import logService from "./logService";
+// BACKLOG-2403: the single sanctioned sqlite3 open. See its header for why a
+// bare `new sqlite3.Database(path, mode)` crashes the main process.
+import {
+  openSqliteReadOnly,
+  type ReadOnlySqliteHandle,
+} from "./db/readOnlySqlite";
 import {
   recordDiscovery,
   recordParse,
   redactAddressBookPath,
   type AddressBookCandidate,
+  type AddressBookSkipReason,
   type ParseStage,
 } from "./contactIngestionFunnel";
 // BACKLOG-2394: discovery lives in its own module so the support-ticket
@@ -73,17 +78,91 @@ interface PhoneToContactInfo {
   [key: string]: ContactInfo; // Maps phone to full contact info
 }
 
+/**
+ * How much of the address-book set a read actually covered — BACKLOG-2404.
+ *
+ *   complete — every book found was read.
+ *   partial  — at least one book was read AND at least one failed.
+ *   none     — nothing was read.
+ *
+ * The three are named rather than left to the caller to derive, because the
+ * derivation is where the bug lives: `contactCount > 0` was standing in for
+ * "the read worked", and a 1-of-3 read satisfies that just as well as a 3-of-3.
+ */
+type ReadCoverage = "complete" | "partial" | "none";
+
+/** One address book that could not be read, and which phase failed. */
+interface AddressBookFailure {
+  /**
+   * The REDACTED, home-relative path (`Sources/0CA70…/AddressBook-v22.abcddb`).
+   * Never absolute: an absolute path carries the user's account name and this
+   * value is designed to be quotable into a support ticket.
+   */
+  path: string;
+  /**
+   * `read-error` = could not open at all (the permissions signature).
+   * `load-error` = opened, then threw partway (the corrupt-store signature).
+   * They name DIFFERENT remedies and must not be collapsed.
+   */
+  reason: AddressBookSkipReason;
+}
+
+/**
+ * The reader's return contract.
+ *
+ * BACKLOG-2404 — the coverage fields below are REQUIRED, not optional, and that
+ * is the whole point of the ticket. BACKLOG-2392 taught the reader to read every
+ * address book and to isolate per-book failures, and it reported `read 2 of 3`
+ * faithfully… to the log. The return value carried `success: true` and a contact
+ * count, which is exactly what a 3-of-3 read carries, so every programmatic
+ * caller — `permissionService` included — was structurally unable to tell a
+ * user who lost her Exchange store from a user who lost nothing.
+ *
+ * That is the silent-partial-result bug class this epic exists to eliminate,
+ * rebuilt one level above where it was fixed. Making these fields optional would
+ * rebuild it a third time: a caller that forgets them compiles and reads as
+ * healthy. Required means every construction site has to state its coverage, and
+ * `coverage` itself is derived in exactly one place (`deriveCoverage`) so it can
+ * never disagree with the counts beside it.
+ */
 interface LoadStatus {
   success: boolean;
   contactCount: number;
   source?: string;
   /** BACKLOG-2392: every address book that contributed, not just the winner. */
   sources?: string[];
+  /**
+   * BACKLOG-2404 — books DISCOVERED. Carried so that "read 2 of 3" is
+   * distinguishable from "read 2 of 2" (catalogue A5). A failure count alone
+   * cannot express that: both have one number in common and mean opposite
+   * things to the person waiting on her contacts.
+   */
+  booksFound: number;
+  /** BACKLOG-2404 — books successfully parsed. */
+  booksRead: number;
+  /** BACKLOG-2404 — books discovered but unreadable. */
+  booksFailed: number;
+  /** BACKLOG-2404 — the three-way verdict. Derived; never assigned by hand. */
+  coverage: ReadCoverage;
+  /** BACKLOG-2404 — which books failed and why. Redacted paths only. */
+  failures: AddressBookFailure[];
   error?: string;
   lastError?: string;
   attemptedPaths?: string[];
   userMessage?: string;
   action?: string;
+}
+
+/**
+ * The ONLY place coverage is decided.
+ *
+ * Inlining this at the two return sites is how the success path and the failure
+ * path drift into disagreeing about what "partial" means.
+ */
+function deriveCoverage(booksFound: number, booksRead: number): ReadCoverage {
+  if (booksRead === 0) return "none";
+  if (booksRead < booksFound) return "partial";
+  return "complete";
 }
 
 interface ContactNamesResult {
@@ -184,10 +263,7 @@ interface BookReadResult {
 }
 
 /** The minimal read-only surface the reader needs from a database handle. */
-interface OpenAddressBook {
-  all: (sql: string) => Promise<any[]>;
-  close: () => Promise<void>;
-}
+type OpenAddressBook = ReadOnlySqliteHandle;
 
 /**
  * A per-book failure, tagged with WHICH phase failed.
@@ -247,30 +323,16 @@ class AddressBookError extends Error {
  * to surface through the query callback instead. Since this reader now walks
  * several books and a store can vanish or be replaced between discovery and
  * read, that difference is the difference between "one account failed" and "the
- * app died". The open callback plus the no-op-guarded `error` listener turn
- * both cases into a normal rejection the caller can isolate.
+ * app died".
+ *
+ * BACKLOG-2403: that open logic now lives in `openSqliteReadOnly` and is shared
+ * with the Messages readers, which had the same defect at six more sites. This
+ * function stays as the named, documented entry point for address books — the
+ * in-place/no-copy rule above is specific to `.abcddb` stores — but it no longer
+ * carries its own copy of the open.
  */
 function openAddressBookReadOnly(dbPath: string): Promise<OpenAddressBook> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
-      if (settled) return;
-      settled = true;
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve({
-        all: promisify(db.all.bind(db)) as (sql: string) => Promise<any[]>,
-        close: promisify(db.close.bind(db)) as () => Promise<void>,
-      });
-    });
-    db.on("error", (err: Error) => {
-      if (settled) return;
-      settled = true;
-      reject(err);
-    });
-  });
+  return openSqliteReadOnly(dbPath, "ContactsService");
 }
 
 /** ZUNIQUEID looks like `<UUID>:ABPerson` / `:ABGroup` / `:ABInfo` / `:ABContainer`. */
@@ -433,6 +495,14 @@ async function getContactNames(): Promise<ContactNamesResult> {
   let lastError: Error | null = null;
   const attemptedPaths: string[] = [];
 
+  // BACKLOG-2404: hoisted OUT of the try, deliberately, so the FAILURE return
+  // reports the same coverage the success return does. A catch block that
+  // cannot see how many books were found has to guess, and the only guess
+  // available is `0` — which is the "never looked" / "found nothing" ambiguity
+  // this epic keeps having to delete.
+  const readTally = { found: 0, read: 0, failed: 0 };
+  const failures: AddressBookFailure[] = [];
+
   try {
     // Kept inside the try: a missing $HOME throws here and must still surface
     // as the structured failure status below, not as a rejected promise.
@@ -443,6 +513,8 @@ async function getContactNames(): Promise<ContactNamesResult> {
       baseDir,
       defaultPath,
     );
+
+    readTally.found = books.length;
 
     if (books.length === 0) {
       // Home-relative only: an absolute path carries the user's account name,
@@ -467,7 +539,6 @@ async function getContactNames(): Promise<ContactNamesResult> {
       emailRows: 0,
       namelessRows: 0,
     };
-    let failedCount = 0;
 
     for (const book of books) {
       attemptedPaths.push(book.fullPath);
@@ -485,6 +556,7 @@ async function getContactNames(): Promise<ContactNamesResult> {
         totals.phoneRows += counts.phoneRows;
         totals.emailRows += counts.emailRows;
         totals.namelessRows += counts.namelessRows;
+        readTally.read++;
         sourcesRead.push(book.fullPath);
         candidates.push({
           path: book.redacted,
@@ -492,11 +564,13 @@ async function getContactNames(): Promise<ContactNamesResult> {
           read: true,
         });
       } catch (err) {
-        failedCount++;
+        readTally.failed++;
         lastError = err as Error;
         // "Could not open" (permissions) vs "opened, then threw" (corruption)
         // are different diagnoses and the funnel keeps them apart.
         const phase = err instanceof AddressBookError ? err.phase : "open";
+        const reason: AddressBookSkipReason =
+          phase === "load" ? "load-error" : "read-error";
         logService.error(
           `[ContactsService] Failed to read address book, continuing with the rest`,
           "ContactsService",
@@ -506,8 +580,12 @@ async function getContactNames(): Promise<ContactNamesResult> {
           path: book.redacted,
           recordCount: null,
           read: false,
-          skipReason: phase === "load" ? "load-error" : "read-error",
+          skipReason: reason,
         });
+        // BACKLOG-2404: the SAME redacted path and the SAME phase the funnel
+        // records, carried on the return value. Derived from one decision so a
+        // caller and a support ticket can never describe the failure differently.
+        failures.push({ path: book.redacted, reason });
       }
     }
 
@@ -515,7 +593,7 @@ async function getContactNames(): Promise<ContactNamesResult> {
       found: books.length,
       candidates,
       readCount: totals.books,
-      failedCount,
+      failedCount: readTally.failed,
       usedFallback,
     });
 
@@ -548,6 +626,16 @@ async function getContactNames(): Promise<ContactNamesResult> {
         contactCount: contacts.length,
         source: sourcesRead[0],
         sources: sourcesRead,
+        // BACKLOG-2404: `success: true` on this path means "at least one book
+        // was read", which is the right contract — one locked Exchange store
+        // must not cost the user her iCloud contacts. But it is NOT the same
+        // claim as "we read everything", and until now it was the only claim
+        // available. These four fields are that missing distinction.
+        booksFound: readTally.found,
+        booksRead: readTally.read,
+        booksFailed: readTally.failed,
+        coverage: deriveCoverage(readTally.found, readTally.read),
+        failures,
       },
     };
   } catch (error) {
@@ -566,6 +654,17 @@ async function getContactNames(): Promise<ContactNamesResult> {
         error: (error as Error).message,
         lastError: lastError?.message,
         attemptedPaths,
+        // BACKLOG-2404: a total failure still reports what it FOUND. "found 3,
+        // read 0" is a diagnosis (three stores are there and none opened —
+        // Full Disk Access); "found 0, read 0" is a different one (there is no
+        // address book on this machine at all). Reaching here with a bare
+        // `success: false` made those indistinguishable, and they send the user
+        // to different places.
+        booksFound: readTally.found,
+        booksRead: readTally.read,
+        booksFailed: readTally.failed,
+        coverage: deriveCoverage(readTally.found, readTally.read),
+        failures,
         userMessage: "Could not load contacts from Contacts app",
         action:
           "Grant Full Disk Access in System Settings > Privacy & Security > Full Disk Access",
@@ -746,54 +845,50 @@ async function loadContactsFromDatabase(
 /**
  * Build a display name from name components alone.
  *
- * ⚠️ THE PRECEDENCE BELOW IS KNOWN-WRONG AND IS DELIBERATELY LEFT ALONE.
+ * BACKLOG-2399 — A PERSON'S NAME OUTRANKS THEIR ORGANISATION.
  *
- * `organization` is tested BEFORE a lone first name, so "Jane" at "Acme Corp"
- * with no surname displays as **"Acme Corp"** — which mis-files exactly the
- * realtor-style "FirstName / Role-in-Org" contacts this product is full of.
- * BACKLOG-2392 was scoped to fix it and did not, for a reason worth writing
- * down:
+ *   first + last   -> "First Last"
+ *   first only     -> the first name        <- this is the line that changed
+ *   last only      -> the surname
+ *   organisation   -> only when there is NO personal name at all
  *
- * UPDATE (BACKLOG-2401, landed): the premise below is NO LONGER TRUE. There is
- * now a source-identity crosswalk (`contact_source_links`), and the backfill
- * resolves through it — `CONTACT_SOURCE_RECORDS_SQL`, source id first, then
- * email, then phone, NEVER name. A contact carrying a crosswalk row is
- * therefore no longer at risk from a relabelling at all. What remains at risk
- * is the narrower population that still has no link (no email, no phone, never
- * re-synced), which is why BACKLOG-2399 is sequenced after this and not merged
- * into it. The original reasoning is kept below because it is what makes that
- * sequencing legible.
+ * `organization` used to be tested BEFORE a lone first name, so a contact with
+ * first name "Margaret" and organisation "Miller - Seller" displayed as
+ * "Miller - Seller" and her actual name was discarded. That mis-files the
+ * "FirstName / Role-in-Org" pattern, which is a large share of a working
+ * agent's address book.
  *
- * (Historically:) `contacts` had NO source-identity column. The ONLY bridge from
- * an imported contact back to its address-book row was display-name string
- * equality — `contactHandlers.ts` backfill: `SELECT ... FROM external_contacts
- * WHERE user_id = ? AND name = ?` against `contacts.display_name`. Correcting
- * the precedence would, on the release that shipped it, change the reader's
- * output for every contact currently stored under an organisation name and
- * break that join for all of them at once.
+ * THE COMPANY IS NOT LOST BY THIS. `contacts` has its own `company` column and
+ * the import carries it separately (`ContactInfo.company`, straight through the
+ * shadow table to the saved contact), so the old fallback was discarding a real
+ * human name in order to store a string that was already stored one field over.
+ * There was never a trade-off here — only a precedence bug.
  *
- * Blast radius, verified rather than assumed:
- *   - The already-imported filter matches on EMAIL and PHONE only, never on
- *     name (BACKLOG-2316). A contact with either identifier therefore does NOT
- *     duplicate in the picker; it only stops receiving backfill.
- *   - The genuinely dangerous population is "stored under an org name AND has
- *     no email/phone yet" — which both orphans and can be re-imported as a
- *     second record. That is precisely the population the name-based backfill
- *     exists to repair.
+ * The organisation fallback STAYS, as last resort: vendor cards like
+ * "Acme Title Co" have no person on them and the organisation is the only label
+ * they have.
  *
- * And a migration cannot rescue it: re-deriving `display_name` requires
- * matching those rows by email or phone, the very identifiers the at-risk rows
- * are missing — so it would repair the safe rows and miss the unsafe ones,
- * while overwriting names the user may have edited by hand.
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS SAFE NOW AND WAS NOT BEFORE — verified, not assumed
+ * ---------------------------------------------------------------------------
+ * BACKLOG-2392 deliberately left this alone, because at the time the ONLY
+ * bridge from a saved contact back to its address-book row was display-name
+ * string equality (`... FROM external_contacts WHERE user_id = ? AND name = ?`
+ * against `contacts.display_name`). Changing the label orphaned every contact
+ * stored under an organisation name, all on one release.
  *
- * The fix belongs after BACKLOG-2401 ("give saved contacts a real link to where
- * they came from"), which replaces that display-name join with a real source
- * identity and so makes the relabelling safe. The precedence flip itself is
- * BACKLOG-2399, which also owns updating the regression test pinning this
- * output.
+ * BACKLOG-2401 replaced that join with a real source-identity crosswalk, and
+ * both consumers were re-checked against the shipped code before this flip:
+ *   - backfill — `CONTACT_SOURCE_RECORDS_SQL` resolves source id, then email,
+ *     then phone. Display name appears nowhere in the SQL.
+ *   - already-imported filter — `linkedSourceKeys` (source_type,
+ *     source_record_id) is tested FIRST, then the email and phone sets. Name
+ *     matching was removed by BACKLOG-2316.
+ * So relabelling changes what the user reads and nothing about what the system
+ * matches on.
  *
  * Returns "" when there is nothing to build from; `buildContactLabel` owns what
- * happens next.
+ * happens next (email, then phone — no record is dropped for want of a name).
  */
 function buildDisplayName(
   firstName?: string,
@@ -806,12 +901,12 @@ function buildDisplayName(
 
   if (first && last) {
     return `${first} ${last}`;
-  } else if (org) {
-    return org;
   } else if (first) {
     return first;
   } else if (last) {
     return last;
+  } else if (org) {
+    return org;
   }
 
   return "";
@@ -910,7 +1005,7 @@ function resolveContactName(
       return contactMap[contactId];
     }
 
-    // Try normalized phone number match (E.164 format: +15551234567)
+    // Try normalized phone number match (E.164 format: +15555550112)
     const normalized = normalizePhoneNumber(contactId);
     if (normalized && contactMap[normalized]) {
       return contactMap[normalized];
@@ -970,4 +1065,8 @@ export type {
   PhoneToContactInfo,
   LoadStatus,
   ContactNamesResult,
+  // BACKLOG-2404 — exported so callers can name the three states instead of
+  // re-deriving them from the counts, which is how the derivation drifts.
+  ReadCoverage,
+  AddressBookFailure,
 };

@@ -75,7 +75,12 @@ afterAll(() => {
 // TEST FIXTURES
 // ============================================
 
-const mockTransaction: Transaction = {
+// BACKLOG-2414: both fixtures are deliberately partial `Transaction` rows — they
+// carry only the columns these service tests read. `message_count`,
+// `attachment_count`, `export_status` and `export_count` are required on the row
+// type but absent here; they are asserted through with `toEqual`, so adding them
+// would change the expected payload rather than just the typing.
+const mockTransaction = {
   id: "txn-123",
   user_id: "user-123",
   property_address: "123 Main St",
@@ -83,7 +88,7 @@ const mockTransaction: Transaction = {
   detection_status: "confirmed",
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
-};
+} as Transaction;
 
 const mockTransactionList: Transaction[] = [
   mockTransaction,
@@ -95,7 +100,7 @@ const mockTransactionList: Transaction[] = [
     detection_status: "pending",
     created_at: "2024-01-02T00:00:00Z",
     updated_at: "2024-01-02T00:00:00Z",
-  },
+  } as Transaction,
 ];
 
 const mockUserId = "user-123";

@@ -1,9 +1,20 @@
 import React, { useState } from "react";
 import { ResponsiveModal } from "../common/ResponsiveModal";
-import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePill";
+import { SourcePill, ImportStatusPill, mapToSourcePillSources } from "./SourcePill";
 import { formatRoleLabel } from "../../utils/transactionRoleUtils";
 import type { ExtendedContact } from "../../types/components";
 import type { Communication, ContactMessageThread, Message } from "@/types";
+import type { ContactSourceProvenance } from "@/types/contactProvenance";
+import { labelForContact } from "@/utils/contactDisplayLabel";
+import {
+  hasNothingToImport,
+  NOTHING_TO_IMPORT_REASON,
+} from "@/utils/importableRecord";
+import { parseDbTimestamp } from "@/utils/dateFormatters";
+import {
+  canUnlinkSource,
+  showSourcesPanel,
+} from "@/utils/contactSourceAffordances";
 
 /**
  * Transaction associated with a contact
@@ -187,8 +198,8 @@ export interface ContactPreviewProps {
    * Emails involving this contact, aggregated across all transactions
    * (BACKLOG-1934, imported only). OPTIONAL and gated: when omitted the Emails
    * section is not rendered at all, so the other ContactPreview consumers
-   * (ContactSelectModal, ContactAssignmentStep, TransactionDetailsTab,
-   * EditContactsModal) are unaffected. Only the Contacts card passes this.
+   * (ContactAssignmentStep, TransactionDetailsTab, EditContactsModal) are
+   * unaffected. Only the Contacts card passes this.
    */
   emails?: Communication[];
   /** Loading state for the emails section (BACKLOG-1934). */
@@ -203,8 +214,8 @@ export interface ContactPreviewProps {
    * Text-message threads involving this contact, aggregated across all
    * transactions (BACKLOG-1935, imported only). OPTIONAL and gated exactly like
    * `emails`: when omitted the Texts section is not rendered at all, so the other
-   * ContactPreview consumers (ContactSelectModal, ContactAssignmentStep,
-   * TransactionDetailsTab, EditContactsModal) are unaffected. Only the Contacts
+   * ContactPreview consumers (ContactAssignmentStep, TransactionDetailsTab,
+   * EditContactsModal) are unaffected. Only the Contacts
    * card passes this. Each thread carries the required `phoneNumber` and its own
    * `messages` (passed straight to ConversationViewModal — no client-side
    * grouping).
@@ -218,12 +229,83 @@ export interface ContactPreviewProps {
    * omitted, thread rows render as static (non-interactive) content.
    */
   onMessageClick?: (thread: ContactMessageThread) => void;
+  /**
+   * BACKLOG-2410 — where this contact came from, and how each link was made.
+   *
+   * OPT-IN with the same gating as `emails` and `messages`: omitted by every
+   * other ContactPreview consumer, so their output is unchanged. An EMPTY array
+   * (or one holding nothing but the contact's own `origin` row) renders NOTHING.
+   *
+   * BACKLOG-2471 — ONE linked source is now enough to show the panel. The panel
+   * used to require two, so unlinking down to a single source made it vanish,
+   * taking with it the only place the remaining link is visible or undoable. The
+   * founder hit that himself. A contact with one linked source still has a link
+   * that can be wrong, so it still has something to disclose.
+   */
+  sources?: ContactSourceProvenance[];
+  /**
+   * Detach one source. When omitted the section is read-only — which the
+   * founder was explicit is the wrong end state ("showing the merge without
+   * letting someone undo it just tells them about a problem they can't fix"),
+   * so the Contacts card always supplies it.
+   */
+  onUnlinkSource?: (link: ContactSourceProvenance) => void;
+  /** The link currently being detached, for the in-flight row state. */
+  unlinkingLinkId?: string | null;
+  /**
+   * BACKLOG-2427: what the last unlink DIDN'T do, and why.
+   *
+   * Set when the addresses a removed source contributed were deliberately kept
+   * — today only because the contact is on an exported audit. Shown here rather
+   * than swallowed, because an outcome that differs from what the paragraph
+   * above promises has to be said out loud or it reads as the bug it is
+   * replacing.
+   */
+  unlinkNotice?: string | null;
   /** Callback to edit the contact (imported only) */
   onEdit?: () => void;
+  /**
+   * Open the manual-link search — "these two ARE the same person"
+   * (BACKLOG-2426).
+   *
+   * Sits beside `Edit Contact`, per the founder: *"next to the edit there
+   * should be link, so the user can search for other contacts to link it
+   * with"*. Optional, so the four other surfaces that render this card are
+   * unaffected until they choose to pass it.
+   *
+   * NEVER offered on an external record: an unimported address-book row has
+   * nothing to link TO, and its action is `Import`.
+   */
+  onLinkSource?: () => void;
+  /**
+   * Open the compare screen for this contact (BACKLOG-2471 PR C).
+   *
+   * The button appears under EXACTLY the condition that opens the Sources panel
+   * — `showSourcesPanel(sourceList)` — because both answer the same question:
+   * is there a record here that could be wrong? One threshold, not two. Optional
+   * for the same reason as `onLinkSource`: the four other surfaces that render
+   * this card are unaffected until they pass it (PR G).
+   */
+  onCompareSources?: () => void;
   /** Callback to remove the contact */
   onRemove?: () => void;
   /** Callback to import the contact (external only) */
   onImport?: () => void;
+  /**
+   * An import of THIS contact is in flight (BACKLOG-2525).
+   *
+   * Founder, 2026-08-05: *"the import button seems like it's not working — you
+   * can click it a few times and nothing happens... i see rosey 3 times"*. A
+   * record with many emails and phones takes seconds to write, and until now
+   * the card was identical throughout, so a second and third press were the
+   * only sensible reading of a button that appeared dead.
+   *
+   * Deliberately a prop and not local state: the owner is the one that knows
+   * whether the IPC call has resolved, and a second source of truth here would
+   * drift from it. Defaults to `false`, so the transaction-flow consumers that
+   * never pass it render exactly as before.
+   */
+  isImporting?: boolean;
   /** Callback to close the preview */
   onClose: () => void;
   /**
@@ -246,7 +328,8 @@ export interface ContactPreviewProps {
  * Gets the display name for a contact
  */
 function getDisplayName(contact: ExtendedContact): string {
-  return contact.display_name || contact.name || "Unknown Contact";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  return labelForContact(contact);
 }
 
 /**
@@ -265,9 +348,11 @@ function getInitial(name: string): string {
  * meta segment) when the date is missing/invalid — never renders "Invalid Date".
  */
 function formatAddedDate(createdAt: string | undefined): string | undefined {
-  if (!createdAt) return undefined;
-  const parsed = new Date(createdAt);
-  if (Number.isNaN(parsed.getTime())) return undefined;
+  // BACKLOG-2632: contacts.created_at is written by `DEFAULT CURRENT_TIMESTAMP`,
+  // i.e. UTC with no zone marker. A bare `new Date()` reads it as LOCAL time, so
+  // a contact imported after 18:00 in Costa Rica (UTC-6) read "Added <tomorrow>".
+  const parsed = parseDbTimestamp(createdAt);
+  if (!parsed) return undefined;
   return `Added ${parsed.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" })}`;
 }
 
@@ -406,16 +491,47 @@ export function ContactPreview({
   messages: contactMessages,
   isLoadingMessages = false,
   onMessageClick,
+  sources,
+  onUnlinkSource,
+  unlinkingLinkId = null,
+  unlinkNotice = null,
   onEdit,
+  onLinkSource,
+  onCompareSources,
   onRemove,
   onImport,
+  isImporting = false,
   onClose,
   onTransactionClick,
   variant = "modal",
 }: ContactPreviewProps): React.ReactElement {
   const displayName = getDisplayName(contact);
   const initial = getInitial(displayName);
-  const sourcePillSource = mapToSourcePillSource(contact.source, isExternal);
+  /**
+   * BACKLOG-2493 — one pill per LIVE crosswalk source, not one per contact.
+   *
+   * This line used to call the singular `mapToSourcePillSource(contact.source,
+   * …)`. `contacts.source` is the scalar written once at INSERT that no unlink
+   * revises, so the card asserted an origin it could not support: the founder's
+   * Paul Dorian read "Outlook" while every address and number on the card had
+   * come from the Mac address book, because Outlook merely imported him first
+   * and the label never moved when the Outlook link was removed. The list filter
+   * had already been moved onto the live links (BACKLOG-2472) — so the filter
+   * and the card disagreed, and the card was the one that was wrong.
+   *
+   * `mapToSourcePillSources` is the SAME call `ContactRoleRow.tsx` and
+   * `ContactCard.tsx` already make. The live set REPLACES the scalar; the two
+   * are never unioned, or the removed source would be displayed forever, which
+   * is the defect (see SourcePill.tsx). A contact with no links — manual, or
+   * created before the crosswalk existed — keeps its scalar-derived pill,
+   * because `source_types` is left `undefined` for those and the mapper falls
+   * back. Nothing disappears.
+   */
+  const sourcePillSources = mapToSourcePillSources(
+    contact.source,
+    contact.source_types,
+    isExternal,
+  );
   const addedLabel = formatAddedDate(contact.created_at);
 
   // Collect emails and phones
@@ -454,6 +570,71 @@ export function ContactPreview({
   const threadList = contactMessages ?? [];
   const showTextsSection = !isExternal && messagesProvided;
 
+  // BACKLOG-2471 — THIS THRESHOLD WAS DELIBERATELY REVERSED. It required TWO
+  // linked sources (BACKLOG-2410's "no clutter on the common case" rule); it now
+  // requires one.
+  //
+  // The reason is not cosmetic. The Unlink control lives INSIDE this panel, so
+  // at a threshold of two, unlinking a two-source contact down to one made the
+  // panel disappear — removing the only place the surviving link is visible and
+  // the only way to undo it. The founder hit that himself. A contact with one
+  // linked source still has a link that can be wrong, so it still has something
+  // to disclose, and the panel is where he goes to see and undo it.
+  //
+  // The original noise concern is answered by the `origin` filter below, not by
+  // the threshold: a contact the user typed in, or one imported from a single
+  // address book with no crosswalk row, still shows nothing.
+  //
+  // There is deliberately NO loading prop either: a spinner that resolves to
+  // nothing on most contacts is noise, one frame later. The section simply
+  // appears once the sources arrive.
+  //
+  // BACKLOG-2473 — DEFENCE IN DEPTH, and it carries MORE weight at a threshold
+  // of one. `getContactProvenance` already excludes `origin` rows, because an
+  // origin row ("you typed this contact in") can never be a wrong merge and can
+  // never be detached — the founder's words: "we can't unlink a contact from
+  // itself so we should hide the button". EVERY created contact now carries an
+  // origin row, so one leaking through the IPC boundary used to need a second
+  // row to open the panel; at `> 0` it would open the panel on its own, on
+  // ordinary contacts, with an Unlink button that always fails. The filter is
+  // what stops that, and ContactPreview.sources.test.tsx pins both halves.
+  const sourceList = (sources ?? []).filter((s) => s.matchMethod !== "origin");
+
+  // BACKLOG-2510 — "IS THERE ANYTHING TO ACT ON", NOT "IS THE LIST NON-EMPTY",
+  // and this PR is what makes the difference matter.
+  //
+  // Routing the Clients & Contacts import through `contacts:import` means every
+  // imported contact finally gets a crosswalk row for the card it came from —
+  // `match_method: 'source_id'`. That row is NOT an `origin` row, so it passes
+  // the filter above, and at a bare `length > 0` this panel would have opened on
+  // every freshly imported contact with `Unlink` on the single record it came
+  // from. The founder rejected exactly that: *"why would we have unlink on a
+  // singular contact. we have a remove contact button already"*. The fix created
+  // the case; this gate is what keeps it out.
+  //
+  // He had already been told where the contact came from — *"but after i
+  // imported tad it still had the 'Contacts App'"* is the card's source label
+  // doing its job. A panel repeating it adds a button, not an answer.
+  //
+  // Multi-source contacts are UNCHANGED. A single import can write two
+  // `source_id` rows when the picker collapsed two address books into one row
+  // (BACKLOG-2458), and unlinking one of those is the wrong-merge undo this
+  // panel exists for. See utils/contactSourceAffordances for the full rule and
+  // for the one case left open.
+  const showSourcesSection = !isExternal && showSourcesPanel(sourceList);
+
+  /**
+   * BACKLOG-2471 PR C — ONE boolean, read in two places.
+   *
+   * The button lives inside the header's action cluster, and that cluster is
+   * itself conditional, so the visibility rule would otherwise be spelled twice:
+   * once to decide whether to render the cluster, once for the button. Two
+   * spellings of one rule drift, and the drift hides: a control that weakened
+   * the inner condition stayed GREEN because the outer one was still doing the
+   * work. Found by running that control rather than by reading.
+   */
+  const showCompareButton = !!onCompareSources && showSourcesSection;
+
   // BACKLOG-1944: per-section "Show all N" / "Show less" expand state. Plain
   // useState is safe here — StrictMode is ON app-wide, but this is local UI
   // state (not a didMount-guard antipattern); double-invoke in dev just
@@ -481,7 +662,29 @@ export function ContactPreview({
           : "flex flex-col max-h-[80vh] overflow-y-auto"
       }
     >
-        {/* Header with close button */}
+        {/*
+          Header with close button.
+
+          BACKLOG-2579 — the X is rendered ONLY in the "modal" variant.
+
+          In the "pane" variant this card is the Clients & Contacts detail, and
+          `Contacts.tsx` is the only caller that passes `variant="pane"`. There
+          the X was a SECOND dismissal affordance beside the screen's own Back
+          button, which is what the founder asked us to drop — at every viewport
+          width, not just the narrow layout. FOUNDER DECISION (2026-08-06,
+          recorded on BACKLOG-2579): remove it everywhere, knowingly accepting
+          that the wide (>=1200px) two-pane layout has no Back button and so
+          loses its explicit close; the pane is persistent there by design and
+          the user moves on by selecting another contact.
+
+          The X STAYS in the modal variant. The three modal consumers
+          (ContactAssignmentStep, EditContactsModal, TransactionDetailsTab)
+          have no Back button, and below the `sm`
+          breakpoint ResponsiveModal is full-screen with no backdrop to click —
+          so there the X is the only way out. Removing it globally would trap
+          those users. Both directions are controlled: C6 and C7.
+        */}
+        {variant !== "pane" && (
         <div className="flex justify-end p-3 sm:p-4">
           <button
             onClick={onClose}
@@ -504,13 +707,33 @@ export function ContactPreview({
             </svg>
           </button>
         </div>
+        )}
 
         {/* Card Head (BACKLOG-1944, matches the artifact's .card-head): left-aligned
             avatar + name/pills column, replacing the prior centered layout. The
             contextual primary action (Import / Edit) sits top-right, across
             from the name — moved out of the footer per Daniel's refinement.
-            Remove stays a secondary action in the footer. */}
-        <div className="px-6 pb-4">
+            Remove stays a secondary action in the footer.
+
+            BACKLOG-2579 follow-up (founder QA of PR #2249): this container has
+            never carried top padding, and never needed any — the close-X row
+            above it (`p-3 sm:p-4`) supplied the gap. Hiding the X in the pane
+            variant took that gap with it and left the avatar flush against the
+            top of the card on the wide (>=1200px) two-pane layout, which has
+            nothing above it at all.
+
+            So the padding is added for the PANE VARIANT ONLY, gated exactly the
+            way the X is hidden. The modal variant still renders the X row and
+            an unconditional value would double-pad it.
+
+            `pt-6` rather than the X row's `p-3 sm:p-4`: it makes the top inset
+            equal to this container's own `px-6`, so the card head sits on a
+            consistent 24px inset instead of inheriting a leftover measurement
+            from a row that no longer exists. */}
+        <div
+          className={`px-6 pb-4${variant === "pane" ? " pt-6" : ""}`}
+          data-testid="contact-preview-head"
+        >
           <div className="flex gap-3.5 items-center justify-between">
             <div className="flex gap-3.5 items-center min-w-0">
               <div
@@ -528,35 +751,138 @@ export function ContactPreview({
                   {displayName}
                 </h2>
                 <div className="flex items-center gap-2 flex-wrap mt-1 text-xs text-gray-500">
-                  <SourcePill source={sourcePillSource} size="sm" />
+                  {/* BACKLOG-2493: one pill per live source — two sources show
+                      two pills, and unlinking one drops its pill on the next
+                      list load. */}
+                  {sourcePillSources.map((pillSource) => (
+                    <SourcePill key={pillSource} source={pillSource} size="sm" />
+                  ))}
                   <ImportStatusPill isImported={!isExternal} size="sm" />
                   {!isExternal && addedLabel && <span>· {addedLabel}</span>}
                 </div>
               </div>
             </div>
             {/* SR polish (BACKLOG-1944): guard each button on its OWN handler,
-                not just isExternal — ContactSelectModal and EditContactsModal
-                compute isExternal but never pass onImport, so an unguarded
+                not just isExternal — EditContactsModal computes isExternal
+                but never passes onImport, so an unguarded
                 render put a dead no-op Import button in their header. Now
                 neither button renders unless its handler is actually wired. */}
             {isExternal
               ? onImport && (
+                /*
+                  BACKLOG-2672 — THE BUTTON THE FOUNDER PRESSED.
+
+                  This is the `[Import]` in his report. `Contacts.tsx:1190` wires
+                  `onImport` for any row whose `is_message_derived` is truthy,
+                  which is exactly the population the message-derived
+                  pseudo-contacts sit in — so this control, not the row's
+                  "+ Add Contact", is the one that would have created the empty
+                  contact.
+
+                  Computed inline rather than plumbed through a prop: this
+                  component already holds the contact and already knows whether
+                  it is external, and a new prop would be a thing each of the
+                  five call sites could forget to pass.
+                */
+                hasNothingToImport(contact) ? (
+                  /*
+                    `aria-disabled`, not `disabled` — see the note on
+                    `ContactRow.blockedButton`. The reason is the button's own
+                    text and therefore its accessible name.
+                  */
+                  <button
+                    type="button"
+                    aria-disabled="true"
+                    className="flex-shrink-0 max-w-[16rem] px-3.5 py-1.5 text-gray-500 text-sm font-semibold rounded-lg bg-gray-100 text-right leading-snug cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                    data-testid="contact-preview-import-blocked"
+                  >
+                    {NOTHING_TO_IMPORT_REASON}
+                  </button>
+                ) : (
+                  /* BACKLOG-2525: `disabled` is the load-bearing attribute, not
+                     the label — a disabled button fires no `onClick` at all, so
+                     the founder's second and third presses reach nothing. The
+                     wording changes too because "Import", greyed, reads as "not
+                     allowed"; "Importing…" reads as "working". */
                   <button
                     onClick={onImport}
-                    className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
+                    disabled={isImporting}
+                    aria-busy={isImporting}
+                    className={`flex-shrink-0 px-3.5 py-1.5 text-white text-sm font-semibold rounded-lg transition-all shadow-md ${
+                      isImporting
+                        ? "bg-gradient-to-r from-purple-400 to-pink-500 opacity-70 cursor-wait"
+                        : "bg-gradient-to-r from-purple-500 to-pink-600 hover:from-purple-600 hover:to-pink-700"
+                    }`}
                     data-testid="contact-preview-import"
                   >
-                    Import
+                    {isImporting ? "Importing…" : "Import"}
                   </button>
                 )
-              : onEdit && (
-                  <button
-                    onClick={onEdit}
-                    className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
-                    data-testid="contact-preview-edit"
+              )
+              : (onEdit || onLinkSource || showCompareButton) && (
+                  /*
+                    BACKLOG-2426 — `Link` immediately LEFT of `Edit`, on SAVED
+                    contacts only. The `isExternal` arm above renders `Import`
+                    instead: an unimported address-book row has nothing to
+                    link TO.
+
+                    THE WRAPPER IS LOAD-BEARING, NOT COSMETIC. The row above is
+                    `justify-between` and had exactly two children for its whole
+                    life — the name block, and ONE button. Returning the two
+                    buttons as bare siblings makes THREE children, and
+                    `justify-between` then spreads them: `Link` lands stranded in
+                    the MIDDLE of the header instead of beside `Edit`. That is
+                    what the founder saw in QA ("can we move the link button to
+                    be near the edit, to its left?"). Keeping them in one flex
+                    child restores the two-child contract and puts the pair
+                    together at the right, in DOM order Link -> Edit.
+                  */
+                  <div
+                    className="flex items-center gap-2 flex-shrink-0"
+                    data-testid="contact-preview-actions"
                   >
-                    Edit Contact
-                  </button>
+                    {/*
+                      BACKLOG-2471 PR C — `Compare sources` leftmost, because it
+                      is the only one of the three that changes nothing: it opens
+                      a read-only screen, while `Link` writes a link and `Edit`
+                      opens the form. Weight increases left to right.
+
+                      GATED ON `showSourcesSection`, WHICH IS `showSourcesPanel`.
+                      The button and the Sources panel answer the same question —
+                      "is there a record here that could be wrong?" — so they
+                      share one threshold. Gating on `sourceList.length > 0`
+                      instead would offer a comparison on a freshly imported
+                      contact whose only record is the one it was made from,
+                      which is the case the founder rejected for `Unlink`.
+                    */}
+                    {showCompareButton && (
+                      <button
+                        onClick={onCompareSources}
+                        className="flex-shrink-0 px-3.5 py-1.5 border border-gray-300 text-gray-700 text-sm font-semibold rounded-lg hover:bg-gray-50 transition-all"
+                        data-testid="contact-compare-open"
+                      >
+                        Compare sources
+                      </button>
+                    )}
+                    {onLinkSource && (
+                      <button
+                        onClick={onLinkSource}
+                        className="flex-shrink-0 px-3.5 py-1.5 border border-purple-300 text-purple-700 text-sm font-semibold rounded-lg hover:bg-purple-50 transition-all"
+                        data-testid="contact-preview-link"
+                      >
+                        Link
+                      </button>
+                    )}
+                    {onEdit && (
+                      <button
+                        onClick={onEdit}
+                        className="flex-shrink-0 px-3.5 py-1.5 bg-gradient-to-r from-purple-500 to-pink-600 text-white text-sm font-semibold rounded-lg hover:from-purple-600 hover:to-pink-700 transition-all shadow-md"
+                        data-testid="contact-preview-edit"
+                      >
+                        Edit Contact
+                      </button>
+                    )}
+                  </div>
                 )}
           </div>
         </div>
@@ -613,6 +939,109 @@ export function ContactPreview({
             </div>
           )}
         </div>
+
+        {/* Sources / provenance (BACKLOG-2410).
+            Sits above Transactions deliberately: this is identity — WHO this
+            record is — and it has to be readable before anything attributed to
+            them. Rendered for any contact with at least one linked source
+            (BACKLOG-2471); never for a contact that only has its own row. */}
+        {showSourcesSection && (
+          <div
+            className="border-t border-gray-200 px-6 py-4"
+            data-testid="contact-sources-section"
+          >
+            <SectionHead title="Sources" count={sourceList.length} />
+            {/* BACKLOG-2427: this line used to stop after "the other sources
+                stay". True about sources, and silent about the emails and
+                phones that source had already contributed — which also stayed,
+                on a contact who may be a party to a transaction. The second
+                sentence is the promise the code now actually keeps. */}
+            {/* BACKLOG-2471: at a threshold of one, the old single sentence
+                ("put together from more than one place", "the other sources
+                stay") is simply FALSE — there is one source and there are no
+                others. Copy that contradicts what is on screen is how a user
+                stops believing the panel, so the one-source case gets its own
+                wording rather than a plural fudge. */}
+            <p
+              className="text-xs text-gray-500 -mt-1.5 mb-3"
+              data-testid="contact-sources-explainer"
+            >
+              {sourceList.length === 1 ? (
+                <>
+                  This contact is linked to one record from somewhere else. If it is a
+                  different person, unlink it — this contact stays. Its email addresses
+                  and phone numbers go with it, unless you added them yourself.
+                </>
+              ) : (
+                <>
+                  This contact was put together from more than one place. If any of these
+                  is a different person, unlink it — the contact and the other sources
+                  stay. Their email addresses and phone numbers go with them, unless
+                  another source has them too or you added them yourself.
+                </>
+              )}
+            </p>
+            {unlinkNotice && (
+              <p
+                className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-3"
+                data-testid="contact-unlink-notice"
+              >
+                {unlinkNotice}
+              </p>
+            )}
+            <div className="space-y-2">
+              {sourceList.map((link) => (
+                <div
+                  key={link.linkId}
+                  className="flex items-start gap-3 rounded-lg border border-gray-200 px-3 py-2"
+                  data-testid={`contact-source-row-${link.linkId}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium text-gray-900">
+                      {link.sourceLabel}
+                      {link.sourceName && (
+                        <span className="font-normal text-gray-500"> — {link.sourceName}</span>
+                      )}
+                    </div>
+                    {/* Words, never a score. This line is what lets a user judge
+                        whether the link is plausible. */}
+                    <div className="text-xs text-gray-500 mt-0.5">{link.matchDescription}</div>
+                    {!link.sourceRecordPresent && (
+                      <div className="text-xs text-amber-700 mt-0.5">
+                        This entry is no longer in that account.
+                      </div>
+                    )}
+                  </div>
+                  {/* BACKLOG-2510 — no button on the SINGLE record a contact was
+                      created from. Detaching it would assert the contact did not
+                      come from where it came from, and would leave it with no
+                      source at all — which is `Remove`, a control the card
+                      already has. Founder: "why would we have unlink on a
+                      singular contact. we have a remove contact button already".
+                      Every other row keeps its button, including both halves of
+                      a two-address-book collapse. */}
+                  {onUnlinkSource && canUnlinkSource(sourceList, link) && (
+                    <button
+                      type="button"
+                      onClick={() => onUnlinkSource(link)}
+                      disabled={unlinkingLinkId === link.linkId}
+                      className="flex-shrink-0 px-2.5 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-50 rounded-md transition-colors disabled:opacity-50"
+                      data-testid={`contact-source-unlink-${link.linkId}`}
+                    >
+                      {/* BACKLOG-2471: the founder chose this word himself,
+                          replacing the shipped "Not this person". The prop stays
+                          `onUnlinkSource` — it always was — so this is a label
+                          change, not a rename. The in-flight state follows the
+                          same verb: "Removing…" belonged to the old wording and
+                          reads like the contact is being deleted. */}
+                      {unlinkingLinkId === link.linkId ? "Unlinking…" : "Unlink"}
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Transactions Section (imported contacts only) */}
         {!isExternal && (isLoadingTransactions || transactions.length > 0) && (

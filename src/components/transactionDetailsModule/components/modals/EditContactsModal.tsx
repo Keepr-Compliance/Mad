@@ -27,6 +27,7 @@ import {
   resolveDefaultContactRole,
   getRoleDisplayName,
 } from "../../../../utils/transactionRoleUtils";
+import { labelForTransactionContact } from "../../../../utils/contactDisplayLabel";
 import { settingsService } from "../../../../services";
 import logger from '../../../../utils/logger';
 import { OfflineNotice } from '../../../common/OfflineNotice';
@@ -68,6 +69,19 @@ export interface AutoLinkResult {
   errors: number;
 }
 
+/**
+ * A party this save took OFF the deal (BACKLOG-2501).
+ *
+ * Reported up through `onSave` so the parent can raise a "{Name} removed" toast
+ * with Undo. It has to come from in here: the removal set is a DIFF between
+ * `originalAssignments` and the staged `roleAssignments`, and both die with this
+ * modal when it closes. The parent sees only "contacts were updated".
+ */
+export interface RemovedTransactionContactSummary {
+  contactId: string;
+  displayName: string;
+}
+
 export interface EditContactsModalProps {
   transaction: Transaction;
   /** Current logged-in user's ID — used for loading contacts from ContactsProvider.
@@ -75,7 +89,14 @@ export interface EditContactsModalProps {
    *  @see BACKLOG-1611 */
   userId: string;
   onClose: () => void;
-  onSave: (autoLinkResults?: AutoLinkResult[]) => void;
+  /**
+   * @param autoLinkResults communications auto-linked for contacts ADDED by this save.
+   * @param removedContacts parties this save took off the deal, for the Undo toast.
+   */
+  onSave: (
+    autoLinkResults?: AutoLinkResult[],
+    removedContacts?: RemovedTransactionContactSummary[],
+  ) => void;
 }
 
 /**
@@ -129,9 +150,12 @@ export function EditContactsModal({
     ContactAssignment[]
   >([]);
 
-  // BACKLOG-1355: Auto-fill role state
+  // BACKLOG-1355: Auto-fill role state.
+  // BACKLOG-2567: `autoFilledContactIds` is gone with ContactRoleRow's "(Auto)"
+  // badge — it was its only reader, so keeping it would leave state that is
+  // written and never read (which eslint does not flag). `autoRoleEnabled`
+  // stays: it gates the auto-assignment itself, which the founder kept.
   const [autoRoleEnabled, setAutoRoleEnabled] = useState(false);
-  const [autoFilledContactIds, setAutoFilledContactIds] = useState<Set<string>>(new Set());
 
   // Load auto-role setting on mount
   useEffect(() => {
@@ -223,18 +247,10 @@ export function EditContactsModal({
       updated[role] = [...(updated[role] || []), contactId];
       return updated;
     });
-    setAutoFilledContactIds((prev) => new Set(prev).add(contactId));
+    // BACKLOG-2567: the badge bookkeeping that used to follow this
+    // `setRoleAssignments` call is gone. The auto-assignment above is the
+    // behaviour the founder kept and must not go with it.
   }, [autoRoleEnabled, validRoles, transactionType]);
-
-  // BACKLOG-1355: Clear auto-filled status when user manually changes role
-  const handleClearAutoFilled = useCallback((contactId: string) => {
-    setAutoFilledContactIds((prev) => {
-      if (!prev.has(contactId)) return prev;
-      const next = new Set(prev);
-      next.delete(contactId);
-      return next;
-    });
-  }, []);
 
   // Remove a contact from the transaction
   const handleRemoveContact = useCallback((contactId: string) => {
@@ -251,14 +267,6 @@ export function EditContactsModal({
         }
       }
       return updated;
-    });
-
-    // BACKLOG-1355: Clear auto-filled status
-    setAutoFilledContactIds((prev) => {
-      if (!prev.has(contactId)) return prev;
-      const next = new Set(prev);
-      next.delete(contactId);
-      return next;
     });
   }, []);
 
@@ -313,6 +321,15 @@ export function EditContactsModal({
       }
 
       // Remove operations: in original but not in current
+      //
+      // BACKLOG-2501: the same pass records WHO left, for the Undo toast. Keyed
+      // by contact_id so a contact holding two roles that both come off yields
+      // one toast entry, not two — `transactions:restore-contact` restores by
+      // (transaction_id, contact_id) and would revive both from a single Undo.
+      const removedByContactId = new Map<
+        string,
+        RemovedTransactionContactSummary
+      >();
       for (const assignment of originalAssignments) {
         const role = assignment.role || assignment.specific_role;
         if (!role) continue;
@@ -324,8 +341,24 @@ export function EditContactsModal({
             role: role,
             specificRole: role,
           });
+          removedByContactId.set(assignment.contact_id, {
+            contactId: assignment.contact_id,
+            // The app's one naming rule — the same label the Key Contacts card
+            // and the removed-contacts section show for this party.
+            displayName: labelForTransactionContact(assignment),
+          });
         }
       }
+
+      // A contact can be removed from one role and added to another in the same
+      // save (a role CHANGE). That is not a removal from the deal, and offering
+      // Undo for it would be wrong, so drop anyone this save also adds back.
+      for (const contactIds of Object.values(roleAssignments)) {
+        for (const contactId of contactIds) {
+          removedByContactId.delete(contactId);
+        }
+      }
+      const removedContacts = [...removedByContactId.values()];
 
       // Add operations: in current but not in original
       for (const [role, contactIds] of Object.entries(roleAssignments)) {
@@ -360,7 +393,7 @@ export function EditContactsModal({
         autoLinkResults = batchResult.autoLinkResults;
       }
 
-      onSave(autoLinkResults);
+      onSave(autoLinkResults, removedContacts);
       onClose();
     } catch (err) {
       const errorMessage =
@@ -438,8 +471,6 @@ export function EditContactsModal({
                   setShowEditModal(true);
                 }}
                 contactsWithoutRoles={contactsWithoutRoles}
-                autoFilledContactIds={autoFilledContactIds}
-                onClearAutoFilled={handleClearAutoFilled}
               />
             )}
 
@@ -524,10 +555,10 @@ interface Screen1ContentProps {
   onEditContact?: (contact: ExtendedContact) => void;
   /** Contacts that are missing roles (for validation highlighting) */
   contactsWithoutRoles?: Set<string>;
-  /** BACKLOG-1355: Set of contact IDs whose roles were auto-filled */
-  autoFilledContactIds?: Set<string>;
-  /** BACKLOG-1355: Callback to clear auto-filled status when user manually changes role */
-  onClearAutoFilled?: (contactId: string) => void;
+  /*
+   * BACKLOG-2567: `autoFilledContactIds` / `onClearAutoFilled` are gone. Both
+   * existed solely to drive and clear ContactRoleRow's "(Auto)" badge.
+   */
 }
 
 /**
@@ -542,8 +573,6 @@ function Screen1Content({
   onRemoveContact,
   onEditContact,
   contactsWithoutRoles = new Set(),
-  autoFilledContactIds = new Set(),
-  onClearAutoFilled,
 }: Screen1ContentProps): React.ReactElement {
   const { contacts, loading: contactsLoading, error: contactsError } = useContacts();
 
@@ -621,14 +650,12 @@ function Screen1Content({
         }
       });
 
+      // BACKLOG-2567: this is the LIVE half of this handler — it is what makes
+      // a manual role change stick. The clear-the-badge call that used to
+      // follow it is gone with the badge; control C2b covers this line.
       onRoleAssignmentsChange(newAssignments);
-
-      // BACKLOG-1355: Clear auto-filled status when user manually changes role
-      if (onClearAutoFilled) {
-        onClearAutoFilled(contactId);
-      }
     },
-    [roleAssignments, onRoleAssignmentsChange, onClearAutoFilled]
+    [roleAssignments, onRoleAssignmentsChange]
   );
 
   if (contactsLoading) {
@@ -726,7 +753,6 @@ function Screen1Content({
             onRemove={() => onRemoveContact(contact.id)}
             onClick={() => setPreviewContact(contact)}
             hasError={contactsWithoutRoles.has(contact.id)}
-            isAutoFilled={autoFilledContactIds.has(contact.id)}
           />
         ))}
       </div>
@@ -784,12 +810,32 @@ function Screen2Overlay({
   onAddContact,
   onRemoveExisting,
 }: Screen2OverlayProps): React.ReactElement {
-  const { contacts, loading, error, refreshContacts, silentRefresh } = useContacts();
-
-  // External contacts from macOS Contacts app (lazy-loaded)
-  const [externalContacts, setExternalContacts] = useState<ExtendedContact[]>([]);
-  const [externalLoading, setExternalLoading] = useState(false);
-  const [externalLoaded, setExternalLoaded] = useState(false);
+  /**
+   * BACKLOG-2631 — BOTH HALVES FROM THE PROVIDER, AND ONE REFRESH FOR THEM.
+   *
+   * This overlay used to hold its own `externalContacts` / `externalLoading` /
+   * `externalLoaded` state and its own `contacts:get-available` call, guarded so
+   * it ran once per mount and never again. That guard is the reported defect:
+   * answering "yes, same person" in the questions modal writes a
+   * `contact_source_links` row, `contacts:get-available` suppresses on exactly
+   * that table, and this overlay never asked it a second time — so the record
+   * just merged away stayed in the list as a SELECTABLE row until the overlay
+   * was closed and reopened.
+   *
+   * Both halves and the refresh now come from `useContactDirectory` through the
+   * provider — the same hook Clients & Contacts and the new-transaction wizard
+   * compose.
+   */
+  const {
+    contacts,
+    loading,
+    error,
+    refreshContacts,
+    refreshBothLists,
+    externalContacts,
+    externalContactsLoading,
+    triggerLazyLoad,
+  } = useContacts();
 
   // Selected contact IDs — passed to ContactAssignmentStep. BACKLOG-2405: SEEDED
   // with the deal's existing contacts so the two-pane "Added" column pre-shows
@@ -807,38 +853,35 @@ function Screen2Overlay({
   // Get userId from contacts context
   const userId = contacts.length > 0 ? contacts[0].user_id : "";
 
-  // Load external contacts from Contacts app when component mounts
+  /**
+   * BACKLOG-2631 — the address-book half is fetched WHEN THIS OVERLAY OPENS, not
+   * when `EditContactsModal` opens.
+   *
+   * The provider wraps Screen 1 as well, and `contacts:get-available` is a
+   * whole-corpus read. Loading it with the provider would put an address-book
+   * query on every open of the modal, including the many that never touch Add
+   * Contacts — a cost the unification is not entitled to introduce. This
+   * overlay is conditionally rendered, so its mount IS the moment the picker is
+   * opened, which is exactly when the old private fetch ran.
+   *
+   * Idempotent by contract: `triggerLazyLoad` is a no-op once the half has
+   * loaded, and refreshes bypass it rather than being blocked by it.
+   */
   useEffect(() => {
-    const loadExternalContacts = async () => {
-      if (!userId || externalLoaded) return;
-
-      setExternalLoading(true);
-      try {
-        const result = await window.api.contacts.getAvailable(userId);
-        if (result.success && result.contacts) {
-          const external: ExtendedContact[] = result.contacts.map((c: ExtendedContact) => ({
-            ...c,
-            is_message_derived: true,
-          }));
-          setExternalContacts(external);
-        }
-      } catch (err) {
-        logger.error("Failed to load external contacts:", err);
-      } finally {
-        setExternalLoading(false);
-        setExternalLoaded(true);
-      }
-    };
-
-    loadExternalContacts();
-  }, [userId, externalLoaded]);
+    triggerLazyLoad();
+  }, [triggerLazyLoad]);
 
   // BACKLOG-2405: the deal's EXISTING contacts stay in `contacts` (not stripped)
-  // so the two-pane can (a) show them as pre-populated Added chips and (b) dedup
-  // their address-book twins out of Available. The OLD code stripped assigned
-  // contacts from this array, which is exactly what let their external twins leak
-  // into Available (assembleDedupedContacts had nothing to match the twin
-  // against). We pass the full lists straight through now.
+  // so the two-pane can show them as pre-populated Added chips. The OLD code
+  // stripped assigned contacts from this array. We pass the full lists straight
+  // through now.
+  //
+  // BACKLOG-2370: keeping them here no longer also suppresses their address-book
+  // twins from Available — the renderer's dedup pass is gone. It is not needed
+  // for that: `contacts:get-available` already excludes an external record that
+  // an imported contact claims, by crosswalk and then by email/phone, and that
+  // decision is the stored one. What the removed pass added on top was hiding
+  // records main had DELIBERATELY released after an unlink.
 
   // Only the GENUINELY-NEW selections get added on "Add Selected" — a contact
   // already on the deal (still in assignedContactIds) is left untouched (keeps
@@ -964,16 +1007,96 @@ function Screen2Overlay({
           contactsLoading={loading}
           contactsError={error}
           onRefreshContacts={refreshContacts}
-          onSilentRefreshContacts={silentRefresh}
+          // BACKLOG-2631 — the ONE refresh path, shared with Clients & Contacts and
+          // the new-transaction wizard. Answering a duplicate question here now
+          // re-reads the address-book half too, so the merged-away record leaves
+          // the list without closing the overlay.
+          onRefreshBothLists={refreshBothLists}
           externalContacts={externalContacts}
-          externalContactsLoading={externalLoading}
+          externalContactsLoading={externalContactsLoading}
         />
       </div>
 
-      {/* Desktop footer — BACKLOG-2405: counts only NEW additions (pre-populated
-          existing chips are not "being added"); removals commit live via ✕. */}
-      <div className="hidden sm:flex flex-shrink-0 px-6 py-4 bg-gray-50 rounded-b-xl items-center justify-between">
-        <p className="text-sm text-gray-600">
+      {/*
+        ============================================================
+        BACKLOG-2639 — ONE FOOTER, IN FLOW, AT EVERY WIDTH.
+        THERE USED TO BE A SECOND, FLOATING COPY. IT COVERED THE SAVE
+        BUTTON OF EVERY OVERLAY OPENED FROM THIS SCREEN.
+        ============================================================
+        The founder, at a narrow window: *"the add selected covers the add save
+        button on narrow view."* Below `sm` this footer was `hidden` and a
+        SECOND copy of the same button rendered as
+        `sm:hidden fixed bottom-4 right-4 z-[71]`.
+
+        `fixed` positions against the VIEWPORT, so that copy sat in the
+        bottom-right corner of the window no matter what was underneath it.
+        What was underneath it was `ContactFormModal` — which mounts inside
+        `ContactAssignmentStep` (a DESCENDANT of this overlay), renders
+        full-screen below `sm`, and puts its **"Add Contact"** save button at
+        the bottom-right (`ContactFormModal.tsx:535`). Both layers land in this
+        overlay's `z-10` stacking context, where the pill's `z-[71]` beats the
+        form's `z-[70]`, so the pill took the click. Measured in chromium over a
+        1px width sweep: the pill won `elementFromPoint` at the save button's
+        centre at EVERY width from 360px to 639px — the whole sub-`sm` band, not
+        a narrow strip, because the cause is a media-query gate and not a
+        fitting problem.
+
+        WHY THIS SHAPE AND NOT A GATE. The obvious fix is what
+        `AuditTransactionModal.tsx:388` does: `{!isContactFormOpen && ...}`,
+        fed by `ContactAssignmentStep`'s `onModalStateChange` (BACKLOG-1654).
+        That is a per-overlay gate that has to be extended by hand for every
+        overlay that might ever open underneath — and it has ALREADY been
+        forgotten once, which is this bug: the audit wizard got the gate, this
+        screen did not. It is still incomplete over there, too (that pill is
+        ungated against `ReviewDuplicatesModal`, mounted at `z-[60]` by
+        `ContactAssignmentStep.tsx:783`).
+
+        So the floating copy is gone rather than gated. This footer is an
+        in-flow, non-positioned `flex-shrink-0` row in the overlay's flex
+        column, above a `flex-1 min-h-0` content region. It PARTICIPATES IN
+        LAYOUT: it reserves its own height, so it cannot paint over anything at
+        any z-index, and it has no stacking context to lose a race in. A control
+        added here later consumes footer width — it cannot float, because
+        nothing here is positioned. That is the property that cannot regress;
+        the old arrangement could only be kept correct by remembering to.
+
+        One control, one place — the founder's rule for this screen family:
+        *"put them all as a part of the same wrap component so they all move
+        together — actually putting them together is even better."*
+
+        WHAT ACTUALLY CHANGED HERE — FOUR THINGS, NOT ONE. An earlier draft of
+        this comment claimed "only `hidden sm:flex` -> `flex` changed on this
+        element. Every other class is untouched." That was FALSE about its own
+        diff. A comment is a claim like any other, and this epic has already
+        paid for one that was read as a guarantee it never made:
+
+          - `hidden sm:flex` -> `flex`   (the fix itself)
+          - `gap-3` — on this element, in the same edit
+          - `min-w-0 truncate` — on the label
+          - `flex-shrink-0` — on the button
+
+        The last three are LOAD-BEARING, not tidying, because this row now
+        renders at widths it never had to serve before. `justify-between` on its
+        own lets a long label push the button past the edge once the row is
+        narrow enough — exactly the range this element newly covers. Measured
+        across 320-639px with labels up to 70 characters, the button holds
+        `w=173.3 h=40.0`, never overflows its row, and the page never scrolls
+        horizontally.
+
+        The `sm+` rendering is unchanged, and that too is MEASURED rather than
+        argued from the class list: `justify-between` already separates the two
+        children by more than any `gap`, nothing shrinks when there is room, and
+        the label does not truncate at those widths. The commit button's rect is
+        identical before and after at 640/768/900px — `x=416.890625 y=684
+        w=183.109375 h=40` at 640px.
+      */}
+      {/* BACKLOG-2405: counts only NEW additions (pre-populated existing chips
+          are not "being added"); removals commit live via ✕. */}
+      <div
+        className="flex flex-shrink-0 px-6 py-4 bg-gray-50 rounded-b-xl items-center justify-between gap-3"
+        data-testid="add-contacts-footer"
+      >
+        <p className="text-sm text-gray-600 min-w-0 truncate">
           {newlyAddedIds.length > 0
             ? `${newlyAddedIds.length} contact${newlyAddedIds.length !== 1 ? "s" : ""} to add`
             : "Select contacts to add"}
@@ -981,31 +1104,12 @@ function Screen2Overlay({
         <button
           onClick={handleAddSelected}
           disabled={newlyAddedIds.length === 0 || isAddingSelected}
-          className={`px-6 py-2 rounded-lg font-semibold transition-all ${
+          className={`flex-shrink-0 px-6 py-2 rounded-lg font-semibold transition-all ${
             newlyAddedIds.length === 0 || isAddingSelected
               ? "bg-gray-300 text-gray-500 cursor-not-allowed"
               : "bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 shadow-md hover:shadow-lg"
           }`}
           data-testid="add-selected-button"
-        >
-          {isAddingSelected
-            ? "Adding..."
-            : newlyAddedIds.length > 0
-              ? `Add Selected (${newlyAddedIds.length})`
-              : "Add Selected"}
-        </button>
-      </div>
-      {/* Mobile floating button */}
-      <div className="sm:hidden fixed bottom-4 right-4 z-[71]">
-        <button
-          onClick={handleAddSelected}
-          disabled={newlyAddedIds.length === 0 || isAddingSelected}
-          className={`px-6 py-3 rounded-full font-semibold text-sm shadow-lg transition-all ${
-            newlyAddedIds.length === 0 || isAddingSelected
-              ? "bg-gray-300 text-gray-500 cursor-not-allowed"
-              : "bg-gradient-to-r from-purple-500 to-pink-600 text-white hover:from-purple-600 hover:to-pink-700 shadow-lg hover:shadow-xl"
-          }`}
-          data-testid="add-selected-button-mobile"
         >
           {isAddingSelected
             ? "Adding..."

@@ -46,12 +46,28 @@ export interface PreferencesResult {
     notifications?: {
       enabled?: boolean;
     };
+    /**
+     * BACKLOG-2486: the phone type the user declared at onboarding, as stored in
+     * the Supabase preferences bag. Typed here because Settings > Contacts needs
+     * it to resolve an ABSENT `iphoneContacts` through the same rule the main
+     * process uses (`preferenceHelper.ts` reads this exact field at :70).
+     * Deliberately `string`, not the narrow union — the bag is untrusted
+     * `Record<string, any>`, so a stray "ios" must be narrowable to null by
+     * `normalizePhoneType` rather than lie its way through the type system.
+     */
+    phone_type?: string;
     contactSources?: {
       direct?: {
         outlookContacts?: boolean;
         gmailContacts?: boolean;
         googleContacts?: boolean;
         macosContacts?: boolean;
+        /**
+         * BACKLOG-2486: written by onboarding since BACKLOG-1900 and, until this
+         * change, by nothing else — Settings had no control for it. It was absent
+         * from this type for the same reason.
+         */
+        iphoneContacts?: boolean;
       };
       inferred?: {
         outlookEmails?: boolean;

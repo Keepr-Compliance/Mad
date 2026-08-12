@@ -1215,7 +1215,14 @@ describe("appStateReducer - Ready State Transitions", () => {
         platform: mockMacOSPlatform,
         userData: userDataNoEmail,
       };
-      const action: AppAction = { type: "EMAIL_CONNECTED" };
+      // email/provider are required by EmailConnectedAction. The reducer's
+      // EMAIL_CONNECTED case reads neither (it only flips hasEmailConnected), so
+      // they are structural filler here and no assertion below touches them.
+      const action: AppAction = {
+        type: "EMAIL_CONNECTED",
+        email: "test@example.com",
+        provider: "google",
+      };
 
       const result = appStateReducer(state, action);
 
@@ -1237,7 +1244,14 @@ describe("appStateReducer - Ready State Transitions", () => {
         platform: mockWindowsPlatform,
         userData: userDataNoEmail,
       };
-      const action: AppAction = { type: "EMAIL_CONNECTED" };
+      // email/provider are required by EmailConnectedAction. The reducer's
+      // EMAIL_CONNECTED case reads neither (it only flips hasEmailConnected), so
+      // they are structural filler here and no assertion below touches them.
+      const action: AppAction = {
+        type: "EMAIL_CONNECTED",
+        email: "test@example.com",
+        provider: "google",
+      };
 
       const result = appStateReducer(state, action);
 
@@ -1256,7 +1270,14 @@ describe("appStateReducer - Ready State Transitions", () => {
         platform: mockMacOSPlatform,
         completedSteps: ["phone-type", "secure-storage"],
       };
-      const action: AppAction = { type: "EMAIL_CONNECTED" };
+      // email/provider are required by EmailConnectedAction. The reducer's
+      // EMAIL_CONNECTED case reads neither (it only flips hasEmailConnected), so
+      // they are structural filler here and no assertion below touches them.
+      const action: AppAction = {
+        type: "EMAIL_CONNECTED",
+        email: "test@example.com",
+        provider: "google",
+      };
 
       const result = appStateReducer(state, action);
 
@@ -1268,7 +1289,14 @@ describe("appStateReducer - Ready State Transitions", () => {
 
     it("returns current state for invalid states", () => {
       const state: AppState = { status: "unauthenticated" };
-      const action: AppAction = { type: "EMAIL_CONNECTED" };
+      // email/provider are required by EmailConnectedAction. The reducer's
+      // EMAIL_CONNECTED case reads neither (it only flips hasEmailConnected), so
+      // they are structural filler here and no assertion below touches them.
+      const action: AppAction = {
+        type: "EMAIL_CONNECTED",
+        email: "test@example.com",
+        provider: "google",
+      };
 
       const result = appStateReducer(state, action);
 

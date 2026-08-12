@@ -483,6 +483,7 @@ describe("supportTicketService", () => {
         phone_type: "android",
         contactSources: { direct: { googleContacts: true } },
         integrations: { iphoneSyncEnabled: false },
+        messages: { source: "android-companion" },
       });
 
       const diagnostics = await collectDiagnostics();
@@ -495,6 +496,39 @@ describe("supportTicketService", () => {
       expect(diagnostics.iphone_sync.user_settings.phone_type).toBe("android");
       expect(diagnostics.iphone_sync.user_settings.contact_sources_configured).toBe(true);
       expect(diagnostics.iphone_sync.user_settings.iphone_sync_enabled).toBe(false);
+      expect(diagnostics.iphone_sync.user_settings.messages_source).toBe(
+        "android-companion"
+      );
+    });
+
+    // BACKLOG-2408: the collector reads the source from the SAME preferences
+    // object it already fetches. An iPhone user who completed onboarding now
+    // has one, so it must survive collection rather than arriving null.
+    it("collects the messages import source for an iPhone user", async () => {
+      const supabaseService = require("../supabaseService").default;
+      supabaseService.getPreferences.mockResolvedValueOnce({
+        phone_type: "iphone",
+        messages: { source: "macos-native" },
+      });
+
+      const diagnostics = await collectDiagnostics();
+
+      expect(diagnostics.iphone_sync.user_settings.phone_type).toBe("iphone");
+      expect(diagnostics.iphone_sync.user_settings.messages_source).toBe(
+        "macos-native"
+      );
+    });
+
+    it("reports messages_source as null when the user has no stored preference", async () => {
+      const supabaseService = require("../supabaseService").default;
+      supabaseService.getPreferences.mockResolvedValueOnce({
+        phone_type: "iphone",
+      });
+
+      const diagnostics = await collectDiagnostics();
+
+      // Distinct from any real source: this install predates the write.
+      expect(diagnostics.iphone_sync.user_settings.messages_source).toBeNull();
     });
 
     it("should NOT leak any UDID/serial into the payload (PII check)", async () => {
@@ -596,8 +630,16 @@ describe("supportTicketService", () => {
             phone_type: "iphone",
             contact_sources_configured: true,
             iphone_sync_enabled: true,
+            // BACKLOG-2408: onboarding writes this for every answer, so an
+            // iPhone user reports a real source rather than a blank.
+            messages_source: "iphone-sync",
           },
         },
+        // BACKLOG-2394 sections. `null` is exactly what collectDiagnostics()
+        // seeds and what the previously-absent key already rendered as
+        // ("diagnostics collection failed"), so the summary output is unchanged.
+        contacts: null,
+        storage: null,
         collected_at: "2026-07-10T12:00:00.000Z",
       };
       return { ...base, ...overrides };
@@ -643,6 +685,39 @@ describe("supportTicketService", () => {
 
       const block = composeDiagnosticsSummary(diag);
       expect(block).toContain("iphone_sync_enabled=unknown");
+    });
+
+    // BACKLOG-2408: an iPhone user's import source used to be unreportable —
+    // onboarding never wrote it, so support could not tell which importer the
+    // user was actually running. It is now a first-class line in every ticket.
+    it("reports the import source for an iPhone user rather than a blank", () => {
+      const diag = makeDiagnostics();
+      diag.iphone_sync.user_settings.phone_type = "iphone";
+      diag.iphone_sync.user_settings.messages_source = "iphone-sync";
+
+      const block = composeDiagnosticsSummary(diag);
+
+      expect(block).toContain("messages_source=iphone-sync");
+      expect(block).not.toContain("messages_source=unset");
+    });
+
+    it("reports macos-native for a macOS iPhone user", () => {
+      const diag = makeDiagnostics();
+      diag.iphone_sync.user_settings.messages_source = "macos-native";
+
+      expect(composeDiagnosticsSummary(diag)).toContain(
+        "messages_source=macos-native"
+      );
+    });
+
+    // A genuinely un-onboarded install is a DIFFERENT state from any stored
+    // value, and must read as such — not as one of the real sources.
+    it("renders messages_source=unset when no preference is stored", () => {
+      const diag = makeDiagnostics();
+      diag.iphone_sync.user_settings.messages_source = null;
+
+      const block = composeDiagnosticsSummary(diag);
+      expect(block).toContain("messages_source=unset");
     });
 
     it("contains NO raw PII (no UDID, serial, device_id, memory internals, or tokens)", () => {

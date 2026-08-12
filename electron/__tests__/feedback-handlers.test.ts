@@ -8,7 +8,13 @@
  * - Learning statistics
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
+import type { UserFeedback } from "../types";
 
 // Mock electron module
 const mockIpcHandle = jest.fn();
@@ -76,13 +82,13 @@ const TEST_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
 const TEST_TXN_ID = "550e8400-e29b-41d4-a716-446655440001";
 
 describe("Feedback Handlers", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
 
   beforeAll(() => {
     // Capture registered handlers
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
 
@@ -104,10 +110,12 @@ describe("Feedback Handlers", () => {
     };
 
     it("should submit feedback successfully", async () => {
+      // Row the handler under test only reads `id` from; asserted to UserFeedback
+      // rather than padded with user_id/created_at the assertions never look at.
       mockDatabaseService.saveFeedback.mockResolvedValue({
         id: "feedback-new",
         ...validFeedbackData,
-      });
+      } as unknown as UserFeedback);
 
       const handler = registeredHandlers.get("feedback:submit");
       const result = await handler(mockEvent, TEST_USER_ID, validFeedbackData);
@@ -126,10 +134,11 @@ describe("Feedback Handlers", () => {
         feedback_type: "general",
         comment: "Good extraction",
       };
+      // See note above: only `id` is read back by the handler.
       mockDatabaseService.saveFeedback.mockResolvedValue({
         id: "feedback-new",
         ...feedbackWithoutField,
-      });
+      } as unknown as UserFeedback);
 
       const handler = registeredHandlers.get("feedback:submit");
       const result = await handler(
@@ -201,6 +210,8 @@ describe("Feedback Handlers", () => {
 
   describe("feedback:get-for-transaction", () => {
     it("should return feedback for transaction", async () => {
+      // Rows are only counted by the assertion below, so they carry just the
+      // columns the test cares about; asserted to UserFeedback[] at the boundary.
       const mockFeedback = [
         { id: "fb-1", field_name: "price", corrected_value: "$500,000" },
         {
@@ -208,7 +219,7 @@ describe("Feedback Handlers", () => {
           field_name: "closing_date",
           corrected_value: "2024-12-01",
         },
-      ];
+      ] as unknown as UserFeedback[];
       mockDatabaseService.getFeedbackByTransaction.mockResolvedValue(
         mockFeedback,
       );

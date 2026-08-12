@@ -15,8 +15,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { dbAll, dbRun, dbGet, dbTransaction, ensureDb } from './core/dbConnection';
 import logService from '../logService';
 import { recordShadowSync } from '../contactIngestionFunnel';
+import { requestContactLinking } from '../contactLinkingScheduler';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
 import { toLookupKey } from '../../utils/phoneNormalization';
+import { dedupeEmailValues, dedupePhoneValues } from '../../utils/contactValueDedup';
 import {
   EXTERNAL_CONTACTS_GET_ALL_SQL,
   EXTERNAL_CONTACT_LAST_MESSAGE_EXPR,
@@ -94,6 +96,87 @@ export interface MacOSContact {
 }
 
 /**
+ * Source-specific identity captured alongside `external_record_id`
+ * (BACKLOG-2407) — serialized into `external_contacts.source_identity_json`.
+ *
+ * ---------------------------------------------------------------------------
+ * CAPTURED NOW BECAUSE IT CANNOT BE CAPTURED LATER
+ * ---------------------------------------------------------------------------
+ * Every value here is WRITTEN and read by NOTHING, exactly as `external_uuid`
+ * was when v57 introduced it. The justification is not that it is useful today:
+ * it is that you cannot go back and read a phone the user no longer owns. Each
+ * value is device- or store-supplied and leaves with the device.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY ONE JSON COLUMN RATHER THAN SIX NAMED ONES
+ * ---------------------------------------------------------------------------
+ * These fields share NO shape across sources — iPhone contributes five, Android
+ * one, macOS none (its portable id is `external_uuid`, a genuinely cross-source
+ * concept, and stays a real column). Six named columns on a shared table,
+ * growing with every future source, would buy typing no query uses: a named
+ * column implies a reader and there is none. Promotion stays cheap if one of
+ * these ever becomes a key — `json_extract(source_identity_json, '$.lookupKey')`
+ * in a later migration's backfill, safe because nothing copies
+ * `external_contacts` positionally (databaseService.ts:2938).
+ *
+ * The counter-argument, recorded so it can be argued with rather than
+ * rediscovered: v57 documented `external_uuid` as "WRITTEN here and read
+ * NOWHERE", and it acquired two readers within one sprint (contactHandlers.ts,
+ * contactSourceLinker.ts). Capture-only values get promoted fast in this
+ * codebase. That is precisely why this is a TYPED shape with ONE serializer and
+ * not a free-form bag — two call sites inventing their own key names is how
+ * "nothing reads it" turns into "nothing CAN read it".
+ */
+export interface SourceIdentity {
+  /** iPhone `ABPerson.ExternalIdentifier` — the external record id. */
+  externalIdentifier?: string | null;
+  /** iPhone `ABPerson.ExternalModificationTag` — ETag-like change tag. */
+  externalModificationTag?: string | null;
+  /** iPhone `ABPerson.ModificationDate`, ISO-8601. Update-vs-insert detection. */
+  modifiedAt?: string | null;
+  /** iPhone `ABPerson.CreationDate`, ISO-8601. */
+  createdAt?: string | null;
+  /** iPhone `ABPerson.StoreID` — the field that explains a sparse `external_uuid`. */
+  storeId?: number | null;
+  /**
+   * Android `ContactsContract.Contacts.LOOKUP_KEY` — the identifier Android
+   * designates as sync-stable, which `_ID` is not.
+   *
+   * WARNING, so this is never mistaken for a fix: capturing it does NOT survive
+   * a device swap on its own. The stored key is `android-${deviceId}-${id}` and
+   * `deviceId` is a DESKTOP-minted per-pairing UUID (localSyncService.ts:816-818)
+   * re-minted on a fresh pairing. See the decision block where that key is built.
+   */
+  lookupKey?: string | null;
+}
+
+/**
+ * Serialize a `SourceIdentity` for storage — the ONLY writer of
+ * `source_identity_json` (BACKLOG-2407).
+ *
+ * Drops null/undefined/empty entries, so a column the source lacked is absent
+ * rather than recorded as a present-but-null key — the distinction the whole
+ * measurement rests on. Returns `null` when nothing at all was captured, which
+ * is what lets the COALESCE in the upserts read "I have nothing to say" as
+ * "leave what is already stored alone", making a re-import from an older backup
+ * non-destructive.
+ */
+export function serializeSourceIdentity(
+  identity: SourceIdentity | null | undefined
+): string | null {
+  if (!identity) return null;
+
+  const populated: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(identity)) {
+    if (value !== null && value !== undefined && value !== '') {
+      populated[key] = value as string | number;
+    }
+  }
+
+  return Object.keys(populated).length > 0 ? JSON.stringify(populated) : null;
+}
+
+/**
  * iPhone Contact structure from iPhone sync (SPRINT-068, BACKLOG-585)
  */
 export interface iPhoneContact {
@@ -101,7 +184,16 @@ export interface iPhoneContact {
   phones?: string[];
   emails?: string[];
   company?: string;
-  recordId: string;  // iPhone backup contact ID (as string)
+  /** iPhone backup contact ID — `ABPerson.ROWID`, and DEVICE-LOCAL (BACKLOG-2407). */
+  recordId: string;
+  /**
+   * BACKLOG-2407 — `ABPerson.ExternalUUID`, the iPhone counterpart of the macOS
+   * ZEXTERNALUUID on `MacOSContact` above. Captured, never matched on;
+   * portability unverified and population rate measured at parse time.
+   */
+  externalUuid?: string | null;
+  /** BACKLOG-2407 — the remaining iPhone identity fields. Captured, never read. */
+  sourceIdentity?: SourceIdentity | null;
 }
 
 /**
@@ -125,6 +217,12 @@ export interface ExternalContactInput {
   name: string | null;
   emails: string[];
   phones: string[];
+  /**
+   * BACKLOG-2407 — source-specific identity captured beside the record id.
+   * Optional: outlook and google_contacts supply nothing and must keep working
+   * unchanged. Today only `android_sync` populates it (with `lookupKey`).
+   */
+  source_identity?: SourceIdentity | null;
   company: string | null;
 }
 
@@ -153,6 +251,53 @@ export interface SyncResult {
 // ============================================
 
 /**
+ * One shadow row -> one `ExternalContact`.
+ *
+ * BACKLOG-2457 — THE RECORD'S OWN REPEATS ARE COLLAPSED HERE, ON THE WAY OUT.
+ *
+ * `emails_json` stores exactly what the provider handed over, and providers hand
+ * over one mailbox more than once as a matter of course: Microsoft Graph returns
+ * every email-typed field of an Outlook contact in ONE `emailAddresses` array
+ * (the reported record carried one mailbox under both `Email` and the chat
+ * field), and `_mapGraphContact` flattens `mobilePhone` + `homePhones` +
+ * `businessPhones` into one phone array. Apple's unified cards do the same on
+ * their own. The picker then drew one address twice, which reads as a broken
+ * import.
+ *
+ * WHY THE READ AND NOT THE WRITE. Deduping in the upserts would only clean rows
+ * written AFTER the fix — every already-synced contact would keep showing its
+ * duplicate until the next full sync, and the reported card is already in that
+ * state. Collapsing here fixes the existing rows on the very next picker open,
+ * costs one pass over a handful of strings per contact, and leaves `emails_json`
+ * as the faithful record of what the source actually said.
+ *
+ * THIS IS ALSO THE IMPORT'S INPUT, not just the card's. `contacts:get-available`
+ * copies `emails`/`phones` straight into each picker row's `allEmails`/
+ * `allPhones`, and importing that row feeds them to `createContactsBatch` /
+ * `backfillContactEmailsSync`. Both of those already refuse a repeat
+ * (case-folded `Set` + `UNIQUE(contact_id, email)`), so the duplicate never
+ * reached `contact_emails` — see the tests, which prove that rather than assume
+ * it. Collapsing here keeps the two layers agreeing about how many addresses a
+ * record has instead of relying on the last one to catch it.
+ *
+ * Order is preserved, so `emails?.[0]` still resolves the same primary.
+ */
+function toExternalContact(row: ExternalContactRow): ExternalContact {
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    name: row.name,
+    phones: dedupePhoneValues(JSON.parse(row.phones_json || '[]')),
+    emails: dedupeEmailValues(JSON.parse(row.emails_json || '[]')),
+    company: row.company,
+    last_message_at: row.last_message_at,
+    external_record_id: row.external_record_id,
+    source: row.source as ExternalContactSource,
+    synced_at: row.synced_at,
+  };
+}
+
+/**
  * Get all external contacts for a user, sorted by last_message_at DESC
  * Uses NULLS LAST workaround for SQLite
  */
@@ -171,21 +316,7 @@ export function getAllForUser(userId: string): ExternalContact[] {
   // of PII-bearing lines per open — shipped to production (warn > info), and
   // enough noise to bury the funnel counters this ticket exists to surface.
   // The aggregate that matters is the picker stage line.
-  return rows.map(row => {
-    const emails: string[] = JSON.parse(row.emails_json || '[]');
-    return {
-      id: row.id,
-      user_id: row.user_id,
-      name: row.name,
-      phones: JSON.parse(row.phones_json || '[]'),
-      emails,
-      company: row.company,
-      last_message_at: row.last_message_at,
-      external_record_id: row.external_record_id,
-      source: row.source as ExternalContactSource,
-      synced_at: row.synced_at,
-    };
-  });
+  return rows.map(toExternalContact);
 }
 
 /**
@@ -210,21 +341,10 @@ export async function getAllForUserAsync(
   const rawRows = await queryContacts('external', userId, timeoutMs) as ExternalContactRow[];
 
   // BACKLOG-2391: per-row PII warn removed — see getAllForUser above.
-  return rawRows.map((row) => {
-    const emails: string[] = JSON.parse(row.emails_json || '[]');
-    return {
-      id: row.id,
-      user_id: row.user_id,
-      name: row.name,
-      phones: JSON.parse(row.phones_json || '[]'),
-      emails,
-      company: row.company,
-      last_message_at: row.last_message_at,
-      external_record_id: row.external_record_id,
-      source: row.source as ExternalContactSource,
-      synced_at: row.synced_at,
-    };
-  });
+  // BACKLOG-2457: SAME mapper as the sync path. This is the branch the picker
+  // actually takes whenever the worker pool is warm, so a collapse applied to
+  // only one of the two would read as fixed and behave broken in the field.
+  return rawRows.map(toExternalContact);
 }
 
 /**
@@ -344,6 +464,10 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
 
   logService.info(`Upserted ${count} external contacts from macOS (${multiEmailCount} with multiple emails)`, 'ExternalContactDbService', { userId });
 
+  // BACKLOG-2474 — one of the THREE places a record can enter this table.
+  // Signals Phase 2; does not run it. See contactLinkingScheduler.
+  if (count > 0) requestContactLinking(userId);
+
   return count;
 }
 
@@ -359,16 +483,28 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
 export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sessionId?: string): number {
   const now = new Date().toISOString();
 
+  // BACKLOG-2407: `external_uuid` (ABPerson.ExternalUUID) and
+  // `source_identity_json` are WRITTEN here and read NOWHERE, matching what
+  // upsertFromMacOS does for ZEXTERNALUUID. `external_record_id` is UNCHANGED —
+  // still ABPerson.ROWID. This is capture-now-use-later; it is not a re-key.
+  //
+  // COALESCE on update rather than plain `excluded.x`, and this path makes that
+  // reachable rather than theoretical: the parser emits NULL for any identity
+  // column the backup's ABPerson lacks, so a user who re-imports from an OLDER
+  // backup after a newer one would otherwise ERASE identifiers already captured
+  // — the exact values that cannot be re-read once the device is gone.
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at, sync_session_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'iphone', ?, ?, ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at, sync_session_id, external_uuid, source_identity_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'iphone', ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
       phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
-      synced_at = excluded.synced_at
+      synced_at = excluded.synced_at,
+      external_uuid = COALESCE(excluded.external_uuid, external_contacts.external_uuid),
+      source_identity_json = COALESCE(excluded.source_identity_json, external_contacts.source_identity_json)
   `;
 
   let count = 0;
@@ -386,12 +522,31 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
         contact.recordId,
         now,
         sessionId || null,
+        contact.externalUuid || null,
+        serializeSourceIdentity(contact.sourceIdentity),
       ]);
       count++;
     }
   });
 
   logService.info(`Upserted ${count} external contacts from iPhone`, 'ExternalContactDbService', { userId });
+
+  // BACKLOG-2474 — DELIBERATELY NOT SIGNALLED WHEN A SESSION IS OPEN.
+  //
+  // A sessionId means these rows are provisional: TASK-2110 rollback deletes
+  // exactly them (`deleteBySessionId`) if a later stage of the iPhone sync
+  // fails or the user cancels — and `storeAttachments` runs after this and can
+  // take minutes. Linking them now would write `contact_source_links` and
+  // `contact_link_proposals` keyed on `source_record_id`s that rollback then
+  // deletes, and rollback does not clean either identity table. The result
+  // would be links to records that no longer exist — a silent breach of the
+  // ACID guarantee, invisible in the review queue because its read INNER JOINs
+  // `external_contacts` and drops the orphans.
+  //
+  // The signal for this path is at the sync's COMMIT point instead
+  // (`iPhoneSyncStorageService.persistSyncResult`), once rollback is off the
+  // table. Session-less callers are not provisional and signal normally.
+  if (count > 0 && sessionId === undefined) requestContactLinking(userId);
 
   return count;
 }
@@ -402,14 +557,66 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
  * (sync_session_id is only set on INSERT, not UPDATE).
  */
 export function deleteBySessionId(userId: string, sessionId: string): number {
-  const result = dbRun(
-    `DELETE FROM external_contacts WHERE user_id = ? AND sync_session_id = ?`,
-    [userId, sessionId]
-  );
+  // BACKLOG-2474 — WHOEVER DELETES A SOURCE RECORD MUST NOT LEAVE THE CROSSWALK
+  // POINTING AT IT.
+  //
+  // Suppressing the linking signal for session-scoped writes (see
+  // `upsertFromiPhone`) is necessary but NOT sufficient, and a test proved it:
+  // the pass reads the whole table, so a signal from ANY OTHER source — a macOS
+  // or Outlook sync finishing while the iPhone sync is still copying
+  // attachments — runs a pass that sees the provisional rows and links them.
+  // Suppression narrows the window; only cleanup closes it.
+  //
+  // Captured BEFORE the delete, because afterwards there is nothing left to
+  // identify. A link to a record that no longer exists is worse than no link:
+  // it silently attributes a contact to a source the user cannot see, and the
+  // review queue hides the matching proposals because its read INNER JOINs
+  // `external_contacts`.
+  // BACKLOG-2480: this path's cleanup was the model the other four lacked. It
+  // now shares the SAME helper rather than keeping a second copy — two
+  // implementations of one rule is how sibling paths drift apart, which is
+  // exactly what BACKLOG-2510 and BACKLOG-2525 were.
+  const result = {
+    changes: deleteExternalContactsAndTheirLinks(
+      userId,
+      `user_id = ? AND sync_session_id = ?`,
+      [userId, sessionId],
+    ),
+  };
+
+  // `contact_link_verdicts` is DELIBERATELY NOT TOUCHED. A verdict is the
+  // user's own answer, not derived data: if this sync is retried and the same
+  // record returns, their "different people" must still bind. Clearing it would
+  // re-ask a question they already answered — the exact nagging this epic
+  // exists to prevent.
+  //
+  // A `source_id` LINK IS EQUALLY THE USER'S OWN CHOICE, AND IS STILL DELETED.
+  // The path is reachable: the user imports one of these records during the
+  // attachment phase, `linkImportedContact` writes `match_method: 'source_id'`
+  // for it, and then the sync fails.
+  //
+  // The distinction is what each row MEANS once its record is gone. A verdict
+  // is a judgement about two identities and stays true whether or not the
+  // record is present. A link is a POINTER — with the row deleted it addresses
+  // nothing, and keeping it would attribute the contact to a source that is not
+  // there. It also self-heals: the next successful sync re-writes the record
+  // and the pass re-derives the link. A deleted verdict could never be
+  // recovered, because only the user can supply it.
+  //
+  // NOTE: THIS INVARIANT HOLDS ONLY HERE. The other four deletion paths in this
+  // file — `deleteStaleContactsBySource` (which runs on EVERY full Outlook,
+  // Google and Android sync), `deleteByMacOSRecordId`, `deleteBySource` and
+  // `clearAllForUser` — do no crosswalk cleanup and leave orphans behind. That
+  // BACKLOG-2480 CLOSED THIS. When the note above was written this was the ONLY
+  // path that cleaned up, and it warned against reading it as evidence the
+  // invariant held globally. It now does: all five deletion paths go through
+  // `deleteExternalContactsAndTheirLinks`, and the write-atomicity guard
+  // (BACKLOG-2530) rejects a new multi-write path that skips a transaction.
 
   if (result.changes > 0) {
     logService.info(
-      `Deleted ${result.changes} external contacts for session ${sessionId}`,
+      `Deleted ${result.changes} external contacts for session ${sessionId} ` +
+        `(and any crosswalk links and proposals that pointed at them)`,
       'ExternalContactDbService',
       { userId }
     );
@@ -433,16 +640,20 @@ export function upsertExternalContacts(
 ): number {
   const now = new Date().toISOString();
 
+  // BACKLOG-2407: `source_identity_json` is written here and read nowhere.
+  // COALESCE so a source that supplies nothing (outlook, google_contacts) can
+  // never erase what another sync captured for the same record.
   const stmt = `
-    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at, source_identity_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
       name = excluded.name,
       phones_json = excluded.phones_json,
       phones_normalized_json = excluded.phones_normalized_json,
       emails_json = excluded.emails_json,
       company = excluded.company,
-      synced_at = excluded.synced_at
+      synced_at = excluded.synced_at,
+      source_identity_json = COALESCE(excluded.source_identity_json, external_contacts.source_identity_json)
   `;
 
   let count = 0;
@@ -460,12 +671,19 @@ export function upsertExternalContacts(
         source,
         contact.external_record_id,
         now,
+        serializeSourceIdentity(contact.source_identity),
       ]);
       count++;
     }
   });
 
   logService.info(`Upserted ${count} external contacts from ${source}`, 'ExternalContactDbService', { userId });
+
+  // BACKLOG-2474 — the path that carries outlook, google_contacts and
+  // android_sync. THIS is the line that closes the Windows hole: a user with
+  // macosEnabled=false and iphoneEnabled=false reaches Phase 2 through here,
+  // and there is no platform gate anywhere on it.
+  if (count > 0) requestContactLinking(userId);
 
   return count;
 }
@@ -714,17 +932,87 @@ export function updateLastMessageAtForPhone(userId: string, normalizedPhone: str
  * rather than left `@deprecated` — a same-shape unscoped sibling is exactly the
  * footgun that caused the incident. Every sync path MUST pass its own `source`.
  */
+/**
+ * ===========================================================================
+ * DELETE SOURCE RECORDS AND EVERYTHING THAT POINTS AT THEM (BACKLOG-2480)
+ * ===========================================================================
+ * **Whoever deletes a source record must not leave the crosswalk pointing at
+ * it.** Five paths delete from `external_contacts`; until this helper existed,
+ * only ONE of them cleaned up — the rest left `contact_source_links` and
+ * `contact_link_proposals` rows referencing records that no longer exist.
+ *
+ * The one that mattered most is `deleteStaleContactsBySource`, which runs on
+ * **every full Outlook, Google or Android sync** — and BACKLOG-2474 made the
+ * linking pass run on every write path, so far more links are created while the
+ * same four paths still removed none of them.
+ *
+ * WHAT AN ORPHAN COSTS:
+ *   - A crosswalk row naming a source record that is gone. `sourceRecordIsCurrent`
+ *     catches some of it INCIDENTALLY — incidental is not by design.
+ *   - A review proposal about a record the user can no longer see, so the
+ *     question is unanswerable. BACKLOG-2410's own reasoning: a queue of
+ *     unanswerable questions is worse than an empty one.
+ *   - Provenance naming a source record that no longer exists.
+ *
+ * ONE HELPER, NOT FOUR FIXES. Four independent cleanups is four chances to drift
+ * — and drift between sibling paths is precisely what caused BACKLOG-2510 and
+ * BACKLOG-2525. A path that forgets to call this now has to forget the ONLY way
+ * to delete a source record.
+ *
+ * `contact_link_verdicts` is DELIBERATELY NOT TOUCHED. A verdict is the user's
+ * own answer, not derived data: if the record returns on a later sync, their
+ * "these are different people" must still bind. Clearing it would re-ask a
+ * question they already answered.
+ *
+ * @param whereSql  predicate over `external_contacts`, WITHOUT the `WHERE`
+ * @param params    bound parameters for `whereSql`, in order
+ */
+function deleteExternalContactsAndTheirLinks(
+  userId: string,
+  whereSql: string,
+  params: unknown[],
+): number {
+  return dbTransaction(() => {
+    // Read the identities FIRST — after the delete there is nothing left to
+    // join against, which is exactly why the four unguarded paths could not
+    // have cleaned up as an afterthought.
+    const doomed = dbAll<{ source: string; external_record_id: string }>(
+      `SELECT source, external_record_id FROM external_contacts
+        WHERE ${whereSql} AND external_record_id IS NOT NULL`,
+      params,
+    );
+
+    const result = dbRun(`DELETE FROM external_contacts WHERE ${whereSql}`, params);
+
+    for (const row of doomed) {
+      dbRun(
+        `DELETE FROM contact_source_links
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+        [userId, row.source, row.external_record_id],
+      );
+      dbRun(
+        `DELETE FROM contact_link_proposals
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+        [userId, row.source, row.external_record_id],
+      );
+    }
+
+    return result.changes;
+  });
+}
+
 export function deleteStaleContactsBySource(userId: string, source: ExternalContactSource, currentSyncTime: string): number {
-  const result = dbRun(
-    `DELETE FROM external_contacts WHERE user_id = ? AND source = ? AND synced_at < ?`,
-    [userId, source, currentSyncTime]
+  const changes = deleteExternalContactsAndTheirLinks(
+    userId,
+    `user_id = ? AND source = ? AND synced_at < ?`,
+    [userId, source, currentSyncTime],
   );
 
-  if (result.changes > 0) {
-    logService.info(`Deleted ${result.changes} stale ${source} external contacts`, 'ExternalContactDbService', { userId });
+  if (changes > 0) {
+    logService.info(`Deleted ${changes} stale ${source} external contacts`, 'ExternalContactDbService', { userId });
   }
 
-  return result.changes;
+  return changes;
 }
 
 /**
@@ -739,9 +1027,10 @@ export function deleteStaleIPhoneContacts(userId: string, currentSyncTime: strin
  * Delete a specific contact by macOS record ID
  */
 export function deleteByMacOSRecordId(userId: string, recordId: string): void {
-  dbRun(
-    'DELETE FROM external_contacts WHERE user_id = ? AND source = ? AND external_record_id = ?',
-    [userId, 'macos', recordId]
+  deleteExternalContactsAndTheirLinks(
+    userId,
+    'user_id = ? AND source = ? AND external_record_id = ?',
+    [userId, 'macos', recordId],
   );
 }
 
@@ -756,19 +1045,20 @@ export function deleteByMacOSRecordId(userId: string, recordId: string): void {
  * @returns Number of contacts deleted
  */
 export function deleteBySource(userId: string, source: ExternalContactSource): number {
-  const result = dbRun(
-    'DELETE FROM external_contacts WHERE user_id = ? AND source = ?',
-    [userId, source]
+  const changes = deleteExternalContactsAndTheirLinks(
+    userId,
+    'user_id = ? AND source = ?',
+    [userId, source],
   );
-  logService.info(`Deleted ${result.changes} external contacts with source '${source}'`, 'ExternalContactDbService', { userId });
-  return result.changes;
+  logService.info(`Deleted ${changes} external contacts with source '${source}'`, 'ExternalContactDbService', { userId });
+  return changes;
 }
 
 /**
  * Clear all external contacts for a user
  */
 export function clearAllForUser(userId: string): void {
-  dbRun('DELETE FROM external_contacts WHERE user_id = ?', [userId]);
+  deleteExternalContactsAndTheirLinks(userId, 'user_id = ?', [userId]);
   logService.info('Cleared all external contacts', 'ExternalContactDbService', { userId });
 }
 
@@ -999,16 +1289,8 @@ export function search(userId: string, query: string, limit: number = 50): Exter
     limit,
   ]);
 
-  return rows.map(row => ({
-    id: row.id,
-    user_id: row.user_id,
-    name: row.name,
-    phones: JSON.parse(row.phones_json || '[]'),
-    emails: JSON.parse(row.emails_json || '[]'),
-    company: row.company,
-    last_message_at: row.last_message_at,
-    external_record_id: row.external_record_id,
-    source: row.source as ExternalContactSource,
-    synced_at: row.synced_at,
-  }));
+  // BACKLOG-2457: same mapper, same collapse — a search result renders the same
+  // card as a picker row and must not disagree with it about how many addresses
+  // the record has.
+  return rows.map(toExternalContact);
 }

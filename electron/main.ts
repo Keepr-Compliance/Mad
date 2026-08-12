@@ -153,6 +153,8 @@ import { registerPaymentHandlers } from "./handlers/paymentHandlers";
 import { sanitizeSessionId } from "./services/paymentService";
 import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHandler";
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
+import { registerSupportAccessHandlers } from "./handlers/supportAccessHandlers";
+import { initializeSupportAccess } from "./services/supportAccess";
 import { registerLocalSyncHandlers, cleanupLocalSyncHandlers } from "./handlers/localSyncHandlers";
 import { registerPairingHandlers, cleanupPairingHandlers } from "./handlers/pairingHandlers";
 import { LLMConfigService } from "./services/llm/llmConfigService";
@@ -1719,6 +1721,21 @@ app.whenReady().then(async () => {
   registerCcpaHandlers();
   registerFailureLogHandlers();
   registerSupportTicketHandlers();
+  registerSupportAccessHandlers();
+  // BACKLOG-2430: the keychain gate is unlocked from inside
+  // initializeSupportAccess(), not from here. It used to be a line in this
+  // file, and deleting that line turned nothing red — the P0 this PR fixes was
+  // itself unguarded, which is the same defect one level up. Nothing in
+  // main.ts is reachable from a test, so the call lives in the module that is.
+  // BACKLOG-2393: load the persisted support access window. There is nothing to
+  // "restore" about the deadline itself — it is an absolute instant on disk, so
+  // it is already correct before this runs. This reads it, closes the window if
+  // the clock passed it while the app was shut, and restarts the upload
+  // schedule if it is still open. Fire-and-forget: a diagnostics feature must
+  // never be able to hold up startup.
+  void initializeSupportAccess().catch((error) => {
+    log.warn(`[SupportAccess] Initialization failed: ${String(error)}`);
+  });
   registerLocalSyncHandlers();
 
   // Android companion pairing (TASK-1428)
@@ -1839,6 +1856,13 @@ app.on("before-quit", () => {
     const { default: shadowDeltaSyncService } = require("./services/shadowDeltaSyncService");
     shadowDeltaSyncService.stop();
   } catch { /* service may never have been imported/started */ }
+  // BACKLOG-2474: drop any scheduled contact-linking pass. The timers are
+  // unref'd so they cannot hold the app open, but a pass firing into a
+  // tearing-down process would run against a database on its way out.
+  try {
+    const { cancelPendingContactLinking } = require("./services/contactLinkingScheduler");
+    cancelPendingContactLinking();
+  } catch { /* service may never have been imported */ }
 });
 
 app.on("activate", () => {

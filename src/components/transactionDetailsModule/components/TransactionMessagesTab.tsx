@@ -18,7 +18,7 @@ import { AuditPeriodToggle } from "./AuditPeriodToggle";
 import { RemovedMessagesSection } from "./RemovedMessagesSection";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useSelection } from "../../../hooks/useSelection";
-import type { ToastAction } from "../../../hooks/useToast";
+import type { NotificationAction, NotificationOptions } from "../../ui/Notification/types";
 import { extractAllHandles } from "../../../utils/phoneNormalization";
 import { mergeThreadsByContact, type MergedThreadEntry } from "../../../utils/threadMergeUtils";
 import { formatDateRangeLabel, parseLocalCalendarDay, isTimestampInAuditPeriod } from "../../../utils/dateRangeUtils";
@@ -69,7 +69,7 @@ interface TransactionMessagesTabProps {
    * Toast handler for success messages.
    * BACKLOG-2390: accepts an optional inline action (e.g. Undo) for move toasts.
    */
-  onShowSuccess?: (message: string, action?: ToastAction) => void;
+  onShowSuccess?: (message: string, options?: NotificationOptions) => void;
   /** Toast handler for error messages */
   onShowError?: (message: string) => void;
   /** Audit period start date for filtering (TASK-1157) */
@@ -339,11 +339,11 @@ export function TransactionMessagesTab({
   const handleAttached = useCallback(
     (attachedMessageIds: string[]) => {
       onMessagesChanged?.();
-      const undoAction: ToastAction | undefined =
+      const undoAction: NotificationAction | undefined =
         transactionId && attachedMessageIds.length > 0
           ? { label: "Undo", onClick: () => void undoAttachMessages(attachedMessageIds) }
           : undefined;
-      onShowSuccess?.("Messages attached successfully", undoAction);
+      onShowSuccess?.("Messages attached successfully", { action: undoAction });
     },
     [onMessagesChanged, onShowSuccess, transactionId, undoAttachMessages]
   );
@@ -416,8 +416,10 @@ export function TransactionMessagesTab({
         // BACKLOG-2390: offer Undo that restores the EXACT ids that moved.
         const movedIds = [...messageIds];
         onShowSuccess?.("Messages removed from transaction", {
-          label: "Undo",
-          onClick: () => void undoRemoveMessages(movedIds),
+          action: {
+            label: "Undo",
+            onClick: () => void undoRemoveMessages(movedIds),
+          },
         });
         // TASK-2094: Optimistic removal — remove messages from parent state in-place.
         // This avoids a full refetch that triggers loading=true → list unmount → remount.
@@ -705,7 +707,7 @@ export function TransactionMessagesTab({
         const movedIds = [...selectedMessageIds];
         onShowSuccess?.(
           convCount > 1 ? `${convCount} conversations removed` : "Messages removed from transaction",
-          { label: "Undo", onClick: () => void undoRemoveMessages(movedIds) }
+          { action: { label: "Undo", onClick: () => void undoRemoveMessages(movedIds) } }
         );
         if (onRemoveMessagesByIds) {
           onRemoveMessagesByIds(selectedMessageIds);

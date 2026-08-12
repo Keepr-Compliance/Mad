@@ -1,14 +1,26 @@
 {
+  "//": "BACKLOG-2414: the test-suite type gate. `npm run type-check` uses tsconfig.json, which",
+  "//2": "EXCLUDES **/*.test.* — so a literal `const x: number = 'str'` in a test file was invisible",
+  "//3": "to every gate in the repo (tsc silent, eslint clean, jest green). This config re-includes",
+  "//4": "test files. It must NOT inherit the base `exclude`: `extends` would carry the **/*.test.*",
+  "//5": "entries over and silently re-open the hole, which is exactly what the previous (unwired)",
+  "//6": "version of this file did. `exclude` is therefore redeclared here in full.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "noEmit": true,
     "types": ["jest", "node", "@testing-library/jest-dom"]
   },
+  "//include": "Deliberately a superset of the base config's include, so this gate can never check",
+  "//include2": "less than `npm run type-check` does. Covers electron/__tests__, electron/**/__tests__,",
+  "//include3": "src/**/__tests__, *.test.ts(x) anywhere under those trees, and tests/__mocks__.",
+  "//include4": "e2e/driver/__tests__ also runs in CI jest; it is gated separately by e2e/tsconfig.json",
+  "//include5": "(`npm run qa:e2e:typecheck`) and is not pulled in here, to avoid rootDir cross-tree",
+  "//include6": "errors — same reasoning as scripts/qa/harness/tsconfig.json (BACKLOG-1849).",
   "include": [
-    "**/*.test.js",
-    "**/*.test.jsx",
-    "**/*.test.ts",
-    "**/*.test.tsx",
-    "**/__tests__/**/*",
-    "tests/**/*"
-  ]
+    "electron/**/*",
+    "src/**/*",
+    "tests/**/*",
+    "scripts/qa/harness/**/*"
+  ],
+  "exclude": ["node_modules", "dist", "build"]
 }

@@ -1,6 +1,7 @@
 import React from "react";
-import { SourcePill, mapToSourcePillSource } from "../../shared/SourcePill";
+import { SourcePill, mapToSourcePillSources } from "../../shared/SourcePill";
 import type { ExtendedContact } from "../../../types/components";
+import { labelForContact } from "../../../utils/contactDisplayLabel";
 
 export interface ContactCardProps {
   /** Contact data to display */
@@ -15,7 +16,9 @@ export interface ContactCardProps {
  * Gets the display name for a contact, preferring display_name over name
  */
 function getDisplayName(contact: ExtendedContact): string {
-  return contact.display_name || contact.name || "Unknown Contact";
+  // BACKLOG-2461: fall through to organisation, phone, then email before
+  // giving up. See src/utils/contactDisplayLabel.ts.
+  return labelForContact(contact);
 }
 
 /**
@@ -58,7 +61,14 @@ function ContactCard({ contact, onClick, onImport }: ContactCardProps) {
   const displayName = getDisplayName(contact);
   const initial = getInitial(displayName);
   const isExternal = isExternalContact(contact);
-  const sourcePillSource = mapToSourcePillSource(contact.source, isExternal);
+  // BACKLOG-2472: one pill per LIVE source. A contact in both the Mac address
+  // book and Outlook said "Outlook" alone, and kept saying it after the Outlook
+  // link was removed.
+  const sourcePillSources = mapToSourcePillSources(
+    contact.source,
+    contact.source_types,
+    isExternal,
+  );
 
   const handleImportClick = (e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent card click
@@ -107,7 +117,11 @@ function ContactCard({ contact, onClick, onImport }: ContactCardProps) {
             >
               {displayName}
             </h3>
-            <SourcePill source={sourcePillSource} size="sm" />
+            <div className="flex items-center gap-1 flex-wrap">
+              {sourcePillSources.map((pillSource) => (
+                <SourcePill key={pillSource} source={pillSource} size="sm" />
+              ))}
+            </div>
           </div>
         </div>
       </div>

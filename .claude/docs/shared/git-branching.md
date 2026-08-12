@@ -408,6 +408,34 @@ git worktree add ../Mad-task-616 -b refactor/TASK-616-console-cleanup develop
 git worktree add ../Mad-hotfix-001 -b hotfix/critical-security-patch main
 ```
 
+**Then, in the new worktree, seed its hook runner (MANDATORY — BACKLOG-2577):**
+
+```bash
+cd ../Mad-task-701
+npm run hooks:doctor -- --seed
+```
+
+### Why the seed step is not optional
+
+`core.hooksPath` is shared by every worktree, and husky resolves the user hook
+relative to it. A worktree with no `.husky/_` directory runs **no pre-push hook
+at all**, and git reports that with **silence and exit 0** — there is no warning,
+and a push that checked nothing looks exactly like a push that passed.
+
+`.husky/_` is deliberately **untracked**, so `git worktree add` cannot bring it
+along: hook infrastructure requires branch-independence, and tracking is
+definitionally branch-dependence (a checkout of a branch without the files would
+delete the directory and disable hooks repo-wide). The one-time seed is the
+price of that safety.
+
+Run `npm run hooks:doctor` (without `--seed`) at any time to see which hook a
+push from this worktree will actually execute, whether it is this worktree's own,
+and its md5. It exits non-zero when the answer is wrong.
+
+**Bounding the risk:** an unseeded worktree loses **local fast feedback, not
+correctness**. CI remains the gate, so nothing bad merges because of a missed
+seed. Fix it anyway rather than pushing blind.
+
 ### Verification Steps (MANDATORY)
 
 **Always verify worktree creation before proceeding:**

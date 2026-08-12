@@ -40,6 +40,9 @@ jest.mock("../logService", () => ({
 const tokenEncryptionService = require("../tokenEncryptionService").default;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { EncryptionError } = require("../tokenEncryptionService");
+// Type-only (erased at compile time, so the require()-based mocking above is
+// untouched) - used to narrow `catch (error: unknown)` bindings below.
+type EncryptionErrorShape = import("../tokenEncryptionService").EncryptionError;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const os = require("os");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -251,8 +254,8 @@ describe("TokenEncryptionService", () => {
         tokenEncryptionService.encrypt("test");
       } catch (error) {
         expect(error).toBeInstanceOf(EncryptionError);
-        expect(error.platform).toBe("linux");
-        expect(error.guidance).toContain("gnome-keyring");
+        expect((error as EncryptionErrorShape).platform).toBe("linux");
+        expect((error as EncryptionErrorShape).guidance).toContain("gnome-keyring");
       }
     });
 
@@ -263,9 +266,9 @@ describe("TokenEncryptionService", () => {
       try {
         tokenEncryptionService.encrypt("test");
       } catch (error) {
-        expect(error.message).toContain("Linux secret service");
-        expect(error.guidance).toContain("gnome-keyring");
-        expect(error.guidance).toContain("KWallet");
+        expect((error as EncryptionErrorShape).message).toContain("Linux secret service");
+        expect((error as EncryptionErrorShape).guidance).toContain("gnome-keyring");
+        expect((error as EncryptionErrorShape).guidance).toContain("KWallet");
       }
     });
 
@@ -276,8 +279,8 @@ describe("TokenEncryptionService", () => {
       try {
         tokenEncryptionService.encrypt("test");
       } catch (error) {
-        expect(error.message).toContain("macOS Keychain");
-        expect(error.guidance).toContain("Keychain Access");
+        expect((error as EncryptionErrorShape).message).toContain("macOS Keychain");
+        expect((error as EncryptionErrorShape).guidance).toContain("Keychain Access");
       }
     });
 
@@ -288,8 +291,8 @@ describe("TokenEncryptionService", () => {
       try {
         tokenEncryptionService.encrypt("test");
       } catch (error) {
-        expect(error.message).toContain("Windows DPAPI");
-        expect(error.guidance).toContain("administrator");
+        expect((error as EncryptionErrorShape).message).toContain("Windows DPAPI");
+        expect((error as EncryptionErrorShape).guidance).toContain("administrator");
       }
     });
   });

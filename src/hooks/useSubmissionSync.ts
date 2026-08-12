@@ -5,7 +5,7 @@
  * Listens for status change events and provides manual sync trigger.
  */
 import { useState, useEffect, useCallback } from "react";
-import { useToast } from "./useToast";
+import { useNotification } from "./useNotification";
 import logger from '../utils/logger';
 
 // ============================================
@@ -55,7 +55,13 @@ export function useSubmissionSync(options?: {
   const [syncing, setSyncing] = useState(false);
   const [recentChanges, setRecentChanges] = useState<StatusChangeEvent[]>([]);
 
-  const { showToast, showSuccess, showWarning } = useToast();
+  /**
+   * BACKLOG-2447: was `useToast()`, whose state was local to this hook. Nothing
+   * ever rendered a container for it, so every submission-status toast this
+   * hook raised was invisible. `useNotification` writes to the single
+   * app-level container, so these now actually appear.
+   */
+  const { notify } = useNotification();
 
   // Listen for status change events from main process
   useEffect(() => {
@@ -83,7 +89,7 @@ export function useSubmissionSync(options?: {
     return () => {
       unsubscribe();
     };
-  }, [options?.onStatusChange, showToasts, showToast, showSuccess, showWarning]);
+  }, [options?.onStatusChange, showToasts, notify]);
 
   /**
    * Get appropriate toast function based on status
@@ -91,12 +97,12 @@ export function useSubmissionSync(options?: {
   function getToastFunction(status: string) {
     switch (status) {
       case "approved":
-        return (message: string) => showSuccess(message);
+        return (message: string) => notify.success(message);
       case "needs_changes":
       case "rejected":
-        return (message: string) => showWarning(message);
+        return (message: string) => notify.warning(message);
       default:
-        return (message: string) => showToast(message, "info");
+        return (message: string) => notify.info(message);
     }
   }
 
@@ -121,7 +127,7 @@ export function useSubmissionSync(options?: {
       if (result.success) {
         setLastSynced(new Date());
         if (result.updated && result.updated > 0 && showToasts) {
-          showToast(`${result.updated} submission${result.updated > 1 ? "s" : ""} updated`, "info");
+          notify.info(`${result.updated} submission${result.updated > 1 ? "s" : ""} updated`);
         }
       }
     } catch (error) {
@@ -129,7 +135,7 @@ export function useSubmissionSync(options?: {
     } finally {
       setSyncing(false);
     }
-  }, [syncing, showToasts, showToast]);
+  }, [syncing, showToasts, notify]);
 
   /**
    * Clear recent changes

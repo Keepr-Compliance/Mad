@@ -186,6 +186,23 @@ export interface PickerStage {
   alreadyImported: number;
   /** Dropped as a duplicate of a row already in the list. */
   duplicateSuppressed: number;
+  /**
+   * BACKLOG-2458 — of the `duplicateSuppressed` records, how many handed their
+   * SOURCE IDENTITY to the row that absorbed them.
+   *
+   * A suppressed record is no longer discarded: the row that collapsed it
+   * carries its `(source_type, source_record_id)` pair, and importing that row
+   * writes a `source_id` crosswalk entry for every one of them. Published
+   * because the whole defect was invisible — the picker knew two records were
+   * one person, threw the conclusion away, and the next sync re-derived it by
+   * content matching as though the user had never chosen anything.
+   *
+   * `duplicateSuppressed - collapsedIdentitiesCarried` is the set whose
+   * identity genuinely could not be carried: rows from the local `contacts`
+   * table have no source record behind them. Optional so funnel snapshots
+   * written before this shipped still read back.
+   */
+  collapsedIdentitiesCarried?: number;
   /** What the renderer receives. */
   shown: number;
 }
@@ -216,6 +233,21 @@ export interface LinkStage {
   flagged: number;
   /** Matched nothing: a genuinely new person. */
   unmatched: number;
+  /**
+   * BACKLOG-2410 — content matches REFUSED because the user has already
+   * answered "different people" about that exact pair.
+   *
+   * Its own counter, not folded into `unmatched`, for the reason this whole
+   * epic turns on: "nothing found" and "never looked" must stay
+   * distinguishable, and here the third state is "asked, and answered". A
+   * support engineer reading `unmatched 40` cannot tell a user whose address
+   * book is full of new people from one who has rejected forty bad suggestions
+   * — those need opposite responses.
+   *
+   * OPTIONAL, so a caller written before this field still type-checks and the
+   * arithmetic note below stays honest about older snapshots.
+   */
+  declined?: number;
 }
 
 /**
@@ -363,17 +395,26 @@ export function formatShadowSyncLine(stage: ShadowSyncStage): string {
 
 /**
  * ```
- * picker: 1116 in (db 0 + external 1116) -> source-disabled 0 -> already-imported 105 -> dup-suppressed 336 -> shown 675
+ * picker: 1116 in (db 0 + external 1116) -> source-disabled 0 -> already-imported 105 -> dup-suppressed 336 (identity carried 336) -> shown 675
  * ```
  * Emitted in the order the handler actually applies the filters, so the
  * arithmetic closes: in - disabled - imported - dup = shown.
+ *
+ * BACKLOG-2458: the parenthetical says how many of the suppressed records
+ * handed their source identity to the row that absorbed them. It is rendered
+ * only when the counter is present, so a snapshot taken before this shipped
+ * formats exactly as it always did rather than claiming a carry of zero.
  */
 export function formatPickerLine(stage: PickerStage): string {
+  const carried =
+    stage.collapsedIdentitiesCarried === undefined
+      ? ""
+      : ` (identity carried ${stage.collapsedIdentitiesCarried})`;
   return (
     `[Contacts] picker: ${stage.rowsIn} in (db ${stage.dbRowsIn} + external ${stage.externalRowsIn})` +
     ` -> source-disabled ${stage.sourceDisabled}` +
     ` -> already-imported ${stage.alreadyImported}` +
-    ` -> dup-suppressed ${stage.duplicateSuppressed}` +
+    ` -> dup-suppressed ${stage.duplicateSuppressed}${carried}` +
     ` -> shown ${stage.shown}`
   );
 }
@@ -384,9 +425,14 @@ export function formatPickerLine(stage: PickerStage): string {
  * up in support tickets).
  *
  * ```
- * links: 1116 records -> id-matched 1102 -> content-matched 12 -> flagged 1 -> unmatched 1
+ * links: 1116 records -> id-matched 1102 -> content-matched 12 -> flagged 1 -> declined 0 -> unmatched 1
  * ```
- * The arithmetic closes: id + content + flagged + unmatched = recordsIn.
+ * The arithmetic closes: id + content + flagged + declined + unmatched = recordsIn.
+ *
+ * `declined` (BACKLOG-2410) is rendered whenever it is present, INCLUDING when
+ * it is zero — a stage that ran and found nothing to decline must not look like
+ * a stage that predates the counter. It is omitted only when `undefined`, which
+ * is the genuine "this snapshot is older than the field" case.
  */
 export function formatLinkLine(stage: LinkStage): string {
   return (
@@ -394,6 +440,7 @@ export function formatLinkLine(stage: LinkStage): string {
     ` -> id-matched ${stage.idMatched}` +
     ` -> content-matched ${stage.contentMatched}` +
     ` -> flagged ${stage.flagged}` +
+    (stage.declined === undefined ? "" : ` -> declined ${stage.declined}`) +
     ` -> unmatched ${stage.unmatched}`
   );
 }

@@ -313,6 +313,8 @@ Engineers MUST complete these checks before committing or pushing. Do not rely o
 3. **Check mock alignment:**
    If you changed a function signature, added a parameter, or changed a return type, verify that all mocks of that function match the new signature. Mismatched mocks cause false passes locally and failures in CI.
 
+> **Controls (breaking your code on purpose to prove a test can see it):** prove the mutation applied before you count its result, treat `Tests: 0 total` as a failure, and commit the fix before any control that reverts with `git checkout --`. Rules and worked example: `.claude/docs/PR-SOP.md` → §4.4.
+
 ### Before Pushing
 
 4. **Merge the base branch into your feature branch:**
