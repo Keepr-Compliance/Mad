@@ -431,7 +431,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toBeDefined();
       expect(plan).toEqual({
         currentVersion: 29,
-        targetVersion: 62,
+        targetVersion: 64,
         pendingMigrations: [
           {
             version: 30,
@@ -565,8 +565,16 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 62,
             description: expect.stringContaining("BACKLOG-2513"),
           },
+          {
+            version: 63,
+            description: expect.stringContaining("BACKLOG-2609"),
+          },
+          {
+            version: 64,
+            description: expect.stringContaining("BACKLOG-2609"),
+          },
         ],
-        wouldRunCount: 33,
+        wouldRunCount: 35,
       });
 
       // Verify no transaction was started (migration wasn't executed)
@@ -578,11 +586,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: version = 62 (all applied — BACKLOG-2513's v62
-      // emails.bulk_mail_headers is the chain head)
+      // Setup: version = 64 (all applied — BACKLOG-2609's v64
+      // contact_link_proposals rebuild is the chain head)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 62 });
+        .mockReturnValueOnce({ version: 64 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -594,8 +602,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: 62,
-        targetVersion: 62,
+        currentVersion: 64,
+        targetVersion: 64,
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -720,12 +728,18 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       // BACKLOG-2410 adds v59 (contact link review queue + verdicts),
       // BACKLOG-2427 adds v60 (recover hand-typed contact value provenance),
       // BACKLOG-2473 adds v61 (crosswalk origin vocabulary),
-      // BACKLOG-2513 adds v62 (emails.bulk_mail_headers)).
+      // BACKLOG-2513 adds v62 (emails.bulk_mail_headers),
+      // BACKLOG-2609 adds v63 (the person layer: persons + contacts.person_id)
+      //                  and v64 (contact_link_proposals polymorphic subject)).
       //
       // BACKLOG-2571 briefly added a v63 (emails.sent_at_source) and took it
-      // out again — founder decision, 2026-08-09. The count going back to 33 is
-      // the enumeration doing its job in the removal direction.
-      expect(mockDb.transaction).toHaveBeenCalledTimes(33);
+      // out again — founder decision, 2026-08-09. The count going back to 33 was
+      // the enumeration doing its job in the removal direction; 33 -> 35 here is
+      // the same enumeration doing its job in the addition direction, and it is
+      // how this PR learned it had a chain-head canary at all. Note that v63 is
+      // now a DIFFERENT migration from the one 2571 withdrew — the number was
+      // free, the meaning is not.
+      expect(mockDb.transaction).toHaveBeenCalledTimes(35);
     });
 
     it("should skip already-applied migrations", async () => {
@@ -733,11 +747,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 62, all migrations applied (BACKLOG-2513's v62
-      // emails.bulk_mail_headers is the chain head)
+      // version = 64, all migrations applied (BACKLOG-2609's v64
+      // contact_link_proposals rebuild is the chain head)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 62 });
+        .mockReturnValueOnce({ version: 64 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },

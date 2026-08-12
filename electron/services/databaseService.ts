@@ -3476,11 +3476,16 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // first-class record, no cascade, restore rejoins the same person, why the
         // display columns are left NULL — is in db/personSchemaSql.ts.
         //
-        // NO INDEX and NOT IN schema.sql: both rules, and the incidents behind
-        // them, are stated in that header. For `contacts` the schema.sql
-        // prohibition is not stylistic — v36's positional copy supplies 15 values
-        // to a 15-column table, so a 16th column declared there is a PREPARE-time
-        // error on every new install (schema.sql:130-135).
+        // NO INDEX and NOT IN schema.sql: both rules, the incidents behind them,
+        // and — for `contacts` specifically — why declaring the column in
+        // schema.sql would SILENTLY DROP it on every fresh install are stated
+        // once, in that same header.
+        //
+        // Deliberately NOT restated here. An earlier draft of this comment
+        // carried the pre-BACKLOG-2371 account ("a PREPARE-time error", from a
+        // positional copy that is now named-column at :1082), so this file
+        // shipped two contradictory explanations of one rule with the wrong one
+        // sitting next to the code. One copy, and it lives with the DDL.
         const hasContacts = d
           .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'contacts'")
           .get();

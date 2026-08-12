@@ -322,6 +322,98 @@ describe("databaseService migration v63 (BACKLOG-2609 — the person layer)", ()
         ).updated_at,
       ).not.toBe(SEEDED_UPDATED_AT);
     });
+
+    /**
+     * THE ROLLBACK LEG — the trigger cannot be STRANDED.
+     *
+     * v63 drops a trigger and recreates it, so the honest question is what a
+     * crash between those two moments leaves behind. The forward path is covered
+     * above; this is the failure path, which nobody exercises until it happens to
+     * a user mid-upgrade.
+     *
+     * The answer is structural rather than careful coding: DDL is transactional
+     * in SQLite, and `_runVersionedMigrations` wraps `migrate()` and the
+     * `schema_version` bump in ONE `db.transaction(...)`, so a throw anywhere in
+     * the backfill rolls the DROP back with it.
+     *
+     * WHAT THIS LEG DOES **NOT** PROVE — measured, not assumed. Disabling the
+     * migration's `finally` re-exec (`if (false && triggerSql)`) leaves THIS test
+     * GREEN and reds the forward test above instead. So the two legs check
+     * different things and neither substitutes for the other:
+     *
+     *   forward leg -> the `finally` re-exec runs, and restores byte-identically
+     *   this leg    -> the failure path cannot strand the trigger EVEN IF the
+     *                  `finally` never ran, because the transaction undoes the DROP
+     *
+     * The failure is injected the way a real one would arrive — a `persons` table
+     * that refuses inserts, so the backfill throws partway — rather than by
+     * stubbing the migration, which would test the stub.
+     */
+    it("a throw mid-backfill leaves the trigger PRESENT, working, and the version unmoved", async () => {
+      const before = triggerSql(harness.db, "update_contacts_timestamp");
+      harness.db.prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 62)").run();
+
+      // v63's CREATE TABLE is IF NOT EXISTS, so this hostile table survives and
+      // its NOT NULL fires on the first backfilled contact — AFTER the trigger
+      // has been dropped, which is the window under test.
+      harness.db.exec(`
+        CREATE TABLE persons (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          display_name TEXT,
+          company TEXT,
+          title TEXT,
+          removed_at DATETIME,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          boom TEXT NOT NULL
+        );
+      `);
+
+      const klass = harness.service.constructor as { MIGRATIONS: Array<{ version: number }> };
+      const all = klass.MIGRATIONS;
+      klass.MIGRATIONS = all.filter((m) => m.version <= 63);
+      try {
+        await expect(harness.service._runVersionedMigrations()).rejects.toThrow(/Migration 63/);
+      } finally {
+        klass.MIGRATIONS = all;
+      }
+
+      // (1) The trigger is back, byte-identical — the DROP did not strand it.
+      expect(triggerSql(harness.db, "update_contacts_timestamp")).toBe(before);
+
+      // (2) ...and it still FIRES. A trigger restored as text but somehow inert
+      //     would satisfy (1) on its own.
+      harness.db.prepare("UPDATE contacts SET company = 'poke' WHERE id = ?").run("c-alpha");
+      expect(
+        (
+          harness.db.prepare("SELECT updated_at FROM contacts WHERE id = ?").get("c-alpha") as {
+            updated_at: string;
+          }
+        ).updated_at,
+      ).not.toBe(SEEDED_UPDATED_AT);
+
+      // (3) The version did NOT move, so the upgrade is retried rather than
+      //     silently skipped — effect and version roll back together.
+      expect(
+        (
+          harness.db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as {
+            version: number;
+          }
+        ).version,
+      ).toBe(62);
+
+      // (4) No half-written person survives...
+      expect(harness.db.prepare("SELECT id FROM persons").all()).toEqual([]);
+
+      // ...and the ALTER rolled back too, so `person_id` is not merely NULL on
+      // every row — THE COLUMN IS GONE. Asserted as absence rather than as "no
+      // contact was repointed", because the weaker form cannot even be expressed
+      // here: `SELECT ... WHERE person_id IS NOT NULL` throws `no such column:
+      // person_id`, which is how this leg discovered that SQLite rolls DDL back
+      // as readily as it rolls back rows.
+      expect(columns(harness.db, "contacts")).not.toContain("person_id");
+    });
   });
 
   // =========================================================================
