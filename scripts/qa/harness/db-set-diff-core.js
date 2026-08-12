@@ -135,7 +135,18 @@ function buildDerivedQuery(opts) {
   }
 
   for (const t of tokens) {
-    // EXACT mirror of autoLinkService.ts address clause.
+    // BACKLOG-2678: this line used to claim "EXACT mirror of autoLinkService.ts address clause".
+    // It is NOT one any more. BACKLOG-2311 moved address filtering out of SQL and into JS
+    // (autoLinkService.ts:283-295 — contentContainsAddress), canonicalized directionals
+    // ("NE" -> "northeast"), and made suffix + directional OPTIONAL. This oracle still ANDs one
+    // LIKE per token, i.e. requires ALL of them.
+    //
+    // The two agree on the current fixture only because every seeded MATCH email spells the full
+    // address; an email saying "742 Birchwood" with no suffix/directional would be counted by the
+    // app and missed here. Reconciling them — and seeding an email at that boundary so the
+    // difference is detectable at all — is BACKLOG-2688. Do NOT "resync" by regenerating
+    // docs/qa/scenarios/fixture-filter-counts.json's normalizedTokens: the canonical "northeast"
+    // appears in no fixture email, so that would drop the runtime ON-count from 4 to 0.
     sql += "\n   AND LOWER(e.subject || ' ' || COALESCE(e.body_plain, '')) LIKE ?";
     params.push(`%${String(t).toLowerCase()}%`);
   }

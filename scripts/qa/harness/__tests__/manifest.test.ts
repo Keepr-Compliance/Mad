@@ -1,4 +1,4 @@
-import { resolve } from 'path';
+import { resolve, sep } from 'path';
 import { readFileSync } from 'fs';
 import { parseScenario, expandPath, loadScenario } from '../manifest';
 
@@ -92,8 +92,11 @@ describe('expandPath', () => {
 describe('loadScenario', () => {
   it('resolves the canonical checklist path relative to the manifest', () => {
     const { canonicalListPath } = loadScenario(SCENARIO);
-    expect(canonicalListPath.endsWith('docs/qa/tx1-canonical-list-v2.20.0.md')).toBe(
-      true,
-    );
+    // BACKLOG-2678: separator-normalized — canonicalListPath is absolute (path.resolve), so on
+    // Windows it uses backslashes and a forward-slash endsWith() is always false. Same latent
+    // Windows-only assertion as gmail-cell.test.ts:43.
+    expect(
+      canonicalListPath.split(sep).join('/').endsWith('docs/qa/tx1-canonical-list-v2.20.0.md'),
+    ).toBe(true);
   });
 });
