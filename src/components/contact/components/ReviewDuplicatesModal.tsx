@@ -595,17 +595,49 @@ function reasonFor(group: ContactGroup): string {
   }
 
   const first = items[0];
-  const who = first.sourceName ? `a ${first.sourceName}` : "an entry";
+
+  /*
+    NO ARTICLE BEFORE AN INTERPOLATED VALUE — BACKLOG-2673.
+
+    This read `a ${first.sourceName}`, which the founder hit at gate 4 as
+    *"Your Mac address book has a Ingrid Halvorsen"*. `sourceName` is a person's
+    name off the user's own address book: an unbounded set, so no hardcoded
+    article can be right for all of it.
+
+    THE FIX IS NOT A VOWEL CHECK. `/^[aeiou]/i` is the obvious repair and it is
+    wrong often enough to be worse than the bug — "a European buyer", "an hour",
+    "an MBA", and every name whose sound does not follow its spelling. English
+    article selection depends on PRONUNCIATION, which is not recoverable from a
+    string, and a rule that is right 90% of the time still reads as carelessness
+    on the 10%.
+
+    So the sentence is rewritten to need no article: it LEADS WITH THE NAME,
+    which is what the user is actually deciding about, and states the event
+    before the reason. Where there is no name the subject is the hardcoded
+    "A record" — the article binds to `record`, a word this code owns.
+
+    IT ALSO FIXES A SECOND DISAGREEMENT. The old frame was `Your ${label} has`,
+    and two of the five labels this screen can show are plural — "Outlook
+    contacts", "Google contacts" — so it read *"Your Outlook contacts has"*. The
+    verb now agrees with the singular subject instead of with the label.
+
+    `in your ${label}` is the house frame, not a new one: `contactLinkEvidence`
+    already ships "A record in your ${sourceLabel} carries ..." and the label map
+    is documented as possessive-ready for exactly this position.
+  */
+  const named = first.sourceName?.trim();
+  const subject = named || "A record";
+  const where = `${subject} in your ${first.sourceLabel}`;
   switch (first.matchedOn) {
     case "email":
-      return `Your ${first.sourceLabel} has ${who} with the same email address as this contact.`;
+      return `${where} has the same email address as this contact.`;
     case "phone":
-      return `Your ${first.sourceLabel} has ${who} with the same phone number as this contact.`;
+      return `${where} has the same phone number as this contact.`;
     case "name":
     case "unique_name":
-      return `Your ${first.sourceLabel} has ${who} with the same full name as this contact. The name is all that matched.`;
+      return `${where} has the same full name as this contact. The name is all that matched.`;
     default:
-      return `Your ${first.sourceLabel} has ${who} that could be this contact.`;
+      return `${where} could be this contact.`;
   }
 }
 

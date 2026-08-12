@@ -101,8 +101,11 @@ describe("ReviewDuplicatesModal", () => {
 
     // THE REASON IS THE HEADING. Exact sentence, not a substring: a heading that
     // drifted into hedging again would still contain these words.
+    // BACKLOG-2673 rewrote this sentence to lead with the name and to compose no
+    // article with an interpolated value. `ReviewDuplicatesModal.articleFreeCopy-2673`
+    // owns that rule; this assertion is here because the reason IS the heading.
     expect((await screen.findByTestId("review-reason-c-daniel")).textContent).toBe(
-      "Your Mac address book has a Nina Stone with the same phone number as this contact.",
+      "Nina Stone in your Mac address book has the same phone number as this contact.",
     );
 
     // CONTROL: restore the evidence block and this goes red.

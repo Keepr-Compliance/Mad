@@ -284,7 +284,25 @@ function clusterQuestion(cluster: ReviewQueueCluster): string {
   if (cluster.items.length > 1) {
     return `Are these also ${first.contactName}?`;
   }
-  const who = first.sourceName ? `"${first.sourceName}"` : `a ${first.sourceLabel} entry`;
+  /*
+    NO ARTICLE BEFORE AN INTERPOLATED VALUE — BACKLOG-2673.
+
+    This read `a ${first.sourceLabel} entry`. Composed over the five labels this
+    table's CHECK constraint actually admits, three of the five were wrong:
+    "a iPhone entry", "a Outlook contacts entry", "a Android phone entry".
+    ("a Mac address book entry" and "a Google contacts entry" were right, which
+    is why it survived — the template is correct for the values its author had
+    in mind.)
+
+    The article now binds to `entry`, a word this code owns, and the label moves
+    behind the preposition where nothing has to agree with it. Deliberately not a
+    vowel check: pronunciation is not recoverable from a string, and a rule that
+    is usually right is worse here than one that cannot be wrong.
+
+    Line 278 above (`this ${first.sourceLabel} entry`) is CONSIDERED AND LEFT
+    ALONE: "this" does not inflect on the sound that follows it.
+  */
+  const who = first.sourceName ? `"${first.sourceName}"` : `an entry in your ${first.sourceLabel}`;
   return `Is ${who} the same person as ${first.contactName}?`;
 }
 
