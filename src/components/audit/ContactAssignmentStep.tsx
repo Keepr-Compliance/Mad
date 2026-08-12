@@ -247,7 +247,15 @@ function ContactAssignmentStep({
   // ContactRoleRow's "(Auto)" badge, so with the badge removed it became state
   // that is written and never read — which eslint does not flag. The auto-fill
   // itself (the `onAssignContact` call below) is untouched.
-  const autoFillAppliedRef = useRef(false);
+  //
+  // BACKLOG-2677: this was a BOOLEAN — "has the step-3 fill run yet" — and that
+  // was the bug. It latched on the first pass, so any contact the pass did not
+  // cover was never defaulted, no matter what changed afterwards. It is now the
+  // SET OF CONTACT IDS the fill has already decided about, which answers the
+  // question the fill actually needs to ask ("have I defaulted THIS person?")
+  // and lets the effect re-run safely as the selection and the contact list
+  // change. See the effect below for why a boolean could not work.
+  const defaultedContactIdsRef = useRef<Set<string>>(new Set());
 
   // BACKLOG-1654: Notify parent when contact form modal opens/closes
   // so parent can hide navigation buttons that overlap the form
@@ -342,46 +350,6 @@ function ContactAssignmentStep({
     return allRoles;
   }, [transactionType]);
 
-  // BACKLOG-1355 / BACKLOG-2358: Fill roles when entering step 3.
-  // Every selected contact without a role gets a default so none are left empty:
-  // the Client baseline always applies (renders as Buyer/Seller (Client) by
-  // type), and the smart default_role auto-fill overrides it when enabled.
-  useEffect(() => {
-    if (step !== 3 || !autoRoleLoaded || autoFillAppliedRef.current) return;
-
-    // Mark as applied so we don't re-run on re-renders
-    autoFillAppliedRef.current = true;
-
-    extendedContacts
-      .filter((c) => selectedContactIds.includes(c.id))
-      .forEach((contact) => {
-        // Skip contacts that already have a role assigned.
-        const hasRole = Object.values(contactAssignments).some(
-          (assignments) => assignments.some((a) => a.contactId === contact.id)
-        );
-        if (hasRole) return;
-
-        const role = resolveDefaultContactRole(
-          autoRoleEnabled,
-          contact.default_role,
-          transactionType as TransactionType,
-          (r) => roleOptions.some((opt) => opt.value === r),
-        );
-
-        // BACKLOG-2567: the assignment. The badge bookkeeping that used to
-        // follow this line is gone; the auto-assignment is not.
-        onAssignContact(role, contact.id, false, "");
-      });
-  }, [step, autoRoleLoaded, autoRoleEnabled, extendedContacts, selectedContactIds, contactAssignments, roleOptions, transactionType, onAssignContact]);
-
-  // Reset auto-fill tracking when going back from step 3. BACKLOG-2567: the
-  // ref survives (it still gates re-running the fill); only the badge set went.
-  useEffect(() => {
-    if (step !== 3) {
-      autoFillAppliedRef.current = false;
-    }
-  }, [step]);
-
   // Auto-select contacts added via ContactFormModal once they appear in the contacts list
   // Wait for the refresh, then select. (The pattern originated in the picker
   // BACKLOG-2515 deleted; it is documented here because this is now its only home.)
@@ -423,6 +391,110 @@ function ContactAssignmentStep({
       .map((t) => t.imported);
     return extra.length > 0 ? [...extendedContacts, ...extra] : extendedContacts;
   }, [extendedContacts, importedTwins, selectedContactIds]);
+
+  /**
+   * BACKLOG-1355 / BACKLOG-2358 / BACKLOG-2677 — every selected contact leaves
+   * step 3 holding a role.
+   *
+   * =========================================================================
+   * BACKLOG-2677 — THE FOUNDER ADDED ONE CONTACT AND THE SAVE REFUSED IT.
+   * =========================================================================
+   * "At least one contact must be assigned the Buyer (Client) role", at save
+   * time, after the work was done. The default was NOT missing — it is the same
+   * `resolveDefaultContactRole` call it has always been. What was missing was
+   * COVERAGE, in two independent ways, and both had to go:
+   *
+   *   1. `autoFillAppliedRef` was a BOOLEAN set BEFORE the loop, so the fill ran
+   *      exactly once per visit to step 3. Anything the selection gained
+   *      afterwards was never defaulted.
+   *   2. The loop iterated `extendedContacts` — `contacts`, the LOCAL SAVED
+   *      LIST. A selected id absent from it at that instant was skipped, and
+   *      because of (1), skipped permanently.
+   *
+   * Together they make a live sequence, and it is the founder's:
+   *
+   *      step 2  add an address-book record → it is imported → its NEW id is
+   *              selected at once, while the silent refresh is still in flight
+   *      step 3  the fill runs against a `contacts` that does not contain it →
+   *              nothing assigned → the boolean latches
+   *      then    the refresh lands, the row appears with an EMPTY role select,
+   *              and the fill never runs again
+   *      save    refused.
+   *
+   * The component ALREADY KNEW that window exists: `augmentedContacts` directly
+   * above is built for it, so the Added chip can show an imported contact's data
+   * before the refresh folds it in. The chip was taught about the window. This
+   * fill was not. It reads `augmentedContacts` now, for the same reason.
+   *
+   * THE FIX IS ID-DRIVEN, NOT RECORD-DRIVEN. It iterates `selectedContactIds` —
+   * the single source of truth for who is on this deal — instead of a contact
+   * array that may lag it. **A contact record is not needed to assign the Client
+   * baseline**; only the `default_role` smart override needs one, so a
+   * record-less id falls back to plain Client. Under the founder's decision of
+   * 12 Aug that fallback is the CORRECT answer, not a degraded one.
+   *
+   * FOUNDER DECISION, 12 Aug, binding: *"any should default to client. until we
+   * have an algorithm that can infer that"* — EVERY contact added defaults to
+   * Client, not just the first, and not only the ones with no Buyer yet. The
+   * item body proposed first-only; he rejected it. When role inference exists
+   * (BACKLOG-2630) the default becomes a prediction and this is reopened.
+   *
+   * WHY THE REF IS A SET AND NOT A BOOLEAN — and why `hasRole` alone is not
+   * enough. The fill must fire for a contact it has not decided about yet, and
+   * must NOT fire for one it has. `hasRole` answers "does this contact have a
+   * role RIGHT NOW", which is a different question: a user who CLEARS a role
+   * (ContactRoleRow's blank option is a reachable state) would have Client
+   * handed straight back on the next render, and the role they just cleared
+   * would be un-clearable. The Set records the decision, so a cleared role stays
+   * cleared. Ids that arrive already holding a role are recorded too — the fill
+   * has decided about them, by deciding not to touch them.
+   *
+   * The Set is reset on leaving step 3, so stepping back to 2 and returning
+   * re-defaults anyone still without a role.
+   */
+  useEffect(() => {
+    if (step !== 3 || !autoRoleLoaded) return;
+
+    const byId = new Map(augmentedContacts.map((c) => [c.id, c]));
+
+    for (const contactId of selectedContactIds) {
+      // Already decided about this person on an earlier pass.
+      if (defaultedContactIdsRef.current.has(contactId)) continue;
+
+      const hasRole = Object.values(contactAssignments).some((assignments) =>
+        assignments.some((a) => a.contactId === contactId),
+      );
+      if (hasRole) {
+        // Decided: leave it alone, now and on every later pass.
+        defaultedContactIdsRef.current.add(contactId);
+        continue;
+      }
+
+      // `contact` is undefined for an id whose record has not landed yet. That
+      // is fine and is the point — `resolveDefaultContactRole` returns the
+      // Client baseline for a missing `default_role`.
+      const contact = byId.get(contactId);
+      const role = resolveDefaultContactRole(
+        autoRoleEnabled,
+        contact?.default_role,
+        transactionType as TransactionType,
+        (r) => roleOptions.some((opt) => opt.value === r),
+      );
+
+      defaultedContactIdsRef.current.add(contactId);
+      // BACKLOG-2567: the assignment. The badge bookkeeping that used to
+      // follow this line is gone; the auto-assignment is not.
+      onAssignContact(role, contactId, false, "");
+    }
+  }, [step, autoRoleLoaded, autoRoleEnabled, augmentedContacts, selectedContactIds, contactAssignments, roleOptions, transactionType, onAssignContact]);
+
+  // Reset the fill's bookkeeping when leaving step 3, so a user who steps back
+  // to pick more people gets them defaulted on the way forward again.
+  useEffect(() => {
+    if (step !== 3) {
+      defaultedContactIdsRef.current = new Set();
+    }
+  }, [step]);
 
   // BACKLOG-2400: external-twin ids to HIDE from Available — the original id of
   // every external contact whose imported twin is currently selected. This is
