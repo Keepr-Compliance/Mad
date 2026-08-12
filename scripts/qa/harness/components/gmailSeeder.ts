@@ -30,9 +30,10 @@ interface Prereqs {
   /** True when the environment is fully provisioned to run a live seed. */
   ok: boolean;
   /**
-   * True when the ONLY thing missing is the Google Workspace tenant / its OAuth
-   * token — i.e. the cell is GATED (BACKLOG-1845), not misconfigured. When set,
-   * `problems` describes the gating reason.
+   * True when the Google Workspace tenant / its OAuth token is missing — i.e.
+   * the cell is GATED (BACKLOG-1845). When set, `problems` ALWAYS includes the
+   * gating reason (BACKLOG-2678: it previously did not whenever a hard problem
+   * was also present, which made the reported detail contradict the status).
    */
   gated: boolean;
   problems: string[];
@@ -67,10 +68,21 @@ function checkPrereqs(ctx: CeremonyContext): Prereqs {
     ? 'no Gmail OAuth token configured (scenario.seed.tokenFile) — Google Workspace tenant absent (BACKLOG-1845)'
     : `Gmail OAuth token not found at ${tokenFile} — Google Workspace tenant absent (BACKLOG-1845)`;
 
+  // BACKLOG-2678: the gating reason is ALWAYS appended when `gated`, instead of
+  // being dropped whenever any hard problem exists. The gated branch below
+  // reports `problems.join('; ')` as its detail, so under the old precedence a
+  // run could announce "GATED" and then explain something else entirely.
+  //
+  // Surfaced by Windows CI once these harness suites entered the CI testMatch:
+  // PYTHON_BIN is the hardcoded POSIX path /usr/bin/python3, which never exists
+  // on windows-latest, so the hard problem always fired first and the detail
+  // read "GATED: python interpreter missing: /usr/bin/python3" — no mention of
+  // the absent tenant that is the actual gate. Hard problems still come FIRST,
+  // so nothing an operator must fix is demoted.
   return {
     ok: hardProblems.length === 0 && tokenPresent,
     gated,
-    problems: hardProblems.length ? hardProblems : gated ? [gatingReason] : [],
+    problems: [...hardProblems, ...(gated ? [gatingReason] : [])],
     corpusDir,
     tokenFile,
     scriptPath,
