@@ -49,10 +49,7 @@ import {
   ALL_SOURCE_LEAF_IDS,
   type ContactFilters,
 } from "../../utils/contactFilterModel";
-import {
-  summariseContactSources,
-  type ContactSourceSegment,
-} from "../../utils/contactSourceBreakdown";
+import { countRowsBySourceFilter } from "../../utils/contactSourceCounts";
 import { buildRowDisambiguators } from "../../utils/contactRowDisambiguation";
 import logger from "../../utils/logger";
 
@@ -197,23 +194,6 @@ export interface ContactSearchListProps {
    * an effect (never during render). Default: unused.
    */
   onVisibleCountChange?: (count: number) => void;
-  /**
-   * Called with the rendered rows partitioned by SOURCE, whenever that
-   * partition changes (BACKLOG-2662).
-   *
-   * A SECOND callback rather than a widened `onVisibleCountChange`, on purpose.
-   * That one has a live contract test (`ContactSearchList.test.tsx`, "reports
-   * the rendered row count via onVisibleCountChange") and several callers that
-   * want the number and nothing else; changing its arity to serve one header
-   * would rewrite every one of them for no gain.
-   *
-   * Derived from `visibleContacts` — THE SAME ARRAY that renders and that
-   * `onVisibleCountChange` counts — so a consumer showing both cannot show a
-   * total and a breakdown that disagree. That disagreement was the bug: the
-   * header's total was this array's length while its parenthetical was the raw,
-   * unfiltered `get-available` payload, and nothing made them reconcile.
-   */
-  onVisibleSourceBreakdownChange?: (segments: ContactSourceSegment[]) => void;
   /**
    * Called the moment a row is opened via `onContactClick`, with everything
    * needed to find the user's place again (BACKLOG-2459).
@@ -441,7 +421,6 @@ export function ContactSearchList({
   className = "",
   compact = false,
   onVisibleCountChange,
-  onVisibleSourceBreakdownChange,
   onAnchorCapture,
   pendingAnchor = null,
   onAnchorConsumed,
@@ -636,6 +615,74 @@ export function ContactSearchList({
     ).length;
   }, [showFilterUI, contacts, externalContacts, selectedSources, selectedRoles]);
 
+  /**
+   * PER-SOURCE COUNTS FOR THE SOURCE DROPDOWN (BACKLOG-2671).
+   *
+   * ===========================================================================
+   * WHICH POPULATION THESE COUNT — THE QUESTION THAT SANK THE HEADER VERSION
+   * ===========================================================================
+   * BACKLOG-2662's header breakdown was right about the sources and wrong about
+   * the POPULATION: its total was the rendered row count while its parts were the
+   * raw, unfiltered `get-available` payload. Nothing made the two reconcile, and
+   * the founder read `1173 contacts (1171 from Contacts App)` — a two-record gap
+   * with no explanation on screen.
+   *
+   * So this states its population and then obeys it. These count THE ROWS THIS
+   * LIST WOULD SHOW WITH EVERY SOURCE TICKED — search applied, role selection
+   * applied, add-mode removals applied, the Autolinked filter applied. Everything
+   * except the source selection, which is the one dimension the dropdown is for.
+   *
+   * Two consequences the reader needs, both deliberate:
+   *
+   *   1. The counts MOVE with the search box and with the role filter, because
+   *      the list does. A count that ignored the search box would promise rows
+   *      the user cannot get to while a query is typed.
+   *   2. The counts DO NOT move when the source selection changes. They are
+   *      counts of what exists, not of what is chosen — unticking Outlook must
+   *      not turn Outlook's own number into 0, which would be a control that
+   *      erases the evidence for using it.
+   *
+   * ===========================================================================
+   * WHY THE "ALL SOURCES" ROW CAN READ HIGHER THAN THE HEADER
+   * ===========================================================================
+   * Under the DEFAULT selection the Inferred leaves are off (`defaultSourceSelection`),
+   * so the header — which counts what is ON SCREEN — can read 1173 while this
+   * reads 1175. That is the honest pairing, not a discrepancy to be smoothed:
+   * this row's contract is "tick everything and you will see N", and showing 1173
+   * there would be a lie the very next click exposes. The difference is exactly
+   * the rows the user's own selection is currently hiding.
+   *
+   * `projectOntoOrder` is set-preserving (every live row survives exactly once),
+   * so counting before it and rendering after it cannot disagree — ordering is
+   * not a filter.
+   */
+  const sourceOptionCounts = useMemo(() => {
+    if (!showFilterUI) return null;
+    const everySource = new Set<string>(ALL_SOURCE_LEAF_IDS as readonly string[]);
+    const withEverySourceTicked = assembleFilterSearch({
+      contacts,
+      externalContacts,
+      searchQuery,
+      filters: { sources: everySource, roles: selectedRoles },
+    });
+    const afterAdd = isAddMode
+      ? withEverySourceTicked.filter((c) => !selectedSet.has(c.id))
+      : withEverySourceTicked;
+    const population = autolinkedOnly
+      ? afterAdd.filter((c) => c.review_state?.badge === "autolinked")
+      : afterAdd;
+    return countRowsBySourceFilter(population, SOURCE_GROUPS);
+  }, [
+    showFilterUI,
+    contacts,
+    externalContacts,
+    searchQuery,
+    selectedRoles,
+    isAddMode,
+    selectedSet,
+    autolinkedOnly,
+  ]);
+
   // "Show all" = TRUE select-all (BACKLOG-2141): reveal EVERYTHING, incl. the
   // Inferred sources and every role leaf.
   const handleShowAll = useCallback(() => {
@@ -655,36 +702,6 @@ export function ContactSearchList({
   }, [visibleContacts.length, onVisibleCountChange]);
 
   /**
-   * The same rows, partitioned by source (BACKLOG-2662).
-   *
-   * Computed from `visibleContacts` rather than from its length: two lists of
-   * equal length can hold different sources (untick Outlook, tick Gmail), and a
-   * length-keyed report would leave the header naming a source that is no longer
-   * on screen.
-   *
-   * ===========================================================================
-   * WHY THE EFFECT FIRES ON A STRING AND NOT ON THE ARRAY — THIS IS AN INFINITE
-   * RENDER LOOP IF YOU CHANGE IT
-   * ===========================================================================
-   * `visibleContacts` DOES NOT HAVE A STABLE IDENTITY. `Contacts.tsx` passes
-   * `selectedIds={[]}` — a fresh array literal on every render — so `selectedSet`
-   * memoises to a new Set each time, and `visibleContacts` (which depends on it)
-   * memoises to a new array each time, for the same rows.
-   *
-   * `onVisibleCountChange` survives that because it reports a NUMBER: React bails
-   * out of a `useState` write when the new value is identical, so the loop closes
-   * after one pass. An ARRAY is never identical to the last one, so reporting the
-   * segments on array identity means: effect -> parent setState -> parent render
-   * -> new `selectedIds` -> new `visibleContacts` -> new segments -> effect,
-   * without end. Measured, not predicted: it hung this component's own suite and
-   * every other test that mounts the Contacts screen.
-   *
-   * So the effect is keyed on the partition's VALUE. Equal partitions produce an
-   * equal key, the effect does not re-run, and the parent is written to only when
-   * what the header says would actually change. The key uses the ASCII unit/record
-   * separators (\u001f, \u001e), which cannot occur in a source label.
-   */
-  /**
    * BACKLOG-2663 — which visible rows need a field to tell them apart.
    *
    * Computed HERE and not in `ContactRow` because ambiguity is a property of the
@@ -699,18 +716,6 @@ export function ContactSearchList({
     () => buildRowDisambiguators(visibleContacts),
     [visibleContacts],
   );
-
-  const visibleSourceBreakdown = summariseContactSources(visibleContacts);
-  const visibleSourceBreakdownKey = visibleSourceBreakdown
-    .map((s) => `${s.label}\u001f${s.count}`)
-    .join("\u001e");
-
-  const visibleSourceBreakdownRef = useRef(visibleSourceBreakdown);
-  visibleSourceBreakdownRef.current = visibleSourceBreakdown;
-
-  useEffect(() => {
-    onVisibleSourceBreakdownChange?.(visibleSourceBreakdownRef.current);
-  }, [visibleSourceBreakdownKey, onVisibleSourceBreakdownChange]);
 
   // Toggle selection for an imported/selectable contact.
   const handleSelect = useCallback(
@@ -1028,6 +1033,17 @@ export function ContactSearchList({
 
           {showFilterUI && (
             <ControlCluster label="Filter:" testId="contact-filter-cluster">
+              {/*
+                BACKLOG-2671 — the per-source counts the header used to carry,
+                and a global select-all on both panels.
+
+                The counts are Source-only: the founder asked "which sources, and
+                how many of each", and a number beside every role would be a
+                second answer to a question nobody asked. `selectAllLabel` names
+                each panel's own "all" ("All sources" / "All roles") rather than a
+                bare "All", because the two dropdowns sit side by side and the
+                labels are read together.
+              */}
               <GroupedMultiSelect
                 groups={SOURCE_GROUPS}
                 selected={selectedSources}
@@ -1035,6 +1051,9 @@ export function ContactSearchList({
                 triggerLabel="Source"
                 summaryFormatter={formatSourceSummary}
                 testId="source-filter"
+                selectAllLabel="All sources"
+                counts={sourceOptionCounts?.byOptionId}
+                totalCount={sourceOptionCounts?.total}
               />
               <GroupedMultiSelect
                 groups={ROLE_GROUPS}
@@ -1043,6 +1062,7 @@ export function ContactSearchList({
                 triggerLabel="Role"
                 summaryFormatter={formatRoleSummary}
                 testId="role-filter"
+                selectAllLabel="All roles"
               />
             </ControlCluster>
           )}

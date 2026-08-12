@@ -53,6 +53,29 @@ export interface GroupedMultiSelectProps {
   className?: string;
   /** Override the base test id (defaults to "grouped-multiselect"). */
   testId?: string;
+  /**
+   * Renders a global select-all row at the TOP of the panel, labelled with this
+   * string (BACKLOG-2671). Omitted -> no such row, and this component's DOM is
+   * byte-identical to before that ticket.
+   *
+   * It is a CONTROL, not an option: it holds no id, never enters the `selected`
+   * Set, and therefore cannot be counted by a `summaryFormatter` that counts leaf
+   * ids. Its tri-state and its toggle both operate on ENABLED children only,
+   * exactly like the group headers below it — see the render for why "all" has to
+   * mean that here and not "the default selection".
+   */
+  selectAllLabel?: string;
+  /**
+   * Per-option counts, keyed by leaf id AND group id (BACKLOG-2671). An option
+   * whose id is absent renders exactly as before, with no count.
+   *
+   * The number answers "tick this and you will see N rows", so it is the OWNER's
+   * job to compute it with the same predicate that filters the list. This
+   * component only draws it.
+   */
+  counts?: ReadonlyMap<string, number>;
+  /** The count shown on the select-all row. Ignored without `selectAllLabel`. */
+  totalCount?: number;
 }
 
 /** All child ids across all groups (both standalone and normal). */
@@ -95,14 +118,36 @@ function defaultSummary(selected: Set<string>, groups: OptionGroup[]): string {
   return `${selectedCount} selected`;
 }
 
+/** Every ENABLED child id across all groups, in render order. */
+function allEnabledChildIds(groups: OptionGroup[]): string[] {
+  return groups.flatMap((group) => enabledChildren(group).map((child) => child.id));
+}
+
+/**
+ * The select-all row's tri-state, over ENABLED children only (BACKLOG-2671).
+ *
+ * Same rule as `computeParentState`, one level up. A panel with no enabled
+ * children at all is "unchecked" and its row renders disabled.
+ */
+function computeSelectAllState(groups: OptionGroup[], selected: Set<string>): ParentState {
+  const enabled = allEnabledChildIds(groups);
+  if (enabled.length === 0) return "unchecked";
+  const selectedCount = enabled.filter((id) => selected.has(id)).length;
+  if (selectedCount === 0) return "unchecked";
+  if (selectedCount === enabled.length) return "checked";
+  return "indeterminate";
+}
+
 /**
  * Counts the focusable rows (for roving keyboard focus), matching the render order:
+ * - the select-all row, when present and enabled (BACKLOG-2671) — FIRST, because it renders first
  * - normal group: the parent header (if it has ≥1 enabled child) then each enabled child
  * - standalone group: the single child if enabled
  * Disabled rows are excluded. Kept in lockstep with the `nextRowRef()` cursor at render time.
  */
-function countFocusableRows(groups: OptionGroup[]): number {
+function countFocusableRows(groups: OptionGroup[], hasSelectAll: boolean): number {
   let count = 0;
+  if (hasSelectAll && allEnabledChildIds(groups).length > 0) count += 1;
   for (const group of groups) {
     if (group.standalone) {
       const child = group.children[0];
@@ -148,6 +193,9 @@ export function GroupedMultiSelect({
   disabled = false,
   className = "",
   testId = "grouped-multiselect",
+  selectAllLabel,
+  counts,
+  totalCount,
 }: GroupedMultiSelectProps): React.ReactElement {
   const [open, setOpen] = useState(false);
 
@@ -205,8 +253,43 @@ export function GroupedMultiSelect({
     [selected, onChange]
   );
 
+  /**
+   * The global select-all toggle (BACKLOG-2671).
+   *
+   * "ALL" MEANS EVERY ENABLED OPTION IN THIS PANEL — the same thing the group
+   * headers directly above already mean (`toggleGroup` operates on enabled
+   * children), and NOT "the default selection". A global row that meant something
+   * different from the rows beneath it would be the harder of the two to explain,
+   * and it would silently disagree with its own checked state: a box that reads
+   * "checked = everything is on" cannot toggle to a state where some things are
+   * off. The caller decides what its defaults are; this row is about what is
+   * selectable here.
+   *
+   * Consequence on the contacts Source panel, stated because it is a real change
+   * in what the user sees: clicking this turns the Inferred sources ON, which the
+   * default selection leaves off. Clicking it again clears to none.
+   *
+   * Disabled children are never swept in (the contacts Role panel's `brokers`
+   * leaf is permanently disabled) — including one would write a selection the
+   * user cannot undo through this UI.
+   */
+  const toggleAll = useCallback(() => {
+    const enabled = allEnabledChildIds(groups);
+    if (enabled.length === 0) return;
+    const selectAll = computeSelectAllState(groups, selected) !== "checked";
+    const next = new Set(selected);
+    for (const id of enabled) {
+      if (selectAll) next.add(id);
+      else next.delete(id);
+    }
+    onChange(next);
+  }, [groups, selected, onChange]);
+
   // Number of focusable rows, kept in lockstep with the `nextRowRef()` cursor at render time.
-  const focusableRowCount = useMemo(() => countFocusableRows(groups), [groups]);
+  const focusableRowCount = useMemo(
+    () => countFocusableRows(groups, selectAllLabel !== undefined),
+    [groups, selectAllLabel],
+  );
 
   // Close on outside click (mousedown) or Escape while open. Local listener — no external hook.
   useEffect(() => {
@@ -286,6 +369,31 @@ export function GroupedMultiSelect({
     };
   };
 
+  // The select-all row renders FIRST, so it takes focus slot 0 here — kept in
+  // lockstep with `countFocusableRows`, which adds 1 under the same condition.
+  // It is a real control and belongs in the roving order; a keyboard user must
+  // be able to reach the row that turns everything on.
+  const hasSelectAllRow = selectAllLabel !== undefined && allEnabledChildIds(groups).length > 0;
+  const selectAllState = computeSelectAllState(groups, selected);
+  const selectAllRef = hasSelectAllRow ? nextRowRef() : undefined;
+
+  /**
+   * The count beside one option, or nothing when the owner gave none
+   * (BACKLOG-2671). Right-aligned and tabular so a column of them lines up.
+   */
+  const renderCount = (optionId: string): React.ReactElement | null => {
+    const value = counts?.get(optionId);
+    if (value === undefined) return null;
+    return (
+      <span
+        className="text-xs text-gray-500 tabular-nums"
+        data-testid={`${testId}-count-${optionId}`}
+      >
+        {value}
+      </span>
+    );
+  };
+
   return (
     <div
       ref={rootRef}
@@ -325,6 +433,40 @@ export function GroupedMultiSelect({
           className="absolute z-20 mt-1 min-w-full w-max max-w-xs bg-white border border-gray-200 rounded-lg shadow-lg py-1 max-h-80 overflow-y-auto"
           data-testid={`${testId}-panel`}
         >
+          {/*
+            Global select-all (BACKLOG-2671). Tri-state over ENABLED children,
+            set imperatively via ref — the SAME mechanism the group headers below
+            use, because jsdom and browsers alike expose `indeterminate` as a DOM
+            property and not an attribute, and a second pattern for one idea in
+            one file is how the two drift apart.
+          */}
+          {hasSelectAllRow && (
+            <label
+              className="flex items-center gap-2 px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50 cursor-pointer border-b border-gray-200"
+              data-testid={`${testId}-select-all`}
+            >
+              <input
+                ref={(el) => {
+                  if (el) el.indeterminate = selectAllState === "indeterminate";
+                  if (selectAllRef) selectAllRef(el);
+                }}
+                type="checkbox"
+                checked={selectAllState === "checked"}
+                onChange={toggleAll}
+                className="h-4 w-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                data-testid={`${testId}-select-all-checkbox`}
+              />
+              <span className="flex-1">{selectAllLabel}</span>
+              {totalCount !== undefined && (
+                <span
+                  className="text-xs text-gray-500 tabular-nums"
+                  data-testid={`${testId}-select-all-count`}
+                >
+                  {totalCount}
+                </span>
+              )}
+            </label>
+          )}
           {groups.map((group) => {
             if (group.standalone) {
               const child = group.children[0];
@@ -357,6 +499,7 @@ export function GroupedMultiSelect({
                       {child.hint}
                     </span>
                   )}
+                  {renderCount(child.id)}
                 </label>
               );
             }
@@ -391,6 +534,7 @@ export function GroupedMultiSelect({
                     data-testid={`${testId}-group-checkbox-${group.id}`}
                   />
                   <span className="flex-1">{group.label}</span>
+                  {renderCount(group.id)}
                 </label>
 
                 {/* Children */}
@@ -423,6 +567,7 @@ export function GroupedMultiSelect({
                           {child.hint}
                         </span>
                       )}
+                      {renderCount(child.id)}
                     </label>
                   );
                 })}
