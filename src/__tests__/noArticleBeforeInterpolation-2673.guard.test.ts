@@ -40,6 +40,7 @@
  */
 
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import * as ts from "typescript";
 
@@ -107,6 +108,7 @@ function insideLoggerCall(node: ts.Node, sf: ts.SourceFile): boolean {
 }
 
 export function findArticleBeforeInterpolation(fileName: string, text: string): Finding[] {
+  parseCount += 1;
   const sf = ts.createSourceFile(
     fileName,
     text,
@@ -172,20 +174,52 @@ export function findArticleBeforeInterpolation(fileName: string, text: string): 
 }
 
 /**
- * Cheap superset filter. Every shape the AST pass can report leaves one of
- * these byte sequences in the raw source, so a file matching none of them
- * cannot contain a finding — and the suite parses ~30 files instead of ~1,500.
+ * THERE IS NO PREFILTER, AND THAT IS DELIBERATE — SR review of PR #2297.
  *
- * `filesScanned` below asserts the filter did not swallow the tree.
+ * The first version of this guard skipped files that did not match a regex
+ * "superset" of the shapes the AST pass can report, to avoid parsing the whole
+ * tree. The regex was wrong: its concatenation alternative required the string
+ * literal to be JUST the article (`"a " + name`), so a real sentence
+ * (`"You already have a " + name`) never matched and the file was never parsed.
+ * It skipped 502 of 732 files — 69% of the repo — and the guard passed blind on
+ * a planted violation in `src/components/Login.tsx`.
+ *
+ * The comment above it claimed the filter was a superset. It was not, and a
+ * false completeness claim inside a guard is worse than no guard: it tells the
+ * next reader the coverage question is already settled.
+ *
+ * So coverage is now a property of the AST pass alone, and `parseCount` below
+ * asserts that nothing stands between enumeration and parsing. Every file this
+ * suite enumerates is parsed. The whole tree costs ~0.2s more than the filtered
+ * version did, which is not a price worth a blind spot.
  */
-const CANDIDATE = /\b[Aa]n?\s+(\$\{|\{)|["'][Aa]n?\s*["']\s*\+|\b[Aa]n?\s*$/m;
+let parseCount = 0;
+
+/** Read + scan a list of files. THE path the repo-wide assertion uses. */
+function scanFiles(list: string[]): string[] {
+  return list.flatMap((file) =>
+    findArticleBeforeInterpolation(file, fs.readFileSync(file, "utf8")).map(
+      (f) => `${rel(f.file)}:${f.line}  ${f.snippet}`,
+    ),
+  );
+}
 
 describe("BACKLOG-2673 — no user-facing template concatenates an article with an interpolated value", () => {
   const files = ROOTS.flatMap((r) => sourceFiles(path.join(REPO_ROOT, r)));
 
-  it("scans a real tree, not an empty one", () => {
-    // A guard that walks zero files is the green-by-vacuum failure this whole
-    // file exists to avoid. The floor is deliberately far below the real count.
+  /**
+   * The floor used to be `files.length > 300`, which counted ENUMERATION and
+   * said nothing about how many of those files were ever handed to the parser.
+   * It passed with 69% of the tree unparsed. It now asserts the number actually
+   * PARSED, so reintroducing any filter — regex, extension, allowlist — makes
+   * `parseCount` fall below the enumerated count and this goes red.
+   */
+  it("parses every file it enumerates, and the tree is real", () => {
+    parseCount = 0;
+    scanFiles(files);
+
+    expect(parseCount).toBe(files.length);
+    // 732 at the time of writing; the floor is deliberately well below it.
     expect(files.length).toBeGreaterThan(300);
   });
 
@@ -228,17 +262,57 @@ describe("BACKLOG-2673 — no user-facing template concatenates an article with 
     expect(findArticleBeforeInterpolation("control.ts", fixed)).toEqual([]);
   });
 
-  it("finds no article before an interpolated value anywhere in src/ or electron/", () => {
-    const findings: Finding[] = [];
-    for (const file of files) {
-      const text = fs.readFileSync(file, "utf8");
-      if (!CANDIDATE.test(text)) continue;
-      findings.push(
-        ...findArticleBeforeInterpolation(file, text).map((f) => ({ ...f, file: rel(f.file) })),
+  /**
+   * THE END-TO-END CONTROL — plants each shape as a REAL FILE ON DISK and runs
+   * the guard's own path over it: enumerate, read, parse, report.
+   *
+   * This exists because the control above it was not enough. It calls the
+   * detector directly, so it proved the DETECTOR worked while the GUARD was
+   * blind — the prefilter sat between them and no test crossed it. That is the
+   * BACKLOG-2439 shape exactly: the verification set omitted the only check
+   * that would fail.
+   *
+   * The concatenation plant is the violation SR planted in `Login.tsx` to prove
+   * it, transcribed verbatim. Anything that narrows the guard between
+   * enumeration and reporting fails here.
+   */
+  it("catches every shape when planted as real files on disk", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "article-guard-2673-"));
+    try {
+      fs.writeFileSync(
+        path.join(dir, "template.ts"),
+        "export const a = (n: string): string => `Your address book has a ${n} in it.`;\n",
       );
-    }
+      fs.writeFileSync(
+        path.join(dir, "concat.ts"),
+        'export const b = (n: string): string => "You already have a " + n;\n',
+      );
+      fs.writeFileSync(
+        path.join(dir, "jsx.tsx"),
+        "export const C = ({ n }: { n: string }) => <p>Your address book has a {n} in it.</p>;\n",
+      );
 
+      const planted = sourceFiles(dir);
+      expect(planted.map((f) => path.basename(f)).sort()).toEqual([
+        "concat.ts",
+        "jsx.tsx",
+        "template.ts",
+      ]);
+
+      // One finding per plant — not a count that a single over-eager match
+      // could satisfy while the other two files went unread.
+      const found = scanFiles(planted);
+      expect(found).toHaveLength(3);
+      expect(found.filter((f) => f.includes("concat.ts"))).toHaveLength(1);
+      expect(found.filter((f) => f.includes("jsx.tsx"))).toHaveLength(1);
+      expect(found.filter((f) => f.includes("template.ts"))).toHaveLength(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("finds no article before an interpolated value anywhere in src/ or electron/", () => {
     // Named, so a failure prints the offending sentence rather than a count.
-    expect(findings.map((f) => `${f.file}:${f.line}  ${f.snippet}`)).toEqual([]);
+    expect(scanFiles(files)).toEqual([]);
   });
 });
