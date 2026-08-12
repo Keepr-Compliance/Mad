@@ -190,8 +190,9 @@ export function findArticleBeforeInterpolation(fileName: string, text: string): 
  *
  * So coverage is now a property of the AST pass alone, and `parseCount` below
  * asserts that nothing stands between enumeration and parsing. Every file this
- * suite enumerates is parsed. The whole tree costs ~0.2s more than the filtered
- * version did, which is not a price worth a blind spot.
+ * suite enumerates is parsed. A scan costs ~0.2s more than the filtered version
+ * did — ~0.84s at suite level, since the tree is walked twice — which is not a
+ * price worth a blind spot.
  */
 let parseCount = 0;
 
@@ -211,8 +212,17 @@ describe("BACKLOG-2673 — no user-facing template concatenates an article with 
    * The floor used to be `files.length > 300`, which counted ENUMERATION and
    * said nothing about how many of those files were ever handed to the parser.
    * It passed with 69% of the tree unparsed. It now asserts the number actually
-   * PARSED, so reintroducing any filter — regex, extension, allowlist — makes
-   * `parseCount` fall below the enumerated count and this goes red.
+   * PARSED, so reintroducing any filter BETWEEN ENUMERATION AND PARSING —
+   * regex, extension, allowlist — makes `parseCount` fall below the enumerated
+   * count and this goes red.
+   *
+   * IT DOES NOT COVER NARROWING ENUMERATION ITSELF, and saying otherwise was a
+   * second false claim in the same file (SR review, round two). A filter at the
+   * enumeration layer shrinks BOTH sides of the equality: adding `"components"`
+   * to `SKIP_DIRS` drops 232 of 732 files — 32%, including all of
+   * `src/components/`, where the founder's defect actually lived — and every
+   * assertion here stays green. That hole is closed by the test below, which
+   * names what must be enumerated rather than trusting a comment to say so.
    */
   it("parses every file it enumerates, and the tree is real", () => {
     parseCount = 0;
@@ -221,6 +231,29 @@ describe("BACKLOG-2673 — no user-facing template concatenates an article with 
     expect(parseCount).toBe(files.length);
     // 732 at the time of writing; the floor is deliberately well below it.
     expect(files.length).toBeGreaterThan(300);
+  });
+
+  /**
+   * ENUMERATION REACHES THE PLACES THE DEFECT LIVED.
+   *
+   * `parseCount === files.length` cannot see a `SKIP_DIRS` entry, so the two
+   * files BACKLOG-2673 actually fixed are named here. `src/components/` carries
+   * its own floor because that is the 232-file block a single `SKIP_DIRS` entry
+   * removes, and it is where the founder hit this.
+   *
+   * Named files rather than a total: a count assertion is equally satisfied by
+   * enumerating 732 of the wrong files.
+   */
+  it("enumerates the files the defect lived in", () => {
+    const enumerated = new Set(files.map(rel));
+
+    expect(enumerated.has("src/components/contact/components/ReviewDuplicatesModal.tsx")).toBe(
+      true,
+    );
+    expect(enumerated.has("electron/services/contactLinkReview.ts")).toBe(true);
+
+    const underComponents = [...enumerated].filter((f) => f.startsWith("src/components/"));
+    expect(underComponents.length).toBeGreaterThan(100);
   });
 
   /**
