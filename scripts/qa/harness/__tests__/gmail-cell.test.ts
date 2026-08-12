@@ -9,7 +9,7 @@
  *   a real provider delta, THIS test failing is the signal to update the Gmail
  *   manifest — not to force the two providers equal forever.
  */
-import { resolve } from 'path';
+import { resolve, sep } from 'path';
 import { loadScenario } from '../manifest';
 import { loadCanonicalList, toExpectedSets } from '../canonicalList';
 import { memberKey } from '../diff';
@@ -34,7 +34,13 @@ describe('Gmail scenario', () => {
     expect(scenario.contacts).toHaveLength(9);
     // sourceTimezone is now formalized in the schema (was previously stripped).
     expect(scenario.sourceTimezone).toBe('America/Los_Angeles');
-    expect(canonicalListPath.endsWith('docs/qa/tx1-canonical-list-gmail-v2.20.0.md')).toBe(true);
+    // BACKLOG-2678: separator-normalized. loadScenario resolves this path with path.resolve, so on
+    // Windows it comes back with backslashes and a forward-slash endsWith() is ALWAYS false. The
+    // assertion was latent for as long as this suite ran only on developer machines — the first CI
+    // run after the harness suites entered the CI testMatch failed here on windows-latest and
+    // passed on macos-latest. That is precisely the drift this item exists to end: the bug was in
+    // the repo the whole time and no CI job could see it.
+    expect(canonicalListPath.split(sep).join('/').endsWith('docs/qa/tx1-canonical-list-gmail-v2.20.0.md')).toBe(true);
   });
 
   it('agrees with its PROVISIONAL manifest on the exact 190/69/37 counts', () => {
