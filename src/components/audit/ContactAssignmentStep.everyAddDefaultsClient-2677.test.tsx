@@ -60,7 +60,14 @@ jest.mock("../../services", () => ({
   },
 }));
 
-/** A saved contact, shaped like the rows `contacts:get-all` emits. */
+/**
+ * A saved contact, shaped like the rows `contacts:get-all` emits.
+ *
+ * `phone` and `company` are OMITTED rather than set to `null`: on `Contact` they
+ * are `string | undefined`, and writing `null` needs a cast that `tsc -p
+ * tsconfig.test.json` rejects outright. Omitting them keeps the fixture inside
+ * the type the producer actually satisfies.
+ */
 function savedContact(id: string, name: string): Contact {
   return {
     id,
@@ -68,8 +75,6 @@ function savedContact(id: string, name: string): Contact {
     name,
     display_name: name,
     email: `${id}@example.com`,
-    phone: null,
-    company: null,
     source: "manual",
     is_message_derived: false,
     created_at: "2026-08-12T00:00:00Z",

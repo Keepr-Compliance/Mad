@@ -50,6 +50,13 @@ jest.mock("../../services", () => ({
 
 const BUYER_ERROR = "At least one contact must be assigned the Buyer (Client) role";
 
+/**
+ * `phone` and `company` are OMITTED rather than set to `null`: on `Contact` they
+ * are `string | undefined`, and writing `null` needs a cast that
+ * `type-check:tests` rejects. `npm test` and `type-check` are both green on the
+ * `null` form — only `tsc -p tsconfig.test.json` catches it, which is why all
+ * five gates get run rather than the two that feel sufficient (BACKLOG-2654).
+ */
 function savedContact(id: string, name: string): Contact {
   return {
     id,
@@ -57,8 +64,6 @@ function savedContact(id: string, name: string): Contact {
     name,
     display_name: name,
     email: `${id}@example.com`,
-    phone: null,
-    company: null,
     source: "manual",
     is_message_derived: false,
     created_at: "2026-08-12T00:00:00Z",
