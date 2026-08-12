@@ -278,9 +278,26 @@ export const CONTACT_SOURCE_LINKS_INDEX_SQL = `
  * WHY A PARTIAL INDEX IS SAFE HERE, verified rather than assumed: the sole
  * production writer is `contactLinkReviewDbService.proposeLink` and it uses
  * `INSERT OR IGNORE`, which honours any unique index. There is NO `ON CONFLICT`
- * clause against this table anywhere in the repo — an `ON CONFLICT (<tuple>)`
- * writer would fail at prepare time against an expression or partial index, which
- * is why that was checked before choosing this shape.
+ * clause against this table anywhere in the repo — enumerated with `git grep -a`,
+ * which reads binary files, so a NUL-poisoned source could not have hidden one
+ * (the `contactManualLink.ts` failure mode, BACKLOG-2637).
+ *
+ * THAT ENUMERATION IS LOAD-BEARING TWICE, not once:
+ *
+ *   1. A bare `ON CONFLICT (user_id, contact_id, target_contact_id)` fails at
+ *      PREPARE time against a partial index — "ON CONFLICT clause does not match
+ *      any PRIMARY KEY or UNIQUE constraint".
+ *   2. The LEGACY tuple `ON CONFLICT (user_id, contact_id, source_type,
+ *      source_record_id)` now fails the same way, because v64 inserted
+ *      `subject_kind` into the UNIQUE. So the enumeration is also the only thing
+ *      that makes the tuple change itself safe.
+ *
+ * THE SAFETY ARGUMENT IS SCOPED TO TODAY'S WRITERS, NOT ALL FUTURE ONES, and the
+ * distinction matters because the obvious reading is wrong: a partial index CAN
+ * be targeted, by repeating its predicate. `ON CONFLICT (user_id, contact_id,
+ * target_contact_id) WHERE subject_kind = 'contact' DO ...` is ACCEPTED. A future
+ * writer wanting upsert semantics on the contact kind has that door open; it just
+ * has to name the WHERE.
  *
  * The `{{TABLE}}` placeholder exists solely for the rebuild, which creates the
  * new table under a temporary name before renaming it over the old one — the same

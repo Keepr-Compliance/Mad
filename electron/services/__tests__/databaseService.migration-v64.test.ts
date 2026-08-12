@@ -762,15 +762,32 @@ describe("databaseService migration v64 (BACKLOG-2609 — polymorphic proposal s
       ).toThrow(/CHECK/i);
     });
 
-    it("cascades a contact-kind question away when EITHER contact is deleted", async () => {
+    /**
+     * THE ASSERTION THAT SEPARATES THE NEW FK FROM A DECORATION.
+     *
+     * Deleting a contact that a row names ONLY as `target_contact_id` is the only
+     * way to observe `FOREIGN KEY (target_contact_id) ... ON DELETE CASCADE`
+     * firing — delete the subject instead and the old `contact_id` FK does the
+     * work, which is the trap the on-disk version of this test originally fell
+     * into. `PRAGMA foreign_key_list` cannot distinguish them either: it returns
+     * table names, so both read as ["contacts", "contacts"].
+     *
+     * `q-3` is the survivor control. Without a row that must NOT die, an
+     * over-broad cascade — or a `DELETE FROM contact_link_proposals` anywhere in
+     * the path — would satisfy the assertion just as well.
+     */
+    it("cascades away a question whose TARGET is deleted, and spares the others", async () => {
       await runV64();
       harness.db.pragma("foreign_keys = ON");
-      askAboutPair("q-1", "c-alpha", "c-beta");
-      askAboutPair("q-2", "c-gamma", "c-beta");
+      askAboutPair("q-1", "c-alpha", "c-beta"); // c-beta as TARGET only
+      askAboutPair("q-2", "c-gamma", "c-beta"); // c-beta as TARGET only
+      askAboutPair("q-3", "c-alpha", "c-gamma"); // does not mention c-beta at all
 
-      // A question about a deleted contact is noise, in both roles — the
-      // target_contact_id FK carries the same ON DELETE CASCADE as contact_id.
       harness.db.prepare("DELETE FROM contacts WHERE id = 'c-beta'").run();
+      expect(proposalIds(harness.db)).toEqual(["q-3"]);
+
+      // ...and the ORIGINAL FK still fires, on the row that just survived.
+      harness.db.prepare("DELETE FROM contacts WHERE id = 'c-alpha'").run();
       expect(proposalIds(harness.db)).toEqual([]);
     });
   });

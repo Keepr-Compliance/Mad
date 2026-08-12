@@ -1527,6 +1527,28 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
         .run(USER_ID, CONTACT_IDS[0]),
     ).toThrow(/UNIQUE/i);
 
+    // (6) THE NEW FK ACTUALLY FIRES. This leg is the ONLY thing in the suite that
+    //     distinguishes `target_contact_id REFERENCES contacts ON DELETE CASCADE`
+    //     from a decoration, and the first version of this test did not have it:
+    //     it deleted CONTACT_IDS[0], which is the pair row's `contact_id` as well
+    //     as the question's subject, so the cascade it observed was the OLD FK's.
+    //     Deleting the TARGET only is what separates them.
+    //     `PRAGMA foreign_key_list` cannot make the distinction either — it
+    //     returns table names, so both read identically as ["contacts","contacts"].
+    //
+    //     `clp-v64-pending` references CONTACT_IDS[0] and is expected to SURVIVE
+    //     this delete; without that survivor the assertion could be satisfied by
+    //     an over-broad cascade.
+    db.prepare("DELETE FROM contacts WHERE id = ?").run(CONTACT_IDS[2]);
+    expect(
+      (
+        db.prepare("SELECT id FROM contact_link_proposals ORDER BY id").all() as Array<{
+          id: string;
+        }>
+      ).map((r) => r.id),
+    ).toEqual(["clp-v64-answered", "clp-v64-pending"]);
+
+    // (7) ...and the original FK still fires, on the row that just survived.
     db.prepare("DELETE FROM contacts WHERE id = ?").run(CONTACT_IDS[0]);
     expect(
       (

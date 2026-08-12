@@ -77,11 +77,25 @@
  * July, caught only by founder live QA).
  *
  * NOT DECLARED IN schema.sql AT ALL, and for `contacts` that is mandatory rather
- * than stylistic: `schema.sql:130-135` records that fresh installs seed
- * `schema_version = 32` and therefore RUN migration v36, whose positional copy
- * supplies 15 values to a 15-column table. A 16th column declared there is a
- * PREPARE-time error that breaks every new install. Contacts columns are added
- * ONLY as a guarded ALTER in a new migration.
+ * than stylistic. Fresh installs seed `schema_version = 32` and therefore RUN
+ * migration v36, which REBUILDS `contacts` — so schema.sql does not get the last
+ * word on this table.
+ *
+ * The mechanism is worth stating precisely, because `schema.sql:130-135` still
+ * describes an older one. That note says a 16th column there is a PREPARE-time
+ * error, from v36's positional copy supplying 15 values to a 15-column table.
+ * That was true until BACKLOG-2371 converted v36's copy to a named-column list
+ * (`databaseService.ts:1082`). THE FAILURE TODAY IS QUIETER AND WORSE: schema.sql
+ * would create `contacts` with 16 columns, v36 would rebuild it from its fixed 15
+ * names, and `person_id` would be SILENTLY DROPPED on every fresh install — no
+ * error, no log, and a column present on upgraded databases but absent on new
+ * ones. Same conclusion either way: contacts columns are added ONLY as a guarded
+ * ALTER in a new migration.
+ *
+ * FOR WHOEVER WRITES A FUTURE `contacts` REBUILD — it must carry `person_id`.
+ * v48's rebuild derives its column list dynamically and is safe as written; v36's
+ * fixed 15-name list runs BEFORE v63 and is unaffected. A new rebuild with a
+ * hand-written column list is the way this column gets lost.
  */
 
 /**
@@ -140,9 +154,16 @@ export const CONTACTS_PERSON_ID_COLUMN = "person_id";
  * the backfill runs, not an invariant the schema enforces — asserting otherwise
  * would be asserting something no writer maintains.
  *
- * SQLite permits `ADD COLUMN` with a foreign-key clause only when the default is
- * NULL (https://sqlite.org/lang_altertable.html), which is exactly the shape
- * here.
+ * The column carries no DEFAULT, which is the shape SQLite's `ADD COLUMN` rules
+ * are happiest with (https://sqlite.org/lang_altertable.html: with foreign-key
+ * enforcement ON, an added `REFERENCES` column's default must be NULL).
+ *
+ * That documented rule is NARROWER than what the engine actually enforces, and
+ * the difference is worth recording so nobody "fixes" this later on a false
+ * premise: migrations run with `foreign_keys = OFF` (`_runVersionedMigrations`,
+ * BACKLOG-1900), and under that pragma SQLite 3.43 accepts a non-NULL default on
+ * a `REFERENCES` column too — measured, not inferred. The DDL below does not rely
+ * on either reading.
  */
 export const CONTACTS_ADD_PERSON_ID_SQL =
   "ALTER TABLE contacts ADD COLUMN person_id TEXT REFERENCES persons(id) ON DELETE SET NULL";
