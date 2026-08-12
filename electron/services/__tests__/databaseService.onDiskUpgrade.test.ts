@@ -233,9 +233,17 @@ const PRE_UPGRADE_VERSION = 55;
  * themselves to 56 locally via runChainThrough(), so they keep their original
  * meaning as the head moves on.
  */
-const HEAD_VERSION = 62;
+const HEAD_VERSION = 64;
 /** The version whose isolated effects the BACKLOG-2364 assertions describe. */
 const TOMBSTONE_VERSION = 56;
+/**
+ * BACKLOG-2609's person layer. Pinned as a literal for the reason this file has
+ * now recorded four times: a version whose test asserts the state BEFORE it must
+ * never be written as an offset from head.
+ */
+const PERSON_LAYER_VERSION = 63;
+/** BACKLOG-2609's `contact_link_proposals` rebuild. Pinned for the same reason. */
+const PROPOSALS_SUBJECT_VERSION = 64;
 /**
  * BACKLOG-2513's `emails.bulk_mail_headers` ADD COLUMN. Pinned to a literal for
  * the same reason as TOMBSTONE_VERSION: written as `HEAD_VERSION` these
@@ -612,8 +620,16 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
       for (const col of TOMBSTONE_COLUMNS) {
         expect(cols).toContain(col);
       }
-      // Appended last, in declaration order.
-      expect(cols.slice(-2)).toEqual(TOMBSTONE_COLUMNS);
+      // Appended TOGETHER and in declaration order.
+      //
+      // This was `cols.slice(-2)` until BACKLOG-2609, when v63 appended
+      // `contacts.person_id` after them and the tail stopped being v56's. The
+      // property v56 actually guarantees is that its two columns arrive
+      // contiguously and in that order — "and nothing ever comes after them" was
+      // never v56's to promise, and pinning it there would make every future
+      // ADD COLUMN on these tables red for no defect.
+      const firstIdx = cols.indexOf(TOMBSTONE_COLUMNS[0]);
+      expect(cols.slice(firstIdx, firstIdx + 2)).toEqual(TOMBSTONE_COLUMNS);
 
       // NULL for pre-existing rows, asserted by ID SET (not by count): the ids
       // whose removed_at IS NULL are exactly the ids in the table.
@@ -1196,6 +1212,329 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
         .prepare("SELECT id FROM contact_source_links ORDER BY id")
         .all() as Array<{ id: string }>).map((r) => r.id),
     ).toEqual(["csl-v61-book", "csl-v61-sms"]);
+  });
+
+  /**
+   * BACKLOG-2609 — THE PERSON LAYER, ON A REAL FILE.
+   *
+   * v63 is the shape BACKLOG-2298/2300 was about: a new table, a guarded
+   * ALTER on `contacts`, and a backfill that writes to every contact row. The
+   * in-memory suite (`databaseService.migration-v63.test.ts`) asserts all of it
+   * against a hand-built fixture; this asserts it against a database that was
+   * built by the real `schema.sql` and the real chain, on disk, through the
+   * PUBLIC `runMigrations()`.
+   *
+   * The `updated_at` leg is the one that could not be checked any other way on
+   * this path: `contacts` carries an AFTER UPDATE trigger, so a backfill written
+   * the obvious way rewrites every contact's `updated_at` to the moment of the
+   * upgrade. The fixture below stamps a fixed old timestamp precisely so the
+   * comparison cannot pass by both sides landing in the same second.
+   */
+  it("v63 creates the person layer on a REAL old database without moving a contact", async () => {
+    assertRealOnDiskTarget();
+
+    const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const allMigrations = klass.MIGRATIONS;
+
+    // --- phase 1: reach v62, the real pre-migration state.
+    klass.MIGRATIONS = allMigrations.filter((m) => m.version <= PERSON_LAYER_VERSION - 1);
+    try {
+      await service.runMigrations();
+    } finally {
+      klass.MIGRATIONS = allMigrations;
+    }
+    expect(schemaVersionOf(db)).toBe(PERSON_LAYER_VERSION - 1);
+
+    // PRE-MIGRATION PROOF: neither structure exists yet, so the assertions after
+    // the upgrade describe something v63 actually did.
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='persons'").get(),
+    ).toBeUndefined();
+    expect(columns(db, "contacts")).not.toContain("person_id");
+
+    // One of the three seeded contacts is TOMBSTONED. It must be backfilled like
+    // any other — "restore rejoins the same person" depends on the tombstoned row
+    // keeping its person_id, so a backfill filtered on `removed_at IS NULL` would
+    // pass every other assertion here and silently un-merge on the first restore.
+    db.prepare("UPDATE contacts SET removed_at = ? WHERE id = ?").run(
+      "2026-01-01 00:00:00",
+      CONTACT_IDS[1],
+    );
+    // A fixed, old `updated_at` on every row, so "did the backfill move it" is
+    // unambiguous rather than two timestamps landing in the same second.
+    //
+    // THE TRIGGER HAS TO BE STOOD DOWN TO DO EVEN THIS, which is the whole point:
+    // the first version of this fixture ran the UPDATE below with the trigger
+    // live and the stamp was overwritten with the wall clock on the spot
+    // (observed: `2026-08-12 18:16:46` where `2020-01-01 00:00:00` was written).
+    // That is exactly what a naive backfill does to every contact the user owns.
+    const triggerSql = (
+      db
+        .prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name = ?")
+        .get("update_contacts_timestamp") as { sql: string }
+    ).sql;
+    db.exec("DROP TRIGGER update_contacts_timestamp;");
+    db.prepare("UPDATE contacts SET updated_at = '2020-01-01 00:00:00'").run();
+    db.exec(triggerSql);
+    const updatedAtBefore = db
+      .prepare("SELECT id, updated_at FROM contacts ORDER BY id")
+      .all() as Array<{ id: string; updated_at: string }>;
+    expect(new Set(updatedAtBefore.map((r) => r.updated_at))).toEqual(
+      new Set(["2020-01-01 00:00:00"]),
+    );
+
+    const indexesBefore = indexNames(db);
+
+    // --- phase 2: the real chain to head, over the real file, with rows present.
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // (1) BOTH STRUCTURES ARE LIVE ON THE REAL FILE.
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='persons'").get(),
+    ).toEqual({ name: "persons" });
+    expect(columns(db, "contacts")).toContain("person_id");
+
+    // (2) EVERY CONTACT — TOMBSTONED INCLUDED — HAS ITS OWN DISTINCT PERSON.
+    //     Asserted as ID SETS: a backfill that pointed all three at one person
+    //     row passes any count-based check.
+    const linked = db
+      .prepare("SELECT id, person_id FROM contacts ORDER BY id")
+      .all() as Array<{ id: string; person_id: string | null }>;
+    expect(linked.map((r) => r.id)).toEqual([...CONTACT_IDS].sort());
+    expect(linked.filter((r) => r.person_id === null)).toEqual([]);
+    const personIds = linked.map((r) => r.person_id as string);
+    expect(new Set(personIds).size).toBe(personIds.length);
+    expect(
+      (db.prepare("SELECT id FROM persons ORDER BY id").all() as Array<{ id: string }>).map(
+        (r) => r.id,
+      ),
+    ).toEqual([...personIds].sort());
+
+    // (3) THE PERSON'S OWN FIELDS ARE LEFT FOR THE MERGE TO SEED (BACKLOG-2611).
+    expect(
+      db.prepare("SELECT DISTINCT display_name, company, title FROM persons").all(),
+    ).toEqual([{ display_name: null, company: null, title: null }]);
+
+    // (4) NOT ONE CONTACT MOVED, despite every row being written to.
+    expect(db.prepare("SELECT id, updated_at FROM contacts ORDER BY id").all()).toEqual(
+      updatedAtBefore,
+    );
+
+    // (5) v63 CREATES NO INDEX OF ITS OWN — nothing reads `person_id` yet, so an
+    //     index would open no access path while costing a B-tree entry on every
+    //     contact write (the rule v62's header states, and the BACKLOG-2298
+    //     incident behind it).
+    //
+    //     `sqlite_autoindex_persons_1` is NOT a choice: this helper counts
+    //     auto-indexes, and SQLite materialises one for a TEXT PRIMARY KEY
+    //     because — unlike INTEGER PRIMARY KEY — it is not a rowid alias. It is
+    //     named here rather than filtered out so that a real index added to this
+    //     migration later still goes red.
+    //
+    //     The only deliberate index in this whole upgrade is v64's.
+    expect(indexNames(db)).toEqual(
+      [
+        ...indexesBefore,
+        "sqlite_autoindex_persons_1",
+        "idx_contact_link_proposals_contact_pair",
+      ].sort(),
+    );
+
+    // (6) DELETING A CONTACT DOES NOT REACH ITS PERSON — the founder's
+    //     retain-on-delete decision, on the real file, with FKs enforced.
+    const orphanedPerson = linked[0].person_id as string;
+    db.prepare("DELETE FROM contacts WHERE id = ?").run(linked[0].id);
+    expect(db.prepare("SELECT id FROM persons WHERE id = ?").get(orphanedPerson)).toEqual({
+      id: orphanedPerson,
+    });
+  });
+
+  /**
+   * BACKLOG-2609 — THE v64 REBUILD, CARRYING REAL ROWS, ON A REAL FILE.
+   *
+   * Same two-phase shape, and the same reason, as the v59 test below: on the
+   * ordinary path through this file the rebuild runs but copies ZERO rows,
+   * because v59 creates the review queue empty. A migration that could scramble
+   * every row would never once be observed moving one across a real file.
+   *
+   * The genuine pre-v64 table has to be RECONSTRUCTED from the historical DDL,
+   * for the reason spelled out in the v61 test above: there is one DDL constant
+   * and it always describes the CURRENT shape, so a replayed chain has v59 emit
+   * the v64 table and the rebuild correctly no-ops. A fixture built from the
+   * constant would make every assertion here pass without v64 ever running.
+   */
+  it("v64 rebuilds a POPULATED review queue on the real file without scrambling a row", async () => {
+    assertRealOnDiskTarget();
+
+    const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const allMigrations = klass.MIGRATIONS;
+
+    // --- phase 1: reach v63, so the review queue exists on disk.
+    klass.MIGRATIONS = allMigrations.filter((m) => m.version <= PROPOSALS_SUBJECT_VERSION - 1);
+    try {
+      await service.runMigrations();
+    } finally {
+      klass.MIGRATIONS = allMigrations;
+    }
+    expect(schemaVersionOf(db)).toBe(PROPOSALS_SUBJECT_VERSION - 1);
+
+    // Restore the genuine pre-v64 shape a shipped install carries.
+    db.exec(`
+      DROP TABLE contact_link_proposals;
+      CREATE TABLE contact_link_proposals (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        contact_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (
+          source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+        ),
+        source_record_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (
+          status IN ('pending', 'confirmed', 'rejected')
+        ),
+        reason TEXT NOT NULL,
+        matched_on TEXT,
+        identity_assessment TEXT NOT NULL CHECK (
+          identity_assessment IN ('same_person', 'possibly_same_person', 'different_people')
+        ),
+        relationship_assessment TEXT NOT NULL CHECK (
+          relationship_assessment IN ('connected', 'possibly_connected', 'no_known_connection')
+        ),
+        cluster_key TEXT NOT NULL,
+        evidence_json TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        resolved_at DATETIME,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+        UNIQUE (user_id, contact_id, source_type, source_record_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_contact_link_proposals_pending
+        ON contact_link_proposals(user_id, status, cluster_key);
+    `);
+
+    // PRE-MIGRATION PROOF: the subject of a question genuinely cannot be a
+    // contact yet. Without this, "it can after" proves nothing.
+    expect(columns(db, "contact_link_proposals")).not.toContain("subject_kind");
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_link_proposals
+             (id, user_id, contact_id, source_type, source_record_id, reason,
+              identity_assessment, relationship_assessment, cluster_key)
+           VALUES ('pre', ?, ?, 'macos', NULL, 'ambiguous_identifier',
+                   'possibly_same_person', 'possibly_connected', 'k')`,
+        )
+        .run(USER_ID, CONTACT_IDS[0]),
+    ).toThrow(/NOT NULL/i);
+
+    // Two rows crossing the rebuild, every nullable field populated distinctly so
+    // a positional copy cannot land correctly by coincidence.
+    const insert = db.prepare(
+      `INSERT INTO contact_link_proposals
+         (id, user_id, contact_id, source_type, source_record_id, status, reason,
+          matched_on, identity_assessment, relationship_assessment, cluster_key,
+          evidence_json, created_at, resolved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run(
+      "clp-v64-pending", USER_ID, CONTACT_IDS[0], "macos", "UUID-A:ABPerson", "pending",
+      "ambiguous_identifier", "email", "possibly_same_person", "possibly_connected",
+      "cluster:a", '{"summary":"a"}', "2026-06-01 00:00:00", null,
+    );
+    insert.run(
+      "clp-v64-answered", USER_ID, CONTACT_IDS[1], "outlook", "OUT-B", "confirmed",
+      "identifier_reassigned", "phone", "same_person", "connected",
+      "cluster:b", '{"summary":"b"}', "2026-06-02 00:00:00", "2026-06-03 00:00:00",
+    );
+
+    const contactsBefore = idsIn(db, "contacts");
+
+    // --- phase 2: the real chain to head, with rows present.
+    await service.runMigrations();
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // (1) BOTH ROWS SURVIVED, FIELD FOR FIELD, and were stamped 'source_record'
+    //     by the DEFAULT rather than by anything in the copy.
+    expect(
+      db
+        .prepare(
+          `SELECT id, user_id, contact_id, subject_kind, source_type, source_record_id,
+                  target_contact_id, status, reason, matched_on, identity_assessment,
+                  relationship_assessment, cluster_key, evidence_json, created_at, resolved_at
+             FROM contact_link_proposals ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "clp-v64-answered", user_id: USER_ID, contact_id: CONTACT_IDS[1],
+        subject_kind: "source_record", source_type: "outlook", source_record_id: "OUT-B",
+        target_contact_id: null, status: "confirmed", reason: "identifier_reassigned",
+        matched_on: "phone", identity_assessment: "same_person",
+        relationship_assessment: "connected", cluster_key: "cluster:b",
+        evidence_json: '{"summary":"b"}', created_at: "2026-06-02 00:00:00",
+        resolved_at: "2026-06-03 00:00:00",
+      },
+      {
+        id: "clp-v64-pending", user_id: USER_ID, contact_id: CONTACT_IDS[0],
+        subject_kind: "source_record", source_type: "macos",
+        source_record_id: "UUID-A:ABPerson", target_contact_id: null, status: "pending",
+        reason: "ambiguous_identifier", matched_on: "email",
+        identity_assessment: "possibly_same_person",
+        relationship_assessment: "possibly_connected", cluster_key: "cluster:a",
+        evidence_json: '{"summary":"a"}', created_at: "2026-06-01 00:00:00",
+        resolved_at: null,
+      },
+    ]);
+
+    // (2) THE CONTACTS ARE UNTOUCHED — exact id SET.
+    expect(idsIn(db, "contacts")).toEqual(contactsBefore);
+
+    // (3) THE QUESTION THE WHOLE REBUILD EXISTS FOR CAN NOW BE ASKED, on the
+    //     real file, having been refused above.
+    const askPair = db.prepare(
+      `INSERT INTO contact_link_proposals
+         (id, user_id, contact_id, subject_kind, target_contact_id, reason,
+          identity_assessment, relationship_assessment, cluster_key)
+       VALUES (?, ?, ?, 'contact', ?, 'ambiguous_identifier',
+               'possibly_same_person', 'possibly_connected', 'pair')`,
+    );
+    expect(() => askPair.run("clp-v64-pair", USER_ID, CONTACT_IDS[0], CONTACT_IDS[2])).not.toThrow();
+
+    // (4) STILL A CONSTRAINT, NOT A FREE-FOR-ALL — the same repeated question is
+    //     refused by the partial index, which is the only thing that can dedup a
+    //     row whose source columns are NULL.
+    expect(() =>
+      askPair.run("clp-v64-pair-again", USER_ID, CONTACT_IDS[0], CONTACT_IDS[2]),
+    ).toThrow(/UNIQUE/i);
+
+    // (5) THE PAIR UNIQUE, THE FK CASCADE AND BOTH INDEXES SURVIVED THE
+    //     DROP/RENAME.
+    expect(indexNames(db)).toEqual(
+      expect.arrayContaining([
+        "idx_contact_link_proposals_pending",
+        "idx_contact_link_proposals_contact_pair",
+      ]),
+    );
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_link_proposals
+             (id, user_id, contact_id, source_type, source_record_id, reason,
+              identity_assessment, relationship_assessment, cluster_key)
+           VALUES ('clp-v64-dup', ?, ?, 'macos', 'UUID-A:ABPerson', 'ambiguous_identifier',
+                   'possibly_same_person', 'possibly_connected', 'k')`,
+        )
+        .run(USER_ID, CONTACT_IDS[0]),
+    ).toThrow(/UNIQUE/i);
+
+    db.prepare("DELETE FROM contacts WHERE id = ?").run(CONTACT_IDS[0]);
+    expect(
+      (
+        db.prepare("SELECT id FROM contact_link_proposals ORDER BY id").all() as Array<{
+          id: string;
+        }>
+      ).map((r) => r.id),
+    ).toEqual(["clp-v64-answered"]);
   });
 
   /**

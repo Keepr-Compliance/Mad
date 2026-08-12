@@ -69,12 +69,23 @@ import { DatabaseError } from "../types";
 import {
   CONTACT_LINK_PROPOSALS_TABLE_SQL,
   CONTACT_LINK_PROPOSALS_INDEX_SQL,
+  CONTACT_LINK_PROPOSALS_CONTACT_PAIR_INDEX_SQL,
+  CONTACT_LINK_PROPOSALS_LEGACY_COLUMNS,
   CONTACT_LINK_VERDICTS_TABLE_SQL,
   CONTACT_LINK_VERDICTS_INDEX_SQL,
   CONTACT_SOURCE_LINKS_COLUMNS,
   CONTACT_SOURCE_LINKS_INDEX_SQL,
+  contactLinkProposalsRebuildTableSql,
   contactSourceLinksRebuildTableSql,
 } from "./db/contactIdentitySchemaSql";
+// BACKLOG-2609 — the person layer: the node ABOVE contacts. See that file's
+// header for why it is a first-class record and why v63 must not cascade.
+import {
+  CONTACTS_ADD_PERSON_ID_SQL,
+  CONTACTS_PERSON_ID_COLUMN,
+  CONTACTS_TIMESTAMP_TRIGGER,
+  PERSONS_TABLE_SQL,
+} from "./db/personSchemaSql";
 import {
   relabelTypedContactValues,
   type SyncSqliteDb,
@@ -3444,6 +3455,194 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
             "[migration v62] added emails.bulk_mail_headers column (BACKLOG-2513)",
           );
         }
+      },
+    },
+    {
+      version: 63,
+      description:
+        "The person layer: a persons table and contacts.person_id, so 'these two contacts are one person' is expressible (BACKLOG-2609)",
+      migrate: (d) => {
+        // BACKLOG-2609 — SUBSTRATE ONLY. NOTHING READS ANY OF THIS YET.
+        //
+        // The dead end this opens up: `contact_source_links` is
+        // UNIQUE (user_id, source_type, source_record_id) and
+        // `contactManualLink.ts:328` refuses to repoint a claimed record, so a
+        // user who imports the same person twice is stuck permanently with no
+        // mechanism and no message. The crosswalk is an EDGE BELOW contacts; the
+        // statement "these two contacts are one person" needs a NODE ABOVE them.
+        //
+        // This migration adds that node and wires nothing to it. Reads, merge and
+        // UI are BACKLOG-2610 / 2611 / 2612 / 2616. The full design rationale —
+        // first-class record, no cascade, restore rejoins the same person, why the
+        // display columns are left NULL — is in db/personSchemaSql.ts.
+        //
+        // NO INDEX and NOT IN schema.sql: both rules, and the incidents behind
+        // them, are stated in that header. For `contacts` the schema.sql
+        // prohibition is not stylistic — v36's positional copy supplies 15 values
+        // to a 15-column table, so a 16th column declared there is a PREPARE-time
+        // error on every new install (schema.sql:130-135).
+        const hasContacts = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'contacts'")
+          .get();
+        if (!hasContacts) return;
+
+        d.exec(PERSONS_TABLE_SQL);
+
+        const contactCols = (
+          d.prepare("PRAGMA table_info(contacts)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+
+        if (!contactCols.includes(CONTACTS_PERSON_ID_COLUMN)) {
+          d.exec(CONTACTS_ADD_PERSON_ID_SQL);
+        }
+
+        // ------------------------------------------------------------------
+        // THE BACKFILL — one person per contact, and NO OTHER COLUMN TOUCHED
+        // ------------------------------------------------------------------
+        // `update_contacts_timestamp` is an AFTER UPDATE trigger that stamps
+        // updated_at = CURRENT_TIMESTAMP on any updated contact row
+        // (schema.sql:1135). Writing person_id onto every contact through it
+        // would rewrite the ENTIRE table's updated_at to the instant of the
+        // upgrade — a user-visible column, flattened, by a migration billed as
+        // inert. SQLite cannot suppress a trigger for one statement, so it is
+        // dropped and recreated from its own sqlite_master.sql, byte-identically.
+        //
+        // Safe because DDL is transactional in SQLite and this whole migrate()
+        // runs inside one transaction with its schema_version bump
+        // (see _runVersionedMigrations): a throw anywhere below rolls the DROP
+        // back with it, so the trigger cannot be left missing.
+        const trigger = d
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name = ?",
+          )
+          .get(CONTACTS_TIMESTAMP_TRIGGER) as { sql?: string | null } | undefined;
+        const triggerSql = typeof trigger?.sql === "string" ? trigger.sql : null;
+
+        if (triggerSql) {
+          d.exec(`DROP TRIGGER ${CONTACTS_TIMESTAMP_TRIGGER};`);
+        }
+
+        try {
+          // TOMBSTONED CONTACTS ARE INCLUDED, DELIBERATELY. Contacts are
+          // tombstoned rather than deleted (contacts.removed_at, v56), and
+          // "restore rejoins the SAME person" works only because the tombstoned
+          // row keeps its person_id. Skipping them is what would let a
+          // delete/restore round trip silently un-merge a person later.
+          const contacts = d
+            .prepare("SELECT id, user_id FROM contacts WHERE person_id IS NULL")
+            .all() as Array<{ id: string; user_id: string }>;
+
+          // Display fields are left NULL: the person is "seeded once at merge and
+          // owned by the user thereafter" (founder, BACKLOG-2611). Copying every
+          // contact's name here would create a second copy that no writer keeps
+          // current, because this migration rewires nothing.
+          const insertPerson = d.prepare(
+            "INSERT INTO persons (id, user_id) VALUES (?, ?)",
+          );
+          const linkContact = d.prepare(
+            "UPDATE contacts SET person_id = ? WHERE id = ?",
+          );
+
+          for (const contact of contacts) {
+            const personId = crypto.randomUUID();
+            insertPerson.run(personId, contact.user_id);
+            linkContact.run(personId, contact.id);
+          }
+
+          if (contacts.length > 0) {
+            logService.info(
+              `[Migration v63] the person layer is live: ${contacts.length} contact(s) ` +
+                `each given their own person, display fields left for the merge to seed`,
+              "Database",
+            );
+          }
+        } finally {
+          if (triggerSql) {
+            d.exec(triggerSql);
+          }
+        }
+      },
+    },
+    {
+      version: 64,
+      description:
+        "Widen contact_link_proposals so a question's subject can be a contact, not only a source record (BACKLOG-2609)",
+      migrate: (d) => {
+        // BACKLOG-2609 — THE REBUILD THAT LETS THE REVIEW QUEUE ASK
+        // "ARE THESE TWO SAVED CONTACTS ONE PERSON?"
+        //
+        // Until now it could not, and not by omission: every proposal's subject
+        // was a source record BY CHECK AND BY NOT NULL
+        // (contactIdentitySchemaSql.ts, pre-v64 shape). BACKLOG-2616 is built on
+        // that question. SQLite cannot ALTER a CHECK, so admitting it is a table
+        // rebuild — the same 12-step procedure v59 and v61 ran on
+        // `contact_source_links`, and the shape here is deliberately identical so
+        // the three can be compared line for line.
+        //
+        // SCHEMA ONLY. This migration writes no proposal and changes no answer.
+        // The polymorphic subject is defined once for FOUR filed consumers —
+        // 2675, 2616, 2674, 2630 — because `contact_source_links` was rebuilt
+        // three times (v57 → v59 → v61) for exactly this reason and a fourth was
+        // avoidable. Why `subject_kind` sits in the UNIQUE, why the contact kind
+        // needs its own partial index (SQLite treats NULLs as DISTINCT in a
+        // UNIQUE, so the table constraint cannot dedup it), and why
+        // contact_id = A / target_contact_id = B is load-bearing for
+        // BACKLOG-2611's merge rule: all in that file's header.
+        //
+        // THE COPY IS BY NAME, NEVER POSITIONAL, and it names the LEGACY column
+        // list because the table being copied FROM has no subject_kind or
+        // target_contact_id. A positional `SELECT *` is what corrupted
+        // `audit_logs` in v33 and `contacts` in v36: every row survives holding
+        // its neighbour's value, so no row count can detect it.
+        //
+        // Guarded on the CHECK text so a re-run is a no-op rather than churning
+        // every row's rowid for nothing. `typeof === "string"` and not a
+        // truthiness check: `sqlite_master.sql` is NULL for auto-created objects,
+        // and this migration also runs against partial-schema fixtures where the
+        // table is absent entirely. Reading `.includes` off a non-string would
+        // throw INSIDE the migration transaction, which the runner escalates to a
+        // restore-from-backup dialog — a catastrophic response to an absent table.
+        const proposalsSql = d
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='contact_link_proposals'",
+          )
+          .get() as { sql?: string | null } | undefined;
+
+        if (typeof proposalsSql?.sql !== "string") {
+          // No review queue on this database (pre-v59 partial fixture, or a
+          // mocked connection). Nothing to widen.
+          return;
+        }
+
+        // `subject_kind` is the marker v64 adds and nothing earlier can contain,
+        // so its presence is the exact test for "already rebuilt".
+        if (!proposalsSql.sql.includes("subject_kind")) {
+          const TEMP_TABLE = "contact_link_proposals_v64";
+          const cols = CONTACT_LINK_PROPOSALS_LEGACY_COLUMNS.join(", ");
+
+          d.exec(contactLinkProposalsRebuildTableSql(TEMP_TABLE));
+          d.exec(
+            `INSERT INTO ${TEMP_TABLE} (${cols}) SELECT ${cols} FROM contact_link_proposals;`,
+          );
+          d.exec("DROP TABLE contact_link_proposals;");
+          d.exec(`ALTER TABLE ${TEMP_TABLE} RENAME TO contact_link_proposals;`);
+
+          // The rebuild dropped the table and with it its index. Recreate the one
+          // v59 shipped — the pending-queue read every linking pass runs.
+          d.exec(CONTACT_LINK_PROPOSALS_INDEX_SQL);
+
+          logService.info(
+            "[Migration v64] contact_link_proposals can now hold a question whose " +
+              "subject is another contact, so two saved contacts can be asked about",
+            "Database",
+          );
+        }
+
+        // UNCONDITIONAL, and it has to be. On a fresh chain replay v59 already
+        // execs the v64 table shape, so the rebuild above correctly no-ops — and
+        // this index would never be created on a new install if it lived inside
+        // that branch. `IF NOT EXISTS` makes the re-run free.
+        d.exec(CONTACT_LINK_PROPOSALS_CONTACT_PAIR_INDEX_SQL);
       },
     },
   ];

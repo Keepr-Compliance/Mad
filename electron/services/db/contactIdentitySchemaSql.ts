@@ -213,22 +213,93 @@ export const CONTACT_SOURCE_LINKS_INDEX_SQL = `
  * it fails exactly one test, and the queue grows without bound.
  *
  * ITS `source_type` CHECK STAYS AT THE FIVE EXTERNAL VALUES, deliberately
- * (BACKLOG-2473). A proposal asks "is this contact the same person as this
- * EXTERNAL RECORD?". There is no external record behind an origin row and no
- * question to ask about one, so `manual`/`email`/`sms`/`inferred` must never
- * reach this table — and the narrow CHECK is what enforces that rather than
+ * (BACKLOG-2473). A proposal about a SOURCE RECORD asks "is this contact the same
+ * person as this EXTERNAL RECORD?". There is no external record behind an origin
+ * row and no question to ask about one, so `manual`/`email`/`sms`/`inferred` must
+ * never reach this table — and the narrow CHECK is what enforces that rather than
  * leaving it to convention. `databaseService.migration-v61.test.ts` asserts the
  * refusal in both directions.
+ *
+ * ===========================================================================
+ * v64 (BACKLOG-2609) — THE SUBJECT OF A QUESTION IS NO LONGER ALWAYS A RECORD
+ * ===========================================================================
+ * Until v64 every proposal's subject was a source record BY CHECK AND BY NOT
+ * NULL. That made "are these two saved contacts one person?" — the question
+ * BACKLOG-2616 is built on — literally unrepresentable, and SQLite cannot ALTER
+ * a CHECK, so admitting it is a table rebuild.
+ *
+ * ONE WIDENING, FOUR CONSUMERS. `subject_kind` is polymorphic rather than
+ * bespoke because four filed items need the same shape and paying for it once is
+ * the whole point: BACKLOG-2675 (your own record changed — apply?),
+ * BACKLOG-2616 (are these two contacts one person?), BACKLOG-2674 (six identical
+ * records — merge?) and BACKLOG-2630 (any band-triggered question).
+ * `contact_source_links` was rebuilt THREE times (v57 → v59 → v61) for exactly
+ * this reason; this is the fourth rebuild avoided rather than the fourth
+ * incurred.
+ *
+ * THE THREE KINDS:
+ *
+ *   `source_record`      the pre-v64 question, and the DEFAULT. Subject is a row
+ *                        in `external_contacts`: `source_type` + `source_record_id`
+ *                        are required, `target_contact_id` must be NULL.
+ *   `contact`            subject is another SAVED CONTACT. `target_contact_id` is
+ *                        required; the two source columns must be NULL.
+ *   `own_record_change`  the user's own record changed — apply? Source-backed
+ *                        like `source_record`, and deliberately defined NARROWLY
+ *                        NOW: a CHECK loosened later is the fourth rebuild this
+ *                        table exists to avoid.
+ *
+ * DIRECTION IS STORED, AND BACKLOG-2611 CANNOT WORK WITHOUT IT. The founder's
+ * merge rule (12 Aug, `pm_comments` on BACKLOG-2611) is asymmetric: single-valued
+ * fields — name, company, role — take **A**, the contact the duplicate was found
+ * FOR; multi-valued fields are the union. So the pair is ORDERED, not a set:
+ *
+ *     contact_id        = A, the incumbent, the subject of the question
+ *     target_contact_id = B, the record found to be A's duplicate
+ *
+ * *"a stored proposal that only names a pair, without saying which side was the
+ * subject, cannot be executed by this rule later."* `CHECK (target_contact_id <>
+ * contact_id)` forbids the degenerate self-pair.
+ *
+ * WHY `subject_kind` IS IN THE UNIQUE TUPLE. So an `own_record_change` question
+ * and a `source_record` question about the same (contact, record) pair can both
+ * exist — they are different questions. Every pre-v64 row and every INSERT that
+ * omits the column defaults to `'source_record'`, so existing dedup behaviour is
+ * bit-for-bit what it was.
+ *
+ * WHY THE CONTACT KIND NEEDS A SEPARATE INDEX — the trap that would have made
+ * this widening silently useless: SQLite treats NULLs as DISTINCT in a UNIQUE
+ * constraint. A `contact`-kind row has both source columns NULL, so the table
+ * UNIQUE above cannot dedup it, and the same unanswered "are these two one
+ * person?" would be appended on EVERY sync — precisely the unbounded growth the
+ * UNIQUE was added to prevent. `CONTACT_LINK_PROPOSALS_CONTACT_PAIR_INDEX_SQL`
+ * closes that hole with a partial unique index.
+ *
+ * WHY A PARTIAL INDEX IS SAFE HERE, verified rather than assumed: the sole
+ * production writer is `contactLinkReviewDbService.proposeLink` and it uses
+ * `INSERT OR IGNORE`, which honours any unique index. There is NO `ON CONFLICT`
+ * clause against this table anywhere in the repo — an `ON CONFLICT (<tuple>)`
+ * writer would fail at prepare time against an expression or partial index, which
+ * is why that was checked before choosing this shape.
+ *
+ * The `{{TABLE}}` placeholder exists solely for the rebuild, which creates the
+ * new table under a temporary name before renaming it over the old one — the same
+ * mechanism, and the same reason, as `CONTACT_SOURCE_LINKS_TEMPLATE` above.
  */
-export const CONTACT_LINK_PROPOSALS_TABLE_SQL = `
-  CREATE TABLE IF NOT EXISTS contact_link_proposals (
+const CONTACT_LINK_PROPOSALS_TEMPLATE = `
+  CREATE TABLE IF NOT EXISTS {{TABLE}} (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     contact_id TEXT NOT NULL,
-    source_type TEXT NOT NULL CHECK (
+    subject_kind TEXT NOT NULL DEFAULT 'source_record' CHECK (
+      subject_kind IN ('source_record', 'contact', 'own_record_change')
+    ),
+    source_type TEXT CHECK (
+      source_type IS NULL OR
       source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
     ),
-    source_record_id TEXT NOT NULL,
+    source_record_id TEXT,
+    target_contact_id TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (
       status IN ('pending', 'confirmed', 'rejected')
     ),
@@ -245,13 +316,90 @@ export const CONTACT_LINK_PROPOSALS_TABLE_SQL = `
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     resolved_at DATETIME,
     FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-    UNIQUE (user_id, contact_id, source_type, source_record_id)
+    FOREIGN KEY (target_contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    CHECK (
+      (subject_kind IN ('source_record', 'own_record_change')
+        AND source_type IS NOT NULL
+        AND source_record_id IS NOT NULL
+        AND target_contact_id IS NULL)
+      OR
+      (subject_kind = 'contact'
+        AND source_type IS NULL
+        AND source_record_id IS NULL
+        AND target_contact_id IS NOT NULL)
+    ),
+    CHECK (target_contact_id IS NULL OR target_contact_id <> contact_id),
+    UNIQUE (user_id, contact_id, subject_kind, source_type, source_record_id)
   );
 `;
+
+export const CONTACT_LINK_PROPOSALS_TABLE_SQL = CONTACT_LINK_PROPOSALS_TEMPLATE.replace(
+  "{{TABLE}}",
+  "contact_link_proposals",
+);
+
+/**
+ * The v64 rebuild's scratch table. Same columns, by construction.
+ *
+ * Like `contactSourceLinksRebuildTableSql`, this always describes the CURRENT
+ * shape, so replaying the chain from scratch has v59 already emit the v64 table
+ * and v64 correctly no-op. Every route converges on one final shape; the
+ * `sqlite_master.sql` parity assertions are what enforce that.
+ */
+export function contactLinkProposalsRebuildTableSql(tempName: string): string {
+  return CONTACT_LINK_PROPOSALS_TEMPLATE.replace("{{TABLE}}", tempName);
+}
+
+/**
+ * The columns a PRE-v64 `contact_link_proposals` has, in declaration order.
+ *
+ * THIS IS THE REBUILD'S SAFETY, and it is the OLD list on purpose: the table
+ * being copied FROM does not have `subject_kind` or `target_contact_id`, so the
+ * copy must name only what exists on both sides. `INSERT INTO ... SELECT` lists
+ * these explicitly on both sides so the copy is BY NAME, never positional — a
+ * positional `SELECT *` is what corrupted `audit_logs` in v33 and `contacts` in
+ * v36, and no row count can detect it because every row is present, holding its
+ * neighbour's value.
+ */
+export const CONTACT_LINK_PROPOSALS_LEGACY_COLUMNS = [
+  "id",
+  "user_id",
+  "contact_id",
+  "source_type",
+  "source_record_id",
+  "status",
+  "reason",
+  "matched_on",
+  "identity_assessment",
+  "relationship_assessment",
+  "cluster_key",
+  "evidence_json",
+  "created_at",
+  "resolved_at",
+] as const;
 
 export const CONTACT_LINK_PROPOSALS_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_contact_link_proposals_pending
     ON contact_link_proposals(user_id, status, cluster_key);
+`;
+
+/**
+ * Dedup for `contact`-kind proposals, which the table UNIQUE cannot reach.
+ *
+ * See the NULL-distinctness note in the table's docblock: without this index the
+ * same unanswered contact-to-contact question is appended on every pass. It is
+ * PARTIAL so it constrains only the kind whose columns it names, leaving the
+ * source-backed kinds entirely to the table UNIQUE.
+ *
+ * Created by migration v64 UNCONDITIONALLY (it is `IF NOT EXISTS`), outside the
+ * rebuild guard — on a fresh chain replay v59 already emits the v64 table shape,
+ * so v64's rebuild correctly no-ops and this index would otherwise never be
+ * created on a new install.
+ */
+export const CONTACT_LINK_PROPOSALS_CONTACT_PAIR_INDEX_SQL = `
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_contact_link_proposals_contact_pair
+    ON contact_link_proposals(user_id, contact_id, target_contact_id)
+    WHERE subject_kind = 'contact';
 `;
 
 /**

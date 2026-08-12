@@ -325,8 +325,15 @@ describe("databaseService migration v59 (BACKLOG-2410 — review queue + verdict
     it("has NO foreign key to contacts — a verdict outlives the contact", async () => {
       await runV59();
       expect(foreignKeys(harness.db, "contact_link_verdicts")).toEqual([]);
-      // The proposals table DOES have one, which is the contrast being drawn.
-      expect(foreignKeys(harness.db, "contact_link_proposals")).toEqual(["contacts"]);
+      // The proposals table DOES have them, which is the contrast being drawn.
+      // TWO of them since v64 (BACKLOG-2609): `contact_id` and the polymorphic
+      // `target_contact_id`, both cascading, because a question about a deleted
+      // contact is noise in EITHER role. A verdict about that contact is
+      // evidence, and stays.
+      expect(foreignKeys(harness.db, "contact_link_proposals")).toEqual([
+        "contacts",
+        "contacts",
+      ]);
     });
 
     it("survives its contact being deleted", async () => {
