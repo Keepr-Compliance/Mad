@@ -32,7 +32,6 @@
 
 import fs from "fs";
 import path from "path";
-import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 // ---------------------------------------------------------------------------
@@ -193,7 +192,7 @@ describe("databaseService migration v56 (BACKLOG-2364 — tombstone columns)", (
    * the whole tail of the chain rather than v56. The runner has no version-limit
    * parameter, so the clip is done by swapping the static array (the same idiom
    * databaseService.onDiskUpgrade.test.ts uses) and restoring it in `finally`.
-   * This keeps every assertion below a statement about v56 at v58 and beyond.
+   * This keeps every assertion below a statement about v56 at v59 and beyond.
    */
   async function runV56(): Promise<void> {
     harness.db.prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 55)").run();

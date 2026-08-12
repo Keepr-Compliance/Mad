@@ -56,3 +56,99 @@ export function redactId(id: string): string {
   if (id.length <= 8) return `${id}...`;
   return `${id.substring(0, 8)}...`;
 }
+
+/**
+ * Redact every email address EMBEDDED IN a free-form string, via
+ * {@link redactEmail}. Use this on text you did not author — server error
+ * messages, exception bodies — where an address may appear anywhere.
+ *
+ * `redactEmail` handles a string that IS an address; this handles a string that
+ * CONTAINS one. Postgres is the motivating case: a constraint violation renders
+ * the offending value inline, e.g.
+ *
+ *   'duplicate key value violates unique constraint "x"
+ *    DETAIL: Key (requester_email)=(jane@example.com) already exists.'
+ *
+ * which would otherwise reach Sentry verbatim, including in the issue title.
+ * [SECURITY — BACKLOG-2431]
+ *
+ * NOT exported, so `scrubServerErrorText` is the only way to reach it. Note
+ * what that does and does not buy: it makes the email-only mistake
+ * unavailable. It does NOT prevent the path-only mistake, because
+ * `redactLocalPaths` is still exported for `updateDiagnostics.ts`. The mistake
+ * that actually happened here is therefore still reachable — use
+ * `scrubServerErrorText` for outbound server text.
+ *
+ * @example
+ *   redactEmailsInText("Key (requester_email)=(jane@example.com) exists")
+ *   // "Key (requester_email)=(j***@example.com) exists"
+ */
+function redactEmailsInText(input: string): string {
+  // Local part per RFC 5322 practical subset; domain must contain a dot so
+  // "@mentions" and bare handles are not mangled.
+  return input.replace(
+    /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+    (match) => redactEmail(match),
+  );
+}
+
+/**
+ * Scrub a server-authored error message before it leaves the app (Sentry, any
+ * outbound telemetry). Removes embedded email addresses and absolute local
+ * filesystem paths, then truncates.
+ *
+ * Use this for ANY string whose content the server chose. Applying the two
+ * redactors by hand at each call site is how one of them gets forgotten —
+ * which is exactly what happened in the first cut of BACKLOG-2431, where the
+ * path redactor was applied and the email one was not. `redactEmailsInText` is
+ * unexported to close that specific hole; `redactLocalPaths` remains exported
+ * (`updateDiagnostics.ts` needs it), so this is the safe default rather than a
+ * mechanically enforced one.
+ * [SECURITY — BACKLOG-2431]
+ *
+ * @param message Raw error text.
+ * @param maxLength Max length before truncation (default 500).
+ */
+export function scrubServerErrorText(
+  message: unknown,
+  maxLength = 500,
+): string {
+  if (typeof message !== "string" || !message) return "Unknown error";
+  let scrubbed = redactEmailsInText(redactLocalPaths(message));
+  if (scrubbed.length > maxLength) {
+    scrubbed = scrubbed.slice(0, maxLength) + "...";
+  }
+  return scrubbed;
+}
+
+/**
+ * Redact absolute local filesystem paths from a string, replacing each with a
+ * `<path>` placeholder. Covers POSIX absolute paths, Windows drive paths, UNC
+ * paths, and `file://` URLs. The username embedded in a home/cache path is PII,
+ * and I/O errors (esp. EACCES/ENOSPC) routinely carry it — so it must never
+ * reach Sentry via the message body. [SECURITY — BACKLOG-1903]
+ *
+ * BACKLOG-2447: promoted here from `services/updateDiagnostics.ts`, which still
+ * uses it via `sanitizeUpdaterMessage`. It is now also the scrubber for support
+ * upload failures (BACKLOG-2431), which report from a different code path and
+ * therefore are NOT covered by the `beforeSend` hook in main.ts — that hook
+ * only scrubs events tagged `component: "auto-updater"`. Callers outside the
+ * updater must scrub at the call site.
+ *
+ * @example
+ *   redactLocalPaths("EACCES: /Users/jane/Library/x")  // "EACCES: <path>"
+ */
+export function redactLocalPaths(input: string): string {
+  return (
+    input
+      // file:// URLs (with or without host) up to the next whitespace/quote.
+      .replace(/file:\/\/\/?[^\s"')]+/gi, "<path>")
+      // UNC paths: \\server\share\...
+      .replace(/\\\\[^\s"')]+/g, "<path>")
+      // Windows drive paths: C:\Users\... or C:/Users/...
+      .replace(/\b[A-Za-z]:[\\/][^\s"')]*/g, "<path>")
+      // POSIX absolute paths: /Users/..., /home/..., /private/var/...
+      // Require at least one more segment so a bare "/" or a URL path isn't hit.
+      .replace(/(?<![\w:/])\/(?:[\w.@~+-]+\/)+[\w.@~+-]*/g, "<path>")
+  );
+}

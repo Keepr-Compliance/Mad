@@ -1,12 +1,17 @@
 /**
  * ImportSourceSettings Component
  *
- * Allows users to choose between importing from:
- * - macOS Messages database + Contacts app (native) [macOS only]
+ * Allows users to choose where their TEXT MESSAGES are imported from:
+ * - macOS Messages database (native) [macOS only]
  * - Connected iPhone via iTunes backup (sync)
  * - Android Companion app via WiFi (BACKLOG-1447)
  *
  * Only one import source is active at a time (radio button pattern).
+ *
+ * BACKLOG-2523: this panel governs `messages.source` and NOTHING else.
+ * Contact sources are the independent `contactSources.direct.*` checkboxes
+ * under Settings > Contacts — BACKLOG-2477 removed the coupling, so any copy
+ * here promising a contacts effect is a false claim about the user's data.
  *
  * @module settings/ImportSourceSettings
  */
@@ -211,7 +216,7 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
     <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
       <h4 className="text-sm font-medium text-gray-900 mb-2">Import Source</h4>
       <p className="text-xs text-gray-600 mb-3">
-        Choose where to import your messages and contacts from.
+        Choose where to import your text messages from.
       </p>
 
       {loading ? (
@@ -221,7 +226,11 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
       ) : (
         <>
           <div className="space-y-2">
-            {/* Radio: macOS Messages + Contacts (macOS only) */}
+            {/* Radio: macOS Messages (macOS only)
+                BACKLOG-2523: this radio governs MESSAGES only. Mac contacts
+                answer to the `macosContacts` checkbox under Settings > Contacts
+                regardless of what is selected here — see BACKLOG-2477 and the
+                comment on SyncOrchestratorService.getContactsSyncPreferences. */}
             {isMacOS && (
               <label
                 className={`flex items-start gap-3 p-3 bg-white rounded border cursor-pointer transition-all ${
@@ -241,10 +250,10 @@ export function ImportSourceSettings({ userId, onSourceChange, onConnectAndroid 
                 />
                 <div>
                   <div className="text-sm font-medium text-gray-900">
-                    macOS Messages + Contacts
+                    macOS Messages
                   </div>
                   <div className="text-xs text-gray-500">
-                    Import from your Mac's Messages app and Contacts
+                    Import text messages from your Mac's Messages app
                   </div>
                 </div>
               </label>

@@ -64,7 +64,6 @@ import type {
   EmailMessage,
   AddressComponents,
   AuditedTransactionData,
-  ContactRoleUpdate,
   TransactionWithDetails,
   RawEmailAttachment,
   DateRange,
@@ -1149,7 +1148,17 @@ class TransactionService {
         closing_deadline,
       } = data;
 
-      const transaction = await databaseService.createTransaction({
+      // BACKLOG-2538: the deal and every party on it are written in ONE
+      // transaction. Previously this was one INSERT followed by N awaited
+      // assignments, unwrapped — a crash after the third of five people left a
+      // deal that existed, carried three of them, and marked nothing. It read
+      // as complete.
+      //
+      // Communication auto-linking below is deliberately OUTSIDE the
+      // transaction: it is a long network-and-scan operation, and holding the
+      // single SQLite write lock across it would block every other writer for
+      // its duration. It is also re-runnable, where a half-written deal is not.
+      const transaction = databaseService.createTransactionWithContactsSync({
         user_id: userId,
         property_address,
         property_street,
@@ -1169,21 +1178,18 @@ class TransactionService {
         total_communications_count: 0,
         offer_count: 0,
         failed_offers_count: 0,
-      } as NewTransaction);
+      } as NewTransaction,
+      (contact_assignments ?? []).map((assignment) => ({
+        contact_id: assignment.contact_id,
+        role: assignment.role,
+        role_category: assignment.role_category,
+        specific_role: assignment.role,
+        is_primary: assignment.is_primary,
+        notes: assignment.notes,
+      })));
       const transactionId = transaction.id;
 
       if (contact_assignments && contact_assignments.length > 0) {
-        for (const assignment of contact_assignments) {
-          await databaseService.assignContactToTransaction(transactionId, {
-            contact_id: assignment.contact_id,
-            role: assignment.role,
-            role_category: assignment.role_category,
-            specific_role: assignment.role,
-            is_primary: assignment.is_primary,
-            notes: assignment.notes,
-          });
-        }
-
         let totalEmailsLinked = 0;
         let totalMessagesLinked = 0;
 
@@ -1359,20 +1365,6 @@ class TransactionService {
       transactionId,
       operations,
     );
-  }
-
-  /**
-   * Update contact role in transaction
-   */
-  async updateContactRole(
-    transactionId: string,
-    contactId: string,
-    updates: ContactRoleUpdate,
-  ): Promise<void> {
-    return await databaseService.updateContactRole(transactionId, contactId, {
-      ...updates,
-      role: updates.role || undefined,
-    });
   }
 
   /**

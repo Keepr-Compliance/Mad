@@ -93,6 +93,10 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
   // ==========================================================================
   // META — resume-skip contract
   // ==========================================================================
+  // BACKLOG-2414: `shouldShow` / `isComplete` are OPTIONAL on the step-meta
+  // contract, so the direct calls below need `!`. That does not weaken anything
+  // these tests check — PermissionsStep must define both, and if it ever stopped,
+  // the call throws and the test fails exactly as it does today.
   describe("meta", () => {
     it("has correct meta.id and is macOS-only", () => {
       expect(PermissionsStep.meta.id).toBe("permissions");
@@ -103,13 +107,13 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
       // After the FDA-grant relaunch, startup checkPermissions() reports granted
       // → permissionsGranted true → this step is skipped so onboarding resumes.
       expect(
-        PermissionsStep.meta.shouldShow(
+        PermissionsStep.meta.shouldShow!(
           createMockContext({ permissionsGranted: true })
         )
       ).toBe(false);
       // Still shows while unknown/false.
       expect(
-        PermissionsStep.meta.shouldShow(
+        PermissionsStep.meta.shouldShow!(
           createMockContext({ permissionsGranted: false })
         )
       ).toBe(true);
@@ -127,13 +131,13 @@ describe("PermissionsStep (BACKLOG-1842)", () => {
     // even though every UI-level test would still pass.
     it("isComplete is ALWAYS permissionsGranted===true — skip must never flip it (invariant)", () => {
       expect(
-        PermissionsStep.meta.isComplete(createMockContext({ permissionsGranted: true }))
+        PermissionsStep.meta.isComplete!(createMockContext({ permissionsGranted: true }))
       ).toBe(true);
       expect(
-        PermissionsStep.meta.isComplete(createMockContext({ permissionsGranted: false }))
+        PermissionsStep.meta.isComplete!(createMockContext({ permissionsGranted: false }))
       ).toBe(false);
       expect(
-        PermissionsStep.meta.isComplete(createMockContext({ permissionsGranted: undefined }))
+        PermissionsStep.meta.isComplete!(createMockContext({ permissionsGranted: undefined }))
       ).toBe(false);
     });
   });

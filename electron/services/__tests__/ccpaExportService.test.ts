@@ -7,7 +7,6 @@
  * TASK-2053: Verifies data gathering, structure, sanitization, and output
  */
 
-import { jest } from "@jest/globals";
 
 // ============================================
 // MOCKS

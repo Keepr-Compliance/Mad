@@ -524,7 +524,7 @@ export function getConversationsFromMessages(userId: string): MessagesConversati
   for (const row of rows) {
     // Resolve the phone number from participants_flat.
     // BACKLOG-1493: participants_flat may contain:
-    //   - Standard digits (e.g., "5551234567") — for normal phone numbers
+    //   - Standard digits (e.g., "5555550112") — for normal phone numbers
     //   - Short code digits (e.g., "72645") — for carrier/marketing SMS
     //   - Alphanumeric string (e.g., "T-Mobile") — for carrier alerts
     const phoneRaw = (row.participants_flat || "").split(",")[0].trim();

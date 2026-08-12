@@ -16,8 +16,8 @@ describe('normalizePhoneNumber', () => {
   // Category 1 — International "+" format: kept as "+<digits>" (formatting stripped).
   describe('category 1: international (+CC) format', () => {
     const cases: Array<[string, string]> = [
-      ['+15551234567', '+15551234567'],
-      ['+1 (555) 123-4567', '+15551234567'],
+      ['+15555550112', '+15555550112'],
+      ['+1 (555) 555-0112', '+15555550112'],
       ['+44 20 7946 0958', '+442079460958'],
       ['+442079460958', '+442079460958'],
       ['+33 1 42 68 53 00', '+33142685300'],
@@ -30,10 +30,10 @@ describe('normalizePhoneNumber', () => {
   // Category 2 — US/Canada 10-digit (no country code): prepend "+1".
   describe('category 2: US/Canada 10-digit', () => {
     const cases: Array<[string, string]> = [
-      ['5551234567', '+15551234567'],
-      ['(555) 123-4567', '+15551234567'],
-      ['555-123-4567', '+15551234567'],
-      ['555.123.4567', '+15551234567'],
+      ['5555550112', '+15555550112'],
+      ['(555) 555-0112', '+15555550112'],
+      ['555-555-0112', '+15555550112'],
+      ['555.555.0112', '+15555550112'],
     ];
     it.each(cases)('normalizes %s -> %s', (input, expected) => {
       expect(normalizePhoneNumber(input)).toBe(expected);
@@ -43,9 +43,9 @@ describe('normalizePhoneNumber', () => {
   // Category 3 — US/Canada 11-digit starting with 1: prepend "+".
   describe('category 3: US/Canada 11-digit (leading 1)', () => {
     const cases: Array<[string, string]> = [
-      ['15551234567', '+15551234567'],
-      ['1 (555) 123-4567', '+15551234567'],
-      ['1-555-123-4567', '+15551234567'],
+      ['15555550112', '+15555550112'],
+      ['1 (555) 555-0112', '+15555550112'],
+      ['1-555-555-0112', '+15555550112'],
     ];
     it.each(cases)('normalizes %s -> %s', (input, expected) => {
       expect(normalizePhoneNumber(input)).toBe(expected);

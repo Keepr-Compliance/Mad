@@ -92,6 +92,14 @@ interface ContactsImportSettingsProps {
   // Persisted source preferences (from Settings.tsx / Supabase)
   outlookContactsEnabled: boolean;
   macosContactsEnabled: boolean;
+  /** BACKLOG-2486: iPhone Contacts, which now has a gate of its own. */
+  iphoneContactsEnabled: boolean;
+  /**
+   * BACKLOG-2486: whether to draw the iPhone Contacts switch at all. Decided by
+   * the caller from the declared phone type — an Android user has no iPhone to
+   * import from.
+   */
+  showIphoneContacts: boolean;
   gmailContactsEnabled: boolean;
   /** TASK-2303: Google Contacts toggle (People API) */
   googleContactsEnabled: boolean;
@@ -113,6 +121,8 @@ export function ContactsImportSettings({
   isGoogleConnected = false,
   outlookContactsEnabled,
   macosContactsEnabled,
+  iphoneContactsEnabled,
+  showIphoneContacts,
   gmailContactsEnabled,
   googleContactsEnabled,
   outlookEmailsInferred,
@@ -158,6 +168,25 @@ export function ContactsImportSettings({
   const [syncStatus, setSyncStatus] = useState<{
     lastSyncAt?: string | null;
     contactCount?: number;
+  } | null>(null);
+
+  /**
+   * BACKLOG-2404 — address-book read coverage from the last macOS sync.
+   *
+   * A Mac holds one address book per account. Reading 1 of 3 used to present
+   * EXACTLY like reading 3 of 3: the reader isolated the failure (2392) and
+   * logged "read 2 of 3", but the return value said only `success: true`, and
+   * this panel discarded even that. A user whose Exchange store was locked saw
+   * half her contacts, no warning, and a normal-looking sync.
+   *
+   * Held as `null` until a sync reports, so nothing is claimed before a read
+   * has happened — "never looked" is not "found nothing".
+   */
+  const [readCoverage, setReadCoverage] = useState<{
+    found: number;
+    read: number;
+    failed: number;
+    coverage: "complete" | "partial" | "none";
   } | null>(null);
 
   // Source stats (TASK-1991)
@@ -317,7 +346,10 @@ export function ContactsImportSettings({
   const hasMacOS = isMacOS;
   const hasOutlook = isMicrosoftConnected;
   const hasGoogle = isGoogleConnected;
-  const hasAnySources = hasMacOS || hasOutlook || hasGoogle;
+  // BACKLOG-2486: `showIphoneContacts` counts as a source. Without it, a Windows
+  // user with an iPhone and no mailbox connected hit the "no sources" placeholder
+  // below and never saw the one switch that governs their only contact source.
+  const hasAnySources = hasMacOS || hasOutlook || hasGoogle || showIphoneContacts;
 
   const anySyncing = isSyncing || outlookSyncing || googleSyncing;
 
@@ -335,7 +367,13 @@ export function ContactsImportSettings({
     // macOS: call syncExternal directly to populate external_contacts from macOS Contacts
     if (hasMacOS && macosContactsEnabled) {
       handleSync(false);
-      window.api.contacts.syncExternal(userId).then(() => loadSourceStats());
+      // BACKLOG-2404: the result was previously DISCARDED (`.then(() => …)`),
+      // which is where the partial read died even after the reader learned to
+      // report it. Capture the coverage so the panel can say "read 2 of 3".
+      window.api.contacts.syncExternal(userId).then((result) => {
+        setReadCoverage(result?.read ?? null);
+        loadSourceStats();
+      });
     }
     if (hasOutlook && outlookContactsEnabled) handleOutlookSync();
     if (hasGoogle && googleContactsEnabled) handleGoogleSync();
@@ -471,11 +509,20 @@ export function ContactsImportSettings({
             </button>
           </div>
 
-          {/* macOS/iPhone Contacts toggle */}
+          {/*
+            macOS Contacts toggle.
+
+            BACKLOG-2486: this was labelled "macOS / iPhone Contacts" and wrote
+            ONLY `macosContacts`. The label named two sources and controlled one.
+            That was survivable while the backend OR'd the two keys together;
+            now that each source answers to its own preference, a switch called
+            "iPhone" that does not move the iPhone gate is simply untrue. Renamed
+            to what it actually controls, with iPhone given its own switch below.
+          */}
           {isMacOS && (
             <div className="flex items-center justify-between py-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-700">macOS / iPhone Contacts</span>
+                <span className="text-sm text-gray-700">macOS Contacts</span>
               </div>
               <button
                 onClick={() => onToggleSource("direct", "macosContacts", macosContactsEnabled)}
@@ -485,11 +532,47 @@ export function ContactsImportSettings({
                 }`}
                 role="switch"
                 aria-checked={macosContactsEnabled}
-                aria-label="macOS iPhone Contacts import"
+                aria-label="macOS Contacts import"
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                     macosContactsEnabled ? "translate-x-6" : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+          )}
+
+          {/*
+            BACKLOG-2486: iPhone Contacts, previously settable ONLY during
+            onboarding. Rendered on both platforms — on Windows it is the only
+            gate for iPhone records, and on macOS it defaults OFF, so without a
+            control here a user could not undo that default.
+          */}
+          {showIphoneContacts && (
+            <div className="flex items-center justify-between py-1">
+              <div className="flex flex-col">
+                <span className="text-sm text-gray-700">iPhone Contacts</span>
+                {isMacOS && !iphoneContactsEnabled && (
+                  <span className="text-xs text-gray-400">
+                    Your Mac address book already includes iPhone contacts synced through
+                    iCloud. Turn this on if you have iCloud contact syncing switched off.
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => onToggleSource("direct", "iphoneContacts", iphoneContactsEnabled)}
+                disabled={loadingPreferences}
+                className={`ml-4 shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  iphoneContactsEnabled ? "bg-blue-500" : "bg-gray-300"
+                }`}
+                role="switch"
+                aria-checked={iphoneContactsEnabled}
+                aria-label="iPhone Contacts import"
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    iphoneContactsEnabled ? "translate-x-6" : "translate-x-1"
                   }`}
                 />
               </button>
@@ -599,6 +682,26 @@ export function ContactsImportSettings({
           {syncStatus.contactCount !== undefined && (
             <> | {syncStatus.contactCount.toLocaleString()} contacts</>
           )}
+        </div>
+      )}
+
+      {/*
+        BACKLOG-2404: a partial read, said out loud.
+
+        Rendered ONLY when a book actually failed — a complete read adds no
+        line, so this cannot become noise the user learns to scroll past. The
+        wording leads with what happened ("read 2 of 3 address books") rather
+        than with a permission to go grant, because the two failure phases have
+        different remedies and the panel does not know which one this was.
+      */}
+      {hasMacOS && macosContactsEnabled && readCoverage && readCoverage.failed > 0 && (
+        <div
+          data-testid="contacts-partial-read-warning"
+          className="mb-3 p-2 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
+        >
+          Read {readCoverage.read} of {readCoverage.found} address books.{" "}
+          {readCoverage.failed === 1 ? "One" : readCoverage.failed} could not be
+          opened, so some contacts may be missing.
         </div>
       )}
 

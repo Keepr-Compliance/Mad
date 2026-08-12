@@ -9,7 +9,7 @@
 import type { ExtendedContact } from "../../types/components";
 import {
   buildVisibleContacts,
-  assembleDedupedContacts,
+  assembleContacts,
   assembleFilterSearch,
   sortContacts,
   projectOntoOrder,
@@ -19,6 +19,7 @@ import {
   type BuildVisibleContactsInput,
 } from "../contactPickerList";
 import type { ContactFilters } from "../contactFilterModel";
+import { looksLikePhoneQuery } from "../phoneNormalization";
 
 // --- Factory ---------------------------------------------------------------
 
@@ -72,6 +73,143 @@ describe("contactMatchesSearch", () => {
 });
 
 // ---------------------------------------------------------------------------
+describe("contactMatchesSearch — a number is findable the way it is DISPLAYED (BACKLOG-2466)", () => {
+  /**
+   * The matcher EXACTLY as it stood before this fix: a single plain substring
+   * pass over every field, phones included.
+   *
+   * This is the control. Asserting it here — rather than reverting the source
+   * by hand once and trusting the memory of it — is what pins the ASYMMETRY
+   * that identifies the defect: the formatted queries were red while the
+   * bare-digit ones were green. A control that turns everything red would only
+   * prove the test runs.
+   */
+  function preFixMatcher(c: ExtendedContact, query: string): boolean {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const haystacks: (string | null | undefined)[] = [
+      c.display_name,
+      c.name,
+      c.email,
+      c.phone,
+      c.company,
+      ...(c.allEmails || []),
+      ...(c.allPhones || []),
+    ];
+    return haystacks.some((v) => !!v && v.toLowerCase().includes(q));
+  }
+
+  /** What the founder created in Contacts.app: a number and nothing else. */
+  const stored = () =>
+    contact({ id: "nameless", display_name: "", name: "", phone: "+14155550100" });
+
+  /** Every form of that number that carries punctuation. Red before the fix. */
+  const FORMATTED = [
+    "+1 (415) 555-0100", // what `formatPhoneNumber` prints — the on-screen label
+    "(415) 555-0100",
+    "415-555-0100",
+    "415 555 0100",
+    "555-0100", // partial
+  ];
+  /** The two forms that already worked. They must STAY green. */
+  const BARE_DIGITS = ["4155550100", "5550100"];
+
+  it.each([...FORMATTED, ...BARE_DIGITS])("finds +14155550100 by %j", (query) => {
+    expect(contactMatchesSearch(stored(), query)).toBe(true);
+  });
+
+  it.each(FORMATTED)("CONTROL: %j found NOTHING before the fix", (query) => {
+    expect(preFixMatcher(stored(), query)).toBe(false);
+  });
+
+  it.each(BARE_DIGITS)("CONTROL: %j already worked before the fix", (query) => {
+    expect(preFixMatcher(stored(), query)).toBe(true);
+  });
+
+  it("non-US numbers are not assumed to be 10 digits or US (founder's own data)", () => {
+    const costaRica = contact({ id: "cr", display_name: "", name: "", phone: "+50664103686" });
+    expect(contactMatchesSearch(costaRica, "+506 6410-3686")).toBe(true);
+    expect(contactMatchesSearch(costaRica, "6410-3686")).toBe(true);
+    // CONTROL: the punctuated form was red, the run-together form was green.
+    expect(preFixMatcher(costaRica, "+506 6410-3686")).toBe(false);
+    expect(preFixMatcher(costaRica, "+50664103686")).toBe(true);
+  });
+
+  it("a country code in the QUERY still finds a number stored without one", () => {
+    // `formatPhoneNumber` prints a bare 10-digit number as "(415) 555-0100" and
+    // an 11-digit "1…" one as "+1 (415) 555-0100". The UI teaches both forms and
+    // Contacts.app supplies both storage shapes, so either must find either.
+    const tenDigits = contact({ id: "ten", display_name: "", name: "", phone: "4155550100" });
+    expect(contactMatchesSearch(tenDigits, "+1 (415) 555-0100")).toBe(true);
+    expect(contactMatchesSearch(tenDigits, "14155550100")).toBe(true);
+    const elevenDigits = contact({ id: "eleven", display_name: "", name: "", phone: "14155550100" });
+    expect(contactMatchesSearch(elevenDigits, "(415) 555-0100")).toBe(true);
+  });
+
+  it("matches through allPhones, not just the primary", () => {
+    const c = contact({ id: "multi", phone: "555-0000", allPhones: ["555-0000", "+14155550100"] });
+    expect(contactMatchesSearch(c, "(415) 555-0100")).toBe(true);
+  });
+
+  it("digits in a NAME still match literally — the phone path is additive", () => {
+    // The gate exists for this row: "415 Realty" has letters, so it never takes
+    // the normalised path, and "415" reaches it through the company haystack —
+    // before the fix and after it.
+    const realty = contact({ id: "realty", display_name: "Zed Zulu", company: "415 Realty" });
+    expect(contactMatchesSearch(realty, "415")).toBe(true);
+    expect(preFixMatcher(realty, "415")).toBe(true);
+    expect(contactMatchesSearch(realty, "415 Realty")).toBe(true);
+  });
+
+  it("does not match an unrelated number", () => {
+    expect(contactMatchesSearch(stored(), "9999999")).toBe(false);
+    expect(contactMatchesSearch(stored(), "(555) 555-0112")).toBe(false);
+    expect(contactMatchesSearch(stored(), "5555550112")).toBe(false);
+  });
+
+  it('"#" is not a phone character — "#013" is an apartment, not an extension', () => {
+    // Pins the exclusion from PHONE_QUERY_CHARS. Admit "#" and this goes red:
+    // "#013" would become the needle "013", which matches the 013 inside this
+    // number, so every contact with 013 anywhere in their digits would surface
+    // for a query that is almost always a unit number.
+    expect(looksLikePhoneQuery("#013")).toBe(false);
+    const c = contact({ id: "unit", display_name: "", name: "", phone: "+14155550131" });
+    expect(contactMatchesSearch(c, "#013")).toBe(false);
+    // The digits alone still reach it — only the "#" form is excluded.
+    expect(contactMatchesSearch(c, "013")).toBe(true);
+  });
+
+  it("an Apple ID parked in a phone column is not reduced to its digits", () => {
+    const handle = contact({ id: "handle", display_name: "", name: "", phone: "chat123456789@icloud.com" });
+
+    // "123-456" is the discriminating query: it is phone-SHAPED (no letters, 6
+    // digits) and does NOT occur literally in the handle, so the plain
+    // substring pass cannot match it. The only route left is the normalised
+    // path — and `normalizePhoneForSearch` returns "" for an "@" value rather
+    // than "123456789", so the handle is not treated as the number it isn't.
+    expect(contactMatchesSearch(handle, "123-456")).toBe(false);
+
+    // The plain substring pass still finds it as the text it actually is.
+    expect(contactMatchesSearch(handle, "chat123")).toBe(true);
+    expect(contactMatchesSearch(handle, "icloud.com")).toBe(true);
+    // And a literal digit run inside it still matches exactly as it did before
+    // the fix — the phone path is additive, so this is unchanged behaviour.
+    expect(contactMatchesSearch(handle, "456")).toBe(true);
+    expect(preFixMatcher(handle, "456")).toBe(true);
+  });
+
+  it("narrows the rendered list to the EXACT matching id set", () => {
+    const target = contact({ id: "target", display_name: "", name: "", phone: "+14155550100" });
+    const other = contact({ id: "other", display_name: "Bob Builder", phone: "+14155550134" });
+    const out = buildVisibleContacts({
+      contacts: [target, other],
+      searchQuery: "+1 (415) 555-0100",
+    });
+    expect(idSet(out)).toEqual(new Set(["target"]));
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe("buildVisibleContacts — search narrows to the exact matching set", () => {
   const alice = contact({ id: "alice", display_name: "Alice Anderson", email: "alice@company.com", phone: "555-1111" });
   const bob = contact({ id: "bob", display_name: "Bob Builder", email: "bob@builders.com", phone: "555-2222", company: "Builders Inc" });
@@ -94,61 +232,185 @@ describe("buildVisibleContacts — search narrows to the exact matching set", ()
 });
 
 // ---------------------------------------------------------------------------
-describe("buildVisibleContacts — dedup: zero duplicate IDs, ever", () => {
-  it("drops externals already imported (email, phone, and NON-primary/allEmails match)", () => {
-    const impByEmail = contact({ id: "imp-email", email: "shared@x.com", phone: "555-0001" });
-    const impByPhone = contact({ id: "imp-phone", email: "unique1@x.com", phone: "555-0002" });
-    const impByAllEmails = contact({ id: "imp-all", email: "primary@x.com", allEmails: ["primary@x.com", "hidden@x.com"] });
+describe("buildVisibleContacts — assembly: BACKLOG-2370 removed the dedup stage", () => {
+  /**
+   * =========================================================================
+   * THIS BLOCK USED TO ASSERT THE OPPOSITE OF WHAT IT ASSERTS NOW
+   * =========================================================================
+   * It pinned a renderer-side rule that decided whether two records were the
+   * same person and DROPPED one of them. The founder had that rule removed on
+   * 2026-08-04: *"ok sounds good we can remove it then simple is better."*
+   *
+   * His reasoning is why the inversion below is a fix and not a regression. A
+   * combination worth showing a user is worth STORING, and once stored it is a
+   * link. This pass stored nothing and was recomputed every render, so a merge
+   * it made could not be audited, undone or explained — and it silently reversed
+   * an unlink he had just performed, hiding the released record on both surfaces
+   * `ContactSearchList` backs.
+   *
+   * The remaining rule lives in `contacts:get-available`, writes a crosswalk row,
+   * consults the user's `different_people` verdicts, and discloses what it
+   * folded. `electron/__tests__/contact-handlers.oneMatchingRule.test.ts` pins
+   * the whole path end to end through the real handler; these cases pin the pure
+   * function's half of it.
+   *
+   * NEGATIVE CONTROL (executed, output in the PR): restore any identity rule to
+   * `assembleContacts` and every case in this block goes red, naming the records
+   * it removed.
+   */
+  it("keeps an external whose email matches a saved contact — main decides that, not this", () => {
+    const saved = contact({ id: "imp-email", email: "shared@example.test", phone: "555-0101" });
+    const ext = contact({ id: "ext-email", email: "SHARED@example.test" });
 
-    const extDupEmail = contact({ id: "ext-email", email: "SHARED@x.com" }); // case-insensitive email match
-    const extDupPhone = contact({ id: "ext-phone", email: "unique2@x.com", phone: "(555) 000-2" }); // last-10 phone match -> 5550002
-    const extDupNonPrimary = contact({ id: "ext-nonprimary", email: "hidden@x.com" }); // matches impByAllEmails via allEmails
-    const extFresh = contact({ id: "ext-fresh", email: "brandnew@x.com" });
+    const out = buildVisibleContacts({ contacts: [saved], externalContacts: [ext] });
 
-    const out = buildVisibleContacts({
-      contacts: [impByEmail, impByPhone, impByAllEmails],
-      externalContacts: [extDupEmail, extDupPhone, extDupNonPrimary, extFresh],
-    });
-
-    expect(idSet(out)).toEqual(new Set(["imp-email", "imp-phone", "imp-all", "ext-fresh"]));
-    // No id appears twice.
-    expect(ids(out).length).toBe(new Set(ids(out)).size);
+    // Was: new Set(["imp-email"]).
+    expect(idSet(out)).toEqual(new Set(["imp-email", "ext-email"]));
   });
 
-  it("collapses duplicate externals, incl. junk-in-email and name-only entries", () => {
-    // Two externals sharing a junk (Zoom URL) 'email' -> deduped by email token.
-    const zoomA = contact({ id: "zoom-a", display_name: "Zoom Room", email: "https://zoom.us/j/12345" });
-    const zoomB = contact({ id: "zoom-b", display_name: "Zoom Room", email: "https://zoom.us/j/12345" });
-    // Two name-only externals (no email/phone) with the same name -> deduped by name.
-    const lucaA = contact({ id: "luca-a", display_name: "Luca", email: undefined, phone: undefined });
-    const lucaB = contact({ id: "luca-b", display_name: "Luca", email: undefined, phone: undefined });
-    // A distinct name-only external survives.
-    const mara = contact({ id: "mara", display_name: "Mara", email: undefined, phone: undefined });
+  it("keeps an external matching a saved contact's NON-primary email", () => {
+    // The shape that surfaces a real duplicate, because `contacts:get-available`
+    // builds its already-imported set from PRIMARY values only and so returns
+    // this record. Named and accepted rather than filtered back out — see
+    // `contact-handlers.oneMatchingRule.test.ts` for the measurement and for how
+    // far it reaches (only contacts with no crosswalk row).
+    const saved = contact({
+      id: "imp-all",
+      email: "primary@example.test",
+      allEmails: ["primary@example.test", "hidden@example.test"],
+    });
+    const ext = contact({ id: "ext-nonprimary", email: "hidden@example.test" });
 
-    const out = buildVisibleContacts({
-      contacts: [],
-      externalContacts: [zoomA, zoomB, lucaA, lucaB, mara],
+    const out = buildVisibleContacts({ contacts: [saved], externalContacts: [ext] });
+
+    expect(idSet(out)).toEqual(new Set(["imp-all", "ext-nonprimary"]));
+  });
+
+  it("keeps the same person recorded twice on one line — a fold is main's to make", () => {
+    const saved = contact({
+      id: "imp-phone",
+      display_name: "Dana Reyes",
+      name: "Dana Reyes",
+      email: "dana@example.test",
+      phone: "555-0102",
+    });
+    const ext = contact({
+      id: "ext-phone",
+      display_name: "Dana Reyes",
+      name: "Dana Reyes",
+      phone: "(555) 010-2",
     });
 
-    // First-seen wins for each identity; every id unique.
-    expect(idSet(out)).toEqual(new Set(["zoom-a", "luca-a", "mara"]));
-    expect(ids(out).length).toBe(new Set(ids(out)).size);
+    const out = buildVisibleContacts({ contacts: [saved], externalContacts: [ext] });
+
+    // Was: new Set(["imp-phone"]). Main still collapses this pair — with a
+    // crosswalk row and a "1 record combined" disclosure on the row that
+    // survives, which is the difference the founder cared about.
+    expect(idSet(out)).toEqual(new Set(["imp-phone", "ext-phone"]));
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-2316 / BACKLOG-2416 — a shared line is not a shared identity.
+  //
+  // These cases predate BACKLOG-2370 and their EXPECTATIONS ARE UNCHANGED. They
+  // are kept verbatim because they are the ones that must never regress in the
+  // other direction: removing a dedup layer can only show more, and "more" must
+  // still be exactly these people. Two Margarets on one brokerage line are two
+  // Margarets whichever layer is asked.
+  // -------------------------------------------------------------------------
+  describe("BACKLOG-2416 — a shared line is not a shared identity", () => {
+    const OFFICE_LINE = "(555) 010-0";
+
+    it("keeps two DISTINCT people who share one office line", () => {
+      const chen = contact({
+        id: "chen",
+        display_name: "Margaret Chen",
+        name: "Margaret Chen",
+        email: "chen@example.test",
+        phone: OFFICE_LINE,
+      });
+      const torres = contact({
+        id: "torres",
+        display_name: "Margaret Torres",
+        name: "Margaret Torres",
+        email: "torres@example.test",
+        phone: OFFICE_LINE,
+      });
+
+      const out = buildVisibleContacts({ contacts: [chen], externalContacts: [torres] });
+
+      expect(idSet(out)).toEqual(new Set(["chen", "torres"]));
+    });
+
+    it("keeps three distinct people on one line, not just the first two", () => {
+      const a = contact({ id: "a", display_name: "Margaret Chen", name: "Margaret Chen", phone: OFFICE_LINE });
+      const b = contact({ id: "b", display_name: "Margaret Torres", name: "Margaret Torres", phone: OFFICE_LINE });
+      const c = contact({ id: "c", display_name: "Margaret Okafor", name: "Margaret Okafor", phone: OFFICE_LINE });
+
+      const out = buildVisibleContacts({ contacts: [], externalContacts: [a, b, c] });
+
+      expect(idSet(out)).toEqual(new Set(["a", "b", "c"]));
+    });
+  });
+
+  it("keeps duplicate externals, including name-only entries main deliberately keeps", () => {
+    // Two name-only address-book cards with the same name. The removed pass kept
+    // ONE. Each is a REACHABLE record with a source pill and an id the user can
+    // select and assign, and they may simply be two different people — which is
+    // exactly why BACKLOG-2316 removed name matching from the main process.
+    const lucaA = contact({ id: "luca-a", display_name: "Luca Example", email: undefined, phone: undefined });
+    const lucaB = contact({ id: "luca-b", display_name: "Luca Example", email: undefined, phone: undefined });
+    const mara = contact({ id: "mara", display_name: "Mara Example", email: undefined, phone: undefined });
+
+    const out = buildVisibleContacts({ contacts: [], externalContacts: [lucaA, lucaB, mara] });
+
+    // Was: new Set(["luca-a", "mara"]).
+    expect(idSet(out)).toEqual(new Set(["luca-a", "luca-b", "mara"]));
   });
 
   it("never merges two distinct IMPORTED DB rows that happen to share an email", () => {
-    // A couple sharing one email — both are real DB rows and must both render.
-    const partnerA = contact({ id: "partner-a", display_name: "Partner A", email: "couple@home.com" });
-    const partnerB = contact({ id: "partner-b", display_name: "Partner B", email: "couple@home.com" });
+    // Unchanged, and now true by construction rather than by a guarded branch:
+    // a couple sharing one email are both real DB rows and must both render.
+    const partnerA = contact({ id: "partner-a", display_name: "Partner A", email: "couple@example.test" });
+    const partnerB = contact({ id: "partner-b", display_name: "Partner B", email: "couple@example.test" });
     const out = buildVisibleContacts({ contacts: [partnerA, partnerB] });
     expect(idSet(out)).toEqual(new Set(["partner-a", "partner-b"]));
   });
 
+  it("still drops an EXACTLY repeated id — the same record twice is not a judgement", () => {
+    // The one thing `assembleContacts` removes. It decides nothing about who
+    // anyone is; it notices one row arriving twice, which is what keeps React
+    // keys unique and what de-overlapped the deleted picker's union of its prop
+    // with `searchContactsForSelection` (both project real `contacts.id`).
+    const a = contact({ id: "same", display_name: "One Row", email: "one@example.test" });
+    const alsoA = contact({ id: "same", display_name: "One Row", email: "one@example.test" });
+    const other = contact({ id: "other", display_name: "Two Row", email: "two@example.test" });
+
+    expect(idSet(buildVisibleContacts({ contacts: [a, alsoA, other] })))
+      .toEqual(new Set(["same", "other"]));
+    // Across the boundary too: a row in BOTH arrays appears once.
+    expect(ids(buildVisibleContacts({ contacts: [a], externalContacts: [alsoA] })))
+      .toEqual(["same"]);
+  });
+
   it("preserves allEmails/allPhones on returned objects (BACKLOG-1270)", () => {
-    const c = contact({ id: "keep", email: "p@x.com", allEmails: ["p@x.com", "s@x.com"], allPhones: ["555-1", "555-2"] });
+    const c = contact({ id: "keep", email: "p@example.test", allEmails: ["p@example.test", "s@example.test"], allPhones: ["555-0101", "555-0102"] });
     const out = buildVisibleContacts({ contacts: [c] });
-    expect(out[0].allEmails).toEqual(["p@x.com", "s@x.com"]);
-    expect(out[0].allPhones).toEqual(["555-1", "555-2"]);
+    expect(out[0].allEmails).toEqual(["p@example.test", "s@example.test"]);
+    expect(out[0].allPhones).toEqual(["555-0101", "555-0102"]);
     expect(out[0]).toBe(c); // same reference, never cloned
+  });
+
+  it("two rows sharing a stableIdentityKey both survive the SORT, not just the assembly", () => {
+    // `projectOntoOrder` groups by `stableIdentityKey`, which is NOT unique. With
+    // nothing upstream collapsing anymore, a Map<key, contact> there would drop
+    // one of these — reintroducing the removed hiding rule inside the sort,
+    // where it would be even harder to see.
+    const partnerA = contact({ id: "partner-a", display_name: "Partner A", email: "couple@example.test" });
+    const partnerB = contact({ id: "partner-b", display_name: "Partner B", email: "couple@example.test" });
+
+    const out = buildVisibleContacts({ contacts: [partnerA, partnerB], sortOrder: "alphabetical" });
+    expect(ids(out)).toEqual(["partner-a", "partner-b"]);
   });
 });
 
@@ -244,6 +506,139 @@ describe("buildVisibleContacts — sort", () => {
 });
 
 // ---------------------------------------------------------------------------
+describe("buildVisibleContacts — nameless rows sort by the label they DISPLAY (BACKLOG-2466)", () => {
+  it("the dedup key is NOT sentinel-aware — sorting must never make it so", () => {
+    // THE pin. `sortName` is sentinel-aware; `normalizeName` must not become so.
+    // If it did, a sentinel-named contact with no email and no phone would fall
+    // through stableIdentityKey's chain to `i:${id}` — the DB UUID — and its
+    // frozen orderKeys entry would change the moment it is imported, which is
+    // the import-jump BACKLOG-2352/2355 exist to prevent. See
+    // contactPickerList.ts:106.
+    const sentinel = contact({ id: "sent", display_name: "Unknown", name: "Unknown" });
+    expect(stableIdentityKey(sentinel)).toBe("n:unknown");
+    expect(stableIdentityKey(sentinel)).not.toBe("i:sent");
+  });
+
+  it("a sentinel name leaves the alphabet instead of sorting under U", () => {
+    // Since BACKLOG-2461 this row READS "+1 (415) 555-0100" on screen. It was
+    // sorting under "unknown" — between Uber and Valdez — with nothing visible
+    // explaining the position.
+    const uber = contact({ id: "uber", display_name: "Uber Inc" });
+    const valdez = contact({ id: "valdez", display_name: "Valdez" });
+    const zed = contact({ id: "zed", display_name: "Zed Zulu" });
+    const sentinel = contact({ id: "sentinel", display_name: "Unknown", phone: "+14155550100" });
+    const out = buildVisibleContacts({
+      contacts: [sentinel, zed, uber, valdez],
+      sortOrder: "alphabetical",
+    });
+    expect(ids(out)).toEqual(["uber", "valdez", "zed", "sentinel"]);
+  });
+
+  it("nameless rows stay at the END, never hoisted to the top", () => {
+    const nameless = contact({ id: "nameless", display_name: "", name: "", phone: "+14155550100" });
+    const amy = contact({ id: "amy", display_name: "Amy Adams" });
+    const zoe = contact({ id: "zoe", display_name: "Zoe Zhang" });
+    expect(ids(buildVisibleContacts({ contacts: [nameless, zoe, amy], sortOrder: "alphabetical" })))
+      .toEqual(["amy", "zoe", "nameless"]);
+  });
+
+  it("within the block they order by their displayed label, not by identity", () => {
+    // Every other candidate key is set to the INVERSE of label order, so this
+    // can only pass through `namelessSortKey`:
+    //   - the ids "a-higher"/"z-lower" defeat a raw id tiebreaker;
+    //   - the emails "a@x.com"/"z@x.com" defeat `compareIdentity`, which
+    //     consults stableIdentityKey — EMAIL first — and would order these
+    //     ["a-higher", "z-lower"], the opposite of the assertion.
+    // The displayed label ignores the email (`contactDisplayLabel` takes the
+    // phone first), so only the label produces the expected order.
+    //
+    // The earlier version of this test had no emails, which left both rows
+    // keyed `p:<phone>` — and `compareIdentity` alone then produced the asserted
+    // order, so it passed with `namelessSortKey` deleted. Verified red now:
+    // see the PR's negative control.
+    const higher = contact({ id: "a-higher", display_name: "", name: "", phone: "+14155550134", email: "a@x.com" });
+    const lower = contact({ id: "z-lower", display_name: "", name: "", phone: "+14155550100", email: "z@x.com" });
+    // "+1 (415) 555-0100" before "+1 (415) 555-0134".
+    expect(ids(buildVisibleContacts({ contacts: [higher, lower], sortOrder: "alphabetical" })))
+      .toEqual(["z-lower", "a-higher"]);
+    // Determinism: the input order cannot change it.
+    expect(ids(buildVisibleContacts({ contacts: [lower, higher], sortOrder: "alphabetical" })))
+      .toEqual(["z-lower", "a-higher"]);
+  });
+
+  it("rows with NOTHING to show sort below rows that at least show something", () => {
+    const blank = contact({ id: "blank", display_name: "", name: "" }); // renders "No name"
+    const withPhone = contact({ id: "phone", display_name: "", name: "", phone: "+14155550100" });
+    const withEmail = contact({ id: "email", display_name: "", name: "", email: "zoe@x.com" });
+    const out = ids(buildVisibleContacts({ contacts: [blank, withEmail, withPhone], sortOrder: "alphabetical" }));
+    expect(out[out.length - 1]).toBe("blank");
+    // "+1 (415) 555-0100" collates before "zoe@x.com".
+    expect(out).toEqual(["phone", "email", "blank"]);
+  });
+
+  it("is a TOTAL order across every sort tier, under every input permutation", () => {
+    // The comparator now composes three tiers — hasName, then (placeholder,
+    // label) for nameless rows, then compareIdentity. A non-total comparator
+    // does not fail an assertion; it surfaces as INSTABILITY, an order that
+    // depends on the input sequence Array.prototype.sort happened to see. The
+    // only way to catch that is to shuffle.
+    //
+    // One contact per tier, plus a second named row so the named branch is
+    // exercised too. All 5040 permutations must produce the identical order.
+    const roster = [
+      contact({ id: "amy", display_name: "Amy Adams" }),
+      contact({ id: "zoe", display_name: "Zoe Zhang" }),
+      contact({ id: "sentinel", display_name: "Unknown", phone: "+14155550100" }),
+      contact({ id: "np-phone", display_name: "", name: "", phone: "+14155550134" }),
+      contact({ id: "np-company", display_name: "", name: "", company: "Acme Realty" }),
+      contact({ id: "np-email", display_name: "", name: "", email: "zoe@x.com" }),
+      contact({ id: "blank", display_name: "", name: "" }),
+    ];
+
+    function permutations<T>(items: T[]): T[][] {
+      if (items.length <= 1) return [items];
+      const out: T[][] = [];
+      items.forEach((item, i) => {
+        const rest = [...items.slice(0, i), ...items.slice(i + 1)];
+        for (const tail of permutations(rest)) out.push([item, ...tail]);
+      });
+      return out;
+    }
+
+    const all = permutations(roster);
+    expect(all).toHaveLength(5040);
+
+    for (const sortOrder of ["alphabetical", "recent"] as const) {
+      // Every contact has null recency, so "recent" ties on every row and
+      // delegates wholly to the alphabetical comparator.
+      const expected = ids(buildVisibleContacts({ contacts: roster, sortOrder }));
+      // Named rows A-Z; then nameless by displayed label — "+1 (415) 555-0100",
+      // "+1 (415) 555-0134", "Acme Realty", "zoe@x.com"; then "No name" last.
+      expect(expected).toEqual([
+        "amy",
+        "zoe",
+        "sentinel",
+        "np-phone",
+        "np-company",
+        "np-email",
+        "blank",
+      ]);
+      for (const permutation of all) {
+        expect(ids(buildVisibleContacts({ contacts: permutation, sortOrder }))).toEqual(expected);
+      }
+    }
+  });
+
+  it("the default RECENT view inherits it — that is where the founder looks", () => {
+    // compareRecent delegates to compareAlphabetical on a timestamp tie, and a
+    // list of never-contacted contacts ties on every row.
+    const sentinel = contact({ id: "sentinel", display_name: "Unknown", phone: "+14155550100", last_communication_at: null });
+    const amy = contact({ id: "amy", display_name: "Amy Adams", last_communication_at: null });
+    expect(ids(buildVisibleContacts({ contacts: [sentinel, amy] }))).toEqual(["amy", "sentinel"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe("buildVisibleContacts — filter", () => {
   const outlookBuyer = contact({ id: "outlook-buyer", source: "outlook", default_role: "buyer" });
   const gmailAgent = contact({ id: "gmail-agent", source: "google_contacts", default_role: "buyer_agent" });
@@ -290,16 +685,23 @@ describe("buildVisibleContacts — import stability (the SVO replacement)", () =
 // ---------------------------------------------------------------------------
 describe("buildVisibleContacts — count equals rendered rows", () => {
   it("result.length is the single source of truth for the visible count", () => {
-    const imported = [contact({ id: "i1", email: "i1@x.com" }), contact({ id: "i2", email: "i2@x.com" })];
+    // BACKLOG-2370: the "deduped against i1" row is now RENDERED — this list no
+    // longer decides identity — so the count moved 3 -> 4. What the case is
+    // actually about is unchanged and is the reason it stays: there is no
+    // separate count channel that can disagree with the rows on screen.
+    const imported = [
+      contact({ id: "i1", email: "i1@example.test" }),
+      contact({ id: "i2", email: "i2@example.test" }),
+    ];
     const external = [
-      contact({ id: "e-dup", email: "I1@x.com" }), // deduped against i1
-      contact({ id: "e-new", email: "e@x.com" }),
+      contact({ id: "e-same-email", email: "I1@example.test" }),
+      contact({ id: "e-new", email: "e@example.test" }),
     ];
     const out = buildVisibleContacts({ contacts: imported, externalContacts: external });
-    expect(out.length).toBe(3);
-    expect(idSet(out)).toEqual(new Set(["i1", "i2", "e-new"]));
-    // assembleDedupedContacts agrees (same engine stage).
-    expect(assembleDedupedContacts(imported, external).length).toBe(3);
+    expect(idSet(out)).toEqual(new Set(["i1", "i2", "e-same-email", "e-new"]));
+    expect(out.length).toBe(4);
+    // assembleContacts agrees (same engine stage).
+    expect(assembleContacts(imported, external).length).toBe(4);
   });
 });
 

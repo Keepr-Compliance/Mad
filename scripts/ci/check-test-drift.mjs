@@ -103,15 +103,6 @@ const ALLOW_LIST = [
     pattern: /^scripts\/qa\/harness\/__tests__\/headSchemaVersion\.test\.ts$/,
     reason: 'QUARANTINED RED — correct failure, wrong fix is to bump the constant; see BACKLOG-2687',
   },
-  {
-    // Long-standing CI exclusion, carried in jest.config.js's CI
-    // testPathIgnorePatterns as `ContactSelectModal.test.tsx // Hangs in CI
-    // during loading`. It runs locally and in the pre-push hook but never in CI.
-    // Surfaced here so the exclusion has a visible home and an owner rather than
-    // living as a one-line comment nobody re-reads. Tracked in BACKLOG-2691.
-    pattern: /^src\/components\/__tests__\/ContactSelectModal\.test\.tsx$/,
-    reason: 'Excluded from CI since before BACKLOG-2678 — "hangs in CI during loading"; see BACKLOG-2691',
-  },
 ];
 
 // ---------------------------------------------------------------------------

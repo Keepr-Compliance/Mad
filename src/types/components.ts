@@ -14,7 +14,6 @@ import type {
   OAuthProvider,
   ContactSource,
 } from "../../electron/types/models";
-
 // ============================================
 // EXTENDED/SHARED TYPES
 // ============================================
@@ -38,6 +37,42 @@ export interface ExtendedContact extends Contact {
   communication_count?: number;
   /** Whether this contact exists in the database (false for external contacts from macOS Contacts) */
   isFromDatabase?: boolean;
+  /**
+   * BACKLOG-2510 — THE SOURCE IDENTITY, DECLARED SO IT CANNOT BE DROPPED AGAIN.
+   *
+   * `contacts:getAvailable` has emitted these on every address-book row since
+   * BACKLOG-2401/2458 (`contactHandlers.ts:1741-1757`), and `contacts:import`
+   * reads them to write the `contact_source_links` row that says which real
+   * record a contact came from. Until now they were **undeclared** — they rode
+   * across IPC as excess properties on an object nobody had told TypeScript
+   * about.
+   *
+   * That is precisely how the Clients & Contacts import lost them. It built a
+   * fresh payload field by field (`Contacts.tsx`) instead of forwarding the row,
+   * so the identity silently vanished and every imported contact reached the
+   * database with no link to the record it was made from — no suppression of
+   * the address-book row, and nothing for a later Outlook sync to attach to.
+   * A hand-built payload is the one shape excess-property checking cannot save
+   * you from, and with the fields undeclared the compiler had nothing to say.
+   *
+   * Declaring them makes the contract checkable: a caller that forwards the row
+   * carries them, and a caller that rebuilds one now visibly omits them.
+   *
+   * Optional because a row from the local `contacts` table has no external
+   * record behind it (`contactHandlers.ts:1372-1386` sets none), which is what
+   * makes `toSourceIdentities` return `no-external-record` for those rows.
+   */
+  externalRecordId?: string | null;
+  externalSourceType?: string | null;
+  /** macOS ZEXTERNALUUID. Captured for later; nothing matches on it. */
+  externalUuid?: string | null;
+  /**
+   * BACKLOG-2556: `collapsedSources` and `absorbedRecords` were declared here.
+   * Both were the picker fold's output — the identities it grouped and the
+   * words describing what it swallowed — and both are deleted with it. The
+   * three fields above are the row's ONE source record, which is now all a
+   * picker row ever stands for.
+   */
 }
 
 /**

@@ -413,7 +413,8 @@ describe("RoleAssigner", () => {
       expect(within(contactRow).getByText("Legacy Name")).toBeInTheDocument();
     });
 
-    it("should show Unknown for contacts without any name", () => {
+    // BACKLOG-2461: was a bare "Unknown". The record holds an email; show it.
+    it("should show the email for contacts without any name", () => {
       const contactsWithNoName: ExtendedContact[] = [
         {
           id: "contact-no-name",
@@ -434,7 +435,7 @@ describe("RoleAssigner", () => {
         />
       );
 
-      expect(screen.getByText("Unknown")).toBeInTheDocument();
+      expect(screen.getByText("anonymous@example.com")).toBeInTheDocument();
     });
 
     it("should handle rapid assignment changes", () => {

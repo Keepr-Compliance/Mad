@@ -106,8 +106,17 @@ describe("SystemHealthMonitor mount gate (BACKLOG-2127)", () => {
   });
 
   it("still does NOT mount when not on the dashboard", () => {
+    // "onboarding" is NOT a member of AppStep (the real onboarding steps are
+    // "phone-type-selection" / "email-onboarding" / "permissions"). The
+    // assertion only depends on the value not being "dashboard", so the literal
+    // is preserved and widened rather than corrected here.
     render(
-      <AppShell app={createShellAppMock({ currentStep: "onboarding", hasEmailConnected: true })}>
+      <AppShell
+        app={createShellAppMock({
+          currentStep: "onboarding" as unknown as AppStateMachine["currentStep"],
+          hasEmailConnected: true,
+        })}
+      >
         <div>content</div>
       </AppShell>
     );

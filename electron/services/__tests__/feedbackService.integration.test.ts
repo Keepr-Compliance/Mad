@@ -31,6 +31,18 @@ const mockDatabaseService = databaseService as jest.Mocked<
   typeof databaseService
 >;
 
+/**
+ * `TransactionFeedback.corrections` declares only propertyAddress /
+ * transactionType / add|removeCommunications, but rejection REASONS travel
+ * through the same field: feedbackService JSON-stringifies the whole
+ * `corrections` object into classification_feedback.corrected_value, and
+ * feedbackLearningService.getLLMFeedbackAnalysis then mines that text for
+ * systematic-error patterns — which is exactly what the tests below assert.
+ * This alias lets the fixtures keep the real `{ reason }` payload while the
+ * production declaration stays untouched.
+ */
+type RejectionCorrections = TransactionFeedback["corrections"];
+
 describe("Feedback Integration Tests", () => {
   const TEST_USER_ID = "test-user-integration-001";
   const TEST_USER_ID_2 = "test-user-integration-002";
@@ -444,7 +456,7 @@ describe("Feedback Integration Tests", () => {
         await feedbackService.recordTransactionFeedback(TEST_USER_ID, {
           detectedTransactionId: `tx-${i}`,
           action: "reject",
-          corrections: { reason: "Escrow officer emails misclassified" },
+          corrections: { reason: "Escrow officer emails misclassified" } as unknown as RejectionCorrections,
         });
       }
 
@@ -462,7 +474,7 @@ describe("Feedback Integration Tests", () => {
         await feedbackService.recordTransactionFeedback(TEST_USER_ID, {
           detectedTransactionId: `tx-a-${i}`,
           action: "reject",
-          corrections: { reason: "Wrong property type detected" },
+          corrections: { reason: "Wrong property type detected" } as unknown as RejectionCorrections,
         });
       }
 
@@ -471,7 +483,7 @@ describe("Feedback Integration Tests", () => {
         await feedbackService.recordTransactionFeedback(TEST_USER_ID, {
           detectedTransactionId: `tx-b-${i}`,
           action: "reject",
-          corrections: { reason: "Not a real estate transaction" },
+          corrections: { reason: "Not a real estate transaction" } as unknown as RejectionCorrections,
         });
       }
 
@@ -503,7 +515,7 @@ describe("Feedback Integration Tests", () => {
       await feedbackService.recordTransactionFeedback(TEST_USER_ID, {
         detectedTransactionId: "tx1",
         action: "reject",
-        corrections: { reason: "One-off error" },
+        corrections: { reason: "One-off error" } as unknown as RejectionCorrections,
       });
 
       const analysis =
@@ -539,7 +551,7 @@ describe("Feedback Integration Tests", () => {
       await feedbackService.recordTransactionFeedback(TEST_USER_ID, {
         detectedTransactionId: "tx3",
         action: "reject",
-        corrections: { reason: "Duplicate detection" },
+        corrections: { reason: "Duplicate detection" } as unknown as RejectionCorrections,
         modelVersion: "claude-3",
         promptVersion: "v1.0",
       });
@@ -547,7 +559,7 @@ describe("Feedback Integration Tests", () => {
       await feedbackService.recordTransactionFeedback(TEST_USER_ID, {
         detectedTransactionId: "tx4",
         action: "reject",
-        corrections: { reason: "Duplicate detection" },
+        corrections: { reason: "Duplicate detection" } as unknown as RejectionCorrections,
         modelVersion: "claude-3",
         promptVersion: "v1.0",
       });

@@ -14,7 +14,7 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { ResumeSetupBanner } from "./ResumeSetupBanner";
-import type { AppState, ReadyState } from "../../appCore/state/types";
+import type { AppState, ReadyState } from "../../appCore/state/machine/types";
 import type { AppStateMachine } from "../../appCore/state/types";
 
 // The hook reads the raw machine state via useOptionalMachineState. We drive it

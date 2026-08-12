@@ -44,6 +44,10 @@ import {
   upsertFromiPhone,
   upsertExternalContacts,
 } from "../../services/db/externalContactDbService";
+import {
+  CONTACT_SOURCE_LINKS_TABLE_SQL,
+  CONTACT_SOURCE_LINKS_INDEX_SQL,
+} from "../../services/db/contactIdentitySchemaSql";
 
 // ---------------------------------------------------------------------------
 // Schema — subset sufficient for the write paths under test.
@@ -106,9 +110,28 @@ function createSchema(db: DatabaseType): void {
       -- here because these fixtures hand-roll the table rather than run the
       -- chain, and the macOS upsert now writes this column.
       external_uuid TEXT,
+      -- BACKLOG-2407: per-source identity capture. Added by migration v58;
+      -- declared here for the same reason as the line above — the iPhone and
+      -- generic upserts exercised by this file now name this column, so a
+      -- fixture without it fails with "no such column" rather than testing
+      -- anything about phone normalization.
+      source_identity_json TEXT,
       UNIQUE (user_id, source, external_record_id)
     );
   `);
+
+  /**
+   * BACKLOG-2496 — the crosswalk table, from the CANONICAL constant rather than
+   * a hand-written copy, so this fixture cannot drift from the real schema.
+   *
+   * It is needed here now because creating a contact WRITES ITS ORIGIN in the
+   * same transaction. A fixture without this table does not model a database
+   * the app could ever run against: every create would roll back on
+   * "no such table: contact_source_links".
+   */
+  db.exec(CONTACT_SOURCE_LINKS_TABLE_SQL);
+  db.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
+
 }
 
 const USER_ID = "user-1";
@@ -166,13 +189,13 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
   // -------------------------------------------------------------------------
   describe("contactDbService.createContact", () => {
     it("persists toLookupKey-equivalent phone_normalized for formatted US phone", async () => {
-      const input = "+1 (415) 555-1234";
+      const input = "+1 (415) 555-0109";
       await createContact({
         user_id: USER_ID,
         display_name: "Alice",
         phone: input,
         is_imported: false,
-      } as Parameters<typeof createContact>[0]);
+      } as Parameters<typeof createContact>[0], { kind: "derived" });
 
       const contact = db
         .prepare("SELECT id FROM contacts WHERE user_id = ? LIMIT 1")
@@ -180,7 +203,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const rows = readPhoneRows(db, contact.id);
       expect(rows).toHaveLength(1);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("4155551234");
+      expect(rows[0].phone_normalized).toBe("4155550109");
     });
 
     it("persists toLookupKey-equivalent phone_normalized for UK international", async () => {
@@ -190,7 +213,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         display_name: "Bob",
         phone: input,
         is_imported: false,
-      } as Parameters<typeof createContact>[0]);
+      } as Parameters<typeof createContact>[0], { kind: "derived" });
 
       const contact = db
         .prepare("SELECT id FROM contacts WHERE user_id = ? LIMIT 1")
@@ -207,7 +230,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
   describe("contactDbService.createContactsBatch", () => {
     it("persists toLookupKey for every contact in the batch", () => {
       const inputs = [
-        { phone: "+1 (415) 555-1234", expected: "4155551234" },
+        { phone: "+1 (415) 555-0109", expected: "4155550109" },
         { phone: "+44 20 7946 0958", expected: "2079460958" },
         { phone: "12345", expected: "12345" },
       ];
@@ -217,6 +240,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
           display_name: `Batch-${idx}`,
           phone: i.phone,
           is_imported: false,
+          origin: { kind: "derived" } as const,
         })),
       );
       expect(ids).toHaveLength(inputs.length);
@@ -320,13 +344,13 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source) VALUES (?, ?, ?, ?, 1, 'manual')",
       ).run(phoneId, contactId, "+15550000000", toLookupKey("+15550000000"));
 
-      const input = "+1 (415) 555-4444";
+      const input = "+1 (415) 555-0115";
       setContactPrimaryPhone(contactId, input);
 
       const rows = readPhoneRows(db, contactId);
       expect(rows).toHaveLength(1);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("4155554444");
+      expect(rows[0].phone_normalized).toBe("4155550115");
     });
   });
 
@@ -344,8 +368,8 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         "INSERT INTO contacts (id, user_id, display_name, is_imported) VALUES (?, ?, ?, 0)",
       ).run(contactId, USER_ID, "Worker");
 
-      const phoneE164 = "+15551234567";
-      const phone = "+1 (555) 123-4567";
+      const phoneE164 = "+15555550112";
+      const phone = "+1 (555) 555-0112";
       const id = crypto.randomUUID();
       // EXACT SQL pattern from electron/workers/contactQueryWorker.ts:163
       db.prepare(
@@ -355,7 +379,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const rows = readPhoneRows(db, contactId);
       expect(rows[0].phone_normalized).toBe(toLookupKey(phoneE164));
-      expect(rows[0].phone_normalized).toBe("5551234567");
+      expect(rows[0].phone_normalized).toBe("5555550112");
     });
   });
 
@@ -369,7 +393,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         {
           recordId,
           name: "Helen",
-          phones: ["+1 (415) 555-1234", "+44 20 7946 0958"],
+          phones: ["+1 (415) 555-0109", "+44 20 7946 0958"],
           emails: [],
           company: null,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -379,10 +403,10 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const row = readExternalPhones(db, recordId);
       const persisted = JSON.parse(row!.phones_normalized_json!);
       expect(persisted).toEqual([
-        toLookupKey("+1 (415) 555-1234"),
+        toLookupKey("+1 (415) 555-0109"),
         toLookupKey("+44 20 7946 0958"),
       ]);
-      expect(persisted).toEqual(["4155551234", "2079460958"]);
+      expect(persisted).toEqual(["4155550109", "2079460958"]);
     });
 
     it("filters out empty-key inputs (whitespace, empty)", () => {
@@ -391,7 +415,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         {
           recordId,
           name: "Ivy",
-          phones: ["", "   ", "+14155551234"],
+          phones: ["", "   ", "+14155550109"],
           emails: [],
           company: null,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -400,7 +424,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const row = readExternalPhones(db, recordId);
       const persisted = JSON.parse(row!.phones_normalized_json!);
-      expect(persisted).toEqual([toLookupKey("+14155551234")]);
+      expect(persisted).toEqual([toLookupKey("+14155550109")]);
     });
   });
 

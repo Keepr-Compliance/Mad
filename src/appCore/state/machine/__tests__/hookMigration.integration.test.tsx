@@ -187,7 +187,7 @@ const defaultSecureStorageOptions = {
   pendingOAuthData: null,
   pendingOnboardingData: {
     phoneType: null as "iphone" | "android" | null,
-    emailProvider: null as string | null,
+    emailProvider: null as "google" | "microsoft" | null,
     emailConnected: false,
     termsAccepted: false,
   },
@@ -219,7 +219,7 @@ const defaultNavigationFlowOptions = {
   pendingOAuthData: null,
   pendingOnboardingData: {
     phoneType: null as "iphone" | "android" | null,
-    emailProvider: null as string | null,
+    emailProvider: null as "google" | "microsoft" | null,
     emailConnected: false,
     termsAccepted: false,
   },

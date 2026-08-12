@@ -12,7 +12,6 @@
  * - Encryption unavailable -> falls back to plaintext
  */
 
-import { jest } from "@jest/globals";
 import path from "path";
 
 // Mock safeStorage with controllable behavior

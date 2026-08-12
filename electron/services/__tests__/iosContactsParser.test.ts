@@ -22,7 +22,7 @@ const mockMultiValues = [
     record_id: 1,
     property: 3,
     label: "_$!<Mobile>!$_",
-    value: "(555) 123-4567",
+    value: "(555) 555-0112",
   },
   {
     record_id: 1,
@@ -35,12 +35,12 @@ const mockMultiValues = [
     record_id: 2,
     property: 3,
     label: "_$!<Work>!$_",
-    value: "+1 555 987 6543",
+    value: "+1 555 555 0121",
   },
-  { record_id: 2, property: 3, label: "_$!<Mobile>!$_", value: "555-111-2222" },
+  { record_id: 2, property: 3, label: "_$!<Mobile>!$_", value: "555-555-0104" },
   { record_id: 2, property: 4, label: "_$!<Work>!$_", value: "jane@acme.com" },
   // Test Company's contact info
-  { record_id: 3, property: 3, label: null, value: "5553334444" },
+  { record_id: 3, property: 3, label: null, value: "5555550107" },
   {
     record_id: 3,
     property: 4,
@@ -227,8 +227,8 @@ describe("iOSContactsParser", () => {
 
       expect(johnDoe?.phoneNumbers.length).toBe(1);
       expect(johnDoe?.phoneNumbers[0].label).toBe("mobile");
-      expect(johnDoe?.phoneNumbers[0].number).toBe("(555) 123-4567");
-      expect(johnDoe?.phoneNumbers[0].normalizedNumber).toBe("+15551234567");
+      expect(johnDoe?.phoneNumbers[0].number).toBe("(555) 555-0112");
+      expect(johnDoe?.phoneNumbers[0].normalizedNumber).toBe("+15555550112");
     });
 
     it("should parse email addresses correctly", () => {
@@ -276,7 +276,7 @@ describe("iOSContactsParser", () => {
     it("should find contact by exact phone number", () => {
       parser.open("/path/to/backup");
 
-      const result = parser.lookupByPhone("(555) 123-4567");
+      const result = parser.lookupByPhone("(555) 555-0112");
 
       expect(result.contact).not.toBeNull();
       expect(result.contact?.id).toBe(1);
@@ -287,7 +287,7 @@ describe("iOSContactsParser", () => {
       parser.open("/path/to/backup");
 
       // Different format but same number
-      const result = parser.lookupByPhone("+1 555 123 4567");
+      const result = parser.lookupByPhone("+1 555 555 0112");
 
       expect(result.contact).not.toBeNull();
       expect(result.contact?.id).toBe(1);
@@ -329,7 +329,7 @@ describe("iOSContactsParser", () => {
     it("should lookup phone number handles", () => {
       parser.open("/path/to/backup");
 
-      const result = parser.lookupByHandle("5551234567");
+      const result = parser.lookupByHandle("5555550112");
 
       expect(result.contact).not.toBeNull();
       expect(result.matchedOn).toBe("phone");

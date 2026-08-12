@@ -98,6 +98,27 @@ function createSchema(db: DatabaseType): void {
       UNIQUE(user_id, source, external_record_id)
     );
 
+    /**
+     * BACKLOG-2480 — every deletion path now removes the crosswalk rows that
+     * pointed at the records it deleted, so the tables must exist here. A
+     * fixture that omits a table the production path writes is a fixture that
+     * describes a state the code cannot be in.
+     */
+    CREATE TABLE contact_source_links (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      contact_id TEXT,
+      source_type TEXT NOT NULL,
+      source_record_id TEXT NOT NULL,
+      match_method TEXT
+    );
+    CREATE TABLE contact_link_proposals (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      contact_id TEXT,
+      source_type TEXT NOT NULL,
+      source_record_id TEXT NOT NULL
+    );
     CREATE TABLE phone_last_message (
       phone_normalized TEXT NOT NULL,
       user_id TEXT NOT NULL,
@@ -125,8 +146,8 @@ function createSchema(db: DatabaseType): void {
 
 /** A small, fully-known address book. */
 const BOOK: MacOSContact[] = [
-  { name: "Alice Anderson", recordId: "rec-1", phones: ["+15551110001"], emails: ["alice@example.com"] },
-  { name: "Bob Brown", recordId: "rec-2", phones: ["+15551110002"], emails: [] },
+  { name: "Alice Anderson", recordId: "rec-1", phones: ["+15555550114"], emails: ["alice@example.com"] },
+  { name: "Bob Brown", recordId: "rec-2", phones: ["+15555550129"], emails: [] },
   { name: "Carol Carter", recordId: "rec-3", phones: [], emails: ["carol@example.com"] },
 ];
 
@@ -209,7 +230,7 @@ describe("BACKLOG-2391: fullSync distinguishes inserted / updated / unchanged", 
     const edited: MacOSContact[] = [
       BOOK[0],
       // Bob gained a second phone in the Mac address book.
-      { ...BOOK[1], phones: ["+15551110002", "+15558880002"] },
+      { ...BOOK[1], phones: ["+15555550129", "+15558880002"] },
       BOOK[2],
     ];
     const second = fullSync(USER_ID, edited);
@@ -224,7 +245,7 @@ describe("BACKLOG-2391: fullSync distinguishes inserted / updated / unchanged", 
         "SELECT phones_json FROM external_contacts WHERE user_id = ? AND source = 'macos' AND external_record_id = 'rec-2'"
       )
       .get(USER_ID) as { phones_json: string };
-    expect(JSON.parse(bob.phones_json)).toEqual(["+15551110002", "+15558880002"]);
+    expect(JSON.parse(bob.phones_json)).toEqual(["+15555550129", "+15558880002"]);
   });
 
   it("counts a rename as an update, not an insert", () => {
@@ -250,7 +271,7 @@ describe("BACKLOG-2391: fullSync distinguishes inserted / updated / unchanged", 
       BOOK[0],                                                     // unchanged
       { ...BOOK[1], company: "Brown & Co" },                       // updated
       // BOOK[2] (rec-3) removed from the Mac                      -> deleted
-      { name: "Dave Davis", recordId: "rec-4", phones: ["+15551110004"], emails: [] }, // inserted
+      { name: "Dave Davis", recordId: "rec-4", phones: ["+15555550127"], emails: [] }, // inserted
     ];
     const second = fullSync(USER_ID, next);
 
@@ -286,7 +307,7 @@ describe("BACKLOG-2391: fullSync distinguishes inserted / updated / unchanged", 
         `INSERT INTO external_contacts
            (id, user_id, name, phones_json, phones_normalized_json, emails_json, company,
             external_record_id, source, synced_at)
-         VALUES ('ext-outlook-1', ?, 'Alice Anderson', '["+15551110001"]', '["5551110001"]',
+         VALUES ('ext-outlook-1', ?, 'Alice Anderson', '["+15555550114"]', '["5555550114"]',
                  '["alice@example.com"]', NULL, 'rec-1', 'outlook', '2020-01-01T00:00:00.000Z')`
       )
       .run(USER_ID);
@@ -306,7 +327,7 @@ describe("BACKLOG-2391: fullSync distinguishes inserted / updated / unchanged", 
         `INSERT INTO external_contacts
            (id, user_id, name, phones_json, phones_normalized_json, emails_json, company,
             external_record_id, source, synced_at)
-         VALUES ('ext-other-1', 'user-other', 'Alice Anderson', '["+15551110001"]', '["5551110001"]',
+         VALUES ('ext-other-1', 'user-other', 'Alice Anderson', '["+15555550114"]', '["5555550114"]',
                  '["alice@example.com"]', NULL, 'rec-1', 'macos', '2020-01-01T00:00:00.000Z')`
       )
       .run();
@@ -357,7 +378,7 @@ describe("BACKLOG-2391: fullSync distinguishes inserted / updated / unchanged", 
       {
         name: "Erin Evans",
         recordId: "rec-5",
-        phones: ["+15551110005"],
+        phones: ["+15555550118"],
         emails: ["erin@example.com", "erin.evans@work.example.com"],
       },
     ]);
@@ -369,7 +390,7 @@ describe("BACKLOG-2391: fullSync distinguishes inserted / updated / unchanged", 
       "Alice Anderson", "Bob Brown", "Carol Carter", "Erin Evans",
       "alice@example.com", "carol@example.com", "erin@example.com",
       "erin.evans@work.example.com",
-      "+15551110001", "+15551110002", "+15551110005",
+      "+15555550114", "+15555550129", "+15555550118",
     ]) {
       expect(emitted).not.toContain(secret);
     }

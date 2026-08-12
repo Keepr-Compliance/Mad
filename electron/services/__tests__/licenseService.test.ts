@@ -11,7 +11,6 @@
  * Tests for Supabase-dependent functions test error handling paths.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock Electron app module
 jest.mock("electron", () => ({

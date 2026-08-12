@@ -13,13 +13,16 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import ContactAssignmentStep from "./ContactAssignmentStep";
-import type { Contact } from "../../../electron/types/models";
+import type { Contact, ContactSource } from "../../../electron/types/models";
 
-// Mock contactService and settingsService
+/**
+ * BACKLOG-2638: `contactService` is no longer mocked here, because the
+ * component no longer uses it. "+ Add" goes through
+ * `window.api.contacts.import` — the same door as Clients & Contacts — so that
+ * a contact created from an address-book card CLAIMS that card, which
+ * `contacts:create` never did. The global `window.api` mock supplies it.
+ */
 jest.mock("../../services", () => ({
-  contactService: {
-    create: jest.fn(),
-  },
   settingsService: {
     getContactAutoRoleEnabled: jest.fn().mockResolvedValue(false),
   },
@@ -82,7 +85,7 @@ describe("ContactAssignmentStep", () => {
     contactsLoading: false,
     contactsError: null,
     onRefreshContacts: jest.fn(),
-    onSilentRefreshContacts: jest.fn(),
+    onRefreshBothLists: jest.fn(),
     externalContacts: [] as Contact[],
     externalContactsLoading: false,
   };
@@ -292,7 +295,11 @@ describe("ContactAssignmentStep", () => {
       email: undefined,
       phone: "555-0001",
       company: undefined,
-      source: "imessage",
+      // "imessage" is not a member of ContactSource (the union has "messages" /
+      // "sms" / "iphone"). Kept verbatim because getSourceBadge() falls back to the
+      // "Manual" badge for unknown values, so renaming it would change what this
+      // test renders. See the report on this fixture.
+      source: "imessage" as unknown as ContactSource,
       is_message_derived: true,
       created_at: "2024-02-01T00:00:00Z",
       updated_at: "2024-02-01T00:00:00Z",
@@ -313,7 +320,7 @@ describe("ContactAssignmentStep", () => {
           selectedContactIds={selected}
           onSelectedContactIdsChange={setSelected}
           externalContacts={externalContacts}
-          onSilentRefreshContacts={jest.fn().mockResolvedValue(undefined)}
+          onRefreshBothLists={jest.fn().mockResolvedValue(undefined)}
         />
       );
     }
@@ -322,25 +329,34 @@ describe("ContactAssignmentStep", () => {
       screen.queryAllByTestId("contact-row").map((r) => r.textContent || "");
 
     it("moves an external contact out of Available and shows it as exactly one Added chip; ✕ restores it (imported id ≠ external id, no shared email)", async () => {
-      const { contactService } = jest.requireMock("../../services");
-      // Imported result carries a DIFFERENT id and (deliberately) no email/phone,
-      // so assembleDedupedContacts CANNOT bridge it to the external twin. On the
-      // pre-fix code the external twin therefore survives in Available while its
-      // chip also shows — "in both places". The fix hides it by its own id.
-      contactService.create.mockResolvedValue({
+      // Imported result carries a DIFFERENT id and (deliberately) no email/phone.
+      // The renderer's identity dedup could not have bridged it to the external
+      // twin even when it existed, and BACKLOG-2370 has since removed that pass
+      // entirely — so the explicit `importedTwins` link is the ONLY thing that
+      // hides the twin, which is exactly what this case pins. On the pre-fix code
+      // the twin survived in Available while its chip also showed — "in both
+      // places". The fix hides it by its own id.
+      //
+      // BACKLOG-2638: was `contactService.create` returning `{ success, data }`.
+      // The add goes through `contacts:import` now, whose response carries
+      // `contacts: Contact[]`. The property this case pins is unchanged — the
+      // returned contact still has an id the external row does not.
+      jest.mocked(window.api.contacts.import).mockResolvedValue({
         success: true,
-        data: {
-          id: "db-1",
-          user_id: "user-123",
-          name: "Paul Phone",
-          display_name: "Paul Phone",
-          email: null,
-          phone: null,
-          source: "imessage",
-          is_message_derived: false,
-          created_at: "2024-02-01T00:00:00Z",
-          updated_at: "2024-02-01T00:00:00Z",
-        },
+        contacts: [
+          {
+            id: "db-1",
+            user_id: "user-123",
+            name: "Paul Phone",
+            display_name: "Paul Phone",
+            email: null,
+            phone: null,
+            source: "imessage",
+            is_message_derived: false,
+            created_at: "2024-02-01T00:00:00Z",
+            updated_at: "2024-02-01T00:00:00Z",
+          } as unknown as Contact,
+        ],
       });
 
       const user = userEvent.setup();

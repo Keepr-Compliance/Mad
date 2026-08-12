@@ -213,3 +213,35 @@ describe("RemovedEmailsSection (BACKLOG-1766)", () => {
     expect(onRestoreComplete).toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2579 follow-up — the emails toggle is NOT centred.
+//
+// The founder asked for the "Show removed contacts" control to be centred. That
+// control lives in the SHARED RemovedItemsSection shell, so centring it there
+// unconditionally would have restyled this section and the conversations one
+// too — neither of which is in PR #2249. The `centerToggle` prop is opt-in and
+// this section does not opt in. Set it here (or make the shell centre
+// unconditionally) and this goes red.
+// ---------------------------------------------------------------------------
+describe("BACKLOG-2579: emails toggle keeps its left alignment", () => {
+  it("left-aligns the toggle row (centerToggle is contacts-only)", () => {
+    (window.api.transactions.getRemovedEmails as jest.Mock).mockResolvedValue({
+      success: true,
+      removedEmails: [],
+    });
+
+    render(
+      <RemovedEmailsSection
+        transactionId="txn-123"
+        onShowSuccess={jest.fn()}
+        onShowError={jest.fn()}
+      />
+    );
+
+    const row = screen.getByTestId("show-removed-emails-toggle-row");
+    expect(row).toHaveClass("justify-between");
+    expect(row).not.toHaveClass("justify-center");
+    expect(row).not.toHaveClass("relative");
+  });
+});

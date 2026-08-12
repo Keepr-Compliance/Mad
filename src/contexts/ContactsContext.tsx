@@ -2,7 +2,7 @@
  * ContactsContext
  * Single source of truth for contacts loading across modals.
  *
- * Problem: EditTransactionModal and EditContactsModal both had their own
+ * Problem: the transaction edit modals both had their own
  * useContactsLoader hooks, causing duplicate API calls when both rendered
  * or when contacts tab was accessed.
  *
@@ -20,18 +20,9 @@
  * const { contacts, loading, error, refreshContacts } = useContacts();
  * ```
  */
-import React, {
-  createContext,
-  useContext,
-  useState,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-} from "react";
+import React, { createContext, useContext, useMemo } from "react";
 import type { ExtendedContact } from "../types/components";
-import { contactService } from "../services";
-import logger from '../utils/logger';
+import { useContactDirectory } from "../hooks/contacts/useContactDirectory";
 
 // ============================================
 // TYPES
@@ -43,10 +34,42 @@ interface ContactsState {
   error: string | null;
 }
 
-interface ContactsContextValue extends ContactsState {
+export interface ContactsContextValue extends ContactsState {
   refreshContacts: () => Promise<void>;
-  /** Refresh without showing loading state - use after adding a contact */
-  silentRefresh: () => Promise<void>;
+  /**
+   * BACKLOG-2631 — THE ADDRESS-BOOK HALF, WHICH THIS PROVIDER DID NOT USED TO
+   * CARRY AND `Screen2Overlay` KEPT A PRIVATE COPY OF.
+   *
+   * `EditContactsModal`'s Add Contacts overlay held its own
+   * `externalContacts` / `externalLoading` / `externalLoaded` state and its own
+   * `contacts:get-available` call behind a once-per-mount guard. That guard is
+   * the reason answering a duplicate question in the overlay left the record on
+   * screen. Both halves live here now, so the overlay has one source for the
+   * data AND one refresh for it.
+   *
+   * FETCHED LAZILY: this provider wraps Screen 1 too, and the address book is a
+   * whole-corpus read. `Screen2Overlay` calls `triggerLazyLoad` when it mounts,
+   * so opening EditContactsModal without opening Add Contacts still costs no
+   * `contacts:get-available` — exactly as before.
+   */
+  externalContacts: ExtendedContact[];
+  externalContactsLoading: boolean;
+  /**
+   * Perform the address-book half's first load. Called by `Screen2Overlay` on
+   * mount; a no-op once it has succeeded.
+   */
+  triggerLazyLoad: () => void;
+  /**
+   * Refresh BOTH halves and commit them as ONE render — the shared
+   * `useContactDirectory.refreshBothLists`, the same function Clients & Contacts
+   * and the new-transaction wizard call.
+   *
+   * This replaced `silentRefresh`, which re-read the saved half only. Every
+   * action that reaches it (import, answering "same person") writes a
+   * `contact_source_links` row, which is what `contacts:get-available`
+   * suppresses on — so the half it skipped was the half that had moved.
+   */
+  refreshBothLists: () => Promise<void>;
 }
 
 interface ContactsProviderProps {
@@ -71,101 +94,73 @@ const ContactsContext = createContext<ContactsContextValue | undefined>(
  * ContactsProvider
  * Loads contacts once for a given userId/propertyAddress combination.
  * All children share the same loaded contacts.
+ *
+ * BACKLOG-2631 — THE LOADING IS NOT WRITTEN HERE ANY MORE.
+ *
+ * This provider held one of the three copies of the picker's data-and-refresh
+ * layer: a saved-half read through `contactService`, a `silentRefresh` that
+ * re-read that half only, and — down in `Screen2Overlay` — a private
+ * address-book fetch behind a once-per-mount guard. It now composes
+ * `useContactDirectory`, the same hook Clients & Contacts and the audit wizard
+ * compose, so all three surfaces refresh through one implementation.
+ *
+ * `useContactDirectory` reads `window.api.contacts.*` directly rather than
+ * through `contactService`. Not a behaviour change: `contactService.getAll` /
+ * `getSortedByActivity` are pass-throughs that rewrap `{success, contacts}` as
+ * `{success, data}` and add nothing else (`src/services/contactService.ts`).
  */
 export function ContactsProvider({
   children,
   userId,
   propertyAddress,
 }: ContactsProviderProps): React.ReactElement {
-  const [state, setState] = useState<ContactsState>({
-    contacts: [],
-    loading: true,
-    error: null,
+  const {
+    contacts,
+    contactsLoading,
+    contactsError,
+    externalContacts,
+    externalContactsLoading,
+    loadContacts,
+    refreshBothLists,
+    triggerLazyLoad,
+  } = useContactDirectory({
+    userId,
+    propertyAddress,
+    // The saved half eagerly — Screen 1 renders the deal's parties from it.
+    // The address book NOT: it is a whole-corpus read and only the Add Contacts
+    // overlay needs it, so `Screen2Overlay` asks for it when it mounts. Opening
+    // this modal and never opening the picker still costs no
+    // `contacts:get-available`, exactly as before.
+    autoLoadExternal: false,
   });
-
-  // Track if component is mounted to prevent state updates after unmount
-  const isMountedRef = useRef(true);
-
-  // Track current load params to detect changes
-  const loadParamsRef = useRef({ userId, propertyAddress });
-
-  /**
-   * Load contacts from API
-   * Uses getSortedByActivity when propertyAddress is provided for relevance,
-   * otherwise uses getAll.
-   */
-  const loadContacts = useCallback(async (showLoading = true) => {
-    if (!isMountedRef.current) return;
-
-    if (showLoading) {
-      setState((prev) => ({ ...prev, loading: true, error: null }));
-    }
-
-    try {
-      const result = propertyAddress
-        ? await contactService.getSortedByActivity(userId, propertyAddress)
-        : await contactService.getAll(userId);
-
-      if (!isMountedRef.current) return;
-
-      if (result.success) {
-        setState({
-          contacts: (result.data || []) as ExtendedContact[],
-          loading: false,
-          error: null,
-        });
-      } else {
-        setState((prev) => ({
-          ...prev,
-          loading: false,
-          error: result.error || "Failed to load contacts",
-        }));
-      }
-    } catch (err) {
-      if (!isMountedRef.current) return;
-
-      logger.error("ContactsContext: Failed to load contacts:", err);
-      setState((prev) => ({
-        ...prev,
-        loading: false,
-        error: "Unable to load contacts",
-      }));
-    }
-  }, [userId, propertyAddress]);
-
-  /** Refresh without showing loading state */
-  const silentRefresh = useCallback(() => loadContacts(false), [loadContacts]);
-
-  // Load contacts on mount
-  useEffect(() => {
-    isMountedRef.current = true;
-    loadContacts();
-
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, [loadContacts]);
-
-  // Reload if userId or propertyAddress change
-  useEffect(() => {
-    const paramsChanged =
-      loadParamsRef.current.userId !== userId ||
-      loadParamsRef.current.propertyAddress !== propertyAddress;
-
-    if (paramsChanged) {
-      loadParamsRef.current = { userId, propertyAddress };
-      loadContacts();
-    }
-  }, [userId, propertyAddress, loadContacts]);
 
   // Memoize context value to prevent unnecessary re-renders
   const contextValue = useMemo<ContactsContextValue>(
     () => ({
-      ...state,
-      refreshContacts: () => loadContacts(true),
-      silentRefresh,
+      contacts,
+      loading: contactsLoading,
+      error: contactsError,
+      refreshContacts: loadContacts,
+      externalContacts,
+      externalContactsLoading,
+      triggerLazyLoad,
+      // Flattened to void: no consumer of this context reads the rows back — the
+      // overlay renders them from `contacts`/`externalContacts` — so the promise
+      // is awaited for sequencing only.
+      refreshBothLists: async () => {
+        await refreshBothLists();
+      },
     }),
-    [state, loadContacts, silentRefresh]
+    [
+      contacts,
+      contactsLoading,
+      contactsError,
+      loadContacts,
+      externalContacts,
+      externalContactsLoading,
+      triggerLazyLoad,
+      refreshBothLists,
+    ]
   );
 
   return (

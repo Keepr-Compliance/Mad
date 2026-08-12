@@ -7,7 +7,12 @@
  * - Windows: Outlook / Microsoft 365 only
  *
  * Selected sources are saved to Supabase as contactSources.direct preferences.
- * Skipping defaults to all available sources enabled (fail-open).
+ *
+ * BACKLOG-2476: skipping now writes the SAME preferences the Continue button
+ * would have written with nothing changed (see `meta.skip.onSkip`). It used to
+ * write nothing at all, which handed the decision to the backend's blanket
+ * "every source is on" default — switching on sources this step had
+ * deliberately left unticked.
  *
  * @module onboarding/steps/ContactSourceStep
  */
@@ -17,8 +22,12 @@ import type {
   OnboardingStep,
   OnboardingStepMeta,
   OnboardingStepContentProps,
+  OnboardingContext,
 } from "../types";
-import { usePlatform } from "../../../contexts/PlatformContext";
+import {
+  getDefaultContactSourceSelection,
+  type ContactSourceDefaultContext,
+} from "../../../utils/contactSourceDefaults";
 import logger from "../../../utils/logger";
 
 // =============================================================================
@@ -44,6 +53,12 @@ interface SourceConfig {
   hidden?: boolean;
   /** Show as disabled with a "Coming Soon" badge. */
   comingSoon?: boolean;
+  /**
+   * BACKLOG-2479: shown on the card only when the source is OFF by default on
+   * the current platform, explaining why. A default the user cannot account for
+   * reads as a bug; turning the source on should be an informed choice.
+   */
+  defaultOffNote?: string;
 }
 
 const SOURCE_OPTIONS: SourceConfig[] = [
@@ -118,6 +133,8 @@ const SOURCE_OPTIONS: SourceConfig[] = [
     selectedBorder: "border-gray-400",
     selectedBg: "bg-gray-50",
     phoneType: "iphone",
+    defaultOffNote:
+      "Your Mac address book already includes iPhone contacts synced through iCloud. Turn this on if you have iCloud contact syncing switched off.",
   },
   {
     key: "androidContacts",
@@ -140,6 +157,79 @@ const SOURCE_OPTIONS: SourceConfig[] = [
 ];
 
 // =============================================================================
+// VISIBILITY + DEFAULTS (shared by Continue and Skip)
+// =============================================================================
+
+/**
+ * The subset of the onboarding context the source rules actually read.
+ * Narrowed so callers cannot accidentally make the answer depend on anything
+ * else — in particular not on `usePlatform()`, which is a second source of
+ * platform truth that Skip has no access to.
+ */
+type SourceRuleContext = Pick<
+  OnboardingContext,
+  "platform" | "phoneType" | "authProvider"
+>;
+
+/** Map the onboarding context onto the defaults rule's input. */
+function toDefaultContext(ctx: SourceRuleContext): ContactSourceDefaultContext {
+  return {
+    // `Platform` also admits linux/android/ios; this step only runs on the two
+    // desktops (`meta.platforms`), so anything else reads as Windows — exactly
+    // what the previous `isMacOS ? "macos" : "windows"` did.
+    platform: ctx.platform === "macos" ? "macos" : "windows",
+    phoneType: ctx.phoneType,
+    authProvider: ctx.authProvider,
+  };
+}
+
+/**
+ * Which source cards does this user see?
+ *
+ * Exported and pure so that BOTH the rendered card list and the skip-time
+ * preference write derive their key set from one function. They used to be
+ * written separately, which is how "skip" and "continue" could disagree about
+ * which keys exist at all — and a test comparing two hand-written copies would
+ * have agreed today and drifted later.
+ */
+export function getVisibleContactSourceConfigs(
+  ctx: SourceRuleContext,
+): SourceConfig[] {
+  const platform = ctx.platform === "macos" ? "macos" : "windows";
+  return SOURCE_OPTIONS.filter((source) => {
+    if (source.hidden) return false;
+    if (source.platforms && !source.platforms.includes(platform)) return false;
+    if (source.phoneType && source.phoneType !== ctx.phoneType) return false;
+    if (source.excludePhoneType && source.excludePhoneType === ctx.phoneType)
+      return false;
+    if (source.authProvider && source.authProvider !== ctx.authProvider)
+      return false;
+    return true;
+  });
+}
+
+/**
+ * The `contactSources.direct` object to persist for this user.
+ *
+ * `selected` is the user's live card state; omit it for the skip path, where
+ * every visible source falls back to its rule default. This is the single
+ * definition of "what gets written", so skipping and continuing-without-changes
+ * cannot drift apart.
+ */
+export function buildDirectContactSourcePrefs(
+  ctx: SourceRuleContext,
+  selected?: Record<string, boolean>,
+): Record<string, boolean> {
+  const defaults = getDefaultContactSourceSelection(toDefaultContext(ctx));
+  const prefs: Record<string, boolean> = {};
+  for (const source of getVisibleContactSourceConfigs(ctx)) {
+    if (source.comingSoon) continue;
+    prefs[source.key] = selected?.[source.key] ?? defaults[source.key];
+  }
+  return prefs;
+}
+
+// =============================================================================
 // STEP META
 // =============================================================================
 
@@ -154,7 +244,32 @@ export const meta: OnboardingStepMeta = {
   skip: {
     enabled: true,
     label: "I'll set this up later",
-    description: "All available sources will be enabled by default",
+    // BACKLOG-2476: this used to promise "All available sources will be enabled
+    // by default", which was both the bug and an accurate description of it.
+    description: "We'll use the recommended sources for your setup",
+    /**
+     * BACKLOG-2476: persist the recommended selection instead of recording
+     * nothing.
+     *
+     * Skipping used to leave `contactSources.direct` absent, and the backend
+     * read an absent preference as "every source is on" — including the ones
+     * this step deliberately left unticked. Writing the same object Continue
+     * would have written makes skipping mean what the button says.
+     *
+     * Note this covers `outlookContacts` / `googleContacts`, which the backend
+     * default cannot derive on its own: only the renderer knows `authProvider`.
+     */
+    onSkip: async (context: OnboardingContext) => {
+      if (!context.userId) return;
+      const directPrefs = buildDirectContactSourcePrefs(context);
+      await window.api.preferences.update(context.userId, {
+        contactSources: { direct: directPrefs },
+      });
+      logger.info(
+        "[ContactSourceStep] Skipped — saved default contact source preferences:",
+        directPrefs,
+      );
+    },
   },
   // Step is complete once the user has proceeded (either by selecting sources or skipping)
   isStepComplete: () => false,
@@ -176,12 +291,18 @@ function SourceCard({
   isSelected,
   onToggle,
   isSaving,
+  isOffByDefault,
 }: {
   source: SourceConfig;
   isSelected: boolean;
   onToggle: () => void;
   isSaving: boolean;
+  /** Does the rule leave this source unticked for this user? */
+  isOffByDefault: boolean;
 }) {
+  const showDefaultOffNote =
+    !isSelected && isOffByDefault && Boolean(source.defaultOffNote);
+
   if (source.comingSoon) {
     return (
       <div className="w-full p-4 rounded-xl border-2 border-gray-200 bg-gray-50 text-left flex items-center gap-4 opacity-60 cursor-not-allowed">
@@ -222,6 +343,14 @@ function SourceCard({
       <div className="flex-1 min-w-0">
         <h4 className="text-sm font-semibold text-gray-900">{source.label}</h4>
         <p className="text-xs text-gray-500 mt-0.5">{source.description}</p>
+        {/* BACKLOG-2479: only while the source is off, and only where the rule
+            actually turns it off — once the user ticks it the note has served
+            its purpose and would just be nagging. */}
+        {showDefaultOffNote && (
+          <p className="text-xs text-gray-400 mt-1 italic">
+            {source.defaultOffNote}
+          </p>
+        )}
       </div>
       <div className="flex-shrink-0">
         {isSelected ? (
@@ -259,33 +388,43 @@ export function Content({
   context,
   onAction,
 }: OnboardingStepContentProps): React.ReactElement {
-  const { isMacOS } = usePlatform();
   const [isSaving, setIsSaving] = useState(false);
 
-  // Default selections adapt to phone type:
-  // - Android: Android Contacts + Google Contacts pre-selected
-  // - iPhone/null: macOS Contacts + SSO provider's contacts pre-selected
-  const isAndroid = context.phoneType === "android";
-  const [selected, setSelected] = useState<Record<string, boolean>>({
-    macosContacts: !isAndroid,
-    outlookContacts: isAndroid ? false : context.authProvider === "microsoft",
-    iphoneContacts: !isAndroid,
-    googleContacts: isAndroid ? true : context.authProvider === "google",
-    androidContacts: isAndroid,
-  });
+  // BACKLOG-2479: pre-selection comes from the shared rule, not from five
+  // expressions written here. The rule is what the main process consults for an
+  // absent preference, so the two cannot disagree.
+  //
+  // Platform is read from `context`, not `usePlatform()`. Both resolve to the
+  // same value (useOnboardingQueue seeds the context from usePlatform), but
+  // `meta.skip.onSkip` only has the context — routing both paths through one
+  // input is what makes "skip === continue" structural rather than coincidental.
+  const [selected, setSelected] = useState<Record<string, boolean>>(() =>
+    getDefaultContactSourceSelection(toDefaultContext(context))
+  );
 
   // Filter sources by platform, phone type, auth provider, and visibility
   const visibleSources = useMemo(
     () =>
-      SOURCE_OPTIONS.filter((source) => {
-        if (source.hidden) return false;
-        if (source.platforms && !source.platforms.includes(isMacOS ? "macos" : "windows")) return false;
-        if (source.phoneType && source.phoneType !== context.phoneType) return false;
-        if (source.excludePhoneType && source.excludePhoneType === context.phoneType) return false;
-        if (source.authProvider && source.authProvider !== context.authProvider) return false;
-        return true;
+      getVisibleContactSourceConfigs({
+        platform: context.platform,
+        phoneType: context.phoneType,
+        authProvider: context.authProvider,
       }),
-    [isMacOS, context.phoneType, context.authProvider]
+    [context.platform, context.phoneType, context.authProvider]
+  );
+
+  // The rule's own answer, kept alongside the live selection so a card can say
+  // why it starts off (BACKLOG-2479) without re-deriving the rule inline.
+  const defaults = useMemo(
+    () =>
+      getDefaultContactSourceSelection(
+        toDefaultContext({
+          platform: context.platform,
+          phoneType: context.phoneType,
+          authProvider: context.authProvider,
+        })
+      ),
+    [context.platform, context.phoneType, context.authProvider]
   );
 
   const handleToggle = useCallback((key: string) => {
@@ -301,12 +440,8 @@ export function Content({
 
     setIsSaving(true);
     try {
-      // Build preferences object for active (non-coming-soon) visible sources only
-      const directPrefs: Record<string, boolean> = {};
-      for (const source of visibleSources) {
-        if (source.comingSoon) continue;
-        directPrefs[source.key] = selected[source.key] ?? true;
-      }
+      // Same builder the skip path uses — see buildDirectContactSourcePrefs.
+      const directPrefs = buildDirectContactSourcePrefs(context, selected);
 
       await window.api.preferences.update(context.userId, {
         contactSources: {
@@ -329,7 +464,7 @@ export function Content({
     }
 
     onAction({ type: "NAVIGATE_NEXT" });
-  }, [context.userId, visibleSources, selected, onAction]);
+  }, [context, selected, onAction]);
 
   return (
     <>
@@ -410,9 +545,10 @@ export function Content({
           <SourceCard
             key={source.key}
             source={source}
-            isSelected={selected[source.key] ?? true}
+            isSelected={selected[source.key] ?? defaults[source.key]}
             onToggle={() => handleToggle(source.key)}
             isSaving={isSaving}
+            isOffByDefault={!defaults[source.key]}
           />
         ))}
       </div>

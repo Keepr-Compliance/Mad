@@ -15,6 +15,10 @@
 
 import { dbRun, dbAll, dbGet, dbExec } from "./db/core/dbConnection";
 import logService from "./logService";
+// BACKLOG-2393: a no-op unless a user has granted a support window. Imported
+// from the weightless trace seam rather than the support-access bundle, because
+// the bundle's diagnostics collector reads this very table.
+import { notifySupportError } from "./supportAccess/trace";
 
 /** Shape of a failure log entry as stored in SQLite */
 export interface FailureLogEntry {
@@ -54,6 +58,11 @@ class FailureLogService {
         "FailureLogService",
         { error: error.substring(0, 100) }
       );
+      // BACKLOG-2393: capture a report near the failure rather than waiting for
+      // the next scheduled hour, when the state that explains it may be gone.
+      // Debounced to once per 5 minutes downstream, so a crash loop does not
+      // become a fire hose, and inert outside a granted window.
+      notifySupportError();
     } catch (err) {
       // Failure logging must never crash the app
       await logService.warn(

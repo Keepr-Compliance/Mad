@@ -4,6 +4,7 @@ import type { Subscription } from "../../electron/types/models";
 import { useLicense } from "@/contexts/LicenseContext";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
 import logger from '../utils/logger';
+import { formatDbDate } from "@/utils/dateFormatters";
 
 interface User {
   id: string;
@@ -373,7 +374,7 @@ function Profile({
                 <div className="flex justify-between items-center py-2 border-b border-gray-100">
                   <span className="text-sm text-gray-600">Last Login</span>
                   <span className="text-sm text-gray-900">
-                    {new Date(user.last_login_at).toLocaleDateString()}
+                    {formatDbDate(user.last_login_at, {}) ?? ""}
                   </span>
                 </div>
               )}
@@ -381,7 +382,7 @@ function Profile({
                 <div className="flex justify-between items-center py-2">
                   <span className="text-sm text-gray-600">Member Since</span>
                   <span className="text-sm text-gray-900">
-                    {new Date(user.created_at).toLocaleDateString()}
+                    {formatDbDate(user.created_at, {}) ?? ""}
                   </span>
                 </div>
               )}

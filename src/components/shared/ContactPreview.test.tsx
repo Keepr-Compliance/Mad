@@ -79,7 +79,7 @@ function makeThread(
 ): ContactMessageThread {
   return {
     thread_id: "thread-1",
-    phoneNumber: "+15551234567",
+    phoneNumber: "+15555550112",
     messages: [makeMessage()],
     transaction_id: "txn-1",
     ...overrides,
@@ -89,7 +89,7 @@ function makeThread(
 const mockThreads: ContactMessageThread[] = [
   makeThread({
     thread_id: "thread-1",
-    phoneNumber: "+15551234567",
+    phoneNumber: "+15555550112",
     transaction_id: "txn-1",
     messages: [
       makeMessage({ id: "m1", sent_at: "2026-01-15T10:00:00.000Z" }),
@@ -98,7 +98,7 @@ const mockThreads: ContactMessageThread[] = [
   }),
   makeThread({
     thread_id: "thread-2",
-    phoneNumber: "+15559876543",
+    phoneNumber: "+15555550121",
     transaction_id: undefined,
     messages: [makeMessage({ id: "m3", sent_at: "2026-01-10T08:00:00.000Z" })],
   }),
@@ -106,8 +106,8 @@ const mockThreads: ContactMessageThread[] = [
 
 // 4 threads - exercises the "See all" / "Show less" toggle (BACKLOG-1944).
 const mockManyThreads: ContactMessageThread[] = [
-  makeThread({ thread_id: "thread-1", phoneNumber: "+15551234567" }),
-  makeThread({ thread_id: "thread-2", phoneNumber: "+15559876543" }),
+  makeThread({ thread_id: "thread-1", phoneNumber: "+15555550112" }),
+  makeThread({ thread_id: "thread-2", phoneNumber: "+15555550121" }),
   makeThread({ thread_id: "thread-3", phoneNumber: "+15555551212" }),
   makeThread({ thread_id: "thread-4", phoneNumber: "+15554443333" }),
 ];
@@ -301,7 +301,8 @@ describe("ContactPreview", () => {
       );
     });
 
-    it("shows Unknown Contact when no name available", () => {
+    // BACKLOG-2461: was "Unknown Contact". See src/utils/contactDisplayLabel.ts.
+    it("falls back to the organisation when there is no name", () => {
       const contactWithoutName: ExtendedContact = {
         ...mockImportedContact,
         display_name: undefined,
@@ -309,7 +310,24 @@ describe("ContactPreview", () => {
       };
       renderContactPreview({ contact: contactWithoutName });
       expect(screen.getByTestId("contact-preview-name")).toHaveTextContent(
-        "Unknown Contact"
+        "ABC Realty"
+      );
+    });
+
+    it('shows "No name" only when we hold nothing at all', () => {
+      const contactWithNothing: ExtendedContact = {
+        ...mockImportedContact,
+        display_name: undefined,
+        name: "",
+        company: undefined,
+        phone: undefined,
+        email: undefined,
+        allPhones: [],
+        allEmails: [],
+      };
+      renderContactPreview({ contact: contactWithNothing });
+      expect(screen.getByTestId("contact-preview-name")).toHaveTextContent(
+        "No name"
       );
     });
 
@@ -652,6 +670,85 @@ describe("ContactPreview", () => {
       );
     });
 
+    /**
+     * BACKLOG-2579 — the contact detail card offered two ways out.
+     *
+     * Founder, QA of the combined branch: "what [we have] feels fine i just
+     * think we need to get rid of the x since we have a back button" — and, when
+     * asked how far it should go, "in all width of view ports".
+     *
+     * `Contacts.tsx` is the ONLY caller that passes variant="pane", and it uses
+     * that variant for BOTH its layouts (the narrow full-screen detail card,
+     * which has the Back button, and the wide >=1200px detail pane). So gating
+     * on the variant covers every viewport width of the contact detail card,
+     * which is what he asked for.
+     *
+     * FOUNDER DECISION, recorded on BACKLOG-2579: remove it everywhere,
+     * knowingly accepting that the wide pane — which has no Back button — loses
+     * its explicit close. The pane is persistent there by design; the user moves
+     * on by picking another contact.
+     *
+     * The modal case below is not symmetry for its own sake. The four modal
+     * consumers have no Back button, and below the `sm` breakpoint
+     * ResponsiveModal is full-screen with no backdrop to click, so the X is the
+     * only way out. A global removal would trap those users; this pins that it
+     * did not happen.
+     *
+     * ESCAPE: there is no Escape handling on this card, in either variant, and
+     * this change neither adds nor removes any — ResponsiveModal, ContactPreview
+     * and Contacts.tsx contain no keydown handler for it. Stated rather than
+     * asserted as "unchanged", which would imply something exists to preserve.
+     * The narrow layout's Back button is a native <button>, so Tab + Enter still
+     * dismisses there.
+     */
+    it("pane variant renders NO close X", () => {
+      // C6. Restore the X unconditionally and this goes red.
+      renderContactPreview({ variant: "pane" });
+      expect(
+        screen.queryByTestId("contact-preview-close")
+      ).not.toBeInTheDocument();
+    });
+
+    it("modal variant STILL renders the close X", () => {
+      // C7. Hide the X unconditionally and this goes red. Guards the four modal
+      // consumers, where the X is the only dismissal affordance on mobile.
+      const onClose = jest.fn();
+      renderContactPreview({ onClose });
+      const close = screen.getByTestId("contact-preview-close");
+      expect(close).toBeInTheDocument();
+      expect(close).toHaveAttribute("aria-label", "Close preview");
+      fireEvent.click(close);
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("pane variant pads the card head where the X row used to sit", () => {
+      // BACKLOG-2579 follow-up, founder QA of PR #2249: with the X hidden,
+      // nothing separated the avatar from the top of the card on the wide
+      // two-pane layout — the head container is `px-6 pb-4` and has never had
+      // top padding of its own. Remove the `pt-6` and this goes red.
+      renderContactPreview({ variant: "pane" });
+      expect(screen.getByTestId("contact-preview-head")).toHaveClass("pt-6");
+    });
+
+    it("modal variant does NOT pad the card head (the X row already does)", () => {
+      // The other direction: the modal still renders the X row (`p-3 sm:p-4`),
+      // so padding the head unconditionally would double the gap there. Make
+      // the padding unconditional and this goes red.
+      renderContactPreview();
+      expect(screen.getByTestId("contact-preview-head")).not.toHaveClass("pt-6");
+      // ...and the row that supplies the modal's spacing is still present.
+      expect(screen.getByTestId("contact-preview-close")).toBeInTheDocument();
+    });
+
+    it("pane variant keeps the rest of the card intact without the X", () => {
+      // Removing a header element must not take the card's content with it.
+      renderContactPreview({ variant: "pane" });
+      expect(screen.getByTestId("contact-preview-name")).toHaveTextContent(
+        "John Smith"
+      );
+      expect(screen.getByTestId("contact-preview-avatar")).toBeInTheDocument();
+    });
+
     it("pane variant still renders transaction rows and fires onTransactionClick", () => {
       const onTransactionClick = jest.fn();
       renderContactPreview({ variant: "pane", onTransactionClick });
@@ -915,10 +1012,10 @@ describe("ContactPreview", () => {
       ).toBeInTheDocument();
       expect(
         screen.getByTestId("contact-preview-text-thread-1")
-      ).toHaveTextContent("+15551234567");
+      ).toHaveTextContent("+15555550112");
       expect(
         screen.getByTestId("contact-preview-text-thread-2")
-      ).toHaveTextContent("+15559876543");
+      ).toHaveTextContent("+15555550121");
     });
 
     it("shows a per-thread message count", () => {

@@ -9,7 +9,6 @@
  * to Electron main process to prevent silent crashes and improve error visibility.
  */
 
-import { jest } from "@jest/globals";
 
 describe("Main Process - Global Error Handlers", () => {
   // Save original console.error

@@ -25,9 +25,16 @@ const CI_TOLERANCE = process.env.CI ? 2.0 : 1.0;
 // ============================================================================
 
 /**
+ * Benchmark fixtures carry the raw Gmail `labels` array, which the persisted
+ * `Message` model does not declare (the spam filter reads labels off the raw
+ * fetched payload). This alias documents that extra field for the fixtures.
+ */
+type BenchmarkMessage = Message & { labels?: string[] };
+
+/**
  * Generate realistic test emails for benchmarking
  */
-function generateTestEmails(count: number): Message[] {
+function generateTestEmails(count: number): BenchmarkMessage[] {
   return Array(count)
     .fill(null)
     .map((_, i) => ({
@@ -39,7 +46,7 @@ function generateTestEmails(count: number): Message[] {
       sent_at: new Date(Date.now() - i * 3600000).toISOString(),
       received_at: new Date(Date.now() - i * 3600000).toISOString(),
       created_at: new Date().toISOString(),
-    })) as Message[];
+    })) as BenchmarkMessage[];
 }
 
 /**
@@ -60,7 +67,7 @@ function getLabelsForEmail(index: number): string[] {
  */
 function filterSpam(emails: Message[]): Message[] {
   return emails.filter((e) => {
-    const gmailResult = isGmailSpam(e.labels || []);
+    const gmailResult = isGmailSpam((e as BenchmarkMessage).labels || []);
     return !gmailResult.isSpam;
   });
 }
@@ -77,7 +84,7 @@ function toMessageInputs(emails: Message[]): MessageInput[] {
     sender: 'sender@email.com',
     recipients: ['recipient@email.com'],
     date: e.sent_at || new Date().toISOString(),
-    labels: e.labels,
+    labels: (e as BenchmarkMessage).labels,
   }));
 }
 
@@ -374,7 +381,7 @@ describe('Pipeline Performance Benchmarks', () => {
           sent_at: new Date().toISOString(),
           received_at: new Date().toISOString(),
           created_at: new Date().toISOString(),
-        })) as Message[];
+        })) as BenchmarkMessage[];
 
       const spamFiltered = filterSpam(emails);
       expect(spamFiltered.length).toBe(0);
@@ -392,7 +399,7 @@ describe('Pipeline Performance Benchmarks', () => {
           sent_at: new Date(Date.now() - i * 3600000).toISOString(),
           received_at: new Date(Date.now() - i * 3600000).toISOString(),
           created_at: new Date().toISOString(),
-        })) as Message[];
+        })) as BenchmarkMessage[];
 
       const threadGrouping = groupEmailsByThread(emails);
       const firstEmails = getFirstEmailsFromThreads(threadGrouping);

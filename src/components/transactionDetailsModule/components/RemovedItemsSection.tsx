@@ -40,6 +40,22 @@ export interface RemovedItemsSectionProps<TGroup> {
   getGroupKey: (group: TGroup) => string;
   /** Render one group's card(s). */
   renderGroup: (group: TGroup) => React.ReactNode;
+  /**
+   * BACKLOG-2579 follow-up (founder QA of PR #2249) — centre the toggle
+   * horizontally instead of left-aligning it.
+   *
+   * OPT-IN, and deliberately so. This shell is shared by FOUR sections: the two
+   * contacts ones, the Emails tab and the Texts tab. The founder named the
+   * "Show removed contacts" control, so centring unconditionally here would
+   * silently restyle the emails and conversations sections, which are outside
+   * this PR. Default `false` keeps those two byte-identical.
+   *
+   * When set, the "Select" affordance is positioned absolutely at the right, so
+   * the toggle stays centred in the FULL row width whether or not Select is
+   * showing — otherwise the toggle would visibly jump sideways when the section
+   * opens and Select appeared beside it.
+   */
+  centerToggle?: boolean;
 
   // BACKLOG-1719: multi-select bulk restore. All optional — when the selection
   // handlers are omitted the section renders exactly as before.
@@ -82,6 +98,7 @@ export function RemovedItemsSection<TGroup>({
   sectionTestId,
   getGroupKey,
   renderGroup,
+  centerToggle = false,
   selectionMode = false,
   onEnterSelectionMode,
   onExitSelectionMode,
@@ -102,8 +119,21 @@ export function RemovedItemsSection<TGroup>({
 
   return (
     <div className="mt-4">
-      {/* Toggle row: expand/collapse + optional "Select" entry */}
-      <div className="flex items-center justify-between gap-2">
+      {/* Toggle row: expand/collapse + optional "Select" entry.
+
+          BACKLOG-2579 follow-up: when `centerToggle` is set the row centres the
+          toggle and takes "Select" out of the flow (absolute, right), so the
+          toggle is centred on the row's FULL width and does not shift when the
+          section opens. Default layout is unchanged for the emails and
+          conversations sections. */}
+      <div
+        className={
+          centerToggle
+            ? "relative flex items-center justify-center gap-2"
+            : "flex items-center justify-between gap-2"
+        }
+        data-testid={`${toggleTestId}-row`}
+      >
         <button
           type="button"
           onClick={onToggle}
@@ -131,7 +161,9 @@ export function RemovedItemsSection<TGroup>({
             <button
               type="button"
               onClick={onExitSelectionMode}
-              className="text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors"
+              className={`text-sm font-medium text-gray-500 hover:text-gray-700 transition-colors${
+                centerToggle ? " absolute right-0" : ""
+              }`}
             >
               Cancel
             </button>
@@ -139,7 +171,9 @@ export function RemovedItemsSection<TGroup>({
             <button
               type="button"
               onClick={onEnterSelectionMode}
-              className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors"
+              className={`text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors${
+                centerToggle ? " absolute right-0" : ""
+              }`}
               data-testid={selectEntryTestId}
             >
               Select

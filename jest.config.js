@@ -170,7 +170,6 @@ module.exports = {
     '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/worktrees/',
     '/tests/integration/', // Runs separately via jest.integration.config.js
-    'ContactSelectModal.test.tsx', // Hangs in CI during loading
     // BACKLOG-2687 (QUARANTINE — NOT a silent skip; scripts/ci/check-test-drift.mjs prints this
     // file in its allow-list on every run, and fails if the entry ever stops matching a real file).
     //

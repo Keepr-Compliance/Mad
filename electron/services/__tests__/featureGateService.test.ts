@@ -9,7 +9,6 @@
  * Tests feature gate checking, caching, persistence, and fail-open behavior.
  */
 
-import { jest } from "@jest/globals";
 import path from "path";
 
 // ============================================

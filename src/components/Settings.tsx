@@ -13,6 +13,7 @@ import { ContactsSettings } from "./settings/ContactsSettings";
 import { SecuritySettings } from "./settings/SecuritySettings";
 import { DataPrivacySettings } from "./settings/DataPrivacySettings";
 import { TroubleshootingSettings } from "./settings/TroubleshootingSettings";
+import { SupportAccessSettings } from "./settings/SupportAccessSettings";
 import { AboutSettings } from "./settings/AboutSettings";
 import { SyncToolsSettings } from "./settings/SyncToolsSettings";
 import { useScrollSpy } from "@/hooks/useScrollSpy";
@@ -35,6 +36,9 @@ const SETTINGS_TABS = [
   { id: "settings-security", label: "Security" },
   { id: "settings-data", label: "Data & Privacy" },
   { id: "settings-troubleshooting", label: "Troubleshooting" },
+  // BACKLOG-2393: time-boxed support access, its consent record, and the
+  // list of diagnostic reports captured under it.
+  { id: "settings-support-access", label: "Support Access" },
   { id: "settings-about", label: "About" },
 ];
 
@@ -287,6 +291,7 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
 
             <DataPrivacySettings userId={userId} />
             <TroubleshootingSettings />
+            <SupportAccessSettings />
             <AboutSettings />
           </>
           )}

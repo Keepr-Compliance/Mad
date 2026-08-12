@@ -7,7 +7,20 @@
  * - Export functionality
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
+import type { Transaction } from "../types";
+import type {
+  ProgressUpdate,
+  ReanalysisResult,
+  ScanOptions,
+  ScanResult,
+  TransactionWithDetails,
+} from "../services/transactionService/types";
 
 // Mock electron module
 const mockIpcHandle = jest.fn();
@@ -179,7 +192,7 @@ const TEST_CONTACT_ID = "550e8400-e29b-41d4-a716-446655440002";
 const TEST_NONEXISTENT_TXN_ID = "550e8400-e29b-41d4-a716-446655449999"; // Valid UUID format, but doesn't exist
 
 describe("Transaction Handlers", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
   const mockMainWindow = {
     webContents: {
@@ -190,8 +203,8 @@ describe("Transaction Handlers", () => {
 
   beforeAll(() => {
     // Capture registered handlers
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
 
@@ -205,12 +218,14 @@ describe("Transaction Handlers", () => {
 
   describe("transactions:scan", () => {
     it("should scan and extract transactions successfully", async () => {
+      // Only the counters the assertions read are populated; asserted to ScanResult
+      // rather than padded with a `transactions` array nothing here inspects.
       const scanResult = {
         success: true,
         transactionsFound: 5,
         emailsScanned: 100,
         realEstateEmailsFound: 20,
-      };
+      } as ScanResult;
       mockTransactionService.scanAndExtractTransactions.mockResolvedValue(
         scanResult,
       );
@@ -229,11 +244,14 @@ describe("Transaction Handlers", () => {
 
     it("should send progress updates to renderer", async () => {
       mockTransactionService.scanAndExtractTransactions.mockImplementation(
-        async (userId: string, options: { onProgress?: Function }) => {
-          if (options.onProgress) {
-            options.onProgress({ progress: 50 });
+        async (userId: string, options?: ScanOptions) => {
+          // `options!` : the handler under test always passes an options object.
+          // The `{ progress: 50 }` payload is the value this test asserts is
+          // forwarded to the renderer verbatim, so it is cast, not reshaped.
+          if (options!.onProgress) {
+            options!.onProgress({ progress: 50 } as unknown as ProgressUpdate);
           }
-          return { success: true };
+          return { success: true } as unknown as ScanResult;
         },
       );
 
@@ -270,10 +288,11 @@ describe("Transaction Handlers", () => {
 
   describe("transactions:get-all", () => {
     it("should return all transactions for user", async () => {
+      // Rows carry only the columns this test counts; asserted at the mock boundary.
       const mockTransactions = [
         { id: "txn-1", property_address: "123 Main St" },
         { id: "txn-2", property_address: "456 Oak Ave" },
-      ];
+      ] as Transaction[];
       mockTransactionService.getTransactions.mockResolvedValue(
         mockTransactions,
       );
@@ -314,10 +333,11 @@ describe("Transaction Handlers", () => {
     };
 
     it("should create transaction successfully", async () => {
+      // toEqual() below compares this exact object, so it is asserted, not padded.
       const createdTransaction = {
         id: "txn-new",
         ...validTransactionData,
-      };
+      } as unknown as Transaction;
       mockTransactionService.createManualTransaction.mockResolvedValue(
         createdTransaction,
       );
@@ -380,7 +400,7 @@ describe("Transaction Handlers", () => {
         id: TEST_TXN_ID,
         property_address: "123 Main St",
         communications: [],
-      };
+      } as unknown as TransactionWithDetails;
       mockTransactionService.getTransactionDetails.mockResolvedValue(
         mockDetails,
       );
@@ -416,16 +436,18 @@ describe("Transaction Handlers", () => {
       id: TEST_TXN_ID,
       user_id: TEST_USER_ID,
       property_address: "123 Main St",
-    };
+    } as TransactionWithDetails;
 
     it("should update transaction successfully", async () => {
       mockTransactionService.getTransactionDetails.mockResolvedValue(
         existingTransaction,
       );
+      // transactionService.updateTransaction resolves to void in production; this
+      // suite mocks a row back. Value kept as-is, only the static type is bridged.
       mockTransactionService.updateTransaction.mockResolvedValue({
         ...existingTransaction,
         status: "closed",
-      });
+      } as unknown as void);
 
       const handler = registeredHandlers.get("transactions:update");
       // Valid statuses: 'active', 'pending', 'closed', 'cancelled'
@@ -473,7 +495,7 @@ describe("Transaction Handlers", () => {
       id: TEST_TXN_ID,
       user_id: TEST_USER_ID,
       property_address: "123 Main St",
-    };
+    } as TransactionWithDetails;
 
     it("should delete transaction successfully", async () => {
       mockTransactionService.getTransactionDetails.mockResolvedValue(
@@ -524,7 +546,11 @@ describe("Transaction Handlers", () => {
     };
 
     it("should create audited transaction successfully", async () => {
-      const createdTransaction = { id: "txn-new", ...validData };
+      // toEqual() below compares this exact object, so it is asserted, not padded.
+      const createdTransaction = {
+        id: "txn-new",
+        ...validData,
+      } as unknown as Transaction;
       mockTransactionService.createAuditedTransaction.mockResolvedValue(
         createdTransaction,
       );
@@ -561,7 +587,7 @@ describe("Transaction Handlers", () => {
         id: TEST_TXN_ID,
         property_address: "123 Main St",
         contacts: [{ id: "contact-1", name: "John Doe" }],
-      };
+      } as unknown as TransactionWithDetails;
       mockTransactionService.getTransactionWithContacts.mockResolvedValue(
         mockTransaction,
       );
@@ -695,10 +721,13 @@ describe("Transaction Handlers", () => {
 
   describe("transactions:reanalyze", () => {
     it("should reanalyze property successfully", async () => {
+      // ReanalysisResult declares emailsFound/realEstateEmailsFound/analyzed, but
+      // this suite mocks (and asserts on) emailsScanned/updatesFound. The payload is
+      // what the assertion below checks, so it is bridged, not rewritten.
       mockTransactionService.reanalyzeProperty.mockResolvedValue({
         emailsScanned: 50,
         updatesFound: 3,
-      });
+      } as unknown as ReanalysisResult);
 
       const handler = registeredHandlers.get("transactions:reanalyze");
       const result = await handler(
@@ -739,7 +768,7 @@ describe("Transaction Handlers", () => {
       user_id: TEST_USER_ID,
       property_address: "123 Main St",
       communications: [],
-    };
+    } as unknown as TransactionWithDetails;
 
     it("should export transaction to PDF successfully", async () => {
       mockTransactionService.getTransactionDetails.mockResolvedValue(
@@ -822,7 +851,7 @@ describe("Transaction Handlers", () => {
       property_address: "123 Main St",
       communications: [],
       export_count: 0,
-    };
+    } as unknown as TransactionWithDetails;
 
     it("should export with enhanced options successfully", async () => {
       mockTransactionService.getTransactionDetails.mockResolvedValue(

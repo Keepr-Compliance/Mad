@@ -160,16 +160,21 @@ class SyncOrchestratorServiceClass {
   }
 
   /**
-   * Read all contacts-related preferences in a single IPC call.
-   * Returns import source and contact source preferences together.
+   * Read the contact-source preferences for a contacts sync, in one IPC call.
    * TASK-2098: Consolidated to avoid duplicate preferences.get calls per sync.
+   *
+   * BACKLOG-2477: this deliberately does NOT read `messages.source`. Contacts
+   * are checkboxes — `contactSources.direct.*` are independent booleans and a
+   * user can hold Mac and Outlook and Google contacts at once, each tagged with
+   * its own source. `messages.source` is a radio button: exclusive by
+   * construction, correct for text messages, and not an answer to any question
+   * about contacts. See `getImportSource` below, which is the messages-only
+   * reader.
    */
   private async getContactsSyncPreferences(userId: string): Promise<{
-    importSource: ImportSource;
     contactSources: { macosContacts: boolean; outlookContacts: boolean; googleContacts: boolean };
   }> {
     const defaults = {
-      importSource: 'macos-native' as ImportSource,
       contactSources: { macosContacts: true, outlookContacts: true, googleContacts: true },
     };
 
@@ -177,9 +182,6 @@ class SyncOrchestratorServiceClass {
       const result = await window.api.preferences.get(userId);
       const prefs = result.preferences as UserPreferences | undefined;
       if (!result.success || !prefs) return defaults;
-
-      // Extract import source (TASK-1979)
-      const importSource: ImportSource = prefs.messages?.source ?? 'macos-native';
 
       // Extract contact source preferences (TASK-2098)
       const direct = prefs.contactSources?.direct;
@@ -189,7 +191,7 @@ class SyncOrchestratorServiceClass {
         googleContacts: typeof direct?.googleContacts === 'boolean' ? direct.googleContacts : true,
       };
 
-      return { importSource, contactSources };
+      return { contactSources };
     } catch (err) {
       logger.warn('[SyncOrchestrator] Failed to read contacts sync preferences, using defaults:', err);
       return defaults;
@@ -229,22 +231,27 @@ class SyncOrchestratorServiceClass {
 
       if (signal?.aborted) return;
 
-      // TASK-2098: Read both import source and contact source preferences in one IPC call
-      const { importSource, contactSources: sourcePrefs } = await this.getContactsSyncPreferences(userId);
-      logger.info('[SyncOrchestrator] Import source preference:', importSource);
+      // TASK-2098: Read the contact source preferences in one IPC call
+      const { contactSources: sourcePrefs } = await this.getContactsSyncPreferences(userId);
       logger.info('[SyncOrchestrator] Contact source preferences:', sourcePrefs);
 
-      // Phase 1: macOS Contacts sync (macOS only, skip if iphone-sync selected or source disabled)
-      if (macOS && importSource !== 'iphone-sync' && sourcePrefs.macosContacts) {
+      // Phase 1: macOS Contacts sync (macOS only, skip if the source is unticked)
+      //
+      // BACKLOG-2477: this gate used to also require `importSource !== 'iphone-sync'`.
+      // That made a question about TEXT MESSAGES answer a question about CONTACTS:
+      // a user who ticked Mac Contacts and then told the app their texts come from
+      // an iPhone — by pairing, by the Settings radio, or by answering the
+      // onboarding phone-type step on Windows — stopped getting Mac contacts, with
+      // nothing on screen saying so and no way to override it from the Contacts
+      // checkboxes. `macosContacts` is now the only thing that decides.
+      if (macOS && sourcePrefs.macosContacts) {
         const result = await window.api.contacts.syncExternal(userId);
         if (!result.success) {
           throw new Error(result.error || 'macOS Contacts sync failed');
         }
         logger.info('[SyncOrchestrator] macOS Contacts sync complete');
-      } else if (macOS && !sourcePrefs.macosContacts) {
+      } else if (macOS) {
         logger.info('[SyncOrchestrator] Skipping macOS Contacts (disabled by user preference)');
-      } else if (macOS && importSource === 'iphone-sync') {
-        logger.info('[SyncOrchestrator] Skipping macOS Contacts (import source: iphone-sync)');
       }
 
       onProgress(50);

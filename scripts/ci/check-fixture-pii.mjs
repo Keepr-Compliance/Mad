@@ -176,6 +176,86 @@ const ALLOWED_DOMAINS = [
   "keeprcompliance.com",
 ];
 
+/**
+ * ## Personal names (BACKLOG-2542)
+ *
+ * The email and phone rules above ran for the first time over
+ * `int/contacts-followups` and found 210 values. Scrubbing exactly those would
+ * have left this behind, in the same object literal:
+ *
+ *     shadowRow("out-juan", "<a real person's full name>", "outlook",
+ *               ["<their gmail address>"], ["<their mobile>"])
+ *
+ * The address and the number were caught. **The name was not, because nothing
+ * looked for names** — so the guard would have reported OK over a row that still
+ * identified someone, now beside a fictional address, which reads as safe and is
+ * not. A name alone is personal data.
+ *
+ * ## Why this rule needs a second signal
+ *
+ * "Two capitalised words" matches an enormous amount of legitimate text — prose
+ * in comments, component names, test descriptions. Flagging that would produce a
+ * guard everyone learns to baseline past, which is worse than no guard.
+ *
+ * So a name is only reported when it appears **on a line that also carries an
+ * email address or a phone number** — the identity-triple shape that actually
+ * leaked. A name on its own line is not reported; that is a deliberate gap, and
+ * the reason `FICTIONAL_NAMES` below exists rather than a cleverer regex.
+ */
+const QUOTED_NAME_RE =
+  /["'`]([A-Z][a-z]{1,15}(?:['-][A-Z][a-z]{1,15})?[ ][A-Z][a-z]{1,15}(?:['-][A-Z]?[a-z]{1,15})?)["'`]/g;
+
+/** An email address or something phone-shaped on the same line. */
+const IDENTITY_CONTEXT_RE = /@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|\+?\d[\d ().-]{8,}\d/;
+
+/**
+ * Names known to be invented. Keep this list SHORT and obviously fictional —
+ * it is not a place to park a real name someone decided was fine. Anything not
+ * listed here is reported and must be replaced or recorded in the baseline with
+ * a human's confirmation.
+ */
+const FICTIONAL_NAMES = new Set([
+  "pat riverton",
+  "robin marsh",
+  "jane seller",
+  "jane doe",
+  "john doe",
+  "john smith",
+  "test user",
+  "test contact",
+  // BACKLOG-2556 — the no-consolidation suite. These are PAIRS BY DESIGN: the
+  // rule under test is "a shared identifier is not evidence of one person", so
+  // every case needs two people whose names a compatibility check would accept
+  // (a shared surname) or reject. Invented for that suite; none refers to
+  // anyone. Listed here rather than baselined because they are fictional, and
+  // the baseline is for values a human confirmed are safe, not for invented
+  // ones.
+  "chris alvarez",
+  "dana alvarez",
+  "robin hale",
+  "sam hale",
+  "lee park",
+  "mo park",
+  // Already this repo's established scrub name for the founder's own case —
+  // see `contact-handlers.importLinking.test.ts`, where the surrounding
+  // `mac-paul` / `out-paul` variables still carry the pre-scrub spelling.
+  "casey lane",
+  // BACKLOG-2514 — the message-derived person in the projection-parity fixture.
+  // Invented. It must be a PLAIN NAME (not an email, not a number) because that
+  // is exactly what `getMessageDerivedContacts` filters `participants.$.from`
+  // down to — a fixture that did not look like a name would not reach the
+  // producer at all, and the control it feeds could not fail.
+  "sam rivers",
+  // BACKLOG-2365's documented case, and this repo's established name for it —
+  // `contactTombstone.test.ts` has used it since that item shipped. Invented,
+  // and self-evidently so: the surname is literally "Example". Listed rather
+  // than renamed because BACKLOG-2608's picker suite asserts the SAME case
+  // through the handler, and the two suites naming the same person is how a
+  // reader connects them. It fires there and not in `contactTombstone` only
+  // because that fixture puts the name and the address on separate lines.
+  "dana example",
+]);
+
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));
 if (overlap.length > 0) {
   console.error(
@@ -254,6 +334,22 @@ function scan() {
             rule: "consumer-email",
             match: value.toLowerCase(),
           });
+        }
+
+        // Names, but only alongside an address or a number on the same line —
+        // see QUOTED_NAME_RE for why the second signal is required.
+        if (IDENTITY_CONTEXT_RE.test(line)) {
+          QUOTED_NAME_RE.lastIndex = 0;
+          for (const m of line.matchAll(QUOTED_NAME_RE)) {
+            const value = m[1];
+            if (FICTIONAL_NAMES.has(value.toLowerCase())) continue;
+            findings.push({
+              file: rel,
+              line: i + 1,
+              rule: "personal-name",
+              match: value,
+            });
+          }
         }
 
         // The three phone patterns overlap by design: "+1 (206) 555-0142" is
@@ -377,6 +473,7 @@ if (offenders.length === 0) {
 
 const emails = offenders.filter((f) => f.rule === "consumer-email");
 const phones = offenders.filter((f) => f.rule === "non-reserved-phone");
+const names = offenders.filter((f) => f.rule === "personal-name");
 
 console.error("");
 console.error("Fixture PII guard: FAILED");
@@ -402,6 +499,23 @@ if (phones.length > 0) {
   console.error("");
   console.error("  Fix: use +1 <area code> 555-01xx (555-0100..555-0199 is reserved");
   console.error("       for fictional use).");
+  console.error("");
+}
+
+if (names.length > 0) {
+  const distinct = [...new Set(names.map((f) => f.match))].sort();
+  console.error(
+    `Personal names beside an address or a number (${names.length} occurrence(s), ` +
+      `${distinct.length} distinct):`,
+  );
+  for (const f of names) console.error(`  ${f.file}:${f.line}  ${f.match}`);
+  console.error("");
+  console.error("  A name is personal data on its own. This rule fires only when the");
+  console.error("  name shares a line with an address or a number — the identity-row");
+  console.error("  shape that leaked in BACKLOG-2542.");
+  console.error("");
+  console.error("  Fix: replace with an invented name, or — if it IS invented — add it");
+  console.error("       to FICTIONAL_NAMES in this file, or record it in the baseline.");
   console.error("");
 }
 

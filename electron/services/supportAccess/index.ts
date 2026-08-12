@@ -1,0 +1,303 @@
+/**
+ * Support access mode — production wiring (BACKLOG-2393)
+ *
+ * The pieces are constructed with injected dependencies so they can be tested
+ * without Electron, a clock, or a network. This module is the one place that
+ * knows the real ones.
+ */
+
+import { app, BrowserWindow } from "electron";
+import * as path from "path";
+import keychainGate from "../keychainGate";
+import { databaseEncryptionService } from "../databaseEncryptionService";
+import logService from "../logService";
+import sessionService from "../sessionService";
+import supabaseService from "../supabaseService";
+import { collectDiagnostics } from "../supportTicketService";
+import { SupportAccessService } from "./supportAccessService";
+import { SupportLogStore } from "./supportLogStore";
+import { SupportReportQueue } from "./supportReportQueue";
+import { SupportUploadScheduler } from "./supportUploadScheduler";
+import { SupabaseSupportTransport } from "./supabaseSupportTransport";
+import {
+  createAesGcmCipher,
+  createKeychainKeyProvider,
+  type SupportCipher,
+} from "./supportCipher";
+import { registerSupportTraceSink } from "./trace";
+import type { SupportAccessState } from "./types";
+
+export * from "./types";
+export * from "./scopes";
+export * from "./disclosure";
+export { SupportAccessService } from "./supportAccessService";
+export { SupportLogStore } from "./supportLogStore";
+export { SupportReportQueue } from "./supportReportQueue";
+export { SupportUploadScheduler } from "./supportUploadScheduler";
+export { SupabaseSupportTransport } from "./supabaseSupportTransport";
+export {
+  createAesGcmCipher,
+  createKeychainKeyProvider,
+  SupportCipherUnavailableError,
+} from "./supportCipher";
+export type { SupportCipher } from "./supportCipher";
+export {
+  supportTrace,
+  isSupportScopeActive,
+  notifySupportError,
+  registerSupportTraceSink,
+} from "./trace";
+
+const MODULE = "SupportAccess";
+
+/**
+ * Channel the main process pushes `SupportAccessState` on when the grant window
+ * opens or closes (BACKLOG-2431). The preload hardcodes the same string, as it
+ * does for every other support channel, to keep runtime main-process code out
+ * of the preload bundle.
+ */
+export const SUPPORT_ACCESS_CHANGED_CHANNEL = "support-access:changed";
+
+function bridgeLog(
+  level: "info" | "warn" | "error",
+  message: string,
+): void {
+  if (level === "error") logService.error(message, MODULE);
+  else if (level === "warn") logService.warn(message, MODULE);
+  else logService.info(message, MODULE);
+}
+
+interface SupportAccessBundle {
+  access: SupportAccessService;
+  logStore: SupportLogStore;
+  queue: SupportReportQueue;
+  scheduler: SupportUploadScheduler;
+  cipher: SupportCipher;
+}
+
+let bundle: SupportAccessBundle | null = null;
+
+function build(): SupportAccessBundle {
+  const baseDir = path.join(app.getPath("userData"), "support-access");
+  const now = () => Date.now();
+
+  const access = new SupportAccessService({
+    now,
+    baseDir,
+    appVersion: () => app.getVersion(),
+    log: bridgeLog,
+  });
+
+  // Encryption at rest. The key is resolved lazily on first use, not here:
+  // touching the keychain during construction would either throw or raise a
+  // prompt before the app is entitled to one. The gate is opened separately,
+  // in `unlockKeychainForProvisionedUser` below.
+  const cipher = createAesGcmCipher(
+    createKeychainKeyProvider({
+      baseDir,
+      isEncryptionAvailable: () => keychainGate.isEncryptionAvailable(),
+      sealString: (plaintext) => keychainGate.encryptString(plaintext),
+      openString: (sealed) => keychainGate.decryptString(sealed),
+      log: bridgeLog,
+    }),
+  );
+
+  const logStore = new SupportLogStore({
+    now,
+    baseDir,
+    isScopeActive: (scope) => access.isScopeActive(scope),
+    currentConsentId: () =>
+      access.isActive() ? (access.getConsentRecord()?.id ?? null) : null,
+    cipher,
+    log: bridgeLog,
+  });
+
+  const queue = new SupportReportQueue({
+    now,
+    baseDir,
+    logStore,
+    cipher,
+    collectDiagnostics: () => collectDiagnostics(),
+    getConsent: () => (access.isActive() ? access.getConsentRecord() : null),
+    log: bridgeLog,
+  });
+
+  const transport = new SupabaseSupportTransport({
+    getClient: () => supabaseService.getClient(),
+    getRequester: async () => {
+      const session = await sessionService.loadSession();
+      const user = session?.user as
+        | { email?: string; display_name?: string; first_name?: string; last_name?: string }
+        | undefined;
+      if (!user?.email) return null;
+      const name =
+        user.display_name ||
+        [user.first_name, user.last_name].filter(Boolean).join(" ") ||
+        user.email;
+      return { email: user.email, name };
+    },
+    baseDir,
+    describeGrant: (consentId) => {
+      const consent = access.findConsent(consentId);
+      if (!consent) return "Support access window";
+      return `${new Date(consent.grantedAt).toLocaleDateString()} (${consent.durationId})`;
+    },
+    log: bridgeLog,
+  });
+
+  const scheduler = new SupportUploadScheduler({
+    now,
+    access,
+    queue,
+    transport,
+    log: bridgeLog,
+  });
+
+  // However a window ends — revoked by hand or simply run out — the scoped log
+  // goes with it. Registered here rather than in the revoke handler, which is
+  // where it used to live and why expiry leaked into the next grant.
+  access.onEnd(async (reason) => {
+    await logStore.clear();
+    bridgeLog("info", `Support access ${reason}; scoped diagnostic log cleared`);
+  });
+
+  return { access, logStore, queue, scheduler, cipher };
+}
+
+export function getSupportAccess(): SupportAccessBundle {
+  if (!bundle) bundle = build();
+  return bundle;
+}
+
+/**
+ * Open the keychain gate for a user who set up secure storage in an earlier
+ * session (BACKLOG-2430).
+ *
+ * ## Why it lives here rather than in main.ts
+ *
+ * It was a line in `main.ts` first. Deleting that line turned nothing red —
+ * `main.ts` is not reachable from a test, so the fix for a P0 had no
+ * regression guard of its own. That is the same shape as the bug it fixes: a
+ * runtime state nothing exercised. Support access is the gate's only consumer,
+ * so this module is where the call belongs *and* the only place it can be
+ * asserted by execution.
+ *
+ * ## Why the key-store file is the right signal
+ *
+ * `hasKeyStore()` is `fs.existsSync` on a userData path — no `safeStorage`
+ * call, so no prompt. And the file is stronger evidence than "onboarding was
+ * passed": it is written only immediately after a **successful**
+ * `safeStorage.encryptString()`, so its presence proves an OS keychain
+ * encryption has already succeeded for this app. This cannot open a gate on a
+ * machine that never completed a keychain interaction.
+ *
+ * Separated from `initializeSupportAccess` so a test can drive one without the
+ * other, and exported for the same reason.
+ */
+export function unlockKeychainForProvisionedUser(): boolean {
+  return keychainGate.unlockIfProvisioned(() =>
+    databaseEncryptionService.hasKeyStore(),
+  );
+}
+
+/**
+ * Called once at startup. Loads persisted state and, if a granted window is
+ * still open, restarts the upload schedule.
+ *
+ * There is nothing to "restore" about the deadline itself — it is an absolute
+ * instant on disk, so it is already correct before this runs.
+ */
+export async function initializeSupportAccess(): Promise<void> {
+  // First, and synchronously. Every path out of this function that could
+  // capture a report — the scheduler starting below, or a manual capture from
+  // Settings later — needs the gate already open, and a returning user has
+  // nothing else that would ever open it.
+  unlockKeychainForProvisionedUser();
+
+  const { access, scheduler, logStore } = getSupportAccess();
+  await access.load();
+
+  // Producers call through supportAccess/trace, which is inert until this
+  // point. Registering only after state has been read means there is no window
+  // in which a stale in-memory default could let a write through.
+  registerSupportTraceSink({
+    write: (scope, event, fields) => {
+      void logStore.write(scope, event, fields).catch(() => undefined);
+    },
+    isScopeActive: (scope) => access.isScopeActive(scope),
+    notifyError: () => {
+      void scheduler.notifyError().catch(() => undefined);
+    },
+  });
+
+  // Reconcile first. It is what closes a window that lapsed while the app was
+  // shut, and the end hook clears the scoped log — so this must run before
+  // anything can capture a report that would otherwise carry the old window's
+  // contacts into a new grant.
+  if (await access.reconcile()) {
+    bridgeLog("info", "Support access window had expired while the app was closed");
+  }
+
+  // Retention, both halves. Scheduled ticks only happen while a window is open,
+  // so without this a deadline reached during a closed period would be enforced
+  // by nothing on this side.
+  await scheduler.purgeExpiredReports().catch((error) => {
+    bridgeLog("warn", `Support report retention pass failed: ${String(error)}`);
+    return undefined;
+  });
+  if (access.isActive()) {
+    const state = access.getState();
+    bridgeLog(
+      "info",
+      `Support access is active until ${state.consent?.expiresAt} (${Math.round(state.msRemaining / 3600000)}h remaining)`,
+    );
+    scheduler.start();
+  }
+  access.onChange((state) => {
+    if (state.active) scheduler.start();
+    else scheduler.stop();
+    broadcastSupportAccessState(state);
+  });
+}
+
+/**
+ * BACKLOG-2431: push state changes to every open window.
+ *
+ * Without this the renderer only learned the window had opened on its own
+ * 60-second poll, so the persistent "support access is on" banner could take a
+ * full minute to appear after the user granted. That banner is the only
+ * always-visible sign that client data is being collected, so it has to track
+ * the grant, not a timer. `grant()` and `end()` both emit through `onChange`,
+ * which is what this is attached to.
+ *
+ * The payload is the same `SupportAccessState` shape `support-access:get-state`
+ * returns, so the renderer can apply it without a follow-up round trip.
+ */
+function broadcastSupportAccessState(state: SupportAccessState): void {
+  try {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed() && win.webContents) {
+        win.webContents.send(SUPPORT_ACCESS_CHANGED_CHANNEL, state);
+      }
+    }
+  } catch (error) {
+    // A grant must never fail because a window went away mid-broadcast; the
+    // renderer's poll is still there as a backstop.
+    bridgeLog(
+      "warn",
+      `Could not broadcast support access state: ${String(error)}`,
+    );
+  }
+}
+
+/** Trigger an on-error capture. Debounced, and a no-op outside the window. */
+export function notifySupportAccessError(): void {
+  void getSupportAccess().scheduler.notifyError().catch(() => undefined);
+}
+
+/** Test seam — drop the singleton so a suite can rebuild it. */
+export function _resetSupportAccessForTests(): void {
+  bundle?.scheduler.stop();
+  bundle = null;
+  registerSupportTraceSink(null);
+}

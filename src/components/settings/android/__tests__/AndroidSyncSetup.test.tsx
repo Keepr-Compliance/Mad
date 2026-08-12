@@ -121,7 +121,7 @@ describe("AndroidSyncSetup", () => {
   // called on unmount.
 
   it("lands on the completed state for a returning already-paired user", async () => {
-    window.api.pairing.getStatus.mockResolvedValueOnce({
+    jest.mocked(window.api.pairing.getStatus).mockResolvedValueOnce({
       success: true,
       status: {
         isPaired: true,
@@ -152,7 +152,7 @@ describe("AndroidSyncSetup", () => {
   // still has a clear way out. Its copy states sync is AUTOMATIC.
   it("the done screen has a primary 'Done' that closes via onComplete, and states auto-sync (BACKLOG-2327)", async () => {
     const onComplete = jest.fn();
-    window.api.pairing.getStatus.mockResolvedValueOnce({
+    jest.mocked(window.api.pairing.getStatus).mockResolvedValueOnce({
       success: true,
       status: {
         isPaired: true,
@@ -226,13 +226,13 @@ describe("AndroidSyncSetup", () => {
     };
 
     it("advances to the success screen when a new device pairs (QR no longer rendered)", async () => {
-      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith([]));
 
       render(<AndroidSyncSetup userId={USER_ID} />);
       await goToPairStep();
 
       // A phone pairs off the QR.
-      window.api.pairing.getStatus.mockResolvedValue(statusWith(["new-1"]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith(["new-1"]));
       await act(async () => {
         await jest.advanceTimersByTimeAsync(POLL_MS);
       });
@@ -244,12 +244,12 @@ describe("AndroidSyncSetup", () => {
 
     it("auto-closes the modal via onComplete shortly after the success confirmation", async () => {
       const onComplete = jest.fn();
-      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith([]));
 
       render(<AndroidSyncSetup userId={USER_ID} onComplete={onComplete} />);
       await goToPairStep();
 
-      window.api.pairing.getStatus.mockResolvedValue(statusWith(["new-1"]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith(["new-1"]));
       await act(async () => {
         await jest.advanceTimersByTimeAsync(POLL_MS);
       });
@@ -267,7 +267,7 @@ describe("AndroidSyncSetup", () => {
 
     it("does NOT auto-advance while no new device appears (no spurious advance)", async () => {
       const onComplete = jest.fn();
-      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith([]));
 
       render(<AndroidSyncSetup userId={USER_ID} onComplete={onComplete} />);
       await goToPairStep();
@@ -284,7 +284,7 @@ describe("AndroidSyncSetup", () => {
 
     it("on re-pair, waits for a genuinely NEW device (a stale paired device does not skip the step)", async () => {
       // Returning user already paired with d1 -> lands on the success screen.
-      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1"]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith(["d1"]));
 
       render(<AndroidSyncSetup userId={USER_ID} />);
       await flush();
@@ -304,7 +304,7 @@ describe("AndroidSyncSetup", () => {
       expect(screen.getByText("Pair Your Android Phone")).toBeInTheDocument();
 
       // A genuinely new device d2 pairs -> advance.
-      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1", "d2"]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith(["d1", "d2"]));
       await act(async () => {
         await jest.advanceTimersByTimeAsync(POLL_MS);
       });
@@ -312,12 +312,12 @@ describe("AndroidSyncSetup", () => {
     });
 
     it("tears down the pairing watcher on unmount (no polling after unmount)", async () => {
-      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith([]));
 
       const { unmount } = render(<AndroidSyncSetup userId={USER_ID} />);
       await goToPairStep();
 
-      const callsBeforeUnmount = window.api.pairing.getStatus.mock.calls.length;
+      const callsBeforeUnmount = jest.mocked(window.api.pairing.getStatus).mock.calls.length;
       unmount();
 
       await act(async () => {
@@ -325,7 +325,7 @@ describe("AndroidSyncSetup", () => {
       });
 
       // Interval cleared on unmount — no further getStatus polls.
-      expect(window.api.pairing.getStatus.mock.calls.length).toBe(callsBeforeUnmount);
+      expect(jest.mocked(window.api.pairing.getStatus).mock.calls.length).toBe(callsBeforeUnmount);
     });
 
     // -------------------------------------------------------------------------
@@ -335,7 +335,7 @@ describe("AndroidSyncSetup", () => {
     // -------------------------------------------------------------------------
     it("does not seed a baseline from an unsuccessful poll (no spurious advance on re-pair)", async () => {
       // Returning user already paired with d1 -> lands on the success screen.
-      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1"]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith(["d1"]));
 
       render(<AndroidSyncSetup userId={USER_ID} />);
       await flush();
@@ -347,13 +347,13 @@ describe("AndroidSyncSetup", () => {
 
       // The FIRST poll on entering the pair step FAILS. Pre-fix this seeded an
       // EMPTY baseline; hardened, it is ignored (neither seeds nor compares).
-      window.api.pairing.getStatus.mockResolvedValue({ success: false } as never);
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue({ success: false } as never);
       fireEvent.click(screen.getByRole("button", { name: /I've Installed It/i }));
       await flush(); // on pair; the immediate seed tick gets an unsuccessful poll
       expect(screen.getByText("Pair Your Android Phone")).toBeInTheDocument();
 
       // Subsequent polls succeed and read the STILL-paired d1 (nothing new).
-      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1"]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith(["d1"]));
       await act(async () => {
         await jest.advanceTimersByTimeAsync(POLL_MS * 2);
       });
@@ -369,13 +369,13 @@ describe("AndroidSyncSetup", () => {
     // stays uncalled) — the active sync is preserved.
     // -------------------------------------------------------------------------
     it("leaves stopServer UNcalled when a live pair auto-advances the wizard", async () => {
-      window.api.pairing.getStatus.mockResolvedValue(statusWith([]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith([]));
 
       const { unmount } = render(<AndroidSyncSetup userId={USER_ID} />);
       await goToPairStep();
 
       // A phone pairs off the QR -> watcher advances to success (completedRef set).
-      window.api.pairing.getStatus.mockResolvedValue(statusWith(["new-1"]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith(["new-1"]));
       await act(async () => {
         await jest.advanceTimersByTimeAsync(POLL_MS);
       });
@@ -398,7 +398,7 @@ describe("AndroidSyncSetup", () => {
     it("the pair step's 'Done' closes via onComplete without stopping the active sync", async () => {
       const onComplete = jest.fn();
       // Returning user already paired with d1 -> lands on the success screen.
-      window.api.pairing.getStatus.mockResolvedValue(statusWith(["d1"]));
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue(statusWith(["d1"]));
 
       const { unmount } = render(
         <AndroidSyncSetup userId={USER_ID} onComplete={onComplete} />

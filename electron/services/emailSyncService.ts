@@ -14,7 +14,11 @@ import * as Sentry from "@sentry/electron/main";
 import logService from "./logService";
 import { autoLinkCommunicationsForContact } from "./autoLinkService";
 import type { AutoLinkResult } from "./autoLinkService";
+// BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
+// granted a support window covering the email-sync scope.
+import { supportTrace } from "./supportAccess/trace";
 import { countEmailsByUser, getEmailByExternalId } from "./db/emailDbService";
+import type { BulkMailHeaders } from "../utils/bulkMailHeaders";
 import { dbGet, dbAll, getRawDatabase } from "./db/core/dbConnection";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
@@ -246,6 +250,66 @@ export interface StoreableEmail {
   // or 'search_validated' (KQL $search, existence-confirmed by the fetcher).
   // Absent ⇒ treated as 'filter'. 'manual' is set by the caller path, not here.
   ingestSource?: "filter" | "search_validated";
+  // BACKLOG-2512: five per-message facts that both fetch services had (or can
+  // cheaply obtain) but that this interface did not declare — so they were
+  // structurally invisible to the writer and hard-coded to NULL at the INSERT.
+  // They cannot be reconstructed from anything the app retains; recovering them
+  // means re-reading every mailbox, so they are captured at ingest.
+  //
+  // These stay optional to avoid breaking existing callers; the guard against a
+  // future provider silently omitting one is the `_wireCheck` assignability
+  // assertion in gmailFetchService.test.ts / outlookFetchService.test.ts.
+  /** RFC 5322 In-Reply-To — Message-ID of the parent; the only reply-edge source. */
+  inReplyTo?: string | null;
+  /** RFC 5322 References — the full ancestor chain. */
+  references?: string | null;
+  /** When the recipient's server accepted the message. */
+  receivedAt?: Date | null;
+  /**
+   * BACKLOG-2571: the sender-asserted send time, and the source of `sent_at`.
+   *
+   * Kept SEPARATE from `date` above, which stays the receive time. `date` has
+   * four readers in this file and two of them compare it against legacy rows'
+   * `sent_at` (receive times) on a ±2 second tolerance; repointing `date` would
+   * make that comparison cross semantics and silently stop matching.
+   *
+   * Optional because a provider that cannot supply it should degrade to the old
+   * behaviour rather than write NULL into `sent_at` — see the bind site.
+   */
+  sentDate?: Date | null;
+  /**
+   * SHA-256 content hash. BACKLOG-2572: NOT cross-provider comparable — Gmail
+   * hashes over internalDate, Outlook over sentDateTime.
+   */
+  contentHash?: string | null;
+  /** Gmail labels / Outlook categories; JSON-encoded into `emails.labels`. */
+  labels?: string[];
+  /**
+   * BACKLOG-2513: retained bulk-mail headers (List-Unsubscribe, Precedence,
+   * Auto-Submitted, Authentication-Results), JSON-encoded into
+   * `emails.bulk_mail_headers`. These are the negative-filter input for the
+   * auto-detection design (BACKLOG-2500 §4.2). Raw facts only — nothing is
+   * classified at ingest.
+   */
+  bulkMailHeaders?: BulkMailHeaders | null;
+}
+
+/**
+ * BACKLOG-2512: convert a possibly-absent, possibly-unparseable date into an ISO
+ * string, or null.
+ *
+ * `new Date("garbage").toISOString()` throws `RangeError: Invalid time value`.
+ * Inside the per-email `try` in the batch insert loop, that RangeError is caught
+ * by `catch (emailError) { errors++ }` — which would discard the ENTIRE email
+ * over one bad timestamp while the sync still reports success. A provider that
+ * returns a malformed `receivedDateTime` would silently cost the user messages.
+ *
+ * Returning null instead keeps the email and loses only the one field.
+ */
+function toIsoStringOrNull(value: Date | string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 /** BACKLOG-1870: normalized attachment metadata (no file bytes). */
@@ -543,9 +607,10 @@ async function fetchStoreAndDedup(params: {
           sent_at, received_at,
           has_attachments, attachment_count,
           message_id_header, content_hash, labels,
+          bulk_mail_headers,
           ingest_source, validated_at,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
@@ -619,18 +684,86 @@ async function fetchStoreAndDedup(params: {
               // search and auto-link.
               email.bcc ?? null,
               email.threadId ?? null,
-              null, // in_reply_to
-              null, // references_header
-              email.date ? new Date(email.date).toISOString() : null,
-              null, // received_at
+              // BACKLOG-2512: the reply edge. Previously literal `null`, which
+              // made a thread graph unreconstructable from stored data — and
+              // reply rate is the strongest signal separating a human
+              // correspondent from an automated sender (BACKLOG-2500 §5).
+              email.inReplyTo ?? null,
+              email.references ?? null,
+              /**
+               * BACKLOG-2571 — `sent_at` is the SEND time as of this task.
+               *
+               * It used to be bound from `email.date`, which holds the RECEIVE
+               * time for both providers (Gmail `internalDate`, Outlook
+               * `receivedDateTime`) — so every date-range query, the
+               * `idx_emails_sent_at` index and the UI sort ran on receive time
+               * while calling it send time.
+               *
+               * `sentDate` is a SEPARATE field rather than a repointed `date`
+               * on purpose: `email.date` is also read by the legacy-row matcher
+               * further up this file, which compares it against legacy rows'
+               * `sent_at` (receive times) on a ±2 second tolerance. Repointing
+               * `date` would have made that comparison cross semantics and stop
+               * matching, silently and with every test still green.
+               *
+               * Falls back to `email.date` when a provider supplies no
+               * `sentDate`, so an un-migrated caller degrades to the OLD
+               * behaviour rather than writing NULL into a column eleven
+               * consumers read.
+               */
+              toIsoStringOrNull(email.sentDate ?? email.date),
+              /**
+               * BACKLOG-2512: server-receipt timestamp.
+               *
+               * Until BACKLOG-2571 this was byte-identical to `sent_at` on
+               * every new row, because both derived from `email.date`. It is
+               * now genuinely distinct, and a difference between the two
+               * columns IS meaningful — it is the send↔receive delta. Rows
+               * written before this task still carry identical values in both,
+               * and nothing on disk marks them as legacy: a re-sync is what
+               * corrects them (founder decision, 2026-08-09 — the only rows
+               * affected were his own test data, so a permanent marker column
+               * would have outlived its cause).
+               *
+               * Parsed via toIsoStringOrNull so an unparseable provider
+               * timestamp nulls one field instead of throwing into the
+               * per-email catch below and discarding the whole email.
+               */
+              toIsoStringOrNull(email.receivedAt),
               email.hasAttachments ? 1 : 0,
               email.attachmentCount || 0,
               // BACKLOG-1769: persist the RFC Message-ID (was dropped as null) so
               // dedup-by-Message-ID works on the next sync and re-deliveries remap
               // in place instead of resurrecting as ghost rows.
               email.messageIdHeader ?? null,
-              null, // content_hash
-              null, // labels
+              // BACKLOG-2512: content hash, already computed by both fetch
+              // services. No reader on `emails.content_hash` today — the dedup
+              // service queries the separate `messages` table — so this cannot
+              // collide with an existing consumer.
+              // BACKLOG-2572: NOT cross-provider comparable (Gmail hashes over
+              // internalDate, Outlook over sentDateTime). Do not build
+              // cross-provider dedup on this column without fixing that first.
+              email.contentHash ?? null,
+              // BACKLOG-2512: JSON per the schema contract ("JSON: Gmail
+              // labels, Outlook categories") and `NewEmail.labels: string`.
+              // Empty array → NULL so untagged mailboxes add no noise.
+              email.labels && email.labels.length > 0
+                ? JSON.stringify(email.labels)
+                : null,
+              // BACKLOG-2513: retained bulk-mail headers as JSON. These are the
+              // negative-filter input for auto-detection (BACKLOG-2500 §4.2) —
+              // the stage that exists because auto-detect manufactured
+              // transactions from newsletters and bank mail (BACKLOG-2499).
+              // Raw values only; NOTHING is classified here. No column reads
+              // this yet, by design: interpreting the headers is a later,
+              // revisable choice, and a classifier written now would freeze a
+              // decision before scoring has measured anything (BACKLOG-2273).
+              // No headers → NULL, so ordinary person-to-person mail adds no
+              // noise (same shape as the labels rule above).
+              email.bulkMailHeaders &&
+              Object.keys(email.bulkMailHeaders).length > 0
+                ? JSON.stringify(email.bulkMailHeaders)
+                : null,
               rowIngestSource, // BACKLOG-1802: ingest_source provenance
               validatedAt, // BACKLOG-1802: set when ingest_source='search_validated'
             );
@@ -996,6 +1129,28 @@ class EmailSyncService {
       totalAlreadyLinked,
       totalErrors,
       networkErrorOccurred,
+    });
+
+    // BACKLOG-2393: the email funnel end to end — fetched from the provider,
+    // deduplicated, stored, then linked to this deal. "The email is in Outlook
+    // but not on the transaction" has four different causes with the same
+    // symptom, and only the gap between these numbers tells them apart. Counts
+    // only; addresses are not recorded here. A no-op outside a granted window.
+    supportTrace("email-sync", "transaction-sync-complete", {
+      transaction_id: transactionId,
+      contact_addresses_searched: contactEmails.length,
+      contact_assignments: contactAssignments.length,
+      window_from: emailFetchSinceDate,
+      window_to: emailFetchBeforeDate,
+      fetched_from_provider: emailsFetched,
+      duplicates_dropped: emailsDuplicates,
+      newly_stored: emailsStored,
+      emails_linked: totalEmailsLinked,
+      threads_linked: totalMessagesLinked,
+      already_linked: totalAlreadyLinked,
+      errors: totalErrors,
+      network_error: networkErrorOccurred,
+      provider_warning: providerWarning ?? null,
     });
 
     // TASK-2049: Return partial success when network error occurred but some emails were saved

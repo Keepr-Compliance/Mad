@@ -12,7 +12,6 @@
  * TASK-1405: Fix contact phone lookup normalization
  */
 
-import { jest } from "@jest/globals";
 
 // Mock the core database connection
 const mockDbAll = jest.fn();
@@ -61,12 +60,12 @@ describe("contactDbService.getContactNamesByPhones", () => {
 
     it("should lookup contact by 10-digit phone number", async () => {
       mockDbAll.mockReturnValue([
-        { display_name: "John Doe", phone: "+15551234567" },
+        { display_name: "John Doe", phone: "+15555550112" },
       ]);
 
-      const result = await getContactNamesByPhones(["5551234567"]);
+      const result = await getContactNamesByPhones(["5555550112"]);
 
-      expect(result.get("5551234567")).toBe("John Doe");
+      expect(result.get("5555550112")).toBe("John Doe");
       expect(mockDbAll).toHaveBeenCalled();
     });
   });
@@ -74,64 +73,64 @@ describe("contactDbService.getContactNamesByPhones", () => {
   describe("phone number normalization and multiple formats", () => {
     it("should store result by raw 10-digit format", async () => {
       mockDbAll.mockReturnValue([
-        { display_name: "Jane Smith", phone: "+15559876543" },
+        { display_name: "Jane Smith", phone: "+15555550121" },
       ]);
 
-      const result = await getContactNamesByPhones(["+15559876543"]);
+      const result = await getContactNamesByPhones(["+15555550121"]);
 
       // Should be stored by 10-digit format
-      expect(result.get("5559876543")).toBe("Jane Smith");
+      expect(result.get("5555550121")).toBe("Jane Smith");
     });
 
     it("should store result by +1 prefix E.164 format", async () => {
       mockDbAll.mockReturnValue([
-        { display_name: "Jane Smith", phone: "+15559876543" },
+        { display_name: "Jane Smith", phone: "+15555550121" },
       ]);
 
-      const result = await getContactNamesByPhones(["+15559876543"]);
+      const result = await getContactNamesByPhones(["+15555550121"]);
 
       // Should be stored by E.164 format with +1
-      expect(result.get("+15559876543")).toBe("Jane Smith");
+      expect(result.get("+15555550121")).toBe("Jane Smith");
     });
 
     it("should store result by 11-digit format with 1 prefix", async () => {
       mockDbAll.mockReturnValue([
-        { display_name: "Jane Smith", phone: "+15559876543" },
+        { display_name: "Jane Smith", phone: "+15555550121" },
       ]);
 
-      const result = await getContactNamesByPhones(["+15559876543"]);
+      const result = await getContactNamesByPhones(["+15555550121"]);
 
       // Should be stored by 11-digit format
-      expect(result.get("15559876543")).toBe("Jane Smith");
+      expect(result.get("15555550121")).toBe("Jane Smith");
     });
 
     it("should handle lookup with different input format than stored", async () => {
       // Contact stored with +1 format
       mockDbAll.mockReturnValue([
-        { display_name: "Bob Wilson", phone: "+15551112222" },
+        { display_name: "Bob Wilson", phone: "+15555550104" },
       ]);
 
       // Input as 10-digit
-      const result = await getContactNamesByPhones(["5551112222"]);
+      const result = await getContactNamesByPhones(["5555550104"]);
 
       // Should still find the contact by multiple keys
-      expect(result.get("5551112222")).toBe("Bob Wilson");
-      expect(result.get("+15551112222")).toBe("Bob Wilson");
-      expect(result.get("15551112222")).toBe("Bob Wilson");
+      expect(result.get("5555550104")).toBe("Bob Wilson");
+      expect(result.get("+15555550104")).toBe("Bob Wilson");
+      expect(result.get("15555550104")).toBe("Bob Wilson");
     });
 
     it("should handle input with country code and store all variants", async () => {
       mockDbAll.mockReturnValue([
-        { display_name: "Alice Green", phone: "+15553334444" },
+        { display_name: "Alice Green", phone: "+15555550107" },
       ]);
 
       // Input with +1 country code
-      const result = await getContactNamesByPhones(["+15553334444"]);
+      const result = await getContactNamesByPhones(["+15555550107"]);
 
       // All three formats should resolve to the same name
-      expect(result.get("5553334444")).toBe("Alice Green");
-      expect(result.get("+15553334444")).toBe("Alice Green");
-      expect(result.get("15553334444")).toBe("Alice Green");
+      expect(result.get("5555550107")).toBe("Alice Green");
+      expect(result.get("+15555550107")).toBe("Alice Green");
+      expect(result.get("15555550107")).toBe("Alice Green");
     });
 
     it("should handle formatted phone numbers with dashes and spaces", async () => {
@@ -187,7 +186,7 @@ describe("contactDbService.getContactNamesByPhones", () => {
       mockGetContactNames.mockRejectedValue(new Error("Access denied"));
 
       // Should not throw
-      const result = await getContactNamesByPhones(["5551234567"]);
+      const result = await getContactNamesByPhones(["5555550112"]);
 
       expect(result.size).toBe(0);
       expect(mockLogService.warn).toHaveBeenCalledWith(

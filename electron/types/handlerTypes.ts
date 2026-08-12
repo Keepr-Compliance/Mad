@@ -218,6 +218,34 @@ export interface AvailableContact {
   externalSourceType?: string | null;
   /** macOS ZEXTERNALUUID. Captured for later; nothing matches on it. */
   externalUuid?: string | null;
+
+  /**
+   * BACKLOG-2556 — `collapsedSources` WAS HERE, AND IT IS DELETED.
+   *
+   * It carried "every source record this ONE row stands for": the row's own
+   * identity plus every record the picker's fold absorbed into it. The import
+   * wrote one `source_id` crosswalk row per entry — so a display-time guess
+   * about two address-book cards became a permanent, unrecoverable claim that
+   * the SOURCE had asserted they were the same record.
+   *
+   * The fold is gone (see `contacts:get-available`), so a picker row stands for
+   * exactly one source record and the three fields above ARE that record.
+   * Deleted rather than left as a single-element array: a plural channel that
+   * nothing fills is a plural channel the next writer fills.
+   */
+
+
+  /**
+   * BACKLOG-2556 — `absorbedRecords` WAS HERE, AND IT IS DELETED.
+   *
+   * It described, in words, which records the fold had swallowed, so the purple
+   * "N records combined" disclosure could be drawn. With nothing folded there
+   * is nothing to disclose, and the disclosure's own words collided with the
+   * amber `contact-row-review-flag` on saved contacts — one saying "combined"
+   * about something the app DECIDED, the other about something that actually
+   * happened, with no way for a user to tell them apart. The amber pill stays;
+   * it reports the crosswalk.
+   */
 }
 
 /**
@@ -239,6 +267,7 @@ export interface ImportableContact {
   externalRecordId?: string | null;
   externalSourceType?: string | null;
   externalUuid?: string | null;
+
 }
 
 /**

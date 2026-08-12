@@ -11,8 +11,8 @@
  * ## Phone Number Categories (BACKLOG-1495 Data Parsing Spec)
  *
  * 1. International format: "+1..." or "+44..." — kept as +digits
- * 2. US/Canada 10-digit: "5551234567" — normalized to "+15551234567"
- * 3. US/Canada 11-digit: "15551234567" — normalized to "+15551234567"
+ * 2. US/Canada 10-digit: "5555550112" — normalized to "+15555550112"
+ * 3. US/Canada 11-digit: "15555550112" — normalized to "+15555550112"
  * 4. Short codes (5-6 digits): "72645", "227263" — returned as-is (digits only)
  *    These are carrier/marketing SMS short codes and must NOT be filtered out.
  * 5. Alphanumeric senders: "T-Mobile", "BANK OF AMERICA" — returned as-is (trimmed)

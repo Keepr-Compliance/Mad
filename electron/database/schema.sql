@@ -147,6 +147,21 @@ CREATE TABLE IF NOT EXISTS contacts (
   -- android_sync) so the Source filter can show friendly per-origin labels. Migration v48
   -- widens this CHECK for existing installs. NOTE: 'messages'/'is_message_derived' are
   -- SELECT-time synthetic labels in contactDbService.ts, NOT column values — kept OUT.
+  --
+  -- BACKLOG-2473 — FIRST-IMPORT PROVENANCE ONLY. IT MUST NEVER BE READ FOR FILTERING.
+  --
+  -- This records where a contact came from AT THE MOMENT IT WAS CREATED, and is
+  -- never revised afterwards. A contact assembled from several sources — the same
+  -- person in the Mac address book AND in Outlook — still carries the single value
+  -- it was first written with, so filtering on it answers a different question from
+  -- the one the user asked and silently omits rows.
+  --
+  -- The authoritative answer to "where did this contact come from" is the
+  -- contact_source_links crosswalk, which holds one row per source INCLUDING an
+  -- 'origin' row for contacts that were typed in by hand or inferred from a thread.
+  -- The column is KEPT rather than dropped because it is the only record of which
+  -- source came FIRST; every read for display or filtering goes to the crosswalk.
+  -- See electron/services/db/contactOriginLink.ts.
   source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
 
   -- Engagement Metrics (for CRM/Relationship Agent)
@@ -198,8 +213,8 @@ CREATE TABLE IF NOT EXISTS contact_phones (
   id TEXT PRIMARY KEY,
   contact_id TEXT NOT NULL,
 
-  phone_e164 TEXT NOT NULL,              -- Normalized: +14155550000
-  phone_display TEXT,                    -- Display format: (415) 555-0000
+  phone_e164 TEXT NOT NULL,              -- Normalized: +14155550102
+  phone_display TEXT,                    -- Display format: (415) 555-0102
   phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key (last 10 digits)
   is_primary INTEGER DEFAULT 0,
   label TEXT,                            -- mobile, home, work, etc.
@@ -372,6 +387,18 @@ CREATE TABLE IF NOT EXISTS emails (
   references_header TEXT,              -- References header for threading
 
   -- Timestamps
+  -- BACKLOG-2571: sent_at is the SENDER-ASSERTED send time (Gmail `Date:`
+  -- header, Outlook `sentDateTime`); received_at is when the server took
+  -- delivery. They were the same value on every row until BACKLOG-2571, because
+  -- both derived from the provider's receive timestamp. A difference between
+  -- them is now meaningful — it is the send↔receive delta.
+  --
+  -- Rows written BEFORE that fix still hold a receive time in sent_at, and
+  -- nothing on disk distinguishes them: the send time was never stored (Outlook's
+  -- sentDateTime reached only the content hash; Gmail's `Date:` header was not
+  -- read at all), so there is nothing to backfill from. A provider re-sync
+  -- rewrites them; no marker column records the difference, by founder decision
+  -- 2026-08-09 — the only rows affected were one developer's test data.
   sent_at DATETIME,
   received_at DATETIME,
 
@@ -386,6 +413,23 @@ CREATE TABLE IF NOT EXISTS emails (
   -- Metadata
   labels TEXT,                         -- JSON: Gmail labels, Outlook categories
   classification TEXT,                 -- BACKLOG-1722: nullable JSON landing zone for future AI classifier output (no consumer today)
+  -- BACKLOG-2513: retained bulk-mail headers as JSON (List-Unsubscribe,
+  -- List-Unsubscribe-Post, Precedence, Auto-Submitted, Authentication-Results).
+  -- Negative-filter input for auto-detection (BACKLOG-2500 s4.2). No reader
+  -- today, by design: raw facts are stored, classification is deferred.
+  --
+  -- Kept in sync with migration v62 (ALTER TABLE ... ADD COLUMN), which is the
+  -- ONLY source of this column on an existing install. This declaration is a
+  -- READABILITY convention (matching validated_at/ingest_source below), NOT a
+  -- parity requirement: schema-parity exec's schema.sql on BOTH of its paths,
+  -- so the migration alone would satisfy it (cf. v56's tombstone columns, which
+  -- are declared on neither table and still converge). It is safe here only
+  -- because `emails` is never positionally copied by any migration.
+  --
+  -- NEVER add a standalone CREATE INDEX on this column to this file: schema.sql
+  -- is exec'd BEFORE the migration chain, so an index on a not-yet-added column
+  -- throws "no such column" on every real upgrade (BACKLOG-2298/2300).
+  bulk_mail_headers TEXT,
 
   -- Lifecycle provenance (BACKLOG-1801, Phase 2 "Validated Evidence Cache").
   -- Kept byte-for-byte in sync with migration v46 (ALTER TABLE ... ADD COLUMN).
@@ -447,6 +491,39 @@ CREATE INDEX IF NOT EXISTS idx_email_participants_address_role
   ON email_participants(email_address, role);
 CREATE INDEX IF NOT EXISTS idx_email_participants_email_id
   ON email_participants(email_id);
+
+-- BACKLOG-2633 — the index the contacts picker's recency subquery probes by.
+--
+-- WHAT IT SERVES. `EXTERNAL_CONTACT_LAST_MESSAGE_EXPR` and
+-- `IMPORTED_CONTACT_LAST_COMMUNICATION_SQL` (db/contactRecencySql.ts) both look a
+-- contact's own addresses up in this table under `LOWER(ep.email_address) =
+-- LOWER(<the contact's address>)`. `LOWER()` on the left makes
+-- `idx_email_participants_email_address` above unusable, so without this index
+-- there is NO access path by address and the planner falls back to driving the
+-- subquery from `emails` — cost `contacts x mailbox` rather than
+-- `contacts x that contact's own addresses`. Measured at the founder's record
+-- count (1,162 external contacts, 3,073 emails): 7,410 ms -> 12 ms.
+--
+-- IT IS HALF OF A FIX AND USELESS ALONE. Measured: adding this index and
+-- changing nothing else is worth 1.0x on a database with no `sqlite_stat1` —
+-- the planner keeps the mailbox-first order and never probes by address. The
+-- other half is the `CROSS JOIN` that pins the order, in contactRecencySql.ts.
+-- Do not delete one believing the other covers it; see that file's docblock.
+--
+-- WHY NO MIGRATION ACCOMPANIES IT. `runMigrations()` execs this file
+-- UNCONDITIONALLY (databaseService.ts) before the versioned chain, so
+-- `CREATE INDEX IF NOT EXISTS` is reached on every start including installs with
+-- nothing pending — the same reasoning BACKLOG-2621 shipped
+-- `idx_contact_emails_email_lower` on, and guarded with a real on-disk test
+-- (databaseService.onDiskUpgrade.test.ts) because neutering that one exec left
+-- the whole suite green. A sibling test guards this index the same way.
+--
+-- It is safe as a standalone CREATE INDEX ONLY because both `email_participants`
+-- and `email_address` are declared ABOVE in this same file. The BACKLOG-2298/2300
+-- failure — "no such column" on every real upgrade — bites an index on a column a
+-- LATER migration adds, since this file runs first. That is not the case here.
+CREATE INDEX IF NOT EXISTS idx_email_participants_lower_address
+  ON email_participants(LOWER(email_address));
 
 -- Backfill error table — populated by migration v41 for rows whose denormalized
 -- headers cannot be parsed. Used by support to triage edge cases.
@@ -917,6 +994,23 @@ CREATE INDEX IF NOT EXISTS idx_contacts_is_imported ON contacts(is_imported);
 CREATE INDEX IF NOT EXISTS idx_contacts_user_imported ON contacts(user_id, is_imported);
 CREATE INDEX IF NOT EXISTS idx_contact_emails_contact_id ON contact_emails(contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_emails_email ON contact_emails(email);
+-- BACKLOG-2621: every case-insensitive email lookup asks for `LOWER(email)`, and
+-- a plain index on `email` cannot serve a function-wrapped column. This
+-- EXPRESSION index matches the predicate exactly, so the matching queries stop
+-- being driven from `contacts` (one child seek per contact) and start being
+-- driven by the value being looked up.
+--
+-- An expression index rather than storing the address lowercased: case is part
+-- of what the user typed and of what gets printed into the compliance export.
+-- Case-folding stored addresses would be a data mutation and a visible change,
+-- and this change must be provably behaviour-neutral. The index changes zero rows.
+--
+-- Safe to declare here rather than in a migration (unlike
+-- idx_contact_phones_normalized below): `contact_emails.email` is an original
+-- table column, so it already exists on every upgrade path at the point
+-- schema.sql runs. SQLite's LOWER() is ASCII-only — unchanged either way, since
+-- the same LOWER() is what the query already asked for.
+CREATE INDEX IF NOT EXISTS idx_contact_emails_email_lower ON contact_emails(LOWER(email));
 CREATE INDEX IF NOT EXISTS idx_contact_phones_contact_id ON contact_phones(contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_phones_phone ON contact_phones(phone_e164);
 -- BACKLOG-1727: idx_contact_phones_normalized is created by migration v40 only.

@@ -8,6 +8,11 @@
  * - Concurrent operations
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
 
 // Mock electron module
@@ -167,7 +172,7 @@ const TEST_CONTACT_ID = "550e8400-e29b-41d4-a716-446655440003";
 const TEST_CONTACT_ID_2 = "550e8400-e29b-41d4-a716-446655440004";
 
 describe("Transaction Handlers Integration Tests", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
   const mockMainWindow = {
     webContents: {
@@ -177,8 +182,8 @@ describe("Transaction Handlers Integration Tests", () => {
   };
 
   beforeAll(() => {
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
     registerTransactionHandlers(mockMainWindow as any);

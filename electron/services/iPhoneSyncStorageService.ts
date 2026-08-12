@@ -15,6 +15,11 @@ import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import * as externalContactDb from "./db/externalContactDbService";
+import {
+  holdContactLinking,
+  releaseContactLinking,
+  requestContactLinking,
+} from "./contactLinkingScheduler";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { detectMessageType } from "../utils/messageTypeDetector";
 import { isContactSourceEnabled } from "../utils/preferenceHelper";
@@ -132,6 +137,23 @@ class IPhoneSyncStorageService {
   ): Promise<PersistResult> {
     const startTime = Date.now();
 
+    // BACKLOG-2474 — NO CONTACT MATCHING WHILE THIS SESSION CAN STILL ROLL BACK.
+    //
+    // `storeContacts` below writes rows stamped with `sessionId`, and every
+    // cancel/failure branch after it calls `rollbackSession` -> `deleteBySessionId`,
+    // which deletes exactly those rows. Between the two sits `storeAttachments`,
+    // which copies files and can run for minutes.
+    //
+    // Suppressing this path's OWN linking signal is not enough: the pass reads
+    // the whole table, so a macOS or Outlook sync completing inside that window
+    // would run a pass that links records this sync is about to delete. The hold
+    // makes "provisional" a property of the data rather than of who signalled.
+    //
+    // Only for session-scoped calls — a call with no session is not rollback-
+    // eligible and must not have its matching suspended.
+    const holdsLinking = sessionId !== undefined;
+    if (holdsLinking) holdContactLinking(userId);
+
     try {
       // Count total attachments for progress tracking
       const totalAttachments = result.messages.reduce(
@@ -236,6 +258,18 @@ class IPhoneSyncStorageService {
 
       const duration = Date.now() - startTime;
 
+      // BACKLOG-2474 — THE COMMIT POINT for the iPhone path.
+      //
+      // `upsertFromiPhone` deliberately does not signal when a sessionId is
+      // open, because everything above this line is still rollback-eligible
+      // (TASK-2110) and linking provisional rows would leave the crosswalk
+      // pointing at records `deleteBySessionId` is about to remove. Past this
+      // point every cancel and failure branch has already returned, so the rows
+      // are permanent and Phase 2 may safely consider them.
+      if (contactResult.stored > 0) {
+        requestContactLinking(userId);
+      }
+
       log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Persistence complete`, {
         messagesStored: messageResult.stored,
         messagesSkipped: messageResult.skipped,
@@ -287,6 +321,12 @@ class IPhoneSyncStorageService {
         duration,
         error: errorMessage,
       };
+    } finally {
+      // BACKLOG-2474: release on EVERY exit — success, cancel and throw alike.
+      // A hold that is never lifted silently disables contact matching for this
+      // user until the app restarts, which would be a worse bug than the one
+      // the hold prevents.
+      if (holdsLinking) releaseContactLinking(userId);
     }
   }
 
@@ -541,11 +581,35 @@ class IPhoneSyncStorageService {
       return { stored: 0, skipped: 0 };
     }
 
-    // Check if iPhone contacts source is enabled (check both keys for compatibility)
+    // BACKLOG-2486: iPhone contacts answer to `iphoneContacts` and NOTHING else.
+    //
+    // This read `!iphoneEnabled && !macosEnabled` — "check both keys for
+    // compatibility". On a Mac `macosContacts` is on for essentially every user,
+    // so the second clause was always false and turning iPhone Contacts off
+    // stored the contacts anyway. The SR review of PR #2201 drove this exact
+    // function and got byte-identical output for stored `iphone:true` and stored
+    // `iphone:false`.
+    //
+    // The "compatibility" being referred to was Windows (commit `c774e198`),
+    // where `macosContacts` is never written and the original macOS-only gate
+    // dropped every iPhone record. That is now handled by the derived default —
+    // `iphoneContacts` absent resolves to `!isMacOS`, i.e. TRUE on Windows
+    // (`contactSourceDefaults.ts:140-152`) — so no borrowed preference is needed.
+    //
+    // NOTE THE ASYMMETRY WITH `macosContacts`, which is deliberate: an ABSENT
+    // `iphoneContacts` is DERIVED (false on macOS, true on Windows), not
+    // fail-open. On macOS that means a user who never completed the
+    // contact-source step will not have iPhone contacts stored — which is the
+    // BACKLOG-2479 rule, because the Mac address book already carries them via
+    // iCloud. Logged at info with the reason so it is diagnosable in the field
+    // rather than looking like a failed sync.
     const iphoneEnabled = await isContactSourceEnabled(userId, "direct", "iphoneContacts", true);
-    const macosEnabled = await isContactSourceEnabled(userId, "direct", "macosContacts", true);
-    if (!iphoneEnabled && !macosEnabled) {
-      log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] iPhone contacts storage skipped (disabled in preferences)`);
+    if (!iphoneEnabled) {
+      log.info(
+        `[${IPhoneSyncStorageService.SERVICE_NAME}] iPhone contacts storage skipped: ` +
+          `the iPhone Contacts source is off for this user (${contacts.length} contacts not stored). ` +
+          `On macOS this is the default — the Mac address book already carries iPhone contacts via iCloud.`
+      );
       return { stored: 0, skipped: contacts.length };
     }
 
@@ -565,7 +629,26 @@ class IPhoneSyncStorageService {
           .map(e => sanitizeString(e.email, MAX_HANDLE_LENGTH)?.toLowerCase())
           .filter((e): e is string => !!e),
         company: sanitizedOrganization || undefined,
-        recordId: String(contact.id),  // iPhone contact ID as string
+        recordId: String(contact.id),  // iPhone contact ID as string (ABPerson.ROWID)
+        // BACKLOG-2407: carry the identifiers that cannot be re-read once this
+        // phone is gone. `recordId` above is UNCHANGED and remains the key —
+        // these ride alongside it and are matched on by nothing.
+        //
+        // Sanitized like every other string taken off the backup: it is a
+        // user-supplied restored file, and MAX_HANDLE_LENGTH is the existing
+        // bound for untrusted text on this path. `?? null` keeps an absent value
+        // null rather than undefined so the serializer drops it cleanly.
+        externalUuid: sanitizeString(contact.externalUuid, MAX_HANDLE_LENGTH) ?? null,
+        sourceIdentity: {
+          externalIdentifier:
+            sanitizeString(contact.externalIdentifier, MAX_HANDLE_LENGTH) ?? null,
+          externalModificationTag:
+            sanitizeString(contact.externalModificationTag, MAX_HANDLE_LENGTH) ?? null,
+          // Already ISO-8601 or null from the parser's own converter.
+          modifiedAt: contact.modifiedAt,
+          createdAt: contact.createdAt,
+          storeId: contact.storeId,
+        },
       };
     });
 

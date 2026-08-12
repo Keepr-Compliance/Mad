@@ -618,7 +618,9 @@ export class KeeprAppDriver implements AppDriver {
       await row.click();
     }
 
-    // Confirm the batch add (desktop "Add Selected"). Resolve the VISIBLE one (mobile twin exists).
+    // Confirm the batch add ("Add Selected"). BACKLOG-2639: there is exactly ONE
+    // of these now, in flow at every width — the mobile floating twin this line
+    // used to warn about is gone (it covered the save button underneath it).
     await this.press(Contacts.addSelectedButton, 'add-selected-button');
 
     // Back on Screen 1: every added contact must now have a role row.

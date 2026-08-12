@@ -149,7 +149,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: null,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: "Hello",
@@ -169,7 +169,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: 123,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: "Hello",
@@ -188,7 +188,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: null,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: "Hello",
@@ -197,7 +197,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-2",
           chat_id: null,
-          handle_id: "+15559876543",
+          handle_id: "+15555550121",
           date: 725846400000000000,
           is_from_me: 1,
           text: "Hi there",
@@ -225,7 +225,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: 0, // Falsy value
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: "Hello",
@@ -248,7 +248,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "unique-guid-123",
           chat_id: null,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: "Hello",
@@ -266,7 +266,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: null,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: "Hello",
@@ -276,7 +276,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
 
       const result = processMessagesWithValidation(messages);
 
-      expect(result.warnings[0].handleId).toBe("+15551234567");
+      expect(result.warnings[0].handleId).toBe("+15555550112");
     });
 
     it("should include sentAt timestamp in warning", () => {
@@ -284,7 +284,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: null,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000, // ~2024 timestamp
           is_from_me: 0,
           text: "Hello",
@@ -326,7 +326,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: null,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: "Hello",
@@ -346,7 +346,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: null,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: "Hello",
@@ -355,7 +355,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-2",
           chat_id: 123,
-          handle_id: "+15559876543",
+          handle_id: "+15555550121",
           date: 725846400000000000,
           is_from_me: 1,
           text: "Hi there",
@@ -399,7 +399,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: null,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: "Hello",
@@ -408,7 +408,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-2",
           chat_id: 123,
-          handle_id: "+15559876543",
+          handle_id: "+15555550121",
           date: 725846400000000000,
           is_from_me: 1,
           text: "Hi",
@@ -508,7 +508,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
       const messages: MockMessage[] = Array.from({ length: 5 }, (_, i) => ({
         guid: `msg-${i}`,
         chat_id: null,
-        handle_id: "+15551234567",
+        handle_id: "+15555550112",
         date: 725846400000000000,
         is_from_me: 0,
         text: `Message ${i}`,
@@ -525,7 +525,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
       const messages: MockMessage[] = Array.from({ length: 5 }, (_, i) => ({
         guid: `msg-${i}`,
         chat_id: i + 1,
-        handle_id: "+15551234567",
+        handle_id: "+15555550112",
         date: 725846400000000000,
         is_from_me: 0,
         text: `Message ${i}`,
@@ -543,7 +543,7 @@ describe("macOSMessagesImportService Validation Logging (TASK-1050)", () => {
         {
           guid: "msg-1",
           chat_id: null,
-          handle_id: "+15551234567",
+          handle_id: "+15555550112",
           date: 725846400000000000,
           is_from_me: 0,
           text: null, // Will be skipped for null text

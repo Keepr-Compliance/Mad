@@ -40,13 +40,16 @@ describe("TransactionService - Database Method Fixes", () => {
   const mockTransactionId = "test-transaction-id";
   const mockContactId = "test-contact-id";
 
-  const mockTransaction: Transaction = {
+  // Partial Transaction row: status/message_count/attachment_count/export_status/
+  // export_count are required on the model but are never read on the paths under
+  // test, so they are asserted away rather than invented.
+  const mockTransaction = {
     id: mockTransactionId,
     user_id: mockUserId,
     property_address: "123 Test St",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  };
+  } as Transaction;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -209,27 +212,30 @@ describe("TransactionService - Database Method Fixes", () => {
         id: "new-transaction-id",
       };
 
-      (databaseService.createTransaction as jest.Mock).mockResolvedValue(
+      (databaseService.createTransactionWithContactsSync as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
-      (databaseService.getTransactionById as jest.Mock).mockResolvedValue(
+      (databaseService.getTransactionById as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
       (
         databaseService.getTransactionContactsWithRoles as jest.Mock
-      ).mockResolvedValue([]);
+      ).mockReturnValue([]);
 
       const result = await transactionService.createAuditedTransaction(
         mockUserId,
         auditedData,
       );
 
-      expect(databaseService.createTransaction).toHaveBeenCalledWith(
+      // BACKLOG-2538: second argument is the party list. Asserted explicitly —
+      // "no parties" and "parties not passed" are different states.
+      expect(databaseService.createTransactionWithContactsSync).toHaveBeenCalledWith(
         expect.objectContaining({
           user_id: mockUserId,
           property_address: "789 Pine Rd",
           status: "active",
         }),
+        [],
       );
       expect(result).toBeDefined();
     });
@@ -241,7 +247,11 @@ describe("TransactionService - Database Method Fixes", () => {
       };
 
       const error = new Error("Database error");
-      (databaseService.createTransaction as jest.Mock).mockRejectedValue(error);
+      (databaseService.createTransactionWithContactsSync as jest.Mock).mockImplementation(
+        () => {
+          throw error;
+        },
+      );
 
       await expect(
         transactionService.createAuditedTransaction(mockUserId, auditedData),
@@ -288,9 +298,11 @@ describe("TransactionService - Database Method Fixes", () => {
         };
 
         const error = new Error("Database error");
-        (databaseService.createTransaction as jest.Mock).mockRejectedValue(
-          error,
-        );
+        (
+          databaseService.createTransactionWithContactsSync as jest.Mock
+        ).mockImplementation(() => {
+          throw error;
+        });
 
         await expect(
           transactionService.createAuditedTransaction(mockUserId, auditedData),

@@ -245,7 +245,7 @@ describe('re-sync of the same SMS does not duplicate (BACKLOG-2202)', () => {
   const datelessRaw: RawSmsRecord = {
     _id: '', // no stable provider row id -> composite fallback
     thread_id: '10',
-    address: '+15551234567',
+    address: '+15555550112',
     body: 'carrier alert with no date',
     date: '',
     date_sent: '',

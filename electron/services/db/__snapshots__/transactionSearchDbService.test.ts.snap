@@ -18,6 +18,7 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildC
     LEFT JOIN contact_phones cp ON cp.contact_id = c.id
     
     WHERE tc.transaction_id = ?
+      AND tc.removed_at IS NULL
       AND (
         c.display_name LIKE ? ESCAPE '\\'
         OR ce.email LIKE ? ESCAPE '\\'
@@ -40,6 +41,7 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildC
     LEFT JOIN contact_phones cp ON cp.contact_id = c.id
     
     WHERE tc.transaction_id = ?
+      AND tc.removed_at IS NULL
       AND (
         c.display_name LIKE ? ESCAPE '\\'
         OR ce.email LIKE ? ESCAPE '\\'

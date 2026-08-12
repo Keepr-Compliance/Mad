@@ -10,7 +10,11 @@ import "@testing-library/jest-dom";
 import App from "../../App";
 import { AuthProvider, NetworkProvider } from "../../contexts";
 import { PlatformProvider } from "../../contexts/PlatformContext";
-import type { AppStateMachine } from "../../appCore/state/types";
+import type {
+  AppStateMachine,
+  AppUser,
+  Subscription,
+} from "../../appCore/state/types";
 
 // Mock useAppStateMachine to bypass async loading states
 const mockUseAppStateMachine = jest.fn<AppStateMachine, []>();
@@ -71,168 +75,189 @@ jest.mock("../../appCore/state/flows", () => ({
 }));
 
 // Default mock user data
+// BACKLOG-2414: `AppUser.avatar_url` is declared `string | undefined`, but this
+// fixture pins the `null` the app actually receives from the profile row. Cast
+// rather than swapped to `undefined` — that would change the value under test.
 const mockUser = {
   id: "user-123",
   email: "test@example.com",
   display_name: "Test User",
   avatar_url: null,
-};
+} as unknown as AppUser;
 
+// BACKLOG-2414: a deliberately partial `Subscription` — these tests only exercise
+// the id/status/plan the header reads. The entitlement fields (`tier`, `isActive`,
+// `isTrial`, `trialEnded`, `trialDaysRemaining`) are left off on purpose: inventing
+// values would drive the paywall/trial branches these tests do not cover.
 const mockSubscription = {
   id: "sub-123",
   status: "active" as const,
   plan: "pro",
-};
+} as unknown as Subscription;
 
 // Helper to create default modal state
-const createModalState = (overrides: Partial<AppStateMachine["modalState"]> = {}) => ({
-  showProfile: false,
-  showSettings: false,
-  showTransactions: false,
-  showContacts: false,
-  showAuditTransaction: false,
-  showVersion: false,
-  showMoveAppPrompt: false,
-  showTermsModal: false,
-  showIPhoneSync: false,
-  ...overrides,
-});
+// BACKLOG-2414: `ModalState` requires `showAndroidSync`, which this fixture has
+// never set. Cast instead of adding it, so the modal state handed to the app stays
+// exactly what these tests have always passed (absent, i.e. falsy).
+const createModalState = (
+  overrides: Partial<AppStateMachine["modalState"]> = {},
+): AppStateMachine["modalState"] =>
+  ({
+    showProfile: false,
+    showSettings: false,
+    showTransactions: false,
+    showContacts: false,
+    showAuditTransaction: false,
+    showVersion: false,
+    showMoveAppPrompt: false,
+    showTermsModal: false,
+    showIPhoneSync: false,
+    ...overrides,
+  }) as AppStateMachine["modalState"];
 
 // Helper to create default app state machine mock
-const createAppStateMock = (overrides: Partial<AppStateMachine> = {}): AppStateMachine => ({
-  // Navigation
-  currentStep: "dashboard",
+// BACKLOG-2414: this fixture has never supplied the sync slice of
+// `AppStateMachine` (`isAnySyncing`, `currentSyncMessage`, `triggerRefresh`), so
+// App renders here with those absent. Cast rather than filled in: supplying a
+// `triggerRefresh` mock in particular would make a call that currently no-ops
+// start doing something, which is a behaviour change, not a typing fix.
+const createAppStateMock = (
+  overrides: Partial<AppStateMachine> = {},
+): AppStateMachine =>
+  ({
+    // Navigation
+    currentStep: "dashboard",
 
-  // Auth
-  isAuthenticated: true,
-  isAuthLoading: false,
-  currentUser: mockUser,
-  sessionToken: "test-token",
-  authProvider: "google",
-  subscription: mockSubscription,
-  needsTermsAcceptance: false,
+    // Auth
+    isAuthenticated: true,
+    isAuthLoading: false,
+    currentUser: mockUser,
+    sessionToken: "test-token",
+    authProvider: "google",
+    subscription: mockSubscription,
+    needsTermsAcceptance: false,
 
-  // Network
-  isOnline: true,
-  isChecking: false,
-  connectionError: null,
+    // Network
+    isOnline: true,
+    isChecking: false,
+    connectionError: null,
 
-  // Platform (macOS by default for permissions tests)
-  isMacOS: true,
-  isWindows: false,
+    // Platform (macOS by default for permissions tests)
+    isMacOS: true,
+    isWindows: false,
 
-  // Permissions
-  hasPermissions: true,
+    // Permissions
+    hasPermissions: true,
 
-  // Secure storage
-  hasSecureStorageSetup: true,
-  isCheckingSecureStorage: false,
-  isDatabaseInitialized: true,
-  isInitializingDatabase: false,
+    // Secure storage
+    hasSecureStorageSetup: true,
+    isCheckingSecureStorage: false,
+    isDatabaseInitialized: true,
+    isInitializingDatabase: false,
 
-  // Email onboarding
-  hasCompletedEmailOnboarding: true,
-  hasEmailConnected: true,
-  isCheckingEmailOnboarding: false,
+    // Email onboarding
+    hasCompletedEmailOnboarding: true,
+    hasEmailConnected: true,
+    isCheckingEmailOnboarding: false,
 
-  // Phone type
-  hasSelectedPhoneType: true,
-  selectedPhoneType: "iphone",
-  isLoadingPhoneType: false,
-  needsDriverSetup: false,
+    // Phone type
+    hasSelectedPhoneType: true,
+    selectedPhoneType: "iphone",
+    isLoadingPhoneType: false,
+    needsDriverSetup: false,
 
-  // New user flow
-  isNewUserFlow: false,
+    // New user flow
+    isNewUserFlow: false,
 
-  // Pending data
-  pendingOAuthData: null,
-  pendingOnboardingData: {
-    termsAccepted: false,
-    phoneType: null,
-    emailConnected: false,
-    emailProvider: null,
-  },
-  // TASK-1603: pendingEmailTokens removed after flow reorder
+    // Pending data
+    pendingOAuthData: null,
+    pendingOnboardingData: {
+      termsAccepted: false,
+      phoneType: null,
+      emailConnected: false,
+      emailProvider: null,
+    },
+    // TASK-1603: pendingEmailTokens removed after flow reorder
 
-  // Modal state
-  modalState: createModalState(),
+    // Modal state
+    modalState: createModalState(),
 
-  // UI state
-  showSetupPromptDismissed: false,
-  isTourActive: false,
-  appPath: "/Applications/Keepr.app",
+    // UI state
+    showSetupPromptDismissed: false,
+    isTourActive: false,
+    appPath: "/Applications/Keepr.app",
 
-  // Modal methods
-  openProfile: jest.fn(),
-  closeProfile: jest.fn(),
-  openSettings: jest.fn(),
-  closeSettings: jest.fn(),
-  openTransactions: jest.fn(),
-  closeTransactions: jest.fn(),
-  openContacts: jest.fn(),
-  closeContacts: jest.fn(),
-  openAuditTransaction: jest.fn(),
-  closeAuditTransaction: jest.fn(),
-  toggleVersion: jest.fn(),
-  closeVersion: jest.fn(),
-  openTermsModal: jest.fn(),
-  closeTermsModal: jest.fn(),
-  openMoveAppPrompt: jest.fn(),
-  closeMoveAppPrompt: jest.fn(),
-  openIPhoneSync: jest.fn(),
-  closeIPhoneSync: jest.fn(),
+    // Modal methods
+    openProfile: jest.fn(),
+    closeProfile: jest.fn(),
+    openSettings: jest.fn(),
+    closeSettings: jest.fn(),
+    openTransactions: jest.fn(),
+    closeTransactions: jest.fn(),
+    openContacts: jest.fn(),
+    closeContacts: jest.fn(),
+    openAuditTransaction: jest.fn(),
+    closeAuditTransaction: jest.fn(),
+    toggleVersion: jest.fn(),
+    closeVersion: jest.fn(),
+    openTermsModal: jest.fn(),
+    closeTermsModal: jest.fn(),
+    openMoveAppPrompt: jest.fn(),
+    closeMoveAppPrompt: jest.fn(),
+    openIPhoneSync: jest.fn(),
+    closeIPhoneSync: jest.fn(),
 
-  // Navigation
-  goToStep: jest.fn(),
-  goToEmailOnboarding: jest.fn(),
+    // Navigation
+    goToStep: jest.fn(),
+    goToEmailOnboarding: jest.fn(),
 
-  // Auth handlers
-  handleLoginSuccess: jest.fn(),
-  handleLoginPending: jest.fn(),
-  handleLogout: jest.fn().mockResolvedValue(undefined),
+    // Auth handlers
+    handleLoginSuccess: jest.fn(),
+    handleLoginPending: jest.fn(),
+    handleLogout: jest.fn().mockResolvedValue(undefined),
 
-  // Terms handlers
-  handleAcceptTerms: jest.fn().mockResolvedValue(undefined),
-  handleDeclineTerms: jest.fn().mockResolvedValue(undefined),
+    // Terms handlers
+    handleAcceptTerms: jest.fn().mockResolvedValue(undefined),
+    handleDeclineTerms: jest.fn().mockResolvedValue(undefined),
 
-  // Phone type handlers
-  handleSelectIPhone: jest.fn().mockResolvedValue(undefined),
-  handleSelectAndroid: jest.fn(),
-  handleAndroidGoBack: jest.fn(),
-  handleAndroidContinueWithEmail: jest.fn().mockResolvedValue(undefined),
-  handlePhoneTypeChange: jest.fn().mockResolvedValue(undefined),
-  handleAppleDriverSetupComplete: jest.fn().mockResolvedValue(undefined),
-  handleAppleDriverSetupSkip: jest.fn().mockResolvedValue(undefined),
+    // Phone type handlers
+    handleSelectIPhone: jest.fn().mockResolvedValue(undefined),
+    handleSelectAndroid: jest.fn(),
+    handleAndroidGoBack: jest.fn(),
+    handleAndroidContinueWithEmail: jest.fn().mockResolvedValue(undefined),
+    handlePhoneTypeChange: jest.fn().mockResolvedValue(undefined),
+    handleAppleDriverSetupComplete: jest.fn().mockResolvedValue(undefined),
+    handleAppleDriverSetupSkip: jest.fn().mockResolvedValue(undefined),
 
-  // Email onboarding handlers
-  handleEmailOnboardingComplete: jest.fn().mockResolvedValue(undefined),
-  handleEmailOnboardingSkip: jest.fn().mockResolvedValue(undefined),
-  handleEmailOnboardingBack: jest.fn(),
-  handleStartGoogleEmailConnect: jest.fn().mockResolvedValue(undefined),
-  handleStartMicrosoftEmailConnect: jest.fn().mockResolvedValue(undefined),
+    // Email onboarding handlers
+    handleEmailOnboardingComplete: jest.fn().mockResolvedValue(undefined),
+    handleEmailOnboardingSkip: jest.fn().mockResolvedValue(undefined),
+    handleEmailOnboardingBack: jest.fn(),
+    handleStartGoogleEmailConnect: jest.fn().mockResolvedValue(undefined),
+    handleStartMicrosoftEmailConnect: jest.fn().mockResolvedValue(undefined),
 
-  // Keychain handlers
-  handleKeychainExplanationContinue: jest.fn().mockResolvedValue(undefined),
-  handleKeychainBack: jest.fn(),
+    // Keychain handlers
+    handleKeychainExplanationContinue: jest.fn().mockResolvedValue(undefined),
+    handleKeychainBack: jest.fn(),
 
-  // Permission handlers
-  handlePermissionsGranted: jest.fn(),
-  checkPermissions: jest.fn().mockResolvedValue(undefined),
+    // Permission handlers
+    handlePermissionsGranted: jest.fn(),
+    checkPermissions: jest.fn().mockResolvedValue(undefined),
 
-  // Network handlers
-  handleRetryConnection: jest.fn().mockResolvedValue(undefined),
+    // Network handlers
+    handleRetryConnection: jest.fn().mockResolvedValue(undefined),
 
-  // UI handlers
-  handleDismissSetupPrompt: jest.fn(),
-  setIsTourActive: jest.fn(),
-  handleDismissMovePrompt: jest.fn(),
-  handleNotNowMovePrompt: jest.fn(),
+    // UI handlers
+    handleDismissSetupPrompt: jest.fn(),
+    setIsTourActive: jest.fn(),
+    handleDismissMovePrompt: jest.fn(),
+    handleNotNowMovePrompt: jest.fn(),
 
-  // Utility
-  getPageTitle: jest.fn().mockReturnValue("Keepr."),
+    // Utility
+    getPageTitle: jest.fn().mockReturnValue("Keepr."),
 
-  ...overrides,
-});
+    ...overrides,
+  }) as AppStateMachine;
 
 // Helper to render App with all required providers
 const renderApp = () => {
@@ -256,36 +281,43 @@ describe("App", () => {
     mockUseAppStateMachine.mockReturnValue(createAppStateMock());
 
     // Default API mocks - still needed for some components that call APIs directly
-    window.api.auth.getCurrentUser.mockResolvedValue({ success: false });
-    window.api.system.checkPermissions.mockResolvedValue({
+    jest.mocked(window.api.auth.getCurrentUser).mockResolvedValue({ success: false });
+    jest.mocked(window.api.system.checkPermissions).mockResolvedValue({
       hasPermission: false,
     });
-    window.api.system.checkAppLocation.mockResolvedValue({
+    jest.mocked(window.api.system.checkAppLocation).mockResolvedValue({
       shouldPrompt: false,
       appPath: "/Applications/Keepr.app",
     });
-    window.api.user.getPhoneType.mockResolvedValue({
+    jest.mocked(window.api.user.getPhoneType).mockResolvedValue({
       success: true,
       phoneType: "iphone",
     });
-    window.api.system.hasEncryptionKeyStore.mockResolvedValue({
+    // BACKLOG-2414: these two mocks omit a field the IPC contract declares
+    // required — `success` on hasEncryptionKeyStore, `available` on
+    // initializeSecureStorage. Left as-is (the app reads only `hasKeyStore` and
+    // `success` respectively on this path); adding the missing field would change
+    // what the code under test sees, so it is a cast, not a fixture edit.
+    jest.mocked(window.api.system.hasEncryptionKeyStore).mockResolvedValue({
       hasKeyStore: true,
-    });
-    window.api.system.initializeSecureStorage.mockResolvedValue({
+    } as Awaited<ReturnType<typeof window.api.system.hasEncryptionKeyStore>>);
+    jest.mocked(window.api.system.initializeSecureStorage).mockResolvedValue({
       success: true,
-    });
-    window.api.system.checkAllConnections.mockResolvedValue({
+    } as Awaited<ReturnType<typeof window.api.system.initializeSecureStorage>>);
+    jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
       success: true,
       google: { connected: true, email: "test@gmail.com" },
       microsoft: { connected: false },
     });
-    window.api.auth.checkEmailOnboarding.mockResolvedValue({
+    jest.mocked(window.api.auth.checkEmailOnboarding).mockResolvedValue({
       success: true,
       completed: true,
     });
-    window.api.system.getAppInfo.mockResolvedValue({
+    // BACKLOG-2414: `getAppInfo` also returns a required `name`; only `version`
+    // is asserted here, so the fixture stays as-is and the shortfall is cast.
+    jest.mocked(window.api.system.getAppInfo).mockResolvedValue({
       version: "1.0.7",
-    });
+    } as Awaited<ReturnType<typeof window.api.system.getAppInfo>>);
   });
 
   describe("Authentication", () => {
@@ -406,14 +438,22 @@ describe("App", () => {
   describe("Logout", () => {
     beforeEach(() => {
       // Mock system API calls used by Profile component
-      window.api.system.checkGoogleConnection.mockResolvedValue({
+      // BACKLOG-2414: the contract declares `email?: string`, but the real
+      // handlers return `null` for a disconnected account and that is what these
+      // fixtures pin. Cast rather than switched to `undefined`, which would change
+      // the value Profile renders from.
+      jest.mocked(window.api.system.checkGoogleConnection).mockResolvedValue({
         connected: false,
         email: null,
-      });
-      window.api.system.checkMicrosoftConnection.mockResolvedValue({
+      } as unknown as Awaited<
+        ReturnType<typeof window.api.system.checkGoogleConnection>
+      >);
+      jest.mocked(window.api.system.checkMicrosoftConnection).mockResolvedValue({
         connected: false,
         email: null,
-      });
+      } as unknown as Awaited<
+        ReturnType<typeof window.api.system.checkMicrosoftConnection>
+      >);
     });
 
     it("should clear all auth state on logout", async () => {
@@ -428,7 +468,7 @@ describe("App", () => {
       // Mock implementation that updates state when profile is opened
       mockUseAppStateMachine.mockImplementation(() => currentMockState);
 
-      window.api.auth.logout.mockResolvedValue({ success: true });
+      jest.mocked(window.api.auth.logout).mockResolvedValue({ success: true });
 
       const { rerender } = renderApp();
 
@@ -484,7 +524,7 @@ describe("App", () => {
 
       mockUseAppStateMachine.mockImplementation(() => currentMockState);
       // Simulate API failure at the lower level
-      window.api.auth.logout.mockRejectedValue(new Error("Network error"));
+      jest.mocked(window.api.auth.logout).mockRejectedValue(new Error("Network error"));
 
       const { rerender } = renderApp();
 
@@ -650,7 +690,7 @@ describe("App", () => {
 
     it("should open settings when settings button is clicked in profile modal", async () => {
       // Mock preferences API
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: { theme: "light", notifications: true },
       });

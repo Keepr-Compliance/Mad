@@ -6,13 +6,25 @@
  *
  * RULE: No code should call safeStorage directly. All calls go through this gate.
  *
- * Flow:
+ * Flow (first run):
  * 1. App starts with gate LOCKED
  * 2. User sees login, terms, phone selection (no keychain needed)
  * 3. User reaches "Secure Storage" step, sees explanation
  * 4. User clicks "Continue" -> renderer calls unlock()
  * 5. Gate UNLOCKED -> keychain prompt appears
  * 6. All subsequent safeStorage calls work normally
+ *
+ * Flow (every later launch):
+ * 1. App starts with gate LOCKED — this state is per-process and does not
+ *    persist, so a returning user begins locked exactly like a new one
+ * 2. Startup calls unlockIfProvisioned(); secure storage was set up in an
+ *    earlier session, so the gate opens without a prompt or a question
+ *
+ * That second flow is the whole reason unlockIfProvisioned exists. Step 3 of
+ * the first-run flow is the *only* thing that ever called unlock(), and a
+ * returning user never sees it — so before BACKLOG-2430 the gate stayed shut
+ * for the entire session and every gated call failed. Support access was the
+ * only consumer, which is why nothing else appeared broken.
  *
  * @module electron/services/keychainGate
  */
@@ -47,6 +59,60 @@ class KeychainGateService {
 
     logService.info("[KeychainGate] Unlocking keychain access", "KeychainGate");
     this._unlocked = true;
+  }
+
+  /**
+   * Unlock because secure storage was provisioned in an earlier session
+   * (BACKLOG-2430).
+   *
+   * The gate's `_unlocked` flag lives on a module singleton, so it is per
+   * process: every launch starts locked. The only caller of `unlock()` is the
+   * onboarding secure-storage step, which a returning user never sees again.
+   * The result was a gate that stayed shut for the whole session on every
+   * launch after the first.
+   *
+   * The predicate is the existing no-prompt file check for the database key
+   * store. If that file is on disk the user has already agreed to secure
+   * storage once and the OS already holds the key — so this raises no prompt
+   * and asks no question that was not already answered. It also cannot re-open
+   * a gate for someone who never passed the step, because then there is no
+   * file.
+   *
+   * Fails closed. A predicate that returns false, or throws, leaves the gate
+   * locked; the caller learns nothing was unlocked from the return value.
+   *
+   * @param isProvisioned - True when secure storage already exists on disk.
+   * @returns Whether the gate is unlocked after this call.
+   */
+  unlockIfProvisioned(isProvisioned: () => boolean): boolean {
+    if (this._unlocked) return true;
+
+    let provisioned: boolean;
+    try {
+      provisioned = isProvisioned();
+    } catch (error) {
+      logService.error(
+        "[KeychainGate] Could not determine whether secure storage is provisioned; staying locked",
+        "KeychainGate",
+        { error: error instanceof Error ? error.message : String(error) },
+      );
+      return false;
+    }
+
+    if (!provisioned) {
+      logService.info(
+        "[KeychainGate] Secure storage is not provisioned yet; staying locked until the user completes the secure storage step",
+        "KeychainGate",
+      );
+      return false;
+    }
+
+    logService.info(
+      "[KeychainGate] Secure storage was provisioned in an earlier session; unlocking for this session",
+      "KeychainGate",
+    );
+    this._unlocked = true;
+    return true;
   }
 
   /**

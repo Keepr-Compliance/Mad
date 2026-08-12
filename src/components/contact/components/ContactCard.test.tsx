@@ -225,7 +225,8 @@ describe("ContactCard", () => {
       );
     });
 
-    it("shows Unknown Contact when no name available", () => {
+    // BACKLOG-2461: was "Unknown Contact". See src/utils/contactDisplayLabel.ts.
+    it("falls back through organisation, then phone, then email", () => {
       renderContactCard({
         contact: createTestContact({
           name: undefined,
@@ -233,19 +234,46 @@ describe("ContactCard", () => {
         }),
       });
       expect(screen.getByTestId("contact-card-name")).toHaveTextContent(
-        "Unknown Contact"
+        "Acme Inc"
+      );
+
+      renderContactCard({
+        contact: createTestContact({
+          name: undefined,
+          display_name: undefined,
+          company: undefined,
+          phone: "+14155550134",
+        }),
+      });
+      expect(screen.getAllByTestId("contact-card-name")[1]).toHaveTextContent(
+        "+1 (415) 555-0134"
       );
     });
 
-    it("shows U initial for Unknown Contact when no name available", () => {
+    it('shows "No name" only when we hold nothing at all', () => {
+      renderContactCard({
+        contact: createTestContact({
+          name: undefined,
+          display_name: undefined,
+          company: undefined,
+          phone: undefined,
+          email: undefined,
+        }),
+      });
+      expect(screen.getByTestId("contact-card-name")).toHaveTextContent(
+        "No name"
+      );
+    });
+
+    it("takes the avatar initial from whatever the label resolved to", () => {
       renderContactCard({
         contact: createTestContact({
           name: undefined,
           display_name: undefined,
         }),
       });
-      // Shows "U" from "Unknown Contact" fallback
-      expect(screen.getByTestId("contact-card-avatar")).toHaveTextContent("U");
+      // "A" from "Acme Inc" — the organisation, not a placeholder.
+      expect(screen.getByTestId("contact-card-avatar")).toHaveTextContent("A");
     });
 
     it("displays email", () => {

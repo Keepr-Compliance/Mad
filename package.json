@@ -41,6 +41,8 @@
     "lint": "eslint electron src",
     "lint:fix": "eslint electron src --fix",
     "type-check": "tsc --noEmit",
+    "type-check:tests": "tsc -p tsconfig.test.json",
+    "type-check:tests:watch": "tsc -p tsconfig.test.json --watch",
     "type-check:watch": "tsc --noEmit --watch",
     "qa:ceremony": "ts-node --transpile-only --project scripts/qa/harness/tsconfig.json scripts/qa/harness/cli.ts",
     "qa:search-attach": "ts-node --transpile-only --project scripts/qa/harness/tsconfig.json scripts/qa/harness/search-attach-cli.ts",
@@ -62,6 +64,9 @@
     "lint:migrations": "bash scripts/lint-migrations.sh",
     "check:pii": "node scripts/ci/check-fixture-pii.mjs",
     "check:pii:list": "node scripts/ci/check-fixture-pii.mjs --list",
+    "check:hooks": "node scripts/ci/check-hooks-tracking.mjs",
+    "check:text-sources": "node scripts/ci/check-text-sources.mjs",
+    "hooks:doctor": "node scripts/hooks-doctor.mjs",
     "prepare": "husky",
     "prestart": "node scripts/rebuild-native.js"
   },

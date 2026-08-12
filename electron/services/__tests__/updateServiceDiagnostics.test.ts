@@ -121,7 +121,10 @@ describe("UpdateService Sentry integration", () => {
     it("captures a Sentry message on error with classified reason", async () => {
       const networkError = new Error("Network request failed");
       jest
-        .spyOn(service as never, "simulateUpdateCheck" as never)
+        .spyOn(
+          service as unknown as { simulateUpdateCheck: () => Promise<void> },
+          "simulateUpdateCheck",
+        )
         .mockRejectedValue(networkError);
 
       await expect(service.checkForUpdates()).rejects.toThrow(
@@ -148,7 +151,10 @@ describe("UpdateService Sentry integration", () => {
     it("tags errors with correct failure reason for storage errors", async () => {
       const storageError = new Error("ENOSPC: no space left on device");
       jest
-        .spyOn(service as never, "simulateUpdateCheck" as never)
+        .spyOn(
+          service as unknown as { simulateUpdateCheck: () => Promise<void> },
+          "simulateUpdateCheck",
+        )
         .mockRejectedValue(storageError);
 
       await expect(service.checkForUpdates()).rejects.toThrow();
@@ -207,7 +213,10 @@ describe("UpdateService Sentry integration", () => {
 
       const permError = new Error("EACCES: permission denied");
       jest
-        .spyOn(service as never, "simulateDownload" as never)
+        .spyOn(
+          service as unknown as { simulateDownload: () => Promise<void> },
+          "simulateDownload",
+        )
         .mockRejectedValue(permError);
 
       await expect(service.downloadUpdate()).rejects.toThrow(
@@ -266,7 +275,10 @@ describe("UpdateService Sentry integration", () => {
 
       const error = new Error("ECONNREFUSED");
       jest
-        .spyOn(service as never, "simulateUpdateCheck" as never)
+        .spyOn(
+          service as unknown as { simulateUpdateCheck: () => Promise<void> },
+          "simulateUpdateCheck",
+        )
         .mockRejectedValue(error);
 
       await expect(service.checkForUpdates()).rejects.toThrow();

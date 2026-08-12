@@ -17,6 +17,11 @@ import {
   isReactionRow,
   REACTION_EMOJI,
 } from "../../utils/reactionUtils";
+import {
+  threadContactLabel,
+  threadContactIsUnresolved,
+  GROUP_CHAT_LABEL,
+} from "./threadContactLabel";
 import logService from "../logService";
 
 /**
@@ -120,7 +125,14 @@ export function getThreadKey(msg: Communication): string {
 }
 
 /**
- * Extract phone/contact name from thread
+ * Extract phone/contact name from thread.
+ *
+ * BACKLOG-2463: an unresolvable thread returns `phone: ""`, not `phone:
+ * "Unknown"`. This field means "the handle this thread is keyed on", and putting
+ * the word "Unknown" in it invented a handle that no message ever carried — then
+ * three call sites had to test `phone.toLowerCase() === "unknown"` to undo it,
+ * and one of them wrote the result into a file name. `""` says the same thing
+ * truthfully, and the display chain already knows what to do with it.
  */
 export function getThreadContact(
   msgs: Communication[],
@@ -160,7 +172,7 @@ export function getThreadContact(
       return { phone: msg.sender, name };
     }
   }
-  return { phone: "Unknown", name: null };
+  return { phone: "", name: null };
 }
 
 /**
@@ -310,13 +322,13 @@ export function generateTextIndex(
     .map((msgs, index) => {
       const contact = getThreadContact(msgs, nameMap);
       const groupChat = isGroupChat(msgs);
-      // Use better display name for unknown contacts
-      let displayName: string;
-      if (!contact.name && contact.phone.toLowerCase() === "unknown") {
-        displayName = groupChat ? "Group Chat" : "Unknown Contact";
-      } else {
-        displayName = contact.name || contact.phone;
-      }
+      // BACKLOG-2463: one shared chain (name -> formatted handle -> "No name"),
+      // called rather than restated. A group thread with no resolvable party is
+      // still named for the chat, which is what it is.
+      const displayName =
+        groupChat && threadContactIsUnresolved(contact)
+          ? GROUP_CHAT_LABEL
+          : threadContactLabel(contact);
 
       return `
           <div class="text-item">
@@ -498,12 +510,15 @@ export function generateTextThreadHTML(
       const threadId = String(threadIndex + 1).padStart(3, "0");
       // Group chats always show "Group Chat #XXX"
       if (groupChat) {
-        return `Group Chat <span class="badge">#${threadId}</span>`;
+        return `${GROUP_CHAT_LABEL} <span class="badge">#${threadId}</span>`;
       }
-      if (!contact.name && contact.phone.toLowerCase() === "unknown") {
-        return `Unknown Contact <span class="badge">#${threadId}</span>`;
+      // BACKLOG-2463: with nobody to name the thread after, print the chain's
+      // terminal label on its own — "Conversation with No name" reads as a claim
+      // about the conversation rather than about the empty field.
+      if (threadContactIsUnresolved(contact)) {
+        return `${escapeHtml(threadContactLabel(contact))} <span class="badge">#${threadId}</span>`;
       }
-      return `Conversation with ${escapeHtml(contact.name || contact.phone)} <span class="badge">#${threadId}</span>`;
+      return `Conversation with ${escapeHtml(threadContactLabel(contact))} <span class="badge">#${threadId}</span>`;
     })()}</h1>
     <div class="meta">${!groupChat && contact.name ? escapeHtml(contact.phone) + " | " : ""}${realMsgs.length} message${realMsgs.length === 1 ? "" : "s"}</div>
     ${groupChat && participants && participants.length > 0 ? `
@@ -512,7 +527,7 @@ export function generateTextThreadHTML(
       <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px;">
         ${participants.map(p => `
           <div style="padding: 4px 0;">
-            <span style="color: #2d3748;">${escapeHtml(p.name || p.phone || "Unknown")}</span>
+            <span style="color: #2d3748;">${escapeHtml(threadContactLabel(p))}</span>
             ${p.phone && p.name ? `<span style="color: #718096; font-size: 12px; display: block;">${escapeHtml(p.phone)}</span>` : ""}
           </div>
         `).join("")}
@@ -567,8 +582,11 @@ export function generateTextMessageHTML(
       // Show phone only in group chats to identify sender
       if (resolvedName) senderPhone = msg.sender;
     } else {
-      // For 1:1 chats, use thread contact info
-      senderName = contact.name || contact.phone;
+      // For 1:1 chats, use thread contact info.
+      // BACKLOG-2463: through the shared chain — `contact.name || contact.phone`
+      // renders the EMPTY STRING for an unresolved thread now that the sentinel
+      // handle is gone, i.e. an inbound message attributed to nobody at all.
+      senderName = threadContactLabel(contact);
     }
   }
 

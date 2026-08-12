@@ -11,9 +11,8 @@ import {
   BulkDeleteConfirmModal,
   BulkExportModal,
 } from "./BulkActionBar";
-import { ToastContainer } from "./Toast";
 import { useSelection } from "../hooks/useSelection";
-import { useToast } from "../hooks/useToast";
+import { useNotification } from "../hooks/useNotification";
 import { useAppStateMachine } from "../appCore";
 import {
   // Components
@@ -199,8 +198,11 @@ function TransactionList({
     closeBulkExportModal: () => setShowBulkExportModal(false),
   });
 
-  // Toast notifications - lifted from TransactionDetails so toasts persist after modal close
-  const { toasts, showSuccess, showError, removeToast } = useToast();
+  // Toast notifications. BACKLOG-2447: these used to be lifted here from
+  // TransactionDetails purely so they survived the modal closing. Notifications
+  // now live in the app-level NotificationProvider, which outlives every modal,
+  // so the lifting is no longer what keeps them on screen.
+  const { notify } = useNotification();
 
   // Sync filter to URL params
   useEffect(() => {
@@ -475,8 +477,8 @@ function TransactionList({
           onClose={() => setSelectedTransaction(null)}
           onTransactionUpdated={handleTransactionUpdated}
           userId={userId}
-          onShowSuccess={showSuccess}
-          onShowError={showError}
+          onShowSuccess={notify.success}
+          onShowError={notify.error}
           initialTab={initialTab}
           initialHighlight={initialHighlight}
         />
@@ -490,8 +492,8 @@ function TransactionList({
           onTransactionUpdated={handleTransactionUpdated}
           isPendingReview={true}
           userId={userId}
-          onShowSuccess={showSuccess}
-          onShowError={showError}
+          onShowSuccess={notify.success}
+          onShowError={notify.error}
           initialTab={initialTab}
         />
       )}
@@ -559,9 +561,6 @@ function TransactionList({
           isExporting={isBulkExporting}
         />
       )}
-
-      {/* Toast Notifications - persists after modal close */}
-      <ToastContainer toasts={toasts} onDismiss={removeToast} />
     </div>
   );
 }

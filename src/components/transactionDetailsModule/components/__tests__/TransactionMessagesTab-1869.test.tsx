@@ -35,7 +35,7 @@ function makeMessage(id: string, threadId: string): Communication {
   return {
     id,
     user_id: "user-1",
-    sender: "+15551234567",
+    sender: "+15555550112",
     thread_id: threadId,
     channel: "sms",
     communication_type: "text",
@@ -43,7 +43,7 @@ function makeMessage(id: string, threadId: string): Communication {
     created_at: "2024-01-10T10:00:00Z",
     has_attachments: false,
     is_false_positive: false,
-    participants: JSON.stringify({ chat_members: ["+15551234567"] }),
+    participants: JSON.stringify({ chat_members: ["+15555550112"] }),
   } as unknown as Communication;
 }
 

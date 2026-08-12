@@ -13,11 +13,23 @@
  * through `getImportedContactsByUserId` unchanged.
  */
 
-import { jest } from "@jest/globals";
 
 const mockDbGet = jest.fn();
 const mockDbAll = jest.fn();
 const mockDbRun = jest.fn();
+/**
+ * DELIBERATELY LEFT A PASSTHROUGH (BACKLOG-2537).
+ *
+ * Nothing here reaches a transaction — measured, by replacing this with a
+ * throwing stub and watching every test in the file stay green. `dbAll`/`dbGet`/
+ * `dbRun` are canned `jest.fn()`s: there is NO DATABASE, so no atomicity claim
+ * is expressible and none can be silently mis-made. Converting it would mean
+ * giving the suite a database, which is a rewrite, not a fix.
+ *
+ * The eleven sibling suites that DO open a real database were converted, and
+ * `electron/__tests__/transactionMockIntegrity.guard.test.ts` fails CI if one
+ * regresses.
+ */
 const mockDbTransaction = jest.fn((fn: () => unknown) => fn());
 
 jest.mock("../core/dbConnection", () => ({

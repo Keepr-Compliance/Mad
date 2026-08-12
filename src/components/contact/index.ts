@@ -3,13 +3,20 @@ export {
   ContactCard,
   ContactDetailsModal,
   ContactFormModal,
-  ImportContactsModal,
   RemoveConfirmationModal,
   BlockingTransactionsModal,
+  ReviewDuplicatesModal,
 } from "./components";
 
 // Hooks
-export { useContactList, useContactSearch, useContactsLayout } from "./hooks";
+export {
+  useContactList,
+  useContactSearch,
+  useContactsLayout,
+  useReviewQueueCount,
+  useOpenQuestions,
+  useContactSources,
+} from "./hooks";
 
 // Types
 export type {

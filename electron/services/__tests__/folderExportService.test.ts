@@ -11,7 +11,6 @@
  * - HTML generation
  */
 
-import { jest } from "@jest/globals";
 
 // Store HTML content for test verification (TASK-1802)
 let lastLoadedHtmlContent: string | null = null;
@@ -167,6 +166,9 @@ describe("FolderExportService", () => {
   });
 
   describe("exportTransactionToFolder - texts as PDFs", () => {
+    // `is_active` is not a transactions column (it lives on users_local /
+    // channel_accounts), so this fixture is not structurally comparable to
+    // Transaction; the double assertion keeps the fixture data untouched.
     const mockTransaction: Transaction = {
       id: "txn-test",
       user_id: "user-123",
@@ -174,7 +176,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     const createTextMessage = (
       id: string,
@@ -203,9 +205,9 @@ describe("FolderExportService", () => {
 
     it("should group messages by thread_id and export as PDFs", async () => {
       const texts: Communication[] = [
-        createTextMessage("msg-1", "thread-A", "+15551234567", "Hello", "inbound"),
-        createTextMessage("msg-2", "thread-A", "+15551234567", "How are you?", "inbound", undefined, "2024-01-15T10:01:00Z"),
-        createTextMessage("msg-3", "thread-B", "+15559876543", "Different thread", "inbound"),
+        createTextMessage("msg-1", "thread-A", "+15555550112", "Hello", "inbound"),
+        createTextMessage("msg-2", "thread-A", "+15555550112", "How are you?", "inbound", undefined, "2024-01-15T10:01:00Z"),
+        createTextMessage("msg-3", "thread-B", "+15555550121", "Different thread", "inbound"),
       ];
 
       await folderExportService.exportTransactionToFolder(
@@ -244,18 +246,18 @@ describe("FolderExportService", () => {
         createTextMessage(
           "msg-1",
           "", // No thread_id
-          "+15551234567",
+          "+15555550112",
           "Message 1",
           "inbound",
-          JSON.stringify({ from: "+15551234567", to: ["+15550001111"] })
+          JSON.stringify({ from: "+15555550112", to: ["+15555550130"] })
         ),
         createTextMessage(
           "msg-2",
           "", // No thread_id
-          "+15551234567",
+          "+15555550112",
           "Message 2",
           "inbound",
-          JSON.stringify({ from: "+15551234567", to: ["+15550001111"] })
+          JSON.stringify({ from: "+15555550112", to: ["+15555550130"] })
         ),
       ];
 
@@ -281,7 +283,7 @@ describe("FolderExportService", () => {
     it("should use phone number when contact name is not available", async () => {
       // When no contact names are found, the phone number should appear
       const texts: Communication[] = [
-        createTextMessage("msg-1", "thread-A", "+15551234567", "Hello", "inbound"),
+        createTextMessage("msg-1", "thread-A", "+15555550112", "Hello", "inbound"),
       ];
 
       await folderExportService.exportTransactionToFolder(
@@ -299,8 +301,12 @@ describe("FolderExportService", () => {
       // Check that phone number is used when no contact name is found
       const htmlContent = lastLoadedHtmlContent;
       expect(htmlContent).not.toBeNull();
-      // Phone number should appear in the conversation header
-      expect(htmlContent).toContain("+15551234567");
+      // Phone number should appear in the conversation header.
+      // BACKLOG-2463: FORMATTED now. The text export routes the thread label
+      // through the shared BACKLOG-2461 chain, whose phone tier is
+      // `formatPhoneNumber`, so the raw E.164 string is not what a reader sees.
+      expect(htmlContent).toContain("Conversation with +1 (555) 555-0112");
+      expect(htmlContent).not.toContain("+15555550112");
     });
 
     it("should detect group chats with more than 2 participants", async () => {
@@ -361,9 +367,9 @@ describe("FolderExportService", () => {
 
     it("should sort messages chronologically within thread", async () => {
       const texts: Communication[] = [
-        createTextMessage("msg-2", "thread-A", "+15551234567", "Second", "inbound", undefined, "2024-01-15T10:05:00Z"),
-        createTextMessage("msg-1", "thread-A", "+15551234567", "First", "inbound", undefined, "2024-01-15T10:00:00Z"),
-        createTextMessage("msg-3", "thread-A", "+15551234567", "Third", "inbound", undefined, "2024-01-15T10:10:00Z"),
+        createTextMessage("msg-2", "thread-A", "+15555550112", "Second", "inbound", undefined, "2024-01-15T10:05:00Z"),
+        createTextMessage("msg-1", "thread-A", "+15555550112", "First", "inbound", undefined, "2024-01-15T10:00:00Z"),
+        createTextMessage("msg-3", "thread-A", "+15555550112", "Third", "inbound", undefined, "2024-01-15T10:10:00Z"),
       ];
 
       await folderExportService.exportTransactionToFolder(
@@ -382,9 +388,10 @@ describe("FolderExportService", () => {
       const htmlContent = lastLoadedHtmlContent;
       expect(htmlContent).not.toBeNull();
 
-      const firstIndex = htmlContent.indexOf("First");
-      const secondIndex = htmlContent.indexOf("Second");
-      const thirdIndex = htmlContent.indexOf("Third");
+      // Non-null asserted: the expect() above already proves it is not null.
+      const firstIndex = htmlContent!.indexOf("First");
+      const secondIndex = htmlContent!.indexOf("Second");
+      const thirdIndex = htmlContent!.indexOf("Third");
 
       expect(firstIndex).toBeLessThan(secondIndex);
       expect(secondIndex).toBeLessThan(thirdIndex);
@@ -392,9 +399,9 @@ describe("FolderExportService", () => {
 
     it("should include message count in header", async () => {
       const texts: Communication[] = [
-        createTextMessage("msg-1", "thread-A", "+15551234567", "One", "inbound"),
-        createTextMessage("msg-2", "thread-A", "+15551234567", "Two", "inbound", undefined, "2024-01-15T10:01:00Z"),
-        createTextMessage("msg-3", "thread-A", "+15551234567", "Three", "inbound", undefined, "2024-01-15T10:02:00Z"),
+        createTextMessage("msg-1", "thread-A", "+15555550112", "One", "inbound"),
+        createTextMessage("msg-2", "thread-A", "+15555550112", "Two", "inbound", undefined, "2024-01-15T10:01:00Z"),
+        createTextMessage("msg-3", "thread-A", "+15555550112", "Three", "inbound", undefined, "2024-01-15T10:02:00Z"),
       ];
 
       await folderExportService.exportTransactionToFolder(
@@ -417,7 +424,7 @@ describe("FolderExportService", () => {
 
     it("should handle single message threads correctly", async () => {
       const texts: Communication[] = [
-        createTextMessage("msg-1", "thread-single", "+15551234567", "Only message", "inbound"),
+        createTextMessage("msg-1", "thread-single", "+15555550112", "Only message", "inbound"),
       ];
 
       await folderExportService.exportTransactionToFolder(
@@ -441,7 +448,7 @@ describe("FolderExportService", () => {
 
     it("should escape HTML in message content", async () => {
       const texts: Communication[] = [
-        createTextMessage("msg-1", "thread-A", "+15551234567", "<script>alert('xss')</script>", "inbound"),
+        createTextMessage("msg-1", "thread-A", "+15555550112", "<script>alert('xss')</script>", "inbound"),
       ];
 
       await folderExportService.exportTransactionToFolder(
@@ -465,7 +472,7 @@ describe("FolderExportService", () => {
 
     it("should include timestamps for each message", async () => {
       const texts: Communication[] = [
-        createTextMessage("msg-1", "thread-A", "+15551234567", "Hello", "inbound", undefined, "2024-01-15T14:30:00Z"),
+        createTextMessage("msg-1", "thread-A", "+15555550112", "Hello", "inbound", undefined, "2024-01-15T14:30:00Z"),
       ];
 
       await folderExportService.exportTransactionToFolder(
@@ -491,6 +498,9 @@ describe("FolderExportService", () => {
   });
 
   describe("PDF file naming", () => {
+    // `is_active` is not a transactions column (it lives on users_local /
+    // channel_accounts), so this fixture is not structurally comparable to
+    // Transaction; the double assertion keeps the fixture data untouched.
     const mockTransaction: Transaction = {
       id: "txn-test",
       user_id: "user-123",
@@ -498,7 +508,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     it("should name files with zero-padded index", async () => {
       const texts: Communication[] = Array.from({ length: 3 }, (_, i) =>
@@ -546,7 +556,7 @@ describe("FolderExportService", () => {
           id: "msg-1",
           user_id: "user-123",
           thread_id: "thread-A",
-          sender: "+15551234567",
+          sender: "+15555550112",
           body_text: "Hello",
           direction: "inbound",
           sent_at: "2024-03-20T10:00:00Z",
@@ -579,6 +589,9 @@ describe("FolderExportService", () => {
   });
 
   describe("text message attachments", () => {
+    // `is_active` is not a transactions column (it lives on users_local /
+    // channel_accounts), so this fixture is not structurally comparable to
+    // Transaction; the double assertion keeps the fixture data untouched.
     const mockTransaction: Transaction = {
       id: "txn-test",
       user_id: "user-123",
@@ -586,7 +599,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     it("should include CSS styles for attachments in text thread PDF", async () => {
       // Verify that the CSS styles for attachment-image and attachment-ref are included
@@ -595,7 +608,7 @@ describe("FolderExportService", () => {
           id: "text-msg-1",
           user_id: "user-123",
           thread_id: "thread-A",
-          sender: "+15551234567",
+          sender: "+15555550112",
           body_text: "Hello",
           direction: "inbound",
           sent_at: "2024-01-15T10:00:00Z",
@@ -633,7 +646,7 @@ describe("FolderExportService", () => {
           id: "text-msg-1",
           user_id: "user-123",
           thread_id: "thread-A",
-          sender: "+15551234567",
+          sender: "+15555550112",
           body_text: "Hello",
           direction: "inbound",
           sent_at: "2024-01-15T10:00:00Z",
@@ -978,7 +991,7 @@ describe("FolderExportService", () => {
     it("should still use phone normalization for text messages", () => {
       const text = {
         communication_type: "text",
-        participants: JSON.stringify({ from: "+15551234567", to: ["+15559876543"] }),
+        participants: JSON.stringify({ from: "+15555550112", to: ["+15555550121"] }),
       };
       const result = getThreadKey(text as any);
       expect(result).toContain("participants-");
@@ -986,6 +999,8 @@ describe("FolderExportService", () => {
   });
 
   describe("email thread export", () => {
+    // See note above: `is_active` is not a transactions column, so the fixture
+    // is not structurally comparable to Transaction.
     const mockTransaction: Transaction = {
       id: "txn-email-test",
       user_id: "user-123",
@@ -993,7 +1008,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     const createEmail = (
       id: string,
@@ -1129,6 +1144,8 @@ describe("FolderExportService", () => {
 
   // BACKLOG-2161: the Summary_Report email index must honor Email Mode.
   describe("summary email index honors Email Mode (BACKLOG-2161)", () => {
+    // See note above: `is_active` is not a transactions column, so the fixture
+    // is not structurally comparable to Transaction.
     const mockTransaction: Transaction = {
       id: "txn-index-mode",
       user_id: "user-123",
@@ -1136,7 +1153,7 @@ describe("FolderExportService", () => {
       transaction_type: "purchase",
       is_active: true,
       created_at: new Date().toISOString(),
-    } as Transaction;
+    } as unknown as Transaction;
 
     const createEmail = (
       id: string,

@@ -10,7 +10,6 @@
  * TASK-1054: Adds coverage for critical path edge cases
  */
 
-import { jest } from "@jest/globals";
 
 // Mock Electron modules
 jest.mock("electron", () => ({
@@ -37,7 +36,10 @@ const mockDb = {
       _sql: string,
       _params: unknown[],
       callback: (err: Error | null) => void,
-    ) => {
+      // Explicit return type breaks the self-reference cycle (mockDb is
+      // returned from inside its own initializer), which would otherwise make
+      // the whole mock implicitly `any`.
+    ): unknown => {
       if (callback) callback(null);
       return mockDb;
     },
@@ -177,10 +179,12 @@ describe("DatabaseService - Edge Cases", () => {
 
       mockStatement.all.mockReturnValue(mockContacts);
 
+      // ContactFilters has no `limit`/`offset`; the assertion casts keep the
+      // filter payload byte-for-byte identical while satisfying the signature.
       const contacts = await databaseService.getContacts({
         user_id: "user-123",
         limit: 50,
-      });
+      } as Parameters<typeof databaseService.getContacts>[0]);
 
       expect(contacts).toHaveLength(50);
     });
@@ -192,7 +196,7 @@ describe("DatabaseService - Edge Cases", () => {
         user_id: "user-123",
         limit: 10,
         offset: 100,
-      });
+      } as Parameters<typeof databaseService.getContacts>[0]);
 
       expect(mockStatement.all).toHaveBeenCalled();
     });
@@ -203,7 +207,7 @@ describe("DatabaseService - Edge Cases", () => {
       await databaseService.getCommunications({
         user_id: "user-123",
         limit: 10000,
-      });
+      } as Parameters<typeof databaseService.getCommunications>[0]);
 
       expect(mockStatement.all).toHaveBeenCalled();
     });
@@ -289,17 +293,20 @@ describe("DatabaseService - Edge Cases", () => {
       });
 
       // Execute multiple creates concurrently
+      // NewUser also requires subscription_tier/subscription_status/is_active;
+      // the casts keep the payload as written rather than inventing values.
+      type NewUserArg = Parameters<typeof databaseService.createUser>[0];
       const promises = [
         databaseService.createUser({
           email: "user1@example.com",
           oauth_provider: "google",
           oauth_id: "id1",
-        }),
+        } as NewUserArg),
         databaseService.createUser({
           email: "user2@example.com",
           oauth_provider: "google",
           oauth_id: "id2",
-        }),
+        } as NewUserArg),
       ];
 
       const results = await Promise.all(promises);
@@ -355,7 +362,7 @@ describe("DatabaseService - Edge Cases", () => {
         user_id: "user-123",
         display_name: unicodeName,
         source: "manual",
-      });
+      }, { kind: "derived" });
 
       expect(contact.display_name).toBe(unicodeName);
     });
@@ -379,6 +386,8 @@ describe("DatabaseService - Edge Cases", () => {
 
       mockStatement.get.mockReturnValue(mockComm);
 
+      // NewMessage also requires has_attachments/is_false_positive; the cast
+      // keeps the payload as written rather than inventing values.
       await databaseService.createCommunication({
         user_id: "user-123",
         communication_type: "email",
@@ -387,7 +396,7 @@ describe("DatabaseService - Edge Cases", () => {
         subject: "Test",
         body: textWithWhitespace,
         sent_at: new Date().toISOString(),
-      });
+      } as Parameters<typeof databaseService.createCommunication>[0]);
 
       expect(mockStatement.run).toHaveBeenCalled();
     });

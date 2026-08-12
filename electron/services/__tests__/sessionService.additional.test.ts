@@ -41,13 +41,22 @@ function extractSavedSessionData(writeCallArg: string): Record<string, unknown> 
 /**
  * Helper: create encrypted file content for readFile mock.
  */
-function createEncryptedFileContent(sessionData: Record<string, unknown>): string {
+// Param widened to `object`: callers pass typed SessionData values, which have
+// no index signature and so are not assignable to Record<string, unknown>.
+function createEncryptedFileContent(sessionData: object): string {
   const json = JSON.stringify(sessionData);
   const encrypted = Buffer.from(`encrypted:${json}`).toString("base64");
   return JSON.stringify({ encrypted });
 }
 
+/** The SessionData argument accepted by sessionService.saveSession (not exported). */
+type SessionDataArg = Parameters<typeof sessionService.saveSession>[0];
+
 describe("SessionService - Additional Tests", () => {
+  // Cast (below): `user` here is the minimal {id, email, name} identity the
+  // service persists and re-reads, not a full User row (which additionally
+  // requires oauth_provider / subscription / timestamps). Kept as-is because the
+  // round-trip assertions compare exactly these fields.
   const mockSession = {
     user: {
       id: "user-123",
@@ -58,7 +67,7 @@ describe("SessionService - Additional Tests", () => {
     provider: "google" as const,
     expiresAt: Date.now() + 86400000, // 24 hours from now
     createdAt: Date.now(),
-  };
+  } as unknown as SessionDataArg;
 
   beforeEach(() => {
     jest.clearAllMocks();

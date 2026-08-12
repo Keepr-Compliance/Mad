@@ -30,6 +30,7 @@ import { IPhoneSyncProvider } from "./contexts/IPhoneSyncContext";
 import { LicenseGate, TrialStatusBanner } from "./components/license";
 import UpdateNotification from "./components/UpdateNotification";
 import { SupportWidget } from "./components/support/SupportWidget";
+import { SupportAccessIndicator } from "./components/support/SupportAccessIndicator";
 
 function App() {
   const app = useAppStateMachine();
@@ -57,6 +58,9 @@ function App() {
           including login, onboarding, error states, and license-blocked states.
           Widget detects auth state internally via IPC. */}
       <SupportWidget />
+      {/* BACKLOG-2393: support access is a bounded window, and the user must be
+          able to see that it is open — and when it closes — from any screen. */}
+      <SupportAccessIndicator />
     </NotificationProvider>
   );
 }

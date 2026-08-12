@@ -35,10 +35,6 @@ export {
 // and uses the transactionDetailsModule for tab components.
 // Import it directly: import TransactionDetails from "./TransactionDetails";
 
-// EditTransactionModal
-export { EditTransactionModal } from "./EditTransactionModal";
-export type { EditTransactionModalProps } from "./EditTransactionModal";
-
 // TransactionListCard
 export { TransactionListCard } from "./TransactionListCard";
 export type { TransactionListCardProps } from "./TransactionListCard";
