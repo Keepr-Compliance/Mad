@@ -9,17 +9,25 @@
  *
  * WHAT IS REAL vs REIMPLEMENTED (be precise — do not overclaim):
  *   - REAL, imported directly:
- *       electron/utils/addressNormalization.normalizeAddress    (address → tokens)
- *       electron/utils/emailDateRange.computeTransactionDateRange (the date window)
- *   - LOCAL reimplementations (isParticipantMatch / isInWindow / matchesAddressTokens
- *     below): faithful mirrors of the app's linking predicates — participant-address
- *     `IN (contacts)`, the sent_at window, and the per-token substring match that the
- *     H3 oracle's db-set-diff-core.buildDerivedQuery expresses as SQL. This guard does
- *     NOT drive the SQL builder itself; the actual SQL shape is exercised END-TO-END by
- *     the H3 oracle against the real encrypted DB in the runtime cell
- *     (e2e/tests/filter-toggle-counts.spec.ts, "H3 oracle" test). So the counts are
- *     validated twice: here by faithful predicates over the fixture rows, and there by
- *     the real SQL over the real DB.
+ *       electron/utils/addressNormalization.normalizeAddress      (address → components)
+ *       electron/utils/addressNormalization.contentContainsAddress (the address gate itself)
+ *       electron/utils/emailDateRange.computeTransactionDateRange  (the date window)
+ *   - LOCAL reimplementations (isParticipantMatch / isInWindow below): faithful mirrors
+ *     of the app's participant-address `IN (contacts)` clause and the sent_at window.
+ *
+ *     BACKLOG-2678: the address predicate USED to be local too (`matchesAddressTokens`,
+ *     require-every-token, mirroring the pre-BACKLOG-2311 SQL `LIKE` chain). BACKLOG-2311
+ *     moved address filtering out of SQL into JS and demoted suffix/directional to
+ *     OPTIONAL, at which point that local mirror was no longer a mirror — it just kept
+ *     agreeing on this fixture. It now calls the app's own contentContainsAddress.
+ *
+ *     This guard still does NOT drive the SQL builder; the actual SQL shape is exercised
+ *     END-TO-END by the H3 oracle against the real encrypted DB in the runtime cell
+ *     (e2e/tests/filter-toggle-counts.spec.ts, "H3 oracle" test). NOTE that the oracle's
+ *     buildDerivedQuery is itself still on the pre-2311 all-tokens semantics — the two
+ *     agree on this fixture only because every seeded MATCH email spells the full
+ *     address. That divergence is BACKLOG-2688, including the boundary email that would
+ *     tell them apart.
  *
  * If a future edit to normalizeAddress, the window logic, or the fixture drifts
  * the real counts away from the manifest, THIS test fails first (fast, pure Node),
@@ -38,7 +46,11 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { normalizeAddress } from '../../../../electron/utils/addressNormalization';
+import {
+  normalizeAddress,
+  contentContainsAddress,
+  type NormalizedAddress,
+} from '../../../../electron/utils/addressNormalization';
 import { computeTransactionDateRange } from '../../../../electron/utils/emailDateRange';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -92,20 +104,40 @@ function isInWindow(e: FixtureEmail): boolean {
   return t >= start.getTime() && t <= end.getTime();
 }
 
-/** filter-ON: OFF membership AND subject/body contains ALL address tokens (substring, mirrors the SQL LIKE). */
-function matchesAddressTokens(e: FixtureEmail, tokens: string[]): boolean {
-  const hay = `${e.subject} ${e.body_plain ?? ''}`.toLowerCase();
-  return tokens.every((tok) => hay.includes(tok.toLowerCase()));
+/**
+ * filter-ON: OFF membership AND the REAL app matcher accepts the email content.
+ *
+ * BACKLOG-2678: this used to be a local `matchesAddressTokens` reimplementation that required
+ * EVERY token as a substring, mirroring the pre-BACKLOG-2311 SQL `LIKE` chain. BACKLOG-2311 moved
+ * address filtering out of SQL and into JS (autoLinkService.ts:283-295) and made suffix/directional
+ * OPTIONAL, so that mirror silently stopped being one. We now call the app's own
+ * `contentContainsAddress` — one less reimplementation to drift.
+ */
+function matchesAddress(e: FixtureEmail, na: NormalizedAddress): boolean {
+  return contentContainsAddress(`${e.subject} ${e.body_plain ?? ''}`, na);
 }
 
 describe('fixture-filter-counts fidelity (BACKLOG-1947/1950)', () => {
-  it('normalizeAddress derives the exact tokens the manifest commits to', () => {
+  it('normalizeAddress derives the exact components the matcher consumes', () => {
     const na = normalizeAddress(seed.FIXTURE_ADDRESS);
     expect(na).not.toBeNull();
-    const tokens = [na!.streetNumber, ...na!.streetName.split(/\s+/)];
     // Pins the tokenizer: a future normalizeAddress change surfaces HERE, not in a headful run.
-    expect(tokens).toEqual(['742', 'birchwood', 'lane', 'ne']);
-    expect(tokens).toEqual(manifest.transaction.normalizedTokens);
+    // BACKLOG-2311 shape — streetNumber + REQUIRED distinctive word(s), with suffix and directional
+    // demoted to OPTIONAL and canonicalized ("NE" -> "northeast").
+    expect(na).toEqual({
+      streetNumber: '742',
+      requiredNameWords: ['birchwood'],
+      optionalWords: ['lane', 'northeast'],
+      full: '742 birchwood lane northeast',
+    });
+
+    // NOT compared against manifest.transaction.normalizedTokens (["742","birchwood","lane","ne"]).
+    // That array is NOT documentation: it feeds db-assert.js -> buildDerivedQuery -> the live
+    // Playwright H3 oracle as one `LIKE '%<token>%'` per token, and the seeded fixture emails spell
+    // the directional "NE". Regenerating it to the canonical "northeast" would make the oracle
+    // search for a string no fixture email contains and collapse the runtime ON-count from 4 to 0.
+    // The manifest bytes are deliberately left alone; reconciling the oracle with the post-2311
+    // required/optional semantics is BACKLOG-2688.
   });
 
   it('the fixture address + contacts match the manifest', () => {
@@ -146,11 +178,10 @@ describe('fixture-filter-counts fidelity (BACKLOG-1947/1950)', () => {
     );
   });
 
-  it('recomputes filter-ON == 4 (⊆ OFF) from the fixture using the REAL address tokens', () => {
+  it('recomputes filter-ON == 4 (⊆ OFF) from the fixture using the REAL address matcher', () => {
     const na = normalizeAddress(seed.FIXTURE_ADDRESS)!;
-    const tokens = [na.streetNumber, ...na.streetName.split(/\s+/)];
     const off = fx.emails.filter((e) => isParticipantMatch(e) && isInWindow(e));
-    const on = off.filter((e) => matchesAddressTokens(e, tokens));
+    const on = off.filter((e) => matchesAddress(e, na));
     expect(on.length).toBe(manifest.expectedCounts.filterOn);
     expect(on.length).toBe(4);
     // filter-ON ⊆ filter-OFF.
@@ -166,15 +197,14 @@ describe('fixture-filter-counts fidelity (BACKLOG-1947/1950)', () => {
 
   it('DECOY (non-contact participant) and OWN-only emails are in NEITHER set — participant IN() is the gate', () => {
     const na = normalizeAddress(seed.FIXTURE_ADDRESS)!;
-    const tokens = [na.streetNumber, ...na.streetName.split(/\s+/)];
     const off = fx.emails.filter((e) => isParticipantMatch(e) && isInWindow(e));
-    const on = off.filter((e) => matchesAddressTokens(e, tokens));
+    const on = off.filter((e) => matchesAddress(e, na));
     const offIds = new Set(off.map((e) => e.id));
     const onIds = new Set(on.map((e) => e.id));
 
     // decoy-2 DELIBERATELY mentions the full address but has a non-contact participant → excluded.
     const decoy2 = fx.emails.find((e) => e.id === 'qa-seed-email-decoy-2')!;
-    expect(matchesAddressTokens(decoy2, tokens)).toBe(true); // it DOES contain the address text
+    expect(matchesAddress(decoy2, na)).toBe(true); // it DOES contain the address text
     expect(offIds.has(decoy2.id)).toBe(false); // …but is NOT linked (no contact participant)
     expect(onIds.has(decoy2.id)).toBe(false);
 

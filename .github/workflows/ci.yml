@@ -220,6 +220,54 @@ jobs:
       - name: Scan fixtures for personal data
         run: npm run check:pii
 
+  # BACKLOG-2678: fail the build when a tracked test file is run by NO CI test config.
+  #
+  # jest.config.js used different testMatch lists under CI and locally, so a file matched only by
+  # the local list ran on developer machines and in the pre-push hook and NEVER in CI — 47 of 622
+  # tracked test files, 31 of them the QA harness's own suites, with nothing able to report it.
+  # Converging the globs closed that day's gap; this job is what stops it reopening.
+  #
+  # Deliberately NOT gated on docs-only, and deliberately WITHOUT `needs: check-changes`: the
+  # docs-only filter treats `.github/workflows/*` as documentation, so a workflow-only PR would
+  # skip this job — which is precisely how a gate gets disabled without anyone noticing
+  # (cf. BACKLOG-2506: duplicated job names and a push leg that emitted no Windows job, all merged
+  # green). It must always run and always report a status.
+  #
+  # Unique job name + unique status-check name. Do NOT add a second job with this name.
+  test-drift:
+    name: Test Drift Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      # The gate asks each runner to list its own tests rather than reimplementing glob matching,
+      # so jest/vitest must be installed. ignore-scripts skips the electron/native rebuild — test
+      # DISCOVERY needs no native module and no app build.
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      # android-companion is NOT an npm workspace (own package-lock, jest-expo preset), so the root
+      # install does not provide its node_modules. Without this, its probe reports DEAD and its 30
+      # test files look orphaned.
+      - name: Install android-companion dependencies
+        working-directory: android-companion
+        run: npm ci
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Check for orphaned test files
+        run: node scripts/ci/check-test-drift.mjs
+
   # BACKLOG-1750: gate the @keepr/ui shared component library. Isolated,
   # platform-agnostic job (single OS, no native modules) — the root `test` job
   # excludes packages/ (see jest.config.js testPathIgnorePatterns), so without
