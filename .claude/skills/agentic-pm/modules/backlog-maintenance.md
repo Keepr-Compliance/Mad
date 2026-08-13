@@ -161,6 +161,21 @@ Items are considered stale if:
 2. **Update or close** - Refresh requirements or mark as won't-do
 3. **Re-prioritize** - Move to appropriate sprint or backlog
 
+### Epic Size — split at 30 children (MANDATORY)
+
+**An epic nobody can hold has stopped organizing anything.**
+
+| Children | Action |
+|----------|--------|
+| ≤ 30 | Fine |
+| > 30 | **Split before adding the next item** |
+
+**Split by the thing being built, not by priority.** Priority changes weekly and re-sorts nothing; a phase boundary (schema → crosswalk → matching → UI → tests) survives, and each half can be summarized in a sentence.
+
+**Why this is not cosmetic.** Epic 2468 reached **121 children**. The cost is that *"what is built?"* stops having an answer that fits on a screen — and on 13 Aug 2026 it was answered **wrongly**, from status fields nobody could audit, because no agent or human could hold the set. It also hides the real signal: 54 pending items in one bucket look like a backlog, while the same 54 grouped into phases show plainly that one phase has not started.
+
+**When an epic passes 30 because the work changed shape** — an investigation found a missing model rather than a broken function — see `sprint-management.md` → *"When the investigation finds a MISSING MODEL, re-cut the plan that day."* Splitting is not enough there; the shape is wrong, not just the size.
+
 ---
 
 ## TODO Extraction
@@ -219,6 +234,18 @@ gh pr list --state all --limit 20 | grep -E "(700|701|702|703|704|705|706)"
 SPRINT-010 was fully merged on 2025-12-29 but sprint file still showed "Planning" on 2026-01-01. This led to incorrect status reports because the file was trusted without verification.
 
 **Trust, but verify.** The source of truth for code state is GitHub; the source of truth for sprint/task status is Supabase. Reconcile both.
+
+### A QA gate is not finished until it writes back (MANDATORY)
+
+The procedure above reconciles status against **merged PRs**. It does not cover the other thing that changes an item's truth: **the founder testing it and saying it works.**
+
+**Rule: a QA gate is not complete until every item it covered has its status set to what the gate found.** Not a summary comment on the epic — the item itself. Write it at the time the result is taken, not afterwards.
+
+**Record the non-passes too.** "Verified", "still broken" and **"not verifiable"** are three different outcomes and all three are real. Gate 4's check 19 could not be verified at all: the linker has no instrumentation, so its convergence claim cannot be confirmed in the field at any scale. Marking that as a pass would have been a vacuous green; marking it as a failure would have been false.
+
+**Why this is MANDATORY.** Gate 4 ran 41 checks on the founder's machine and confirmed 37 fixes holding. The result was written as **one comment on epic 2468 and not one child status changed.** Weeks later the board reported **29 items as unverified when he had personally verified 21 of them** — and he caught it, not the process. A stale `testing` is indistinguishable from a real one, so the under-report is invisible; and because *some* items had been advanced and others had not, the column looked maintained.
+
+**Check for the shape:** if an item carries a `FOUNDER TEST — PASS` comment above an unchanged status field, the write-back was skipped.
 
 ---
 

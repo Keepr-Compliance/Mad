@@ -135,6 +135,26 @@ When verifying a fix or process (sync jobs, reindexing, CI automations), confirm
 
 Three occurrences in one night, 10–11 Aug 2026 (BACKLOG-2645). Worked example: `.claude/docs/PR-SOP.md` → §4.4.
 
+### Derive sets by execution, not by grep (MANDATORY)
+
+**grep finds a TOKEN. It does not find the PROPERTY you are counting.** A symbol appears in a comment, a test, a dead branch, a file grep skips because one raw NUL byte makes it read as binary. Every one of those inflates or deflates a count, and the number reaches the founder with no way to tell.
+
+1. **Cite the command next to any number you state.** "17 call sites (`git grep -c ... | wc -l`)" is checkable; "17 call sites" is not.
+2. **To count things with a property, break the property and see what goes red.** Reachability, "is this filtered", "does this path run" — none of these are greppable. Run it.
+3. **An empty grep result is a claim, not a fact.** Run `file <path>` before concluding a symbol is absent — `contactManualLink.ts` read as binary for weeks and every repo-wide sweep silently skipped it (BACKLOG-2637).
+
+Three separate undercounts in one night, 30 Jul 2026.
+
+### State a mechanism as traced, or mark it untraced (MANDATORY)
+
+**An item's stated mechanism becomes the engineer's fixture.** Whoever picks the item up builds a test that reproduces the mechanism as written. If it was inferred rather than traced, they build a fixture for a state the code cannot produce — and it passes, because nothing contradicts it.
+
+1. **Trace the mechanism to a running line, or write "MECHANISM UNTRACED" in the item.** Either is fine. Silence is not.
+2. **Quote real literals.** BACKLOG-2679 cited `"No name's own entry"`; the code emits `"Unknown's own entry"` (`contactDbService.ts:529`). No fixture could have reproduced the filed string.
+3. **Name the real producer.** BACKLOG-2672 was filed as an `external_contacts` row when the records are synthesised from `messages` by `getMessageDerivedContacts` — a fix keyed on `isExternal` would have missed every one.
+
+Both were caught by the engineer *after* implementation had begun, 11–12 Aug 2026.
+
 ---
 
 ## MANDATORY: Follow Instructions Exactly
