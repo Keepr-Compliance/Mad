@@ -162,6 +162,14 @@ jobs:
       - name: Rebuild native modules for Electron
         run: node scripts/rebuild-native.js
         continue-on-error: true
+        env:
+          # TEMPORARY CONTROL FOR BACKLOG-2698 — REVERT BEFORE MERGE.
+          # Points prebuild-install's sqlite3 mirror at an unresolvable host so
+          # the download fails deterministically, forcing the from-source
+          # node-gyp fallback to run. That fallback is the thing under repair;
+          # without this the download just succeeds and the Windows job goes
+          # green having never exercised the fix.
+          npm_config_sqlite3_binary_host: https://invalid.invalid
 
       # BACKLOG-2505: NODE_OPTIONS on the next three steps.
       #
