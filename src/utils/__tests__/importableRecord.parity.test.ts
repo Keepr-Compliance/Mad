@@ -94,13 +94,13 @@ const CASES: Row[] = [
     why: "COMPANY COUNTS — the display chain's second tier renders it on screen",
   },
   {
-    parts: { name: "", phone: "+15551234567", allPhones: ["+15551234567"], allEmails: [] },
+    parts: { name: "", phone: "+14155550142", allPhones: ["+14155550142"], allEmails: [] },
     expected: false,
     why: "THE BOUNDARY — transcribed from contacts:get-available for a nameless address-book row",
   },
   { parts: { name: "", email: "dana@example.com" }, expected: false, why: "email only" },
   {
-    parts: { allPhones: ["+15551234567"] },
+    parts: { allPhones: ["+14155550142"] },
     expected: false,
     why: "identifier only in the plural array — the flat field alone would miss it",
   },
@@ -110,17 +110,17 @@ const CASES: Row[] = [
     why: "identifier only in the plural emails array",
   },
   {
-    parts: { name: "unknown", phone: "+15551234567" },
+    parts: { name: "unknown", phone: "+14155550142" },
     expected: false,
     why: "sentinel name but a REAL phone — refusing this is the too-broad failure",
   },
   {
-    parts: { phone: "dana@icloud.com" },
+    parts: { phone: "dana@example.com" },
     expected: false,
     why: "NO DIGIT TEST — an iMessage handle can be an Apple ID and still identify a person",
   },
   {
-    parts: { name: "unknown", allPhones: ["", "+15551234567"] },
+    parts: { name: "unknown", allPhones: ["", "+14155550142"] },
     expected: false,
     why: "one usable entry among blanks is enough",
   },

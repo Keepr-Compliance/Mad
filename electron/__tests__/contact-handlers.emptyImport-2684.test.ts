@@ -293,7 +293,7 @@ describe("contacts:import refuses a record with nothing on it (BACKLOG-2684)", (
    */
   it("refuses the whole batch rather than silently importing only the good record", async () => {
     const outcome = await importRecords([
-      { name: "Dana Whitlock", phone: "5551234567" },
+      { name: "Dana Whitlock", phone: "4155550142" },
       { name: "unknown", phone: "unknown" },
     ]);
 
@@ -305,7 +305,7 @@ describe("contacts:import refuses a record with nothing on it (BACKLOG-2684)", (
   /** The reason names WHICH record, so a batch caller can act on it. */
   it("names the position of the refused record in the batch", async () => {
     const outcome = await importRecords([
-      { name: "Dana Whitlock", phone: "5551234567" },
+      { name: "Dana Whitlock", phone: "4155550142" },
       { name: "unknown", phone: "unknown" },
     ]);
 
@@ -313,7 +313,7 @@ describe("contacts:import refuses a record with nothing on it (BACKLOG-2684)", (
   });
 
   it("still accepts an ordinary named record", async () => {
-    const outcome = await importRecords([{ name: "Dana Whitlock", phone: "5551234567" }]);
+    const outcome = await importRecords([{ name: "Dana Whitlock", phone: "4155550142" }]);
 
     expect(outcome.refused).toBe(false);
     expect(rowsCreated()).toBe(1);
@@ -328,7 +328,7 @@ describe("contacts:import refuses a record with nothing on it (BACKLOG-2684)", (
  * NAME but WITH a phone stays importable. Asserting `refused === false` here
  * would be WRONG, and measuring it is what proved that:
  *
- *   {name:"", phone:"+15551234567"}  ->  pre-fix: REFUSED, "name is required"
+ *   {name:"", phone:"+14155550142"}  ->  pre-fix: REFUSED, "name is required"
  *   {name:"", email:"d@e.com"}       ->  pre-fix: REFUSED, "name is required"
  *   {name:"", company:"Vantrees"}    ->  pre-fix: REFUSED, "name is required"
  *
@@ -337,8 +337,8 @@ describe("contacts:import refuses a record with nothing on it (BACKLOG-2684)", (
  * what `contacts:get-available` emits for an `external_contacts` row with an
  * empty `name`, transcribed from the real producer rather than invented:
  *
- *   { id:"ext-1", name:"", phone:"+15551234567", email:null, company:null,
- *     allPhones:["+15551234567"], allEmails:[], isFromDatabase:false, ... }
+ *   { id:"ext-1", name:"", phone:"+14155550142", email:null, company:null,
+ *     allPhones:["+14155550142"], allEmails:[], isFromDatabase:false, ... }
  *
  * So the boundary the 2672 decision names is ALREADY crossed in the main
  * process, and the renderer offers an Import button that the handler then
@@ -358,10 +358,10 @@ describe("the new predicate is not the thing refusing a nameless-but-identified 
       {
         id: "ext-1",
         name: "",
-        phone: "+15551234567",
+        phone: "+14155550142",
         email: null,
         company: null,
-        allPhones: ["+15551234567"],
+        allPhones: ["+14155550142"],
         allEmails: [],
         isFromDatabase: false,
       },
