@@ -198,7 +198,9 @@ describe("BACKLOG-2669 — the worker twin plans from links only", () => {
     if (!mockPort.handler) return; // worker never loaded — nothing was opened
     const exit = jest
       .spyOn(process, "exit")
-      .mockImplementation((() => undefined) as unknown as (code?: number) => never);
+      .mockImplementation(
+        (() => undefined) as unknown as (code?: string | number | null) => never,
+      );
     try {
       mockPort.handler({ type: "shutdown" });
     } finally {
