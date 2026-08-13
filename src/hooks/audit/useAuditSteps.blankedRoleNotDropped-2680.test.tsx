@@ -62,8 +62,6 @@ jest.mock("../../services", () => ({
   },
 }));
 
-const BUYER_ERROR = "At least one contact must be assigned the Buyer (Client) role";
-
 function savedContact(id: string, name: string): Contact {
   return {
     id,
@@ -385,17 +383,21 @@ describe("BACKLOG-2680: a contact whose role is blanked is not silently dropped"
     expect(setError).toHaveBeenCalledWith(
       "Please assign a role to all contacts (1 contact missing roles)",
     );
-    expect(setError).not.toHaveBeenCalledWith(BUYER_ERROR);
   });
 
   /**
-   * THE CLIENT RULE IS STILL REACHABLE, and still fires when every role has
-   * been changed away from Client by hand — BACKLOG-2677 control 4. It is
-   * unreachable by default, not deleted, and the new check must not have
-   * shadowed it: every contact here HAS a role, so the missing-roles check
-   * passes and the Buyer check is the one that must speak.
+   * THERE IS NOTHING BEHIND THE ROLE-LESS GATE ANY MORE (BACKLOG-2683).
+   *
+   * This test used to assert that the Client rule was still reachable once the
+   * role-less check passed. The founder deleted that rule on 13 Aug, so the
+   * assertion is inverted: every contact here HAS a role, the role-less check
+   * passes, and nothing else stands between the user and the save.
+   *
+   * It still earns its place. A Client gate re-added behind the role-less one
+   * would return before `onSubmit` and turn this red — which is the exact
+   * regression the decision needs guarded.
    */
-  it("still reports the missing Client when every role was changed away by hand", async () => {
+  it("saves once every contact is classified, even with no Client among them", async () => {
     const user = userEvent.setup();
     const onSubmit = jest.fn();
     const setError = jest.fn();
@@ -416,7 +418,6 @@ describe("BACKLOG-2680: a contact whose role is blanked is not silently dropped"
     );
     await user.click(screen.getByTestId("wizard-next"));
 
-    expect(onSubmit).not.toHaveBeenCalled();
-    expect(setError).toHaveBeenCalledWith(BUYER_ERROR);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
   });
 });

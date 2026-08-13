@@ -12,7 +12,6 @@
 import { useState, useCallback } from "react";
 import {
   findContactsMissingRoles,
-  hasClientAssigned,
   missingRolesMessage,
   toRoleContactIds,
 } from "../../utils/transactionContactRules";
@@ -109,12 +108,11 @@ export function useAuditSteps({
         return;
       }
 
-      // Unchanged rule, now asked through the shared function so Edit Contacts
-      // asks it the same way (BACKLOG-2681).
-      if (!hasClientAssigned(roleIds)) {
-        setError("At least one contact must be assigned the Buyer (Client) role");
-        return;
-      }
+      // THERE IS NO "AT LEAST ONE CLIENT" GATE HERE ANY MORE (BACKLOG-2683).
+      // The founder deleted the requirement on 13 Aug: a deal may be saved with
+      // nobody holding the Client role. The role-less check above stays — every
+      // contact must be classified as something; none of them has to be the
+      // Client.
       setError(null);
       onSubmit();
     }

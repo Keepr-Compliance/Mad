@@ -469,23 +469,12 @@ describe("EditContactsModal", () => {
     // tests removed - SPRINT-066 UX redesign changed from multi-select + "Add Selected"
     // to direct-add via "+" import button. The flow no longer uses add-selected-button.
 
-    /**
-     * BACKLOG-2681: this fixture used to be a deal whose ONLY contact held
-     * `client`, and the test then changed that role away — which is exactly the
-     * save BACKLOG-2681 now refuses. The fixture is a seller's agent instead,
-     * so the test keeps testing what it is named for (a role change emits a
-     * remove of the old role and an add of the new one) rather than testing the
-     * Client rule by accident.
-     *
-     * The refusal is asserted where it is enforced:
-     * `electron/__tests__/transaction-handlers.lastClient-2681.test.ts`.
-     */
     it("save generates correct remove operations", async () => {
       mockGetDetails.mockResolvedValue({
         success: true,
         transaction: {
           contact_assignments: [
-            { id: "a1", contact_id: "contact-1", role: "seller_agent" },
+            { id: "a1", contact_id: "contact-1", role: "client" },
           ],
         },
       });
@@ -511,7 +500,7 @@ describe("EditContactsModal", () => {
             expect.objectContaining({
               action: "remove",
               contactId: "contact-1",
-              role: "seller_agent",
+              role: "client",
             }),
             expect.objectContaining({
               action: "add",
@@ -528,20 +517,12 @@ describe("EditContactsModal", () => {
     // Available. Removing an existing chip queues an unlink-on-Save; new adds must
     // not re-add the pre-existing ones.
     describe("pre-populated existing contacts (BACKLOG-2405)", () => {
-      /**
-       * BACKLOG-2681: a seller's agent rather than the Client. These tests are
-       * about the Added-chip lifecycle and the operations it emits, and one of
-       * them removes this contact from the deal — which, when the contact was
-       * the only Client, is the save BACKLOG-2681 now refuses. Every assertion
-       * in this describe is role-agnostic, so the role is free to change and
-       * the subject of the tests does not.
-       */
       const withAssignedContact1 = () =>
         mockGetDetails.mockResolvedValue({
           success: true,
           transaction: {
             contact_assignments: [
-              { id: "a1", contact_id: "contact-1", role: "seller_agent" },
+              { id: "a1", contact_id: "contact-1", role: "client" },
             ],
           },
         });
@@ -681,15 +662,12 @@ describe("EditContactsModal", () => {
       });
     });
 
-    // BACKLOG-2681: a seller's agent, not the Client — this test changes the
-    // role away, and doing that to the only Client is now refused. The subject
-    // here is the error banner, not the rule.
     it("shows error message on save failure", async () => {
       mockGetDetails.mockResolvedValue({
         success: true,
         transaction: {
           contact_assignments: [
-            { id: "a1", contact_id: "contact-1", role: "seller_agent" },
+            { id: "a1", contact_id: "contact-1", role: "client" },
           ],
         },
       });
@@ -716,13 +694,12 @@ describe("EditContactsModal", () => {
       });
     });
 
-    // BACKLOG-2681: as above — the subject is the "Saving..." label.
     it('shows "Saving..." while save in progress', async () => {
       mockGetDetails.mockResolvedValue({
         success: true,
         transaction: {
           contact_assignments: [
-            { id: "a1", contact_id: "contact-1", role: "seller_agent" },
+            { id: "a1", contact_id: "contact-1", role: "client" },
           ],
         },
       });

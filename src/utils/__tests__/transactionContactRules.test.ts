@@ -24,12 +24,9 @@
 import {
   contactIdsWithRoles,
   findContactsMissingRoles,
-  hasClientAssigned,
   missingRolesMessage,
   toRoleContactIds,
-  LAST_CLIENT_REMOVED_MESSAGE,
 } from "../transactionContactRules";
-import { LAST_CLIENT_REMOVED_ERROR } from "../../../electron/utils/transactionClientRule";
 
 describe("toRoleContactIds narrows the wizard's shape", () => {
   it("keeps the ids under their roles", () => {
@@ -124,50 +121,12 @@ describe("missingRolesMessage matches the string Edit Contacts already shipped",
   });
 });
 
-describe("hasClientAssigned", () => {
-  it("is true when someone holds the client role", () => {
-    expect(hasClientAssigned({ client: ["c1"] })).toBe(true);
-  });
-
-  it("is false for an empty client list", () => {
-    expect(hasClientAssigned({ client: [] })).toBe(false);
-  });
-
-  it("is false when the key is absent", () => {
-    expect(hasClientAssigned({ seller_agent: ["c1"] })).toBe(false);
-  });
-
-  /**
-   * DELIBERATELY THE SPECIFIC ROLE, NOT THE CATEGORY. `buyer` and `seller` map
-   * to the CLIENT role category, but the wizard's shipped gate has always asked
-   * about `client` itself. Widening it here would quietly change what the
-   * wizard accepts — a different change from the one BACKLOG-2681 asks for.
-   *
-   * This is the control that catches such a widening.
-   */
-  it("does not accept `buyer` or `seller` as a Client", () => {
-    expect(hasClientAssigned({ buyer: ["c1"] })).toBe(false);
-    expect(hasClientAssigned({ seller: ["c1"] })).toBe(false);
-  });
-});
-
-describe("the last-Client message", () => {
-  it("names what is wrong and what to do about it", () => {
-    expect(LAST_CLIENT_REMOVED_MESSAGE).toMatch(/no Client/i);
-    expect(LAST_CLIENT_REMOVED_MESSAGE).toMatch(/assign/i);
-  });
-
-  /**
-   * THE TWO SIDES MUST SAY THE SAME SENTENCE.
-   *
-   * `EditContactsModal` shows the renderer constant; the main process throws
-   * the electron one when a caller reaches `batchUpdateContactAssignments`
-   * without asking first. A user who hits both paths must not be told two
-   * different things about one rule — and the module boundary means these two
-   * constants can only be compared here, in a test, which is exactly why the
-   * mirror pairs in this repo all carry a parity assertion.
-   */
-  it("is identical on the enforcing side in the main process", () => {
-    expect(LAST_CLIENT_REMOVED_ERROR).toBe(LAST_CLIENT_REMOVED_MESSAGE);
-  });
-});
+/**
+ * There is no `hasClientAssigned` suite here, and no last-Client message
+ * parity test, because BACKLOG-2683's founder decision deleted the rule they
+ * covered on 13 Aug. Both this module's Client helper and its main-process
+ * mirror (`electron/utils/transactionClientRule.ts`) are gone. The wizard no
+ * longer refuses a deal with no Client; see
+ * `useAuditSteps.saveSucceedsUntouched-2677.test.tsx`, which now asserts that
+ * such a save SUCCEEDS.
+ */

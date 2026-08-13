@@ -202,19 +202,11 @@ const availableNames = (): string[] =>
 describe("EditContactsModal two-pane (BACKLOG-2405, real ContactSearchList)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    /**
-     * The deal already has the name-only contact assigned.
-     *
-     * BACKLOG-2681: as a seller's agent rather than the Client. One test here
-     * removes this contact from the deal, and removing the only Client is the
-     * save BACKLOG-2681 now refuses. Every assertion in this file is about the
-     * Added/Available panes and the operations they emit — none of them reads
-     * the role — so the fixture role is free to change and the subject is not.
-     */
+    // The deal already has the name-only contact assigned.
     mockGetDetails.mockResolvedValue({
       success: true,
       transaction: {
-        contact_assignments: [{ id: "a1", contact_id: "db-paul", role: "seller_agent" }],
+        contact_assignments: [{ id: "a1", contact_id: "db-paul", role: "client" }],
       },
     });
     // The saved half, as the provider reads it for a deal with an address.

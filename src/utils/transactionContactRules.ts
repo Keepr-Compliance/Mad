@@ -1,41 +1,28 @@
 /**
- * THE RULES ABOUT WHO IS ON A TRANSACTION, STATED ONCE
- * (BACKLOG-2680, BACKLOG-2681)
+ * THE RULE ABOUT WHO IS ON A TRANSACTION, STATED ONCE (BACKLOG-2680)
  *
  * ===========================================================================
  * WHY THIS FILE EXISTS
  * ===========================================================================
  * There are two surfaces that put contacts on a deal, and they answered the
- * same two questions differently:
+ * same question differently:
  *
  *   "a contact with no role"    wizard: SILENTLY DROPS THEM   (BACKLOG-2680)
  *                               Edit Contacts: refuses the save
  *
- *   "no Client on the deal"     wizard: refuses the save
- *                               Edit Contacts: SAVES IT       (BACKLOG-2681)
- *
- * Each surface enforced exactly one of the two rules, and each was missing the
- * other one. That is the same shape as BACKLOG-2603 (duplicate comparison in
- * one add surface and not the other) and BACKLOG-2664 (the rule in the linker
- * and absent in the backfill's worker twin): the rule lived in the caller
- * rather than in the thing being called.
+ * The wizard was missing the rule the other surface already had. That is the
+ * same shape as BACKLOG-2603 (duplicate comparison in one add surface and not
+ * the other) and BACKLOG-2664 (the rule in the linker and absent in the
+ * backfill's worker twin): the rule lived in the caller rather than in the
+ * thing being called.
  *
  * So both callers now import these functions. "The two surfaces agree" is then
  * true by construction rather than asserted twice and left to drift — and the
  * drift is the defect, not the symptom.
  *
- * ===========================================================================
- * WHERE THE REAL AUTHORITY FOR THE CLIENT RULE LIVES
- * ===========================================================================
- * `hasClientAssigned` here is a RENDERER convenience so the user gets a named
- * reason instead of a raw IPC failure. It is NOT the enforcement.
- *
- * BACKLOG-2681 is explicit that the check belongs in the main process, "where
- * every route passes through, not duplicated in two renderers that will drift
- * (they already have)". The enforcing copy is
- * `electron/utils/transactionClientRule.ts`, reached through
- * `transactions:batchUpdateContacts`, and it refuses the save whether or not a
- * renderer asked first.
+ * A second rule — "the deal must have a Client" — was briefly stated here too,
+ * for BACKLOG-2681. The founder deleted the requirement on 13 Aug
+ * (BACKLOG-2683); see the note further down where it used to live.
  *
  * ===========================================================================
  * WHY THE TWO SHAPES ARE NORMALISED RATHER THAN UNIFIED
@@ -47,7 +34,6 @@
  * the call site instead — the rules only ever need the ids.
  */
 
-import { SPECIFIC_ROLES } from "../constants/contactRoles";
 
 /** role -> the contact ids holding that role. The shape both surfaces reduce to. */
 export type RoleContactIds = Record<string, string[] | undefined>;
@@ -101,27 +87,16 @@ export function missingRolesMessage(count: number): string {
 }
 
 /**
- * Does anyone hold the Client role?
+ * THERE IS DELIBERATELY NO CLIENT RULE IN THIS FILE (BACKLOG-2683).
  *
- * Deliberately the `client` key alone, matching the wizard's existing gate at
- * `useAuditSteps.ts` exactly. `buyer` and `seller` map to the CLIENT role
- * CATEGORY, but the shipped rule has always asked about the specific role, and
- * widening it here would quietly change what the wizard accepts — a different
- * change from the one BACKLOG-2681 asks for.
- */
-export function hasClientAssigned(assignments: RoleContactIds): boolean {
-  const client = assignments[SPECIFIC_ROLES.CLIENT];
-  return Array.isArray(client) && client.length > 0;
-}
-
-/**
- * FOUNDER DECISION, BACKLOG-2677, 12 Aug, on why this rule is real rather than
- * onboarding scaffolding: *"Do not delete that check — it still guards a
- * transaction whose roles were all changed away from Client by hand."*
+ * `hasClientAssigned` and `LAST_CLIENT_REMOVED_MESSAGE` lived here until the
+ * founder's 13 Aug decision dropped the "at least one Client" requirement
+ * outright: *"lets just drop this requirement i don't think it's necessary."*
+ * A deal may now be saved with nobody holding the Client role, on either
+ * surface, so neither the wizard gate nor the Edit Contacts message survives.
  *
- * That sentence describes this exact scenario, so BACKLOG-2681's open question
- * ("is the rule real, or is it wizard-only scaffolding?") is already answered
- * on the record, and the answer is that it is real.
+ * Do not reintroduce one without a founder decision reversing that. The
+ * consequence was stated and accepted when it was made: an exported audit
+ * package may not name which side the agent represented. If that later matters,
+ * the place to solve it is the export, not a save-time wall.
  */
-export const LAST_CLIENT_REMOVED_MESSAGE =
-  "This transaction would be left with no Client. Assign the Client role to someone before saving.";
