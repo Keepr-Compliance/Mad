@@ -39,6 +39,19 @@
  * database says. So the second case links a record and asserts the plan carries
  * that record's values, by exact identity. An empty plan only means something
  * once the same fixture, plus a link, produces a non-empty one.
+ *
+ * ===========================================================================
+ * DRIVING THE WORKER FOR REAL MEANS CLOSING IT FOR REAL
+ * ===========================================================================
+ * The worker opens its own connection and owns it; the fixture's `seed.close()`
+ * closes a different handle entirely. Leaving the worker's open cost this suite
+ * a Windows-only failure — macOS unlinks open files without complaint, Windows
+ * locks them, and the temp-directory cleanup died with `EBUSY` on the two tests
+ * that start a worker (CI run 31639170765).
+ *
+ * Teardown now sends the worker the same `shutdown` message production sends
+ * and then ASSERTS the connection is closed, so the next leak fails on the
+ * machine that wrote it rather than two platforms away. See `afterEach`.
  */
 
 import path from "path";
@@ -58,11 +71,28 @@ const REAL_DRIVER_PATH = path.join(
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const RealDatabase = require(REAL_DRIVER_PATH) as typeof import("better-sqlite3-multiple-ciphers");
 
+/**
+ * Every connection the WORKER opens, in construction order.
+ *
+ * The worker's `db` is a module-local that it never exports, so this array is
+ * the only handle a test can get on it — and holding it is what lets teardown
+ * PROVE the connection was closed instead of assuming it. See `afterEach` for
+ * why that proof is the control this suite turns on.
+ *
+ * The seed's connection is absent by construction, not by filtering: the seed
+ * requires the driver by ABSOLUTE PATH (`REAL_DRIVER_PATH`), and the repo's
+ * `moduleNameMapper` entry is anchored (`^better-sqlite3-multiple-ciphers$`),
+ * so a path require never reaches this factory. Only the worker's
+ * `import Database from "better-sqlite3-multiple-ciphers"` does.
+ */
+const mockWorkerConnections: DatabaseType[] = [];
+
 // The worker imports the driver by name; the repo maps that name to an
-// auto-mock. Point it back at the real module for this suite only.
+// auto-mock. Point it back at the real module for this suite only, through a
+// thin wrapper that records what the worker opens.
 jest.mock("better-sqlite3-multiple-ciphers", () => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require(
+  const Real = require(
     require("path").join(
       __dirname,
       "..",
@@ -72,6 +102,18 @@ jest.mock("better-sqlite3-multiple-ciphers", () => {
       "better-sqlite3-multiple-ciphers",
     ),
   );
+
+  // A `function`, not an arrow: the worker calls `new Database(...)`, and an
+  // arrow cannot be constructed. Returning the real instance from a constructor
+  // makes it the value of `new`, so the worker is handed the genuine connection
+  // and this wrapper is invisible to it.
+  function RecordingDatabase(this: unknown, ...args: unknown[]): unknown {
+    const connection = new Real(...args);
+    mockWorkerConnections.push(connection);
+    return connection;
+  }
+
+  return RecordingDatabase;
 });
 
 /** Captures the worker's side of the `parentPort` protocol. */
@@ -130,15 +172,77 @@ describe("BACKLOG-2669 — the worker twin plans from links only", () => {
   beforeEach(() => {
     mockPort.handler = null;
     mockPort.posted = [];
+    mockWorkerConnections.length = 0;
     jest.resetModules();
 
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-2669-worker-"));
     dbPath = path.join(tmpDir, "keepr.db");
   });
 
+  /**
+   * Closes the worker's connection through the worker's OWN teardown path.
+   *
+   * WHY A MESSAGE AND NOT A THREAD KILL: there is no thread to kill. This suite
+   * mocks `worker_threads`, so the worker module runs in-process and its `db`
+   * is a module-local nothing else can reach; only the worker's own `shutdown`
+   * branch closes it. `{type:"shutdown"}` is also exactly what production posts
+   * (`contactWorkerPool.ts`), so the close this exercises is the one that runs
+   * in the app rather than a teardown invented for the test.
+   *
+   * WHY `process.exit` IS STUBBED: the worker's shutdown branch ends with
+   * `process.exit(0)`. That is right for a real worker thread and fatal
+   * in-process — unstubbed it would take the entire Jest worker down mid-run.
+   * The stub is scoped to this one call and restored immediately after.
+   */
+  function shutdownWorker(): void {
+    if (!mockPort.handler) return; // worker never loaded — nothing was opened
+    const exit = jest
+      .spyOn(process, "exit")
+      .mockImplementation((() => undefined) as unknown as (code?: number) => never);
+    try {
+      mockPort.handler({ type: "shutdown" });
+    } finally {
+      exit.mockRestore();
+    }
+  }
+
   afterEach(() => {
-    setDb(null as unknown as DatabaseType);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    try {
+      shutdownWorker();
+
+      /**
+       * THE CONTROL — and the reason this file must not merely retry `rmSync`.
+       *
+       * The worker opens its OWN connection to `keepr.db` (its `openDatabase`),
+       * which the fixture's `seed.close()` does not touch and `setDb(null)` only
+       * drops a reference to. That leaked handle is INVISIBLE on macOS, which
+       * lets a process unlink an open file; Windows refuses, so the leak
+       * surfaced only there — as `EBUSY: resource busy or locked, unlink` out of
+       * the `rmSync` below (CI run 31639170765). `force: true` suppresses
+       * ENOENT, never EBUSY.
+       *
+       * `.open` flips to false exactly on close, on every platform. Asserting it
+       * here makes the leak fail LOUDLY on a developer's machine instead of only
+       * on a Windows runner: delete the `shutdownWorker()` call above and this
+       * goes red locally on macOS — which is how it was verified.
+       *
+       * The count assertion stops the loop from passing vacuously. If the
+       * recording wrapper above ever stops seeing the worker's constructor, an
+       * empty array would satisfy the loop forever and this control would
+       * quietly stop controlling anything.
+       */
+      if (mockPort.handler) {
+        expect(mockWorkerConnections.length).toBeGreaterThan(0);
+      }
+      for (const connection of mockWorkerConnections) {
+        expect(connection.open).toBe(false);
+      }
+    } finally {
+      // Cleanup runs even when the assertions above fail, so one leaked handle
+      // cannot strand a temp directory for every later run.
+      setDb(null as unknown as DatabaseType);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   /**
