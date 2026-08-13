@@ -152,9 +152,26 @@ Three separate undercounts in one night, 30 Jul 2026.
 1. **Trace the mechanism to a running line, or write "MECHANISM UNTRACED" in the item.** Either is fine. Silence is not.
 2. **Name the real producer.** BACKLOG-2672 was filed as an `external_contacts` row when the records are synthesised from `messages` by `getMessageDerivedContacts` — a fix keyed on `isExternal` would have missed every one. Caught by the engineer *after* implementation began.
 3. **Quote literals from the code, not from memory.** A string assembled by interpolation has no fixed literal to quote — cite the template and the variable's fallback instead.
-4. **A CORRECTION IS A CLAIM TOO, and carries the same burden.** The first draft of this very rule "corrected" BACKLOG-2679 by asserting the code emits `"Unknown's own entry"` at `contactDbService.ts:529`. **All three parts were false:** that line is an `INSERT INTO contacts`; the string is built at `contactLinkEvidence.ts:187` as `` `${who}'s own entry` `` — which is where 2679 already pointed; and `who` comes from `contactDisplayName()`, which falls back to `"this contact"`, never `"Unknown"`. Caught in SR review **of the PR that added this rule**.
+4. **Do not infer a universal negative from a local trace.** *"This function falls back to Y, therefore Z never appears"* is not established until you check **every writer of that function's input.** A fallback only tells you what happens when the input is empty — it says nothing about what the input contains.
+5. **A CORRECTION IS A CLAIM TOO, and carries the same burden.** It is trusted *more* than the original and therefore checked *less*.
 
-Rule 4 is the expensive one. Being the person who spots a wrong mechanism creates no exemption from tracing your replacement — and a correction is trusted *more* than the original, so it is checked less.
+### The worked example — three passes over one sentence, in the rule about mechanisms
+
+**Pass 1.** This rule's first draft cited BACKLOG-2679's string as emitted from `contactDbService.ts:529`. Wrong **citation**: `:529` is `[`, the parameter-array opener. The sentence is assembled at `electron/services/contactLinkEvidence.ts:187` — `` `…saved against ${who} — but ${who}'s own entry in that ${ctx.sourceLabel} no longer lists it.` `` — which is where 2679 already pointed. The mistake was conflating the **writer** of `"Unknown"` with the **emitter** of the sentence.
+
+**Pass 2.** SR review called it false in all three parts, having traced `contactDisplayName()` (`contactLinkEvidence.ts:274-280`) to `return name && name.length > 0 ? name : "this contact"` and concluded `"Unknown"` never appears there.
+
+**Pass 3.** The delta review overturned its own finding. `contactDisplayName()` returns `contacts.display_name` **verbatim**; the fallback fires only when the column is empty, and **five live writers guarantee it is not**:
+
+```
+electron/handlers/contactHandlers.ts:1875, :2355   display_name: validatedData.name || "Unknown"
+electron/services/db/contactDbService.ts:371, :532 contactData.display_name || "Unknown"
+electron/services/localSyncService.ts:1581         display_name: contact.displayName || "Unknown"
+```
+
+**So `"Unknown's own entry in that Mac address book"` IS emittable, and the first draft was substantively right about the literal while wrong about where it comes from.** Verified at `develop` @ `a2a98d540`.
+
+Pass 2 is the instance of rule 4, and it is the one to learn from: **a single function's fallback was traced correctly, and a universal negative was inferred from it.** Emittability is not prevalence — gate 4 found zero such rows in the founder's own corpus.
 
 ---
 
