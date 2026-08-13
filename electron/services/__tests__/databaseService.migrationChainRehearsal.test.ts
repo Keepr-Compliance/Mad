@@ -70,9 +70,26 @@
  *   mutation, are recorded on BACKLOG-2700 in pm_comments.
  *
  * CONTROL 2 — a migration removed from the chain.
- *   Filter v57 out of `DatabaseService.MIGRATIONS` before the act phase.
- *   RESULT: RED, on the v57 structural probe and on the probes of the
- *   migrations that build on it. Recorded on BACKLOG-2700.
+ *   Comment v57's entry out of `DatabaseService.MIGRATIONS`.
+ *   RESULT: 15 of 17 RED with
+ *       Migration sequence error: Missing migration version 57 (found 56 -> 58)
+ *   — the runner's own sequence guard, before any probe is reached.
+ *
+ * CONTROL 2b — v57 PRESENT but neutered (`return;` as the first statement of its
+ *   `migrate`), so the sequence guard is satisfied and the chain still lands on
+ *   62. This is the sharper one.
+ *   RESULT: exactly 4 RED, and they are precisely the v57-dependent probes —
+ *   v57, v59, v60, v61 — while 13 pass, including "the app opens" and every
+ *   id-set assertion. Under the same mutation `migration-v59`, `migration-v61`
+ *   and `migration-v62` all stayed GREEN: the downstream migrations do not
+ *   notice that their prerequisite did nothing, because each seeds its own
+ *   minimal fixture. That is the interaction blind spot, demonstrated.
+ *
+ * CONTROL 3 — the `foreign_keys = ON` line after the fixture restore removed.
+ *   RESULT: exactly 1 RED — `expect(db.pragma("foreign_keys"))`, Expected 1,
+ *   Received 0. Proves that assertion is not vacuous, and that the fixture's
+ *   own `PRAGMA foreign_keys=OFF;` really would leave the chain running from
+ *   the wrong state without it.
  *
  * ===========================================================================
  * IDENTITY, NEVER COUNTS
@@ -277,6 +294,22 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
     // output, which came from the shipped code's own init path.
     db.exec(fs.readFileSync(FIXTURE_SQL_PATH, "utf8"));
 
+    // RE-ENABLE foreign_keys AFTER the restore, and not only before it.
+    //
+    // The dump opens with `PRAGMA foreign_keys=OFF;` so it can create tables in
+    // any order, and never turns it back on. Without this line the connection
+    // therefore enters the act phase with FK enforcement OFF — which is NOT the
+    // handle a real launch migrates on: `_openDatabase()` sets
+    // `foreign_keys = ON` (databaseService.ts:360).
+    //
+    // That difference is load-bearing, not cosmetic. `_runVersionedMigrations()`
+    // reads the CURRENT pragma into `fkWasOn` (databaseService.ts:3576), turns
+    // FKs off for the duration of the chain, and restores them to ON afterwards
+    // ONLY IF they were on to begin with (:3607). Left off, this suite would run
+    // the chain from the wrong starting state and finish with enforcement
+    // disabled, so the restore branch would never execute here.
+    db.pragma("foreign_keys = ON");
+
     // Deferred require so the jest.mock factories above are applied first.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     service = require("../databaseService").default;
@@ -385,6 +418,14 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
 
     const integrity = db.pragma("integrity_check") as Array<{ integrity_check: string }>;
     expect(integrity[0]?.integrity_check).toBe("ok");
+
+    // Foreign-key enforcement is back ON after the chain. The runner disables it
+    // for the duration (the documented safe table-rebuild procedure) and
+    // restores it only if it was on when it started — so this asserts both that
+    // the fixture entered the act phase in the production state AND that the
+    // restore branch (databaseService.ts:3607) actually ran. A database left
+    // with enforcement off would accept orphan writes on the next launch.
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
 
     // Empty = no orphans. A rebuild that recreated a table without re-pointing
     // its children shows up here and almost nowhere else.
