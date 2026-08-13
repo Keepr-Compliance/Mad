@@ -150,10 +150,11 @@ Three separate undercounts in one night, 30 Jul 2026.
 **An item's stated mechanism becomes the engineer's fixture.** Whoever picks the item up builds a test that reproduces the mechanism as written. If it was inferred rather than traced, they build a fixture for a state the code cannot produce — and it passes, because nothing contradicts it.
 
 1. **Trace the mechanism to a running line, or write "MECHANISM UNTRACED" in the item.** Either is fine. Silence is not.
-2. **Quote real literals.** BACKLOG-2679 cited `"No name's own entry"`; the code emits `"Unknown's own entry"` (`contactDbService.ts:529`). No fixture could have reproduced the filed string.
-3. **Name the real producer.** BACKLOG-2672 was filed as an `external_contacts` row when the records are synthesised from `messages` by `getMessageDerivedContacts` — a fix keyed on `isExternal` would have missed every one.
+2. **Name the real producer.** BACKLOG-2672 was filed as an `external_contacts` row when the records are synthesised from `messages` by `getMessageDerivedContacts` — a fix keyed on `isExternal` would have missed every one. Caught by the engineer *after* implementation began.
+3. **Quote literals from the code, not from memory.** A string assembled by interpolation has no fixed literal to quote — cite the template and the variable's fallback instead.
+4. **A CORRECTION IS A CLAIM TOO, and carries the same burden.** The first draft of this very rule "corrected" BACKLOG-2679 by asserting the code emits `"Unknown's own entry"` at `contactDbService.ts:529`. **All three parts were false:** that line is an `INSERT INTO contacts`; the string is built at `contactLinkEvidence.ts:187` as `` `${who}'s own entry` `` — which is where 2679 already pointed; and `who` comes from `contactDisplayName()`, which falls back to `"this contact"`, never `"Unknown"`. Caught in SR review **of the PR that added this rule**.
 
-Both were caught by the engineer *after* implementation had begun, 11–12 Aug 2026.
+Rule 4 is the expensive one. Being the person who spots a wrong mechanism creates no exemption from tracing your replacement — and a correction is trusted *more* than the original, so it is checked less.
 
 ---
 

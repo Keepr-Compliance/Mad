@@ -161,16 +161,25 @@ Items are considered stale if:
 2. **Update or close** - Refresh requirements or mark as won't-do
 3. **Re-prioritize** - Move to appropriate sprint or backlog
 
-### Epic Size — split at 30 children (MANDATORY)
+### Epic Size — 30 children is a REVIEW TRIGGER, not a hard cap
 
-**An epic nobody can hold has stopped organizing anything.**
+**An epic nobody can hold has stopped organizing anything.** But some epics are legitimately flat, so this is a prompt to look, not an automatic split.
 
 | Children | Action |
 |----------|--------|
 | ≤ 30 | Fine |
-| > 30 | **Split before adding the next item** |
+| > 30 | **Stop and ask: is this a build, or a list?** Split if it is a build. Record the exemption if it is a list. |
 
 **Split by the thing being built, not by priority.** Priority changes weekly and re-sorts nothing; a phase boundary (schema → crosswalk → matching → UI → tests) survives, and each half can be summarized in a sentence.
+
+**Legitimately flat epics — do NOT split these:**
+
+- **Inventories.** BACKLOG-2021 (SOC 2 Trust Services Criteria) has 55 children because there are 55 controls. The list *is* the deliverable; splitting it by "phase" would invent a structure the framework does not have.
+- **Time-boxes.** BACKLOG-2183 (`v2.25.0 post-release testing bugs`) has 31 unrelated bugs whose only shared property is when they were found. There is no axis to split on.
+
+**The distinguishing question: does the epic describe ONE thing being built, or N things being tracked?** A build over 30 is a planning failure. A list over 30 is just a list — record why it is exempt on the epic, so the next reviewer does not re-open it.
+
+Seven epics exceed 30 today; two of them are the exemptions above.
 
 **Why this is not cosmetic.** Epic 2468 reached **121 children**. The cost is that *"what is built?"* stops having an answer that fits on a screen — and on 13 Aug 2026 it was answered **wrongly**, from status fields nobody could audit, because no agent or human could hold the set. It also hides the real signal: 54 pending items in one bucket look like a backlog, while the same 54 grouped into phases show plainly that one phase has not started.
 
