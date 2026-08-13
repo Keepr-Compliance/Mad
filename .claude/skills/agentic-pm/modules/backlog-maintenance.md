@@ -49,6 +49,11 @@ SELECT pm_get_item_detail('<uuid>');
 | QA passed | `pm_update_item_status('<uuid>', 'completed')` |
 | Sprint closed | Verify all items have correct status via `pm_list_items` |
 
+> **When the new item came out of work on another item, link it in the same step.** Insert a
+> `pm_task_links` row with `link_type = 'introduced_by'` (source = the new item, target = the
+> originator). Prose in the body is not a link. Full rules, SQL and worked examples:
+> `.claude/skills/backlog-management/SKILL.md` → "Linking a New Item (MANDATORY)".
+
 ### Example Operations
 
 **New item created:**
@@ -156,6 +161,30 @@ Items are considered stale if:
 2. **Update or close** - Refresh requirements or mark as won't-do
 3. **Re-prioritize** - Move to appropriate sprint or backlog
 
+### Epic Size — 30 children is a REVIEW TRIGGER, not a hard cap
+
+**An epic nobody can hold has stopped organizing anything.** But some epics are legitimately flat, so this is a prompt to look, not an automatic split.
+
+| Children | Action |
+|----------|--------|
+| ≤ 30 | Fine |
+| > 30 | **Stop and ask: is this a build, or a list?** Split if it is a build. Record the exemption if it is a list. |
+
+**Split by the thing being built, not by priority.** Priority changes weekly and re-sorts nothing; a phase boundary (schema → crosswalk → matching → UI → tests) survives, and each half can be summarized in a sentence.
+
+**Legitimately flat epics — do NOT split these:**
+
+- **Inventories.** BACKLOG-2021 (SOC 2 Trust Services Criteria) has 55 children because there are 55 controls. The list *is* the deliverable; splitting it by "phase" would invent a structure the framework does not have.
+- **Time-boxes.** BACKLOG-2183 (`v2.25.0 post-release testing bugs`) has 31 unrelated bugs whose only shared property is when they were found. There is no axis to split on.
+
+**The distinguishing question: does the epic describe ONE thing being built, or N things being tracked?** A build over 30 is a planning failure. A list over 30 is just a list — record why it is exempt on the epic, so the next reviewer does not re-open it.
+
+Seven epics exceed 30 today; two of them are the exemptions above.
+
+**Why this is not cosmetic.** Epic 2468 reached **121 children**. The cost is that *"what is built?"* stops having an answer that fits on a screen — and on 13 Aug 2026 it was answered **wrongly**, from status fields nobody could audit, because no agent or human could hold the set. It also hides the real signal: 54 pending items in one bucket look like a backlog, while the same 54 grouped into phases show plainly that one phase has not started.
+
+**When an epic passes 30 because the work changed shape** — an investigation found a missing model rather than a broken function — see `sprint-management.md` → *"When the investigation finds a MISSING MODEL, re-cut the plan that day."* Splitting is not enough there; the shape is wrong, not just the size.
+
 ---
 
 ## TODO Extraction
@@ -214,6 +243,18 @@ gh pr list --state all --limit 20 | grep -E "(700|701|702|703|704|705|706)"
 SPRINT-010 was fully merged on 2025-12-29 but sprint file still showed "Planning" on 2026-01-01. This led to incorrect status reports because the file was trusted without verification.
 
 **Trust, but verify.** The source of truth for code state is GitHub; the source of truth for sprint/task status is Supabase. Reconcile both.
+
+### A QA gate is not finished until it writes back (MANDATORY)
+
+The procedure above reconciles status against **merged PRs**. It does not cover the other thing that changes an item's truth: **the founder testing it and saying it works.**
+
+**Rule: a QA gate is not complete until every item it covered has its status set to what the gate found.** Not a summary comment on the epic — the item itself. Write it at the time the result is taken, not afterwards.
+
+**Record the non-passes too.** "Verified", "still broken" and **"not verifiable"** are three different outcomes and all three are real. Gate 4's check 19 could not be verified at all: the linker has no instrumentation, so its convergence claim cannot be confirmed in the field at any scale. Marking that as a pass would have been a vacuous green; marking it as a failure would have been false.
+
+**Why this is MANDATORY.** Gate 4 ran 41 checks on the founder's machine and confirmed 37 fixes holding. The result was written as **one comment on epic 2468 and not one child status changed.** Weeks later the board reported **29 items as unverified when he had personally verified 21 of them** — and he caught it, not the process. A stale `testing` is indistinguishable from a real one, so the under-report is invisible; and because *some* items had been advanced and others had not, the column looked maintained.
+
+**Check for the shape:** if an item carries a `FOUNDER TEST — PASS` comment above an unchanged status field, the write-back was skipped.
 
 ---
 

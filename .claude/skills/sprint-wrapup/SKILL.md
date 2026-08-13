@@ -108,8 +108,11 @@ WHERE item_number IN (<backlog numbers for sprint tasks>);
 Verify all agents logged metrics and record task totals:
 
 ```sql
--- Check metrics for this sprint's tasks
-SELECT task_id, agent_type, total_tokens, billable_tokens, duration_ms, description
+-- Check metrics for this sprint's tasks.
+-- billable_tokens is the cost column. Do NOT report total_tokens as spend: it includes
+-- cache_read_tokens and runs ~19x higher (measured 19.54x on 2026-08-11). Summing the
+-- wrong column made every tracker variance wrong and forced 89 rows to be recomputed (PR #2282).
+SELECT task_id, agent_type, billable_tokens, duration_ms, description
 FROM pm_token_metrics
 WHERE sprint_id = '<sprint-uuid>'
 ORDER BY task_id, recorded_at;

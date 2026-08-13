@@ -22,6 +22,7 @@ import supabaseService from "./supabaseService";
 import { normalizePhone } from "./messageMatchingService";
 import { pairingService } from "./pairingService";
 import * as externalContactDb from "./db/externalContactDbService";
+import type { ContactOrigin } from "./db/contactOriginLink";
 import { autoLinkNewMessagesForUserDebounced } from "./autoLinkService";
 import type {
   EncryptedPayload,
@@ -1084,7 +1085,7 @@ class LocalSyncService {
    * ## Data Parsing Spec (BACKLOG-1495)
    *
    * **participants_flat** — Used for conversation grouping and contact matching:
-   *   - Standard phone numbers (7+ digits): raw digits from sender (e.g., "5551234567")
+   *   - Standard phone numbers (7+ digits): raw digits from sender (e.g., "5555550112")
    *   - Short codes (< 7 digits): digits as-is (e.g., "72645")
    *   - Alphanumeric senders: full normalized string (e.g., "T-Mobile", "BANK OF AMERICA")
    *   - Never empty — falls back to normalized sender string
@@ -1327,6 +1328,26 @@ class LocalSyncService {
   }
 
   /**
+   * The `external_contacts.external_record_id` for one Android contact.
+   *
+   * ONE SPELLING, TWO CALLERS (BACKLOG-2556). `storeContacts` writes the record
+   * under this id and `promoteToMainContacts` CLAIMS that same id in the
+   * crosswalk. If the two ever disagree the claim silently matches nothing, the
+   * record looks un-imported, and the promoted contact appears twice — which is
+   * exactly the failure mode this helper exists to make impossible. It is the
+   * same trap `contactOriginLink.ts` guards against with its single
+   * `contacts.source` -> crosswalk `source_type` map: one address book must not
+   * acquire a second spelling.
+   *
+   * The composition itself is unchanged and still carries the BACKLOG-2407
+   * defect recorded inside `storeContacts` — this only stops it being written
+   * out twice.
+   */
+  private androidExternalRecordId(deviceId: string, contactId: string): string {
+    return `android-${deviceId}-${contactId}`;
+  }
+
+  /**
    * Store received contacts in the external_contacts shadow table.
    * Uses the same pattern as Outlook/Google contact sync — stores
    * in the shadow table with source 'android_sync', matching by
@@ -1356,8 +1377,44 @@ class LocalSyncService {
     // Map SyncContact to ExternalContactInput for the generic upsert
     const externalContacts: externalContactDb.ExternalContactInput[] = contacts.map(
       (contact) => {
-        // Build external_record_id from deviceId + stable contact ID for dedup
-        const externalRecordId = `android-${deviceId}-${contact.id}`;
+        // ---------------------------------------------------------------
+        // BACKLOG-2407 — RECORDED DECISION ON THE `deviceId` COMPONENT.
+        // The key is UNCHANGED here. Read this before assuming lookupKey
+        // capture fixed device replacement, because it did not.
+        // ---------------------------------------------------------------
+        // THE DEFECT. `contact.id` is `ContactsContract.Contacts._ID`, a row id
+        // Android explicitly does NOT designate as sync-stable, and `deviceId`
+        // is worse: a DESKTOP-minted per-pairing UUID (see the /register handler
+        // in this file — `isMintedDeviceId(claimed) ? claimed : randomUUID()`).
+        // A phone that re-pairs without presenting its previous minted UUID gets
+        // a NEW one, so EVERY android contact re-keys — even when the phone, and
+        // therefore every `_ID` and `lookupKey` on it, is completely unchanged.
+        // The device-scoping is the larger half of the defect, not the id choice.
+        //
+        // WHY IT IS NOT FIXED IN THIS TASK. Re-keying a live namespace is a data
+        // migration with a pairing story attached; it does not belong in a task
+        // whose contract is to capture identifiers and change no behaviour.
+        // Capturing `lookupKey` is a PREREQUISITE for that fix, not the fix.
+        //
+        // THE RECOMMENDED FIX. Move device identity to the companion: persist it
+        // in the phone's own storage and re-present it on every pairing, so the
+        // desktop reuses rather than mints. `isMintedDeviceId` already implements
+        // the reuse half. Not purely a storage change — Android wipes app storage
+        // on uninstall, so reinstall still needs an answer.
+        //
+        // WHAT HAPPENS TODAY WHEN IT RE-KEYS, verified rather than assumed. The
+        // BACKLOG-2401 crosswalk re-links the new record to the same contact by
+        // email then phone: `linkExternalContactsForUser` filters only on
+        // `user_id` and `external_record_id IS NOT NULL`, with no source filter,
+        // so android_sync genuinely reaches that fallback. It is a partial
+        // recovery, not a repair. On a re-pairing FULL sync,
+        // `syncContactsBySource` -> `deleteStaleContactsBySource` DELETES the old
+        // `android-<old>-<id>` rows outright, while `contact_source_links` keys on
+        // (source_type, source_record_id) with its FK on `contact_id` — so the
+        // external row is destroyed underneath a surviving crosswalk row rather
+        // than merely going stale. And a contact carrying neither an email nor a
+        // phone recovers nothing at all.
+        const externalRecordId = this.androidExternalRecordId(deviceId, contact.id);
 
         // Extract phone numbers as simple strings
         const phones = contact.phones
@@ -1375,6 +1432,10 @@ class LocalSyncService {
           emails,
           phones,
           company: contact.company ?? null,
+          // BACKLOG-2407: capture the lookup key beside the key, matched on by
+          // nothing. Absent for any contact with no structured-name row, which
+          // the serializer drops rather than storing as a null entry.
+          source_identity: { lookupKey: contact.lookupKey ?? null },
         };
       }
     );
@@ -1403,6 +1464,23 @@ class LocalSyncService {
         "android_sync",
         externalContacts
       );
+
+      // BACKLOG-2401: re-stamp EVERY android row as seen in this sync.
+      //
+      // A diff upserts only what CHANGED, so without this each unchanged row
+      // keeps an older `synced_at` and reads as "not present in the latest
+      // sync". That is the marker `deleteStaleContactsBySource` prunes on and
+      // the identity crosswalk's currency test reads — so between full
+      // snapshots the crosswalk's reassignment guard would be silently DISABLED
+      // for android_sync, and a phone number that had moved between two people
+      // would be bound to the WRONG contact without ever being flagged.
+      //
+      // This asserts nothing new: skipping the stale-deletion two lines above
+      // already means "rows I did not mention are still present". It writes that
+      // down instead of leaving it implicit. See markSourceRecordsCurrent for
+      // the audit of every other `synced_at` reader.
+      externalContactDb.markSourceRecordsCurrent(userId, "android_sync");
+
       externalContactDb.updateLastMessageAtFromLookupTable(userId);
     }
 
@@ -1418,7 +1496,7 @@ class LocalSyncService {
     // in the main contacts view. Match by phone number to avoid duplicates.
     // On a partial diff this only promotes the new/changed contacts, which is
     // correct — unchanged contacts were promoted on a prior sync (BACKLOG-2208).
-    this.promoteToMainContacts(userId, contacts);
+    this.promoteToMainContacts(userId, deviceId, contacts);
 
     return inserted;
   }
@@ -1430,8 +1508,33 @@ class LocalSyncService {
    *
    * BACKLOG-1469: Android contacts were only stored in external_contacts shadow
    * table but never promoted to the main contacts table, making them invisible.
+   *
+   * BACKLOG-2556 — `deviceId` is a parameter because THE PROMOTED CONTACT MUST
+   * CLAIM THE RECORD IT CAME FROM. See the origin below.
    */
-  private promoteToMainContacts(userId: string, contacts: SyncContact[]): void {
+  private promoteToMainContacts(
+    userId: string,
+    deviceId: string,
+    contacts: SyncContact[],
+  ): void {
+    // BACKLOG-2593 — TWO KNOWN DEFECTS LIVE IN THE SKIP BELOW. Read before
+    // relying on this method's claims.
+    //
+    // 1. The "already exists" test is a shared last-10-digits phone number with
+    //    NO NAME CHECK — the BACKLOG-2416 shape, on a create path. Two people on
+    //    one office line: the second is never created.
+    // 2. When it skips, NOTHING IS CLAIMED, while `storeContacts` has already
+    //    written the record to `external_contacts`. The create path below claims
+    //    its record (BACKLOG-2556); this skip does not.
+    //
+    // And the BACKLOG-2407 block in `storeContacts` makes the skip the COMMON
+    // case: a re-pairing mints a new `deviceId`, every record re-keys, the full
+    // sync deletes the old rows, and every contact then phone-matches its own
+    // previously-promoted twin. So once the consolidation guessing is deleted,
+    // every Android contact would show twice again by THIS route.
+    //
+    // Blocker-level for the BACKLOG-2556 deletion PR: claim on the skip path, or
+    // have the founder accept it. Deliberately not decided here.
     const contactsToCreate: Array<{
       user_id: string;
       display_name: string;
@@ -1441,6 +1544,7 @@ class LocalSyncService {
       is_imported: boolean;
       allPhones: string[];
       allEmails: string[];
+      origin: ContactOrigin;
     }> = [];
 
     for (const contact of contacts) {
@@ -1481,6 +1585,35 @@ class LocalSyncService {
           is_imported: true,
           allPhones: phones,
           allEmails: emails,
+          // BACKLOG-2496 — this path wrote NO crosswalk row at all before, so
+          // an Android-promoted contact could never say where it came from and
+          // was recoverable only by a later content-matching pass.
+          //
+          // BACKLOG-2556 — AND IT MUST CLAIM THE RECORD, not merely record that
+          // it was derived. The earlier `{ kind: "derived" }` said this path
+          // "holds no external record id to point at". It does: `storeContacts`,
+          // one call frame up, has just written this very contact to
+          // `external_contacts` under the id below.
+          //
+          // A derived origin writes the SYNTHETIC key `origin:<contactId>`,
+          // which matches no external record. Once the content-matching
+          // fallbacks in `contacts:get-available` are deleted — the founder's
+          // "no consolidation, 100% raw list" rule — the crosswalk key is the
+          // ONLY thing left that can suppress an already-imported record. So a
+          // derived origin here would show every Android-promoted contact
+          // TWICE: once as the saved contact, once as its unclaimed record.
+          //
+          // The id comes from the shared helper, never a second copy of the
+          // format. See `androidExternalRecordId`.
+          origin: {
+            kind: "sourceRecords",
+            identities: [
+              {
+                sourceType: "android_sync",
+                sourceRecordId: this.androidExternalRecordId(deviceId, contact.id),
+              },
+            ],
+          },
         });
       }
     }

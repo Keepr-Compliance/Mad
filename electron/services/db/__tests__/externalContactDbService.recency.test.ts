@@ -48,7 +48,11 @@ function createSchema(db: DatabaseType): void {
       last_message_at DATETIME,
       external_record_id TEXT,
       source TEXT,
-      synced_at DATETIME
+      synced_at DATETIME,
+      -- BACKLOG-2401: ZEXTERNALUUID capture, added by migration v57 and
+      -- selected by EXTERNAL_CONTACTS_GET_ALL_SQL. Declared here because
+      -- this fixture hand-rolls the table instead of running the chain.
+      external_uuid TEXT
     );
 
     CREATE TABLE contacts (
@@ -232,9 +236,9 @@ describe("BACKLOG-2355 external contact recency (phone + email, real SQLite)", (
   });
 
   it("ANTI-JUMP INVARIANT holds for a phone-only person too", () => {
-    insertPhoneMessage(db, "4155551234", "2026-03-15T12:00:00Z");
-    insertExternal(db, { id: "ext-ph", name: "Phone Only", phonesNormalized: ["4155551234"] });
-    insertImported(db, { id: "imp-ph", name: "Phone Only", phonesNormalized: ["4155551234"] });
+    insertPhoneMessage(db, "4155550109", "2026-03-15T12:00:00Z");
+    insertExternal(db, { id: "ext-ph", name: "Phone Only", phonesNormalized: ["4155550109"] });
+    insertImported(db, { id: "imp-ph", name: "Phone Only", phonesNormalized: ["4155550109"] });
 
     const ext = externalRecency(db).get("ext-ph");
     const imp = importedRecency(db, "imp-ph");
@@ -243,19 +247,19 @@ describe("BACKLOG-2355 external contact recency (phone + email, real SQLite)", (
   });
 
   it("takes the MAX across phone and email channels", () => {
-    insertPhoneMessage(db, "4155551234", "2026-01-01T00:00:00Z");
+    insertPhoneMessage(db, "4155550109", "2026-01-01T00:00:00Z");
     insertEmail(db, "both@x.com", { sentAt: "2026-06-01T00:00:00Z" });
     insertExternal(db, {
       id: "ext-both",
       name: "Both Channels",
       emails: ["both@x.com"],
-      phonesNormalized: ["4155551234"],
+      phonesNormalized: ["4155550109"],
     });
     insertImported(db, {
       id: "imp-both",
       name: "Both Channels",
       emails: ["both@x.com"],
-      phonesNormalized: ["4155551234"],
+      phonesNormalized: ["4155550109"],
     });
 
     const ext = externalRecency(db).get("ext-both");
@@ -270,10 +274,10 @@ describe("BACKLOG-2355 external contact recency (phone + email, real SQLite)", (
 
   it("computes the correct value for a MIXED batch (exact id -> date map)", () => {
     insertEmail(db, "hd@berkeley.edu", { sentAt: "2026-05-01T10:00:00Z" });
-    insertPhoneMessage(db, "4155550000", "2026-02-02T02:00:00Z");
+    insertPhoneMessage(db, "4155550102", "2026-02-02T02:00:00Z");
 
     insertExternal(db, { id: "ext-email", name: "Email Person", emails: ["hd@berkeley.edu"] });
-    insertExternal(db, { id: "ext-phone", name: "Phone Person", phonesNormalized: ["4155550000"] });
+    insertExternal(db, { id: "ext-phone", name: "Phone Person", phonesNormalized: ["4155550102"] });
     insertExternal(db, { id: "ext-none", name: "Cold Person", emails: ["nope@x.com"] });
 
     const recency = externalRecency(db);

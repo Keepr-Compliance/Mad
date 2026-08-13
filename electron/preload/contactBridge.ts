@@ -4,7 +4,23 @@
  */
 
 import { ipcRenderer } from "electron";
-import type { NewContact, Contact, Communication, ContactMessageThread } from "../types/models";
+import type {
+  NewContact,
+  Contact,
+  ContactSource,
+  Communication,
+  ContactMessageThread,
+} from "../types/models";
+import type {
+  ContactReviewCluster,
+  ContactSourceProvenance,
+  UnlinkSourceResponse,
+  FindLinkableSourcesResponse,
+  LinkSourceResponse,
+  SourceRecordRef,
+  ContactCompareView,
+  ConfirmSourcesOutcome,
+} from "../types/ipc/window-api-contacts";
 
 export const contactBridge = {
   /**
@@ -71,6 +87,13 @@ export const contactBridge = {
     success: boolean;
     emails?: { id: string; email: string; is_primary: boolean }[];
     phones?: { id: string; phone: string; is_primary: boolean }[];
+    /**
+     * BACKLOG-2493: the contact's LIVE crosswalk sources, so a hand-built
+     * contact object (the transaction "Key Contacts" pane) shows the same
+     * source pills as the Clients & Contacts card instead of the stale
+     * INSERT-time scalar. OMITTED, never `[]`, when there are no links.
+     */
+    source_types?: ContactSource[];
     error?: string;
   }> => ipcRenderer.invoke("contacts:get-edit-data", contactId),
 
@@ -97,6 +120,24 @@ export const contactBridge = {
    */
   remove: (contactId: string) =>
     ipcRenderer.invoke("contacts:remove", contactId),
+
+  /**
+   * BACKLOG-2367: contacts the user has removed, for the "Removed contacts"
+   * section. Removal is a tombstone, so each row still carries its emails, its
+   * phones and — the point of the epic — its transaction roles.
+   * @param userId - Owning user ID
+   * @returns Removed contact rows, most recently removed first
+   */
+  getRemoved: (userId: string) =>
+    ipcRenderer.invoke("contacts:get-removed", userId),
+
+  /**
+   * BACKLOG-2367: undo a contact removal.
+   * @param contactId - Contact ID to restore
+   * @returns `restored: false` when the contact was already active
+   */
+  restore: (contactId: string) =>
+    ipcRenderer.invoke("contacts:restore", contactId),
 
   /**
    * Look up contact names by phone numbers (batch)
@@ -172,13 +213,20 @@ export const contactBridge = {
   /**
    * TASK-1773: Trigger manual sync of external contacts from macOS
    * @param userId - User ID to sync contacts for
-   * @returns Sync results (inserted, deleted, total)
+   * @returns Sync results (inserted, deleted, total) + BACKLOG-2404 read coverage
    */
   syncExternal: (userId: string): Promise<{
     success: boolean;
     inserted?: number;
     deleted?: number;
     total?: number;
+    /** BACKLOG-2404 — address books found / read / failed for this sync. */
+    read?: {
+      found: number;
+      read: number;
+      failed: number;
+      coverage: "complete" | "partial" | "none";
+    };
     error?: string;
   }> => ipcRenderer.invoke("contacts:syncExternal", userId),
 
@@ -281,6 +329,148 @@ export const contactBridge = {
       ipcRenderer.removeListener("contacts:external-sync-complete", handler);
     };
   },
+
+  /**
+   * BACKLOG-2474: a linking pass settled; the review-queue count may have moved.
+   *
+   * Its own channel rather than a second use of the one above — see
+   * `window-api-contacts.ts` for why sharing it would repopulate the import
+   * picker in the middle of an import.
+   *
+   * @returns Cleanup function to remove listener
+   */
+  onLinkReviewUpdated: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on("contacts:link-review-updated", handler);
+    return () => {
+      ipcRenderer.removeListener("contacts:link-review-updated", handler);
+    };
+  },
+
+  // =========================================================================
+  // BACKLOG-2410 — review queue + provenance
+  // =========================================================================
+
+  /**
+   * How many identity questions are waiting. Drives the count on the
+   * "Review N possible duplicates" button.
+   *
+   * Separate from `getReviewQueue` on purpose: the count is fetched whenever the
+   * contacts screen mounts, the queue itself only when the panel is opened.
+   */
+  getReviewQueueCount: (
+    userId: string,
+  ): Promise<{ success: boolean; count?: number; error?: string }> =>
+    ipcRenderer.invoke("contacts:review-queue-count", userId),
+
+  /** Pending identity questions, grouped so one answer can settle several. */
+  getReviewQueue: (
+    userId: string,
+  ): Promise<{ success: boolean; clusters?: ContactReviewCluster[]; error?: string }> =>
+    ipcRenderer.invoke("contacts:get-review-queue", userId),
+
+  /** "The same person" — creates the link and records a durable must-link. */
+  confirmLink: (
+    userId: string,
+    proposalId: string,
+  ): Promise<{ success: boolean; linked?: boolean; alsoRejected?: number; error?: string }> =>
+    ipcRenderer.invoke("contacts:confirm-link", userId, proposalId),
+
+  /** "Different people" — records a durable cannot-link. Never asked again. */
+  rejectLink: (
+    userId: string,
+    proposalId: string,
+  ): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("contacts:reject-link", userId, proposalId),
+
+  /** Which sources a saved contact was assembled from, and how each was matched. */
+  getSources: (
+    userId: string,
+    contactId: string,
+  ): Promise<{ success: boolean; sources?: ContactSourceProvenance[]; error?: string }> =>
+    ipcRenderer.invoke("contacts:get-sources", userId, contactId),
+
+  /**
+   * Detach ONE source. The contact survives, the source record survives, every
+   * other link survives — and the next sync will not put it back.
+   *
+   * BACKLOG-2427: it also TAKES BACK the emails and phones that source
+   * contributed and nothing else does. The counts come back so the caller can
+   * say so, and `retainedReason` says when they were kept on purpose.
+   */
+  unlinkSource: (
+    userId: string,
+    contactId: string,
+    linkId: string,
+  ): Promise<UnlinkSourceResponse> =>
+    ipcRenderer.invoke("contacts:unlink-source", userId, contactId, linkId),
+
+  /**
+   * BACKLOG-2471 PR C — the compare screen's columns. READ-ONLY: this call
+   * writes nothing, and `Unlink` on a column goes through `unlinkSource` above
+   * when PR D adds it.
+   */
+  getCompareColumns: (
+    userId: string,
+    contactId: string,
+    proposedSource?: { sourceType: string; sourceRecordId: string },
+    options?: { collapseContactSources?: boolean },
+  ): Promise<{ success: boolean; view?: ContactCompareView | null; error?: string }> =>
+    ipcRenderer.invoke(
+      "contacts:get-compare-columns",
+      userId,
+      contactId,
+      proposedSource,
+      options,
+    ),
+
+  /**
+   * BACKLOG-2471 PR D — the footer's `Confirm`. The ONLY write the compare
+   * screen makes; its per-column `Unlink` goes through `unlinkSource` above,
+   * unchanged.
+   */
+  confirmSources: (userId: string, contactId: string): Promise<ConfirmSourcesOutcome> =>
+    ipcRenderer.invoke("contacts:confirm-sources", userId, contactId),
+
+  /**
+   * BACKLOG-2426 — source records the user could attach by hand.
+   *
+   * UNCLAIMED only, by the same definition the import picker uses. An empty
+   * query lists what is available rather than nothing.
+   */
+  findLinkableSources: (
+    userId: string,
+  ): Promise<FindLinkableSourcesResponse> =>
+    ipcRenderer.invoke("contacts:find-linkable-sources", userId),
+
+  /**
+   * Attach SEVERAL source records to one saved contact, because the user said
+   * so (BACKLOG-2591).
+   *
+   * Returns one outcome per record, in the same order. A refusal is per-record:
+   * one already-claimed record does not stop the others being linked.
+   *
+   * The first call returns `prior_rejection` for any pair the user previously
+   * unlinked, and writes nothing for those; pass them back in
+   * `acknowledgedPriorRejections` on the second call to overturn them. That
+   * two-step is the feature, not a retry — and it is asked ONCE for the whole
+   * batch rather than record by record.
+   */
+  linkSource: (
+    userId: string,
+    contactId: string,
+    records: SourceRecordRef[],
+    acknowledgedPriorRejections?: SourceRecordRef[],
+  ): Promise<LinkSourceResponse> =>
+    ipcRenderer.invoke(
+      "contacts:link-source",
+      userId,
+      contactId,
+      records,
+      acknowledgedPriorRejections,
+    ),
 };
 
 /**

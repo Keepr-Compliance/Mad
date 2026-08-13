@@ -2,25 +2,32 @@
  * ContactSearchList Component
  *
  * A search-enabled contact selection list that combines imported and external
- * (address-book) contacts into one deterministic, deduped list.
+ * (address-book) contacts into one deterministic list.
  *
- * All list-shaping logic (assemble -> dedup -> filter -> search -> sort) lives in
- * the pure `contactPickerList` engine; this component is a thin, side-effect-free
- * wrapper that owns UI state (search text, sort toggle, grouped filter selection)
- * and renders rows. There are NO ref writes during render — the render order is a
+ * All list-shaping logic (assemble -> filter -> search -> sort) lives in the pure
+ * `contactPickerList` engine; this component is a thin, side-effect-free wrapper
+ * that owns UI state (search text, sort toggle, grouped filter selection) and
+ * renders rows. There are NO ref writes during render — the render order is a
  * pure function of props + UI state (BACKLOG-2352, replacing the SVO machinery of
  * BACKLOG-1745/1761).
  *
+ * BACKLOG-2370: this list does NOT decide whether two records are the same
+ * person. It renders what the main process gives it. The one place that decision
+ * is made is `contacts:get-available`, which stores it and discloses it. This
+ * component used to re-decide it, knew nothing about unlink verdicts, and so
+ * silently reversed one on the founder's data — see `assembleContacts`.
+ *
+ * @see BACKLOG-2370: One matching rule, not two
  * @see BACKLOG-2352: Rewrite the contact search/select pipeline
  * @see TASK-1763: Original ContactSearchList Component
  */
 
 import React, { useState, useMemo, useCallback, useRef, useEffect, useLayoutEffect } from "react";
-import { ContactRow } from "./ContactRow";
+import { BADGE_LABELS, ContactRow } from "./ContactRow";
 import { GroupedMultiSelect } from "./GroupedMultiSelect";
 import type { ExtendedContact } from "../../types/components";
 import {
-  assembleDedupedContacts,
+  assembleContacts,
   assembleFilterSearch,
   sortContacts,
   projectOntoOrder,
@@ -28,6 +35,12 @@ import {
   mergeNewOrderKeys,
   type ContactSortOrder,
 } from "../../utils/contactPickerList";
+import { importBlockedReason } from "../../utils/importableRecord";
+import {
+  resolveContactAnchor,
+  scrollTopForAnchor,
+  type ContactListAnchor,
+} from "../../utils/contactListAnchor";
 import {
   SOURCE_GROUPS,
   ROLE_GROUPS,
@@ -37,6 +50,8 @@ import {
   ALL_SOURCE_LEAF_IDS,
   type ContactFilters,
 } from "../../utils/contactFilterModel";
+import { countRowsBySourceFilter } from "../../utils/contactSourceCounts";
+import { buildRowDisambiguators } from "../../utils/contactRowDisambiguation";
 import logger from "../../utils/logger";
 
 /**
@@ -56,6 +71,22 @@ import logger from "../../utils/logger";
  */
 export type ContactFilterMode = "off" | "ephemeral" | "persistent";
 
+/**
+ * How a selectable row presents its per-row selection affordance (BACKLOG-2400):
+ *
+ * - `"checkbox"` (default): the historical behavior — each row shows a checkbox
+ *   and clicking toggles selection in place. Selected rows STAY in the list
+ *   (checked). Used by every consumer except the two-pane picker.
+ * - `"add"`: each row shows a **"+ Add"** button instead of a checkbox, and a
+ *   contact that is currently selected DROPS OUT of the list (it has "moved" to
+ *   the caller's Added column). Deselection happens outside this list (the
+ *   Added column's ✕), so the list only ever ADDS. Used by
+ *   `ContactAssignmentStep` Step 2. This makes selection single-sourced — a
+ *   contact is EITHER available OR added, never shown in both with conflicting
+ *   state (the checkbox/pill desync this replaces).
+ */
+export type ContactSelectionMode = "checkbox" | "add";
+
 export interface ContactSearchListProps {
   /** Imported/existing contacts */
   contacts: ExtendedContact[];
@@ -68,6 +99,24 @@ export interface ContactSearchListProps {
   /** Callback to import an external contact - returns the imported contact */
   onImportContact?: (contact: ExtendedContact) => Promise<ExtendedContact>;
   /**
+   * Select an external row WITHOUT importing it (BACKLOG-2591).
+   *
+   * In "add" mode an external row today MEANS import: `handleExternalSelect` ->
+   * `handleImport` -> `onImportContact`, which CREATES a contact. Manual linking
+   * must attach the record to an EXISTING contact and must never create one — a
+   * reachable import here would manufacture exactly the duplicates the feature
+   * removes.
+   *
+   * Omitting `onImportContact` is NOT a way to get that: without it the row
+   * becomes a silent no-op rather than a link. So this is a genuine third path,
+   * not a flag.
+   *
+   * PRECEDENCE: this WINS over `onImportContact` where both are somehow
+   * supplied, and it forces the per-row import button off — so a caller cannot
+   * half-configure linking and leave an import reachable.
+   */
+  onExternalSelect?: (contact: ExtendedContact) => void;
+  /**
    * Whether to show add/import button for already-imported contacts.
    * - true: Show button for ALL contacts (use in transaction flows to add to transaction)
    * - false: Only show button for external contacts (use in Contacts screen for import only)
@@ -76,6 +125,22 @@ export interface ContactSearchListProps {
   showAddButtonForImported?: boolean;
   /** Callback when a contact is clicked (for viewing details). If provided, clicking a contact calls this instead of selection. */
   onContactClick?: (contact: ExtendedContact) => void;
+  /**
+   * BACKLOG-2603 — a way into a contact's open questions that does NOT spend
+   * the row click.
+   *
+   * Passed straight through to `ContactRow.onOpenQuestions`, which turns the
+   * badge into a button. It exists because `isSelectionMode` is derived from
+   * `!onContactClick` (see the row-render below): in the transaction wizard the
+   * row click means "add to the deal", so the questions need their own
+   * affordance — and the badge, already the thing that says a question exists,
+   * is it.
+   *
+   * Clients & Contacts omits this. Its row click already opens the filtered
+   * queue, so a second route off the same row would be two controls for one
+   * action. Omitting it leaves that surface byte-identical.
+   */
+  onOpenContactQuestions?: (contact: ExtendedContact) => void;
   /**
    * Contact ID currently shown in a master-detail pane (BACKLOG-1898 QA fix).
    * When set, the matching row is highlighted even though `selectedIds` stays
@@ -98,6 +163,12 @@ export interface ContactSearchListProps {
    */
   filterMode?: ContactFilterMode;
   /**
+   * Per-row selection affordance. See {@link ContactSelectionMode}. Default:
+   * `"checkbox"` (unchanged for every existing consumer). `"add"` opts into the
+   * two-pane "+ Add" affordance and drops selected contacts out of the list.
+   */
+  selectionMode?: ContactSelectionMode;
+  /**
    * Initial sort order. The component owns the live sort as internal state
    * (driven by the Sort control), so this only seeds the first render.
    * Default: `"recent"`.
@@ -111,12 +182,62 @@ export interface ContactSearchListProps {
    */
   compact?: boolean;
   /**
-   * Called with the number of rows actually rendered (post filter, post search,
-   * post dedup) whenever that count changes (BACKLOG-2141). Derived from the
+   * Forwarded verbatim to every `ContactRow` (BACKLOG-2591). Default `false`,
+   * so both transaction pickers and Clients & Contacts render name-only exactly
+   * as BACKLOG-2356 decided. See `ContactRowProps.showDetailLine` for why the
+   * link picker is the one surface that turns it on.
+   */
+  showDetailLine?: boolean;
+  /**
+   * Called with the number of rows actually rendered (post filter, post search)
+   * whenever that count changes (BACKLOG-2141). Derived from the
    * SAME array that renders, so header counts always match the list. Fired from
    * an effect (never during render). Default: unused.
    */
   onVisibleCountChange?: (count: number) => void;
+  /**
+   * Called the moment a row is opened via `onContactClick`, with everything
+   * needed to find the user's place again (BACKLOG-2459).
+   *
+   * Fired SYNCHRONOUSLY from the click handler, before `onContactClick`, and not
+   * from an effect: below 1200px the Contacts screen replaces this whole list
+   * with the detail card in the same commit, so a layout effect would never run
+   * and there would be nothing left to measure. Because the anchor is held by
+   * the PARENT it also survives that unmount.
+   */
+  onAnchorCapture?: (anchor: ContactListAnchor) => void;
+  /**
+   * An anchor to return to — set by the parent when the detail view closes.
+   *
+   * The list scrolls to the anchored contact (or its survivor, or its nearest
+   * surviving neighbour) and then calls `onAnchorConsumed`. While the resolution
+   * finds nothing — the usual reason is that a `silentLoadContacts()` from the
+   * action the user just took has not landed yet — the anchor is left pending
+   * and retried as the data settles, so it can never restore against a stale list.
+   */
+  pendingAnchor?: ContactListAnchor | null;
+  /** Called once `pendingAnchor` has been restored. */
+  onAnchorConsumed?: () => void;
+  /**
+   * The search text, when the PARENT owns it (BACKLOG-2509).
+   *
+   * OPTIONAL, and all-or-nothing with `onSearchQueryChange`: supply both and
+   * this list is controlled; supply neither and it keeps its own `useState`,
+   * which is what the transaction-flow pickers want — a modal that closes has
+   * no search worth remembering.
+   *
+   * The Contacts screen supplies both because below 1200px it replaces this
+   * whole list with the detail card, and state inside an unmounted component is
+   * not a memory — the same reason `pendingAnchor` is held by the parent.
+   *
+   * SESSION-ONLY by decision (founder, 2026-08-06: "search is a moment, filters
+   * are a setup"). The parent holds it in plain state; nothing persists it, and
+   * the grouped Source/Role filter remains the only thing this component writes
+   * to localStorage.
+   */
+  searchQuery?: string;
+  /** Called with the new search text. Pairs with `searchQuery` — see above. */
+  onSearchQueryChange?: (query: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,6 +287,23 @@ function saveContactFilters(filters: ContactFilters): void {
   }
 }
 
+/**
+ * The rendered row for a contact id, or null (BACKLOG-2459).
+ *
+ * A scan rather than a `[data-contact-id="..."]` selector: contact ids come from
+ * an address book and are not guaranteed to be CSS-identifier-safe, and
+ * `CSS.escape` is not universally present in test runtimes. A linear scan over
+ * the rendered rows is exact and cannot throw on a hostile id.
+ */
+function findRowElement(container: HTMLElement | null, contactId: string): HTMLElement | null {
+  if (!container) return null;
+  const rows = container.querySelectorAll<HTMLElement>("[data-contact-id]");
+  for (const row of Array.from(rows)) {
+    if (row.getAttribute("data-contact-id") === contactId) return row;
+  }
+  return null;
+}
+
 /** All ENABLED leaf ids across the given groups (disabled leaves are unselectable). */
 function enabledLeafIds(groups: { children: { id: string; disabled?: boolean }[] }[]): string[] {
   return groups.flatMap((g) => g.children.filter((c) => !c.disabled).map((c) => c.id));
@@ -206,14 +344,72 @@ function formatRoleSummary(selected: Set<string>): string {
   return `${count} selected`;
 }
 
+/**
+ * A label and the controls it names, as ONE wrappable unit — BACKLOG-2471,
+ * point 4 of the founder's 7 Aug spec.
+ *
+ * THE DEFECT THIS DELETES. The controls row is `flex-wrap`. The labels used to
+ * be bare siblings of their controls inside it, so every child was an
+ * independent wrap candidate. In the band of widths where the label still fits
+ * on line one but the controls after it no longer do, the browser broke the
+ * line between them and left the word `Filter:` stranded alone above its own
+ * dropdowns. `Sort:` had the identical shape.
+ *
+ * WHY A COMPONENT AND NOT A WRAP RULE. The founder: *"put them all as a part of
+ * the same wrap component so they all move together."* A `flex-nowrap` or a
+ * `whitespace-nowrap` tuned to today's widths would look right today and regress
+ * the moment someone appends a control — which has already happened once, when
+ * BACKLOG-2626 added `Autolinked` to this row. Grouping makes "they move
+ * together" structural: a cluster is a single flex item in the wrapping row, so
+ * the line can only break BETWEEN clusters, never inside one. Either the whole
+ * group sits on line one or the whole group moves to line two; the intermediate
+ * state the founder saw has no way to exist.
+ *
+ * Two rules hold this, and `ContactSearchList.controlClusters-2471.test.tsx`
+ * asserts both:
+ *   1. This wrapper does NOT set `flex-wrap` — its children cannot split.
+ *   2. Every element child of `contact-controls` IS a cluster. A new control
+ *      dropped in beside the clusters rather than inside one fails that test,
+ *      which is the regression the founder is actually worried about.
+ *
+ * No `role="group"` here: the sort segmented control already carries one, and
+ * nesting a second unlabelled group only adds noise for a screen reader. The
+ * grouping being asserted is a LAYOUT fact, so it is carried by a data
+ * attribute rather than by ARIA.
+ *
+ * Spacing is unchanged from before the grouping: the row's `gap-x-3` reproduces
+ * the old 8px gap + the `ml-1` that used to sit on the `Filter:` label (12px
+ * between clusters), and this `gap-2` reproduces the old 8px between a label and
+ * its controls.
+ */
+function ControlCluster({
+  label,
+  testId,
+  children,
+}: {
+  label: string;
+  testId: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <div className="flex items-center gap-2" data-control-cluster="" data-testid={testId}>
+      <span className="text-xs text-gray-400 flex-shrink-0">{label}</span>
+      {children}
+    </div>
+  );
+}
+
 export function ContactSearchList({
   contacts,
   externalContacts = [],
   selectedIds,
   onSelectionChange,
   onImportContact,
+  onExternalSelect,
+  showDetailLine = false,
   showAddButtonForImported = false,
   onContactClick,
+  onOpenContactQuestions,
   activeContactId,
   onAddManually,
   addedContactIds = new Set(),
@@ -221,12 +417,31 @@ export function ContactSearchList({
   error = null,
   searchPlaceholder = "Search contacts...",
   filterMode = "off",
+  selectionMode = "checkbox",
   initialSortOrder = "recent",
   className = "",
   compact = false,
   onVisibleCountChange,
+  onAnchorCapture,
+  pendingAnchor = null,
+  onAnchorConsumed,
+  searchQuery: controlledSearchQuery,
+  onSearchQueryChange,
 }: ContactSearchListProps): React.ReactElement {
-  const [searchQuery, setSearchQuery] = useState("");
+  const isAddMode = selectionMode === "add";
+
+  // BACKLOG-2509 — the search text, owned here or by the parent.
+  //
+  // Resolved ONCE, into the two names the rest of this component already used,
+  // so there is exactly one value the render reads and one setter the handlers
+  // call. Deliberately NOT a `useState` seeded from the prop: that shape looks
+  // equivalent and silently resets the box on every remount, which is the exact
+  // bug this item exists to fix.
+  const [internalSearchQuery, setInternalSearchQuery] = useState("");
+  const isSearchControlled =
+    controlledSearchQuery !== undefined && onSearchQueryChange !== undefined;
+  const searchQuery = isSearchControlled ? controlledSearchQuery : internalSearchQuery;
+  const setSearchQuery = isSearchControlled ? onSearchQueryChange : setInternalSearchQuery;
   const [sortOrder, setSortOrder] = useState<ContactSortOrder>(initialSortOrder);
   const [importingIds, setImportingIds] = useState<Set<string>>(new Set());
   const [focusedIndex, setFocusedIndex] = useState(-1);
@@ -240,6 +455,19 @@ export function ContactSearchList({
     () => (filterMode === "persistent" ? loadContactFilters() : trueSelectAll()),
     [filterMode],
   );
+  /**
+   * BACKLOG-2471 PR F, renamed by BACKLOG-2626 — the `Autolinked` filter.
+   *
+   * DELIBERATELY NOT PERSISTED, unlike Source and Role. Founder decision D4 made
+   * `searchQuery` session-only for the same reason, and this is the stronger
+   * case: an empty search box is VISIBLY empty, while an active filter reads as
+   * "this is the whole list". A forgotten filter would hide the rest of the
+   * address book with nothing on screen admitting it.
+   *
+   * So it is plain state — not in `ContactFilters`, not in the
+   * `contactModal.filterModel.v1` payload, and no migration of either.
+   */
+  const [autolinkedOnly, setAutolinkedOnly] = useState(false);
   const [selectedSources, setSelectedSources] = useState<Set<string>>(initialFilters.sources);
   const [selectedRoles, setSelectedRoles] = useState<Set<string>>(initialFilters.roles);
 
@@ -329,29 +557,132 @@ export function ContactSearchList({
   // Pure, no side effects. Background refreshes and selection update row DATA in
   // place without reordering; genuinely new contacts merge in at their sorted
   // position; contacts that vanish (search/filter/removal) drop out.
-  const visibleContacts = useMemo(
-    () =>
-      projectOntoOrder(
-        assembleFilterSearch({
-          contacts,
-          externalContacts,
-          searchQuery,
-          filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
-        }),
-        orderKeys,
-        sortOrder,
-      ),
-    [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys],
+  //
+  // BACKLOG-2400: in "add" mode, selected contacts DROP OUT of the list (they
+  // have moved to the caller's Added column). The freeze (`orderKeys`) is NOT
+  // touched by this — every contact keeps its frozen slot — so deselecting a
+  // contact (via the Added column's ✕) returns its row to its exact original
+  // position. This is a final render-time filter, applied AFTER projection.
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const visibleContacts = useMemo(() => {
+    const projected = projectOntoOrder(
+      assembleFilterSearch({
+        contacts,
+        externalContacts,
+        searchQuery,
+        filters: showFilterUI ? { sources: selectedSources, roles: selectedRoles } : null,
+      }),
+      orderKeys,
+      sortOrder,
+    );
+    const afterAdd = isAddMode ? projected.filter((c) => !selectedSet.has(c.id)) : projected;
+    // BACKLOG-2471 PR F: applied LAST, on the same list the rows render from, so
+    // the control's visibility and the rows it reveals cannot come from two
+    // predicates. BACKLOG-2626 switched the predicate to the BADGE, so the rows
+    // this reveals are exactly the rows wearing `Autolinked` — one rule, decided
+    // in `getReviewStateByContact`, read here and by `ContactRow`.
+    return autolinkedOnly
+      ? afterAdd.filter((c) => c.review_state?.badge === "autolinked")
+      : afterAdd;
+  }, [contacts, externalContacts, searchQuery, sortOrder, showFilterUI, selectedSources, selectedRoles, orderKeys, isAddMode, selectedSet, autolinkedOnly]);
+
+  /**
+   * How many contacts the app linked on its own — counted from the SAME array
+   * the filter above narrows, before it is narrowed.
+   *
+   * Not a second query and not a prop: a control that offers a set it cannot
+   * produce is the "Review 12 opening onto 9" defect in miniature, and the only
+   * way it cannot happen is for the visibility test and the rows to have one
+   * source. The NUMBER is no longer shown (`11abce67`); it survives only as the
+   * hidden-at-zero test.
+   */
+  const autolinkedCount = useMemo(
+    () => contacts.filter((c) => c.review_state?.badge === "autolinked").length,
+    [contacts],
   );
 
-  // Count of contacts hidden by the Source/Role FILTERS only (not search, not
-  // dedup). Zero when the filter UI is off. Drives the "N hidden" escape hatches.
+  // Count of contacts hidden by the Source/Role FILTERS only (not search).
+  // Zero when the filter UI is off. Drives the "N hidden" escape hatches.
+  //
+  // BACKLOG-2370: this used to run over the output of a renderer-side dedup
+  // pass, which has been deleted — this list no longer decides whether two
+  // records are the same person, so the only rows it can hide are the ones the
+  // FILTERS hide, and the count is over everything the main process returned.
   const categoryHiddenCount = useMemo((): number => {
     if (!showFilterUI) return 0;
-    const assembled = assembleDedupedContacts(contacts, externalContacts);
     const filters = { sources: selectedSources, roles: selectedRoles };
-    return assembled.filter((contact) => !matchesContactFilters(contact, filters)).length;
+    return assembleContacts(contacts, externalContacts).filter(
+      (contact) => !matchesContactFilters(contact, filters),
+    ).length;
   }, [showFilterUI, contacts, externalContacts, selectedSources, selectedRoles]);
+
+  /**
+   * PER-SOURCE COUNTS FOR THE SOURCE DROPDOWN (BACKLOG-2671).
+   *
+   * ===========================================================================
+   * WHICH POPULATION THESE COUNT — THE QUESTION THAT SANK THE HEADER VERSION
+   * ===========================================================================
+   * BACKLOG-2662's header breakdown was right about the sources and wrong about
+   * the POPULATION: its total was the rendered row count while its parts were the
+   * raw, unfiltered `get-available` payload. Nothing made the two reconcile, and
+   * the founder read `1173 contacts (1171 from Contacts App)` — a two-record gap
+   * with no explanation on screen.
+   *
+   * So this states its population and then obeys it. These count THE ROWS THIS
+   * LIST WOULD SHOW WITH EVERY SOURCE TICKED — search applied, role selection
+   * applied, add-mode removals applied, the Autolinked filter applied. Everything
+   * except the source selection, which is the one dimension the dropdown is for.
+   *
+   * Two consequences the reader needs, both deliberate:
+   *
+   *   1. The counts MOVE with the search box and with the role filter, because
+   *      the list does. A count that ignored the search box would promise rows
+   *      the user cannot get to while a query is typed.
+   *   2. The counts DO NOT move when the source selection changes. They are
+   *      counts of what exists, not of what is chosen — unticking Outlook must
+   *      not turn Outlook's own number into 0, which would be a control that
+   *      erases the evidence for using it.
+   *
+   * ===========================================================================
+   * WHY THE "ALL SOURCES" ROW CAN READ HIGHER THAN THE HEADER
+   * ===========================================================================
+   * Under the DEFAULT selection the Inferred leaves are off (`defaultSourceSelection`),
+   * so the header — which counts what is ON SCREEN — can read 1173 while this
+   * reads 1175. That is the honest pairing, not a discrepancy to be smoothed:
+   * this row's contract is "tick everything and you will see N", and showing 1173
+   * there would be a lie the very next click exposes. The difference is exactly
+   * the rows the user's own selection is currently hiding.
+   *
+   * `projectOntoOrder` is set-preserving (every live row survives exactly once),
+   * so counting before it and rendering after it cannot disagree — ordering is
+   * not a filter.
+   */
+  const sourceOptionCounts = useMemo(() => {
+    if (!showFilterUI) return null;
+    const everySource = new Set<string>(ALL_SOURCE_LEAF_IDS as readonly string[]);
+    const withEverySourceTicked = assembleFilterSearch({
+      contacts,
+      externalContacts,
+      searchQuery,
+      filters: { sources: everySource, roles: selectedRoles },
+    });
+    const afterAdd = isAddMode
+      ? withEverySourceTicked.filter((c) => !selectedSet.has(c.id))
+      : withEverySourceTicked;
+    const population = autolinkedOnly
+      ? afterAdd.filter((c) => c.review_state?.badge === "autolinked")
+      : afterAdd;
+    return countRowsBySourceFilter(population, SOURCE_GROUPS);
+  }, [
+    showFilterUI,
+    contacts,
+    externalContacts,
+    searchQuery,
+    selectedRoles,
+    isAddMode,
+    selectedSet,
+    autolinkedOnly,
+  ]);
 
   // "Show all" = TRUE select-all (BACKLOG-2141): reveal EVERYTHING, incl. the
   // Inferred sources and every role leaf.
@@ -371,6 +702,22 @@ export function ContactSearchList({
     onVisibleCountChange?.(visibleContacts.length);
   }, [visibleContacts.length, onVisibleCountChange]);
 
+  /**
+   * BACKLOG-2663 — which visible rows need a field to tell them apart.
+   *
+   * Computed HERE and not in `ContactRow` because ambiguity is a property of the
+   * RESULT SET: three rows sharing one name are unchoosable only while all
+   * three are on screen, and a row that knows only about itself cannot tell.
+   *
+   * Deliberately over `visibleContacts` — post filter, post search — so
+   * searching down to one Dana quiets her row again. Over the raw props it would
+   * keep disambiguating rows whose namesake the user has already filtered away.
+   */
+  const rowDisambiguators = useMemo(
+    () => buildRowDisambiguators(visibleContacts),
+    [visibleContacts],
+  );
+
   // Toggle selection for an imported/selectable contact.
   const handleSelect = useCallback(
     (contactId: string) => {
@@ -387,6 +734,21 @@ export function ContactSearchList({
   const handleImport = useCallback(
     async (contact: ExtendedContact, autoSelect: boolean = false) => {
       if (!onImportContact || importingIds.has(contact.id)) return;
+      /*
+        BACKLOG-2672 — THE REFUSAL, not just a greyed button.
+
+        Every import on this surface funnels through here: the "+ Add Contact"
+        press, the "+ Add" press, the row click that auto-imports
+        (`handleExternalSelect` below), and Enter on a focused row. Guarding the
+        buttons alone would leave three of those four open.
+
+        `isExternal` is passed as `true` because reaching this function already
+        means the row was treated as an external one; `importBlockedReason`'s
+        saved-contact gate is satisfied by construction here, and its second leg
+        (`is_message_derived`) still runs for the message-derived rows that
+        `externalSet` does not contain.
+      */
+      if (importBlockedReason(contact, true)) return;
 
       setImportingIds((prev) => new Set(prev).add(contact.id));
       try {
@@ -407,28 +769,122 @@ export function ContactSearchList({
     [onImportContact, importingIds, selectedIds, onSelectionChange],
   );
 
-  // Selecting an external contact auto-imports it.
+  // Selecting an external contact auto-imports it — UNLESS the caller wants it
+  // selected by identity instead (BACKLOG-2591). `onExternalSelect` WINS: see
+  // its docblock for why an import path must be unreachable in linking mode.
   const handleExternalSelect = useCallback(
     async (contact: ExtendedContact) => {
+      if (onExternalSelect) {
+        onExternalSelect(contact);
+        return;
+      }
       if (onImportContact) await handleImport(contact, true);
     },
-    [onImportContact, handleImport],
+    [onExternalSelect, onImportContact, handleImport],
   );
+
+  /**
+   * BACKLOG-2459 — measure the user's place before the detail view takes over.
+   *
+   * Reads the live DOM rather than a stored index because that is what "stay
+   * put" is measured against: where the row sits ON SCREEN inside this
+   * container. When there is no row to measure the offset is 0 — the anchor
+   * still carries the CONTACT, which is the part that matters; only the
+   * fine-grained "same place on screen" is lost.
+   */
+  const captureAnchor = useCallback(
+    (contact: ExtendedContact): void => {
+      if (!onAnchorCapture) return;
+      const container = listRef.current;
+      const row = findRowElement(container, contact.id);
+      const viewportOffset =
+        container && row
+          ? row.getBoundingClientRect().top - container.getBoundingClientRect().top
+          : 0;
+      onAnchorCapture({
+        contact,
+        orderIds: visibleContacts.map((c) => c.id),
+        viewportOffset,
+      });
+    },
+    [onAnchorCapture, visibleContacts],
+  );
+
+  /**
+   * BACKLOG-2459 — put the user back where they were.
+   *
+   * A layout effect so the restore is painted in the same frame the list
+   * reappears; the user never sees the top of the list flash past. It re-runs as
+   * `visibleContacts` settles, and consumes the anchor only once the resolution
+   * actually lands on a row — an anchor that resolves to nothing is a list that
+   * has not finished reloading, not a list without the contact.
+   */
+  useLayoutEffect(() => {
+    if (!pendingAnchor) return;
+    const container = listRef.current;
+    if (!container) return;
+
+    const resolution = resolveContactAnchor(visibleContacts, pendingAnchor);
+    if (resolution.index < 0 || !resolution.contact) return;
+
+    const row = findRowElement(container, resolution.contact.id);
+    if (!row) return;
+
+    container.scrollTop = scrollTopForAnchor({
+      currentScrollTop: container.scrollTop,
+      containerTop: container.getBoundingClientRect().top,
+      rowTop: row.getBoundingClientRect().top,
+      viewportOffset: pendingAnchor.viewportOffset,
+    });
+    onAnchorConsumed?.();
+  }, [pendingAnchor, visibleContacts, onAnchorConsumed]);
 
   // Row click behavior by mode/type.
   const handleRowSelect = useCallback(
     (contact: ExtendedContact, isExternal: boolean) => {
       if (onContactClick) {
+        captureAnchor(contact);
         onContactClick(contact);
         return;
       }
-      if (isExternal && onImportContact && !selectedIds.includes(contact.id)) {
+      /*
+        BACKLOG-2672 — THE HOLE THE BUTTON GUARD DOES NOT COVER.
+
+        Placed AFTER the `onContactClick` branch on purpose. The founder's whole
+        reason for choosing option 2 over suppression was that he wants to be
+        able to investigate these records: on Clients & Contacts the row click
+        OPENS THE DETAIL PANE, and that must keep working.
+
+        Below this line the row click does something else entirely. In the
+        wizard's add-mode there is no `onContactClick`, so a click on the row
+        BODY reaches `handleSelect` and puts the record in the transaction
+        without ever passing through `handleImport`. Disabling the button and
+        leaving this open would refuse the press he can see and allow the one he
+        cannot.
+      */
+      if (importBlockedReason(contact, isExternal)) return;
+      // BACKLOG-2591: `onExternalSelect` opens this branch too — without it a
+      // link picker's external rows would fall through to plain `handleSelect`
+      // and never reach the caller at all.
+      if (
+        isExternal &&
+        (onImportContact || onExternalSelect) &&
+        !selectedIds.includes(contact.id)
+      ) {
         handleExternalSelect(contact);
       } else {
         handleSelect(contact.id);
       }
     },
-    [handleSelect, handleExternalSelect, onContactClick, onImportContact, selectedIds],
+    [
+      handleSelect,
+      handleExternalSelect,
+      onContactClick,
+      onImportContact,
+      onExternalSelect,
+      selectedIds,
+      captureAnchor,
+    ],
   );
 
   const handleImportButtonClick = useCallback(
@@ -534,41 +990,92 @@ export function ContactSearchList({
           </div>
         </div>
 
-        {/* Sort control (always visible) + Source/Role grouped filters (filter modes only) */}
+        {/*
+          Sort control (always visible) + Source/Role grouped filters (filter
+          modes only). Each label travels with the controls it names — see
+          `ControlCluster`. This row wraps BETWEEN clusters and nowhere else, so
+          anything added here must go INSIDE a cluster, not beside one.
+        */}
         <div
-          className="px-2 sm:px-3 py-2 border-b border-gray-100 flex items-center gap-2 flex-wrap"
+          className="px-2 sm:px-3 py-2 border-b border-gray-100 flex items-center gap-x-3 gap-y-2 flex-wrap"
           data-testid="contact-controls"
         >
-          <span className="text-xs text-gray-400 flex-shrink-0">Sort:</span>
-          <div
-            role="group"
-            aria-label="Sort order"
-            className="inline-flex rounded-lg border border-gray-300 overflow-hidden"
-            data-testid="contact-sort-control"
-          >
-            <button
-              type="button"
-              onClick={() => setSortOrder("recent")}
-              aria-pressed={sortOrder === "recent"}
-              className={sortButtonClass(sortOrder === "recent")}
-              data-testid="sort-recent"
+          <ControlCluster label="Sort:" testId="contact-sort-cluster">
+            <div
+              role="group"
+              aria-label="Sort order"
+              className="inline-flex rounded-lg border border-gray-300 overflow-hidden"
+              data-testid="contact-sort-control"
             >
-              Recent
-            </button>
-            <button
-              type="button"
-              onClick={() => setSortOrder("alphabetical")}
-              aria-pressed={sortOrder === "alphabetical"}
-              className={`${sortButtonClass(sortOrder === "alphabetical")} border-l border-gray-300`}
-              data-testid="sort-alphabetical"
-            >
-              Alphabetical
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => setSortOrder("recent")}
+                aria-pressed={sortOrder === "recent"}
+                className={sortButtonClass(sortOrder === "recent")}
+                data-testid="sort-recent"
+              >
+                Recent
+              </button>
+              <button
+                type="button"
+                onClick={() => setSortOrder("alphabetical")}
+                aria-pressed={sortOrder === "alphabetical"}
+                className={`${sortButtonClass(sortOrder === "alphabetical")} border-l border-gray-300`}
+                data-testid="sort-alphabetical"
+              >
+                Alphabetical
+              </button>
+              {/*
+                BACKLOG-2626, folding in `11abce67` — the chip became an OPTION.
+
+                It used to be a standalone amber pill reading `Needs review · N`.
+                Three things changed, all of them the founder's:
+
+                1. **`Autolinked`, not `Needs review`.** These are the contacts the
+                   matcher was CONFIDENT about — it attached the record without
+                   asking. The genuinely uncertain ones are the open questions.
+                   Labelling the confident set "needs review" inverts the signal.
+                2. **No count.** *"Just the word."* A number turns a lens into a
+                   backlog, and there is nothing here the user is behind on.
+                3. **Inside the Sort control**, as one of its options rather than a
+                   badge beside it — his words, and it is why this button sits in
+                   the same bordered group as Recent and Alphabetical.
+
+                It remains a FILTER rather than a sort: pressing it narrows the list
+                and pressing it again restores it, and the chosen sort order is
+                untouched either way. That is deliberate and is what he described —
+                the control is one segmented cluster, not one exclusive choice.
+
+                Still hidden at zero, like the header's review button: a filter that
+                can only ever return an empty list is a dead control.
+              */}
+              {autolinkedCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setAutolinkedOnly((on) => !on)}
+                  aria-pressed={autolinkedOnly}
+                  className={`${sortButtonClass(autolinkedOnly)} border-l border-gray-300`}
+                  data-testid="filter-autolinked"
+                >
+                  {BADGE_LABELS.autolinked}
+                </button>
+              )}
+            </div>
+          </ControlCluster>
 
           {showFilterUI && (
-            <>
-              <span className="text-xs text-gray-400 flex-shrink-0 ml-1">Filter:</span>
+            <ControlCluster label="Filter:" testId="contact-filter-cluster">
+              {/*
+                BACKLOG-2671 — the per-source counts the header used to carry,
+                and a global select-all on both panels.
+
+                The counts are Source-only: the founder asked "which sources, and
+                how many of each", and a number beside every role would be a
+                second answer to a question nobody asked. `selectAllLabel` names
+                each panel's own "all" ("All sources" / "All roles") rather than a
+                bare "All", because the two dropdowns sit side by side and the
+                labels are read together.
+              */}
               <GroupedMultiSelect
                 groups={SOURCE_GROUPS}
                 selected={selectedSources}
@@ -576,6 +1083,9 @@ export function ContactSearchList({
                 triggerLabel="Source"
                 summaryFormatter={formatSourceSummary}
                 testId="source-filter"
+                selectAllLabel="All sources"
+                counts={sourceOptionCounts?.byOptionId}
+                totalCount={sourceOptionCounts?.total}
               />
               <GroupedMultiSelect
                 groups={ROLE_GROUPS}
@@ -584,8 +1094,9 @@ export function ContactSearchList({
                 triggerLabel="Role"
                 summaryFormatter={formatRoleSummary}
                 testId="role-filter"
+                selectAllLabel="All roles"
               />
-            </>
+            </ControlCluster>
           )}
         </div>
       </div>
@@ -685,6 +1196,10 @@ export function ContactSearchList({
               </svg>
               {searchQuery ? (
                 <p>No contacts match &quot;{searchQuery}&quot;</p>
+              ) : isAddMode && selectedIds.length > 0 ? (
+                // BACKLOG-2400: the list is empty in "add" mode only because every
+                // available contact has already moved to the Added column.
+                <p data-testid="all-added-message">All contacts added</p>
               ) : (
                 <p>No contacts available</p>
               )}
@@ -713,13 +1228,45 @@ export function ContactSearchList({
                 isSelected={isSelected}
                 isAdded={isAdded}
                 isAdding={isImporting}
-                showCheckbox={isSelectionMode}
+                // BACKLOG-2400 "add" mode: swap the checkbox for a "+ Add"
+                // button. Selected rows are already filtered out above, so a
+                // visible row is always addable.
+                showCheckbox={isAddMode ? false : isSelectionMode}
+                showAddButton={isAddMode}
+                /*
+                  BACKLOG-2672 — computed HERE, once, for both buttons.
+
+                  `isExternal` alone would miss the record this item is about:
+                  message-derived pseudo-contacts arrive in the SAVED half's
+                  array (`contacts:get-all` merges them), so `externalSet` does
+                  not contain them and `isExternal` is false. The second leg of
+                  `isUnimportedSourceRecord` is what catches them.
+                */
+                importBlockedReason={importBlockedReason(contact, isExternal)}
                 showImportButton={
-                  !compact && !isSelectionMode && !!onImportContact && (isExternal || showAddButtonForImported)
+                  // BACKLOG-2591: `!onExternalSelect` is the fence. In linking
+                  // mode an import would CREATE a contact — the one thing this
+                  // surface must never do — so the button is suppressed on the
+                  // prop that declares linking, not left to the caller to also
+                  // remember to omit `onImportContact`.
+                  !isAddMode && !compact && !isSelectionMode && !onExternalSelect && !!onImportContact && (isExternal || showAddButtonForImported)
                 }
                 compact={compact}
+                showDetailLine={showDetailLine}
+                // BACKLOG-2663: absent for a unique name — `.get` returns
+                // `undefined` and the row renders name-only, unchanged.
+                disambiguator={rowDisambiguators.get(contact.id)}
+                // BACKLOG-2556: `collapsedRecords` was passed here. The fold
+                // that produced them is deleted, so there is nothing to pass.
                 onSelect={() => handleRowSelect(contact, isExternal)}
                 onImport={() => handleImportButtonClick(contact)}
+                // BACKLOG-2603: undefined unless the consumer asked for it, so
+                // the badge stays a plain status everywhere it already was.
+                onOpenQuestions={
+                  onOpenContactQuestions
+                    ? () => onOpenContactQuestions(contact)
+                    : undefined
+                }
                 className={focusedIndex === index ? "ring-2 ring-inset ring-purple-500" : ""}
               />
             );

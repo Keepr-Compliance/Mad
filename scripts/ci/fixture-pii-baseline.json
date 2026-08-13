@@ -1,0 +1,2323 @@
+{
+  "$comment": "Pre-existing consumer-domain addresses and non-reserved phone numbers, recorded so scripts/ci/check-fixture-pii.mjs fails only on NEW ones. Entries here are believed to be invented but have not all been audited. Adding an entry is a review decision: it asserts the value is not a real person's. Never add one to silence a genuine finding — replace the value with example.com / +1 555 01xx instead.",
+  "generatedBy": "node scripts/ci/check-fixture-pii.mjs --update-baseline",
+  "backlog": "BACKLOG-2485",
+  "entryCount": 463,
+  "entries": [
+    {
+      "file": "admin-portal/app/dashboard/support/components/CreateTicketDialog.tsx",
+      "rule": "non-reserved-phone",
+      "match": "5551234567"
+    },
+    {
+      "file": "android-companion/services/__tests__/contactReader.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000001"
+    },
+    {
+      "file": "android-companion/services/__tests__/contactReader.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000002"
+    },
+    {
+      "file": "android-companion/services/__tests__/contactReader.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000003"
+    },
+    {
+      "file": "android-companion/services/__tests__/contactReader.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000004"
+    },
+    {
+      "file": "android-companion/services/__tests__/contactReader.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000005"
+    },
+    {
+      "file": "android-companion/services/__tests__/contactReader.test.ts",
+      "rule": "personal-name",
+      "match": "Whitespace Dan"
+    },
+    {
+      "file": "android-companion/services/__tests__/contactSyncState.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "9998887777"
+    },
+    {
+      "file": "android-companion/services/__tests__/smsReader.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551230000"
+    },
+    {
+      "file": "android-companion/services/__tests__/smsReader.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5559990000"
+    },
+    {
+      "file": "broker-portal/lib/auth/helpers.ts",
+      "rule": "personal-name",
+      "match": "Izzy Rescue"
+    },
+    {
+      "file": "electron/__tests__/auth-handlers.integration.test.ts",
+      "rule": "consumer-email",
+      "match": "existing@gmail.com"
+    },
+    {
+      "file": "electron/__tests__/auth-handlers.integration.test.ts",
+      "rule": "consumer-email",
+      "match": "newuser@gmail.com"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.dedupParity.test.ts",
+      "rule": "personal-name",
+      "match": "Margaret Chen"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.dedupParity.test.ts",
+      "rule": "personal-name",
+      "match": "Margaret Torres"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.importLinking.test.ts",
+      "rule": "personal-name",
+      "match": "Jordan Ashby"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.importLinking.test.ts",
+      "rule": "personal-name",
+      "match": "Nita Bramwell"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.importLinking.test.ts",
+      "rule": "personal-name",
+      "match": "Oleg Vantry"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.importLinking.test.ts",
+      "rule": "personal-name",
+      "match": "Solo Person"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.importLinking.test.ts",
+      "rule": "personal-name",
+      "match": "Twin Ids"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Ada Example"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Alice Example"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Bea Example"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Ben Example"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Cleo Example"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Dov Example"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Gus Example"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Paul Example"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Paul Multi"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.oneMatchingRule.test.ts",
+      "rule": "personal-name",
+      "match": "Rae Example"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.pickerIdentity.test.ts",
+      "rule": "personal-name",
+      "match": "Margaret Chen"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.pickerIdentity.test.ts",
+      "rule": "personal-name",
+      "match": "Margaret Okafor"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.pickerIdentity.test.ts",
+      "rule": "personal-name",
+      "match": "Margaret Torres"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.pickerIdentity.test.ts",
+      "rule": "personal-name",
+      "match": "Sarah Whitfield"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.pickerIdentity.test.ts",
+      "rule": "personal-name",
+      "match": "Tom Whitfield"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.sourceGates.test.ts",
+      "rule": "personal-name",
+      "match": "Ana Whitfield"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.sourceGates.test.ts",
+      "rule": "personal-name",
+      "match": "Ben Carrow"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.sourceGates.test.ts",
+      "rule": "personal-name",
+      "match": "Cleo Marsh"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.sourceGates.test.ts",
+      "rule": "personal-name",
+      "match": "Dev Ranjan"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550001"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551110000"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551230000"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5552220000"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5552223333"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5553330000"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5554440000"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5557778888"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5559990000"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "personal-name",
+      "match": "Bob Jones"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "personal-name",
+      "match": "Dana Lee"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "personal-name",
+      "match": "Db Keep"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "personal-name",
+      "match": "Imported One"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "personal-name",
+      "match": "Imported Person"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.test.ts",
+      "rule": "personal-name",
+      "match": "Jane Smith"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.typedValueProvenance.test.ts",
+      "rule": "personal-name",
+      "match": "Some Body"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.universalLinking.test.ts",
+      "rule": "personal-name",
+      "match": "Devin Ashcroft"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.universalLinking.test.ts",
+      "rule": "personal-name",
+      "match": "Marisol Okafor"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.universalLinking.test.ts",
+      "rule": "personal-name",
+      "match": "Poison Record"
+    },
+    {
+      "file": "electron/__tests__/contact-handlers.universalLinking.test.ts",
+      "rule": "personal-name",
+      "match": "Rhoda Yiu"
+    },
+    {
+      "file": "electron/__tests__/google-contact-provider.test.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "electron/__tests__/system-handlers.test.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "electron/__tests__/system-handlers.test.ts",
+      "rule": "consumer-email",
+      "match": "user@outlook.com"
+    },
+    {
+      "file": "electron/handlers/__tests__/sharedAuthHandlers.test.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "electron/schemas/__tests__/schemas.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550001"
+    },
+    {
+      "file": "electron/services/__tests__/ccpaExportService.test.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/ccpaExportService.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5555555555"
+    },
+    {
+      "file": "electron/services/__tests__/connectionStatusService.lastSyncAt.test.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/connectionStatusService.lastSyncAt.test.ts",
+      "rule": "consumer-email",
+      "match": "user@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/contactCompare.test.ts",
+      "rule": "personal-name",
+      "match": "Paul Dorian"
+    },
+    {
+      "file": "electron/services/__tests__/contactLinkReview.test.ts",
+      "rule": "personal-name",
+      "match": "Alice Stone"
+    },
+    {
+      "file": "electron/services/__tests__/contactLinkReview.test.ts",
+      "rule": "personal-name",
+      "match": "Bob Stone"
+    },
+    {
+      "file": "electron/services/__tests__/contactLinkReview.test.ts",
+      "rule": "personal-name",
+      "match": "Daniel Haim"
+    },
+    {
+      "file": "electron/services/__tests__/contactLinkReview.test.ts",
+      "rule": "personal-name",
+      "match": "Front Desk"
+    },
+    {
+      "file": "electron/services/__tests__/contactLinkReview.test.ts",
+      "rule": "personal-name",
+      "match": "Jane Buyer"
+    },
+    {
+      "file": "electron/services/__tests__/contactLinkReview.test.ts",
+      "rule": "personal-name",
+      "match": "John Seller"
+    },
+    {
+      "file": "electron/services/__tests__/contactLinkReview.test.ts",
+      "rule": "personal-name",
+      "match": "Jon Frost"
+    },
+    {
+      "file": "electron/services/__tests__/contactLinkReview.test.ts",
+      "rule": "personal-name",
+      "match": "Nina Stone"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155552222"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155553333"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155557777"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155557788"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155558888"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "personal-name",
+      "match": "Frozen Buyer"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "personal-name",
+      "match": "Frozen Seller"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "personal-name",
+      "match": "Jane Married"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "personal-name",
+      "match": "Legacy Person"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "personal-name",
+      "match": "Live Only"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceLinker.test.ts",
+      "rule": "personal-name",
+      "match": "Someone New"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceValues.test.ts",
+      "rule": "personal-name",
+      "match": "Idem Person"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceValues.test.ts",
+      "rule": "personal-name",
+      "match": "Late Linker"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceValues.test.ts",
+      "rule": "personal-name",
+      "match": "Legacy Person"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceValues.test.ts",
+      "rule": "personal-name",
+      "match": "Multi Source"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceValues.test.ts",
+      "rule": "personal-name",
+      "match": "Round Trip"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceValues.test.ts",
+      "rule": "personal-name",
+      "match": "Shared Person"
+    },
+    {
+      "file": "electron/services/__tests__/contactSourceValues.test.ts",
+      "rule": "personal-name",
+      "match": "Solo Person"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.addressBooks.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5553330003"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.addressBooks.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5554440001"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.addressBooks.test.ts",
+      "rule": "personal-name",
+      "match": "Ada Cloud"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.addressBooks.test.ts",
+      "rule": "personal-name",
+      "match": "Grace Cloud"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.addressBooks.test.ts",
+      "rule": "personal-name",
+      "match": "Homer Local"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.addressBooks.test.ts",
+      "rule": "personal-name",
+      "match": "Ruth Work"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.addressBooks.test.ts",
+      "rule": "personal-name",
+      "match": "Title Co"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.funnel.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5552000000"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.wal.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5559990003"
+    },
+    {
+      "file": "electron/services/__tests__/contactsService.wal.test.ts",
+      "rule": "personal-name",
+      "match": "Nina Newer"
+    },
+    {
+      "file": "electron/services/__tests__/databaseService.migration-v47.test.ts",
+      "rule": "personal-name",
+      "match": "Closing Disclosure"
+    },
+    {
+      "file": "electron/services/__tests__/databaseService.migration-v47.test.ts",
+      "rule": "personal-name",
+      "match": "Inspection Report"
+    },
+    {
+      "file": "electron/services/__tests__/databaseService.migration-v47.test.ts",
+      "rule": "personal-name",
+      "match": "Offer Accepted"
+    },
+    {
+      "file": "electron/services/__tests__/databaseService.migration-v47.test.ts",
+      "rule": "personal-name",
+      "match": "Purchase Agreement"
+    },
+    {
+      "file": "electron/services/__tests__/databaseService.migration-v59.test.ts",
+      "rule": "personal-name",
+      "match": "Alpha Person"
+    },
+    {
+      "file": "electron/services/__tests__/databaseService.test.ts",
+      "rule": "consumer-email",
+      "match": "test@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/emailDedup.integration.test.ts",
+      "rule": "consumer-email",
+      "match": "test@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/expandAttachedThreads.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "3105559999"
+    },
+    {
+      "file": "electron/services/__tests__/expandAttachedThreads.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155557777"
+    },
+    {
+      "file": "electron/services/__tests__/expandAttachedThreads.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000001"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "alex.r@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "aturner@yahoo.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "dwilson@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "dyoung@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "mfoster@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "pwilson@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "rcooper@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "rgonzalez@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "rmartinez@yahoo.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "consumer-email",
+      "match": "swright@icloud.com"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "2095553101"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "2095553201"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4085551101"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4085551201"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4085552501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4085552801"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4085553701"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4085554401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155550201"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155550701"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155550702"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155550801"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155551001"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155551401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155551801"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155552001"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155552301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155553001"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155553301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155553401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155553801"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155554201"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155554501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "4155554801"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105550301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105550401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105550901"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105551501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105551901"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105552401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105552701"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105553501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105553901"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105554301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "5105554901"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "6505550501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "6505550502"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "6505550601"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "6505551601"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "6505552101"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "6505552201"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "6505552901"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "6505554001"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "6505554601"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "8007435000"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "9255551301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "9255551701"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "9255552601"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "9255553601"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "9255554101"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/contacts.json",
+      "rule": "non-reserved-phone",
+      "match": "9255554701"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "2095553101"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "2095553201"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4085551101"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4085551201"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4085552501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4085553701"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4085554401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155550201"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155550701"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155550801"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155551001"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155551401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155551801"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155552001"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155552301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155553001"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155553301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155553401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155553801"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "4155554501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105550301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105550401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105550901"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105551501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105551901"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105552401"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105552701"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105553501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105553901"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "5105554301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "6505550501"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "6505550601"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "6505551601"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "6505552101"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "6505552201"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "6505552901"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "9255551301"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "9255551701"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "9255552601"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "9255553601"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/fake-ios-backup/messages.json",
+      "rule": "non-reserved-phone",
+      "match": "9255554101"
+    },
+    {
+      "file": "electron/services/__tests__/fixtures/v2.27.0-populated.sql",
+      "rule": "non-reserved-phone",
+      "match": "4155550000"
+    },
+    {
+      "file": "electron/services/__tests__/folderExportService.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000000"
+    },
+    {
+      "file": "electron/services/__tests__/folderExportService.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551110000"
+    },
+    {
+      "file": "electron/services/__tests__/folderExportService.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551111111"
+    },
+    {
+      "file": "electron/services/__tests__/folderExportService.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5552220000"
+    },
+    {
+      "file": "electron/services/__tests__/folderExportService.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5552222222"
+    },
+    {
+      "file": "electron/services/__tests__/folderExportService.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5553333333"
+    },
+    {
+      "file": "electron/services/__tests__/getEarliestCommunicationDate.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "0000000000"
+    },
+    {
+      "file": "electron/services/__tests__/getEarliestCommunicationDate.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550001"
+    },
+    {
+      "file": "electron/services/__tests__/getEarliestCommunicationDate.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550002"
+    },
+    {
+      "file": "electron/services/__tests__/gmailFetchService.folder.test.ts",
+      "rule": "consumer-email",
+      "match": "test@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/gmailFetchService.test.ts",
+      "rule": "consumer-email",
+      "match": "test@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/gmailFetchService.test.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/googleAuthService.test.ts",
+      "rule": "consumer-email",
+      "match": "test@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/incrementalSync.integration.test.ts",
+      "rule": "consumer-email",
+      "match": "test@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/iosMessagesParser.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155555678"
+    },
+    {
+      "file": "electron/services/__tests__/iPhoneSyncStorageService.sourceGate.test.ts",
+      "rule": "personal-name",
+      "match": "Ana Whitfield"
+    },
+    {
+      "file": "electron/services/__tests__/iPhoneSyncStorageService.sourceGate.test.ts",
+      "rule": "personal-name",
+      "match": "Ben Carrow"
+    },
+    {
+      "file": "electron/services/__tests__/iPhoneSyncStorageService.sourceGate.test.ts",
+      "rule": "personal-name",
+      "match": "Cleo Marsh"
+    },
+    {
+      "file": "electron/services/__tests__/localSyncService.contactDiff.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000001"
+    },
+    {
+      "file": "electron/services/__tests__/localSyncService.contactDiff.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000002"
+    },
+    {
+      "file": "electron/services/__tests__/localSyncService.lookupKey.test.ts",
+      "rule": "personal-name",
+      "match": "Ada Lovelace"
+    },
+    {
+      "file": "electron/services/__tests__/macOSMessagesImportService.reactionRetag.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "3105551234"
+    },
+    {
+      "file": "electron/services/__tests__/macOSMessagesImportService.threads.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550001"
+    },
+    {
+      "file": "electron/services/__tests__/macOSMessagesImportService.threads.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550002"
+    },
+    {
+      "file": "electron/services/__tests__/macOSMessagesImportService.threads.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550003"
+    },
+    {
+      "file": "electron/services/__tests__/macOSMessagesImportService.threads.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5105551234"
+    },
+    {
+      "file": "electron/services/__tests__/macOSMessagesImportService.validation.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551111111"
+    },
+    {
+      "file": "electron/services/__tests__/messageMatchingService.test.ts",
+      "rule": "consumer-email",
+      "match": "madison.jones+tag@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/messageMatchingService.test.ts",
+      "rule": "consumer-email",
+      "match": "user@icloud.com"
+    },
+    {
+      "file": "electron/services/__tests__/messageMatchingService.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550001"
+    },
+    {
+      "file": "electron/services/__tests__/outlookFetchService.delta.test.ts",
+      "rule": "consumer-email",
+      "match": "me@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/outlookFetchService.folder.test.ts",
+      "rule": "consumer-email",
+      "match": "test@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/outlookFetchService.pagination.test.ts",
+      "rule": "consumer-email",
+      "match": "me@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/outlookFetchService.test.ts",
+      "rule": "consumer-email",
+      "match": "preferred@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/outlookFetchService.test.ts",
+      "rule": "consumer-email",
+      "match": "test@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/outlookFetchService.test.ts",
+      "rule": "consumer-email",
+      "match": "unique-id-123@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/outlookFetchService.test.ts",
+      "rule": "consumer-email",
+      "match": "user@outlook.com"
+    },
+    {
+      "file": "electron/services/__tests__/reactions.integration.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "3105559999"
+    },
+    {
+      "file": "electron/services/__tests__/sessionService.test.ts",
+      "rule": "consumer-email",
+      "match": "test@gmail.com"
+    },
+    {
+      "file": "electron/services/__tests__/sessionService.test.ts",
+      "rule": "consumer-email",
+      "match": "test@outlook.com"
+    },
+    {
+      "file": "electron/services/contactResolutionService.ts",
+      "rule": "consumer-email",
+      "match": "janesmith@icloud.com"
+    },
+    {
+      "file": "electron/services/contactResolutionService.ts",
+      "rule": "consumer-email",
+      "match": "paul@icloud.com"
+    },
+    {
+      "file": "electron/services/db/__tests__/attachmentDbService.transactionAll.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551230000"
+    },
+    {
+      "file": "electron/services/db/__tests__/attachmentDbService.transactionAll.test.ts",
+      "rule": "personal-name",
+      "match": "Purchase Agreement"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.contactComms.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550001"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.contactComms.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550002"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.contactComms.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550055"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.contactComms.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155557777"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.contactComms.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155558888"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.emailNameMap.test.ts",
+      "rule": "consumer-email",
+      "match": "emily.patt@gmail.com"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.emailNameMap.test.ts",
+      "rule": "personal-name",
+      "match": "Emily Patterson"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.emailNameMap.test.ts",
+      "rule": "personal-name",
+      "match": "Good Contact"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.emailNameMap.test.ts",
+      "rule": "personal-name",
+      "match": "Imported Primary"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.emailNameMap.test.ts",
+      "rule": "personal-name",
+      "match": "Message Derived"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.emailNameMap.test.ts",
+      "rule": "personal-name",
+      "match": "Sarah Mitchell"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551111111"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5552222222"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5554443333"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5556667777"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5558889999"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "personal-name",
+      "match": "Alice Green"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "personal-name",
+      "match": "Bob Wilson"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "personal-name",
+      "match": "Charlie Brown"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "personal-name",
+      "match": "Jane Smith"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "personal-name",
+      "match": "Person One"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.phoneLookup.test.ts",
+      "rule": "personal-name",
+      "match": "Person Two"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.transactionRecency.test.ts",
+      "rule": "personal-name",
+      "match": "Daniel Haim"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactDbService.transactionRecency.test.ts",
+      "rule": "personal-name",
+      "match": "Never Contacted"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactOriginLink.test.ts",
+      "rule": "personal-name",
+      "match": "Other Card"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactOriginLink.test.ts",
+      "rule": "personal-name",
+      "match": "Phone Person"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactOriginLink.test.ts",
+      "rule": "personal-name",
+      "match": "Shared Person"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactTombstone.danglingRefs.test.ts",
+      "rule": "personal-name",
+      "match": "Nobody Example"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactTombstone.danglingRefs.test.ts",
+      "rule": "personal-name",
+      "match": "Reese Example"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactValueProvenanceBackfill.test.ts",
+      "rule": "personal-name",
+      "match": "Corrupt Row"
+    },
+    {
+      "file": "electron/services/db/__tests__/contactValueProvenanceBackfill.test.ts",
+      "rule": "personal-name",
+      "match": "No Values"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.funnelCounts.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5558880002"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.funnelCounts.test.ts",
+      "rule": "personal-name",
+      "match": "Alice Anderson"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.funnelCounts.test.ts",
+      "rule": "personal-name",
+      "match": "Bob Brown"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.funnelCounts.test.ts",
+      "rule": "personal-name",
+      "match": "Carol Carter"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.funnelCounts.test.ts",
+      "rule": "personal-name",
+      "match": "Dave Davis"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.recency.test.ts",
+      "rule": "personal-name",
+      "match": "Cold Person"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.recency.test.ts",
+      "rule": "personal-name",
+      "match": "Daniel Haim"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.recency.test.ts",
+      "rule": "personal-name",
+      "match": "Email Person"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.recency.test.ts",
+      "rule": "personal-name",
+      "match": "Never Contacted"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.recency.test.ts",
+      "rule": "personal-name",
+      "match": "Phone Only"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.recency.test.ts",
+      "rule": "personal-name",
+      "match": "Phone Person"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.valueDedup.test.ts",
+      "rule": "personal-name",
+      "match": "Case Variant"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.valueDedup.test.ts",
+      "rule": "personal-name",
+      "match": "Junk Values"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.valueDedup.test.ts",
+      "rule": "personal-name",
+      "match": "Phone Dup"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.valueDedup.test.ts",
+      "rule": "personal-name",
+      "match": "Phone Two"
+    },
+    {
+      "file": "electron/services/db/__tests__/externalContactDbService.valueDedup.test.ts",
+      "rule": "personal-name",
+      "match": "Robin Quillfeather"
+    },
+    {
+      "file": "electron/services/db/__tests__/phoneNormalizedJoin.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155551111"
+    },
+    {
+      "file": "electron/services/db/__tests__/phoneNormalizedJoin.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155552222"
+    },
+    {
+      "file": "electron/services/folderExport/__tests__/combinedExportHelpers.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551110000"
+    },
+    {
+      "file": "electron/services/folderExport/__tests__/textExportUnknownContact.test.ts",
+      "rule": "personal-name",
+      "match": "Jane Rivera"
+    },
+    {
+      "file": "electron/services/folderExport/__tests__/threadContactLabel.test.ts",
+      "rule": "consumer-email",
+      "match": "jane@icloud.com"
+    },
+    {
+      "file": "electron/services/folderExport/__tests__/threadContactLabel.test.ts",
+      "rule": "personal-name",
+      "match": "Jane Rivera"
+    },
+    {
+      "file": "electron/services/folderExport/__tests__/threadContactLabel.test.ts",
+      "rule": "personal-name",
+      "match": "Unknown Contact"
+    },
+    {
+      "file": "electron/services/llm/__tests__/contentSanitizer.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5551239999"
+    },
+    {
+      "file": "electron/services/llm/__tests__/contentSanitizer.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5554443333"
+    },
+    {
+      "file": "electron/services/llm/prompts/__tests__/prompts.test.ts",
+      "rule": "personal-name",
+      "match": "John Buyer"
+    },
+    {
+      "file": "electron/utils/__tests__/emailAddress.test.ts",
+      "rule": "personal-name",
+      "match": "Alice Smith"
+    },
+    {
+      "file": "electron/utils/__tests__/exportUtils.test.ts",
+      "rule": "consumer-email",
+      "match": "madison@gmail.com"
+    },
+    {
+      "file": "electron/utils/__tests__/exportUtils.test.ts",
+      "rule": "consumer-email",
+      "match": "paul@icloud.com"
+    },
+    {
+      "file": "electron/utils/__tests__/exportUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Email Contact"
+    },
+    {
+      "file": "electron/utils/__tests__/exportUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Known Contact"
+    },
+    {
+      "file": "electron/utils/__tests__/exportUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Morgan Reed"
+    },
+    {
+      "file": "electron/utils/__tests__/exportUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Paul Johnson"
+    },
+    {
+      "file": "electron/utils/__tests__/exportUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Phone Contact"
+    },
+    {
+      "file": "electron/utils/__tests__/phoneNormalization.test.ts",
+      "rule": "consumer-email",
+      "match": "madison.jones+tag@gmail.com"
+    },
+    {
+      "file": "electron/utils/__tests__/phoneNormalization.test.ts",
+      "rule": "consumer-email",
+      "match": "user@icloud.com"
+    },
+    {
+      "file": "electron/utils/__tests__/phoneNormalization.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4159999999"
+    },
+    {
+      "file": "electron/utils/__tests__/phoneNormalization.writePath.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155552222"
+    },
+    {
+      "file": "electron/utils/__tests__/phoneNormalization.writePath.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155553333"
+    },
+    {
+      "file": "electron/utils/__tests__/phoneNormalization.writePath.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155555555"
+    },
+    {
+      "file": "electron/utils/__tests__/phoneNormalization.writePath.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155557777"
+    },
+    {
+      "file": "electron/utils/__tests__/phoneNormalization.writePath.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155559876"
+    },
+    {
+      "file": "electron/utils/__tests__/phoneNormalization.writePath.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "5550000000"
+    },
+    {
+      "file": "electron/utils/exportUtils.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "electron/utils/phoneNormalization.ts",
+      "rule": "consumer-email",
+      "match": "user@icloud.com"
+    },
+    {
+      "file": "scripts/qa/harness/__tests__/edge-case-asserter.test.ts",
+      "rule": "consumer-email",
+      "match": "michelle.torres@gmail.com"
+    },
+    {
+      "file": "scripts/qa/harness/__tests__/fixtures/json-export-tx1/Transaction_742_Birchwood.json",
+      "rule": "consumer-email",
+      "match": "david.patterson@gmail.com"
+    },
+    {
+      "file": "scripts/qa/harness/__tests__/fixtures/json-export-tx1/Transaction_742_Birchwood.json",
+      "rule": "non-reserved-phone",
+      "match": "3605551234"
+    },
+    {
+      "file": "scripts/qa/harness/__tests__/search-attach-asserter.test.ts",
+      "rule": "personal-name",
+      "match": "Appraisal Update"
+    },
+    {
+      "file": "scripts/qa/harness/__tests__/search-attach-asserter.test.ts",
+      "rule": "personal-name",
+      "match": "Wire Instructions"
+    },
+    {
+      "file": "scripts/qa/harness/__tests__/search-expectations.test.ts",
+      "rule": "consumer-email",
+      "match": "david.patterson@gmail.com"
+    },
+    {
+      "file": "scripts/qa/harness/search-expectations.ts",
+      "rule": "consumer-email",
+      "match": "david.patterson@gmail.com"
+    },
+    {
+      "file": "scripts/qa/harness/seed-fixture.js",
+      "rule": "personal-name",
+      "match": "Alice Buyer"
+    },
+    {
+      "file": "scripts/qa/harness/seed-fixture.js",
+      "rule": "personal-name",
+      "match": "Bob Seller"
+    },
+    {
+      "file": "scripts/qa/harness/seed-fixture.js",
+      "rule": "personal-name",
+      "match": "Buyer Co"
+    },
+    {
+      "file": "scripts/qa/harness/seed-fixture.js",
+      "rule": "personal-name",
+      "match": "Carol Escrow"
+    },
+    {
+      "file": "scripts/qa/harness/seed-fixture.js",
+      "rule": "personal-name",
+      "match": "Escrow Partners"
+    },
+    {
+      "file": "scripts/qa/harness/seed-fixture.js",
+      "rule": "personal-name",
+      "match": "Manual Co"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "non-reserved-phone",
+      "match": "5551234567"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "non-reserved-phone",
+      "match": "5552468013"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "non-reserved-phone",
+      "match": "5553217890"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "non-reserved-phone",
+      "match": "5553691215"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "non-reserved-phone",
+      "match": "5554443333"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "non-reserved-phone",
+      "match": "5556543210"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "non-reserved-phone",
+      "match": "5557771234"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "non-reserved-phone",
+      "match": "5558884321"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "non-reserved-phone",
+      "match": "5559876543"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "personal-name",
+      "match": "Agent Karen"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "personal-name",
+      "match": "Broker Jim"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "personal-name",
+      "match": "David Client"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "personal-name",
+      "match": "Lisa Escrow"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "personal-name",
+      "match": "Mike Lender"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "personal-name",
+      "match": "Sarah Johnson"
+    },
+    {
+      "file": "scripts/test-sms-backup.xml",
+      "rule": "personal-name",
+      "match": "Tom Inspector"
+    },
+    {
+      "file": "src/components/__tests__/App.test.tsx",
+      "rule": "consumer-email",
+      "match": "test@gmail.com"
+    },
+    {
+      "file": "src/components/__tests__/Settings.test.tsx",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "src/components/__tests__/Settings.test.tsx",
+      "rule": "consumer-email",
+      "match": "user@outlook.com"
+    },
+    {
+      "file": "src/components/__tests__/TransactionDetails.test.tsx",
+      "rule": "personal-name",
+      "match": "Thread Alpha"
+    },
+    {
+      "file": "src/components/__tests__/TransactionDetails.test.tsx",
+      "rule": "personal-name",
+      "match": "Thread Beta"
+    },
+    {
+      "file": "src/components/shared/ContactPreview.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "3105556789"
+    },
+    {
+      "file": "src/components/shared/ContactPreview.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "5554443333"
+    },
+    {
+      "file": "src/components/shared/ContactPreview.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "5555551212"
+    },
+    {
+      "file": "src/components/shared/ContactSearchList.test.tsx",
+      "rule": "personal-name",
+      "match": "Imp One"
+    },
+    {
+      "file": "src/components/shared/ContactSearchList.test.tsx",
+      "rule": "personal-name",
+      "match": "Imp Two"
+    },
+    {
+      "file": "src/components/shared/ContactSearchList.test.tsx",
+      "rule": "personal-name",
+      "match": "Only Once"
+    },
+    {
+      "file": "src/components/shared/ContactSearchList.test.tsx",
+      "rule": "personal-name",
+      "match": "Same Email"
+    },
+    {
+      "file": "src/components/support/__tests__/SupportWidget.test.tsx",
+      "rule": "personal-name",
+      "match": "Detected User"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/MessageThreadCard.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550001"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/MessageThreadCard.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550055"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/MessageThreadCard.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550066"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/MessageThreadCard.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550077"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/MessageThreadCard.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550088"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/MessageThreadCard.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550099"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/MessageThreadCard.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/MoveToastUndo-2390.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/RemovedMessagesSection-1793.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/RemovedMessagesSection-2263.test.tsx",
+      "rule": "consumer-email",
+      "match": "romina@icloud.com"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/RemovedMessagesSection-2263.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/RemovedMessagesSection-2263.test.tsx",
+      "rule": "personal-name",
+      "match": "Alex Broker"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/RemovedSection-1719-bulk-restore.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/TransactionAttachmentsTab.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "5551230000"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/TransactionAttachmentsTab.test.tsx",
+      "rule": "personal-name",
+      "match": "Purchase Agreement"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/TransactionMessagesTab-1719.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/__tests__/TransactionMessagesTab.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/AttachMessagesModal.test.tsx",
+      "rule": "consumer-email",
+      "match": "romina@icloud.com"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/AttachMessagesModal.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/AttachMessagesModal.test.tsx",
+      "rule": "personal-name",
+      "match": "Alex Broker"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/ConversationViewModal.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/ConversationViewModal.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550300"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/ConversationViewModal.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550400"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/ConversationViewModal.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155550500"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/ConversationViewModal.test.tsx",
+      "rule": "personal-name",
+      "match": "Alice Smith"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/ConversationViewModal.test.tsx",
+      "rule": "personal-name",
+      "match": "Bob Jones"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/EmailThreadViewModal.nameResolution.test.tsx",
+      "rule": "consumer-email",
+      "match": "emily.patt@gmail.com"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/EmailThreadViewModal.nameResolution.test.tsx",
+      "rule": "personal-name",
+      "match": "Emily Patterson"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/EmailViewModal.test.tsx",
+      "rule": "consumer-email",
+      "match": "emily.patt@gmail.com"
+    },
+    {
+      "file": "src/components/transactionDetailsModule/components/modals/__tests__/EmailViewModal.test.tsx",
+      "rule": "personal-name",
+      "match": "Emily Patterson"
+    },
+    {
+      "file": "src/contexts/__tests__/ContactsContext.test.tsx",
+      "rule": "personal-name",
+      "match": "Jane Smith"
+    },
+    {
+      "file": "src/contexts/__tests__/ContactsContext.test.tsx",
+      "rule": "personal-name",
+      "match": "New Contact"
+    },
+    {
+      "file": "src/services/__tests__/authService.test.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "src/services/__tests__/authService.test.ts",
+      "rule": "consumer-email",
+      "match": "user@outlook.com"
+    },
+    {
+      "file": "src/services/__tests__/systemService.test.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "src/services/__tests__/systemService.test.ts",
+      "rule": "consumer-email",
+      "match": "user@outlook.com"
+    },
+    {
+      "file": "src/utils/__tests__/contactDisplayLabel.parity.test.ts",
+      "rule": "personal-name",
+      "match": "Acme Realty"
+    },
+    {
+      "file": "src/utils/__tests__/contactDisplayLabel.parity.test.ts",
+      "rule": "personal-name",
+      "match": "Unknown Contact"
+    },
+    {
+      "file": "src/utils/__tests__/contactListAnchor.test.ts",
+      "rule": "personal-name",
+      "match": "Cleo Example"
+    },
+    {
+      "file": "src/utils/__tests__/contactListAnchor.test.ts",
+      "rule": "personal-name",
+      "match": "Elm Example"
+    },
+    {
+      "file": "src/utils/__tests__/contactListAnchor.test.ts",
+      "rule": "personal-name",
+      "match": "Fenn Example"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "consumer-email",
+      "match": "chat123456789@icloud.com"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Acme Realty"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Alice Anderson"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Alpha Alpha"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Bob Builder"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Builders Inc"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Carol Chen"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Dup One"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Dup Two"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Mike Mike"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "One Row"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Same Name"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Two Row"
+    },
+    {
+      "file": "src/utils/__tests__/contactPickerList.test.ts",
+      "rule": "personal-name",
+      "match": "Zed Zulu"
+    },
+    {
+      "file": "src/utils/__tests__/emailConnectionEvents.test.ts",
+      "rule": "consumer-email",
+      "match": "test@outlook.com"
+    },
+    {
+      "file": "src/utils/__tests__/emailConnectionEvents.test.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "src/utils/__tests__/emailConnectionEvents.test.ts",
+      "rule": "consumer-email",
+      "match": "user1@gmail.com"
+    },
+    {
+      "file": "src/utils/__tests__/emailConnectionEvents.test.ts",
+      "rule": "consumer-email",
+      "match": "user2@outlook.com"
+    },
+    {
+      "file": "src/utils/__tests__/emailParticipantUtils.test.ts",
+      "rule": "consumer-email",
+      "match": "emily.patt@gmail.com"
+    },
+    {
+      "file": "src/utils/__tests__/emailParticipantUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Emily Patterson"
+    },
+    {
+      "file": "src/utils/__tests__/emailParticipantUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Quincy Poe"
+    },
+    {
+      "file": "src/utils/__tests__/emailParticipantUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Sarah Mitchell"
+    },
+    {
+      "file": "src/utils/__tests__/threadMergeUtils.test.ts",
+      "rule": "consumer-email",
+      "match": "jane@gmail.com"
+    },
+    {
+      "file": "src/utils/__tests__/threadMergeUtils.test.ts",
+      "rule": "consumer-email",
+      "match": "madison@icloud.com"
+    },
+    {
+      "file": "src/utils/__tests__/threadMergeUtils.test.ts",
+      "rule": "consumer-email",
+      "match": "romina@icloud.com"
+    },
+    {
+      "file": "src/utils/__tests__/threadMergeUtils.test.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155550200"
+    },
+    {
+      "file": "src/utils/__tests__/threadMergeUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Jane Smith"
+    },
+    {
+      "file": "src/utils/__tests__/threadMergeUtils.test.ts",
+      "rule": "personal-name",
+      "match": "Morgan Lake"
+    },
+    {
+      "file": "src/utils/contactPickerList.ts",
+      "rule": "personal-name",
+      "match": "Vex Example"
+    },
+    {
+      "file": "src/utils/emailConnectionEvents.ts",
+      "rule": "consumer-email",
+      "match": "user@gmail.com"
+    },
+    {
+      "file": "src/utils/phoneNormalization.ts",
+      "rule": "consumer-email",
+      "match": "chat123456789@icloud.com"
+    },
+    {
+      "file": "supabase/migrations/20260313_support_rbac_seed.sql",
+      "rule": "personal-name",
+      "match": "Compliance Guidance"
+    },
+    {
+      "file": "supabase/migrations/20260313_support_rbac_seed.sql",
+      "rule": "personal-name",
+      "match": "Feature Request"
+    },
+    {
+      "file": "supabase/migrations/20260313_support_rbac_seed.sql",
+      "rule": "personal-name",
+      "match": "Product Technical"
+    },
+    {
+      "file": "tests/e2e/autoDetection.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155551234"
+    },
+    {
+      "file": "tests/e2e/autoDetection.test.tsx",
+      "rule": "non-reserved-phone",
+      "match": "4155555678"
+    },
+    {
+      "file": "tests/fixtures/realEstateEmails.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155551234"
+    },
+    {
+      "file": "tests/fixtures/realEstateEmails.ts",
+      "rule": "non-reserved-phone",
+      "match": "4155555678"
+    },
+    {
+      "file": "tests/mocks/llmResponses.ts",
+      "rule": "personal-name",
+      "match": "Lisa Chen"
+    },
+    {
+      "file": "tests/mocks/llmResponses.ts",
+      "rule": "personal-name",
+      "match": "Mark Wilson"
+    },
+    {
+      "file": "tests/mocks/llmResponses.ts",
+      "rule": "personal-name",
+      "match": "Mike Johnson"
+    },
+    {
+      "file": "tests/mocks/llmResponses.ts",
+      "rule": "personal-name",
+      "match": "Sarah Jones"
+    }
+  ]
+}

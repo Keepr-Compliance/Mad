@@ -25,7 +25,19 @@
  *   (prevTransactionIdRef). A non-StrictMode render will NOT catch this bug.
  */
 import React from "react";
-import { render, waitFor } from "@testing-library/react";
+import { render as rtlRender, waitFor } from "@testing-library/react";
+import { NotificationProvider } from "../../contexts/NotificationContext";
+
+/**
+ * BACKLOG-2447: these components now raise toasts through `useNotification`,
+ * which requires the app-level NotificationProvider that `App.tsx` supplies in
+ * production. Passing it as RTL's `wrapper` (rather than wrapping each element)
+ * means `rerender` keeps the provider too.
+ */
+const render = (
+  ui: Parameters<typeof rtlRender>[0],
+  options?: Parameters<typeof rtlRender>[1],
+) => rtlRender(ui, { wrapper: NotificationProvider, ...options });
 import "@testing-library/jest-dom";
 import type { HighlightTarget } from "../transactionDetailsModule/types";
 
@@ -129,7 +141,10 @@ const baseTransaction = {
   transaction_type: "purchase" as const,
   status: "active" as const,
   sale_price: 100000,
-  closed_at: null,
+  // Transaction.closed_at is typed `string | undefined`, but SQLite returns
+  // NULL for an open transaction. The fixture keeps the real null value; the
+  // double cast only reconciles it with the declared model type.
+  closed_at: null as unknown as import("../../../electron/types/models").Transaction["closed_at"],
   message_count: 0,
   attachment_count: 0,
   export_status: "not_exported" as const,

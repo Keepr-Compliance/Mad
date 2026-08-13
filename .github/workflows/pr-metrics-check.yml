@@ -18,7 +18,16 @@ name: PR Metrics Validation
 # - Dependabot PRs are exempt (automated dependency updates)
 # - PRs with [skip-metrics] in title are exempt (use sparingly)
 # - PRs with 'hotfix', 'quick-fix', or 'ci-fix' labels are exempt
-# - Integration branch PRs (int/*) are exempt (combine multiple tasks)
+# - Non-engineer head branches are exempt, by prefix (see "Check for skip flag")
+#
+# Head-branch exemptions exist because the Agent ID is an attribution key for
+# ONE engineer agent's pm_token_metrics row. A PR that is not one agent's work
+# has no honest id to cite, and Check 2 is a substring match with no existence
+# test — so the cheapest way to satisfy it is to invent one. PR #2295 cited
+# 'a0d1a15d2ff4f0d40', which has zero rows in pm_token_metrics. The exemptions
+# below are deliberately narrow: they name branch prefixes that CANNOT be an
+# engineer task branch (fix/, feat/, feature/, docs/, test/, claude/ and bare
+# chore/ all still fail without an Agent ID).
 
 on:
   pull_request:
@@ -56,10 +65,27 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           HEAD_REF: ${{ github.head_ref }}
         run: |
+          echo "Head branch: $HEAD_REF"
+
           if [[ "$HEAD_REF" == int/* ]]; then
             echo "skip=true" >> $GITHUB_OUTPUT
-            echo "skip_reason=integration branch" >> $GITHUB_OUTPUT
+            echo "skip_reason=integration branch (int/*)" >> $GITHUB_OUTPUT
             echo "::notice::Metrics validation skipped - integration branch (int/*) combines multiple tasks"
+          elif [[ "$HEAD_REF" == squash/* ]]; then
+            # PM squash/aggregate PRs (BACKLOG-2685). A squash collapses many
+            # agents' commits into one; there is no single engineer to attribute
+            # and no pm_token_metrics row that could honestly be cited. Example:
+            # PR #2300 squashed 429 commits from dozens of agents.
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "skip_reason=PM squash branch (squash/*)" >> $GITHUB_OUTPUT
+            echo "::notice::Metrics validation skipped - PM squash branch (squash/*) aggregates many agents' commits; no single engineer to attribute"
+          elif [[ "$HEAD_REF" == chore/ci-* ]]; then
+            # CI-configuration PRs (BACKLOG-2685). Same class the pre-existing
+            # 'ci-fix' exempt label already covers; the prefix makes it apply
+            # without a label round-trip (the workflow does not run on 'labeled').
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "skip_reason=CI configuration branch (chore/ci-*)" >> $GITHUB_OUTPUT
+            echo "::notice::Metrics validation skipped - CI configuration branch (chore/ci-*)"
           elif [[ "$PR_TITLE" == *"[skip-metrics]"* ]]; then
             echo "skip=true" >> $GITHUB_OUTPUT
             echo "skip_reason=title flag" >> $GITHUB_OUTPUT
@@ -73,6 +99,7 @@ jobs:
           fi
 
       - name: Validate Engineer Metrics Section
+        id: validate
         if: steps.skip-check.outputs.skip != 'true'
         env:
           # Untrusted input passed via env, never interpolated into run: —
@@ -123,22 +150,35 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          # Workflow-controlled values, but passed via env for consistency with
+          # the injection-safe pattern used above.
+          SKIPPED: ${{ steps.skip-check.outputs.skip }}
+          SKIP_REASON: ${{ steps.skip-check.outputs.skip_reason }}
+          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
         run: |
-          if [[ "${{ steps.skip-check.outputs.skip }}" == "true" ]]; then
+          if [[ "$SKIPPED" == "true" ]]; then
             echo "## PR Metrics Validation: SKIPPED" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
-            SKIP_REASON="${{ steps.skip-check.outputs.skip_reason }}"
-            if [[ "$SKIP_REASON" == "exempt label" ]]; then
-              echo "Metrics validation was skipped due to exempt label (hotfix/quick-fix/ci-fix)." >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "> **Note**: Exempt labels are appropriate for urgent fixes that bypass the sprint workflow." >> $GITHUB_STEP_SUMMARY
-            else
-              echo "Metrics validation was skipped due to [skip-metrics] flag in PR title." >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "> **Note**: Use [skip-metrics] sparingly. All sprint tasks should include metrics." >> $GITHUB_STEP_SUMMARY
-            fi
-          else
+            # Report the reason that actually fired. Previously every non-label
+            # skip was reported as "[skip-metrics] flag in PR title", which was
+            # already false for int/* skips (BACKLOG-2685).
+            echo "Reason: **${SKIP_REASON}**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            case "$SKIP_REASON" in
+              "exempt label")
+                echo "> **Note**: Exempt labels (hotfix/quick-fix/ci-fix) are appropriate for urgent fixes that bypass the sprint workflow." >> $GITHUB_STEP_SUMMARY
+                ;;
+              "title flag")
+                echo "> **Note**: Use [skip-metrics] sparingly. All sprint tasks should include metrics." >> $GITHUB_STEP_SUMMARY
+                ;;
+              *)
+                echo "> **Note**: This head branch is not an engineer task branch, so there is no single agent_id to attribute. Engineer branches still require an Agent ID." >> $GITHUB_STEP_SUMMARY
+                ;;
+            esac
+          elif [[ "$VALIDATE_OUTCOME" == "success" ]]; then
             echo "## PR Metrics Validation: PASSED" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "All required sections are present:" >> $GITHUB_STEP_SUMMARY
@@ -147,4 +187,14 @@ jobs:
             echo "- [x] Task/Backlog cross-reference" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "> Numeric metrics live in Supabase \`pm_token_metrics\` (auto-captured — BACKLOG-1873)." >> $GITHUB_STEP_SUMMARY
+          else
+            # Previously this branch printed "PASSED" whenever the job was not
+            # skipped — including when validation had just FAILED. Observed on
+            # run 31569375378 (PR #2300): the job failed and the summary said
+            # PASSED (BACKLOG-2685).
+            echo "## PR Metrics Validation: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Read the **Validate Engineer Metrics Section** step log for which check failed." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> See \`.github/PULL_REQUEST_TEMPLATE.md\` for the required format." >> $GITHUB_STEP_SUMMARY
           fi

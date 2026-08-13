@@ -1,143 +1,191 @@
 #!/bin/bash
-# Track token usage after engineer agents complete
-# Triggered by SubagentStop hook
+# SubagentStop -- record what a subagent spent, and WHOSE work it was.
 #
 # PRIMARY: Supabase pm_token_metrics (via pm_log_agent_metrics RPC)
-# BACKUP:  tokens.csv (append-only, never queried in workflow)
+# BACKUP:  .claude/metrics/tokens.csv (append-only, never queried in workflow)
 #
-# Task context: reads .claude/.current-task JSON file written by PM before agent invocation
-# Failed payloads: written to ~/.claude/metrics/failed-payloads.jsonl for replay
+# BACKLOG-1693. Task identity used to be re-read here from .claude/.current-task
+# -- one shared file, mutated by whoever spawned the most recent agent. With a
+# fleet running concurrently that file names some other agent's item by the time
+# this hook fires. Measured on 2026-08-11: five consecutive agents stamped
+# BACKLOG-2617 while the file already read BACKLOG-2628; one item accumulated
+# 262 runs and 104M tokens over nine days; 19.2% of labelled rows were recorded
+# outside their item's lifetime.
+#
+# Identity is now bound to agent_id at spawn (register-agent.sh) and resolved
+# here by that key. Resolution order, first hit wins:
+#
+#   1. sidecar  ~/.claude/agent-tasks/<agent_id>.json   -- written at spawn
+#   2. this agent's own transcript: first BACKLOG-nnnn in its brief
+#   3. pm_agent_activity row for this agent_id
+#   4. .claude/.current-task -- ONLY when no sibling subagent is running AND the
+#      file was written inside this run's window
+#   5. nothing. An unlabelled row is recoverable; a wrongly-labelled one is not.
+#
+# Path 2 exists because for a FOREGROUND Agent call PostToolUse fires at tool
+# completion, i.e. after this hook -- the sidecar does not exist yet.
+#
+# NON-BLOCKING BY DESIGN: every failure path still exits 0.
 
-# --- Log directory: user-private, not world-readable /tmp ---
 LOG_DIR="${HOME}/.claude/logs"
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" 2>/dev/null
 DEBUG_LOG="${LOG_DIR}/hook-debug.log"
 
-# Log that hook was called (for debugging)
 echo "[HOOK FIRED] $(date)" >> "$DEBUG_LOG"
 
-# Read hook input from stdin
 INPUT=$(cat)
 echo "[HOOK INPUT] $INPUT" >> "$DEBUG_LOG"
 
-# Extract fields from hook input
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // ""')
-AGENT_ID=$(echo "$INPUT" | jq -r '.agent_id // ""')
-# Use agent_transcript_path for subagent token data (not main session transcript)
-TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.agent_transcript_path // .transcript_path // ""')
+command -v jq >/dev/null 2>&1 || { echo '{"decision": "allow"}'; exit 0; }
 
-# --- Read task context from .current-task file (written by PM at Step 5) ---
-CURRENT_TASK_FILE="${CLAUDE_PROJECT_DIR:-.}/.claude/.current-task"
-TASK_ID=""
-AGENT_TYPE=""
-SPRINT_ID=""
-BACKLOG_ITEM_ID=""
-DESCRIPTION=""
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+. "${HOOK_DIR}/agent-identity.sh" 2>/dev/null || { echo '{"decision": "allow"}'; exit 0; }
 
-if [ -f "$CURRENT_TASK_FILE" ]; then
-  TASK_ID=$(jq -r '.task_id // ""' "$CURRENT_TASK_FILE" 2>/dev/null)
-  AGENT_TYPE=$(jq -r '.agent_type // ""' "$CURRENT_TASK_FILE" 2>/dev/null)
-  SPRINT_ID=$(jq -r '.sprint_id // ""' "$CURRENT_TASK_FILE" 2>/dev/null)
-  BACKLOG_ITEM_ID=$(jq -r '.backlog_item_id // ""' "$CURRENT_TASK_FILE" 2>/dev/null)
-  DESCRIPTION=$(jq -r '.description // ""' "$CURRENT_TASK_FILE" 2>/dev/null)
-  echo "[HOOK] Read task context: task=$TASK_ID type=$AGENT_TYPE sprint=$SPRINT_ID backlog=$BACKLOG_ITEM_ID desc=$DESCRIPTION" >> "$DEBUG_LOG"
-else
-  echo "[HOOK] WARNING: No .current-task file at $CURRENT_TASK_FILE — metrics will have no task linkage" >> "$DEBUG_LOG"
-fi
+SESSION_ID=$(jq -r '.session_id // ""' <<<"$INPUT")
+AGENT_ID=$(jq -r '.agent_id // ""' <<<"$INPUT")
+# agent_transcript_path is the SUBAGENT's own transcript; transcript_path is the
+# parent session's and would count the whole fleet's spend against one agent.
+TRANSCRIPT_PATH=$(jq -r '.agent_transcript_path // .transcript_path // ""' <<<"$INPUT")
 
-# Use portable path for metrics CSV (backup only)
 METRICS_FILE="${CLAUDE_PROJECT_DIR:-.}/.claude/metrics/tokens.csv"
-mkdir -p "$(dirname "$METRICS_FILE")"
-
-# Create CSV header if file doesn't exist
+mkdir -p "$(dirname "$METRICS_FILE")" 2>/dev/null
 if [ ! -f "$METRICS_FILE" ]; then
   echo "timestamp,session_id,agent_id,agent_type,task_id,description,input_tokens,output_tokens,cache_read,cache_create,billable_tokens,total_tokens,api_calls,duration_secs,started_at,ended_at" > "$METRICS_FILE"
 fi
 
-# Skip if no transcript
 if [ -z "$TRANSCRIPT_PATH" ] || [ ! -f "$TRANSCRIPT_PATH" ]; then
   echo "[HOOK] No transcript at: $TRANSCRIPT_PATH" >> "$DEBUG_LOG"
   echo '{"decision": "allow"}'
   exit 0
 fi
 
-# Parse transcript for token totals and duration
-# Tokens are in message.usage.input_tokens, message.usage.output_tokens, etc.
-STATS=$(jq -s '
-  {
-    tokens: ([.[] | select(.message.usage != null) | .message.usage] | {
-      total_input: (map(.input_tokens // 0) | add),
-      total_output: (map(.output_tokens // 0) | add),
-      total_cache_read: (map(.cache_read_input_tokens // 0) | add),
-      total_cache_create: (map(.cache_creation_input_tokens // 0) | add),
-      api_calls: length
-    }),
-    timing: {
-      start: (map(.timestamp) | map(select(. != null)) | sort | first),
-      end: (map(.timestamp) | map(select(. != null)) | sort | last)
-    }
-  }
-' "$TRANSCRIPT_PATH" 2>/dev/null || echo '{"tokens":{"total_input":0,"total_output":0,"total_cache_read":0,"total_cache_create":0,"api_calls":0},"timing":{"start":null,"end":null}}')
+# ============================================================
+# Tokens, timing, model
+# ============================================================
+STATS=$(transcript_stats "$TRANSCRIPT_PATH")
 
-# Extract token metrics
-TOTAL_INPUT=$(echo "$STATS" | jq -r '.tokens.total_input // 0')
-TOTAL_OUTPUT=$(echo "$STATS" | jq -r '.tokens.total_output // 0')
-TOTAL_CACHE_READ=$(echo "$STATS" | jq -r '.tokens.total_cache_read // 0')
-TOTAL_CACHE_CREATE=$(echo "$STATS" | jq -r '.tokens.total_cache_create // 0')
-API_CALLS=$(echo "$STATS" | jq -r '.tokens.api_calls // 0')
-# Total = new input + output + cache (cache counts towards context usage)
+TOTAL_INPUT=$(jq -r '.total_input // 0' <<<"$STATS")
+TOTAL_OUTPUT=$(jq -r '.total_output // 0' <<<"$STATS")
+TOTAL_CACHE_READ=$(jq -r '.total_cache_read // 0' <<<"$STATS")
+TOTAL_CACHE_CREATE=$(jq -r '.total_cache_create // 0' <<<"$STATS")
+API_CALLS=$(jq -r '.api_calls // 0' <<<"$STATS")
+START_TS=$(jq -r '.start // empty' <<<"$STATS")
+END_TS=$(jq -r '.end // empty' <<<"$STATS")
+
 TOTAL_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT + TOTAL_CACHE_READ + TOTAL_CACHE_CREATE))
-
-# Billable = input + output + cache_create (standardized formula, matches DB generated column)
 BILLABLE_TOKENS=$((TOTAL_INPUT + TOTAL_OUTPUT + TOTAL_CACHE_CREATE))
 
-# Extract timing and calculate duration in seconds (portable -- no macOS-only date -j)
-START_TS=$(echo "$STATS" | jq -r '.timing.start // empty')
-END_TS=$(echo "$STATS" | jq -r '.timing.end // empty')
-if [ -n "$START_TS" ] && [ -n "$END_TS" ]; then
-  # Use jq to compute duration from ISO timestamps (portable across macOS/Linux)
-  DURATION_SECS=$(jq -n --arg s "$START_TS" --arg e "$END_TS" '
-    def parse_ts: split(".")[0] | strptime("%Y-%m-%dT%H:%M:%S") | mktime;
-    (($e | parse_ts) - ($s | parse_ts)) | if . < 0 then 0 else . end
-  ' 2>/dev/null || echo "0")
+START_EPOCH=$(iso_to_epoch "$START_TS")
+END_EPOCH=$(iso_to_epoch "$END_TS")
+if [ -n "$START_EPOCH" ] && [ -n "$END_EPOCH" ] && [ "$END_EPOCH" -ge "$START_EPOCH" ] 2>/dev/null; then
+  DURATION_SECS=$((END_EPOCH - START_EPOCH))
 else
   DURATION_SECS=0
-  START_TS=""
-  END_TS=""
+fi
+DURATION_MS=$((DURATION_SECS * 1000))
+TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+# Real model or empty -- never the literal "unknown" that 1,725 rows carry.
+MODEL=$(transcript_model "$TRANSCRIPT_PATH")
+
+# ============================================================
+# Identity, keyed on agent_id
+# ============================================================
+LEGACY_ID=""; AGENT_TYPE=""; DESCRIPTION=""; ID_SOURCE="none"
+
+# --- 1. sidecar written at spawn, keyed by this agent's own id ---
+SIDECAR="${AGENT_TASK_DIR}/${AGENT_ID}.json"
+if [ -n "$AGENT_ID" ] && [ -f "$SIDECAR" ]; then
+  LEGACY_ID=$(jq -r '.legacy_id // ""' "$SIDECAR" 2>/dev/null)
+  AGENT_TYPE=$(jq -r '.agent_type // ""' "$SIDECAR" 2>/dev/null)
+  DESCRIPTION=$(jq -r '.description // ""' "$SIDECAR" 2>/dev/null)
+  [ -n "$LEGACY_ID" ] && ID_SOURCE="sidecar"
 fi
 
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-DURATION_MS=$((DURATION_SECS * 1000))
-
-# Extract model from transcript (first message with a model field)
-MODEL=$(jq -r '[.message.model // empty] | first // "unknown"' "$TRANSCRIPT_PATH" 2>/dev/null | head -1)
-[ -z "$MODEL" ] && MODEL="unknown"
-
-# ============================================================
-# PRIMARY: Push to Supabase
-# ============================================================
-# Try env vars first, then fall back to config file
-SUPABASE_URL="${PM_SUPABASE_URL:-}"
-SUPABASE_KEY="${PM_SUPABASE_KEY:-}"
-SUPABASE_SUCCESS=false
-
-if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
-  HOOK_ENV="${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/.env"
-  if [ -f "$HOOK_ENV" ]; then
-    # shellcheck source=/dev/null
-    source "$HOOK_ENV"
-    SUPABASE_URL="${PM_SUPABASE_URL:-}"
-    SUPABASE_KEY="${PM_SUPABASE_KEY:-}"
-    echo "[HOOK] Loaded credentials from $HOOK_ENV" >> "$DEBUG_LOG"
+# --- 2. the agent's own brief ---
+if [ -z "$LEGACY_ID" ]; then
+  PROMPT_TEXT=$(jq -rs '
+    [ .[] | select(.type == "user") | .message.content ] | first
+    | if . == null then "" elif type == "string" then .
+      elif type == "array" then ([ .[] | .text? // "" ] | join(" "))
+      else "" end
+  ' "$TRANSCRIPT_PATH" 2>/dev/null)
+  CANDIDATE=$(grep -oE 'BACKLOG-[0-9]+' <<<"$PROMPT_TEXT" 2>/dev/null | head -1)
+  if [ -n "$CANDIDATE" ]; then
+    LEGACY_ID="$CANDIDATE"
+    ID_SOURCE="transcript"
   fi
 fi
 
-if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_KEY" ]; then
-  # Build JSON payload with jq to prevent injection
+# agent_type is on the transcript's assistant entries whether or not the
+# sidecar exists. Never taken from .current-task -- that field cross-stamps too.
+if [ -z "$AGENT_TYPE" ]; then
+  AGENT_TYPE=$(jq -rs '[ .[] | .attributionAgent // empty ] | first // empty' "$TRANSCRIPT_PATH" 2>/dev/null)
+fi
+
+load_supabase_creds || echo "[HOOK] WARNING: PM_SUPABASE_URL/KEY unset -- Supabase push skipped" >> "$DEBUG_LOG"
+
+# --- 3. registry row for this agent_id ---
+if [ -z "$LEGACY_ID" ] && [ -n "$AGENT_ID" ] && [ -n "${SUPABASE_URL:-}" ]; then
+  REG=$(curl -s -m 5 \
+    "${SUPABASE_URL}/rest/v1/pm_agent_activity?agent_id=eq.${AGENT_ID}&select=legacy_id,agent_type,description&limit=1" \
+    -H "apikey: ${SUPABASE_KEY}" -H "Authorization: Bearer ${SUPABASE_KEY}" 2>/dev/null) || REG=""
+  if [ -n "$REG" ]; then
+    CANDIDATE=$(jq -r '.[0].legacy_id // ""' <<<"$REG" 2>/dev/null)
+    if [ -n "$CANDIDATE" ]; then
+      LEGACY_ID="$CANDIDATE"
+      ID_SOURCE="registry"
+      [ -z "$AGENT_TYPE" ] && AGENT_TYPE=$(jq -r '.[0].agent_type // ""' <<<"$REG" 2>/dev/null)
+      [ -z "$DESCRIPTION" ] && DESCRIPTION=$(jq -r '.[0].description // ""' <<<"$REG" 2>/dev/null)
+    fi
+  fi
+fi
+
+# --- 4. .current-task, hard-gated ---
+# Two conditions, both required. Either one alone leaves the old bug intact:
+#   (a) no sibling subagent is running. If one is, the shared file belongs to
+#       whichever agent was spawned last and cannot be trusted for this one.
+#   (b) the file was written inside this run's window (from 5 min before its
+#       first message to its last). A file left over from a previous item fails
+#       this and is ignored -- that staleness is what produced the 262-run item.
+if [ -z "$LEGACY_ID" ]; then
+  CURRENT_TASK_FILE="${CLAUDE_PROJECT_DIR:-.}/.claude/.current-task"
+  SIBLINGS=$(jq -r '[ .background_tasks[]? | select(.type == "subagent") ] | length' <<<"$INPUT" 2>/dev/null || echo 0)
+  [ -z "$SIBLINGS" ] && SIBLINGS=0
+  MTIME=$(file_mtime "$CURRENT_TASK_FILE")
+
+  if [ "$SIBLINGS" -eq 0 ] 2>/dev/null && [ -n "$MTIME" ] && [ -n "$START_EPOCH" ] && [ -n "$END_EPOCH" ] \
+     && [ "$MTIME" -ge $((START_EPOCH - 300)) ] && [ "$MTIME" -le $((END_EPOCH + 60)) ]; then
+    LEGACY_ID=$(jq -r '.task_id // ""' "$CURRENT_TASK_FILE" 2>/dev/null)
+    [ -z "$AGENT_TYPE" ] && AGENT_TYPE=$(jq -r '.agent_type // ""' "$CURRENT_TASK_FILE" 2>/dev/null)
+    [ -z "$DESCRIPTION" ] && DESCRIPTION=$(jq -r '.description // ""' "$CURRENT_TASK_FILE" 2>/dev/null)
+    [ -n "$LEGACY_ID" ] && ID_SOURCE="current-task(fresh,solo)"
+  else
+    echo "[HOOK] .current-task not used: siblings=$SIBLINGS mtime=${MTIME:-none} window=[${START_EPOCH:-?},${END_EPOCH:-?}]" >> "$DEBUG_LOG"
+  fi
+fi
+
+# --- legacy_id -> uuid. Text in a uuid column is not a mislabelled row; it is a
+# 400 and a LOST row, so nothing reaches the RPC without passing the gate. ---
+BACKLOG_ITEM_ID=""; SPRINT_ID=""
+if [ -n "$LEGACY_ID" ]; then
+  read -r BACKLOG_ITEM_ID SPRINT_ID <<<"$(resolve_item_uuid "$LEGACY_ID")"
+fi
+BACKLOG_ITEM_ID=$(uuid_or_empty "$BACKLOG_ITEM_ID")
+SPRINT_ID=$(uuid_or_empty "$SPRINT_ID")
+
+echo "[HOOK] identity: agent=$AGENT_ID source=$ID_SOURCE task=$LEGACY_ID item=${BACKLOG_ITEM_ID:-null} type=$AGENT_TYPE model=${MODEL:-null}" >> "$DEBUG_LOG"
+
+# ============================================================
+# PRIMARY: Supabase
+# ============================================================
+SUPABASE_SUCCESS=false
+if [ -n "${SUPABASE_URL:-}" ] && [ -n "${SUPABASE_KEY:-}" ]; then
   JSON_PAYLOAD=$(jq -n \
     --arg agent_id "$AGENT_ID" \
     --arg agent_type "$AGENT_TYPE" \
-    --arg task_id "$TASK_ID" \
+    --arg task_id "$LEGACY_ID" \
     --arg description "$DESCRIPTION" \
     --arg sprint_id "$SPRINT_ID" \
     --arg backlog_item_id "$BACKLOG_ITEM_ID" \
@@ -165,48 +213,25 @@ if [ -n "$SUPABASE_URL" ] && [ -n "$SUPABASE_KEY" ]; then
       p_duration_ms: $duration_ms,
       p_api_calls: $api_calls,
       p_session_id: $session_id,
-      p_model: $model
+      p_model: (if $model == "" then null else $model end)
     }')
 
-  # Capture HTTP status and response body
-  HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${SUPABASE_URL}/rest/v1/rpc/pm_log_agent_metrics" \
-    -H "apikey: ${SUPABASE_KEY}" \
-    -H "Authorization: Bearer ${SUPABASE_KEY}" \
-    -H "Content-Type: application/json" \
-    -d "$JSON_PAYLOAD" 2>/dev/null) || true
-
-  HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
-  HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -1)
-
+  HTTP_STATUS=$(post_metrics "$JSON_PAYLOAD" "$DEBUG_LOG")
   if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "201" ]; then
     SUPABASE_SUCCESS=true
-    echo "[HOOK] Supabase OK ($HTTP_STATUS): $TOTAL_TOKENS tokens, task=$TASK_ID" >> "$DEBUG_LOG"
-  else
-    echo "[HOOK] SUPABASE_PUSH_FAILED ($HTTP_STATUS): $HTTP_BODY" >> "$DEBUG_LOG"
-
-    # Write failed payload to JSONL for replay at Step 14
-    FAILED_FILE="${HOME}/.claude/metrics/failed-payloads.jsonl"
-    mkdir -p "$(dirname "$FAILED_FILE")"
-    jq -n \
-      --arg ts "$TIMESTAMP" \
-      --arg status "$HTTP_STATUS" \
-      --arg error "$HTTP_BODY" \
-      --argjson payload "$JSON_PAYLOAD" \
-      '{timestamp: $ts, http_status: $status, error: $error, payload: $payload}' >> "$FAILED_FILE"
-    echo "[HOOK] Failed payload saved to $FAILED_FILE" >> "$DEBUG_LOG"
+    echo "[HOOK] Supabase OK ($HTTP_STATUS): $BILLABLE_TOKENS billable, task=${LEGACY_ID:-unlabelled} via $ID_SOURCE" >> "$DEBUG_LOG"
   fi
-else
-  echo "[HOOK] WARNING: PM_SUPABASE_URL or PM_SUPABASE_KEY not set — Supabase push skipped" >> "$DEBUG_LOG"
 fi
 
 # ============================================================
-# BACKUP: Always write to CSV (append-only backup)
+# BACKUP: CSV (append-only)
 # ============================================================
-# CSV columns: timestamp,session_id,agent_id,agent_type,task_id,description,input_tokens,output_tokens,cache_read,cache_create,billable_tokens,total_tokens,api_calls,duration_secs,started_at,ended_at
-CSV_ROW="${TIMESTAMP},${SESSION_ID},${AGENT_ID},${AGENT_TYPE},${TASK_ID},,$TOTAL_INPUT,$TOTAL_OUTPUT,$TOTAL_CACHE_READ,$TOTAL_CACHE_CREATE,$BILLABLE_TOKENS,$TOTAL_TOKENS,$API_CALLS,$DURATION_SECS,$START_TS,$END_TS"
-
+CSV_ROW="${TIMESTAMP},${SESSION_ID},${AGENT_ID},${AGENT_TYPE},${LEGACY_ID},,$TOTAL_INPUT,$TOTAL_OUTPUT,$TOTAL_CACHE_READ,$TOTAL_CACHE_CREATE,$BILLABLE_TOKENS,$TOTAL_TOKENS,$API_CALLS,$DURATION_SECS,$START_TS,$END_TS"
 echo "$CSV_ROW" >> "$METRICS_FILE"
-echo "[HOOK] CSV backup written: $TOTAL_TOKENS tokens (supabase=$SUPABASE_SUCCESS)" >> "$DEBUG_LOG"
+echo "[HOOK] CSV backup written: $TOTAL_TOKENS total (supabase=$SUPABASE_SUCCESS)" >> "$DEBUG_LOG"
+
+# The sidecar has served its purpose; leave no state to go stale.
+[ -n "$AGENT_ID" ] && rm -f "$SIDECAR" 2>/dev/null
 
 echo '{"decision": "allow"}'
 exit 0

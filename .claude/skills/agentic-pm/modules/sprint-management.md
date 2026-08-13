@@ -507,6 +507,25 @@ Phase 2: Implementation (Based on Findings)
 3. **Defer if no bug found** - Don't implement fixes for non-existent bugs
 4. **Update backlog immediately** - Change status to `deferred` with reason
 
+### When the investigation finds a MISSING MODEL, re-cut the plan that day
+
+**Source:** the contacts arc, 26 Jul – 13 Aug 2026 (BACKLOG-2701).
+
+The pattern above assumes an investigation returns *"this function is broken"* or *"this bug does not exist."* There is a third outcome, and it is the expensive one: **"the thing this depends on was never built."**
+
+It happened on 31 Jul 2026. Three contact bugs had each been investigated the same day they were filed and fixed within hours — the pattern worked. Then BACKLOG-2401 found that `contacts` had **no source-identity column at all**: a saved contact was bound to its address-book record by `display_name` string equality, so anyone who changed their name was silently orphaned forever.
+
+That finding did not describe a broken function. It described a missing model — and it was the shared cause under the picker faults, the wrong merges, and values appearing and vanishing.
+
+**The plan was never re-cut around it.** The epic kept accepting items in creation order and reached **121 children**, at which point *"what is built?"* had no answer that fit on a screen. On 13 Aug it was answered wrongly, from stale status fields.
+
+**Rules:**
+
+1. **When a finding is a missing model rather than a broken function, stop adding items and re-cut the plan the same day.** The remaining bugs are now symptoms of one build, not a list.
+2. **A foundation replacement has a shape.** Schema → crosswalk → matching → UI → tests. Structure the epic that way. A bug list in creation order is not a plan for building a foundation.
+3. **Re-file the open symptoms against the new shape** so each one lands in the phase that will actually fix it. Several will close as already-covered.
+4. **Say so out loud.** *"This stopped being a bug fix and became a foundation replacement"* is a scope change the founder needs to hear on the day it happens, not at the end.
+
 ### Investigation Tooling (MCP)
 
 Investigation agents have MCP access — use it instead of guessing at a cause you can look up:

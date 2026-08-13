@@ -32,6 +32,12 @@ export const ContactSchema = z.object({
 
   // Source
   source: ContactSourceSchema,
+  // BACKLOG-2472: the live crosswalk-derived source set. MUST be declared here —
+  // `validateResponse` parses with a plain (non-strict) z.object, which STRIPS
+  // unknown keys, so an undeclared field would be silently deleted on the
+  // getContactById path and the card would fall back to the stale scalar with no
+  // error anywhere.
+  source_types: z.array(ContactSourceSchema).optional(),
 
   // Engagement Metrics
   last_inbound_at: OptionalTimestamp,
@@ -46,6 +52,22 @@ export const ContactSchema = z.object({
   metadata: z.string().nullable().optional(), // JSON
   created_at: TimestampSchema,
   updated_at: TimestampSchema,
+
+  // Removal (tombstone) — migration v56, BACKLOG-2364/2365.
+  //
+  // MUST be declared here, for exactly the reason `source_types` above must be:
+  // `validateResponse` parses with a plain (non-strict) z.object, which STRIPS
+  // undeclared keys. `models.ts` declares both fields, so reading them off a
+  // `Contact` type-checks — but on the `getContactById` path zod deleted them
+  // before any caller saw them, and reported nothing.
+  //
+  // That silent erasure had a live consequence (BACKLOG-2367): the audit entry
+  // for a contact restore reads `removed_reason` to record what the contact was
+  // removed FOR, so it wrote `restored_from: null` every single time. It
+  // type-checked, and 11,000+ green tests missed it, because the only way to
+  // see it is to run the real query through the real schema.
+  removed_at: OptionalTimestamp,
+  removed_reason: z.string().nullable().optional(),
 
   // Import status
   is_message_derived: z.union([z.number(), z.boolean()]).nullable().optional(),

@@ -16,7 +16,9 @@ import type {
   TransactionFilters,
   CommunicationFilters,
   ContactFilters,
+  ContactUpdateFields,
 } from "./models";
+import type { ContactOrigin } from "../services/db/contactOriginLink";
 
 // ============================================
 // DATABASE QUERY RESULTS
@@ -104,10 +106,20 @@ export interface IDatabaseService {
   deleteUser(userId: string): Promise<void>;
 
   // Contact operations
-  createContact(contactData: NewContact): Promise<Contact>;
+  /**
+   * BACKLOG-2496: `origin` is REQUIRED — where the contact came from is written
+   * in the same transaction as the contact, and an implementation that omits it
+   * does not compile.
+   */
+  createContact(contactData: NewContact, origin: ContactOrigin): Promise<Contact>;
   getContactById(contactId: string): Promise<Contact | null>;
   getContacts(filters?: ContactFilters): Promise<Contact[]>;
-  updateContact(contactId: string, updates: Partial<Contact>): Promise<void>;
+  /**
+   * BACKLOG-2528: `ContactUpdateFields`, not `Partial<Contact>`. `Contact` is
+   * the READ shape and carries aliases that are not columns, so
+   * `Partial<Contact>` typed a rename as valid while the writer discarded it.
+   */
+  updateContact(contactId: string, updates: ContactUpdateFields): Promise<void>;
   deleteContact(contactId: string): Promise<void>;
   searchContacts(query: string, userId: string): Promise<Contact[]>;
 
@@ -152,6 +164,9 @@ export interface IDatabaseService {
   unlinkContactFromTransaction(
     transactionId: string,
     contactId: string,
+    // BACKLOG-2366: persisted to `transaction_contacts.removed_reason`. Removal
+    // is a tombstone, not a delete, so the row records why the party came off.
+    reason?: string,
   ): Promise<void>;
   getTransactionContacts(transactionId: string): Promise<Contact[]>;
 

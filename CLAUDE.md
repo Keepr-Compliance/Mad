@@ -125,6 +125,54 @@ When verifying a fix or process (sync jobs, reindexing, CI automations), confirm
 
 **Incident Reference:** BACKLOG-1875 — pm-task-sync ran "successfully" while every RPC call was rejected; the error was masked as "task not found".
 
+### Prove the mutation applied before you count its result (MANDATORY)
+
+**An unverified mutation is an unrun control.** When you break your own code on purpose to prove a test can see the break, you apply the break as a text replacement — and **if the pattern does not match, nothing is replaced**. The code is untouched, the suite passes, and the green run gets written down as *"I broke it and the tests did not catch it."* Nothing was ever broken. The record then points at the wrong thing: it reads as a weak test when it is a broken harness, and the next person "fixes" a test that was fine.
+
+1. **A mutation's result does not count until the mutation is proven to have applied.** Use an exact-string replace that raises when it matches nothing, or check `git diff --numstat`, and print `MUTATION APPLIED` plus the mutated line before running anything.
+2. **`Tests: 0 total` is a FAILURE.** Jest exits 0 when it matches no test files, so zero tests passing is indistinguishable from all tests passing if only the exit code is read. Assert a non-zero test count and report the counts.
+3. **Commit the fix BEFORE running any control that reverts with `git checkout --`.** On 2026-08-11 an agent discarded its own uncommitted fix that way and nearly shipped the bug it had just proven.
+
+Three occurrences in one night, 10–11 Aug 2026 (BACKLOG-2645). Worked example: `.claude/docs/PR-SOP.md` → §4.4.
+
+### Derive sets by execution, not by grep (MANDATORY)
+
+**grep finds a TOKEN. It does not find the PROPERTY you are counting.** A symbol appears in a comment, a test, a dead branch, a file grep skips because one raw NUL byte makes it read as binary. Every one of those inflates or deflates a count, and the number reaches the founder with no way to tell.
+
+1. **Cite the command next to any number you state.** "17 call sites (`git grep -c ... | wc -l`)" is checkable; "17 call sites" is not.
+2. **To count things with a property, break the property and see what goes red.** Reachability, "is this filtered", "does this path run" — none of these are greppable. Run it.
+3. **An empty grep result is a claim, not a fact.** Run `file <path>` before concluding a symbol is absent — `contactManualLink.ts` read as binary for weeks and every repo-wide sweep silently skipped it (BACKLOG-2637).
+
+Three separate undercounts in one night, 30 Jul 2026.
+
+### State a mechanism as traced, or mark it untraced (MANDATORY)
+
+**An item's stated mechanism becomes the engineer's fixture.** Whoever picks the item up builds a test that reproduces the mechanism as written. If it was inferred rather than traced, they build a fixture for a state the code cannot produce — and it passes, because nothing contradicts it.
+
+1. **Trace the mechanism to a running line, or write "MECHANISM UNTRACED" in the item.** Either is fine. Silence is not.
+2. **Name the real producer.** BACKLOG-2672 was filed as an `external_contacts` row when the records are synthesised from `messages` by `getMessageDerivedContacts` — a fix keyed on `isExternal` would have missed every one. Caught by the engineer *after* implementation began.
+3. **Quote literals from the code, not from memory.** A string assembled by interpolation has no fixed literal to quote — cite the template and the variable's fallback instead.
+4. **Do not infer a universal negative from a local trace.** *"This function falls back to Y, therefore Z never appears"* is not established until you check **every writer of that function's input.** A fallback only tells you what happens when the input is empty — it says nothing about what the input contains.
+5. **A CORRECTION IS A CLAIM TOO, and carries the same burden.** It is trusted *more* than the original and therefore checked *less*.
+
+### The worked example — three passes over one sentence, in the rule about mechanisms
+
+**Pass 1.** This rule's first draft cited BACKLOG-2679's string as emitted from `contactDbService.ts:529`. Wrong **citation**: `:529` is `[`, the parameter-array opener. The sentence is assembled at `electron/services/contactLinkEvidence.ts:187` — `` `…saved against ${who} — but ${who}'s own entry in that ${ctx.sourceLabel} no longer lists it.` `` — which is where 2679 already pointed. The mistake was conflating the **writer** of `"Unknown"` with the **emitter** of the sentence.
+
+**Pass 2.** SR review called it false in all three parts, having traced `contactDisplayName()` (`contactLinkEvidence.ts:274-280`) to `return name && name.length > 0 ? name : "this contact"` and concluded `"Unknown"` never appears there.
+
+**Pass 3.** The delta review overturned its own finding. `contactDisplayName()` returns `contacts.display_name` **verbatim**; the fallback fires only when the column is empty, and **five live writers guarantee it is not**:
+
+```
+electron/handlers/contactHandlers.ts:1875, :2355   display_name: validatedData.name || "Unknown"
+electron/services/db/contactDbService.ts:371, :532 contactData.display_name || "Unknown"
+electron/services/localSyncService.ts:1581         display_name: contact.displayName || "Unknown"
+```
+
+**So `"Unknown's own entry in that Mac address book"` IS emittable, and the first draft was substantively right about the literal while wrong about where it comes from.** Verified at `develop` @ `a2a98d540`.
+
+Pass 2 is the instance of rule 4, and it is the one to learn from: **a single function's fallback was traced correctly, and a universal negative was inferred from it.** Emittability is not prevalence — gate 4 found zero such rows in the founder's own corpus.
+
 ---
 
 ## MANDATORY: Follow Instructions Exactly
@@ -317,10 +365,21 @@ git worktree add ../Mad-task-XXX -b feature/TASK-XXX-description int/<sprint-nam
 # For standalone work: base from develop
 # git worktree add ../Mad-task-XXX -b feature/TASK-XXX-description develop
 
+cd ../Mad-task-XXX
+
+# Give the worktree its own hook runner (BACKLOG-2577). A worktree without
+# .husky/_ runs NO pre-push hook and git reports that with silence and exit 0.
+npm run hooks:doctor -- --seed
+
 # Verify isolation
 git worktree list
 pwd  # Should show Mad-task-XXX, NOT main repo
 ```
+
+`hooks:doctor` (no `--seed`) answers "which hook runs when I push, and is it
+mine?" and exits non-zero when the answer is wrong. A hookless worktree loses
+**local fast feedback, not correctness** — CI remains the gate — but fix it
+anyway rather than pushing blind.
 
 **Full documentation:** `.claude/docs/shared/git-branching.md` (Git Worktrees section)
 
@@ -535,7 +594,9 @@ npm run dev              # Start Electron in dev mode
 npm run build            # Build for production
 
 # Testing
-npm test                 # Run all tests
+npx jest path/to/file.test.ts   # PREFERRED for single suites - never touches node_modules
+npm test                 # Full suite. Flips the shared native module for the duration
+                         # of the run, then always restores it (see Native Module Errors)
 npm run type-check       # TypeScript check
 npm run lint             # ESLint check
 
@@ -552,6 +613,43 @@ NODE_MODULE_VERSION 127. This version of Node.js requires NODE_MODULE_VERSION 13
 ```
 
 **Symptoms**: Database fails to initialize, app stuck on loading/onboarding screens in an infinite loop.
+
+**Check which build is currently live** (a plain `require()` is NOT proof — `bindings` finds a
+cwd-relative copy and falsely succeeds, so use `dlopen` on the absolute path):
+
+```bash
+node -e "try{process.dlopen({exports:{}},'/Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node');console.log('NODE build -> dev WILL break')}catch(e){console.log('ELECTRON build -> dev OK')}"
+```
+
+#### Why this keeps happening: one binary, two incompatible ABIs
+
+`better-sqlite3-multiple-ciphers` can only be built for **one** ABI at a time:
+
+| Build | `npm run dev` | jest's 32 real-module suites |
+|-------|---------------|------------------------------|
+| **Electron** (resting state) | works | cannot load the binary |
+| **Node** | broken | works |
+
+Every git worktree symlinks `node_modules` at `/Users/daniel/Developer/Mad/node_modules`, so
+**anything that rebuilds the module writes the SHARED tree** and affects the founder's running
+dev app and every sibling worktree at once.
+
+`npm test` flips to the Node ABI for the duration of the run and restores the Electron build
+afterwards. Before BACKLOG-2372 the restore lived in npm's `posttest` hook, which npm **skips
+when tests fail** — so a red or Ctrl-C'd run stranded the shared tree. That is why the breakage
+correlated with test *failures*, not test *runs*. It now restores on every exit path, including
+Ctrl-C. If a restore ever fails you get a loud banner and **exit code 75** — follow the command
+it prints.
+
+**Still true, and not protected:**
+- **`npm install` / `npm rebuild` have the same hazard and no such protection.**
+- While any `npm test` run is in progress the shared binary is Node-ABI, so starting
+  `npm run dev` mid-run can still fail. BACKLOG-2374 (worktree-local native module) is the
+  durable fix.
+- `npm run test:watch` and `npm run test:coverage` deliberately do **not** flip the tree, so
+  the 32 real-module suites fail under them. Use `npm test` for those suites.
+
+**Agents: prefer `npx jest path/to/file.test.ts`** — it never touches `node_modules`.
 
 **Fix (try in order)**:
 

@@ -8,12 +8,24 @@
  * together by last_communication_at DESC (NULLS-LAST) with display_name tie-break.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock core/dbConnection
 const mockDbGet = jest.fn();
 const mockDbAll = jest.fn();
 const mockDbRun = jest.fn();
+/**
+ * DELIBERATELY LEFT A PASSTHROUGH (BACKLOG-2537).
+ *
+ * Nothing here reaches a transaction — measured, by replacing this with a
+ * throwing stub and watching every test in the file stay green. `dbAll`/`dbGet`/
+ * `dbRun` are canned `jest.fn()`s: there is NO DATABASE, so no atomicity claim
+ * is expressible and none can be silently mis-made. Converting it would mean
+ * giving the suite a database, which is a rewrite, not a fix.
+ *
+ * The eleven sibling suites that DO open a real database were converted, and
+ * `electron/__tests__/transactionMockIntegrity.guard.test.ts` fails CI if one
+ * regresses.
+ */
 const mockDbTransaction = jest.fn((fn: () => unknown) => fn());
 
 jest.mock("../core/dbConnection", () => ({
@@ -110,7 +122,7 @@ describe("getContactsSortedByActivity — unified sort (BACKLOG-1745 Part 1)", (
         last_communication_at: "2026-01-01T00:00:00Z" },
     ];
     const messageDerived = [
-      { id: "md-null", display_name: "Aaron", name: "Aaron", email: null, phone: "+15551234567",
+      { id: "md-null", display_name: "Aaron", name: "Aaron", email: null, phone: "+15555550112",
         company: null, source: "messages", is_imported: 0, is_message_derived: 1,
         last_communication_at: null, communication_count: 0 },
     ];

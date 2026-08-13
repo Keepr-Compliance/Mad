@@ -15,6 +15,7 @@ import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun } from "./core/dbConnection";
 import { validateFields } from "../../utils/sqlFieldWhitelist";
 import { isTextMessage } from "../../utils/channelHelpers";
+import { dbTimestampNow } from "../../utils/dbTimestamp";
 import logService from "../logService";
 
 /**
@@ -325,14 +326,23 @@ export async function addIgnoredCommunication(
 ): Promise<IgnoredCommunication> {
   const id = crypto.randomUUID();
 
+  // BACKLOG-2632: persist ignored_at EXPLICITLY instead of leaning on the column
+  // default. Previously the row got `DEFAULT CURRENT_TIMESTAMP` (naive UTC,
+  // "2026-08-10 01:00:00") while the object returned below carried
+  // `new Date().toISOString()` — a different string for the same instant. The
+  // in-memory value rendered the correct day and then FLIPPED to the next day on
+  // the first refetch, which reads as data corruption rather than a skewed date.
+  // One value, written and returned, so persisted and in-memory are byte-identical.
+  const ignoredAt = dbTimestampNow();
+
   // BACKLOG-1560: Include email_id and thread_id columns for direct suppression
   // BACKLOG-2319: + match_reason, preserved so restore reclassifies correctly.
   const sql = `
     INSERT INTO ignored_communications (
       id, user_id, transaction_id, email_subject, email_sender,
       email_sent_at, email_thread_id, email_id, thread_id,
-      original_communication_id, reason, match_reason
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      original_communication_id, reason, match_reason, ignored_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const params = [
@@ -348,6 +358,7 @@ export async function addIgnoredCommunication(
     data.original_communication_id || null,
     data.reason || null,
     data.match_reason || null,
+    ignoredAt,
   ];
 
   dbRun(sql, params);
@@ -369,7 +380,9 @@ export async function addIgnoredCommunication(
     original_communication_id: data.original_communication_id || null,
     reason: data.reason || null,
     match_reason: data.match_reason || null,
-    ignored_at: new Date().toISOString(),
+    // BACKLOG-2632: the SAME string that was just persisted, not a fresh
+    // toISOString(). Renderers normalise it via parseDbTimestamp().
+    ignored_at: ignoredAt,
   } as IgnoredCommunication;
 
   return ignoredComm;
@@ -404,6 +417,37 @@ export async function getIgnoredCommunicationsByUser(
 }
 
 /**
+ * BACKLOG-2571 — TRANSITION BRIDGE, NOT THE INTENDED DESIGN.
+ *
+ * Both matchers below identify a dismissed email by
+ * (scope, sender, subject, timestamp) with EXACT string equality on the
+ * timestamp. That timestamp is copied from an email row's `sent_at`
+ * (`transactionService.unlinkCommunication`), and BACKLOG-2571 changed what
+ * `sent_at` means: it used to be the RECEIVE time and is now the
+ * sender-asserted SEND time.
+ *
+ * So one `ignored_communications` table now holds keys written under two
+ * different semantics, and an equality match against a single value misses
+ * whichever half it was not handed. A miss here is not cosmetic: an email the
+ * founder explicitly dismissed COMES BACK on the next scan.
+ *
+ * `IN (?, ?)` lets a caller offer both candidate timestamps — an email's
+ * `sent_at` and its `received_at` — so a key written under either semantics
+ * still matches. A caller holding only one value passes it alone; the second
+ * placeholder then repeats it, which matches exactly what the single-value
+ * form used to do.
+ *
+ * The index `(user_id, email_sender, email_subject, email_sent_at)` still
+ * serves an `IN` on its trailing column, so this costs nothing at runtime.
+ *
+ * DO NOT BUILD ON THIS SHAPE. "Match either timestamp" is a bridge across a
+ * meaning change, not a design — a timestamp was always a weak key, and two
+ * weak keys are not stronger than one. The intended fix is to re-key
+ * `ignored_communications` on `message_id_header` / `email_id`, which identify
+ * a message rather than describing it. Filed as the follow-up to BACKLOG-2571.
+ */
+
+/**
  * Check if a communication is ignored for a transaction
  * Uses email sender, subject, and sent_at to identify the email
  */
@@ -412,13 +456,15 @@ export async function isEmailIgnoredForTransaction(
   emailSender: string,
   emailSubject: string,
   emailSentAt: string,
+  /** BACKLOG-2571: second candidate timestamp — see the bridge note above. */
+  emailAltSentAt?: string | null,
 ): Promise<boolean> {
   const sql = `
     SELECT id FROM ignored_communications
     WHERE transaction_id = ?
       AND email_sender = ?
       AND email_subject = ?
-      AND email_sent_at = ?
+      AND email_sent_at IN (?, ?)
     LIMIT 1
   `;
   const result = dbGet(sql, [
@@ -426,6 +472,7 @@ export async function isEmailIgnoredForTransaction(
     emailSender,
     emailSubject,
     emailSentAt,
+    emailAltSentAt ?? emailSentAt,
   ]);
   return !!result;
 }
@@ -439,16 +486,24 @@ export async function isEmailIgnoredByUser(
   emailSender: string,
   emailSubject: string,
   emailSentAt: string,
+  /** BACKLOG-2571: second candidate timestamp — see the bridge note above. */
+  emailAltSentAt?: string | null,
 ): Promise<boolean> {
   const sql = `
     SELECT id FROM ignored_communications
     WHERE user_id = ?
       AND email_sender = ?
       AND email_subject = ?
-      AND email_sent_at = ?
+      AND email_sent_at IN (?, ?)
     LIMIT 1
   `;
-  const result = dbGet(sql, [userId, emailSender, emailSubject, emailSentAt]);
+  const result = dbGet(sql, [
+    userId,
+    emailSender,
+    emailSubject,
+    emailSentAt,
+    emailAltSentAt ?? emailSentAt,
+  ]);
   return !!result;
 }
 

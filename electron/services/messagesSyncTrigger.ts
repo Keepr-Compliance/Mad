@@ -38,6 +38,9 @@ import {
 } from "./autoLinkService";
 import { computeEarliestAuditStart } from "../utils/emailDateRange";
 import { getMessagesFloorISO, isMessagesImporterAvailable } from "./auditCoverageService";
+// BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
+// granted a support window covering the message-import scope.
+import { supportTrace } from "./supportAccess/trace";
 import {
   recordImport,
   recordExpansionRun,
@@ -370,6 +373,24 @@ async function runEnsure(params: {
       expansionRan,
       floorBefore,
       floorAfter,
+    });
+
+    // BACKLOG-2393: why an import did *not* happen is the question this answers.
+    // "Keepr didn't pick up my texts" is usually a decision made right here —
+    // already covered, no importer on this platform, or a failed run — and none
+    // of those look any different to a user. A no-op outside a granted window.
+    supportTrace("message-import", "sync-trigger-complete", {
+      reason,
+      required_start: requiredStart,
+      floor_before: floorBefore,
+      floor_after: floorAfter,
+      gap,
+      already_scanned_deep: alreadyScannedDeep,
+      importer_available: importerAvailable,
+      import_ran: importRan,
+      imported,
+      expansion_ran: expansionRan,
+      skipped_because: skipped ?? null,
     });
 
     return {

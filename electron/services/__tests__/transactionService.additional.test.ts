@@ -14,6 +14,7 @@ import outlookFetchService from "../outlookFetchService";
 import transactionExtractorService from "../transactionExtractorService";
 import logService from "../logService";
 import type { Transaction, NewTransaction } from "../../types";
+import type { TransactionWithDetails } from "../transactionService/types";
 
 // Mock the dependencies
 jest.mock("../databaseService");
@@ -76,13 +77,17 @@ describe("TransactionService - Additional Coverage", () => {
   const mockTransactionId = "test-transaction-id";
   const mockContactId = "test-contact-id";
 
-  const mockTransaction: Transaction = {
+  // Partial Transaction row: status/message_count/attachment_count/export_status/
+  // export_count are required on the model but are never read on the paths under
+  // test, so they are asserted away rather than invented. Present fields stay
+  // type-checked against the model.
+  const mockTransaction = {
     id: mockTransactionId,
     user_id: mockUserId,
     property_address: "123 Test St, San Francisco, CA 94102",
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  };
+  } as Transaction;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -477,52 +482,6 @@ describe("TransactionService - Additional Coverage", () => {
     });
   });
 
-  describe("updateContactRole", () => {
-    it("should update contact role with provided updates", async () => {
-      const updates = {
-        role: "listing_agent",
-        role_category: "agent",
-        is_primary: true,
-        notes: "Updated role",
-      };
-
-      (databaseService.updateContactRole as jest.Mock).mockResolvedValue({});
-
-      await transactionService.updateContactRole(
-        mockTransactionId,
-        mockContactId,
-        updates,
-      );
-
-      expect(databaseService.updateContactRole).toHaveBeenCalledWith(
-        mockTransactionId,
-        mockContactId,
-        expect.objectContaining(updates),
-      );
-    });
-
-    it("should handle partial updates", async () => {
-      const updates = { is_primary: false };
-
-      (databaseService.updateContactRole as jest.Mock).mockResolvedValue({});
-
-      await transactionService.updateContactRole(
-        mockTransactionId,
-        mockContactId,
-        updates,
-      );
-
-      expect(databaseService.updateContactRole).toHaveBeenCalledWith(
-        mockTransactionId,
-        mockContactId,
-        expect.objectContaining({
-          is_primary: false,
-          role: undefined,
-        }),
-      );
-    });
-  });
-
   describe("reanalyzeProperty", () => {
     const mockEmails = [
       {
@@ -637,16 +596,16 @@ describe("TransactionService - Additional Coverage", () => {
 
       const mockCreatedTransaction = { ...mockTransaction, id: "new-txn-id" };
 
-      (databaseService.createTransaction as jest.Mock).mockResolvedValue(
+      (databaseService.createTransactionWithContactsSync as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
       (
         databaseService.assignContactToTransaction as jest.Mock
-      ).mockResolvedValue({});
-      (databaseService.getTransactionById as jest.Mock).mockResolvedValue(
+      ).mockReturnValue({});
+      (databaseService.getTransactionById as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
-      (databaseService.getTransactionContactsWithRoles as jest.Mock).mockResolvedValue(
+      (databaseService.getTransactionContactsWithRoles as jest.Mock).mockReturnValue(
         auditedData.contact_assignments,
       );
 
@@ -655,21 +614,30 @@ describe("TransactionService - Additional Coverage", () => {
         auditedData,
       );
 
-      expect(databaseService.assignContactToTransaction).toHaveBeenCalledTimes(
-        2,
+      // BACKLOG-2538: the deal and its parties are now written by ONE call, so
+      // the assertion moves up to that call — and gets stronger for it. It no
+      // longer says "two assignments happened at some point"; it says the deal
+      // and both parties were handed to the same atomic write, in order.
+      expect(
+        databaseService.createTransactionWithContactsSync,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        databaseService.createTransactionWithContactsSync,
+      ).toHaveBeenCalledWith(
+        expect.objectContaining({ user_id: mockUserId }),
+        [
+          expect.objectContaining({ contact_id: "contact-1", role: "seller" }),
+          expect.objectContaining({
+            contact_id: "contact-2",
+            role: "buyer_agent",
+          }),
+        ],
       );
-      expect(databaseService.assignContactToTransaction).toHaveBeenCalledWith(
-        "new-txn-id",
-        expect.objectContaining({ contact_id: "contact-1", role: "seller" }),
-      );
-      expect(databaseService.assignContactToTransaction).toHaveBeenCalledWith(
-        "new-txn-id",
-        expect.objectContaining({
-          contact_id: "contact-2",
-          role: "buyer_agent",
-        }),
-      );
-      expect(result?.contact_assignments).toHaveLength(2);
+      // createAuditedTransaction is DECLARED `Promise<Transaction | null>` but
+      // actually returns getTransactionWithContacts()'s TransactionWithDetails,
+      // which is where contact_assignments lives. Narrowing here, not changing
+      // the assertion.
+      expect((result as TransactionWithDetails | null)?.contact_assignments).toHaveLength(2);
     });
 
     it("should handle transaction with property coordinates", async () => {
@@ -681,13 +649,13 @@ describe("TransactionService - Additional Coverage", () => {
 
       const mockCreatedTransaction = { ...mockTransaction, id: "verified-txn" };
 
-      (databaseService.createTransaction as jest.Mock).mockResolvedValue(
+      (databaseService.createTransactionWithContactsSync as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
-      (databaseService.getTransactionById as jest.Mock).mockResolvedValue(
+      (databaseService.getTransactionById as jest.Mock).mockReturnValue(
         mockCreatedTransaction,
       );
-      (databaseService.getTransactionContactsWithRoles as jest.Mock).mockResolvedValue(
+      (databaseService.getTransactionContactsWithRoles as jest.Mock).mockReturnValue(
         [],
       );
 
@@ -696,11 +664,13 @@ describe("TransactionService - Additional Coverage", () => {
         auditedData,
       );
 
-      expect(databaseService.createTransaction).toHaveBeenCalledWith(
+      expect(databaseService.createTransactionWithContactsSync).toHaveBeenCalledWith(
         expect.objectContaining({
           property_coordinates: "37.7749,-122.4194",
           closing_date_verified: true, // Should be true when coordinates present
         }),
+      
+        [],
       );
     });
   });

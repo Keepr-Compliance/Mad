@@ -23,7 +23,10 @@ describe("useTransactionMessages", () => {
   };
 
   // Mock communications with different channels
-  const mockCommunications: Partial<Communication>[] = [
+  // Cast (below): these fixtures carry only the Message fields the hook reads —
+  // channel, direction, body_text, participants, sent_at. Message also requires
+  // `created_at`, omitted deliberately so the hook receives exactly this payload.
+  const mockCommunications = [
     {
       id: "comm-1",
       user_id: "user-456",
@@ -76,13 +79,13 @@ describe("useTransactionMessages", () => {
       has_attachments: false,
       is_false_positive: false,
     },
-  ];
+  ] as Communication[];
 
   beforeEach(() => {
     jest.clearAllMocks();
 
     // Default mock implementation
-    window.api.transactions.getDetails.mockResolvedValue({
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
       success: true,
       transaction: {
         ...mockTransaction,
@@ -146,7 +149,7 @@ describe("useTransactionMessages", () => {
     });
 
     it("should handle empty communications array", async () => {
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -170,7 +173,7 @@ describe("useTransactionMessages", () => {
         (c) => c.channel === "email"
       );
 
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -190,7 +193,7 @@ describe("useTransactionMessages", () => {
     });
 
     it("should handle missing communications in response", async () => {
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -211,7 +214,9 @@ describe("useTransactionMessages", () => {
     it("should return messages with communication_type='text' (thread-based linking)", async () => {
       // BACKLOG-502: Thread-based links use communication_type='text' for SMS
       // (Schema allows 'email', 'text', 'imessage' - not 'sms')
-      const autoLinkedMessages: Partial<Communication>[] = [
+      // Cast (below): partial Message fixtures — only the fields the hook
+      // filters on are supplied; Message also requires `created_at`.
+      const autoLinkedMessages = [
         {
           id: "auto-1",
           user_id: "user-456",
@@ -231,9 +236,9 @@ describe("useTransactionMessages", () => {
           has_attachments: false,
           is_false_positive: false,
         },
-      ];
+      ] as Communication[];
 
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -255,7 +260,9 @@ describe("useTransactionMessages", () => {
     });
 
     it("should return messages with communication_type='imessage' (legacy field)", async () => {
-      const autoLinkedMessages: Partial<Communication>[] = [
+      // Cast (below): partial Message fixtures — only the fields the hook
+      // filters on are supplied; Message also requires `created_at`.
+      const autoLinkedMessages = [
         {
           id: "auto-imessage",
           user_id: "user-456",
@@ -265,9 +272,9 @@ describe("useTransactionMessages", () => {
           has_attachments: false,
           is_false_positive: false,
         },
-      ];
+      ] as Communication[];
 
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -289,7 +296,9 @@ describe("useTransactionMessages", () => {
 
     it("should return messages with both channel and communication_type fields (mixed data)", async () => {
       // Scenario: mix of manually attached (channel) and auto-linked (communication_type) messages
-      const mixedMessages: Partial<Communication>[] = [
+      // Cast (below): partial Message fixtures — only the fields the hook
+      // filters on are supplied; Message also requires `created_at`.
+      const mixedMessages = [
         {
           id: "manual-sms",
           user_id: "user-456",
@@ -346,9 +355,9 @@ describe("useTransactionMessages", () => {
           has_attachments: false,
           is_false_positive: false,
         },
-      ];
+      ] as Communication[];
 
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,
@@ -378,7 +387,7 @@ describe("useTransactionMessages", () => {
 
   describe("error handling", () => {
     it("should set error message when API call fails", async () => {
-      window.api.transactions.getDetails.mockRejectedValue(
+      jest.mocked(window.api.transactions.getDetails).mockRejectedValue(
         new Error("Network error")
       );
 
@@ -393,7 +402,7 @@ describe("useTransactionMessages", () => {
     });
 
     it("should handle unsuccessful API response", async () => {
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: false,
         error: "Transaction not found",
       });
@@ -437,7 +446,8 @@ describe("useTransactionMessages", () => {
       expect(result.current.messages).toHaveLength(3);
 
       // Update mock to return different data
-      const newMessage: Partial<Communication> = {
+      // Cast: same partial-fixture rationale as mockCommunications above.
+      const newMessage = {
         id: "comm-6",
         user_id: "user-456",
         channel: "sms",
@@ -445,9 +455,9 @@ describe("useTransactionMessages", () => {
         sent_at: "2024-01-20T10:00:00Z",
         has_attachments: false,
         is_false_positive: false,
-      };
+      } as Communication;
 
-      window.api.transactions.getDetails.mockResolvedValue({
+      jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
         success: true,
         transaction: {
           ...mockTransaction,

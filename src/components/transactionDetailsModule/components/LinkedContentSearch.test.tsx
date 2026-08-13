@@ -35,7 +35,7 @@ const richResults: LinkedContentSearchResults = {
     total: 3,
   },
   texts: {
-    items: [{ id: "m1", sender: "+15551234567", snippet: "on my way", sentAt: null }],
+    items: [{ id: "m1", sender: "+15555550112", snippet: "on my way", sentAt: null }],
     total: 1,
   },
 };
@@ -70,7 +70,7 @@ const globalResults: GlobalContentSearchResults = {
   },
   texts: {
     items: [
-      { id: "m1", sender: "+15551234567", snippet: "omw", sentAt: null, attribution: ATTR_OAK },
+      { id: "m1", sender: "+15555550112", snippet: "omw", sentAt: null, attribution: ATTR_OAK },
     ],
     total: 1,
   },
@@ -346,7 +346,7 @@ describe("LinkedContentSearch — BACKLOG-1870 Phase 1.5 matched-attachment indi
       items: [
         {
           id: "m1",
-          sender: "+15551234567",
+          sender: "+15555550112",
           snippet: "pic",
           sentAt: null,
           matchedAttachmentFilenames: ["IMG_2201.heic"],

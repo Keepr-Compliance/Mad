@@ -13,16 +13,6 @@
  * We override the moduleNameMapper by using jest.mock with the actual module path.
  */
 
-import {
-  jest,
-  describe,
-  beforeAll,
-  afterAll,
-  beforeEach,
-  afterEach,
-  it,
-  expect,
-} from "@jest/globals";
 
 // Force Jest to use the real better-sqlite3-multiple-ciphers module
 // This must be done before any imports that depend on it.
@@ -108,17 +98,17 @@ describe("iOSMessagesParser", () => {
     // Insert test handles (contacts)
     db.exec(`
       INSERT INTO handle (ROWID, id, service) VALUES
-        (1, '+14155551234', 'iMessage'),
+        (1, '+14155550109', 'iMessage'),
         (2, '+14155555678', 'SMS'),
         (3, 'user@example.com', 'iMessage'),
-        (4, '+14155559999', 'iMessage');
+        (4, '+14155550105', 'iMessage');
     `);
 
     // Insert test chats
     // Individual chat, group chat
     db.exec(`
       INSERT INTO chat (ROWID, guid, chat_identifier, display_name) VALUES
-        (1, 'chat-guid-1', '+14155551234', NULL),
+        (1, 'chat-guid-1', '+14155550109', NULL),
         (2, 'chat-guid-2', 'chat123456789', 'Family Group'),
         (3, 'chat-guid-3', 'user@example.com', NULL);
     `);
@@ -301,7 +291,7 @@ describe("iOSMessagesParser", () => {
     it("should identify individual chats correctly", () => {
       const conversations = parser.getConversations();
       const individualChat = conversations.find(
-        (c) => c.chatIdentifier === "+14155551234",
+        (c) => c.chatIdentifier === "+14155550109",
       );
 
       expect(individualChat).toBeDefined();
@@ -548,7 +538,7 @@ describe("iOSMessagesParser", () => {
       );
 
       expect(messageFromContact).toBeDefined();
-      expect(messageFromContact!.handle).toBe("+14155551234");
+      expect(messageFromContact!.handle).toBe("+14155550109");
     });
 
     it("should handle messages from me (no handle)", () => {

@@ -7,8 +7,6 @@
 import { ipcMain, shell, BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import path from "path";
-import sqlite3 from "sqlite3";
-import { promisify } from "util";
 
 // Import services and utilities
 import {
@@ -17,6 +15,14 @@ import {
 } from "../services/contactsService";
 import logService from "../services/logService";
 import { getConversationsFromMessages } from "../services/db/messageDbService";
+// BACKLOG-2403: chat.db lives behind Full Disk Access, so "unreadable" is a
+// normal state during onboarding. A bare `new sqlite3.Database(path, mode)`
+// turns that into an uncaught `error` event and kills the main process; this
+// helper turns it into a rejection wrapHandler can report.
+import {
+  openSqliteReadOnly,
+  type ReadOnlySqliteHandle,
+} from "../services/db/readOnlySqlite";
 import { wrapHandler } from "../utils/wrapHandler";
 import { getYearsAgoTimestamp } from "../utils/dateUtils";
 import { MAC_EPOCH } from "../constants";
@@ -87,15 +93,16 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
       "Library/Messages/chat.db"
     );
 
-    const db = new sqlite3.Database(messagesDbPath, sqlite3.OPEN_READONLY);
-    const dbAll = promisify(db.all.bind(db)) as <T>(
-      sql: string,
-      params?: unknown
-    ) => Promise<T[]>;
-    const dbClose = promisify(db.close.bind(db));
+    // Rejects (does not crash) when chat.db is missing or unreadable; wrapHandler
+    // turns that into { success: false, error } for the renderer.
+    const db = await openSqliteReadOnly(messagesDbPath, "ConversationHandlers");
+    const dbAll = db.all;
 
-    let db2: sqlite3.Database | null = null;
-    let dbClose2: (() => Promise<void>) | null = null;
+    // Tracked so the catch below can release BOTH handles. Previously only the
+    // second was closed, so a failure in the first query leaked handle #1.
+    let dbClosed = false;
+    let db2: ReadOnlySqliteHandle | null = null;
+    let db2Closed = false;
 
     try {
         // Get contact names from Contacts database
@@ -122,15 +129,12 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
         `);
 
         // Close first database connection - we're done with it
-        await dbClose();
+        await db.close();
+        dbClosed = true;
 
         // Re-open database to query group chat participants
-        db2 = new sqlite3.Database(messagesDbPath, sqlite3.OPEN_READONLY);
-        const dbAll2 = promisify(db2.all.bind(db2)) as <T>(
-          sql: string,
-          params?: unknown
-        ) => Promise<T[]>;
-        dbClose2 = promisify(db2.close.bind(db2));
+        db2 = await openSqliteReadOnly(messagesDbPath, "ConversationHandlers");
+        const dbAll2 = db2.all;
 
         // Map conversations and deduplicate by contact NAME
         // This ensures that if a contact has multiple phone numbers or emails,
@@ -373,7 +377,8 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
         }
 
         // Close the second database connection
-        await dbClose2();
+        await db2.close();
+        db2Closed = true;
 
         // Convert map back to array
         const deduplicatedConversations = Array.from(
@@ -394,10 +399,18 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
           conversations: recentConversations,
         };
       } catch (error) {
-        // Clean up db2 if it was opened
-        if (dbClose2) {
+        // Release whichever handles are still open. A close failure must not
+        // mask the error that actually broke the request, so each is isolated.
+        if (!dbClosed) {
           try {
-            await dbClose2();
+            await db.close();
+          } catch (closeError) {
+            logService.error("Error closing db", "ConversationHandlers", { error: closeError });
+          }
+        }
+        if (db2 && !db2Closed) {
+          try {
+            await db2.close();
           } catch (closeError) {
             logService.error("Error closing db2", "ConversationHandlers", { error: closeError });
           }
@@ -415,15 +428,13 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
         "Library/Messages/chat.db"
       );
 
-      const db = new sqlite3.Database(messagesDbPath, sqlite3.OPEN_READONLY);
-      const dbAll = promisify(db.all.bind(db)) as <T>(
-        sql: string,
-        params?: unknown
-      ) => Promise<T[]>;
-      const dbClose = promisify(db.close.bind(db));
+      // This is the click that used to kill the app: open a conversation before
+      // Full Disk Access is granted and the bare construction crashed the main
+      // process. It now rejects and surfaces through wrapHandler.
+      const db = await openSqliteReadOnly(messagesDbPath, "ConversationHandlers");
 
       try {
-        const messages = await dbAll<MessageRow>(
+        const messages = await db.all<MessageRow>(
           `
         SELECT
           message.ROWID as id,
@@ -440,8 +451,6 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
           [chatId]
         );
 
-        await dbClose();
-
         return {
           success: true,
           messages: messages.map((msg) => ({
@@ -452,9 +461,17 @@ export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
             sender: msg.sender,
           })),
         };
-      } catch (error) {
-        await dbClose();
-        throw error;
+      } finally {
+        // Closed on both paths. A failure to close must not replace the error
+        // that got us here, which is what `await dbClose()` inside the old catch
+        // would have done.
+        try {
+          await db.close();
+        } catch (closeError) {
+          logService.error("Error closing chat.db", "ConversationHandlers", {
+            error: closeError,
+          });
+        }
       }
     }, { module: "ConversationHandlers" }),
   );

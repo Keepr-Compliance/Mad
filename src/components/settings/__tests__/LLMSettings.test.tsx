@@ -8,14 +8,19 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { LLMSettings } from "../LLMSettings";
+import type { LLMProvider, LLMUserConfig } from "../../../../electron/types/ipc/llm";
 
 describe("LLMSettings", () => {
   const mockUserId = "user-123";
 
-  const defaultConfig = {
+  const defaultConfig: LLMUserConfig = {
     hasOpenAI: false,
     hasAnthropic: false,
-    preferredProvider: null,
+    // Cast: the IPC type declares preferredProvider as a non-nullable
+    // LLMProvider, but the DB column and the renderer's own LLMUserConfig
+    // (LLMSettings.tsx) both allow null — "no provider chosen yet" — which is
+    // exactly the state this default fixture models.
+    preferredProvider: null as unknown as LLMProvider,
     openAIModel: "gpt-4o",
     anthropicModel: "claude-sonnet-4-20250514",
     tokensUsed: 0,
@@ -38,27 +43,27 @@ describe("LLMSettings", () => {
     jest.clearAllMocks();
 
     // Default mocks
-    window.api.llm.getConfig.mockResolvedValue({
+    jest.mocked(window.api.llm.getConfig).mockResolvedValue({
       success: true,
       data: defaultConfig,
     });
-    window.api.llm.getUsage.mockResolvedValue({
+    jest.mocked(window.api.llm.getUsage).mockResolvedValue({
       success: true,
       data: defaultUsage,
     });
-    window.api.llm.validateKey.mockResolvedValue({
+    jest.mocked(window.api.llm.validateKey).mockResolvedValue({
       success: true,
       data: true,
     });
-    window.api.llm.setApiKey.mockResolvedValue({ success: true });
-    window.api.llm.removeApiKey.mockResolvedValue({ success: true });
-    window.api.llm.updatePreferences.mockResolvedValue({ success: true });
-    window.api.llm.recordConsent.mockResolvedValue({ success: true });
+    jest.mocked(window.api.llm.setApiKey).mockResolvedValue({ success: true });
+    jest.mocked(window.api.llm.removeApiKey).mockResolvedValue({ success: true });
+    jest.mocked(window.api.llm.updatePreferences).mockResolvedValue({ success: true });
+    jest.mocked(window.api.llm.recordConsent).mockResolvedValue({ success: true });
   });
 
   describe("Rendering", () => {
     it("should render loading state initially", () => {
-      window.api.llm.getConfig.mockImplementation(
+      jest.mocked(window.api.llm.getConfig).mockImplementation(
         () => new Promise(() => {}) // Never resolves to show loading
       );
 
@@ -160,7 +165,7 @@ describe("LLMSettings", () => {
     });
 
     it("should show masked key when key exists", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasOpenAI: true },
       });
@@ -236,7 +241,7 @@ describe("LLMSettings", () => {
     });
 
     it("should show invalid status after failed validation", async () => {
-      window.api.llm.validateKey.mockResolvedValue({
+      jest.mocked(window.api.llm.validateKey).mockResolvedValue({
         success: true,
         data: false,
       });
@@ -307,7 +312,7 @@ describe("LLMSettings", () => {
     });
 
     it("should show remove button when key exists", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasOpenAI: true },
       });
@@ -320,7 +325,7 @@ describe("LLMSettings", () => {
     });
 
     it("should call removeApiKey when remove button is clicked", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasOpenAI: true },
       });
@@ -341,7 +346,7 @@ describe("LLMSettings", () => {
 
   describe("Consent Modal", () => {
     it("should show consent modal when consent not given", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasConsent: false },
       });
@@ -364,7 +369,7 @@ describe("LLMSettings", () => {
     });
 
     it("should require checkbox before accept button is enabled", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasConsent: false },
       });
@@ -380,7 +385,7 @@ describe("LLMSettings", () => {
     });
 
     it("should enable accept button after checking acknowledgment", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasConsent: false },
       });
@@ -400,7 +405,7 @@ describe("LLMSettings", () => {
     });
 
     it("should call recordConsent when accept is clicked", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasConsent: false },
       });
@@ -422,7 +427,7 @@ describe("LLMSettings", () => {
     });
 
     it("should close modal when cancel is clicked", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasConsent: false },
       });
@@ -468,7 +473,7 @@ describe("LLMSettings", () => {
     });
 
     it("should disable AI feature toggles when consent not given", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasConsent: false },
       });
@@ -503,7 +508,7 @@ describe("LLMSettings", () => {
     });
 
     it("should show warning when consent not given", async () => {
-      window.api.llm.getConfig.mockResolvedValue({
+      jest.mocked(window.api.llm.getConfig).mockResolvedValue({
         success: true,
         data: { ...defaultConfig, hasConsent: false },
       });
@@ -526,7 +531,7 @@ describe("LLMSettings", () => {
 
   describe("Error Handling", () => {
     it("should show error state when config load fails", async () => {
-      window.api.llm.getConfig.mockRejectedValue(new Error("Network error"));
+      jest.mocked(window.api.llm.getConfig).mockRejectedValue(new Error("Network error"));
 
       render(<LLMSettings userId={mockUserId} />);
 
@@ -536,7 +541,7 @@ describe("LLMSettings", () => {
     });
 
     it("should show try again button on error", async () => {
-      window.api.llm.getConfig.mockRejectedValue(new Error("Network error"));
+      jest.mocked(window.api.llm.getConfig).mockRejectedValue(new Error("Network error"));
 
       render(<LLMSettings userId={mockUserId} />);
 
@@ -546,7 +551,7 @@ describe("LLMSettings", () => {
     });
 
     it("should retry loading config when try again is clicked", async () => {
-      window.api.llm.getConfig
+      jest.mocked(window.api.llm.getConfig)
         .mockRejectedValueOnce(new Error("Network error"))
         .mockResolvedValueOnce({ success: true, data: defaultConfig });
 

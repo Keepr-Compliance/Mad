@@ -1,21 +1,213 @@
 #!/bin/sh
+#
+# pre-push: run the tests affected by THE COMMITS BEING PUSHED.
+# Blocks the push if those tests fail. (BACKLOG-2573)
+#
+# ## The two defects this replaced
+#
+# 1. WRONG BASE. The old hook read `@{upstream}` and fell back to
+#    `origin/develop` when a branch had no upstream -- i.e. on every first
+#    push. From a branch cut off `int/email-retention` (measured: 214 commits /
+#    517 files ahead of develop) that selected 230 suites to guard a 6-file
+#    diff, so every push needed `--no-verify`. A hook that is always bypassed
+#    is not a hook.
+#
+#    The fix is not a better two-point diff -- a two-point diff regenerates the
+#    bug the moment a branch sync-merges its base branch (CLAUDE.md Step 4
+#    mandates exactly that), because one endpoint then sits before the whole
+#    int advance. The fix is to bound the file set by the COMMITS being pushed:
+#      git log --name-only --pretty=format: "$local_sha" --not --remotes="$remote"
+#    That also handles multi-boundary history, force-push-after-rebase and
+#    multi-ref pushes natively, and needs no upstream and no `remote_sha`.
+#
+#    `--cc` was evaluated and not adopted: measured identical (3 files vs 3) on
+#    a real sync-merge branch, so it buys nothing on this repo's history.
+#    Consequence, accepted: a conflict resolution that exists ONLY inside a
+#    merge commit contributes no files here. CI still covers it.
+#
+# 2. WRONG ABI. `better-sqlite3-multiple-ciphers` compiles for one ABI at a
+#    time and rests on the Electron build. 32 suites bypass the jest
+#    moduleNameMapper stub and load the REAL binary; under plain-node jest they
+#    load fine and then fail inside the tests at `new Database(...)`, on every
+#    branch, regardless of the diff. So the condition cannot be detected by
+#    trying to load a suite -- this hook probes THE BINARY and picks the runner
+#    that matches it.
+#
+#    NEVER rebuild the module here. Every git worktree symlinks node_modules at
+#    the main repo, so a rebuild from a hook breaks the founder's running dev
+#    app and every sibling worktree at once. See scripts/test-with-restore.js.
+#
+# ## Knobs (all optional; each exists so a control can be RUN, not argued)
+#
+#   PREPUSH_BASE=<rev>          select commits reachable from the pushed tip but
+#                               not from <rev>. Escape hatch -- narrower and
+#                               louder than --no-verify.
+#   PREPUSH_JEST_ROUTE=auto|node|electron   force the root-jest runner.
+#   PREPUSH_ELECTRON_BIN=<path>             override electron resolution.
+#   PREPUSH_DRYRUN=1            echo remote / commit count / base / route /
+#                               selected suites, then exit 0 before any runner.
+#
+# ## Shell notes
+#
+# husky runs this as `sh -e` (.husky/_/h). Every command whose non-zero exit is
+# EXPECTED must be guarded with `|| true` or sit in an `if`, or the hook dies
+# mid-run. The runner calls use `|| exit_code=$?` so the hook can print its own
+# verdict; without that guard `set -e` aborts at the failing runner and the
+# "Push blocked" line never prints. The later stages stay skipped either way --
+# they gate on `[ $exit_code -eq 0 ]` (lines 109 / 117 / 133 of the pre-2573
+# file).
 
-# pre-push hook: run tests affected by changes being pushed
-# Blocks push if affected tests fail; succeeds silently if no tests match
+banner() {
+  echo ""
+  echo "!! ------------------------------------------------------------------"
+  echo "!! [pre-push] $1"
+  echo "!! ------------------------------------------------------------------"
+  shift
+  for line in "$@"; do echo "!! $line"; done
+  echo ""
+}
 
-# Get the remote tracking branch to compare against
-# Note: `|| true` prevents set -e (husky 9) from aborting on exit code 128
-# when no upstream is configured for the branch
-upstream=$(git rev-parse --abbrev-ref @{upstream} 2>/dev/null || true)
-if [ -z "$upstream" ]; then
-  # No upstream set — compare against the merge base with origin/develop
-  upstream="origin/develop"
+# A zero-oid is all '0' (40 chars for sha1, 64 for sha256). Any non-'0'
+# character means a real oid, so this needs no length literal.
+is_zero() {
+  case "$1" in
+    *[!0]*) return 1 ;;
+    "") return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+
+# --- Remote validation -------------------------------------------------------
+# $1 is the remote NAME only when a named remote was used; `git push <url> ...`
+# passes a URL. A bogus value made the old derivation silently select nothing
+# (measured: 6756 unpushed commits, 0 boundaries -> exit 0) and makes the new
+# one select everything (measured: 5025 files). Neither is acceptable, so the
+# remote is validated before it is used.
+remote="${1:-origin}"
+wide_fallback=""
+if ! git remote 2>/dev/null | grep -qx "$remote"; then
+  if git remote 2>/dev/null | grep -qx "origin"; then
+    banner "'$remote' is not a configured remote (a URL was pushed to, or the remote is named differently)." \
+           "Falling back to 'origin' for change detection. Test selection may be wider than usual."
+    remote="origin"
+  else
+    banner "No usable remote for change detection: this repository has no configured remote to compare against (looked for '$remote' and 'origin')." \
+           "Falling back to a WIDE base. This runs many more suites than a normal push." \
+           "Set PREPUSH_BASE=<rev> to narrow it."
+    wide_fallback="1"
+  fi
 fi
 
-# Get list of changed files between upstream and HEAD
-changed_files=$(git diff --name-only "$upstream"...HEAD 2>/dev/null || git diff --name-only HEAD~1 2>/dev/null || echo "")
+# --- What to exclude ---------------------------------------------------------
+# PREPUSH_BASE is the sanctioned escape hatch now that --no-verify is frozen, so
+# it is the knob engineers actually reach for -- and an unvalidated one is worse
+# than no knob at all: `git rev-list --count ... --not <typo>` fails, the
+# `|| echo 0` guard below turns that into n=0, and the hook reports the
+# reassuring "no new commits" while running ZERO tests. A typo would silently
+# disable the hook, which is the disease this file exists to cure. So validate
+# it, and on failure IGNORE it rather than honour it: unlike the no-remote case
+# below, a working default exists here, so real coverage beats an exit-0 warning.
+prepush_base="$PREPUSH_BASE"
+if [ -n "$prepush_base" ] && ! git rev-parse --verify --quiet "$prepush_base" >/dev/null 2>&1; then
+  banner "PREPUSH_BASE='$prepush_base' does not resolve to anything in this repository." \
+         "IGNORING the override -- falling back to normal change detection." \
+         "Nothing was skipped: the affected tests below still ran. But if you" \
+         "meant to narrow the base, the ref name is wrong. Check it with:" \
+         "  git rev-parse --verify $prepush_base"
+  prepush_base=""
+fi
+
+# One token, used as: git log ... --not $not_arg
+if [ -n "$prepush_base" ]; then
+  not_arg="$prepush_base"
+  base_desc="PREPUSH_BASE=$prepush_base (override)"
+  banner "PREPUSH_BASE is set -- change detection is overridden." \
+         "Base: $prepush_base" \
+         "Unset it to return to normal (commits not yet on '$remote')."
+elif [ -n "$wide_fallback" ]; then
+  # The wide fallback is only wide if its ref exists. If it does not, every
+  # `git rev-list --count` below returns 0 via its `|| echo 0` guard, and the
+  # hook would report "no new commits" -- indistinguishable from a genuinely
+  # up-to-date push. That is the exact conflation this hook must not make, so
+  # the unresolvable case gets its own name and its own banner.
+  if git rev-parse --verify --quiet origin/develop >/dev/null 2>&1; then
+    not_arg="origin/develop"
+    base_desc="origin/develop (wide fallback -- no usable remote)"
+  else
+    banner "Cannot work out what this push contains: no usable remote, and 'origin/develop' does not exist either." \
+           "NO TESTS WERE SELECTED -- this hook checked nothing." \
+           "This is NOT a passing test run. CI remains the gate." \
+           "To get local coverage, set PREPUSH_BASE=<rev> to something this repo has."
+    exit 0
+  fi
+else
+  not_arg="--remotes=$remote"
+  base_desc="commits not present on any '$remote' ref"
+fi
+
+# --- Collect the pushed commits ----------------------------------------------
+# git feeds one line per ref on stdin: <local_ref> <local_sha> <remote_ref> <remote_sha>
+# `remote_sha` is deliberately unused as a base: excluding every remote ref is
+# correct for a first push AND survives a force-push after a rebase, which
+# `remote_sha..local_sha` does not.
+all_files=""
+total_commits=0
+saw_ref=""
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "$local_ref" ] && continue
+  saw_ref="1"
+
+  if is_zero "$local_sha"; then
+    echo "[pre-push] $remote_ref is being deleted -- nothing to test."
+    continue
+  fi
+
+  n=$(git rev-list --count "$local_sha" --not $not_arg 2>/dev/null || echo 0)
+  total_commits=$((total_commits + n))
+
+  if [ "$n" -eq 0 ]; then
+    echo "[pre-push] $local_ref: no new commits for '$remote' -- nothing to test."
+    continue
+  fi
+
+  echo "[pre-push] $local_ref: $n commit(s) to push (base: $base_desc)"
+  f=$(git log --name-only --pretty=format: "$local_sha" --not $not_arg 2>/dev/null || true)
+  all_files="$all_files
+$f"
+done
+
+# No stdin at all (hook invoked by hand, or by a caller that does not speak the
+# pre-push protocol). Fall back to HEAD through the SAME validated remote and
+# the SAME exclusion spec -- never to a hardcoded branch.
+if [ -z "$saw_ref" ]; then
+  head_sha=$(git rev-parse HEAD 2>/dev/null || true)
+  if [ -z "$head_sha" ]; then
+    echo "[pre-push] No refs on stdin and no resolvable HEAD -- nothing to test."
+    exit 0
+  fi
+  total_commits=$(git rev-list --count "$head_sha" --not $not_arg 2>/dev/null || echo 0)
+  echo "[pre-push] No refs on stdin -- falling back to HEAD ($total_commits commit(s), base: $base_desc)"
+  if [ "$total_commits" -gt 0 ]; then
+    all_files=$(git log --name-only --pretty=format: "$head_sha" --not $not_arg 2>/dev/null || true)
+  fi
+fi
+
+# Loud, but never narrowing and never skipping: a plausible push is a handful of
+# commits. A three-digit count means the exclusion spec is not doing its job.
+if [ "$total_commits" -gt 50 ]; then
+  banner "$total_commits commits are being treated as new -- that is unusually many." \
+         "Base in use: $base_desc" \
+         "Test selection will be much wider than a normal push." \
+         "If this is wrong, check the remote name, or set PREPUSH_BASE=<rev>."
+fi
+
+changed_files=$(echo "$all_files" | sed '/^$/d' | sort -u)
 
 if [ -z "$changed_files" ]; then
+  echo "[pre-push] No changed files in the pushed commits -- nothing to test."
   exit 0
 fi
 
@@ -58,15 +250,87 @@ done
 # Deduplicate and trim
 test_files=$(echo "$test_files" | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/^ *//;s/ *$//')
 
+# --- Pick the root-jest runner from the resting ABI ---------------------------
+# Same probe as scripts/test-with-restore.js:125-136 (kept a copy rather than
+# extracted: that function sits inside a load-bearing BACKLOG-2372 comment
+# block, and refactoring it is not this task). The probe SELECTS a route; it
+# never gates a skip, because both ABI states are real and each has a runner
+# that works.
+native_binary="$repo_root/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node"
+abi_state=$(node -e '
+  try {
+    process.dlopen({ exports: {} }, process.argv[1]);
+    console.log("node");
+  } catch (e) {
+    var m = (e && e.message) || "";
+    console.log(/NODE_MODULE_VERSION|different Node\.js version/.test(m) ? "electron" : "unknown");
+  }
+' "$native_binary" 2>/dev/null || echo "unknown")
+
+route="${PREPUSH_JEST_ROUTE:-auto}"
+route_why=""
+if [ "$route" = "auto" ]; then
+  case "$abi_state" in
+    electron)
+      route="electron"
+      route_why="native module rests on the Electron ABI"
+      ;;
+    node)
+      route="node"
+      route_why="native module is currently the Node build"
+      ;;
+    *)
+      route="node"
+      route_why="native module state could not be determined"
+      banner "Could not determine which ABI the native SQLite module is built for." \
+             "Looked at: $native_binary" \
+             "Running root tests under plain node. If suites that use the real" \
+             "SQLite driver fail with NODE_MODULE_VERSION, that is why -- the" \
+             "failure is the environment, not your change. Re-check with:" \
+             "  ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js <suite>"
+      ;;
+  esac
+else
+  route_why="PREPUSH_JEST_ROUTE=$route (override)"
+fi
+
+electron_bin=""
+if [ "$route" = "electron" ]; then
+  electron_bin="${PREPUSH_ELECTRON_BIN:-$(node -p "require('electron')" 2>/dev/null || true)}"
+  if [ -z "$electron_bin" ] || [ ! -x "$electron_bin" ]; then
+    banner "The Electron binary is not available, so real-SQLite suites cannot run on the correct ABI." \
+           "Tried: ${electron_bin:-<unresolved>}" \
+           "Running root tests under plain node instead. Suites that load the real" \
+           "SQLite driver may fail for that reason alone." \
+           "Repair (common in a fresh worktree):" \
+           "  node node_modules/electron/install.js"
+    route="node"
+    route_why="electron binary unavailable"
+    electron_bin=""
+  fi
+fi
+
+# --- Report what was decided, every run --------------------------------------
+# A hook that silently picks a scope is how the old bug survived for months.
+echo "[pre-push] remote=$remote  commits=$total_commits  base=$base_desc"
+echo "[pre-push] root jest route: $route ($route_why; probe=$abi_state)"
 if [ -z "$test_files" ]; then
   echo "[pre-push] No affected test files found — skipping tests."
+else
+  echo "[pre-push] Affected tests:"
+  for f in $test_files; do
+    echo "  - $f"
+  done
+fi
+
+if [ -n "$PREPUSH_DRYRUN" ]; then
+  echo "[pre-push] PREPUSH_DRYRUN=1 — decisions reported above, no tests executed."
   exit 0
 fi
 
-echo "[pre-push] Running affected tests:"
-for f in $test_files; do
-  echo "  - $f"
-done
+if [ -z "$test_files" ]; then
+  exit 0
+fi
 
 # Split test files into broker-portal, admin-portal, android-companion, and root
 # tests. Broker-portal tests need their own jest config for correct @/ path
@@ -97,18 +361,21 @@ done
 
 exit_code=0
 
-# Run root tests (if any)
+# Run root tests (if any), on the runner the probe selected.
 root_tests=$(echo "$root_tests" | sed 's/^ *//;s/ *$//')
 if [ -n "$root_tests" ]; then
-  npx jest --bail --no-coverage --passWithNoTests $root_tests
-  exit_code=$?
+  if [ "$route" = "electron" ]; then
+    ELECTRON_RUN_AS_NODE=1 "$electron_bin" "$repo_root/node_modules/jest/bin/jest.js" \
+      --bail --no-coverage --passWithNoTests $root_tests || exit_code=$?
+  else
+    npx jest --bail --no-coverage --passWithNoTests $root_tests || exit_code=$?
+  fi
 fi
 
 # Run broker-portal tests with broker-portal jest config (if any)
 bp_tests=$(echo "$bp_tests" | sed 's/^ *//;s/ *$//')
 if [ $exit_code -eq 0 ] && [ -n "$bp_tests" ]; then
-  npx jest --config broker-portal/jest.config.js --bail --no-coverage --passWithNoTests $bp_tests
-  exit_code=$?
+  npx jest --config broker-portal/jest.config.js --bail --no-coverage --passWithNoTests $bp_tests || exit_code=$?
 fi
 
 # Run admin-portal tests via vitest (if any). Admin-portal tests import from
@@ -122,8 +389,7 @@ if [ $exit_code -eq 0 ] && [ -n "$ap_tests" ]; then
     ap_tests_rel="$ap_tests_rel $rel"
   done
   ap_tests_rel=$(echo "$ap_tests_rel" | sed 's/^ *//;s/ *$//')
-  (cd admin-portal && npx vitest run --passWithNoTests $ap_tests_rel)
-  exit_code=$?
+  (cd admin-portal && npx vitest run --passWithNoTests $ap_tests_rel) || exit_code=$?
 fi
 
 # Run android-companion tests with the companion jest config (jest-expo). Run
@@ -138,8 +404,7 @@ if [ $exit_code -eq 0 ] && [ -n "$ac_tests" ]; then
     ac_tests_rel="$ac_tests_rel $rel"
   done
   ac_tests_rel=$(echo "$ac_tests_rel" | sed 's/^ *//;s/ *$//')
-  (cd android-companion && npx jest --bail --no-coverage --passWithNoTests $ac_tests_rel)
-  exit_code=$?
+  (cd android-companion && npx jest --bail --no-coverage --passWithNoTests $ac_tests_rel) || exit_code=$?
 fi
 
 if [ $exit_code -ne 0 ]; then

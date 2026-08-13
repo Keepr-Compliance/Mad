@@ -116,6 +116,17 @@ module.exports = {
   // BACKLOG-1940: also run the QA driver's pure unit tests (e2e/driver/__tests__) in CI so the
   // PASS/FAIL/HARNESS_ERROR outcome-classification proofs actually gate the pipeline. These are
   // Node-only (no app launch, no Playwright import), so they run under the standard jest config.
+  //
+  // BACKLOG-2678: the CI and local lists below had DIVERGED, and the gap was invisible by
+  // construction — a test file matched only by the local list runs on a developer machine and in
+  // the pre-push hook, and NEVER in CI. Measured on develop @ 6179e97f: 622 tracked test files,
+  // 47 run by no CI job at all, 31 of those the QA harness's own suites. BACKLOG-1940 added
+  // e2e/driver/__tests__ "so the outcome-classification proofs actually gate the pipeline", and the
+  // harness's other 31 files were never added beside it — the machinery built to catch regressions
+  // was not itself guarded, and two of its suites were red.
+  //
+  // KEEP THE TWO LISTS CONVERGED. scripts/ci/check-test-drift.mjs fails the build on any tracked
+  // test file that no CI config selects, so a new orphan breaks CI instead of going quiet.
   testMatch: process.env.CI ? [
     '**/src/**/*.(test|spec).{js,jsx,ts,tsx}',
     '**/electron/**/*.(test|spec).{js,jsx,ts,tsx}',
@@ -124,6 +135,23 @@ module.exports = {
     // live OUTSIDE this dir (e.g. under the Playwright config as e2e/*.spec.ts) so it is not dragged
     // into this Node run — Playwright specs can't execute under jest and would fail the pipeline.
     '**/e2e/driver/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
+    // BACKLOG-2678: the QA harness's own unit suites. Pure Node (no app launch, no Playwright, no
+    // DB) — they already ran green under `npm run qa:test` / jest.qa.config.js, which no CI job
+    // invoked. Nested form mirrors jest.qa.config.js so a future nested __tests__ dir is covered.
+    '**/scripts/qa/harness/**/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
+    // BACKLOG-2678: the repo-root tests/ tier (tests/e2e/**). tests/integration/** is NOT run here —
+    // it is excluded by testPathIgnorePatterns below and runs as its own CI step via
+    // jest.integration.config.js.
+    //
+    // ANCHORED TO <rootDir> ON PURPOSE. The bare `**/tests/**` used by the local list below ALSO
+    // matches e2e/tests/, which is the Playwright suite — those specs import @playwright/test and
+    // cannot execute under jest. The first draft of this line was unanchored and pulled all 11 of
+    // them in; the control that compares the selected set before/after caught it. Do not unanchor.
+    '<rootDir>/tests/**/*.(test|spec).{js,jsx,ts,tsx}',
+    // BACKLOG-2678: scripts/__tests__ (the electron-builder afterPack hook). Pure Node, 14 tests,
+    // green — it was simply matched by no CI glob. Surfaced by scripts/ci/check-test-drift.mjs on
+    // its first run. Anchored for the same reason as tests/ above.
+    '<rootDir>/scripts/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
   ] : [
     '**/__tests__/**/*.(test|spec).{js,jsx,ts,tsx}',
     '**/tests/**/*.(test|spec).{js,jsx,ts,tsx}',
@@ -131,10 +159,10 @@ module.exports = {
   ],
 
   // Ignore patterns - exclude problematic tests in CI
-  // The integration tier (tests/integration/) is NOT part of this unit run; the
-  // CI `testMatch` above only selects src/** and electron/**. It runs as its own
-  // CI step via jest.integration.config.js (see BACKLOG-1786). The entry below is
-  // belt-and-suspenders so it never double-runs if `testMatch` is broadened.
+  // The integration tier (tests/integration/) is NOT part of this unit run. It runs as its own
+  // CI step via jest.integration.config.js (see BACKLOG-1786). BACKLOG-2678 broadened the CI
+  // `testMatch` to include `**/tests/**`, so the entry below — written as belt-and-suspenders
+  // "so it never double-runs if testMatch is broadened" — is now the load-bearing exclusion.
   testPathIgnorePatterns: process.env.CI ? [
     '/node_modules/',
     '/dist/',
@@ -142,7 +170,22 @@ module.exports = {
     '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/worktrees/',
     '/tests/integration/', // Runs separately via jest.integration.config.js
-    'ContactSelectModal.test.tsx', // Hangs in CI during loading
+    // BACKLOG-2687 (QUARANTINE — NOT a silent skip; scripts/ci/check-test-drift.mjs prints this
+    // file in its allow-list on every run, and fails if the entry ever stops matching a real file).
+    //
+    // headSchemaVersion.test.ts is RED and the red is CORRECT: it reports that the seeder stamps
+    // HEAD_SCHEMA_VERSION = 50 while the head migration is 57. But satisfying it by bumping the
+    // constant would BREAK the fixture. The guard's premise — "schema.sql is already head
+    // structure, so stamp head and replay nothing" — is false: removed_at/removed_reason (v56) and
+    // contact_source_links (v57) are absent from electron/database/schema.sql, so a DB stamped 57
+    // would skip the migrations that create them. Stamp 50 is functionally correct today (every
+    // migration 51-57 is replay-safe behind PRAGMA table_info / IF NOT EXISTS, and 50 > 36 so v36's
+    // destructive contacts rebuild never replays).
+    //
+    // Deciding the right stamp needs a real Electron launch against a freshly seeded fixture.
+    // Tracked in BACKLOG-2687; un-quarantining is part of closing it. Do NOT "fix" this by bumping
+    // HEAD_SCHEMA_VERSION.
+    'scripts/qa/harness/__tests__/headSchemaVersion.test.ts',
     // TASK-2254: Re-enabled tests that now pass:
     // - iosMessagesParser.test.ts (NODE_MODULE_VERSION issue resolved)
     // - autoLinkService.test.ts (test expectations updated to match current code)

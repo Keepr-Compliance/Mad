@@ -21,6 +21,8 @@ export {
 export { RemovedMessagesSection } from "./RemovedMessagesSection";
 export { RemovedEmailsSection } from "./RemovedEmailsSection";
 export { RemovedItemsSection } from "./RemovedItemsSection";
+// BACKLOG-2367 — parties removed from a deal, and the button that restores them.
+export { RemovedTransactionContactsSection } from "./RemovedTransactionContactsSection";
 export { SubmissionStatusBadge } from "./SubmissionStatusBadge";
 export { ReviewNotesPanel } from "./ReviewNotesPanel";
 export * from "./modals";

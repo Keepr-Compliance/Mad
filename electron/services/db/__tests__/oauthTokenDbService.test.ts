@@ -7,7 +7,6 @@
  * Tests the sync time helper functions for incremental email fetching
  */
 
-import { jest } from "@jest/globals";
 
 // Mock the core database connection
 const mockDbGet = jest.fn();

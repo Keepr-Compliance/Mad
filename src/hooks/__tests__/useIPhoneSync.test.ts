@@ -186,7 +186,9 @@ describe("useIPhoneSync", () => {
     it("should start device detection on mount", () => {
       renderHook(() => useIPhoneSync());
 
-      expect(window.api.device.startDetection as jest.Mock).toHaveBeenCalled();
+      // `device!`: WindowApi types the namespace as optional, but the mock installed
+      // by this suite always defines it (the missing-API case is tested separately).
+      expect(window.api.device!.startDetection as jest.Mock).toHaveBeenCalled();
     });
 
     it("should stop detection on unmount", () => {
@@ -194,7 +196,7 @@ describe("useIPhoneSync", () => {
 
       unmount();
 
-      expect(window.api.device.stopDetection as jest.Mock).toHaveBeenCalled();
+      expect(window.api.device!.stopDetection as jest.Mock).toHaveBeenCalled();
     });
   });
 

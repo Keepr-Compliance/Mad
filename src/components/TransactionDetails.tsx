@@ -15,8 +15,11 @@ import type { Transaction } from "@/types";
 import { transactionService } from '../services';
 import ExportModal from "./ExportModal";
 import AuditTransactionModal from "./AuditTransactionModal";
-import { ToastContainer } from "./Toast";
-import { useToast } from "../hooks/useToast";
+import { useNotification } from "../hooks/useNotification";
+import type {
+  NotificationAction,
+  NotificationOptions,
+} from "./ui/Notification/types";
 import { useTransactionStatusUpdate } from "../hooks/useTransactionStatusUpdate";
 import { useSyncOrchestrator } from "../hooks/useSyncOrchestrator";
 import { useNetwork } from "../contexts/NetworkContext";
@@ -48,10 +51,14 @@ import { ReviewNotesPanel } from "./transactionDetailsModule/components/ReviewNo
 // Import Submit for Review components (BACKLOG-391)
 import { SubmitForReviewModal } from "./transactionDetailsModule/components/modals/SubmitForReviewModal";
 import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitForReview";
-import type { AutoLinkResult } from "./transactionDetailsModule/components/modals/EditContactsModal";
+import type {
+  AutoLinkResult,
+  RemovedTransactionContactSummary,
+} from "./transactionDetailsModule/components/modals/EditContactsModal";
 
 import type { TransactionTab, HighlightTarget } from "./transactionDetailsModule/types";
 import type { EmailThread } from "./transactionDetailsModule/components/EmailThreadCard";
+import { restoreRemovedEmailsByContentIds, type EmailUndoOutcome } from "./transactionDetailsModule/utils/undoMoveRestore";
 import { isEmailMessage } from '@/utils/channelHelpers';
 import logger from '../utils/logger';
 import { OfflineNotice } from './common/OfflineNotice';
@@ -64,8 +71,11 @@ interface TransactionDetailsComponentProps {
   isPendingReview?: boolean;
   /** User ID for feedback recording */
   userId?: string;
-  /** Toast handler for success messages - if provided, uses parent's toast system */
-  onShowSuccess?: (message: string) => void;
+  /**
+   * Toast handler for success messages - if provided, uses parent's toast system.
+   * BACKLOG-2390: accepts an optional inline action (e.g. Undo) for move toasts.
+   */
+  onShowSuccess?: (message: string, options?: NotificationOptions) => void;
   /** Toast handler for error messages - if provided, uses parent's toast system */
   onShowError?: (message: string) => void;
   /** Initial tab to display when opening TransactionDetails */
@@ -106,12 +116,15 @@ function TransactionDetails({
   // from Contacts when the email header carries no name.
   const emailNameMap = useContactNameMap(userId ?? transaction?.user_id);
 
-  // Toast notifications - use props if provided, otherwise use local fallback
-  const localToast = useToast();
-  const showSuccess = onShowSuccess || localToast.showSuccess;
-  const showError = onShowError || localToast.showError;
-  // TASK-2070: Warning toast for provider errors (always local -- no parent prop for warnings)
-  const showWarning = localToast.showWarning;
+  // Toast notifications - use props if provided, otherwise notify directly.
+  // BACKLOG-2447: the fallback used to be a *local* useToast whose container
+  // this component rendered itself. Both paths now reach the same app-level
+  // container, so the prop is only about letting a parent intercept.
+  const { notify } = useNotification();
+  const showSuccess = onShowSuccess || notify.success;
+  const showError = onShowError || notify.error;
+  // TASK-2070: Warning toast for provider errors (no parent prop for warnings)
+  const showWarning = notify.warning;
 
   // Transaction data hook
   const {
@@ -122,6 +135,7 @@ function TransactionDetails({
     loadDetails,
     loadCommunications,
     refreshCommunicationsSilently,
+    refreshContactsSilently,
     setResolvedSuggestions,
     updateSuggestedContacts,
     removeCommunicationsByIds,
@@ -199,6 +213,11 @@ function TransactionDetails({
   const [showUnlinkThread, setShowUnlinkThread] = useState<EmailThread | null>(null);
   // BACKLOG-1780: bump after each successful unlink → RemovedEmailsSection refetches silently.
   const [removedRefreshKey, setRemovedRefreshKey] = useState(0);
+  // BACKLOG-2367: same two pieces for the removed-CONTACTS section on Overview.
+  // The open state is lifted here, above the Key Contacts loading spinner, so a
+  // restore never collapses the section (the BACKLOG-1780 invariant).
+  const [removedContactsOpen, setRemovedContactsOpen] = useState(false);
+  const [removedContactsRefreshKey, setRemovedContactsRefreshKey] = useState(0);
 
   // Suggested contacts hook
   const {
@@ -499,6 +518,39 @@ function TransactionDetails({
     });
   }, [restore, transaction.id, onClose, onTransactionUpdated, showSuccess, showError]);
 
+  // BACKLOG-2390 (fix, Bug 3): Undo a single/thread email removal. Restores the
+  // EXACT emails that moved by their CONTENT ids (email.id = emails.id) via the
+  // shared thread-aware restore mapping. Fails LOUD on no-match / restore failure.
+  const undoRestoreEmails = useCallback(
+    async (emailContentIds: string[]) => {
+      if (emailContentIds.length === 0) return;
+      let outcome: EmailUndoOutcome;
+      try {
+        outcome = await restoreRemovedEmailsByContentIds(
+          window.api.transactions,
+          transaction.id,
+          emailContentIds,
+        );
+      } catch {
+        showError("Failed to undo");
+        return;
+      }
+      if (outcome.status === "success" || outcome.status === "restore_failed") {
+        await refreshCommunicationsSilently("email");
+        refreshAttachments();
+        setRemovedRefreshKey((k) => k + 1);
+      }
+      if (outcome.status === "success") {
+        showSuccess("Move undone");
+      } else if (outcome.status === "fetch_failed") {
+        showError(outcome.error || "Failed to undo");
+      } else {
+        showError("Couldn't undo — emails are still removed");
+      }
+    },
+    [transaction.id, refreshCommunicationsSilently, refreshAttachments, showSuccess, showError],
+  );
+
   // Communication handlers
   // BACKLOG-1781: when the confirmed comm belongs to a merged card (showUnlinkThread),
   // collect one representative communicationId per distinct backend thread_id and call
@@ -542,7 +594,20 @@ function TransactionDetails({
           }
 
           const n = allUnlinkedIds.length;
-          showSuccess(n > 1 ? `${n} emails removed` : "Email unlinked from transaction");
+          // BACKLOG-2390 (Bug 3): offer Undo on single/thread removal too. Restore
+          // by the removed emails' CONTENT ids (email.id = emails.id), the id-space
+          // getRemovedEmails() keys on — NOT allUnlinkedIds (communications ids).
+          const removedEmailContentIds = (showUnlinkThread?.emails ?? [comm])
+            .map((e) => e?.id)
+            .filter((id): id is string => !!id);
+          const undoAction: NotificationAction | undefined =
+            removedEmailContentIds.length > 0
+              ? { label: "Undo", onClick: () => void undoRestoreEmails(removedEmailContentIds) }
+              : undefined;
+          showSuccess(
+            n > 1 ? `${n} emails removed` : "Email unlinked from transaction",
+            { action: undoAction },
+          );
           setShowUnlinkThread(null);
           // BACKLOG-1780: signal RemovedEmailsSection to refresh its count.
           setRemovedRefreshKey((k) => k + 1);
@@ -558,7 +623,7 @@ function TransactionDetails({
         showError
       );
     },
-    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError]
+    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError, undoRestoreEmails]
   );
 
   // BACKLOG-1781: handler for thread-aware unlink confirmation. Stores the full
@@ -592,6 +657,62 @@ function TransactionDetails({
     // reflects a just-attached (or unlinked) email without a manual reload.
     refreshAttachments();
   }, [loadDetails, refreshAttachments]);
+
+  /**
+   * Undo an Edit Contacts save that took parties off this deal (BACKLOG-2501).
+   *
+   * Calls the SAME `transactions:restore-contact` channel the "Show removed (N)"
+   * section under Key Contacts restores through
+   * (`RemovedTransactionContactsSection.restoreGroup`) — one path, two callers,
+   * no second un-remove route.
+   *
+   * This restores the party's role on THIS transaction only. It deliberately
+   * does NOT touch `contacts.removed_at`: the two tombstones are independent by
+   * design, and undoing a removal from a deal must not un-delete the person from
+   * the database (there is a suite asserting exactly that).
+   *
+   * Sequential rather than `Promise.all`: these are SQLite writes to the same
+   * junction table through one IPC channel, and a partial failure has to be
+   * attributable to a name.
+   */
+  const undoRemoveTransactionContacts = useCallback(
+    async (removed: RemovedTransactionContactSummary[]) => {
+      const failed: string[] = [];
+      for (const party of removed) {
+        try {
+          const result = await window.api.transactions.restoreContact(
+            transaction.id,
+            party.contactId
+          );
+          if (!result.success) failed.push(party.displayName);
+        } catch (err) {
+          logger.error("Failed to restore transaction contact:", err);
+          failed.push(party.displayName);
+        }
+      }
+
+      // Silent: a spinner here unmounts the Key Contacts list and collapses the
+      // removed section mid-interaction (the BACKLOG-1780 failure).
+      await refreshContactsSilently();
+      // The party is back on the deal, so the removed-section count is stale.
+      setRemovedContactsRefreshKey((k) => k + 1);
+      onTransactionUpdated?.();
+
+      if (failed.length > 0) {
+        showError(
+          failed.length > 1
+            ? `Failed to restore ${failed.length} contacts`
+            : `Failed to restore ${failed[0]}`
+        );
+      }
+    },
+    [
+      transaction.id,
+      refreshContactsSilently,
+      onTransactionUpdated,
+      showError,
+    ]
+  );
 
   // BACKLOG-1780: silent communications refresh for the restore-removed path.
   // No loading flag, no spinner, no unmount — React reconciles keyed rows in place.
@@ -847,6 +968,12 @@ function TransactionDetails({
               isOnline={isOnline}
               onContactUpdated={loadDetails}
               onNavigateToTab={handleNavigateToTab}
+              onContactRestoreComplete={refreshContactsSilently}
+              onShowSuccess={showSuccess}
+              onShowError={showError}
+              removedContactsOpen={removedContactsOpen}
+              onRemovedContactsOpenChange={setRemovedContactsOpen}
+              removedContactsRefreshKey={removedContactsRefreshKey}
             />
           )}
 
@@ -1006,9 +1133,15 @@ function TransactionDetails({
           transaction={transaction}
           userId={userId || transaction.user_id}
           onClose={() => setShowEditContactsModal(false)}
-          onSave={(autoLinkResults?: AutoLinkResult[]) => {
+          onSave={(
+            autoLinkResults?: AutoLinkResult[],
+            removedContacts?: RemovedTransactionContactSummary[],
+          ) => {
             loadDetails();
             onTransactionUpdated?.();
+            // BACKLOG-2367: a save can REMOVE a party, so the removed-contacts
+            // count is now stale. Bump to refetch it silently — no spinner.
+            setRemovedContactsRefreshKey((k) => k + 1);
             // TASK-1126: Show detailed toast with auto-link results
             if (autoLinkResults && autoLinkResults.length > 0) {
               const totalEmails = autoLinkResults.reduce(
@@ -1033,8 +1166,31 @@ function TransactionDetails({
               } else {
                 showSuccess("Contacts updated. Use 'Sync' on the Emails tab to fetch new emails from your provider.");
               }
-            } else {
+            } else if (!removedContacts || removedContacts.length === 0) {
+              // BACKLOG-2501: when this save only REMOVED people, the removal
+              // toast below is raised instead — it says who left and offers
+              // Undo, which is strictly more than "Contacts updated
+              // successfully" carries. A save that also linked communications
+              // still reports that above; losing "12 emails linked" would be a
+              // regression, so those two coexist.
               showSuccess("Contacts updated successfully");
+            }
+
+            // BACKLOG-2501: "{Name} removed" with Undo. Founder QA asked for the
+            // same toast the Clients & Contacts delete now raises.
+            if (removedContacts && removedContacts.length > 0) {
+              const removed = [...removedContacts];
+              showSuccess(
+                removed.length > 1
+                  ? `${removed.length} contacts removed`
+                  : `${removed[0].displayName} removed`,
+                {
+                  action: {
+                    label: "Undo",
+                    onClick: () => void undoRemoveTransactionContacts(removed),
+                  },
+                }
+              );
             }
           }}
         />
@@ -1058,11 +1214,6 @@ function TransactionDetails({
           }}
           onSubmit={handleSubmitForReview}
         />
-      )}
-
-      {/* Toast Notifications - render if using local toast, or if local toasts exist (TASK-2070: warnings always use local) */}
-      {(!onShowSuccess && !onShowError || localToast.toasts.length > 0) && (
-        <ToastContainer toasts={localToast.toasts} onDismiss={localToast.removeToast} />
       )}
     </ResponsiveModal>
   );

@@ -7,7 +7,6 @@
  * Tests HTML generation and formatting utilities
  */
 
-import { jest } from "@jest/globals";
 
 // Mock electron
 jest.mock("electron", () => ({

@@ -72,6 +72,62 @@ describe("KeychainGateService", () => {
     });
   });
 
+  /**
+   * BACKLOG-2430. The gate's unlocked flag is per-process, and the only caller
+   * of unlock() is the onboarding secure-storage step. A returning user never
+   * sees that step, so before this the gate stayed shut for the whole session
+   * on every launch after the first — and support access, its only consumer,
+   * could never seal a report.
+   */
+  describe("unlockIfProvisioned", () => {
+    it("unlocks when secure storage was provisioned in an earlier session", () => {
+      // The state a returning user actually starts in.
+      expect(keychainGate.isUnlocked()).toBe(false);
+
+      expect(keychainGate.unlockIfProvisioned(() => true)).toBe(true);
+      expect(keychainGate.isUnlocked()).toBe(true);
+    });
+
+    it("stays locked when secure storage has never been set up", () => {
+      // A genuinely new user. Unlocking here would raise a keychain prompt
+      // before the app has earned one, which is what the gate exists to stop.
+      expect(keychainGate.unlockIfProvisioned(() => false)).toBe(false);
+      expect(keychainGate.isUnlocked()).toBe(false);
+    });
+
+    it("stays locked when the provisioning check throws", () => {
+      // Fails closed. An unreadable userData directory must not be treated as
+      // consent.
+      expect(
+        keychainGate.unlockIfProvisioned(() => {
+          throw new Error("userData unreadable");
+        }),
+      ).toBe(false);
+      expect(keychainGate.isUnlocked()).toBe(false);
+    });
+
+    it("does not consult the check once the gate is already unlocked", () => {
+      keychainGate.unlock();
+      const check = jest.fn().mockReturnValue(false);
+
+      expect(keychainGate.unlockIfProvisioned(check)).toBe(true);
+      expect(check).not.toHaveBeenCalled();
+      expect(keychainGate.isUnlocked()).toBe(true);
+    });
+
+    it("leaves a gate it unlocked able to encrypt, which is the whole point", () => {
+      expect(() => keychainGate.encryptString("secret")).toThrow(
+        /keychain access not yet allowed/i,
+      );
+
+      keychainGate.unlockIfProvisioned(() => true);
+
+      expect(keychainGate.encryptString("secret")).toEqual(
+        Buffer.from("encrypted"),
+      );
+    });
+  });
+
   describe("lock", () => {
     it("should lock the gate", () => {
       keychainGate.unlock();
@@ -182,3 +238,10 @@ describe("KeychainGateService", () => {
     });
   });
 });
+
+// BACKLOG-2414: marks this file as a MODULE for TypeScript. Without it the suite
+// is a global script, so its top-level `const mockPlatform` / `originalPlatform`
+// collide with the identically-named consts in the sibling service suites
+// (TS2451 "Cannot redeclare block-scoped variable"). Jest already evaluates each
+// test file in its own scope, so this is a compile-time scoping fix only.
+export {};

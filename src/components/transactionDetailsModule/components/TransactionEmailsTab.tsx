@@ -20,6 +20,8 @@ import { RemovedEmailsSection } from "./RemovedEmailsSection";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useContactNameMap } from "../../../hooks/useContactNameMap";
 import { useSelection } from "../../../hooks/useSelection";
+import type { NotificationAction, NotificationOptions } from "../../ui/Notification/types";
+import { restoreRemovedEmailsByContentIds, type EmailUndoOutcome } from "../utils/undoMoveRestore";
 
 interface TransactionEmailsTabProps {
   communications: Communication[];
@@ -66,8 +68,11 @@ interface TransactionEmailsTabProps {
    * Uses refreshCommunicationsSilently — no loading flag, no spinner, no scroll jump.
    */
   onRestoreComplete?: () => Promise<void>;
-  /** Toast handler for success messages */
-  onShowSuccess?: (message: string) => void;
+  /**
+   * Toast handler for success messages.
+   * BACKLOG-2390: accepts an optional inline action (e.g. Undo) for move toasts.
+   */
+  onShowSuccess?: (message: string, options?: NotificationOptions) => void;
   /** Toast handler for error messages */
   onShowError?: (message: string) => void;
   /** Audit period start date (ISO string) for email date filtering */
@@ -305,6 +310,11 @@ export function TransactionEmailsTab({
   }, []);
 
   // Handle emails attached successfully
+  // BACKLOG-2390: left as a plain toast (no Undo). `linkEmails` takes pre-link
+  // email ids, but the only email unlink IPC (`unlinkCommunication`) operates on a
+  // communications-row id and expands to the whole thread — there is no safe
+  // exact-id inverse for an email attach, so faking one would risk over-removing
+  // sibling emails. Messages attach (symmetric `unlinkMessages`) does get Undo.
   const handleAttached = useCallback(() => {
     onEmailsChanged?.();
     onShowSuccess?.("Emails attached successfully");
@@ -347,6 +357,9 @@ export function TransactionEmailsTab({
       try {
         const res = await window.api.transactions.confirmEmailLinks(emailIds, transactionId);
         if (res?.success) {
+          // BACKLOG-2390: left as a plain toast (no Undo). Confirm sets
+          // match_reason='user_confirmed'; there is no `unconfirm` IPC to cleanly
+          // revert a thread back to Needs-review, so no exact inverse exists.
           onShowSuccess?.(thread.emailCount > 1 ? "Conversation confirmed" : "Email confirmed");
           if (onConfirmComplete) {
             await onConfirmComplete();
@@ -389,6 +402,53 @@ export function TransactionEmailsTab({
     [selectedThreads]
   );
 
+  // BACKLOG-2390 (fix): Undo a just-completed bulk remove. Restores the EXACT
+  // emails that moved by mapping their CONTENT ids (emails.id) to their
+  // suppression rows and calling the existing restore path (restoreRemovedEmail).
+  //
+  // The caller passes CONTENT ids (email.id = emails.id), NOT the communications
+  // ids that unlinkCommunication returns — those never match getRemovedEmails()'s
+  // email_id column (which is emails.id), which is why the old undo restored
+  // nothing while still claiming "Move undone".
+  //
+  // Fails LOUD: if no suppression row matches, or any restore fails, an error
+  // toast is shown instead of a false "Move undone". The confirmation toast it
+  // fires carries NO action, so an undo can never loop into another undo.
+  const undoBulkRemoveEmails = useCallback(
+    async (removedEmailContentIds: string[]) => {
+      if (!transactionId || removedEmailContentIds.length === 0) return;
+      let outcome: EmailUndoOutcome;
+      try {
+        outcome = await restoreRemovedEmailsByContentIds(
+          window.api.transactions,
+          transactionId,
+          removedEmailContentIds
+        );
+      } catch {
+        onShowError?.("Failed to undo");
+        return;
+      }
+      // Refresh only when a restore was actually attempted (keeps the removed
+      // count + list in sync); skip the pointless refresh on fetch/no-match.
+      if (outcome.status === "success" || outcome.status === "restore_failed") {
+        if (onRestoreComplete) {
+          await onRestoreComplete();
+        } else {
+          onEmailsChanged?.();
+        }
+        setLocalRemovedBump((b) => b + 1);
+      }
+      if (outcome.status === "success") {
+        onShowSuccess?.("Move undone");
+      } else if (outcome.status === "fetch_failed") {
+        onShowError?.(outcome.error || "Failed to undo");
+      } else {
+        onShowError?.("Couldn't undo — emails are still removed");
+      }
+    },
+    [transactionId, onRestoreComplete, onEmailsChanged, onShowSuccess, onShowError]
+  );
+
   // BACKLOG-1719: bulk remove. Generalises the BACKLOG-1781 loop across ALL
   // selected threads: collect ONE representative communicationId per distinct
   // backend thread_id (dedup across selections), then call the FROZEN
@@ -427,7 +487,23 @@ export function TransactionEmailsTab({
       }
 
       const n = allUnlinkedIds.length || selectedEmailCount;
-      onShowSuccess?.(n > 1 ? `${n} emails removed` : "Email removed from transaction");
+      // BACKLOG-2390 (fix): attach an Undo that restores the EXACT emails that
+      // moved. The undo payload is the emails' CONTENT ids (email.id = emails.id),
+      // which live in the same id-space as getRemovedEmails().email_id — NOT the
+      // communications ids in allUnlinkedIds (those never matched, so the old undo
+      // restored nothing). Restore is thread-aware, so one matched email per
+      // thread pulls its whole conversation back.
+      const removedEmailContentIds = selectedThreads.flatMap((t) =>
+        t.emails.map((e) => e.id).filter((id): id is string => !!id)
+      );
+      const undoAction: NotificationAction | undefined =
+        removedEmailContentIds.length > 0
+          ? { label: "Undo", onClick: () => void undoBulkRemoveEmails(removedEmailContentIds) }
+          : undefined;
+      onShowSuccess?.(
+        n > 1 ? `${n} emails removed` : "Email removed from transaction",
+        { action: undoAction }
+      );
       // Refresh the removed-emails count in place.
       setLocalRemovedBump((b) => b + 1);
     } finally {
@@ -436,7 +512,7 @@ export function TransactionEmailsTab({
       deselectAllThreads();
       setSelectionMode(false);
     }
-  }, [selectedThreads, selectedEmailCount, onRemoveEmailsByIds, onEmailsChanged, onShowSuccess, deselectAllThreads]);
+  }, [selectedThreads, selectedEmailCount, onRemoveEmailsByIds, onEmailsChanged, onShowSuccess, deselectAllThreads, undoBulkRemoveEmails]);
 
   // Loading state
   if (loading) {

@@ -163,11 +163,43 @@ jobs:
         run: node scripts/rebuild-native.js
         continue-on-error: true
 
+      # BACKLOG-2505: NODE_OPTIONS on the next three steps.
+      #
+      # Every step from "Run tests" down already sets --max-old-space-size=4096.
+      # These three did not, so they ran on whatever old-space limit Node derives
+      # from the runner's total memory. `type-check:tests` needs ~2 GB, which put
+      # it right at that derived limit: it OOM'd (exit 134, node::OOMErrorHandler)
+      # on two consecutive re-runs of an UNCHANGED commit on PR #2212, having
+      # passed on an earlier run of the same commit.
+      #
+      # Value and shape are copied from the sibling steps rather than tuned, so
+      # every Node step in this job now carries one explicit, identical limit
+      # instead of an implicit one that varies with the runner.
       - name: TypeScript type check
         run: npm run type-check
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+      # BACKLOG-2414: `npm run type-check` uses tsconfig.json, which EXCLUDES
+      # **/*.test.* — so the entire test suite was never type-checked by anything.
+      # A literal `const x: number = "string"` in a test file passed tsc, eslint and
+      # jest simultaneously. This step closes that hole; it is a separate step (not
+      # folded into type-check) so a failure names the test suite explicitly.
+      - name: TypeScript type check (test suite)
+        # BACKLOG-2505: print the limit actually in force before running. This is
+        # the step that OOM'd, and a green run on its own cannot tell "the cap
+        # applied" from "the OOM did not fire this time" — the printed number can.
+        # It reads V8's own limit, so it tracks the flag rather than echoing it.
+        run: |
+          node -p "'v8 heap_size_limit: ' + Math.round(require('v8').getHeapStatistics().heap_size_limit / 1048576) + ' MB'"
+          npm run type-check:tests
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Run linter
         run: npm run lint
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Run tests
         run: npm test -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit
@@ -198,6 +230,134 @@ jobs:
         run: npx vitest run
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
+
+  # BACKLOG-2485: block personal-looking data from entering source/test paths.
+  # This repository is public, so a fixture containing a real person's address or
+  # phone number is permanently republished to every clone and fork the moment it
+  # lands. Deliberately NOT gated on docs-only: the check is a few seconds of pure
+  # node with no install step, and it must always report a status.
+  fixture-pii:
+    name: Fixture PII Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      - name: Scan fixtures for personal data
+        run: npm run check:pii
+
+  # BACKLOG-2678: fail the build when a tracked test file is run by NO CI test config.
+  #
+  # jest.config.js used different testMatch lists under CI and locally, so a file matched only by
+  # the local list ran on developer machines and in the pre-push hook and NEVER in CI — 47 of 622
+  # tracked test files, 31 of them the QA harness's own suites, with nothing able to report it.
+  # Converging the globs closed that day's gap; this job is what stops it reopening.
+  #
+  # Deliberately NOT gated on docs-only, and deliberately WITHOUT `needs: check-changes`: the
+  # docs-only filter treats `.github/workflows/*` as documentation, so a workflow-only PR would
+  # skip this job — which is precisely how a gate gets disabled without anyone noticing
+  # (cf. BACKLOG-2506: duplicated job names and a push leg that emitted no Windows job, all merged
+  # green). It must always run and always report a status.
+  #
+  # Unique job name + unique status-check name. Do NOT add a second job with this name.
+  test-drift:
+    name: Test Drift Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      # The gate asks each runner to list its own tests rather than reimplementing glob matching,
+      # so jest/vitest must be installed. ignore-scripts skips the electron/native rebuild — test
+      # DISCOVERY needs no native module and no app build.
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      # android-companion is NOT an npm workspace (own package-lock, jest-expo preset), so the root
+      # install does not provide its node_modules. Without this, its probe reports DEAD and its 30
+      # test files look orphaned.
+      - name: Install android-companion dependencies
+        working-directory: android-companion
+        run: npm ci
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Check for orphaned test files
+        run: node scripts/ci/check-test-drift.mjs
+
+  # BACKLOG-2577: hook infrastructure requires branch-independence, and tracking
+  # is definitionally branch-dependence. Committing anything under .husky/_ makes
+  # the runner directory disappear on a checkout of any branch without it, which
+  # silently disables pre-push and pre-commit repo-wide (exit 0, no warning).
+  # This job is the standing rule preventing that packaging from returning.
+  # No npm install: the check reads the git index only, and husky's installer
+  # would write core.hooksPath as a side effect if it ran in CI.
+  hooks-tracking:
+    name: Hooks Tracking Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      - name: Assert nothing under .husky/_ is tracked
+        run: npm run check:hooks
+
+  # BACKLOG-2637: a source file holding a raw NUL is classified as binary by the
+  # search tools, which then omit it from every repo-wide sweep WITHOUT warning
+  # and WITHOUT a non-zero exit. The result is not a slow search or a failed one
+  # — it is a clean-looking negative, and nothing anywhere says the file was
+  # skipped. It happened twice in one epic and both times a person found it by
+  # running `file` on a hunch, not by any check.
+  #
+  # Scope is repository-wide on purpose. The narrow first draft (electron/ and
+  # src/) left 691 of 2,051 tracked .ts/.tsx unchecked — a third of the
+  # TypeScript — and the clinching case is the guard script itself, which
+  # acquired the defect during its own development and lives in scripts/.
+  #
+  # Detection is a strict read of every tracked TS/JS file, NOT `file(1)`: file
+  # reads a prefix, and was measured calling a 200 KB file with a NUL at offset
+  # 150,000 "ASCII text" while that file was silently unsearchable. The same pass
+  # catches invalid UTF-8, which git cannot see and which ugrep — what `grep`
+  # resolves to in the agent shell — also skips silently. 2,121 files in ~0.7s.
+  #
+  # Deliberately NOT gated on docs-only: no install step, and it must always
+  # report a status.
+  text-sources:
+    name: Text Source Guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      - name: Assert every tracked TS/JS file is searchable
+        run: npm run check:text-sources
 
   # BACKLOG-1750: gate the @keepr/ui shared component library. Isolated,
   # platform-agnostic job (single OS, no native modules) — the root `test` job

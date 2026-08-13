@@ -11,7 +11,6 @@
  * and the cache-is-a-mirror-never-grantor invariant.
  */
 
-import { jest } from "@jest/globals";
 
 // ── Mocks ────────────────────────────────────────────────────────────────
 jest.mock("electron", () => ({

@@ -31,16 +31,24 @@ This eliminates the manual `--label` step — the hook writes task context at in
 
 All metric queries use SQL via `mcp__supabase__execute_sql`:
 
+> **`billable_tokens` is the cost column. Never report `total_tokens` as effort or spend.**
+> `total_tokens` includes `cache_read_tokens` and runs ~19x higher — measured 19.54x across
+> the whole live table on 2026-08-11 (15,967,627,947 vs 817,061,720).
+> `billable_tokens` is `GENERATED ALWAYS AS (input + output + cache_creation)`; cache reads
+> are excluded on purpose. Summing the wrong column made every tracker `variance` wrong and
+> forced 89 item rows to be recomputed (PR #2282). Below, `total_tokens` appears only in
+> full component breakdowns, for diagnosis — not as an answer to "how much did this cost".
+
 ### Task totals (replaces `sum_effort.py`)
 ```sql
 SELECT
   task_id,
+  SUM(billable_tokens) AS billable_tokens,   -- the cost figure
   SUM(input_tokens) AS input_tokens,
   SUM(output_tokens) AS output_tokens,
   SUM(cache_read_tokens) AS cache_read_tokens,
   SUM(cache_creation_tokens) AS cache_creation_tokens,
-  SUM(total_tokens) AS total_tokens,
-  SUM(billable_tokens) AS billable_tokens,
+  SUM(total_tokens) AS total_tokens,         -- diagnostic only: includes cache reads
   SUM(api_calls) AS api_calls,
   SUM(duration_ms) / 1000 AS duration_secs,
   COUNT(DISTINCT agent_id) AS agent_sessions,
@@ -71,8 +79,7 @@ ORDER BY recorded_at;
 ```sql
 SELECT
   sprint_id,
-  SUM(total_tokens) AS total_tokens,
-  SUM(billable_tokens) AS billable_tokens,
+  SUM(billable_tokens) AS billable_tokens,   -- the sprint's cost; do NOT sum total_tokens
   COUNT(DISTINCT task_id) AS tasks,
   COUNT(DISTINCT agent_id) AS agents
 FROM pm_token_metrics
@@ -107,7 +114,7 @@ SELECT pm_record_task_tokens('<task_uuid>', 150000);
 Before recording task totals, verify all agents logged:
 
 ```sql
-SELECT agent_id, agent_type, total_tokens, task_id
+SELECT agent_id, agent_type, billable_tokens, task_id
 FROM pm_token_metrics
 WHERE task_id = 'TASK-XXXX'
 ORDER BY recorded_at;

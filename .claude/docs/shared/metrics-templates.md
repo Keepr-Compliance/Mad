@@ -36,9 +36,16 @@ All sprint tasks require metrics tracking for:
 -- Query metrics for a task
 SELECT * FROM pm_token_metrics WHERE task_id = 'TASK-XXXX' ORDER BY recorded_at;
 
--- Aggregate totals
-SELECT SUM(total_tokens), SUM(billable_tokens) FROM pm_token_metrics WHERE task_id = 'TASK-XXXX';
+-- Aggregate totals. billable_tokens is the cost column — see the warning below.
+SELECT SUM(billable_tokens) FROM pm_token_metrics WHERE task_id = 'TASK-XXXX';
 ```
+
+> **Never sum `total_tokens` for cost, effort or variance.** It includes
+> `cache_read_tokens` and runs ~19x higher — measured 19.54x across the whole live table
+> on 2026-08-11 (15,967,627,947 vs 817,061,720). `billable_tokens` is
+> `GENERATED ALWAYS AS (input + output + cache_creation)`; cache reads are excluded on
+> purpose. Summing the wrong column is what made every tracker `variance` wrong and forced
+> 89 item rows to be recomputed (PR #2282).
 
 ---
 
@@ -101,11 +108,14 @@ Engineer Agent ID: <agent_id from Task tool output>
 
 **Auto-captured to Supabase by SubagentStop hook.** Query via MCP:
 ```sql
-SELECT total_tokens, billable_tokens, duration_ms, api_calls, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
+-- billable_tokens is the Actual figure. total_tokens is listed only for diagnosis
+-- alongside its components; it includes cache_read_tokens (~19x) — never use it as cost.
+SELECT billable_tokens, duration_ms, api_calls, input_tokens, output_tokens,
+       cache_read_tokens, cache_creation_tokens, total_tokens
 FROM pm_token_metrics WHERE agent_id = '<agent_id>';
 ```
 
-**Variance:** PM Est ~XK vs Actual ~XK (X% over/under)
+**Variance:** PM Est ~XK vs Actual ~XK (X% over/under) — Actual is `billable_tokens`
 ```
 
 ---
@@ -117,11 +127,11 @@ SR Engineer metrics are auto-captured to Supabase by the SubagentStop hook. Post
 ```markdown
 ### Metrics (Auto-Captured to Supabase)
 
-Query: `SELECT total_tokens, duration_ms, api_calls FROM pm_token_metrics WHERE agent_id = '<agent_id>';`
+Query: `SELECT billable_tokens, duration_ms, api_calls FROM pm_token_metrics WHERE agent_id = '<agent_id>';`
 
 | Metric | Value |
 |--------|-------|
-| **Total Tokens** | X |
+| **Billable Tokens** | X |
 | Duration | X seconds |
 | API Calls | X |
 ```

@@ -7,8 +7,8 @@
  *   - electron/utils/phoneLookupKey.ts (reduced to 1-line shim — see migration v40 immutability note)
  *
  * Two canonical functions:
- *   - `toE164(raw)` → "+15551234567" form (used for display / contact storage / matching)
- *   - `toLookupKey(raw)` → "5551234567" (last 10 digits) (used as JOIN key against
+ *   - `toE164(raw)` → "+15555550112" form (used for display / contact storage / matching)
+ *   - `toLookupKey(raw)` → "5555550112" (last 10 digits) (used as JOIN key against
  *     `phone_last_message.phone_normalized` / `contact_phones.phone_normalized` /
  *     `external_contacts.phones_normalized_json`)
  *
@@ -40,7 +40,7 @@ import { REGEX_PATTERNS } from "../constants";
  * at the call site (see `messageMatchingService.normalizePhone`).
  *
  * @example
- * toE164("(555) 123-4567")        // "+15551234567"
+ * toE164("(555) 555-0112")        // "+15555550112"
  * toE164("+44 20 7946 0958")      // "+442079460958"
  * toE164("User@ICLOUD.COM")       // "user@icloud.com"
  * toE164("")                      // ""
@@ -77,7 +77,7 @@ export function toE164(phone: string | null | undefined): string {
  *   - Null / undefined / empty / whitespace-only input → `""`
  *
  * @example
- * toLookupKey("+1 (415) 555-1234")  // "4155551234"
+ * toLookupKey("+1 (415) 555-0109")  // "4155550109"
  * toLookupKey("+44 20 7946 0958")    // "2079460958"
  * toLookupKey("12345")               // "12345"
  * toLookupKey("VERIZON")             // "VERIZON"
@@ -106,9 +106,9 @@ export function toLookupKey(raw: string | null | undefined): string {
  * comparison. Falsy inputs always return false.
  *
  * @example
- * phoneNumbersMatch("(555) 123-4567", "5551234567")     // true
+ * phoneNumbersMatch("(555) 555-0112", "5555550112")     // true
  * phoneNumbersMatch("+44 20 7946 0958", "2079460958")    // true
- * phoneNumbersMatch("5551234567", "5559876543")          // false
+ * phoneNumbersMatch("5555550112", "5555550121")          // false
  */
 export function phoneNumbersMatch(
   phone1: string | null | undefined,
@@ -151,6 +151,40 @@ export function extractDigits(phone: string | null | undefined): string {
   return phone.replace(REGEX_PATTERNS.PHONE_NORMALIZE, "");
 }
 
+/** The characters a person actually types when writing a phone number. */
+const PHONE_QUERY_CHARS = /^[+()\-.\s\d]+$/;
+
+/**
+ * Does this SEARCH QUERY look like someone typing a phone number?
+ *
+ * ===========================================================================
+ * MIRROR PAIR. Renderer copy: `src/utils/phoneNormalization.ts`
+ * ===========================================================================
+ * BACKLOG-2467. `tsconfig.electron.json` sets `rootDir: "./electron"`, so the
+ * main process cannot import the renderer copy (same constraint that produced
+ * the two copies of `formatPhoneNumber` above and of `contactDisplayLabel`).
+ * The two are held together by
+ * `src/utils/__tests__/contactDisplayLabel.parity.test.ts`, which loads both and
+ * asserts an identical verdict for every case — a query that the picker's
+ * client-side matcher treats as a phone number and the SQL search does not (or
+ * vice versa) is precisely how the two surfaces diverged in the first place.
+ *
+ * Read the renderer copy for the full reasoning. In short: no letters, at least
+ * 3 digits. The letter rule keeps a company called "415 Realty" on the name
+ * path; the 3-digit floor rejects "+", "()" and a bare "1", a needle that would
+ * substring-match nearly every number on file.
+ *
+ * Gates the NORMALISED phone comparison ONLY — every caller keeps its plain
+ * substring pass unconditionally, so this can never remove a match that works
+ * today.
+ */
+export function looksLikePhoneQuery(query: string | null | undefined): boolean {
+  const trimmed = (query || "").trim();
+  if (!trimmed) return false;
+  if (!PHONE_QUERY_CHARS.test(trimmed)) return false;
+  return extractDigits(trimmed).length >= 3;
+}
+
 /**
  * Return the last N digits of a phone number (default 10). Useful for fuzzy
  * matching across country-code variations.
@@ -166,8 +200,27 @@ export function getTrailingDigits(phone: string, count: number = 10): string {
  * - 11-digit US with leading 1 → "+1 (XXX) XXX-XXXX"
  * - 10-digit US → "(XXX) XXX-XXXX"
  * - 7-digit local → "XXX-XXXX"
+ * - International (input carried a leading "+") → "+<digits>", country code kept.
  * - Otherwise returns the cleaned digit string, or the original if cleaning
  *   yields empty.
+ *
+ * BACKLOG-2461: the international branch did not exist. `PHONE_NORMALIZE` is
+ * `/\D/g`, which strips the "+" along with the punctuation, so every non-US
+ * number missed all three US shapes and fell out as a bare digit run —
+ * "+50664103686" (Costa Rica, real data) became "50664103686", which is not
+ * dialable and reads as a serial number.
+ *
+ * That matters more now than it did: this string can BE a contact's label.
+ * `contactDisplayLabel` falls back to the phone when a contact has no name, so
+ * a mangled number would be printed into the compliance PDF as a party's
+ * identity.
+ *
+ * Digits are deliberately NOT regrouped for international numbers. Grouping
+ * varies by country and guessing it wrongly misrepresents the number; doing it
+ * correctly needs a full libphonenumber metadata set. Keeping "+" and the
+ * digits leaves the number faithful and dialable, which is the property that
+ * matters here. US shapes are unchanged — asserted by test, so no existing
+ * caller shifts.
  */
 export function formatPhoneNumber(phone: string | null | undefined): string {
   if (!phone) return "";
@@ -181,6 +234,11 @@ export function formatPhoneNumber(phone: string | null | undefined): string {
     return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
   } else if (cleaned.length === 7) {
     return `${cleaned.slice(0, 3)}-${cleaned.slice(3)}`;
+  }
+  // Only re-attach "+" when the caller supplied one. Inventing a country code
+  // for a bare digit run would assert something we were never told.
+  if (cleaned && phone.trim().startsWith("+")) {
+    return `+${cleaned}`;
   }
   return cleaned || phone;
 }

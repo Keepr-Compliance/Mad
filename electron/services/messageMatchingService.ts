@@ -57,7 +57,7 @@ export interface AutoLinkOptions {
 
 /**
  * Normalize a phone number to E.164 format for comparison.
- * Handles various input formats: (415) 555-0000, 415-555-0000, +14155550000, etc.
+ * Handles various input formats: (415) 555-0102, 415-555-0102, +14155550102, etc.
  *
  * BACKLOG-1729: Delegates to the canonical `toE164` from `phoneNormalization`,
  * wrapped to preserve the historical `string | null` signature. The legacy
@@ -67,7 +67,7 @@ export interface AutoLinkOptions {
  * non-null result would produce a different observable outcome.
  *
  * @param phone - The phone number to normalize
- * @returns Normalized E.164 format (+14155550000) or null if invalid/empty
+ * @returns Normalized E.164 format (+14155550102) or null if invalid/empty
  */
 export function normalizePhone(phone: string | null | undefined): string | null {
   const r = toE164(phone);
@@ -108,7 +108,7 @@ export async function getTransactionContactPhones(
       cp.phone_e164 as phone
     FROM transaction_contacts tc
     JOIN contact_phones cp ON tc.contact_id = cp.contact_id
-    WHERE tc.transaction_id = ?
+    WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
   `;
 
   const results = dbAll<{ contactId: string; phone: string }>(sql, [transactionId]);
@@ -571,7 +571,7 @@ export async function getTransactionContactEmails(
       ce.email as email
     FROM transaction_contacts tc
     JOIN contact_emails ce ON tc.contact_id = ce.contact_id
-    WHERE tc.transaction_id = ?
+    WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
   `;
 
   const results = dbAll<{ contactId: string; email: string }>(sql, [transactionId]);

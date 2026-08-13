@@ -30,6 +30,9 @@ import {
 } from "../utils/addressNormalization";
 import type { MatchReason } from "../types/models";
 import { reactionExclusion } from "./db/reactionExclusion";
+// BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
+// granted a support window covering the transaction-linking scope.
+import { supportTrace } from "./supportAccess/trace";
 
 
 // ============================================
@@ -358,6 +361,7 @@ function countContactCandidateTransactions(userId: string, contactId: string): n
     WHERE tc.contact_id = ?
       AND t.user_id = ?
       AND t.status != 'archived'
+      AND tc.removed_at IS NULL
   `;
   const row = dbGet<{ cnt: number }>(sql, [contactId, userId]);
   return row?.cnt ?? 0;
@@ -382,6 +386,7 @@ function getOtherCandidateTransactionAddresses(
       AND t.user_id = ?
       AND t.status != 'archived'
       AND t.id != ?
+      AND tc.removed_at IS NULL
       AND COALESCE(t.property_address, t.property_street) IS NOT NULL
   `;
   return dbAll<{ address: string }>(sql, [contactId, userId, transactionId])
@@ -426,7 +431,7 @@ async function findMessagesByContactPhones(
 
   // Add phone patterns — use last 10 digits for suffix matching.
   // participants_flat may store phones with or without country code
-  // (e.g. "13609181693" vs "3609181693"), so matching on the last 10
+  // (e.g. "12065550142" vs "2065550142"), so matching on the last 10
   // digits ensures both formats are found.
   for (const phone of phoneNumbers) {
     const digits = phone.replace(/\D/g, "");
@@ -1022,6 +1027,32 @@ export async function autoLinkCommunicationsForContact(
       }
     );
 
+    // BACKLOG-2393: the auto-linking decision, not just its outcome. "Why did
+    // this email land on the wrong deal, or in review instead of on the deal?"
+    // needs to know how many transactions were in the running and how the
+    // address comparison resolved between them — a linked count alone says
+    // nothing about the ones that were considered and rejected. Counts and
+    // decisions only; no address strings or message bodies. A no-op outside a
+    // granted support window.
+    supportTrace("transaction-linking", "auto-link-contact-complete", {
+      contact_id: contactId,
+      transaction_id: transactionId,
+      candidate_transactions: candidateTxnCount,
+      single_candidate: singleCandidate,
+      other_candidate_addresses: otherCandidateAddresses.length,
+      address_filter_skipped: skipAddressFilter,
+      email_candidates: emailCandidates.length,
+      emails_linked: result.emailsLinked,
+      threads_linked: result.messagesLinked,
+      already_linked: result.alreadyLinked,
+      sent_to_review: needsReviewCount,
+      disambiguated_to_other_deal: disambiguatedAway,
+      thread_ids_examined: threadIds.size,
+      messages_without_thread: messagesWithoutThread.length,
+      errors: result.errors,
+      duration_ms: duration,
+    });
+
     return result;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -1096,6 +1127,13 @@ export async function autoLinkNewMessagesForUser(
     // Query all active transactions with assigned contacts for this user.
     // JOIN transaction_contacts to get contact-transaction pairs in one query.
     // Only include non-archived transactions (status != 'archived').
+    //
+    // BACKLOG-2366: `tc.removed_at IS NULL` is the negative-signal enforcement
+    // point. This loop is what pulls newly-synced mail and messages into a deal
+    // on behalf of each assigned contact. Without the filter, a party the user
+    // removed would keep dragging their communications back into the transaction
+    // on every sync — the same failure `ignored_communications` prevents for
+    // individually unlinked emails.
     const sql = `
       SELECT DISTINCT
         tc.contact_id,
@@ -1104,6 +1142,7 @@ export async function autoLinkNewMessagesForUser(
       JOIN transactions t ON t.id = tc.transaction_id
       WHERE t.user_id = ?
         AND t.status != 'archived'
+        AND tc.removed_at IS NULL
       ORDER BY tc.transaction_id
     `;
 
@@ -1158,6 +1197,19 @@ export async function autoLinkNewMessagesForUser(
         ...result,
       }
     );
+
+    // BACKLOG-2393: the post-sync sweep. `pairs.length` vs `pairsProcessed` is
+    // the difference between "we looked and found nothing" and "we never
+    // looked", which is the ambiguity this whole scope exists to remove.
+    supportTrace("transaction-linking", "auto-link-post-sync-complete", {
+      pairs_enumerated: pairs.length,
+      pairs_processed: result.pairsProcessed,
+      emails_linked: result.totalEmailsLinked,
+      threads_linked: result.totalMessagesLinked,
+      already_linked: result.totalAlreadyLinked,
+      errors: result.totalErrors,
+      duration_ms: result.durationMs,
+    });
 
     Sentry.addBreadcrumb({
       category: "auto_link.post_sync",
@@ -1666,6 +1718,18 @@ export async function expandAttachedThreadsForUser(
         durationMs: result.durationMs,
       }
     );
+
+    // BACKLOG-2393: thread expansion, where "half the conversation is attached
+    // and half isn't" is decided. `skippedSuppressed` is the count that
+    // distinguishes a deliberate exclusion from a miss.
+    supportTrace("transaction-linking", "attached-thread-expansion-complete", {
+      pairs_examined: result.pairsExamined,
+      messages_linked: result.messagesLinked,
+      skipped_suppressed: result.skippedSuppressed,
+      skipped_already_linked: result.skippedAlreadyLinked,
+      errors: result.errors,
+      duration_ms: result.durationMs,
+    });
 
     Sentry.addBreadcrumb({
       category: "auto_link.attached_expansion",

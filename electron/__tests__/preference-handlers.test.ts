@@ -6,6 +6,11 @@
  * - Partial preference updates with deep merge
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
 
 // Mock electron module
@@ -39,13 +44,13 @@ const mockSupabaseService = supabaseService as jest.Mocked<
 const TEST_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
 
 describe("Preference Handlers", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
 
   beforeAll(() => {
     // Capture registered handlers
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
 
@@ -74,7 +79,14 @@ describe("Preference Handlers", () => {
     });
 
     it("should return empty object when no preferences exist", async () => {
-      mockSupabaseService.getPreferences.mockResolvedValue(null);
+      // BACKLOG-2414: `getPreferences` is typed (and implemented) to always
+      // resolve a `Record<string, any>` — it ends in `data?.preferences || {}` and
+      // cannot return null/undefined. These stubs deliberately hand the handler
+      // the value the service cannot produce, to pin the handler's own
+      // defensiveness, so they are cast rather than corrected.
+      mockSupabaseService.getPreferences.mockResolvedValue(
+        null as unknown as Record<string, unknown>,
+      );
 
       const handler = registeredHandlers.get("preferences:get");
       const result = await handler(mockEvent, TEST_USER_ID);
@@ -84,7 +96,10 @@ describe("Preference Handlers", () => {
     });
 
     it("should handle undefined preferences", async () => {
-      mockSupabaseService.getPreferences.mockResolvedValue(undefined);
+      // BACKLOG-2414: cast — see the note on "no preferences exist" above.
+      mockSupabaseService.getPreferences.mockResolvedValue(
+        undefined as unknown as Record<string, unknown>,
+      );
 
       const handler = registeredHandlers.get("preferences:get");
       const result = await handler(mockEvent, TEST_USER_ID);
@@ -236,7 +251,10 @@ describe("Preference Handlers", () => {
       const partialUpdate = {
         theme: "light",
       };
-      mockSupabaseService.getPreferences.mockResolvedValue(null);
+      // BACKLOG-2414: cast — see the note on "no preferences exist" above.
+      mockSupabaseService.getPreferences.mockResolvedValue(
+        null as unknown as Record<string, unknown>,
+      );
       mockSupabaseService.syncPreferences.mockResolvedValue(undefined);
 
       const handler = registeredHandlers.get("preferences:update");

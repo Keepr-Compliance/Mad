@@ -21,6 +21,7 @@
 import type { Database as DatabaseType } from "better-sqlite3";
 import { toLookupKey } from "../../utils/phoneNormalization";
 import { reactionExclusion } from "./reactionExclusion";
+import { ACTIVE_CONTACTS_CLAUSE_C } from "./contactTombstoneSql";
 
 // ---------------------------------------------------------------------------
 // Public result types (wire shape returned through IPC)
@@ -290,8 +291,13 @@ export function buildContactQuery(
   const phoneKey = digitsOnly.length >= 3 ? toLookupKey(rawQuery) : "";
   const phonePat = phoneKey ? containsPattern(phoneKey) : "";
 
+  // BACKLOG-2366: `tc.removed_at IS NULL` — searching within a transaction must
+  // not return a party who was removed from it. This predicate is shared by `sql`
+  // and `countSql` below (both interpolate `where`), so the row set and the count
+  // cannot drift apart.
   const where = `
     WHERE tc.transaction_id = ?
+      AND tc.removed_at IS NULL
       AND (
         c.display_name LIKE ? ESCAPE '\\'
         OR ce.email LIKE ? ESCAPE '\\'
@@ -571,9 +577,16 @@ export function buildTransactionsQuery(
   limit: number,
 ): BuiltQuery {
   const pat = containsPattern(rawQuery);
+  // BACKLOG-2366: the tombstone filter belongs in the JOIN condition, NOT the
+  // WHERE. In the WHERE it would silently convert this LEFT JOIN to an inner
+  // one for any transaction whose only party has been removed — that
+  // transaction would then stop matching on `property_address` too, which has
+  // nothing to do with its parties. In the ON clause the row is simply
+  // NULL-extended, so address search still finds it.
   const from = `
     FROM transactions t
-    LEFT JOIN transaction_contacts tc ON tc.transaction_id = t.id
+    LEFT JOIN transaction_contacts tc
+      ON tc.transaction_id = t.id AND tc.removed_at IS NULL
     LEFT JOIN contacts c ON c.id = tc.contact_id`;
   const where = `
     WHERE t.user_id = ?
@@ -648,20 +661,28 @@ export function buildGlobalContactQuery(
           ORDER BY tc.is_primary DESC, tc.created_at ASC, t.id ASC
         ) AS rn
       FROM contacts c
-      LEFT JOIN transaction_contacts tc ON tc.contact_id = c.id
+      -- BACKLOG-2366: filtered in the ON clause so a contact whose only role was
+      -- removed still appears in global search under their own name — just
+      -- without being attributed to the deal they are no longer on. In the WHERE
+      -- clause they would disappear from search entirely.
+      LEFT JOIN transaction_contacts tc
+        ON tc.contact_id = c.id AND tc.removed_at IS NULL
       LEFT JOIN transactions t ON t.id = tc.transaction_id
-      WHERE c.user_id = ?
+      WHERE c.user_id = ?${ACTIVE_CONTACTS_CLAUSE_C}
         AND (${match})
     ) ranked
     WHERE ranked.rn = 1
     ORDER BY ranked.displayName COLLATE NOCASE ASC
     LIMIT ?`;
 
+  // BACKLOG-2365: this tombstone filter MUST stay identical to the rows query
+  // above. The two are read together — the count labels that list — so any
+  // divergence shows the user "12 contacts" above a list of 9.
   const countSql = `${MARK.contactsCount}
     SELECT COUNT(*) AS total FROM (
       SELECT c.id
       FROM contacts c
-      WHERE c.user_id = ?
+      WHERE c.user_id = ?${ACTIVE_CONTACTS_CLAUSE_C}
         AND (${match})
       GROUP BY c.id
     ) x`;

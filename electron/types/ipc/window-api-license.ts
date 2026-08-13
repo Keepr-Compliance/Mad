@@ -288,4 +288,16 @@ export interface WindowApiSupport {
     ticket_number?: number;
     error?: string;
   }>;
+  /**
+   * Support access mode (BACKLOG-2393).
+   *
+   * The shape is taken straight from the bridge rather than re-declared, so
+   * this declaration cannot drift from the implementation the way the
+   * `collectDiagnostics` shape above has.
+   */
+  access: SupportAccessBridge;
 }
+
+/** Structural type of `supportBridge.access` in electron/preload/supportBridge.ts. */
+export type SupportAccessBridge =
+  typeof import("../../preload/supportBridge").supportBridge.access;

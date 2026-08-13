@@ -11,6 +11,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Contacts from "../Contacts";
+import type { Contact } from "../../../electron/types/models";
+import type { ContactBlockingTransaction } from "../../../electron/types/ipc/window-api-contacts";
 
 // isDatabaseInitialized: true so the real component content renders.
 jest.mock("../../appCore", () => ({
@@ -56,6 +58,13 @@ const mockUserId = "user-123";
 
 // A client (imported) contact with a transaction, so the detail card shows a
 // clickable transaction row.
+//
+// BACKLOG-2414: the contact and the blocking-transaction fixtures below carry only
+// the fields the Contacts master-detail UI reads. The full `Contact` /
+// `ContactBlockingTransaction` row types additionally require `user_id`,
+// timestamps and the message/attachment/export counters; supplying them would
+// change what the component renders from (the counters in particular drive badge
+// text), so the fixtures stay as-is and only the type is asserted.
 const importedContact = {
   id: "contact-1",
   name: "John Doe",
@@ -64,20 +73,24 @@ const importedContact = {
   company: "ABC Real Estate",
   source: "manual",
   default_role: "buyer",
-};
+} as Contact;
 
 describe("Contacts - master-detail layout (BACKLOG-1898 T5)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    window.api.contacts.getAll.mockResolvedValue({
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({
       success: true,
       contacts: [importedContact],
     });
     // checkCanDelete supplies the transaction list shown in the detail card.
-    window.api.contacts.checkCanDelete.mockResolvedValue({
+    jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
       success: true,
       transactions: [
-        { id: "txn-99", property_address: "123 Main St", roles: ["buyer"] },
+        {
+          id: "txn-99",
+          property_address: "123 Main St",
+          roles: ["buyer"],
+        } as ContactBlockingTransaction,
       ],
     });
   });
@@ -218,7 +231,7 @@ describe("Contacts - master-detail layout (BACKLOG-1898 T5)", () => {
       // string that caused BACKLOG-1898's `t.roles?.join is not a function`
       // (a string has no .join). With roles now an array, the mapper's
       // `.join(", ")` is type-safe and the Transactions section renders.
-      window.api.contacts.checkCanDelete.mockResolvedValue({
+      jest.mocked(window.api.contacts.checkCanDelete).mockResolvedValue({
         success: true,
         canDelete: false,
         count: 2,
@@ -228,13 +241,13 @@ describe("Contacts - master-detail layout (BACKLOG-1898 T5)", () => {
             property_address: "123 Main St",
             status: "active",
             roles: ["client"],
-          },
+          } as ContactBlockingTransaction,
           {
             id: "t2",
             property_address: "456 Oak Ave",
             status: "active",
             roles: ["title_company"],
-          },
+          } as ContactBlockingTransaction,
         ],
       });
 

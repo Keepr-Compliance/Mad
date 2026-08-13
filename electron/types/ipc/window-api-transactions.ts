@@ -8,6 +8,20 @@ import type {
   ExportCompletenessResult,
   EnsureMessagesCoverageResult,
 } from "../auditCoverage";
+// BACKLOG-2367. TYPE-ONLY, fully erased at build time — the renderer gains the
+// shape without gaining a dependency on main-process code. One definition
+// rather than a hand-copied mirror that drifts the first time a column moves.
+import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
+
+/**
+ * A party tombstoned off a transaction — BACKLOG-2367.
+ *
+ * Structurally identical to a live assignment (`getRemovedTransactionContacts`
+ * selects `tc.*` plus the same contact columns as the live read), so it is the
+ * producer's own type rather than a parallel one. Aliased for the name: the
+ * distinguishing fact about these rows is that `removed_at` is non-null.
+ */
+export type RemovedTransactionContact = TransactionContactResult;
 
 // ============================================
 // BACKLOG-1866: Overview linked-content search result shapes
@@ -284,6 +298,31 @@ export interface WindowApiTransactions {
     transactionId: string,
     contactId: string,
   ) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * BACKLOG-2367: parties previously removed from this transaction, most
+   * recently removed first. Removal is a tombstone (BACKLOG-2366), so every
+   * row still carries the role it held on the deal.
+   */
+  getRemovedContacts: (
+    transactionId: string,
+  ) => Promise<{
+    success: boolean;
+    removedContacts?: RemovedTransactionContact[];
+    error?: string;
+  }>;
+  /**
+   * BACKLOG-2367: put a removed party back on this transaction.
+   * `restored: false` means the assignment was already live.
+   */
+  restoreContact: (
+    transactionId: string,
+    contactId: string,
+  ) => Promise<{
+    success: boolean;
+    restored?: boolean;
+    restoredCount?: number;
+    error?: string;
+  }>;
   batchUpdateContacts: (
     transactionId: string,
     operations: Array<{

@@ -19,6 +19,9 @@ import * as externalContactDb from "./db/externalContactDbService";
 import logService from "./logService";
 import { toLookupKey } from "../utils/phoneNormalization";
 import type { Communication } from "../types/models";
+// BACKLOG-2393: scoped support-access tracing. Both calls are no-ops unless a
+// user has granted a support window covering the scope.
+import { supportTrace } from "./supportAccess/trace";
 
 /**
  * Resolved participant entry with handle, resolved name, and type classification.
@@ -34,7 +37,7 @@ export interface ResolvedParticipant {
  * For email handles, returns lowercase as-is (don't strip non-digit chars).
  *
  * TASK-2027: Fixed to handle email handles correctly. The old version
- * stripped all non-digits, turning "madisonsola@gmail.com" into "" (empty string),
+ * stripped all non-digits, turning "quincypoe@example.com" into "" (empty string),
  * causing duplicate conversation PDFs and unresolved email participants in exports.
  *
  * BACKLOG-1729: Phone branch now delegates to the canonical `toLookupKey`
@@ -86,6 +89,16 @@ export async function resolvePhoneNames(
 
   const result: Record<string, string> = {};
 
+  // BACKLOG-2393: the "phone numbers not resolved to names" tickets could not be
+  // answered because nothing recorded which source resolved what. Counting how
+  // many of the *inputs* now have a name (rather than how many keys the map
+  // holds — each hit writes several alias keys) is the only figure that means
+  // anything to a reader.
+  const countResolved = (): number =>
+    phones.filter((p) => result[normalizePhone(p)] || result[p]).length;
+  let afterImported = 0;
+  let afterExternal = 0;
+
   // Source 1: App's imported contacts (contact_phones table)
   try {
     const normalizedPhones = phones.map((p) => normalizePhone(p));
@@ -116,6 +129,8 @@ export async function resolvePhoneNames(
     );
   }
 
+  afterImported = countResolved();
+
   // Source 2: External contacts (iPhone, macOS, Outlook, Google)
   if (userId) {
     try {
@@ -142,6 +157,8 @@ export async function resolvePhoneNames(
       );
     }
   }
+
+  afterExternal = countResolved();
 
   // Source 3: macOS Contacts database (AddressBook)
   try {
@@ -189,6 +206,29 @@ export async function resolvePhoneNames(
     );
   }
 
+  // BACKLOG-2393: in -> out (reason for the difference), the same shape as the
+  // contacts funnel. A no-op outside a granted support window.
+  const resolved = countResolved();
+  supportTrace("contact-resolution", "resolve-phone-names", {
+    attempted: phones.length,
+    resolved,
+    unresolved: phones.length - resolved,
+    by_imported_contacts: afterImported,
+    by_external_contacts: afterExternal - afterImported,
+    by_macos_contacts: resolved - afterExternal,
+    had_user_id: Boolean(userId),
+  });
+
+  // BACKLOG-2428: a second trace used to run here under a "contact-trace"
+  // scope, dumping up to 200 raw unresolved handles. It was removed rather
+  // than repaired. It claimed to follow one named contact through every stage,
+  // but no contact picker existed anywhere in the app, so nobody could name
+  // the individual; it fired only when resolution failed, which is not the
+  // case it promised to answer; and it was the only place in support access
+  // that recorded a person's identifying details.
+  //
+  // The counts above stay. They are the useful half, and they name nobody.
+
   return result;
 }
 
@@ -196,7 +236,7 @@ export async function resolvePhoneNames(
  * Resolve email addresses to contact names via the contact_emails table.
  *
  * NEW in TASK-2026: Enables resolution of iMessage email handles
- * (e.g., paul@icloud.com, madisonsola@gmail.com).
+ * (e.g., paul@icloud.com, quincypoe@example.com).
  */
 export async function resolveEmailNames(
   emails: string[],

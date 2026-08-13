@@ -19,7 +19,6 @@
  * used the wrong shape is exactly how the Phase 1 boundary bug hid.
  */
 
-import { jest } from "@jest/globals";
 
 const mockDbAll = jest.fn();
 const mockDbGet = jest.fn();
@@ -28,6 +27,23 @@ jest.mock("../core/dbConnection", () => ({
   dbAll: mockDbAll,
   dbGet: mockDbGet,
   dbRun: jest.fn(),
+  /**
+   * DELIBERATELY NOT A REAL TRANSACTION (BACKLOG-2537), and this is the shape
+   * that needs saying out loud: `jest.fn()` does not call its argument AT ALL.
+   * If anything here ever entered a transaction, the body would silently not
+   * run.
+   *
+   * It is safe today because nothing here reaches one — measured, by replacing
+   * this with a throwing stub and watching every test in the file stay green.
+   * `dbAll`/`dbGet`/`dbRun` are canned `jest.fn()`s; there is NO DATABASE, so
+   * no atomicity claim can be made or mis-made here. Giving it real transaction
+   * semantics would mean giving it a database, which is a rewrite of the suite,
+   * not a fix to a mock.
+   *
+   * The sibling suites that DO open a database were converted, and
+   * `electron/__tests__/transactionMockIntegrity.guard.test.ts` now fails CI if
+   * one of them regresses.
+   */
   dbTransaction: jest.fn(),
 }));
 
@@ -285,7 +301,7 @@ describe("contactDbService.getMessagesForContact", () => {
       .mockReturnValueOnce([{ id: "cp-1", phone: "+14155550001", is_primary: 1 }])
       .mockReturnValueOnce([
         // involves the contact
-        messageRow({ id: "msg-1", thread_id: "thread-a", participants_flat: "+14155550001, +14155559999" }),
+        messageRow({ id: "msg-1", thread_id: "thread-a", participants_flat: "+14155550001, +14155550105" }),
         // does NOT involve the contact
         messageRow({ id: "msg-2", thread_id: "thread-b", participants_flat: "+14155558888, +14155557777" }),
       ]);
@@ -306,10 +322,10 @@ describe("contactDbService.getMessagesForContact", () => {
       ])
       .mockReturnValueOnce([
         // Thread A, matched by phone 1
-        messageRow({ id: "m1", thread_id: "thread-a", participants_flat: "+14155550001, +1 (415) 555-9999", sent_at: "2024-05-01T00:00:00Z" }),
-        messageRow({ id: "m2", thread_id: "thread-a", participants_flat: "+14155550001, +14155559999", sent_at: "2024-05-01T00:05:00Z" }),
+        messageRow({ id: "m1", thread_id: "thread-a", participants_flat: "+14155550001, +1 (415) 555-0105", sent_at: "2024-05-01T00:00:00Z" }),
+        messageRow({ id: "m2", thread_id: "thread-a", participants_flat: "+14155550001, +14155550105", sent_at: "2024-05-01T00:05:00Z" }),
         // Thread B, matched by phone 2 (different format in participants_flat)
-        messageRow({ id: "m3", thread_id: "thread-b", participants_flat: "(415) 555-0055, +14155551234", sent_at: "2024-05-03T00:00:00Z" }),
+        messageRow({ id: "m3", thread_id: "thread-b", participants_flat: "(415) 555-0055, +14155550109", sent_at: "2024-05-03T00:00:00Z" }),
       ]);
 
     const result = await getMessagesForContact(CONTACT_ID);

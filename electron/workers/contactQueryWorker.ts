@@ -19,11 +19,14 @@
 import { parentPort } from "worker_threads";
 import Database from "better-sqlite3-multiple-ciphers";
 import type { Database as DatabaseType } from "better-sqlite3";
-import { toLookupKey } from "../utils/phoneNormalization";
 import {
-  IMPORTED_CONTACT_LAST_COMMUNICATION_SQL,
   EXTERNAL_CONTACTS_GET_ALL_SQL,
 } from "../services/db/contactRecencySql";
+import {
+  CONTACT_SOURCE_RECORDS_SQL,
+  type ContactSourceRecordRow,
+} from "../services/db/contactSourceLinkSql";
+import { IMPORTED_CONTACTS_SELECT_SQL } from "../services/db/contactProjectionSql";
 
 type QueryType = "external" | "imported" | "backfill";
 
@@ -48,7 +51,22 @@ type WorkerMessage = InitMessage | QueryMessage | ShutdownMessage;
 let db: DatabaseType | null = null;
 
 function openDatabase(dbPath: string, encryptionKey: string): void {
-  db = new Database(dbPath);
+  /**
+   * BACKLOG-2536 — READ-ONLY BY CONSTRUCTION, NOT BY DISCIPLINE.
+   *
+   * This connection was writable, and the backfill below used it to INSERT.
+   * That made a SECOND writer: two connections competing for the one SQLite
+   * write lock, and — worse than the contention — a check-then-write race that
+   * no retry can fix. The backfill decided `is_primary` from a read ("does this
+   * contact have any email yet?") and then wrote; the main process could insert
+   * into that gap, leaving two primaries or none. Nothing failed. Both writes
+   * succeeded and disagreed.
+   *
+   * The worker still does all the scanning — that is why it exists, and the
+   * 3.7s freeze it was built for (BACKLOG-661) was a READ of 1000+ address-book
+   * rows. It now returns a PLAN and the main process applies it.
+   */
+  db = new Database(dbPath, { readonly: true });
   db.pragma(`key = "x'${encryptionKey}'"`);
   db.pragma("cipher_compatibility = 4");
   db.pragma("foreign_keys = ON");
@@ -58,28 +76,10 @@ function openDatabase(dbPath: string, encryptionKey: string): void {
 
 function runImportedQuery(userId: string): unknown[] {
   if (!db) throw new Error("Database not initialized");
-  const sql = `
-    SELECT
-      c.*,
-      c.display_name as name,
-      COALESCE(
-        (SELECT email FROM contact_emails WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
-        (SELECT email FROM contact_emails WHERE contact_id = c.id LIMIT 1)
-      ) as email,
-      COALESCE(
-        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id AND is_primary = 1 LIMIT 1),
-        (SELECT phone_e164 FROM contact_phones WHERE contact_id = c.id LIMIT 1)
-      ) as phone,
-      (SELECT json_group_array(email) FROM contact_emails WHERE contact_id = c.id) as all_emails_json,
-      (SELECT json_group_array(phone_e164) FROM contact_phones WHERE contact_id = c.id) as all_phones_json,
-      0 as is_message_derived,
-      -- BACKLOG-2354: recency for the get-all list path (shared with the sync
-      -- fallback in contactDbService — keep both copies identical).
-      ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL}
-    FROM contacts c
-    WHERE c.user_id = ? AND c.is_imported = 1
-    ORDER BY c.display_name ASC
-  `;
+  // BACKLOG-2514: the SAME constant the main-thread producer runs. This was a
+  // hand-kept copy that a comment required to stay byte-identical with
+  // contactDbService's; sharing the string is what that comment was asking for.
+  const sql = IMPORTED_CONTACTS_SELECT_SQL;
   return db.prepare(sql).all(userId);
 }
 
@@ -93,89 +93,85 @@ function runExternalQuery(userId: string): unknown[] {
   return db.prepare(EXTERNAL_CONTACTS_GET_ALL_SQL).all(userId);
 }
 
+/**
+ * PLAN the backfill. Writes nothing (BACKLOG-2536).
+ *
+ * Returns one row per contact that has something to gain, carrying the values
+ * to add. `is_primary` is deliberately NOT decided here: it depends on what the
+ * contact holds at the moment of the write, and only the writer can see that.
+ */
 function runBackfillQuery(userId: string): unknown[] {
   if (!db) throw new Error("Database not initialized");
 
-  // Get all imported contacts
   const importedContacts = db.prepare(
-    `SELECT id, display_name FROM contacts WHERE user_id = ? AND is_imported = 1`
-  ).all(userId) as Array<{ id: string; display_name: string }>;
+    `SELECT id FROM contacts WHERE user_id = ? AND is_imported = 1`
+  ).all(userId) as Array<{ id: string }>;
 
-  let updated = 0;
+  const plan: Array<{ contactId: string; emails: string[]; phones: string[] }> = [];
 
   for (const contact of importedContacts) {
-    // Find matching external contact by name
-    const external = db.prepare(
-      `SELECT emails_json, phones_json FROM external_contacts WHERE user_id = ? AND name = ?`
-    ).get(userId, contact.display_name) as { emails_json: string; phones_json: string } | undefined;
+    // BACKLOG-2401 — this lookup used to be display-name equality, so a rename
+    // in Contacts.app permanently orphaned the saved record: no phone or email
+    // update ever reached it again.
+    //
+    // CONTACT_SOURCE_RECORDS_SQL is shared VERBATIM with the main-thread twin in
+    // contactHandlers.ts. Order: source id, then email, then phone. Never name.
+    const externals = db
+      .prepare(CONTACT_SOURCE_RECORDS_SQL)
+      .all({ userId, contactId: contact.id }) as ContactSourceRecordRow[];
 
-    if (!external) continue;
+    if (externals.length === 0) continue;
 
-    const emails: string[] = external.emails_json ? JSON.parse(external.emails_json) : [];
-    const phones: string[] = external.phones_json ? JSON.parse(external.phones_json) : [];
+    // One person can be in several sources at once. Backfill is additive and
+    // dedupes below, so every linked record contributes instead of one winning.
+    const emails: string[] = [];
+    const phones: string[] = [];
+    for (const external of externals) {
+      if (external.emails_json) emails.push(...(JSON.parse(external.emails_json) as string[]));
+      if (external.phones_json) phones.push(...(JSON.parse(external.phones_json) as string[]));
+    }
 
-    let contactUpdated = false;
-
-    // Backfill emails
-    if (emails.length > 0) {
-      const existingEmails = db.prepare(
+    // Everything the contact already holds is filtered out HERE, where the
+    // reads are cheap and off the main thread. The writer re-checks with
+    // INSERT OR IGNORE, because this plan is a snapshot and the contact may
+    // have changed between the scan and the write.
+    const existingEmails = new Set(
+      (db.prepare(
         `SELECT LOWER(email) as email FROM contact_emails WHERE contact_id = ?`
-      ).all(contact.id) as Array<{ email: string }>;
-      const existingSet = new Set(existingEmails.map(r => r.email));
-
-      for (const email of emails) {
-        if (!email) continue;
-        const normalized = email.toLowerCase().trim();
-        if (existingSet.has(normalized)) continue;
-        existingSet.add(normalized);
-
-        const isPrimary = existingEmails.length === 0 && !contactUpdated ? 1 : 0;
-        const id = crypto.randomUUID();
-        const result = db.prepare(
-          `INSERT OR IGNORE INTO contact_emails (id, contact_id, email, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`
-        ).run(id, contact.id, normalized, isPrimary);
-        if (result.changes > 0) contactUpdated = true;
-      }
-    }
-
-    // Backfill phones
-    if (phones.length > 0) {
-      const existingPhones = db.prepare(
+      ).all(contact.id) as Array<{ email: string }>).map((r) => r.email)
+    );
+    const existingPhoneKeys = new Set(
+      (db.prepare(
         `SELECT phone_e164 FROM contact_phones WHERE contact_id = ?`
-      ).all(contact.id) as Array<{ phone_e164: string }>;
-      const existingSet = new Set(
-        existingPhones.map(r => r.phone_e164.replace(/\D/g, '').slice(-10))
-      );
+      ).all(contact.id) as Array<{ phone_e164: string }>).map((r) =>
+        r.phone_e164.replace(/\D/g, "").slice(-10)
+      )
+    );
 
-      for (const phone of phones) {
-        if (!phone) continue;
-        // Normalize to E.164
-        const digits = phone.replace(/\D/g, '');
-        let phoneE164: string;
-        if (digits.length === 10) phoneE164 = `+1${digits}`;
-        else if (digits.length === 11 && digits.startsWith('1')) phoneE164 = `+${digits}`;
-        else if (phone.startsWith('+')) phoneE164 = phone;
-        else phoneE164 = `+${digits}`;
-
-        const normalizedKey = phoneE164.replace(/\D/g, '').slice(-10);
-        if (existingSet.has(normalizedKey)) continue;
-        existingSet.add(normalizedKey);
-
-        const isPrimary = existingPhones.length === 0 && !contactUpdated ? 1 : 0;
-        const id = crypto.randomUUID();
-        const result = db.prepare(
-          `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`
-        ).run(id, contact.id, phoneE164, phone, toLookupKey(phoneE164), isPrimary);
-        if (result.changes > 0) contactUpdated = true;
-      }
+    const missingEmails: string[] = [];
+    for (const email of emails) {
+      if (!email) continue;
+      const normalized = email.toLowerCase().trim();
+      if (existingEmails.has(normalized)) continue;
+      existingEmails.add(normalized);
+      missingEmails.push(normalized);
     }
 
-    if (contactUpdated) updated++;
+    const missingPhones: string[] = [];
+    for (const phone of phones) {
+      if (!phone) continue;
+      const key = phone.replace(/\D/g, "").slice(-10);
+      if (!key || existingPhoneKeys.has(key)) continue;
+      existingPhoneKeys.add(key);
+      missingPhones.push(phone);
+    }
+
+    if (missingEmails.length > 0 || missingPhones.length > 0) {
+      plan.push({ contactId: contact.id, emails: missingEmails, phones: missingPhones });
+    }
   }
 
-  return [{ updated }];
+  return plan;
 }
 
 // Listen for messages from the pool

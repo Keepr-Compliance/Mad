@@ -21,7 +21,6 @@
  */
 
 import path from "path";
-import { jest } from "@jest/globals";
 
 // ---------------------------------------------------------------------------
 // MOCKS — same shape as databaseService.migration-v40.test.ts

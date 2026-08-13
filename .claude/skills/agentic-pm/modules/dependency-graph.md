@@ -22,6 +22,12 @@
 - If `conflicts_with` edges exist inside the same phase, you must:
   - Resequence tasks
   - OR create integration branches and define merge order
+- **A `depends_on` edge means the work breaks if reordered — not that you planned to do A first.**
+  Persist intended sequence to `pm_backlog_items.sort_order` and hard constraints to
+  `pm_dependencies`. Conflating them marks every item blocked and hides the two or three real
+  constraints. Test: *swap the pair — does the work break, or are you just annoyed?*
+  Canonical rules and worked examples: `.claude/skills/backlog-management/SKILL.md`
+  → "Linking a New Item (MANDATORY)".
 
 ## Mermaid output format
 

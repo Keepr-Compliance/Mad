@@ -30,7 +30,20 @@ export interface ContactCreateInput {
  * Contact update input
  */
 export interface ContactUpdateInput {
-  display_name?: string;
+  /**
+   * BACKLOG-2528 — `name`, NOT `display_name`.
+   *
+   * This field said `display_name`, which is the COLUMN name. The
+   * `contacts:update` channel does not accept it: `validateContactData` reads
+   * only `name`, so a `display_name` key is dropped by the validator before the
+   * writer is reached, and the handler still returns success. That is the same
+   * silent-drop shape as the rename defect this item is about, one layer up —
+   * latent only because this method has no production callers yet.
+   *
+   * The channel's vocabulary is the renderer's: reads come back with `name`
+   * (`getContactById` selects `display_name as name`), and `name` goes back.
+   */
+  name?: string;
   email?: string;
   phone?: string;
   company?: string;
@@ -59,57 +72,26 @@ export interface ContactDeleteCheck {
  * Contact Service
  * Provides a clean abstraction over window.api.contacts
  */
+/**
+ * BACKLOG-2631 — THE THREE READ METHODS ARE GONE, AND THEIR ABSENCE IS THE
+ * POINT.
+ *
+ * `getAll`, `getSortedByActivity` and `getAvailable` lived here as
+ * `{success, contacts}` -> `{success, data}` rewraps and nothing else.
+ * `getAvailable` had already had no application caller for some time;
+ * `ContactsContext` was the last caller of the other two, and it now reads the
+ * picker's data through `useContactDirectory` along with the other two
+ * containers.
+ *
+ * DELETED RATHER THAN LEFT SITTING: three exported functions named exactly what
+ * the next person will search for is a trap, not dead weight. They would fix
+ * `contactService.getAvailable` — the obvious-looking place — and nothing would
+ * happen, because nothing calls it. BACKLOG-2511 was itself caused by a refresh
+ * function sitting exported with zero callers.
+ *
+ * The one place these channels are read is `src/hooks/contacts/useContactDirectory.ts`.
+ */
 export const contactService = {
-  /**
-   * Get all contacts for a user
-   */
-  async getAll(userId: string): Promise<ApiResult<Contact[]>> {
-    try {
-      const result = await window.api.contacts.getAll(userId);
-      if (result.success) {
-        return { success: true, data: result.contacts || [] };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * Get contacts sorted by recent activity
-   */
-  async getSortedByActivity(
-    userId: string,
-    propertyAddress?: string
-  ): Promise<ApiResult<Contact[]>> {
-    try {
-      const result = await window.api.contacts.getSortedByActivity(
-        userId,
-        propertyAddress
-      );
-      if (result.success) {
-        return { success: true, data: result.contacts || [] };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * Get available contacts (not linked to any transaction)
-   */
-  async getAvailable(userId: string): Promise<ApiResult<Contact[]>> {
-    try {
-      const result = await window.api.contacts.getAvailable(userId);
-      if (result.success) {
-        return { success: true, data: result.contacts || [] };
-      }
-      return { success: false, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
 
   /**
    * Create a new contact
@@ -219,8 +201,19 @@ export const contactService = {
       if (result.success) {
         return {
           success: true,
+          // BACKLOG-2510 — COUNT THE ROWS THAT CAME BACK. This read
+          // `result.imported`, a field `contacts:import` has never sent: it
+          // returns `contacts`, the created rows. So a successful import of 40
+          // people reported `imported: 0`, always, and the declared IPC type
+          // said `imported?: number` so nothing complained. Correcting the type
+          // is what surfaced this — the compiler found it immediately, which is
+          // the argument for keeping IPC types honest.
+          //
+          // Nothing in `src/` calls this method today; its own test supplied the
+          // `imported` value its fixture invented, so the test agreed with the
+          // code about a response neither had seen the handler produce.
           data: {
-            imported: result.imported || 0,
+            imported: result.contacts?.length ?? 0,
           },
         };
       }

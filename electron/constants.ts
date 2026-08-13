@@ -8,7 +8,10 @@ export const MAC_EPOCH: number = new Date("2001-01-01T00:00:00Z").getTime();
 export const FIVE_YEARS_IN_MS: number = 5 * 365 * 24 * 60 * 60 * 1000;
 
 // Database Constants
-export const MIN_CONTACT_RECORD_COUNT: number = 10;
+// BACKLOG-2392 removed MIN_CONTACT_RECORD_COUNT (was 10). It gated which single
+// address book got read, and it systematically discarded the top-level
+// "On My Mac" store, which on a verified machine held 3 rows. Every book is now
+// read; there is no threshold to tune. Do not reintroduce one.
 export const CONTACTS_BASE_DIR: string =
   "Library/Application Support/AddressBook";
 export const DEFAULT_CONTACTS_DB: string =

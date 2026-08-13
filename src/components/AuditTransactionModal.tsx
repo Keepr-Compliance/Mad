@@ -70,7 +70,7 @@ function AuditTransactionModal({
     contactsLoading,
     contactsError,
     refreshContacts,
-    silentRefreshContacts,
+    refreshBothLists,
     // External contacts (from macOS Contacts app, etc.)
     externalContacts,
     externalContactsLoading,
@@ -328,7 +328,10 @@ function AuditTransactionModal({
               contactsLoading={contactsLoading}
               contactsError={contactsError}
               onRefreshContacts={refreshContacts}
-              onSilentRefreshContacts={silentRefreshContacts}
+              // BACKLOG-2631 — the ONE refresh path. Answering a duplicate question
+              // inside this wizard now re-reads the address-book half too, so the
+              // record just merged away leaves the list without closing the modal.
+              onRefreshBothLists={refreshBothLists}
               // External contacts (from macOS Contacts app, etc.)
               externalContacts={externalContacts}
               externalContactsLoading={externalContactsLoading}

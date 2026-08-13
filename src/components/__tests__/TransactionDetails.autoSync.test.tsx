@@ -13,9 +13,22 @@
  */
 
 import React from "react";
-import { render, screen, act, waitFor } from "@testing-library/react";
+import { render as rtlRender, screen, act, waitFor } from "@testing-library/react";
+import { NotificationProvider } from "../../contexts/NotificationContext";
+
+/**
+ * BACKLOG-2447: these components now raise toasts through `useNotification`,
+ * which requires the app-level NotificationProvider that `App.tsx` supplies in
+ * production. Passing it as RTL's `wrapper` (rather than wrapping each element)
+ * means `rerender` keeps the provider too.
+ */
+const render = (
+  ui: Parameters<typeof rtlRender>[0],
+  options?: Parameters<typeof rtlRender>[1],
+) => rtlRender(ui, { wrapper: NotificationProvider, ...options });
 import "@testing-library/jest-dom";
 import TransactionDetails from "../TransactionDetails";
+import type { Transaction } from "../../../electron/types/models";
 
 // ── Context mocks ────────────────────────────────────────────────────────────
 
@@ -76,7 +89,7 @@ jest.mock("../../hooks/useSyncOrchestrator", () => ({
 const TXN_ID = "txn-1832";
 const OTHER_TXN_ID = "txn-other";
 
-const baseTransaction = {
+const baseTransaction: Transaction = {
   id: TXN_ID,
   user_id: "user-1",
   property_address: "1832 Auto Sync Lane",
@@ -108,7 +121,7 @@ describe("TransactionDetails — BACKLOG-1832 auto-sync lifecycle", () => {
     jest.clearAllMocks();
 
     // Setup IPC call mocks
-    window.api.transactions.getDetails.mockResolvedValue({
+    jest.mocked(window.api.transactions.getDetails).mockResolvedValue({
       success: true,
       transaction: { ...baseTransaction, communications: [], contact_assignments: [] },
     });
@@ -122,7 +135,7 @@ describe("TransactionDetails — BACKLOG-1832 auto-sync lifecycle", () => {
       success: true,
       transaction: { communications: [], contact_assignments: [] },
     });
-    window.api.contacts.getAll.mockResolvedValue({ success: true, contacts: [] });
+    jest.mocked(window.api.contacts.getAll).mockResolvedValue({ success: true, contacts: [] });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window.api.transactions as any).getRemovedEmails = jest.fn().mockResolvedValue({
       success: true,

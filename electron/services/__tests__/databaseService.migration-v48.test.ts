@@ -28,7 +28,6 @@
 
 import path from "path";
 import fs from "fs";
-import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 // ---------------------------------------------------------------------------
@@ -296,7 +295,7 @@ describe("databaseService migration v48 (BACKLOG-1900 P0.1 — distinct contact 
         .prepare(
           "INSERT INTO contact_phones (id, contact_id, phone_e164) VALUES (?, ?, ?)",
         )
-        .run("phone-1", "parent-1", "+14155550000");
+        .run("phone-1", "parent-1", "+14155550102");
       harness.db.prepare("INSERT INTO schema_version (id, version) VALUES (1, 47)").run();
 
       await harness.service._runVersionedMigrations();

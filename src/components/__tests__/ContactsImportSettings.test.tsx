@@ -12,7 +12,10 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import { ContactsImportSettings } from "../settings/MacOSContactsImportSettings";
+import {
+  ContactsImportSettings,
+  formatContactSyncCounts,
+} from "../settings/MacOSContactsImportSettings";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 
 // Mock useSyncOrchestrator
@@ -60,6 +63,10 @@ const mockGetSourceStats = jest.fn().mockResolvedValue({
   success: true,
   stats: { macos: 10, iphone: 0, outlook: 5 },
 });
+// BACKLOG-2404: controllable, because the address-book read coverage this
+// returns is now rendered. It used to be an inline stub whose result the
+// component discarded.
+const mockSyncExternal = jest.fn().mockResolvedValue({ success: true });
 
 const mockOnToggleSource = jest.fn();
 
@@ -68,6 +75,11 @@ const defaultProps = {
   userId: "user-1",
   outlookContactsEnabled: true,
   macosContactsEnabled: true,
+  // BACKLOG-2486: iPhone Contacts became a switch of its own. Default OFF and
+  // hidden here so the pre-existing cases keep asserting what they were written
+  // to assert; the iPhone switch has its own describe block below.
+  iphoneContactsEnabled: false,
+  showIphoneContacts: false,
   gmailContactsEnabled: true,
   googleContactsEnabled: true,
   outlookEmailsInferred: false,
@@ -95,7 +107,7 @@ function renderWithPlatform(
         getExternalSyncStatus: mockGetExternalSyncStatus,
         syncOutlookContacts: mockSyncOutlookContacts,
         syncGoogleContacts: mockSyncGoogleContacts,
-        syncExternal: jest.fn().mockResolvedValue({ success: true }),
+        syncExternal: mockSyncExternal,
         forceReimport: jest.fn().mockResolvedValue({ success: true, cleared: 0 }),
         getSourceStats: mockGetSourceStats,
       },
@@ -114,8 +126,10 @@ beforeEach(() => {
   mockSyncGoogleContacts.mockClear();
   mockGetSourceStats.mockClear();
   mockOnToggleSource.mockClear();
+  mockSyncExternal.mockClear();
 
   // Reset mocks to default success values
+  mockSyncExternal.mockResolvedValue({ success: true });
   mockGetExternalSyncStatus.mockResolvedValue({
     success: true,
     lastSyncAt: null,
@@ -154,7 +168,7 @@ describe("ContactsImportSettings", () => {
       expect(screen.getByText("Contacts")).toBeInTheDocument();
       expect(screen.getByText("Import Contacts")).toBeInTheDocument();
       expect(screen.getByText("Force Re-import")).toBeInTheDocument();
-      expect(screen.getByLabelText("macOS iPhone Contacts import")).toBeInTheDocument();
+      expect(screen.getByLabelText("macOS Contacts import")).toBeInTheDocument();
     });
 
     it("should render both macOS and Outlook toggles when Microsoft is connected", () => {
@@ -163,7 +177,7 @@ describe("ContactsImportSettings", () => {
         "darwin"
       );
 
-      expect(screen.getByLabelText("macOS iPhone Contacts import")).toBeInTheDocument();
+      expect(screen.getByLabelText("macOS Contacts import")).toBeInTheDocument();
       expect(screen.getByLabelText("Outlook Contacts import")).toBeInTheDocument();
     });
 
@@ -190,7 +204,7 @@ describe("ContactsImportSettings", () => {
       expect(
         screen.getByText(/Connect a Microsoft or Google account/)
       ).toBeInTheDocument();
-      expect(screen.queryByLabelText("macOS iPhone Contacts import")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("macOS Contacts import")).not.toBeInTheDocument();
     });
 
     it("should render Outlook toggle on Windows when Microsoft connected", () => {
@@ -200,7 +214,7 @@ describe("ContactsImportSettings", () => {
       );
 
       expect(screen.getByLabelText("Outlook Contacts import")).toBeInTheDocument();
-      expect(screen.queryByLabelText("macOS iPhone Contacts import")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("macOS Contacts import")).not.toBeInTheDocument();
     });
   });
 
@@ -303,7 +317,7 @@ describe("ContactsImportSettings", () => {
         "darwin"
       );
 
-      fireEvent.click(screen.getByLabelText("macOS iPhone Contacts import"));
+      fireEvent.click(screen.getByLabelText("macOS Contacts import"));
 
       expect(mockOnToggleSource).toHaveBeenCalledWith("direct", "macosContacts", true);
     });
@@ -358,6 +372,122 @@ describe("ContactsImportSettings", () => {
     });
   });
 
+  // BACKLOG-2388 (#95): Force Re-import must be gated behind an explicit
+  // confirmation dialog; it must NOT fire the destructive wipe immediately.
+  describe("Force Re-import confirmation (BACKLOG-2388 #95)", () => {
+    it("does not run the wipe on the first click — it opens a confirm dialog", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+
+      fireEvent.click(screen.getByText("Force Re-import"));
+
+      // Dialog is shown, sync NOT yet requested.
+      expect(
+        screen.getByTestId("contacts-force-reimport-confirm-modal")
+      ).toBeInTheDocument();
+      expect(mockRequestSync).not.toHaveBeenCalled();
+    });
+
+    it("aborts the wipe when Cancel is clicked", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+
+      fireEvent.click(screen.getByText("Force Re-import"));
+      fireEvent.click(screen.getByText("Cancel"));
+
+      expect(
+        screen.queryByTestId("contacts-force-reimport-confirm-modal")
+      ).not.toBeInTheDocument();
+      expect(mockRequestSync).not.toHaveBeenCalledWith(
+        ["contacts"],
+        "user-1",
+        { forceReimport: true }
+      );
+    });
+
+    it("runs the force re-import only after the dialog is confirmed", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+
+      fireEvent.click(screen.getByText("Force Re-import"));
+      fireEvent.click(screen.getByTestId("contacts-force-reimport-confirm"));
+
+      expect(mockRequestSync).toHaveBeenCalledWith(["contacts"], "user-1", {
+        forceReimport: true,
+      });
+      expect(
+        screen.queryByTestId("contacts-force-reimport-confirm-modal")
+      ).not.toBeInTheDocument();
+    });
+
+    it("warning copy makes no claim about unlinking transactions", () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+
+      fireEvent.click(screen.getByText("Force Re-import"));
+
+      const modal = screen.getByTestId("contacts-force-reimport-confirm-modal");
+      expect(modal).toHaveTextContent(/attached to a transaction are kept/i);
+      expect(modal).not.toHaveTextContent(/unlink/i);
+    });
+  });
+
+  /**
+   * BACKLOG-2404 — a partial address-book read is said out loud.
+   *
+   * A Mac holds one address book per account. Reading 1 of 3 presented EXACTLY
+   * like reading 3 of 3: the reader isolated the failure and logged "read 2 of
+   * 3" (BACKLOG-2392), but the return value said only `success: true` and this
+   * panel discarded even that. The user saw half her contacts, no warning, and
+   * a normal-looking sync — and was then told her sync had succeeded when she
+   * filed a ticket about missing contacts.
+   */
+  describe("partial address-book read is surfaced (BACKLOG-2404)", () => {
+    it("tells the user when a book could not be opened", async () => {
+      mockSyncExternal.mockResolvedValue({
+        success: true,
+        read: { found: 3, read: 2, failed: 1, coverage: "partial" },
+      });
+
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+      fireEvent.click(screen.getByText("Import Contacts"));
+
+      const notice = await screen.findByTestId("contacts-partial-read-warning");
+      // The numbers, in the form a human reads them.
+      expect(notice).toHaveTextContent(/Read 2 of 3 address books/i);
+      expect(notice).toHaveTextContent(/some contacts may be missing/i);
+    });
+
+    it("stays SILENT on a complete read — the notice must not become wallpaper", async () => {
+      // The negative control for the rule above. A warning the user sees after
+      // every healthy sync is a warning they stop reading, which would rebuild
+      // the original bug in a different medium.
+      mockSyncExternal.mockResolvedValue({
+        success: true,
+        read: { found: 3, read: 3, failed: 0, coverage: "complete" },
+      });
+
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+      fireEvent.click(screen.getByText("Import Contacts"));
+
+      await waitFor(() => expect(mockSyncExternal).toHaveBeenCalledWith("user-1"));
+      expect(screen.queryByTestId("contacts-partial-read-warning")).not.toBeInTheDocument();
+    });
+
+    it("says nothing before a sync has reported — 'never looked' is not 'found nothing'", async () => {
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+
+      expect(screen.queryByTestId("contacts-partial-read-warning")).not.toBeInTheDocument();
+    });
+
+    it("does not throw when an older main process returns no coverage at all", async () => {
+      // Forward/backward compatibility: `read` is optional on the IPC result.
+      mockSyncExternal.mockResolvedValue({ success: true });
+
+      renderWithPlatform(<ContactsImportSettings {...defaultProps} />, "darwin");
+      fireEvent.click(screen.getByText("Import Contacts"));
+
+      await waitFor(() => expect(mockSyncExternal).toHaveBeenCalledWith("user-1"));
+      expect(screen.queryByTestId("contacts-partial-read-warning")).not.toBeInTheDocument();
+    });
+  });
+
   describe("backward compatibility", () => {
     it("should export MacOSContactsImportSettings as alias", async () => {
       const { MacOSContactsImportSettings } = await import(
@@ -365,5 +495,58 @@ describe("ContactsImportSettings", () => {
       );
       expect(MacOSContactsImportSettings).toBe(ContactsImportSettings);
     });
+  });
+});
+
+// BACKLOG-2388: unified sync-result copy. Presentation-only formatter shared by
+// the macOS / Outlook / Google result banners so wording stays consistent and a
+// re-import that adds nothing no longer reads "0 contacts imported".
+describe("formatContactSyncCounts (BACKLOG-2388)", () => {
+  it("returns the no-new-contacts line for an Outlook/Google zero count", () => {
+    expect(formatContactSyncCounts({ imported: 0 })).toBe(
+      "No new contacts were found."
+    );
+  });
+
+  it("returns the no-new-contacts line for a macOS zero insert/delete", () => {
+    expect(formatContactSyncCounts({ inserted: 0, deleted: 0 })).toBe(
+      "No new contacts were found."
+    );
+  });
+
+  it("keeps a lump imported count when non-zero (Outlook/Google)", () => {
+    expect(formatContactSyncCounts({ imported: 5 })).toBe(
+      "5 contacts imported."
+    );
+    expect(formatContactSyncCounts({ imported: 1 })).toBe(
+      "1 contact imported."
+    );
+  });
+
+  it("surfaces an updated count when reported", () => {
+    expect(formatContactSyncCounts({ inserted: 0, deleted: 0, updated: 3 })).toBe(
+      "No new contacts were found. 3 updated."
+    );
+    expect(formatContactSyncCounts({ inserted: 2, updated: 4 })).toBe(
+      "2 new contacts added. 4 updated."
+    );
+  });
+
+  it("renders added / removed / total detail for the macOS path", () => {
+    expect(
+      formatContactSyncCounts({ inserted: 2, deleted: 1, total: 10 })
+    ).toBe("2 new contacts added. 1 removed. 10 total.");
+  });
+
+  it("returns an empty string when no counts are known (macOS orchestrator path)", () => {
+    // The orchestrator reports completion without counts; we must NOT falsely
+    // claim "No new contacts were found." in that case.
+    expect(formatContactSyncCounts({})).toBe("");
+  });
+
+  it("does not claim 'no new' when contacts were removed but none added", () => {
+    expect(formatContactSyncCounts({ inserted: 0, deleted: 3 })).toBe(
+      "3 removed."
+    );
   });
 });

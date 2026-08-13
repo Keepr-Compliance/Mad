@@ -18,8 +18,70 @@ import React, { useState, useEffect, useCallback } from "react";
 import { usePlatform } from "../../contexts/PlatformContext";
 import { useSyncOrchestrator } from "../../hooks/useSyncOrchestrator";
 import { useNetwork } from "../../contexts/NetworkContext";
+import { ResponsiveModal } from "../common/ResponsiveModal";
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
+
+/**
+ * BACKLOG-2388: Shared "counts clause" for a contact-sync result so the macOS,
+ * Outlook, and Google result banners read consistently. Returns only the
+ * trailing sentence(s) that follow "<source> contacts synced." — e.g.
+ * "No new contacts were found.", "5 new contacts added. 3 updated.", or
+ * "12 contacts imported.". Presentation only — no sync logic lives here.
+ *
+ * Shape notes (verified while scoping):
+ *  - The macOS contacts path completes through the sync orchestrator, which
+ *    reports completion WITHOUT counts (all fields undefined). We must not
+ *    claim "No new contacts were found." in that case, so an unknown result
+ *    yields an empty string and the banner shows just "macOS contacts synced.".
+ *  - Outlook/Google expose only a single lump `imported` count (their IPC
+ *    result carries `count`, with no new-vs-updated breakdown available).
+ *  - `updated` is supported here for wording consistency, but no source
+ *    currently emits an updated count (see the PR issue log).
+ */
+export function formatContactSyncCounts(counts: {
+  inserted?: number;
+  updated?: number;
+  deleted?: number;
+  total?: number;
+  /** Outlook/Google lump total synced this run. */
+  imported?: number;
+}): string {
+  const { inserted, updated, deleted, total, imported } = counts;
+
+  const details: string[] = [];
+  if (typeof inserted === "number" && inserted > 0) {
+    details.push(`${inserted.toLocaleString()} new ${inserted === 1 ? "contact" : "contacts"} added.`);
+  }
+  if (typeof imported === "number" && imported > 0) {
+    details.push(`${imported.toLocaleString()} ${imported === 1 ? "contact" : "contacts"} imported.`);
+  }
+  if (typeof updated === "number" && updated > 0) {
+    details.push(`${updated.toLocaleString()} updated.`);
+  }
+  if (typeof deleted === "number" && deleted > 0) {
+    details.push(`${deleted.toLocaleString()} removed.`);
+  }
+  if (typeof total === "number") {
+    details.push(`${total.toLocaleString()} total.`);
+  }
+
+  // "Nothing new" fires only on a KNOWN-zero signal (a count that is defined
+  // and zero), never on a merely-absent one — otherwise the count-less macOS
+  // orchestrator result would falsely claim no contacts were found.
+  const knownZeroNew =
+    (inserted === 0 && deleted === 0) || imported === 0;
+
+  if (knownZeroNew) {
+    // Any "0 …" segments were already skipped above; keep the meaningful ones
+    // (updated / total) alongside the no-new line.
+    return details.length
+      ? `No new contacts were found. ${details.join(" ")}`
+      : "No new contacts were found.";
+  }
+
+  return details.join(" ");
+}
 
 interface ContactsImportSettingsProps {
   userId: string;
@@ -30,6 +92,14 @@ interface ContactsImportSettingsProps {
   // Persisted source preferences (from Settings.tsx / Supabase)
   outlookContactsEnabled: boolean;
   macosContactsEnabled: boolean;
+  /** BACKLOG-2486: iPhone Contacts, which now has a gate of its own. */
+  iphoneContactsEnabled: boolean;
+  /**
+   * BACKLOG-2486: whether to draw the iPhone Contacts switch at all. Decided by
+   * the caller from the declared phone type — an Android user has no iPhone to
+   * import from.
+   */
+  showIphoneContacts: boolean;
   gmailContactsEnabled: boolean;
   /** TASK-2303: Google Contacts toggle (People API) */
   googleContactsEnabled: boolean;
@@ -51,6 +121,8 @@ export function ContactsImportSettings({
   isGoogleConnected = false,
   outlookContactsEnabled,
   macosContactsEnabled,
+  iphoneContactsEnabled,
+  showIphoneContacts,
   gmailContactsEnabled,
   googleContactsEnabled,
   outlookEmailsInferred,
@@ -71,9 +143,24 @@ export function ContactsImportSettings({
   // Check if another sync (not contacts) is running
   const isOtherSyncRunning = isRunning && !isSyncing;
 
+  /**
+   * NOTE (BACKLOG-2391): `inserted` / `deleted` / `total` are currently DEAD.
+   * No `setLastResult` call site supplies them (see :118, :122, :155, :269 —
+   * :259 discards the resolved sync result), so `lastResult.inserted` is always
+   * undefined and the numeric block in the render below never draws.
+   *
+   * If you wire the real result through, fix the summary logic at the same time:
+   * `inserted === 0 && deleted === 0` currently renders "No changes detected",
+   * which became WRONG once BACKLOG-2391 made these numbers real. An
+   * update-only sync (contacts edited on the Mac, none added or removed) has
+   * inserted 0 and deleted 0 but is NOT "no changes" — it has a non-zero
+   * `updated`, which this type does not even carry yet. Add `updated` and
+   * branch on all three.
+   */
   const [lastResult, setLastResult] = useState<{
     success: boolean;
     inserted?: number;
+    updated?: number;
     deleted?: number;
     total?: number;
     error?: string;
@@ -81,6 +168,25 @@ export function ContactsImportSettings({
   const [syncStatus, setSyncStatus] = useState<{
     lastSyncAt?: string | null;
     contactCount?: number;
+  } | null>(null);
+
+  /**
+   * BACKLOG-2404 — address-book read coverage from the last macOS sync.
+   *
+   * A Mac holds one address book per account. Reading 1 of 3 used to present
+   * EXACTLY like reading 3 of 3: the reader isolated the failure (2392) and
+   * logged "read 2 of 3", but the return value said only `success: true`, and
+   * this panel discarded even that. A user whose Exchange store was locked saw
+   * half her contacts, no warning, and a normal-looking sync.
+   *
+   * Held as `null` until a sync reports, so nothing is claimed before a read
+   * has happened — "never looked" is not "found nothing".
+   */
+  const [readCoverage, setReadCoverage] = useState<{
+    found: number;
+    read: number;
+    failed: number;
+    coverage: "complete" | "partial" | "none";
   } | null>(null);
 
   // Source stats (TASK-1991)
@@ -240,13 +346,19 @@ export function ContactsImportSettings({
   const hasMacOS = isMacOS;
   const hasOutlook = isMicrosoftConnected;
   const hasGoogle = isGoogleConnected;
-  const hasAnySources = hasMacOS || hasOutlook || hasGoogle;
+  // BACKLOG-2486: `showIphoneContacts` counts as a source. Without it, a Windows
+  // user with an iPhone and no mailbox connected hit the "no sources" placeholder
+  // below and never saw the one switch that governs their only contact source.
+  const hasAnySources = hasMacOS || hasOutlook || hasGoogle || showIphoneContacts;
 
   const anySyncing = isSyncing || outlookSyncing || googleSyncing;
 
   // All hooks must be declared before any early return to satisfy Rules of Hooks.
   const [forceReimporting, setForceReimporting] = useState(false);
   const [showInfoTooltip, setShowInfoTooltip] = useState(false);
+  // BACKLOG-2388 (#95): gate the destructive-sounding Force Re-import behind an
+  // explicit confirm dialog before it wipes the local cache and re-imports.
+  const [showReimportConfirm, setShowReimportConfirm] = useState(false);
 
   // Unified import: triggers only user-selected sources
   // Fire-and-forget by design — each sync has its own loading/error state
@@ -255,7 +367,13 @@ export function ContactsImportSettings({
     // macOS: call syncExternal directly to populate external_contacts from macOS Contacts
     if (hasMacOS && macosContactsEnabled) {
       handleSync(false);
-      window.api.contacts.syncExternal(userId).then(() => loadSourceStats());
+      // BACKLOG-2404: the result was previously DISCARDED (`.then(() => …)`),
+      // which is where the partial read died even after the reader learned to
+      // report it. Capture the coverage so the panel can say "read 2 of 3".
+      window.api.contacts.syncExternal(userId).then((result) => {
+        setReadCoverage(result?.read ?? null);
+        loadSourceStats();
+      });
     }
     if (hasOutlook && outlookContactsEnabled) handleOutlookSync();
     if (hasGoogle && googleContactsEnabled) handleGoogleSync();
@@ -391,11 +509,20 @@ export function ContactsImportSettings({
             </button>
           </div>
 
-          {/* macOS/iPhone Contacts toggle */}
+          {/*
+            macOS Contacts toggle.
+
+            BACKLOG-2486: this was labelled "macOS / iPhone Contacts" and wrote
+            ONLY `macosContacts`. The label named two sources and controlled one.
+            That was survivable while the backend OR'd the two keys together;
+            now that each source answers to its own preference, a switch called
+            "iPhone" that does not move the iPhone gate is simply untrue. Renamed
+            to what it actually controls, with iPhone given its own switch below.
+          */}
           {isMacOS && (
             <div className="flex items-center justify-between py-1">
               <div className="flex items-center gap-2">
-                <span className="text-sm text-gray-700">macOS / iPhone Contacts</span>
+                <span className="text-sm text-gray-700">macOS Contacts</span>
               </div>
               <button
                 onClick={() => onToggleSource("direct", "macosContacts", macosContactsEnabled)}
@@ -405,11 +532,47 @@ export function ContactsImportSettings({
                 }`}
                 role="switch"
                 aria-checked={macosContactsEnabled}
-                aria-label="macOS iPhone Contacts import"
+                aria-label="macOS Contacts import"
               >
                 <span
                   className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                     macosContactsEnabled ? "translate-x-6" : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+          )}
+
+          {/*
+            BACKLOG-2486: iPhone Contacts, previously settable ONLY during
+            onboarding. Rendered on both platforms — on Windows it is the only
+            gate for iPhone records, and on macOS it defaults OFF, so without a
+            control here a user could not undo that default.
+          */}
+          {showIphoneContacts && (
+            <div className="flex items-center justify-between py-1">
+              <div className="flex flex-col">
+                <span className="text-sm text-gray-700">iPhone Contacts</span>
+                {isMacOS && !iphoneContactsEnabled && (
+                  <span className="text-xs text-gray-400">
+                    Your Mac address book already includes iPhone contacts synced through
+                    iCloud. Turn this on if you have iCloud contact syncing switched off.
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => onToggleSource("direct", "iphoneContacts", iphoneContactsEnabled)}
+                disabled={loadingPreferences}
+                className={`ml-4 shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  iphoneContactsEnabled ? "bg-blue-500" : "bg-gray-300"
+                }`}
+                role="switch"
+                aria-checked={iphoneContactsEnabled}
+                aria-label="iPhone Contacts import"
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    iphoneContactsEnabled ? "translate-x-6" : "translate-x-1"
                   }`}
                 />
               </button>
@@ -522,6 +685,26 @@ export function ContactsImportSettings({
         </div>
       )}
 
+      {/*
+        BACKLOG-2404: a partial read, said out loud.
+
+        Rendered ONLY when a book actually failed — a complete read adds no
+        line, so this cannot become noise the user learns to scroll past. The
+        wording leads with what happened ("read 2 of 3 address books") rather
+        than with a permission to go grant, because the two failure phases have
+        different remedies and the panel does not know which one this was.
+      */}
+      {hasMacOS && macosContactsEnabled && readCoverage && readCoverage.failed > 0 && (
+        <div
+          data-testid="contacts-partial-read-warning"
+          className="mb-3 p-2 rounded text-xs bg-amber-50 text-amber-800 border border-amber-200"
+        >
+          Read {readCoverage.read} of {readCoverage.found} address books.{" "}
+          {readCoverage.failed === 1 ? "One" : readCoverage.failed} could not be
+          opened, so some contacts may be missing.
+        </div>
+      )}
+
       {/* Source stats grid (read-only indicators) */}
       <div className="grid grid-cols-3 gap-2 text-center mb-3">
         {isMacOS && (
@@ -615,26 +798,12 @@ export function ContactsImportSettings({
           {lastResult.success ? (
             <>
               {hasMacOS && "macOS contacts synced. "}
-              {lastResult.inserted !== undefined && lastResult.inserted > 0 && (
-                <>
-                  <strong>{lastResult.inserted.toLocaleString()}</strong> new
-                  contacts added.{" "}
-                </>
-              )}
-              {lastResult.deleted !== undefined && lastResult.deleted > 0 && (
-                <>
-                  <strong>{lastResult.deleted.toLocaleString()}</strong>{" "}
-                  removed.{" "}
-                </>
-              )}
-              {lastResult.total !== undefined && (
-                <>
-                  <strong>{lastResult.total.toLocaleString()}</strong> total.
-                </>
-              )}
-              {lastResult.inserted === 0 && lastResult.deleted === 0 && (
-                <>No changes detected.</>
-              )}
+              {formatContactSyncCounts({
+                inserted: lastResult.inserted,
+                updated: lastResult.updated,
+                deleted: lastResult.deleted,
+                total: lastResult.total,
+              })}
             </>
           ) : (
             <>Sync failed: {safeErrorMessage(lastResult.error)}</>
@@ -654,10 +823,7 @@ export function ContactsImportSettings({
           {outlookLastResult.success ? (
             <>
               Outlook contacts synced.{" "}
-              {outlookLastResult.count !== undefined && (
-                <strong>{outlookLastResult.count.toLocaleString()}</strong>
-              )}{" "}
-              contacts imported.
+              {formatContactSyncCounts({ imported: outlookLastResult.count })}
             </>
           ) : (
             <>Outlook sync failed: {safeErrorMessage(outlookLastResult.error)}</>
@@ -677,10 +843,7 @@ export function ContactsImportSettings({
           {googleLastResult.success ? (
             <>
               Google contacts synced.{" "}
-              {googleLastResult.count !== undefined && (
-                <strong>{googleLastResult.count.toLocaleString()}</strong>
-              )}{" "}
-              contacts imported.
+              {formatContactSyncCounts({ imported: googleLastResult.count })}
             </>
           ) : (
             <>Google sync failed: {safeErrorMessage(googleLastResult.error)}</>
@@ -698,7 +861,7 @@ export function ContactsImportSettings({
           {anySyncing ? "Syncing..." : isOtherSyncRunning ? "Sync in Progress..." : noSourcesSelected ? "Select a Source" : "Import Contacts"}
         </button>
         <button
-          onClick={handleForceReimport}
+          onClick={() => setShowReimportConfirm(true)}
           disabled={anySyncing || isOtherSyncRunning || noSourcesSelected || forceReimporting}
           className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           title="Wipe all cached contacts from every source and re-import from enabled sources"
@@ -731,6 +894,67 @@ export function ContactsImportSettings({
           )}
         </div>
       </div>
+
+      {/*
+        BACKLOG-2388 (#95): Force Re-import confirmation. This path clears only
+        the locally cached copy (external_contacts) and re-imports from enabled
+        sources — it does NOT delete manually-added contacts and does NOT unlink
+        transaction-attached contacts, so the copy makes no unlink claim (unlike
+        the Messages force re-import, which does cascade). Reuses the app's
+        shared ResponsiveModal confirm pattern.
+      */}
+      {showReimportConfirm && (
+        <ResponsiveModal
+          onClose={() => setShowReimportConfirm(false)}
+          zIndex="z-[70]"
+          panelClassName="max-w-md p-6"
+          testId="contacts-force-reimport-confirm-modal"
+        >
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+              <svg
+                className="w-6 h-6 text-blue-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
+              </svg>
+            </div>
+            <h3 className="text-lg font-bold text-gray-900">
+              Re-import all contacts?
+            </h3>
+          </div>
+          <p className="text-sm text-gray-600 mb-6">
+            This clears the locally cached copy of every synced source (Contacts
+            App, Outlook, Google, Messages) and re-imports them fresh. Contacts
+            you added manually or attached to a transaction are kept.
+          </p>
+          <div className="flex items-center gap-3 justify-end">
+            <button
+              onClick={() => setShowReimportConfirm(false)}
+              className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                setShowReimportConfirm(false);
+                handleForceReimport();
+              }}
+              data-testid="contacts-force-reimport-confirm"
+              className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all"
+            >
+              Re-import
+            </button>
+          </div>
+        </ResponsiveModal>
+      )}
 
       {/* Loading indicators */}
       {isSyncing && (

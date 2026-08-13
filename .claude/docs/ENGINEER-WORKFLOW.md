@@ -197,7 +197,9 @@ SR Engineer Agent ID: <agent_id from Task tool output>
 **Actions:**
 1. Read the approved plan
 2. Implement exactly as specified
-3. Run tests: `npm test`
+3. Run tests: `npx jest path/to/file.test.ts` for a single suite, or `npm test` for the full run
+
+   > `npm test` runs the full suite and briefly rebuilds the shared native SQLite module for the Node ABI, restoring the Electron build when it finishes (BACKLOG-2372). For a single suite prefer `npx jest path/to/file.test.ts`, which never touches `node_modules` and cannot disturb a running `npm run dev`.
 4. Run type check: `npm run type-check`
 5. Run lint: `npm run lint`
 6. Create PR
@@ -311,6 +313,8 @@ Engineers MUST complete these checks before committing or pushing. Do not rely o
 3. **Check mock alignment:**
    If you changed a function signature, added a parameter, or changed a return type, verify that all mocks of that function match the new signature. Mismatched mocks cause false passes locally and failures in CI.
 
+> **Controls (breaking your code on purpose to prove a test can see it):** prove the mutation applied before you count its result, treat `Tests: 0 total` as a failure, and commit the fix before any control that reverts with `git checkout --`. Rules and worked example: `.claude/docs/PR-SOP.md` → §4.4.
+
 ### Before Pushing
 
 4. **Merge the base branch into your feature branch:**
@@ -366,7 +370,7 @@ gh pr create --base int/<sprint-name> --title "..." --body "..."
    ```bash
    gh run view <RUN-ID> --log-failed
    ```
-   - Test failures → Run `npm test` locally, fix, push
+   - Test failures → Run `npx jest <failing file>` locally, fix, push
    - Type errors → Run `npm run type-check`, fix, push
    - Lint errors → Run `npm run lint --fix`, commit, push
 
@@ -560,7 +564,7 @@ Copy this into a `pm_comments` entry on the backlog item (or include it in your 
 - [ ] Invoked Engineer agent
 - [ ] Engineer Agent ID: _______________
 - [ ] Code implemented per approved plan
-- [ ] Tests pass (npm test)
+- [ ] Tests pass (`npm test`, or `npx jest <files>` for a targeted run)
 - [ ] Type check passes (npm run type-check)
 - [ ] Lint passes (npm run lint)
 - [ ] PR created

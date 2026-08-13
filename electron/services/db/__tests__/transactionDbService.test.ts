@@ -8,7 +8,6 @@
  * TASK-1403: Added tests for email count calculation
  */
 
-import { jest } from "@jest/globals";
 import { DatabaseError } from "../../../types";
 
 // Mock the dbConnection module for email count tests

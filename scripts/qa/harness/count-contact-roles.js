@@ -3,10 +3,14 @@
  * QA Harness — READ the assigned contact ROLES for a transaction (BACKLOG-1949).
  *
  * Standalone cipher-open helper. Opens the app's encrypted SQLite DB (read-only) with an explicit
- * `--key` and reads every `transaction_contacts` row for a transaction — the ground truth of which
- * contacts the app REALLY assigned and WITH WHICH ROLE after the "add users with roles" UI flow drove
- * batchUpdateContacts (BACKLOG-1875 verify-by-OBSERVING). Emits a single sentinel-prefixed JSON line
- * on stdout: `{ rows: [{ contact_id, role, role_category, specific_role, is_primary }] }`.
+ * `--key` and reads every CURRENTLY-ASSIGNED `transaction_contacts` row for a transaction — the ground
+ * truth of which contacts the app REALLY assigned and WITH WHICH ROLE after the "add users with roles"
+ * UI flow drove batchUpdateContacts (BACKLOG-1875 verify-by-OBSERVING). Emits a single sentinel-prefixed
+ * JSON line on stdout: `{ rows: [{ contact_id, role, role_category, specific_role, is_primary }] }`.
+ *
+ * BACKLOG-2366: "currently assigned" means `removed_at IS NULL`. Removal tombstones the junction row
+ * rather than deleting it, so an unfiltered read would keep reporting parties the user has taken off
+ * the deal. See the query below.
  *
  * The add path keeps `role` and `specific_role` in sync and derives `role_category` from
  * ROLE_TO_CATEGORY (see EditContactsModal / assignContactToTransaction), so the cell asserts the FULL
@@ -47,11 +51,18 @@ function readContactRoles(opts) {
     db.pragma(`key = "x'${opts.key}'"`);
     db.pragma('cipher_compatibility = 4');
     db.pragma('query_only = ON');
+    // BACKLOG-2366: `removed_at IS NULL` is REQUIRED, not cosmetic. Removing a
+    // contact from a transaction is now a tombstone, not a DELETE — the junction
+    // row survives with removed_at set. This helper is the ground-truth oracle
+    // for which contacts are CURRENTLY assigned, so it must answer the same
+    // question the app does. Without the filter the remove-contact cell reports
+    // `not-removed` for a removal that worked perfectly: a false failure landing
+    // in front of the founder during QA.
     const rows = db
       .prepare(
         `SELECT contact_id, role, role_category, specific_role, is_primary
            FROM transaction_contacts
-          WHERE transaction_id = ?
+          WHERE transaction_id = ? AND removed_at IS NULL
           ORDER BY contact_id`,
       )
       .all(opts.transactionId);

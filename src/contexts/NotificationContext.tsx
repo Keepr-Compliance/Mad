@@ -26,11 +26,29 @@ import type {
   NotifyMethods,
 } from "../components/ui/Notification/types";
 
-/** Maximum number of visible notifications */
+/**
+ * Maximum number of visible notifications. Raising a sixth drops the oldest.
+ *
+ * BACKLOG-2447: this is a BEHAVIOUR CHANGE for the 9 callers migrated off the
+ * deleted `useToast`, which had no cap and stacked without limit. A caller that
+ * raises more than five in one burst now silently loses the earliest. Kept as
+ * is — an unbounded stack can cover the viewport — but it is a real difference,
+ * so it is documented here and on `NotifyMethods`.
+ */
 const MAX_NOTIFICATIONS = 5;
 
-/** Default auto-dismiss duration in milliseconds */
-const DEFAULT_DURATION = 3000;
+/**
+ * Default auto-dismiss duration in milliseconds.
+ *
+ * BACKLOG-2447: was 3000 here and 5000 in the deleted `useToast`. Unified on
+ * the longer value so migrated callers do not silently lose 2 seconds of read
+ * time — several of them show multi-clause sync results ("12 emails linked,
+ * 3 skipped") that are not readable in 3s.
+ *
+ * This value is also stated in the `NotificationOptions.duration` doc comment
+ * in `components/ui/Notification/types.ts`. Change both together.
+ */
+const DEFAULT_DURATION = 5000;
 
 // Create context with null default to ensure provider is used
 const NotificationContext = createContext<NotificationContextValue | null>(
@@ -172,8 +190,9 @@ export function NotificationProvider({
     if (process.env.NODE_ENV !== "development") return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).__notify = notify;
-    // Log once on initial mount only (not on every re-render)
-    // The empty dep array below ensures this runs once
+    // Empty dep array: bind once on mount. `notify` is referenced but omitted
+    // deliberately — it is a stable useMemo, and rebinding on every change
+    // would serve no purpose for a debug handle.
   }, []);
 
   return (

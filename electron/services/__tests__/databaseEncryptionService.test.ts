@@ -7,7 +7,6 @@
  * Tests encryption key generation, storage, and retrieval
  */
 
-import { jest, describe, it, expect, beforeEach } from "@jest/globals";
 
 // Create mock functions first
 const mockIsEncryptionAvailable = jest.fn();

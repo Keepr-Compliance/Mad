@@ -12,13 +12,31 @@
 import supabaseService from "../services/supabaseService";
 import logService from "../services/logService";
 import { EMAIL_CACHE_DURATION_MONTHS_DEFAULT } from "../constants";
+import {
+  BACKEND_DERIVED_DEFAULT_KEYS,
+  isContactSourceKey,
+  isContactSourceOnByDefault,
+  normalizePhoneType,
+} from "./contactSourceDefaults";
 
 /**
  * Check if a specific contact source is enabled in user preferences.
  *
- * Follows a fail-open strategy: if preferences cannot be loaded
- * (e.g., Supabase offline), defaults to enabled (true) so that
- * existing import flows are not silently broken.
+ * Three different situations get three different answers:
+ *
+ * 1. **The user expressed a preference.** It wins, always.
+ * 2. **The user expressed no preference** — skipped the onboarding step,
+ *    onboarded before the step existed, or the best-effort write failed.
+ *    BACKLOG-2476: for the direct sources in `BACKEND_DERIVED_DEFAULT_KEYS`
+ *    this is now answered by the SAME rule onboarding pre-selects with, so a
+ *    skip no longer switches on a source the step deliberately left off. Every
+ *    other key keeps `defaultValue`; see that constant's docblock for why the
+ *    list is not all five.
+ * 3. **Preferences could not be READ at all** (e.g. Supabase offline). Fail
+ *    open on `defaultValue`, unchanged. Deliberately NOT folded into case 2:
+ *    when the read fails we cannot see `phone_type` either, so applying the
+ *    rule would be guessing — and guessing OFF silently breaks a working
+ *    import.
  *
  * @param userId - The user's UUID
  * @param category - 'direct' for direct imports, 'inferred' for auto-discovered
@@ -35,7 +53,29 @@ export async function isContactSourceEnabled(
   try {
     const preferences = await supabaseService.getPreferences(userId);
     const value = preferences?.contactSources?.[category]?.[key];
-    return typeof value === "boolean" ? value : defaultValue;
+    if (typeof value === "boolean") return value;
+
+    // BACKLOG-2476: no stored preference. Answer with onboarding's own rule
+    // where it is safe to, instead of a blanket `true`.
+    if (
+      category === "direct" &&
+      isContactSourceKey(key) &&
+      BACKEND_DERIVED_DEFAULT_KEYS.includes(key)
+    ) {
+      return isContactSourceOnByDefault(key, {
+        platform: process.platform === "darwin" ? "macos" : "windows",
+        // Already inside the object we just fetched — no extra round trip.
+        // Narrowed rather than cast: `getPreferences` returns
+        // `Record<string, any>`, so a stray "ios" must read as unknown.
+        phoneType: normalizePhoneType(preferences?.phone_type),
+        // Not knowable here: only `phone_type` lives in the preferences bag,
+        // and `users.oauth_provider` is in the local SQLite DB this helper must
+        // work without. No key in BACKEND_DERIVED_DEFAULT_KEYS depends on it.
+        authProvider: null,
+      });
+    }
+
+    return defaultValue;
   } catch {
     logService.warn(
       `[PreferenceHelper] Could not load preferences for contact source check, defaulting to ${defaultValue}`,

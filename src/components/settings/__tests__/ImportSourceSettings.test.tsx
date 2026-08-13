@@ -32,12 +32,12 @@ describe("ImportSourceSettings", () => {
     (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
 
     // Default: no saved preference (macos-native will be default)
-    window.api.preferences.get.mockResolvedValue({
+    jest.mocked(window.api.preferences.get).mockResolvedValue({
       success: true,
       preferences: {},
     });
 
-    window.api.preferences.update.mockResolvedValue({
+    jest.mocked(window.api.preferences.update).mockResolvedValue({
       success: true,
     });
   });
@@ -47,7 +47,7 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       expect(screen.getByText("iPhone Sync")).toBeInTheDocument();
@@ -63,7 +63,7 @@ describe("ImportSourceSettings", () => {
         expect(screen.getByText("iPhone Sync")).toBeInTheDocument();
       });
 
-      expect(screen.queryByText("macOS Messages + Contacts")).not.toBeInTheDocument();
+      expect(screen.queryByText("macOS Messages")).not.toBeInTheDocument();
       expect(screen.getByText("Android Companion")).toBeInTheDocument();
     });
 
@@ -72,17 +72,45 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText("Choose where to import your messages and contacts from.")
+          screen.getByText("Choose where to import your text messages from.")
         ).toBeInTheDocument();
       });
+    });
+
+    /**
+     * BACKLOG-2523 regression guard.
+     *
+     * This panel writes `messages.source` and NOTHING else. Contact sources are
+     * the independent `contactSources.direct.*` checkboxes under
+     * Settings > Contacts (BACKLOG-2477 decoupled them; see the comment on
+     * SyncOrchestratorService.getContactsSyncPreferences). Any copy here that
+     * mentions contacts is therefore a false claim about the user's own data —
+     * it either promises a contacts effect this screen does not have, or scares
+     * a user off switching message sources for fear of disturbing contacts.
+     *
+     * This asserts the ABSENCE of the whole class, not the presence of the
+     * three strings that happened to be wrong on 2026-08-05. It is deliberately
+     * the strong form (/contact/i, unqualified): the panel renders no such word
+     * today, so any reintroduction reddens this immediately.
+     */
+    it("never claims the Import Source panel governs contacts", async () => {
+      const { container } = render(<ImportSourceSettings userId={mockUserId} />);
+
+      await waitFor(() => {
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
+      });
+
+      expect(container.textContent).not.toMatch(/contact/i);
     });
   });
 
   describe("Loading State", () => {
     it("should show loading spinner while fetching preference", async () => {
       // Create a promise that won't resolve immediately
-      let resolvePreference: (value: unknown) => void;
-      window.api.preferences.get.mockImplementation(
+      let resolvePreference: (
+        value: Awaited<ReturnType<typeof window.api.preferences.get>>
+      ) => void;
+      jest.mocked(window.api.preferences.get).mockImplementation(
         () =>
           new Promise((resolve) => {
             resolvePreference = resolve;
@@ -117,14 +145,14 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         const macosRadio = screen.getByRole("radio", {
-          name: /macos messages \+ contacts/i,
+          name: /macos messages/i,
         });
         expect(macosRadio).toBeChecked();
       });
     });
 
     it("should load saved macos-native preference", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "macos-native" },
@@ -135,14 +163,14 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         const macosRadio = screen.getByRole("radio", {
-          name: /macos messages \+ contacts/i,
+          name: /macos messages/i,
         });
         expect(macosRadio).toBeChecked();
       });
     });
 
     it("should load saved iphone-sync preference", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "iphone-sync" },
@@ -160,7 +188,7 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should load saved android-companion preference", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "android-companion" },
@@ -178,14 +206,14 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should handle preference load error gracefully", async () => {
-      window.api.preferences.get.mockRejectedValue(new Error("Network error"));
+      jest.mocked(window.api.preferences.get).mockRejectedValue(new Error("Network error"));
 
       render(<ImportSourceSettings userId={mockUserId} />);
 
       // Should still render with default (macos-native)
       await waitFor(() => {
         const macosRadio = screen.getByRole("radio", {
-          name: /macos messages \+ contacts/i,
+          name: /macos messages/i,
         });
         expect(macosRadio).toBeChecked();
       });
@@ -198,7 +226,7 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText("macOS Messages + Contacts")
+          screen.getByText("macOS Messages")
         ).toBeInTheDocument();
         expect(screen.getByText("iPhone Sync")).toBeInTheDocument();
         expect(screen.getByText("Android Companion")).toBeInTheDocument();
@@ -239,7 +267,7 @@ describe("ImportSourceSettings", () => {
 
     it("should update selection when macOS Messages is clicked", async () => {
       // Start with iphone-sync selected
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "iphone-sync" },
@@ -250,11 +278,11 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       const macosRadio = screen.getByRole("radio", {
-        name: /macos messages \+ contacts/i,
+        name: /macos messages/i,
       });
       await user.click(macosRadio);
 
@@ -301,7 +329,7 @@ describe("ImportSourceSettings", () => {
 
     it("should save preference when selection changes to macos-native", async () => {
       // Start with iphone-sync selected
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "iphone-sync" },
@@ -313,12 +341,12 @@ describe("ImportSourceSettings", () => {
 
       await waitFor(() => {
         expect(
-          screen.getByText("macOS Messages + Contacts")
+          screen.getByText("macOS Messages")
         ).toBeInTheDocument();
       });
 
       const macosRadio = screen.getByRole("radio", {
-        name: /macos messages \+ contacts/i,
+        name: /macos messages/i,
       });
       await user.click(macosRadio);
 
@@ -328,7 +356,7 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should handle save error gracefully (revert selection)", async () => {
-      window.api.preferences.update.mockRejectedValue(new Error("Save failed"));
+      jest.mocked(window.api.preferences.update).mockRejectedValue(new Error("Save failed"));
 
       const user = userEvent.setup();
       render(<ImportSourceSettings userId={mockUserId} />);
@@ -347,7 +375,7 @@ describe("ImportSourceSettings", () => {
       // Wait for revert
       await waitFor(() => {
         const macosRadio = screen.getByRole("radio", {
-          name: /macos messages \+ contacts/i,
+          name: /macos messages/i,
         });
         expect(macosRadio).toBeChecked();
       });
@@ -360,14 +388,14 @@ describe("ImportSourceSettings", () => {
 
       // Wait for loading to complete (radio buttons visible)
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       expect(screen.queryByText("To use iPhone Sync:")).not.toBeInTheDocument();
     });
 
     it("should show iPhone instructions when iphone-sync is selected", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "iphone-sync" },
@@ -418,7 +446,7 @@ describe("ImportSourceSettings", () => {
     // this component. Pairing now happens ONLY through the guided AndroidSyncSetup
     // wizard (single entry point), so this component keeps device management only.
     it("should NOT render an inline pair button when android-companion is selected", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "android-companion" },
@@ -439,7 +467,21 @@ describe("ImportSourceSettings", () => {
     });
 
     it("should show a 'Connect your Android phone' CTA wired to the guided wizard when no devices are paired (BACKLOG-2347)", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      // BACKLOG-2544 — THE RACE IS NOW RUN ON EVERY EXECUTION, DELIBERATELY.
+      //
+      // This component makes TWO independent async loads. On a fast machine
+      // both settle in one tick and the race never happens; on macOS CI it
+      // sometimes did, and the test failed there and nowhere else — on the same
+      // commit that passed elsewhere.
+      //
+      // Delaying the second load by one tick is what a slower runner does for
+      // free. Injecting it here makes the condition DETERMINISTIC: the test can
+      // no longer pass by being lucky, and a future change that reintroduces
+      // the race fails immediately rather than four merges later.
+      jest.mocked(window.api.pairing.getStatus).mockImplementation(
+        () => new Promise((r) => setTimeout(() => r({ success: true, devices: [] }), 0)) as never,
+      );
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "android-companion" },
@@ -451,25 +493,58 @@ describe("ImportSourceSettings", () => {
         <ImportSourceSettings userId={mockUserId} onConnectAndroid={onConnectAndroid} />
       );
 
+      /**
+       * BACKLOG-2544 — WAIT FOR THE SECOND LOAD BEFORE TOUCHING ANYTHING.
+       *
+       * This component makes TWO independent async loads: the preference, and
+       * then the Android pairing/sync status. The test used to find the button
+       * as soon as the FIRST resolved and click it — so on a slower machine the
+       * second could land in between, re-render, and leave the click on a
+       * detached node. The handler never fired and the assertion failed, on
+       * macOS CI only, on the same commit that passed elsewhere.
+       *
+       * Reproduced deterministically by delaying the second load by one tick,
+       * which is what a slower runner does for free. `Loading devices…` is the
+       * component's own marker for that load being in flight, so waiting for it
+       * to clear waits for the exact thing that was racing.
+       *
+       * `queryBy` + `waitFor`, not `waitForElementToBeRemoved`: the marker may
+       * never render at all when both loads settle in one tick, and that must
+       * not be an error.
+       */
+      // TWO waits, in this order, and the order is the fix.
+      //
+      // Waiting only for `Loading devices…` to be ABSENT passes instantly —
+      // `androidLoading` starts false, so at that moment the second load has
+      // not begun. Established by running it: the button was found and then
+      // detached before the very next line.
+      //
+      // So: wait for the second load to have STARTED, then for it to have
+      // FINISHED. Only then is the tree stable enough to touch.
+      await waitFor(() => expect(window.api.pairing.getStatus).toHaveBeenCalled());
+      await waitFor(() => {
+        expect(screen.queryByText(/loading devices/i)).not.toBeInTheDocument();
+      });
+
+      const user = userEvent.setup();
       const cta = await screen.findByRole("button", {
         name: /connect your android phone/i,
       });
       expect(cta).toBeInTheDocument();
 
-      const user = userEvent.setup();
       await user.click(cta);
-      expect(onConnectAndroid).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(onConnectAndroid).toHaveBeenCalledTimes(1));
     });
 
     it("should show paired devices when devices are paired", async () => {
-      window.api.preferences.get.mockResolvedValue({
+      jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           messages: { source: "android-companion" },
         },
       });
 
-      window.api.pairing.getStatus.mockResolvedValue({
+      jest.mocked(window.api.pairing.getStatus).mockResolvedValue({
         success: true,
         status: {
           isPaired: true,
@@ -497,7 +572,7 @@ describe("ImportSourceSettings", () => {
 
       // Wait for loading to complete (radio buttons visible)
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       // The Android device-management block (and its connect CTA) only
@@ -511,8 +586,10 @@ describe("ImportSourceSettings", () => {
   describe("Disabled State", () => {
     it("should disable radio buttons while saving", async () => {
       // Make the update take a while
-      let resolveUpdate: (value: unknown) => void;
-      window.api.preferences.update.mockImplementation(
+      let resolveUpdate: (
+        value: Awaited<ReturnType<typeof window.api.preferences.update>>
+      ) => void;
+      jest.mocked(window.api.preferences.update).mockImplementation(
         () =>
           new Promise((resolve) => {
             resolveUpdate = resolve;
@@ -548,11 +625,11 @@ describe("ImportSourceSettings", () => {
       render(<ImportSourceSettings userId={mockUserId} />);
 
       await waitFor(() => {
-        expect(screen.getByText("macOS Messages + Contacts")).toBeInTheDocument();
+        expect(screen.getByText("macOS Messages")).toBeInTheDocument();
       });
 
       // The selected option's label should have the blue border styling
-      const macosLabel = screen.getByText("macOS Messages + Contacts").closest("label");
+      const macosLabel = screen.getByText("macOS Messages").closest("label");
       expect(macosLabel).toHaveClass("border-blue-500");
     });
 
@@ -574,7 +651,7 @@ describe("ImportSourceSettings", () => {
       expect(iphoneLabel).toHaveClass("border-blue-500");
 
       // macOS label should not have blue border
-      const macosLabel = screen.getByText("macOS Messages + Contacts").closest("label");
+      const macosLabel = screen.getByText("macOS Messages").closest("label");
       expect(macosLabel).not.toHaveClass("border-blue-500");
     });
 

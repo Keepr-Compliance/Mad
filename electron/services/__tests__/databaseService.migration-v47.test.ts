@@ -21,7 +21,6 @@
  */
 
 import path from "path";
-import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 // ---------------------------------------------------------------------------
@@ -262,10 +261,14 @@ describe("databaseService migration v47 (BACKLOG-1861 — legacy email dedup)", 
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
     expect(row.version).toBe(latestVersion(harness));
-    // Latest migration is now v55: BACKLOG-2319's match_reason (communications /
-    // ignored_communications) sits on top of develop's v52 reaction columns, v53
-    // message_import_state, and v54 sync_session_id indexes.
-    expect(row.version).toBe(55);
+    // Latest migration is now v62: BACKLOG-2513's emails.bulk_mail_headers sits
+    // on top of v61's crosswalk origin vocabulary, v60's hand-typed contact
+    // value provenance recovery, v59's contact link review queue,
+    // v58's external_contacts.source_identity_json, v57's contact_source_links
+    // crosswalk, v56 tombstone columns (contacts / transaction_contacts
+    // removed_at + removed_reason), v55 match_reason, v54 sync_session_id
+    // indexes, and v53 message_import_state.
+    expect(row.version).toBe(62);
   });
 
   it("collapses a legacy+new pair: legacy deleted, comms link moved to new", async () => {

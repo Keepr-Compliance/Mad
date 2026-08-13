@@ -3,8 +3,15 @@ import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
 import microsoftAuthService from "./microsoftAuthService";
+// BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
+// granted a support window covering the email-sync scope.
+import { supportTrace } from "./supportAccess/trace";
 import { OAuthToken, ParsedParticipant } from "../types/models";
 import { computeEmailHash } from "../utils/emailHash";
+import {
+  buildBulkMailHeaders,
+  type BulkMailHeaders,
+} from "../utils/bulkMailHeaders";
 import { normalizeEmailAddress } from "../utils/emailAddress";
 import { EmailDeduplicationService } from "./emailDeduplicationService";
 import {
@@ -61,6 +68,10 @@ interface GraphMessage {
   // TASK-917: Added for Message-ID extraction (deduplication)
   internetMessageId?: string;
   internetMessageHeaders?: GraphInternetMessageHeader[];
+  // BACKLOG-2512: Outlook's user-assigned categories — the Graph analogue of
+  // Gmail labels for the `emails.labels` column ("JSON: Gmail labels, Outlook
+  // categories", schema.sql). Most mailboxes return an empty array.
+  categories?: string[];
 }
 
 /**
@@ -134,7 +145,18 @@ interface ParsedEmail {
   to: string | null;
   cc: string | null;
   bcc: string | null;
+  /**
+   * Graph's `receivedDateTime` — when the mailbox received the message.
+   *
+   * BACKLOG-2571: NOT the send time, and must not be repointed at one.
+   * `emailSyncService`'s legacy-row matcher compares this against stored
+   * `sent_at` values that are themselves receive times, within ±2 seconds.
+   */
   date: Date;
+  /**
+   * Graph's `sentDateTime` — the sender-asserted send time. BACKLOG-2571 makes
+   * this what `emails.sent_at` stores; it previously fed only the content hash.
+   */
   sentDate: Date;
   body: string;
   bodyPlain: string;
@@ -147,7 +169,40 @@ interface ParsedEmail {
   parentFolderId?: string;
   /** RFC 5322 Message-ID header for deduplication (TASK-917) */
   messageIdHeader: string | null;
-  /** SHA-256 content hash for fallback deduplication (TASK-918) */
+  /**
+   * BACKLOG-2512: RFC 5322 In-Reply-To header — the Message-ID of the parent
+   * message, and the only source of a reply edge. Read from Graph's
+   * `internetMessageHeaders`, which is already in every `$select`.
+   */
+  inReplyTo: string | null;
+  /** BACKLOG-2512: RFC 5322 References header (full ancestor chain). */
+  references: string | null;
+  /**
+   * BACKLOG-2512: when the recipient's server accepted the message — Graph's
+   * `receivedDateTime`, as distinct from the sender-asserted `sentDateTime`.
+   * See BACKLOG-2571: `receivedDateTime` is currently also what lands in
+   * `sent_at` via `date`, the pre-existing mis-mapping this task leaves alone.
+   */
+  receivedAt: Date | null;
+  /**
+   * BACKLOG-2513: retained bulk-mail headers (List-Unsubscribe, Precedence,
+   * Auto-Submitted, Authentication-Results) from `internetMessageHeaders`,
+   * which is already in every `$select`. Null when the message carried none.
+   * Raw values only — nothing is classified at ingest.
+   */
+  bulkMailHeaders: BulkMailHeaders | null;
+  /**
+   * BACKLOG-2512: Outlook categories, stored in the shared `emails.labels`
+   * column ("JSON: Gmail labels, Outlook categories", schema.sql).
+   */
+  labels: string[];
+  /**
+   * SHA-256 content hash for fallback deduplication (TASK-918).
+   * BACKLOG-2572: NOT comparable across providers — this hash is computed over
+   * `sentDateTime` (send time) while gmailFetchService hashes over
+   * `internalDate` (received time), despite the comment below claiming the two
+   * are consistent. Do not use it for cross-provider dedup.
+   */
   contentHash: string;
   /** ID of the original message if this is a duplicate (TASK-919) */
   duplicateOf?: string;
@@ -189,6 +244,58 @@ interface EmailSearchOptions {
  * @param message - Graph API message object
  * @returns Message-ID header value or null if not found
  */
+/**
+ * BACKLOG-2512: Case-insensitive lookup of a single RFC 5322 header from Graph's
+ * `internetMessageHeaders` array.
+ *
+ * Extracted verbatim from the lookup that was already inline in
+ * `extractMessageIdHeader` — Graph does not normalize header casing, so every
+ * caller needs the same `toLowerCase()` comparison.
+ *
+ * BACKLOG-2513 (bulk-mail headers: List-Unsubscribe / Precedence /
+ * Auto-Submitted / Authentication-Results) should hook in here rather than
+ * re-implementing the scan; `internetMessageHeaders` is already in every
+ * `$select`, so that task needs no extra request or scope either.
+ *
+ * @param message - Graph API message object
+ * @param name - Header name to find (matched case-insensitively)
+ * @returns Header value, or null when absent or empty
+ */
+function getInternetHeader(message: GraphMessage, name: string): string | null {
+  if (!message.internetMessageHeaders?.length) {
+    return null;
+  }
+  const target = name.toLowerCase();
+  const header = message.internetMessageHeaders.find(
+    (h) => h.name?.toLowerCase() === target,
+  );
+  return header?.value || null;
+}
+
+/**
+ * BACKLOG-2513: EVERY occurrence of a header from `internetMessageHeaders`, in
+ * wire order.
+ *
+ * `getInternetHeader` above takes the first match only, which is right for
+ * single-instance headers. `Authentication-Results` legitimately repeats — one
+ * instance per authenticating hop (per `authserv-id`) — and keeping only the
+ * first would discard the hop that may be the failing one.
+ *
+ * @param message - Graph API message object
+ * @param name - Header name to find (matched case-insensitively)
+ * @returns every matching non-empty header value; empty array when absent
+ */
+function getAllInternetHeaders(message: GraphMessage, name: string): string[] {
+  if (!message.internetMessageHeaders?.length) {
+    return [];
+  }
+  const target = name.toLowerCase();
+  return message.internetMessageHeaders
+    .filter((h) => h.name?.toLowerCase() === target)
+    .map((h) => h.value)
+    .filter((v): v is string => typeof v === "string" && v.length > 0);
+}
+
 function extractMessageIdHeader(message: GraphMessage): string | null {
   // Option 1: Use internetMessageId property (preferred, simpler)
   if (message.internetMessageId) {
@@ -196,16 +303,7 @@ function extractMessageIdHeader(message: GraphMessage): string | null {
   }
 
   // Option 2: Fall back to internetMessageHeaders array
-  if (message.internetMessageHeaders && message.internetMessageHeaders.length > 0) {
-    const messageIdHeader = message.internetMessageHeaders.find(
-      (h) => h.name?.toLowerCase() === "message-id",
-    );
-    if (messageIdHeader?.value) {
-      return messageIdHeader.value;
-    }
-  }
-
-  return null;
+  return getInternetHeader(message, "message-id");
 }
 
 /**
@@ -512,7 +610,7 @@ class OutlookFetchService {
       const needsClientSort = hasTextQuery || hasContactFilter;
       const orderBy = needsClientSort ? "" : "$orderby=receivedDateTime desc";
       const selectFields =
-        "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders";
+        "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders,categories";
 
       logService.info("Searching emails", "OutlookFetch", {
         originalQuery: query,
@@ -717,7 +815,7 @@ class OutlookFetchService {
     const allParsed: ParsedEmail[] = [];
     const seenIds = new Set<string>();
     const selectFields =
-      "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders";
+      "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders,categories";
 
     for (const email of contactEmails) {
       try {
@@ -938,7 +1036,7 @@ class OutlookFetchService {
     }
 
     const DELTA_SELECT =
-      "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders";
+      "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders,categories";
     const MAX_DELTA_PAGES = 50;
 
     const stripRoot = (url: string): string =>
@@ -1124,7 +1222,19 @@ class OutlookFetchService {
         ? message.body.content
         : message.bodyPreview || "";
 
-    // Use sentDateTime for hash (consistent with Gmail using internalDate)
+    /**
+     * The sender-asserted send time. BACKLOG-2571 makes this what
+     * `emails.sent_at` stores; before it, `sent_at` got `receivedDateTime` and
+     * this value reached nothing but the hash below.
+     *
+     * The comment that stood here claimed using `sentDateTime` for the hash was
+     * *"consistent with Gmail using internalDate"*. That is the exact opposite
+     * of the truth — `internalDate` is Gmail's RECEIVE time — and the false
+     * claim is why the asymmetry went unexamined long enough to need its own
+     * item. The hash inputs are still asymmetric as of this task and are fixed
+     * by BACKLOG-2572; the claim that they are not is removed now, because a
+     * comment asserting two things agree is what stops the next reader looking.
+     */
     const sentDate = new Date(message.sentDateTime);
 
     // Compute content hash for deduplication fallback (TASK-918)
@@ -1168,7 +1278,15 @@ class OutlookFetchService {
       to: to,
       cc: cc,
       bcc: bcc,
+      /**
+       * BACKLOG-2571: STILL `receivedDateTime`, deliberately — see the note on
+       * the Gmail parser's `date`. `emailSyncService`'s legacy-row matcher
+       * compares this against stored `sent_at` values (receive times) within
+       * ±2 seconds; repointing it would compare send-to-receive and the matcher
+       * would silently stop matching.
+       */
       date: new Date(message.receivedDateTime),
+      /** BACKLOG-2571: the send time, and what `emails.sent_at` now stores. */
       sentDate: sentDate,
       body: body,
       bodyPlain: bodyPlain,
@@ -1182,7 +1300,24 @@ class OutlookFetchService {
       parentFolderId: message.parentFolderId,
       // TASK-917: Message-ID for deduplication
       messageIdHeader: extractMessageIdHeader(message),
-      // TASK-918: Content hash for fallback deduplication
+      // BACKLOG-2512: threading headers from `internetMessageHeaders` (already
+      // in every $select — no extra request, no extra scope).
+      inReplyTo: getInternetHeader(message, "in-reply-to"),
+      references: getInternetHeader(message, "references"),
+      // BACKLOG-2512: the true server-receipt timestamp.
+      receivedAt: new Date(message.receivedDateTime),
+      // BACKLOG-2512: Outlook categories → the shared `labels` column.
+      labels: message.categories ?? [],
+      // BACKLOG-2513: bulk-mail headers, captured HERE — before `parsed.raw` is
+      // zeroed below. Same shared builder as Gmail, so the two providers cannot
+      // drift in which headers are kept or what the JSON keys are named.
+      bulkMailHeaders: buildBulkMailHeaders(
+        (name) => getInternetHeader(message, name),
+        (name) => getAllInternetHeaders(message, name),
+      ),
+      // TASK-918: Content hash for fallback deduplication.
+      // BACKLOG-2572: hashed over sentDateTime here vs internalDate in Gmail —
+      // not cross-provider comparable.
       contentHash,
       // BACKLOG-1802: provenance for the writer's ingest_source column.
       ingestSource,
@@ -1497,7 +1632,7 @@ class OutlookFetchService {
       const { after = null, before = null, maxResults = 200, onProgress } = options;
 
       const selectFields =
-        "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders";
+        "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders,categories";
 
       const filters: string[] = [];
       if (after) {
@@ -1645,6 +1780,16 @@ class OutlookFetchService {
         `Multi-folder fetch complete: ${allEmails.length} unique emails from ${folders.length} folders`,
         "OutlookFetch"
       );
+
+      // BACKLOG-2393: folders enumerated vs unique messages returned. A folder
+      // that is never enumerated looks identical to a folder with no matches,
+      // and "Keepr missed the emails in my Archive" is that distinction.
+      supportTrace("email-sync", "outlook-folders-fetched", {
+        provider: "outlook",
+        folders_enumerated: folders.length,
+        unique_emails: allEmails.length,
+        message_ids_seen: seenMessageIds.size,
+      });
 
       return allEmails;
     } catch (error) {

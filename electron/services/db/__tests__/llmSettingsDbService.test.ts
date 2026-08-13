@@ -7,7 +7,6 @@
  * Tests CRUD operations, token usage tracking, and consent management
  */
 
-import { jest } from "@jest/globals";
 
 // Mock crypto
 jest.mock("crypto", () => ({

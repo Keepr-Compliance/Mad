@@ -28,6 +28,20 @@ import { checkAppleDrivers } from "./appleDriverService";
 import { pairingService } from "./pairingService";
 import localSyncService from "./localSyncService";
 import supabaseService from "./supabaseService";
+// BACKLOG-2394: contacts + storage facts. Five of nine tickets filed in one day
+// were answerable from these counts, and every one of them arrived with a
+// diagnostics block that carried none of them.
+import permissionService from "./permissionService";
+import {
+  collectContactsDiagnostics,
+  formatContactsDiagnostics,
+  type ContactsDiagnostics,
+} from "./contactsDiagnostics";
+import {
+  collectStorageDiagnostics,
+  formatStorageDiagnostics,
+  type StorageDiagnostics,
+} from "./storageDiagnostics";
 
 /**
  * BACKLOG-1918: iPhone-sync / Apple-driver diagnostics section attached to
@@ -85,6 +99,14 @@ export interface IphoneSyncDiagnostics {
     phone_type: string | null;
     contact_sources_configured: boolean;
     iphone_sync_enabled: boolean | null;
+    /**
+     * BACKLOG-2408: the persisted messages import source
+     * ("macos-native" | "iphone-sync" | "android-companion"), which decides
+     * which importer the dashboard sync path runs. `null` means no preference
+     * is stored, in which case the app falls through to its platform default —
+     * a distinct state from any stored value, so it is reported as such.
+     */
+    messages_source: string | null;
   };
 }
 
@@ -123,6 +145,21 @@ export interface AppDiagnostics {
   uptime_seconds: number;
   /** BACKLOG-1918: iPhone-sync / Apple-driver diagnostics section. */
   iphone_sync: IphoneSyncDiagnostics;
+  /**
+   * BACKLOG-2394: contacts pipeline, LIVE (address books on disk, permissions)
+   * and RECORDED (the BACKLOG-2391 funnel, each stage carrying its timestamp).
+   *
+   * `null` means collection itself failed — which is NOT the same as "a sync
+   * never ran" (that state lives inside the section, in `recorded`). Both are
+   * distinct from zero contacts, and all three render as different sentences.
+   */
+  contacts: ContactsDiagnostics | null;
+  /**
+   * BACKLOG-2394: storage, schema and data-quality facts. `null` when
+   * collection threw; an unopened database is reported inside the section with
+   * its reason, never as zeros.
+   */
+  storage: StorageDiagnostics | null;
   collected_at: string;
   /**
    * BACKLOG-1903: When a support ticket is filed within ~10 min of an
@@ -181,6 +218,21 @@ export function composeDiagnosticsSummary(diag: AppDiagnostics): string {
   lines.push(`Recent errors (count): ${diag.recent_errors.length}`);
   lines.push(`Uptime: ${diag.uptime_seconds}s`);
   lines.push(composeIphoneSyncLine(diag.iphone_sync));
+
+  // BACKLOG-2394. Contacts before Storage, and LIVE before RECORDED inside
+  // each: the always-true facts come first so a reader who skims one line
+  // still learns how many address books the machine holds.
+  if (diag.contacts) {
+    lines.push(...formatContactsDiagnostics(diag.contacts));
+  } else {
+    lines.push("Contacts: diagnostics collection failed");
+  }
+  if (diag.storage) {
+    lines.push(...formatStorageDiagnostics(diag.storage));
+  } else {
+    lines.push("Storage: diagnostics collection failed");
+  }
+
   lines.push(`Collected at: ${diag.collected_at}`);
 
   return lines.join("\n");
@@ -203,6 +255,9 @@ function composeIphoneSyncLine(s: IphoneSyncDiagnostics): string {
     `apple_driver.installed=${yn(s.apple_driver.is_installed)}`,
     `apple_driver.service_running=${yn(s.apple_driver.service_running)}`,
     `iphone_sync_enabled=${s.user_settings.iphone_sync_enabled === null ? "unknown" : yn(s.user_settings.iphone_sync_enabled)}`,
+    // BACKLOG-2408: which importer this user actually runs. "unset" means no
+    // stored preference, so the app is using its platform default.
+    `messages_source=${s.user_settings.messages_source ?? "unset"}`,
   ];
   return `iPhone Sync: ${parts.join(", ")}`;
 }
@@ -259,6 +314,11 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
     device_id: "",
     uptime_seconds: 0,
     iphone_sync: defaultIphoneSyncDiagnostics(),
+    // BACKLOG-2394: null, NOT an empty section full of zeros. A zero here
+    // would be indistinguishable from "this user has no contacts", which is
+    // the exact ambiguity that made the reporter's logs useless.
+    contacts: null,
+    storage: null,
     collected_at: new Date().toISOString(),
   };
 
@@ -384,6 +444,54 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
     /* keep default section */
   }
 
+  // BACKLOG-2394: contacts section. The Full Disk Access probe is the only
+  // slow-ish part and it is a file read, not a database open — nothing here
+  // can raise a permission prompt while a user is trying to file a bug.
+  try {
+    let fullDiskAccess: "granted" | "denied" | "unknown" = "unknown";
+    // Only probe on macOS — Full Disk Access does not exist elsewhere, and the
+    // collector forces "n/a" there regardless. Skipping saves a pointless file
+    // read on every Windows ticket.
+    if (process.platform === "darwin") {
+      try {
+        const fda = await permissionService.checkFullDiskAccess();
+        fullDiskAccess = fda.hasPermission ? "granted" : "denied";
+      } catch {
+        /* stays "unknown" — which is not "denied" */
+      }
+    }
+    diagnostics.contacts = await collectContactsDiagnostics({
+      fullDiskAccess,
+      uptimeSeconds: diagnostics.uptime_seconds,
+    });
+  } catch (err) {
+    logService.warn(
+      "[Support] Contacts diagnostics collection failed",
+      "SupportTicketService",
+      { error: err instanceof Error ? err.message : String(err) }
+    );
+    /* stays null — reported as "collection failed", never as zeros */
+  }
+
+  // BACKLOG-2394: storage / schema / data-quality section.
+  try {
+    const dbOpen = databaseService.isInitialized();
+    diagnostics.storage = collectStorageDiagnostics({
+      db: dbOpen ? databaseService.getRawDatabase() : null,
+      dbPath: databaseService.getDatabasePath(),
+      latestSchemaVersion: databaseService.getLatestSchemaVersion(),
+      locale: readIntlLocale(),
+      timezone: readIntlTimeZone(),
+    });
+  } catch (err) {
+    logService.warn(
+      "[Support] Storage diagnostics collection failed",
+      "SupportTicketService",
+      { error: err instanceof Error ? err.message : String(err) }
+    );
+    /* stays null */
+  }
+
   // BACKLOG-1903: link this ticket to a recent auto-updater failure's Sentry
   // event so support tickets arrive pre-diagnosed. Only present if a failure
   // occurred within the ~10-minute linkage window.
@@ -402,6 +510,30 @@ export async function collectDiagnostics(): Promise<AppDiagnostics> {
   }
 
   return sanitizeDiagnostics(diagnostics);
+}
+
+/**
+ * BACKLOG-2394: locale and timezone. Date-parsing bugs are effectively
+ * invisible without them — "the closing date is a day off" reads as a logic bug
+ * until you notice the reporter is on a UTC+13 machine.
+ *
+ * These are environment settings, not location data: `en-US` / `America/Denver`
+ * is the same granularity every website already receives.
+ */
+function readIntlLocale(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().locale ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readIntlTimeZone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** PII-safe empty iphone_sync section used as the default/fallback. */
@@ -429,6 +561,7 @@ function defaultIphoneSyncDiagnostics(): IphoneSyncDiagnostics {
       phone_type: null,
       contact_sources_configured: false,
       iphone_sync_enabled: null,
+      messages_source: null,
     },
   };
 }
@@ -535,11 +668,20 @@ async function collectIphoneSyncDiagnostics(): Promise<IphoneSyncDiagnostics> {
       const contactSourcesConfigured = hasConfiguredContactSources(
         prefs?.contactSources
       );
+      // BACKLOG-2408: read from the same preferences object already fetched
+      // above — no extra I/O. Onboarding now writes this for every answer, so
+      // a null here means a genuinely un-onboarded install running on the
+      // platform default, not merely "the user picked iPhone".
+      const messagesSource =
+        typeof prefs?.messages?.source === "string"
+          ? prefs.messages.source
+          : null;
 
       section.user_settings = {
         phone_type: phoneType,
         contact_sources_configured: contactSourcesConfigured,
         iphone_sync_enabled: iphoneSyncEnabled,
+        messages_source: messagesSource,
       };
 
       // phone_type on the section is derived from the user's setting.

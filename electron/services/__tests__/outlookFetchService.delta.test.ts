@@ -96,7 +96,9 @@ describe("outlookFetchService.fetchDeltaEmails (BACKLOG-1831)", () => {
     expect(removedSkipped).toBe(0);
 
     // First call hit the folder delta endpoint with $select.
-    const firstUrl = (mockAxios.mock.calls[0][0] as { url: string }).url;
+    // jest.MockedFunction resolves axios's `(url: string, ...)` overload, but the
+    // service calls the `(config)` form; the extra hop is type-only.
+    const firstUrl = (mockAxios.mock.calls[0][0] as unknown as { url: string }).url;
     expect(firstUrl).toContain("/me/mailFolders/folder-1/messages/delta");
     expect(firstUrl).toContain("$select=");
   });
@@ -138,7 +140,8 @@ describe("outlookFetchService.fetchDeltaEmails (BACKLOG-1831)", () => {
 
     expect(emails).toHaveLength(1);
     expect(deltaLink).toBe(DELTA_LINK);
-    const url = (mockAxios.mock.calls[0][0] as { url: string }).url;
+    // See note above: axios is called with a config object, not a URL string.
+    const url = (mockAxios.mock.calls[0][0] as unknown as { url: string }).url;
     expect(url).toBe(stored); // exact resume URL, no $select appended
   });
 });

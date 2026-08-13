@@ -7,6 +7,11 @@
  * - Delete protection
  */
 
+import {
+  createIpcHandlerRegistry,
+  type IpcHandlerRegistry,
+  type RegisteredIpcHandler,
+} from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
 
 // Mock electron module
@@ -40,6 +45,7 @@ jest.mock("../services/databaseService", () => ({
   default: {
     getImportedContactsByUserId: jest.fn(),
     getImportedContactsByUserIdAsync: jest.fn(),
+    getRemovedContactIdentifiers: jest.fn(() => Promise.resolve([])),
     getUnimportedContactsByUserId: jest.fn(),
     getContactsSortedByActivity: jest.fn(),
     createContact: jest.fn(),
@@ -69,7 +75,9 @@ jest.mock("../services/databaseService", () => ({
     isInitialized: jest.fn().mockReturnValue(true),
     backfillContactEmails: jest.fn(),
     backfillContactPhones: jest.fn(),
-    findContactByName: jest.fn(),
+    // BACKLOG-2617: `findContactByName` is deleted from the facade, so the mock
+    // key for it goes too. A stale key is a standing invitation to write a test
+    // against a method production no longer has.
     searchContactsForSelection: jest.fn().mockReturnValue([]),
     getContactNamesByPhones: jest.fn().mockResolvedValue(new Map()),
     getLastMessageDatesForPhones: jest.fn().mockReturnValue(new Map()),
@@ -154,6 +162,26 @@ jest.mock("../services/db/externalContactDbService", () => ({
   getContactSourceStats: jest.fn().mockReturnValue({ macos: 0, iphone: 0, outlook: 0 }),
 }));
 
+/**
+ * BACKLOG-2608 — THE PICKER'S ONLY ALREADY-IMPORTED TEST IS THE CROSSWALK, so
+ * this suite has to be able to state one.
+ *
+ * The email/phone content fallbacks are deleted, so a fixture can no longer
+ * express "this record is already imported" by giving it a saved contact's
+ * address. It expresses it the way the app now does: a
+ * `contact_source_links` row for the (source_type, source_record_id) PAIR.
+ *
+ * `sourceKey` is deliberately the REAL one — the set the handler consults and
+ * the set a test seeds must be keyed by the same function, or a fixture can
+ * claim a link the handler cannot see.
+ */
+let mockLinkedSourceKeys = new Set<string>();
+
+jest.mock("../services/db/contactSourceLinkDbService", () => ({
+  ...jest.requireActual("../services/db/contactSourceLinkDbService"),
+  getLinkedSourceKeys: jest.fn(() => mockLinkedSourceKeys),
+}));
+
 // Mock contactDbService functions used by the handler (BACKLOG-1270)
 jest.mock("../services/db/contactDbService", () => ({
   ...jest.requireActual("../services/db/contactDbService"),
@@ -163,11 +191,49 @@ jest.mock("../services/db/contactDbService", () => ({
 
 // Import after mocks are set up
 import { registerContactHandlers } from "../handlers/contactHandlers";
+// BACKLOG-2608: the REAL key builder, so a seeded claim and the handler's lookup
+// cannot be keyed differently.
+import { sourceKey } from "../services/db/contactSourceLinkDbService";
 import databaseService from "../services/databaseService";
 import { getContactNames } from "../services/contactsService";
+import type {
+  ContactNamesResult,
+  LoadStatus,
+  ContactInfo,
+  ContactMap,
+  PhoneToContactInfo,
+} from "../services/contactsService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import contactSyncService from "../services/contactSyncService";
+import type { Contact } from "../types/models";
+import type {
+  ContactWithActivity,
+  TransactionWithRoles,
+} from "../services/db/contactDbService";
+// BACKLOG-2391: the funnel module is deliberately NOT mocked — these tests read
+// the real structured snapshot the diagnostics block will consume.
+import {
+  getContactIngestionFunnel,
+  resetContactIngestionFunnel,
+} from "../services/contactIngestionFunnel";
+
+/**
+ * BACKLOG-2414 — why the row fixtures below are CAST to `Contact` /
+ * `ContactWithActivity` / `TransactionWithRoles` rather than completed.
+ *
+ * Once test files started being type-checked, every `mockResolvedValue(...)` on
+ * a `jest.Mocked<typeof databaseService>` reader began demanding the reader's
+ * full row type. These fixtures deliberately carry only the columns the handler
+ * under test actually reads.
+ *
+ * Filling in the missing required columns is NOT a neutral edit here: it changes
+ * the payload the production handler receives. `source` in particular is read by
+ * the `contacts:get-available` dedup/precedence path, and `user_id` is compared
+ * during update/delete authorisation — inventing values for them would silently
+ * re-target the very behaviour these tests pin. The cast keeps the runtime object
+ * byte-for-byte what it was and confines the change to the type layer.
+ */
 
 // Get typed references to mocked services
 const mockDatabaseService = databaseService as jest.Mocked<
@@ -178,6 +244,109 @@ const mockContactsService = {
     typeof getContactNames
   >,
 };
+
+/**
+ * BACKLOG-2404 — a COMPLETE reader result for the `getContactNames` mocks.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A FACTORY, AND NOT JUST DELETING THE `as any`
+ * ---------------------------------------------------------------------------
+ * The incident: a mock here omitted the required `status` behind an `as any`,
+ * so it asserted against a shape the real reader cannot return, and the
+ * omission only surfaced once the handler started reading `status`.
+ *
+ * Deleting the casts would NOT have prevented it — and, stated precisely
+ * because the obvious claim is wrong, **neither does this factory make the
+ * omission a compile error. Nothing type-checks test files in this repo.**
+ * `tsconfig.json` excludes `**\/*.test.ts`, so `tsc --noEmit` never loads them
+ * (`--listFiles` reports zero files under `electron/__tests__`), and ts-jest
+ * does not report type diagnostics either.
+ *
+ * Probed rather than assumed — three times, because two plausible-sounding
+ * versions of this very comment were false:
+ *   - `status: 12345`, a number where `LoadStatus` is required -> 0 tsc errors.
+ *   - a required field deleted from an INLINE annotated literal -> 0 errors
+ *     (spreading `Partial<LoadStatus>` re-optionalises every field).
+ *   - `coverage` deleted from the annotated `const base: LoadStatus` below,
+ *     with the mutation asserted to have applied -> still 0 errors, and jest
+ *     still passes 89/89.
+ * It is also why six other sites in this file pass `status: "loaded"` — a
+ * string — and have always been green.
+ *
+ * What this factory actually buys, which is real but is not compile-time:
+ *   1. **By construction** a call site cannot omit `status`; the factory always
+ *      supplies a complete one. That is what stops a repeat of the incident.
+ *   2. **One place to update.** A new required `LoadStatus` field is added here
+ *      once and every call site inherits it, rather than being hunted across
+ *      ten object literals that no tool will flag.
+ *
+ * The `: LoadStatus` annotation on `base` is kept because it costs nothing and
+ * WOULD catch the omission the day test files are type-checked (filed as a
+ * follow-up). It is not load-bearing today — do not describe it as a gate.
+ */
+function readerResult(
+  over: {
+    phoneToContactInfo?: PhoneToContactInfo;
+    contacts?: ContactInfo[];
+    contactMap?: ContactMap;
+    status?: Partial<LoadStatus>;
+  } = {},
+): ContactNamesResult {
+  // Annotated and spread-free: this is the line that actually checks the shape.
+  const base: LoadStatus = {
+    success: true,
+    contactCount: over.contacts?.length ?? 0,
+    booksFound: 1,
+    booksRead: 1,
+    booksFailed: 0,
+    coverage: "complete",
+    failures: [],
+  };
+
+  return {
+    contactMap: over.contactMap ?? {},
+    phoneToContactInfo: over.phoneToContactInfo ?? {},
+    contacts: over.contacts ?? [],
+    status: { ...base, ...over.status },
+  };
+}
+
+/**
+ * A reader result with NO `status` at all — the one shape `readerResult` cannot
+ * express, since `status` is required on `ContactNamesResult`.
+ *
+ * A single NAMED escape hatch rather than an anonymous cast at the call site,
+ * so the deliberate lie is visible and greppable. It exists only to drive the
+ * "omit coverage, never fabricate zeros" branch.
+ */
+function readerResultWithoutStatus(over: {
+  phoneToContactInfo?: PhoneToContactInfo;
+} = {}): ContactNamesResult {
+  return {
+    contactMap: {},
+    phoneToContactInfo: over.phoneToContactInfo ?? {},
+    contacts: [],
+  } as unknown as ContactNamesResult;
+}
+
+/**
+ * BACKLOG-2414 — the LEGACY reader-result shape the six mocks below pass: a bare
+ * `{ phoneToContactInfo, status: "loaded" }`, with no `contactMap` and with
+ * `status` as a string where `LoadStatus` is an object. (These are the six sites
+ * the `readerResult` note above already calls out.)
+ *
+ * They are left passing exactly that. Each one drives a `contacts:get-available`
+ * dedup/precedence path that reads only `phoneToContactInfo`; routing them
+ * through `readerResult()` would hand the handler under test a different payload,
+ * which is the thing those tests pin. This wrapper is a single NAMED escape hatch
+ * — the same pattern as `readerResultWithoutStatus` — so the drift is greppable
+ * instead of six anonymous inline casts. It returns its argument untouched, so
+ * the mocked value is unchanged at runtime.
+ */
+function legacyReaderResult<T>(literal: T): ContactNamesResult {
+  return literal as unknown as ContactNamesResult;
+}
+
 const mockAuditService = auditService as jest.Mocked<typeof auditService>;
 const mockLogService = logService as jest.Mocked<typeof logService>;
 
@@ -197,13 +366,13 @@ const TEST_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
 const TEST_CONTACT_ID = "550e8400-e29b-41d4-a716-446655440001";
 
 describe("Contact Handlers", () => {
-  let registeredHandlers: Map<string, Function>;
+  let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
 
   beforeAll(() => {
     // Capture registered handlers
-    registeredHandlers = new Map();
-    mockIpcHandle.mockImplementation((channel: string, handler: Function) => {
+    registeredHandlers = createIpcHandlerRegistry();
+    mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
       registeredHandlers.set(channel, handler);
     });
 
@@ -214,6 +383,8 @@ describe("Contact Handlers", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     resetExternalContactsMock();
+    // BACKLOG-2608: nothing is claimed unless a case says so.
+    mockLinkedSourceKeys = new Set<string>();
     // TASK-1950: Default all sources to enabled
     mockIsContactSourceEnabled.mockResolvedValue(true);
   });
@@ -223,7 +394,7 @@ describe("Contact Handlers", () => {
       const mockContacts = [
         { id: "contact-1", name: "John Doe", email: "john@example.com" },
         { id: "contact-2", name: "Jane Smith", email: "jane@example.com" },
-      ];
+      ] as Contact[];
       mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue(
         mockContacts,
       );
@@ -388,7 +559,10 @@ describe("Contact Handlers", () => {
           emails: ["john@example.com"],
           company: null,
           last_message_at: null,
-          macos_record_id: "record-1",
+          // BACKLOG-2608: the shadow table always carries a source identity, and
+          // it is what the already-imported test now reads.
+          external_record_id: "record-1",
+          source: "macos",
           synced_at: new Date().toISOString(),
         },
         {
@@ -399,15 +573,20 @@ describe("Contact Handlers", () => {
           emails: ["jane@example.com"],
           company: null,
           last_message_at: null,
-          macos_record_id: "record-2",
+          external_record_id: "record-2",
+          source: "macos",
           synced_at: new Date().toISOString(),
         },
       ]);
 
       mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
       mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
-        { name: "John Doe", email: "john@example.com" },
+        { name: "John Doe", email: "john@example.com" } as Contact,
       ]);
+      // BACKLOG-2608: John's card is imported because the CROSSWALK says the
+      // user imported that exact record. It used to be "because a saved contact
+      // shares his address", which is a resemblance and is no longer enough.
+      mockLinkedSourceKeys = new Set([sourceKey("macos", "record-1")]);
 
       const handler = registeredHandlers.get("contacts:get-available");
       const result = await handler(mockEvent, TEST_USER_ID);
@@ -504,9 +683,9 @@ describe("Contact Handlers", () => {
             name: "John Doe",
             email: "john@example.com",
             phone: "555-1234",
-          },
+          } as Contact,
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
             "555-9999": {
               name: "John D.", // Slightly different name
@@ -515,7 +694,7 @@ describe("Contact Handlers", () => {
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -535,9 +714,9 @@ describe("Contact Handlers", () => {
             name: "John Doe",
             email: "John@Example.COM",
             phone: "555-1234",
-          },
+          } as Contact,
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
             "555-9999": {
               name: "John D.",
@@ -546,7 +725,7 @@ describe("Contact Handlers", () => {
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -565,19 +744,19 @@ describe("Contact Handlers", () => {
             id: "db-1",
             name: "Jane Smith",
             email: "jane@example.com",
-            phone: "+15551234567",
-          },
+            phone: "+15555550112",
+          } as Contact,
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
-            "(555) 123-4567": {
+            "(555) 555-0112": {
               name: "Jane S.", // Slightly different name
-              phones: ["(555) 123-4567"], // Same phone, different format
+              phones: ["(555) 555-0112"], // Same phone, different format
               emails: ["janes@other.com"], // Different email
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -592,22 +771,22 @@ describe("Contact Handlers", () => {
       it("should handle phone numbers with and without country code", async () => {
         // BACKLOG-2316: a shared phone now only dedupes when the NAMES are
         // compatible, so this test keeps the same name across sources to prove
-        // the phone-format normalization (5559876543 == +1 555 987 6543) still
+        // the phone-format normalization (5555550121 == +1 555 555 0121) still
         // collapses the SAME person. (Distinct names on a shared line are
         // covered by the "distinct contacts are not over-suppressed" block.)
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-1", name: "Bob Jones", phone: "5559876543" }, // No country code
+          { id: "db-1", name: "Bob Jones", phone: "5555550121" } as Contact, // No country code
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
-            "+1 555 987 6543": {
+            "+1 555 555 0121": {
               name: "Bob Jones",
-              phones: ["+1 555 987 6543"], // With country code
+              phones: ["+1 555 555 0121"], // With country code
               emails: [],
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -623,9 +802,15 @@ describe("Contact Handlers", () => {
     // dropped distinct people who merely share a name string (e.g. multiple
     // "Margaret"s). Two records that share ONLY a name (no email, no shared
     // phone) must both survive. Genuine same-person duplicates still collapse
-    // via email or a shared phone + compatible name (covered elsewhere), and a
-    // re-import of a same-named contact is still de-duplicated at write time by
-    // contacts:create (findContactByName).
+    // via email or a shared phone + compatible name (covered elsewhere).
+    //
+    // BACKLOG-2617 CORRECTED THE LAST SENTENCE THAT USED TO SIT HERE. It read
+    // "a re-import of a same-named contact is still de-duplicated at write time
+    // by contacts:create (findContactByName)" — offered as reassurance that
+    // removing name matching from the picker left a safety net behind it. That
+    // net was the defect: `contacts:create` returned the OTHER person's contact
+    // and reported success. It is deleted, along with `findContactByName`.
+    // Name-only matching now exists nowhere: not in the picker, not on create.
     describe("name-only matches do NOT dedupe (BACKLOG-2316)", () => {
       it("keeps both contacts that share only a name (no email/phone overlap)", async () => {
         // db stub (name only) in STEP 1; the fuller record with a distinct
@@ -648,7 +833,7 @@ describe("Contact Handlers", () => {
           },
         ]);
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-1", name: "Alice Brown" }, // No email or phone
+          { id: "db-1", name: "Alice Brown" } as Contact, // No email or phone
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
@@ -680,7 +865,7 @@ describe("Contact Handlers", () => {
           },
         ]);
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-1", name: "CHARLIE DAVIS" },
+          { id: "db-1", name: "CHARLIE DAVIS" } as Contact,
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
@@ -702,9 +887,9 @@ describe("Contact Handlers", () => {
             email: "priority@example.com",
             phone: "555-2222",
             company: "iPhone Company",
-          },
+          } as Contact,
         ]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
             "555-2222": {
               name: "Priority Contact",
@@ -713,7 +898,7 @@ describe("Contact Handlers", () => {
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -755,7 +940,7 @@ describe("Contact Handlers", () => {
             name: "Person One",
             email: "one@example.com",
             phone: "555-1111",
-          },
+          } as Contact,
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
@@ -811,6 +996,155 @@ describe("Contact Handlers", () => {
         expect(result.success).toBe(true);
         const names = new Set(result.contacts.map((c: any) => c.name));
         expect(names).toEqual(new Set(["Margaret Astor", "George Astor"]));
+      });
+
+      /**
+       * BACKLOG-2399 — the shape the relabel made reachable.
+       *
+       * `namesAreCompatible` compared token-by-token only up to the SHORTER
+       * name's length, so a lone first name was prefix-compatible with every
+       * longer name starting with it. On a shared office line that silently
+       * removed a distinct person from the import picker.
+       *
+       * The shape was mostly unreachable before: these cards were labelled by
+       * ORGANISATION ("Miller - Seller"), which collides with nothing.
+       * BACKLOG-2399 relabels that population to bare first names — exactly
+       * this shape — so a latent case became a common one.
+       *
+       * The test above (BACKLOG-2316) uses TWO FULL NAMES and cannot catch
+       * this: "Margaret Astor" / "George Astor" diverge at token 0.
+       */
+      it("keeps a first-name-only contact AND a distinct longer name on one line (BACKLOG-2399)", async () => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(2);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-margaret-bare",
+            user_id: TEST_USER_ID,
+            // Post-relabel: was "Miller - Seller", now her actual first name.
+            name: "Margaret",
+            phones: ["+15551230000"], // shared office line
+            emails: [],
+            source: "macos",
+            company: "Miller - Seller",
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-margaret-chen",
+            user_id: TEST_USER_ID,
+            name: "Margaret Chen", // SAME first name, DIFFERENT person
+            phones: ["+15551230000"], // same office line
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        // Exact identity SET. Before the fix this was just ["Margaret"] —
+        // Margaret Chen was unimportable and nothing reported it.
+        const ids = new Set(result.contacts.map((c: any) => c.id));
+        expect(ids).toEqual(new Set(["ext-margaret-bare", "ext-margaret-chen"]));
+      });
+
+      it("no longer collapses an abbreviated spelling on one line [BACKLOG-2556]", async () => {
+        // The control for the rule above: tightening the single-token case must
+        // not stop genuine cross-source duplicates collapsing. Two full names
+        // that agree token-by-token are still one person.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(2);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-jane-full",
+            user_id: TEST_USER_ID,
+            name: "Jane Smith",
+            phones: ["+15554440000"],
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-jane-abbrev",
+            user_id: TEST_USER_ID,
+            name: "Jane S.", // abbreviated surname, same person
+            phones: ["+15554440000"],
+            emails: [],
+            source: "outlook",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        const ids = new Set(result.contacts.map((c: any) => c.id));
+        // BACKLOG-2556: was `new Set(["ext-jane-full"])`. "Jane S." on the same
+        // line as "Jane Smith" is prefix-compatible and used to fold; it is
+        // also exactly as compatible with a different Jane S. The fold is
+        // deleted, so both cards are offered.
+        expect(ids).toEqual(new Set(["ext-jane-full", "ext-jane-abbrev"]));
+      });
+
+      it("no longer collapses two identical bare first names on one line [BACKLOG-2556]", async () => {
+        // The other control: the tightening must not split an EXACT match.
+        // "Margaret" / "Margaret" is handled by the equality check, so the same
+        // person imported from two sources under a bare name still collapses.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(2);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-bare-macos",
+            user_id: TEST_USER_ID,
+            name: "Margaret",
+            phones: ["+15555550116"],
+            emails: [],
+            source: "macos",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-bare-outlook",
+            user_id: TEST_USER_ID,
+            name: "Margaret",
+            phones: ["+15555550116"],
+            emails: [],
+            source: "outlook",
+            company: null,
+            last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        const result = await handler(mockEvent, TEST_USER_ID);
+
+        expect(result.success).toBe(true);
+        const ids = new Set(result.contacts.map((c: any) => c.id));
+        // BACKLOG-2556: was `new Set(["ext-bare-macos"])`. Two bare "Margaret"
+        // cards on one number is the case an equality check gets right and a
+        // shared office line gets wrong, and nothing here can tell them apart.
+        expect(ids).toEqual(new Set(["ext-bare-macos", "ext-bare-outlook"]));
       });
 
       it("recovers a contact the phone-map last-wins overwrite dropped (uses person list)", async () => {
@@ -890,7 +1224,7 @@ describe("Contact Handlers", () => {
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
         // A DIFFERENT Margaret is already imported (distinct phone/email).
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
-          { id: "imp-1", name: "Margaret", email: "other-margaret@example.com", phone: "+15550001111" },
+          { id: "imp-1", name: "Margaret", email: "other-margaret@example.com", phone: "+15555550130" } as Contact,
         ]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -901,9 +1235,12 @@ describe("Contact Handlers", () => {
         expect(ids).toContain("ext-margaret-b");
       });
 
-      it("still collapses the SAME person across sources via a shared email", async () => {
-        // Guard against over-correction: a genuine macOS+shadow duplicate that
-        // shares an email must still collapse to one.
+      it("no longer collapses across sources via a shared email [BACKLOG-2556]", async () => {
+        // BACKLOG-2556: this asserted ONE row ("a genuine macOS+shadow
+        // duplicate that shares an email must still collapse"). Both records
+        // are unimported — a legacy local `contacts` row and a shadow row — and
+        // neither the user nor the crosswalk has said they are one person. Two
+        // rows.
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const externalContactDb = require("../services/db/externalContactDbService");
         (externalContactDb.getCount as jest.Mock).mockReturnValue(1);
@@ -921,7 +1258,7 @@ describe("Contact Handlers", () => {
           },
         ]);
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
-          { id: "db-dana", name: "Dana Lee", email: "dana@example.com", phone: "+15559998888" },
+          { id: "db-dana", name: "Dana Lee", email: "dana@example.com", phone: "+15555550120" } as Contact,
         ]);
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
 
@@ -929,30 +1266,31 @@ describe("Contact Handlers", () => {
         const result = await handler(mockEvent, TEST_USER_ID);
 
         expect(result.success).toBe(true);
-        expect(result.contacts).toHaveLength(1);
-        expect(result.contacts[0].id).toBe("db-dana"); // DB record wins
+        // IDENTITY, not a count: the DB row is still first (STEP 1 runs before
+        // the shadow loop), and the shadow row it used to absorb is behind it.
+        expect(result.contacts.map((c: any) => c.id)).toEqual(["db-dana", "ext-dup"]);
       });
     });
 
     describe("already imported contacts filtered by phone", () => {
       it("should filter out macOS contacts if phone matches already imported", async () => {
         mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
-        mockContactsService.getContactNames.mockResolvedValue({
+        mockContactsService.getContactNames.mockResolvedValue(legacyReaderResult({
           phoneToContactInfo: {
-            "(555) 333-4444": {
+            "(555) 555-0107": {
               name: "Already Imported Person",
-              phones: ["(555) 333-4444"],
+              phones: ["(555) 555-0107"],
               emails: ["different@email.com"],
             },
           },
           status: "loaded",
-        });
+        }));
         mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
           {
             name: "Other Name",
             email: "other@email.com",
-            phone: "+15553334444",
-          }, // Same phone normalized
+            phone: "+15555550107",
+          } as Contact, // Same phone normalized
         ]);
 
         const handler = registeredHandlers.get("contacts:get-available");
@@ -961,6 +1299,206 @@ describe("Contact Handlers", () => {
         expect(result.success).toBe(true);
         // Should be empty - phone matches already imported contact
         expect(result.contacts).toHaveLength(0);
+      });
+    });
+
+    /**
+     * BACKLOG-2391 — picker funnel stage.
+     *
+     * Every `continue` in contacts:get-available drops a contact the user asked
+     * for. None of those drops were countable, so "my contacts are missing"
+     * could not be told apart from "they were never read off the Mac".
+     *
+     * ASSERTION STYLE: exact ID SETS for what survives, alongside the counts.
+     * A count assertion alone passes when the WRONG rows survive.
+     */
+    describe("BACKLOG-2391: picker funnel counts", () => {
+      beforeEach(() => {
+        resetContactIngestionFunnel();
+      });
+
+      /**
+       * A corpus with one drop of each kind, so every counter is non-zero and
+       * a counter wired to the wrong branch cannot hide behind a zero:
+       *   - db-keep          : shown
+       *   - db-imported      : SHOWN since BACKLOG-2608 — see below
+       *   - ext-keep         : shown
+       *   - ext-dup-of-db    : duplicate (shares db-keep's email)
+       *   - ext-outlook-off  : source disabled (outlook switched off)
+       *   - ext-imported     : already-imported (the crosswalk claims the record)
+       *
+       * BACKLOG-2608 — `db-imported` MOVED, and the move is the finding, not a
+       * fixture repair. It is a legacy row in the local `contacts` table with no
+       * `(source_type, source_record_id)` pair of any kind, so there is nothing
+       * the crosswalk can say about it and it can never again be called
+       * already-imported. It was being dropped because a saved contact shared
+       * its phone under a compatible name. `ext-imported` carries the
+       * already-imported case now, on a real claim.
+       *
+       * BACKLOG-2416: `db-imported` carries the NAME of the imported contact it
+       * is meant to duplicate. A shared phone alone no longer proves two records
+       * are one person — household and office lines are shared by distinct
+       * people — so the row must name the person it claims to be. It was
+       * previously "Db Imported" against an imported "Imported One", which under
+       * the new rule is a DIFFERENT person on the same line and is correctly
+       * shown. The intent of the fixture ("this row is already imported") is
+       * unchanged; only its name now says so.
+       */
+      async function runFunnelFixture() {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getCount as jest.Mock).mockReturnValue(4);
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-keep", user_id: TEST_USER_ID, name: "Ext Keep",
+            phones: ["+15551110000"], emails: ["ext-keep@example.com"],
+            // BACKLOG-2458: the shadow table ALWAYS carries a source identity
+            // (BACKLOG-2401 made it the identity). Omitting it here made the
+            // fixture unable to express whether a collapsed record's identity
+            // survives, which is the whole of the BACKLOG-2458 carry.
+            external_record_id: "rec-ext-keep", external_uuid: null,
+            source: "macos", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-dup-of-db", user_id: TEST_USER_ID, name: "Db Keep",
+            phones: ["+15552220000"], emails: ["db-keep@example.com"],
+            external_record_id: "rec-ext-dup", external_uuid: null,
+            source: "macos", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            id: "ext-outlook-off", user_id: TEST_USER_ID, name: "Outlook Person",
+            phones: ["+15553330000"], emails: ["outlook@example.com"],
+            source: "outlook", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            // BACKLOG-2531: the name now matters. This row models the SAME
+            // person recorded in the address book, so it carries the imported
+            // contact's name ("Imported One"). It used to say "Ext Imported" —
+            // a different person entirely — and was suppressed anyway, because
+            // a shared address alone was treated as proof. Under the name gate
+            // that spelling would be OFFERED, which is the fix, not a break.
+            id: "ext-imported", user_id: TEST_USER_ID, name: "Imported One",
+            phones: ["+15554440000"], emails: ["already@example.com"],
+            // BACKLOG-2608: an identity, because the crosswalk is now the only
+            // thing that can call a record already-imported.
+            external_record_id: "rec-ext-imported", external_uuid: null,
+            source: "macos", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+
+        mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([
+          { id: "db-keep", name: "Db Keep", email: "db-keep@example.com", phone: "+15552220000" } as Contact,
+          { id: "db-imported", name: "Imported One", email: "db-imported@example.com", phone: "+15559990000" } as Contact,
+        ]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
+          { id: "imp-1", name: "Imported One", email: "already@example.com", phone: "+15559990000" } as Contact,
+        ]);
+        mockLinkedSourceKeys = new Set([sourceKey("macos", "rec-ext-imported")]);
+
+        // Outlook switched OFF, everything else on.
+        mockIsContactSourceEnabled.mockImplementation(
+          async (_u: string, _c: string, key: string) => key !== "outlookContacts",
+        );
+
+        const handler = registeredHandlers.get("contacts:get-available");
+        return handler(mockEvent, TEST_USER_ID);
+      }
+
+      it("reports every drop reason, and the arithmetic closes", async () => {
+        const result = await runFunnelFixture();
+        expect(result.success).toBe(true);
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker).toBeDefined();
+
+        expect(picker!.dbRowsIn).toBe(2);
+        expect(picker!.externalRowsIn).toBe(4);
+        expect(picker!.rowsIn).toBe(6);
+        expect(picker!.sourceDisabled).toBe(1);      // ext-outlook-off
+        // BACKLOG-2608: was 2 — `db-imported` (a legacy local row with no source
+        // identity) was dropped on a shared phone plus a compatible name. Only
+        // `ext-imported` remains, and it is dropped because the crosswalk claims
+        // its record.
+        expect(picker!.alreadyImported).toBe(1);
+        // BACKLOG-2556: was 1 (ext-dup-of-db folded into db-keep on a shared
+        // address). The fold is deleted, so this drop reason is structurally
+        // zero — nothing else in the handler suppresses a row as a duplicate.
+        // The FIELD stays because `PickerStage` is a persisted diagnostics
+        // shape read back by the support bundle.
+        expect(picker!.duplicateSuppressed).toBe(0);
+        // ...and `collapsedIdentitiesCarried` is omitted entirely rather than
+        // reported as 0, so no line claims a carry mechanism that is gone.
+        expect(picker!.collapsedIdentitiesCarried).toBeUndefined();
+        expect(picker!.shown).toBe(4); // BACKLOG-2608: was 3, `db-imported` joined
+
+        // The funnel is only trustworthy if it balances.
+        expect(
+          picker!.rowsIn -
+            picker!.sourceDisabled -
+            picker!.alreadyImported -
+            picker!.duplicateSuppressed,
+        ).toBe(picker!.shown);
+      });
+
+      it("the surviving rows are the EXACT ones the counts claim", async () => {
+        const result = await runFunnelFixture();
+
+        // Identity, not count: `shown: 3` is equally satisfied by dropping
+        // db-keep and keeping ext-dup-of-db, which would be the wrong rows.
+        // BACKLOG-2556: `ext-dup-of-db` is the third — it shared an address and
+        // a name with the legacy `db-keep` row and used to be folded into it.
+        // BACKLOG-2608: `db-imported` is the fourth — a legacy local row that
+        // no crosswalk row can speak for, previously dropped on a shared phone.
+        expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual([
+          "db-imported",
+          "db-keep",
+          "ext-dup-of-db",
+          "ext-keep",
+        ]);
+      });
+
+      it("emits ONE info line per picker read — counters, never per-row", async () => {
+        await runFunnelFixture();
+
+        const pickerLines = mockLogService.info.mock.calls
+          .map((c: unknown[]) => String(c[0]))
+          .filter((m: string) => m.includes("picker:"));
+
+        expect(pickerLines).toHaveLength(1);
+        expect(pickerLines[0]).toBe(
+          "[Contacts] picker: 6 in (db 2 + external 4) -> source-disabled 1" +
+            " -> already-imported 1 -> dup-suppressed 0 -> shown 4",
+        );
+      });
+
+      it("leaks no PII into any emitted log line", async () => {
+        await runFunnelFixture();
+
+        // Every name / address / number present in the fixture corpus.
+        const pii = [
+          "Ext Keep", "Db Keep", "Outlook Person", "Ext Imported", "Db Imported", "Imported One",
+          "ext-keep@example.com", "db-keep@example.com", "outlook@example.com",
+          "already@example.com", "db-imported@example.com",
+          "+15551110000", "+15552220000", "+15553330000", "+15554440000", "+15559990000",
+        ];
+
+        const emitted = [
+          ...mockLogService.info.mock.calls,
+          ...mockLogService.warn.mock.calls,
+          ...mockLogService.error.mock.calls,
+        ]
+          .map((c: unknown[]) =>
+            c.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "),
+          )
+          .join("\n");
+
+        for (const secret of pii) {
+          expect(emitted).not.toContain(secret);
+        }
       });
     });
   });
@@ -984,13 +1522,13 @@ describe("Contact Handlers", () => {
           name: "John Doe",
           email: "john@example.com",
           phone: "555-1234",
-        })
+        } as Contact)
         .mockResolvedValueOnce({
           id: "contact-jane",
           name: "Jane Smith",
           email: "jane@example.com",
           phone: "555-5678",
-        });
+        } as Contact);
 
       const handler = registeredHandlers.get("contacts:import");
       const result = await handler(mockEvent, TEST_USER_ID, contactsToImport);
@@ -1059,7 +1597,11 @@ describe("Contact Handlers", () => {
           name: "Less Active Jane",
           lastActivity: new Date(Date.now() - 86400000),
         },
-      ];
+        // BACKLOG-2414: `lastActivity` is not a `ContactWithActivity` field (the
+        // real reader returns `last_communication_at`). Left verbatim because no
+        // assertion here reads it — the test only pins the length and the reader
+        // arguments — and renaming it would change the mocked payload.
+      ] as unknown as ContactWithActivity[];
       mockDatabaseService.getContactsSortedByActivity.mockResolvedValue(
         sortedContacts,
       );
@@ -1103,7 +1645,10 @@ describe("Contact Handlers", () => {
     };
 
     it("should create contact successfully", async () => {
-      const createdContact = { id: "contact-new", ...validContactData };
+      const createdContact = {
+        id: "contact-new",
+        ...validContactData,
+      } as Contact;
       mockDatabaseService.createContact.mockResolvedValue(createdContact);
 
       const handler = registeredHandlers.get("contacts:create");
@@ -1144,7 +1689,7 @@ describe("Contact Handlers", () => {
         mockDatabaseService.createContact.mockResolvedValue({
           id: "contact-src",
           name: "Imported Person",
-        });
+        } as Contact);
 
         const handler = registeredHandlers.get("contacts:create");
         const result = await handler(mockEvent, TEST_USER_ID, {
@@ -1154,8 +1699,13 @@ describe("Contact Handlers", () => {
         });
 
         expect(result.success).toBe(true);
+        // BACKLOG-2496: the origin is now a REQUIRED second argument, written
+        // in the same transaction as the contact. Asserted rather than
+        // wildcarded — a create that passed the wrong origin would otherwise
+        // read as a pass here.
         expect(mockDatabaseService.createContact).toHaveBeenCalledWith(
           expect.objectContaining({ source: expectedSource }),
+          { kind: "derived" },
         );
       },
     );
@@ -1164,7 +1714,7 @@ describe("Contact Handlers", () => {
       mockDatabaseService.createContact.mockResolvedValue({
         id: "contact-fallback",
         name: "Unknown Origin",
-      });
+      } as Contact);
 
       const handler = registeredHandlers.get("contacts:create");
       const result = await handler(mockEvent, TEST_USER_ID, {
@@ -1176,6 +1726,8 @@ describe("Contact Handlers", () => {
       expect(result.success).toBe(true);
       expect(mockDatabaseService.createContact).toHaveBeenCalledWith(
         expect.objectContaining({ source: "manual" }),
+        // BACKLOG-2496 — the required origin argument.
+        { kind: "derived" },
       );
     });
 
@@ -1198,26 +1750,34 @@ describe("Contact Handlers", () => {
       user_id: TEST_USER_ID,
       name: "Old Name",
       email: "old@example.com",
-    };
+    } as Contact;
 
-    it("should update contact successfully", async () => {
-      mockDatabaseService.getContactById.mockResolvedValue(existingContact);
-      mockDatabaseService.updateContact.mockResolvedValue(undefined);
-
-      const handler = registeredHandlers.get("contacts:update");
-      const result = await handler(mockEvent, TEST_CONTACT_ID, {
-        name: "New Name",
-      });
-
-      expect(result.success).toBe(true);
-      expect(mockDatabaseService.updateContact).toHaveBeenCalled();
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "CONTACT_UPDATE",
-          success: true,
-        }),
-      );
-    });
+    /**
+     * REPLACED, NOT SUPPLEMENTED — BACKLOG-2528.
+     *
+     * What stood here was "should update contact successfully":
+     *
+     *     expect(result.success).toBe(true);
+     *     expect(mockDatabaseService.updateContact).toHaveBeenCalled();
+     *
+     * with `updateContact` mocked. It asserted that a mock was called, which a
+     * writer dropping every field satisfies just as well as a correct one. It
+     * was green for the entire life of a P0 in the code directly beneath it:
+     * renaming a contact wrote nothing, and the handler still reported success.
+     *
+     * Re-pointing it at `updateContact.mock.calls[0]` would not fix that — the
+     * argument is not the guarantee, the row is. The successful-rename case
+     * therefore moved somewhere that can observe a row:
+     *
+     *     electron/__tests__/contact-handlers.updatePersistence.test.ts
+     *
+     * which drives this same handler over a REAL database and reads
+     * `display_name` back with raw SQL, including across a close/reopen.
+     *
+     * The audit-log assertion moved with it. The two failure cases below stay
+     * here: they are about the handler's error handling, which a mocked
+     * `databaseService` is the right tool for.
+     */
 
     it("should handle invalid contact ID", async () => {
       const handler = registeredHandlers.get("contacts:update");
@@ -1255,11 +1815,16 @@ describe("Contact Handlers", () => {
       expect(result.count).toBe(0);
     });
 
-    it("should return false when contact has transactions", async () => {
+    it("still reports canDelete for a contact WITH transactions, and returns them", async () => {
+      // BACKLOG-2365: this asserted `canDelete: false`. Removal is a tombstone
+      // now and the contact's roles survive it, so having transactions no
+      // longer makes anyone undeletable. The `transactions` payload is the part
+      // that still matters — three callers use this handler purely to LIST the
+      // deals a contact is on — so it is asserted by exact id set, not length.
       const transactions = [
         { id: "txn-1", property_address: "123 Main St" },
         { id: "txn-2", property_address: "456 Oak Ave" },
-      ];
+      ] as TransactionWithRoles[];
       mockDatabaseService.getTransactionsByContact.mockResolvedValue(
         transactions,
       );
@@ -1268,8 +1833,11 @@ describe("Contact Handlers", () => {
       const result = await handler(mockEvent, TEST_CONTACT_ID);
 
       expect(result.success).toBe(true);
-      expect(result.canDelete).toBe(false);
-      expect(result.transactions).toHaveLength(2);
+      expect(result.canDelete).toBe(true);
+      expect(result.transactions.map((t: { id: string }) => t.id)).toEqual([
+        "txn-1",
+        "txn-2",
+      ]);
       expect(result.count).toBe(2);
     });
 
@@ -1287,7 +1855,7 @@ describe("Contact Handlers", () => {
       id: TEST_CONTACT_ID,
       user_id: TEST_USER_ID,
       name: "John Doe",
-    };
+    } as Contact;
 
     it("should delete contact successfully when no transactions", async () => {
       mockDatabaseService.getContactById.mockResolvedValue(existingContact);
@@ -1306,18 +1874,34 @@ describe("Contact Handlers", () => {
       );
     });
 
-    it("should prevent deletion when contact has transactions", async () => {
+    it("DELETES a contact that has transactions — the old guard is gone", async () => {
+      // BACKLOG-2365, founder-approved. This test previously asserted the
+      // opposite: that a contact on a deal could not be deleted. That guard
+      // existed only because deletion cascaded away the contact's roles on
+      // those very deals. Removal is reversible now, so the contact a user most
+      // needs to correct is no longer the one contact they cannot touch.
       mockDatabaseService.getContactById.mockResolvedValue(existingContact);
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([
-        { id: "txn-1" },
+        { id: "txn-1" } as TransactionWithRoles,
       ]);
 
       const handler = registeredHandlers.get("contacts:delete");
       const result = await handler(mockEvent, TEST_CONTACT_ID);
 
-      expect(result.success).toBe(false);
-      expect(result.canDelete).toBe(false);
-      expect(result.error).toContain("associated transactions");
+      expect(result.success).toBe(true);
+      expect(mockDatabaseService.deleteContact).toHaveBeenCalledWith(
+        TEST_CONTACT_ID,
+        "user_deleted",
+      );
+      // The audit trail records the removal AND why.
+      expect(mockAuditService.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "CONTACT_DELETE",
+          resourceId: TEST_CONTACT_ID,
+          metadata: expect.objectContaining({ reason: "user_deleted" }),
+          success: true,
+        }),
+      );
     });
 
     it("should handle invalid contact ID", async () => {
@@ -1357,17 +1941,22 @@ describe("Contact Handlers", () => {
       );
     });
 
-    it("should prevent removal when contact has transactions", async () => {
+    it("REMOVES a contact that has transactions — the old guard is gone here too", async () => {
+      // BACKLOG-2365. This is the path the Clients & Contacts remove button
+      // takes, so leaving the guard here would have left the founder-facing
+      // flow behaving exactly as before no matter what contacts:delete did.
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([
-        { id: "txn-1" },
+        { id: "txn-1" } as TransactionWithRoles,
       ]);
+      mockDatabaseService.removeContact.mockResolvedValue(undefined);
 
       const handler = registeredHandlers.get("contacts:remove");
       const result = await handler(mockEvent, TEST_CONTACT_ID);
 
-      expect(result.success).toBe(false);
-      expect(result.canDelete).toBe(false);
-      expect(result.error).toContain("associated transactions");
+      expect(result.success).toBe(true);
+      expect(mockDatabaseService.removeContact).toHaveBeenCalledWith(
+        TEST_CONTACT_ID,
+      );
     });
 
     it("should handle invalid contact ID", async () => {
@@ -1415,23 +2004,81 @@ describe("Contact Handlers", () => {
 
     it("should proceed with sync when macOS contacts source is enabled", async () => {
       mockIsContactSourceEnabled.mockResolvedValue(true);
-      mockContactsService.getContactNames.mockResolvedValue({
-        phoneToContactInfo: {
-          "+1234567890": {
-            name: "Test Contact",
-            phones: ["+1234567890"],
-            emails: ["test@example.com"],
-            company: "Test Corp",
-            recordId: "rec-1",
+      // BACKLOG-2404: built through the typed factory, so the required-field
+      // contract is enforced at the factory's return annotation rather than
+      // waved through by an `as any` (see readerResult's header).
+      mockContactsService.getContactNames.mockResolvedValue(
+        readerResult({
+          phoneToContactInfo: {
+            "+1234567890": {
+              name: "Test Contact",
+              phones: ["+1234567890"],
+              emails: ["test@example.com"],
+              company: "Test Corp",
+              recordId: "rec-1",
+            },
           },
-        },
-      } as any);
+          status: { contactCount: 1, booksFound: 3, booksRead: 3 },
+        }),
+      );
 
       const handler = registeredHandlers.get("contacts:syncExternal");
       const result = await handler(mockEvent, TEST_USER_ID);
 
       expect(result.success).toBe(true);
       expect(mockContactsService.getContactNames).toHaveBeenCalled();
+    });
+
+    /**
+     * BACKLOG-2404 — the coverage has to survive the IPC hop.
+     *
+     * The reader knowing "read 2 of 3" is worth nothing if the handler drops
+     * it: Settings is the surface the user actually looks at, and it was
+     * discarding this result entirely.
+     */
+    it("forwards a PARTIAL address-book read to the renderer", async () => {
+      mockIsContactSourceEnabled.mockResolvedValue(true);
+      mockContactsService.getContactNames.mockResolvedValue(
+        readerResult({
+          phoneToContactInfo: {
+            "+1234567890": { name: "Test Contact", phones: ["+1234567890"], emails: [], recordId: "rec-1" },
+          },
+          status: {
+            contactCount: 1,
+            booksFound: 3,
+            booksRead: 2,
+            booksFailed: 1,
+            coverage: "partial",
+            failures: [{ path: "Sources/1DB81…/AddressBook-v22.abcddb", reason: "read-error" }],
+          },
+        }),
+      );
+
+      const handler = registeredHandlers.get("contacts:syncExternal");
+      const result = await handler(mockEvent, TEST_USER_ID);
+
+      expect(result.success).toBe(true);
+      expect(result.read).toEqual({ found: 3, read: 2, failed: 1, coverage: "partial" });
+    });
+
+    it("OMITS coverage rather than inventing zeros when the reader did not report it", async () => {
+      // Defaulting to zeros would fabricate a measurement, and `read 0 of 0` is
+      // indistinguishable from "we never looked" — the ambiguity this epic
+      // exists to delete. Absent means unreported; the panel then draws nothing.
+      mockIsContactSourceEnabled.mockResolvedValue(true);
+      mockContactsService.getContactNames.mockResolvedValue(
+        readerResultWithoutStatus({
+          phoneToContactInfo: {
+            "+1234567890": { name: "Test Contact", phones: ["+1234567890"], emails: [], recordId: "rec-1" },
+          },
+        }),
+      );
+
+      const handler = registeredHandlers.get("contacts:syncExternal");
+      const result = await handler(mockEvent, TEST_USER_ID);
+
+      expect(result.success).toBe(true);
+      expect(result.read).toBeUndefined();
     });
   });
 
@@ -1561,7 +2208,7 @@ describe("Contact Handlers", () => {
           name: "iPhone Contact",
           email: "iphone@example.com",
           phone: "+1234567890",
-        },
+        } as Contact,
       ]);
 
       const handler = registeredHandlers.get("contacts:get-available");
@@ -1633,7 +2280,7 @@ describe("Contact Handlers", () => {
           name: "iPhone Contact",
           email: "iphone@example.com",
           phone: "+1234567890",
-        },
+        } as Contact,
       ]);
 
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -1659,6 +2306,574 @@ describe("Contact Handlers", () => {
       const contactNames = result.contacts.map((c: any) => c.name);
       expect(contactNames).toContain("iPhone Contact");
       expect(contactNames).toContain("Outlook Contact");
+    });
+  });
+
+  /**
+   * BACKLOG-2478: every source is gated BY ITS OWN PREFERENCE.
+   *
+   * `android_sync` had no named branch and fell to a catch-all that decided its
+   * visibility from the *macOS* preference. That is wrong on its own terms, but
+   * it did NOT black out Android on Windows: `macosContacts` is never written
+   * there (platform-filtered in onboarding, `isMacOS`-gated in Settings) and
+   * `isContactSourceEnabled` fails open, so `macosEnabled` is `true` on Windows
+   * and the catch-all never fired. It fired only for users who explicitly
+   * disabled the Mac address book.
+   *
+   * What this change buys is that the picker no longer depends on a fail-open
+   * default of an unrelated preference to be correct.
+   *
+   * The corpus carries one record per source plus one deliberately unrecognised
+   * source. Every record has a DISTINCT name, email and phone so that no
+   * assertion here can be satisfied by the dedup or already-imported paths — if
+   * a record is missing from the returned set, the source filter dropped it.
+   */
+  describe("BACKLOG-2478: per-source picker gating", () => {
+    /** Every id in the corpus, so "absent" is always proved against a known whole. */
+    const ALL_IDS = [
+      "ext-android",
+      "ext-google",
+      "ext-iphone",
+      "ext-macos",
+      "ext-outlook",
+      "ext-unknown",
+    ];
+
+    beforeEach(() => {
+      resetContactIngestionFunnel();
+      mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([]);
+      mockDatabaseService.getUnimportedContactsByUserId.mockResolvedValue([]);
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const externalContactDb = require("../services/db/externalContactDbService");
+      (externalContactDb.getCount as jest.Mock).mockReturnValue(6);
+      (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+        {
+          id: "ext-macos", user_id: TEST_USER_ID, name: "Mac Person",
+          phones: ["+15555550114"], emails: ["mac@example.com"],
+          external_record_id: "rec-macos", external_uuid: null,
+          source: "macos", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-iphone", user_id: TEST_USER_ID, name: "iPhone Person",
+          phones: ["+15555550129"], emails: ["iphone@example.com"],
+          external_record_id: "rec-iphone", external_uuid: null,
+          source: "iphone", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-outlook", user_id: TEST_USER_ID, name: "Outlook Person",
+          phones: ["+15555550128"], emails: ["outlook@example.com"],
+          external_record_id: "rec-outlook", external_uuid: null,
+          source: "outlook", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-google", user_id: TEST_USER_ID, name: "Google Person",
+          phones: ["+15555550127"], emails: ["google@example.com"],
+          external_record_id: "rec-google", external_uuid: null,
+          source: "google_contacts", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-android", user_id: TEST_USER_ID, name: "Android Person",
+          phones: ["+15555550118"], emails: ["android@example.com"],
+          external_record_id: "rec-android", external_uuid: "uuid-android",
+          source: "android_sync", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+        {
+          id: "ext-unknown", user_id: TEST_USER_ID, name: "Unknown Person",
+          phones: ["+15555550126"], emails: ["unknown@example.com"],
+          external_record_id: "rec-unknown", external_uuid: null,
+          // Deliberately outside EXTERNAL_SOURCE_TYPES. `external_contacts.source`
+          // is `TEXT DEFAULT 'macos'` with NO CHECK constraint (schema.sql:1262),
+          // so this is a reachable state, not a hypothetical one.
+          source: "carrier_pigeon", company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        },
+      ]);
+    });
+
+    /** Enable exactly the named preference keys; everything else is OFF. */
+    function enableOnly(...keys: string[]) {
+      mockIsContactSourceEnabled.mockImplementation(
+        async (_u: string, _c: string, key: string) => keys.includes(key),
+      );
+    }
+
+    async function getAvailable() {
+      const handler = registeredHandlers.get("contacts:get-available");
+      return handler(mockEvent, TEST_USER_ID);
+    }
+
+    async function shownIds(): Promise<string[]> {
+      const result = await getAvailable();
+      expect(result.success).toBe(true);
+      return result.contacts.map((c: { id: string }) => c.id).sort();
+    }
+
+    describe("android_sync is gated when macOS is explicitly disabled", () => {
+      /**
+       * NOTE ON WHAT THIS BLOCK DOES AND DOES NOT PROVE.
+       *
+       * `enableOnly()` forces every unnamed key to `false`. That models a user
+       * who EXPLICITLY switched the Mac address book off — 2 of 13 production
+       * preference rows, both macOS users. It is NOT what a Windows machine
+       * looks like: there `macosContacts` is never written at all, and
+       * `isContactSourceEnabled` fails open to `true`.
+       *
+       * An earlier revision of this file described these as "the founder's case:
+       * Windows", which was wrong and helped a false root cause survive review.
+       * The Windows configuration is covered by the
+       * "real preference semantics" block below, which honours the default
+       * argument instead of discarding it. Do not reintroduce the Windows
+       * framing here.
+       */
+      it("returns the Android contact when macOS and iPhone are both disabled", async () => {
+        enableOnly("androidContacts", "outlookContacts", "googleContacts");
+
+        // Identity, not count. A count of 4 is equally satisfied by returning
+        // ext-macos instead of ext-android, which is the exact wrong answer.
+        expect(await shownIds()).toEqual([
+          "ext-android",
+          "ext-google",
+          "ext-outlook",
+          "ext-unknown",
+        ]);
+      });
+
+      it("returns the Android contact even when it is the ONLY enabled source", async () => {
+        // The narrowest statement of the bug: nothing but Android is on, and
+        // the picker must not come back without it.
+        enableOnly("androidContacts");
+
+        expect(await shownIds()).toEqual(["ext-android", "ext-unknown"]);
+      });
+
+      it("does not count the Android contact as source-disabled", async () => {
+        enableOnly("androidContacts", "outlookContacts", "googleContacts");
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker).toBeDefined();
+        // ext-macos + ext-iphone only. Counting ext-android here would be the
+        // funnel lying about a record the user can actually see (BACKLOG-2391).
+        expect(picker!.sourceDisabled).toBe(2);
+        expect(picker!.shown).toBe(4);
+      });
+
+      it("carries the Android record's source identity through to import", async () => {
+        // These rows never used to reach the push site, so the identity fields
+        // are asserted rather than assumed. `android_sync` is in
+        // EXTERNAL_SOURCE_TYPES, so it must NOT be flattened to contacts_app.
+        enableOnly("androidContacts");
+        const result = await getAvailable();
+        const android = result.contacts.find((c: { id: string }) => c.id === "ext-android");
+
+        expect(android).toBeDefined();
+        expect(android.source).toBe("android_sync");
+        expect(android.externalRecordId).toBe("rec-android");
+        expect(android.externalSourceType).toBe("android_sync");
+        expect(android.externalUuid).toBe("uuid-android");
+        // BACKLOG-2556: `collapsedSources` was asserted here as a
+        // single-element restatement of the three fields above. Deleted with
+        // the fold that filled it; the three fields ARE the record.
+        expect(android.collapsedSources).toBeUndefined();
+      });
+    });
+
+    describe("android_sync respects its own preference", () => {
+      it("hides the Android contact when androidContacts is disabled", async () => {
+        enableOnly("outlookContacts", "googleContacts");
+
+        const ids = await shownIds();
+        expect(ids).not.toContain("ext-android");
+        expect(ids).toEqual(["ext-google", "ext-outlook", "ext-unknown"]);
+      });
+
+      it("counts the disabled Android contact as source-disabled", async () => {
+        enableOnly("outlookContacts", "googleContacts");
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        // ext-macos + ext-iphone + ext-android.
+        expect(picker!.sourceDisabled).toBe(3);
+        expect(picker!.shown).toBe(3);
+      });
+
+      it("hides the Android contact even when macOS is enabled", async () => {
+        // The preference is the ONLY thing that decides this now. Under the old
+        // catch-all, macOS being on was enough to show an Android record — the
+        // same wrong coupling as the bug, in the permissive direction.
+        enableOnly("macosContacts", "iphoneContacts");
+
+        const ids = await shownIds();
+        expect(ids).not.toContain("ext-android");
+        expect(ids).toEqual(["ext-iphone", "ext-macos", "ext-unknown"]);
+      });
+    });
+
+    describe("the other four sources are gated exactly as before", () => {
+      it("shows every source when all preferences are on", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        expect(await shownIds()).toEqual(ALL_IDS);
+      });
+
+      it("hides outlook when outlookContacts is off", async () => {
+        enableOnly("macosContacts", "iphoneContacts", "googleContacts", "androidContacts");
+        expect(await shownIds()).not.toContain("ext-outlook");
+      });
+
+      it("hides google_contacts when googleContacts is off", async () => {
+        enableOnly("macosContacts", "iphoneContacts", "outlookContacts", "androidContacts");
+        expect(await shownIds()).not.toContain("ext-google");
+      });
+
+      it("hides macos when macosContacts is off", async () => {
+        enableOnly("iphoneContacts", "outlookContacts", "googleContacts", "androidContacts");
+        expect(await shownIds()).not.toContain("ext-macos");
+      });
+
+      // BACKLOG-2486: THE OR-RULE IS GONE, AND THE FIRST OF THESE INVERTED.
+      //
+      // It previously read "keeps the iphone OR-rule: shown when macOS is on but
+      // iPhone is off", with the rationale "on macOS they are the same address
+      // book". That rationale is why the coupling survived review, and it is
+      // wrong in the only direction that matters: it made `iphoneContacts`
+      // unable to suppress anything on a Mac, so unticking iPhone Contacts at
+      // setup imported iPhone contacts anyway.
+      //
+      // The two sources DO overlap on a Mac — that is real, and it is why
+      // BACKLOG-2479 turns iPhone OFF by default there. Overlapping is a reason
+      // to default one of them off; it is not a reason to make the user's answer
+      // unreadable.
+      //
+      // The full matrix, including what an ABSENT key means on each platform,
+      // is in `contact-handlers.sourceGates.test.ts`. These two stay here so the
+      // BACKLOG-2478 per-source suite keeps one case per source in one place.
+      it("hides iphone when iphoneContacts is off, even with macOS on", async () => {
+        enableOnly("macosContacts");
+        expect(await shownIds()).not.toContain("ext-iphone");
+      });
+
+      it("shows iphone when iphoneContacts is on, even with macOS off", async () => {
+        enableOnly("iphoneContacts");
+        expect(await shownIds()).toContain("ext-iphone");
+      });
+    });
+
+    describe("an unrecognised source is shown, not silently dropped", () => {
+      it("shows the unknown source when macOS is disabled", async () => {
+        // This is the branch that produced the bug. Under the old catch-all an
+        // unrecognised source vanished on every Windows machine, with no error
+        // and no counter — the failure mode that let BACKLOG-2478 reach the field.
+        enableOnly("androidContacts");
+        expect(await shownIds()).toContain("ext-unknown");
+      });
+
+      it("does not count the unknown source as source-disabled", async () => {
+        enableOnly("androidContacts");
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        // Shown records must never be counted as suppressed, or the funnel
+        // cannot distinguish "missing" from "never read" (BACKLOG-2391).
+        expect(picker!.sourceDisabled).toBe(4); // macos, iphone, outlook, google
+        expect(picker!.shown).toBe(2);          // android + unknown
+      });
+    });
+
+    describe("the funnel arithmetic still closes", () => {
+      it.each([
+        ["Android only", ["androidContacts"]],
+        ["Android + cloud", ["androidContacts", "outlookContacts", "googleContacts"]],
+        ["Android off", ["outlookContacts", "googleContacts"]],
+        ["all sources on", ["macosContacts", "iphoneContacts", "outlookContacts", "googleContacts", "androidContacts"]],
+      ])("balances for %s", async (_label, keys) => {
+        enableOnly(...(keys as string[]));
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker!.externalRowsIn).toBe(6);
+        expect(
+          picker!.rowsIn -
+            picker!.sourceDisabled -
+            picker!.alreadyImported -
+            picker!.duplicateSuppressed,
+        ).toBe(picker!.shown);
+      });
+
+      /**
+       * The cases above cannot detect a mis-count in `alreadyImported` or
+       * `duplicateSuppressed`: the corpus gives every record a distinct
+       * identity and mocks the imported/unimported DB reads to `[]`, so both
+       * terms are always 0 and the assertion degenerates to
+       * `6 - sourceDisabled === shown`.
+       *
+       * This case makes all four terms non-zero WITH an Android record present,
+       * so the invariant is actually load-bearing.
+       */
+      it("balances when every drop reason is non-zero and Android is in the mix", async () => {
+        enableOnly("androidContacts", "outlookContacts", "googleContacts");
+
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue([
+          {
+            id: "ext-android", user_id: TEST_USER_ID, name: "Android Person",
+            phones: ["+15555550118"], emails: ["android@example.com"],
+            external_record_id: "rec-android", external_uuid: "uuid-android",
+            source: "android_sync", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            // Source disabled: macos is off under enableOnly above.
+            id: "ext-macos", user_id: TEST_USER_ID, name: "Mac Person",
+            phones: ["+15555550114"], emails: ["mac@example.com"],
+            external_record_id: "rec-macos", external_uuid: null,
+            source: "macos", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            // Already imported. BACKLOG-2608: because the CROSSWALK claims the
+            // record (seeded below), not because its email matches the saved
+            // contact — a resemblance no longer suppresses anything.
+            id: "ext-imported", user_id: TEST_USER_ID, name: "Imported Person",
+            phones: ["+15555550117"], emails: ["imported@example.com"],
+            external_record_id: "rec-imported", external_uuid: null,
+            source: "android_sync", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+          {
+            // BACKLOG-2556: shares ext-android's email under the same name, so
+            // it USED to collapse into it. The fold is deleted and it is now
+            // its own row — kept in the fixture deliberately, because a funnel
+            // that "balances" is only meaningful if a row that used to be
+            // dropped is proven to be counted as shown instead.
+            id: "ext-dup", user_id: TEST_USER_ID, name: "Android Person",
+            phones: ["+15555550125"], emails: ["android@example.com"],
+            external_record_id: "rec-dup", external_uuid: null,
+            source: "android_sync", company: null, last_message_at: null,
+            synced_at: new Date().toISOString(),
+          },
+        ]);
+        mockDatabaseService.getImportedContactsByUserIdAsync.mockResolvedValue([
+          { id: "imp-1", name: "Imported Person", email: "imported@example.com", phone: "+15555550117" } as Contact,
+        ]);
+        mockLinkedSourceKeys = new Set([sourceKey("android_sync", "rec-imported")]);
+
+        const result = await getAvailable();
+        expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual([
+          "ext-android",
+          "ext-dup",
+        ]);
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker!.sourceDisabled).toBe(1);      // ext-macos
+        expect(picker!.alreadyImported).toBe(1);     // ext-imported
+        expect(picker!.duplicateSuppressed).toBe(0); // BACKLOG-2556: was 1 (ext-dup)
+        expect(picker!.shown).toBe(2);
+        expect(
+          picker!.rowsIn -
+            picker!.sourceDisabled -
+            picker!.alreadyImported -
+            picker!.duplicateSuppressed,
+        ).toBe(picker!.shown);
+      });
+    });
+
+    /**
+     * REAL PREFERENCE SEMANTICS — the block that would have caught the
+     * misdiagnosis this PR originally shipped with.
+     *
+     * `enableOnly()` above forces every unnamed key to `false` and DISCARDS the
+     * `defaultValue` argument. No real machine is ever in that state, and the
+     * discarded argument is exactly where the truth lives: a key that onboarding
+     * never wrote is ABSENT, and `isContactSourceEnabled` returns the caller's
+     * default for absent keys.
+     *
+     * `withStoredPreferences` mirrors `preferenceHelper.ts:36-37` exactly, so
+     * these cases exercise the same fail-open path production does — and a
+     * change of the handler's default from `true` to `false` turns them red,
+     * which under `enableOnly()` it would not.
+     */
+    describe("real preference semantics (stored[key] ?? defaultValue)", () => {
+      /** Exactly `preferenceHelper.ts:36-37`. Honours the 4th argument. */
+      function withStoredPreferences(stored: Record<string, boolean>) {
+        mockIsContactSourceEnabled.mockImplementation(
+          async (_u: string, _c: string, key: string, defaultValue: boolean) =>
+            typeof stored[key] === "boolean" ? stored[key] : defaultValue,
+        );
+      }
+
+      it("reads androidContacts with a default of TRUE", async () => {
+        // The default argument is the whole mechanism. If someone "tightens"
+        // this to false, every absent-key user loses their Android contacts —
+        // and no enableOnly()-based test would notice.
+        withStoredPreferences({});
+        await getAvailable();
+
+        expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(
+          TEST_USER_ID,
+          "direct",
+          "androidContacts",
+          true,
+        );
+      });
+
+      it("shows Android for a Windows + Android user (exactly the keys onboarding writes)", async () => {
+        // On Windows, `visibleSources` excludes macosContacts (platforms:
+        // ["macos"]) and iphoneContacts (phoneType: "iphone"), so onboarding
+        // writes only these three. macos/iphone are ABSENT, not false — which
+        // is why they are shown too, and why the old catch-all never fired here.
+        withStoredPreferences({
+          androidContacts: true,
+          googleContacts: true,
+          outlookContacts: true,
+        });
+
+        expect(await shownIds()).toEqual(ALL_IDS);
+      });
+
+      it("shows Android for a Windows + iPhone user who later pairs Android", async () => {
+        // THE DISPROOF OF THE "KNOWN LIMITATION" THIS PR ONCE CLAIMED.
+        //
+        // androidContacts has `phoneType: "android"`, so an iPhone-declaring
+        // user never has it written. Absent -> default true -> SHOWN. There is
+        // no stored `false` to strand them, and zero production rows have one.
+        withStoredPreferences({
+          iphoneContacts: true,
+          outlookContacts: true,
+          googleContacts: false,
+        });
+
+        const ids = await shownIds();
+        expect(ids).toContain("ext-android");
+        expect(ids).not.toContain("ext-google");
+      });
+
+      it("hides Android only when the preference is EXPLICITLY false", async () => {
+        withStoredPreferences({
+          macosContacts: true,
+          iphoneContacts: true,
+          outlookContacts: true,
+          googleContacts: true,
+          androidContacts: false,
+        });
+
+        const ids = await shownIds();
+        expect(ids).not.toContain("ext-android");
+        expect(ids).toEqual(["ext-google", "ext-iphone", "ext-macos", "ext-outlook", "ext-unknown"]);
+      });
+
+      it("shows Android when macOS is explicitly disabled but Android is absent", async () => {
+        // The only configuration in which the old catch-all actually fired:
+        // a user who deliberately turned the Mac address book off. Android is
+        // absent -> true -> shown. Base behaviour dropped it here.
+        withStoredPreferences({ macosContacts: false });
+
+        expect(await shownIds()).toContain("ext-android");
+      });
+    });
+
+    /**
+     * BACKLOG-2478: a NULL source is the one state the "visible but auditable"
+     * argument cannot afford to lose, because a nullable column with no CHECK
+     * is what that argument leans on. `external_contacts.source` is
+     * `TEXT DEFAULT 'macos'` with neither constraint, and
+     * `externalContactDbService` casts `row.source as ExternalContactSource`
+     * over it — so the union type is a promise the database does not keep.
+     */
+    describe("null and unrecognised sources are shown AND logged", () => {
+      function withCorpus(rows: Array<Record<string, unknown>>) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const externalContactDb = require("../services/db/externalContactDbService");
+        (externalContactDb.getAllForUserAsync as jest.Mock).mockResolvedValue(rows);
+      }
+
+      function row(id: string, source: string | null, n: number) {
+        return {
+          id, user_id: TEST_USER_ID, name: `Person ${n}`,
+          phones: [`+1555222000${n}`], emails: [`p${n}@example.com`],
+          external_record_id: `rec-${id}`, external_uuid: null,
+          source, company: null, last_message_at: null,
+          synced_at: new Date().toISOString(),
+        };
+      }
+
+      it("shows a record whose source is NULL", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-null", null, 1)]);
+
+        const result = await getAvailable();
+        expect(result.contacts.map((c: { id: string }) => c.id)).toEqual(["ext-null"]);
+      });
+
+      it("logs the NULL source under a sentinel rather than staying silent", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-null", null, 1)]);
+        await getAvailable();
+
+        const warned = (logService.warn as jest.Mock).mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.includes("unrecognised source"));
+        expect(warned).toHaveLength(1);
+        expect(warned[0]).toContain("(null/empty)");
+      });
+
+      it("does not count a NULL-source record as source-disabled", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-null", null, 1)]);
+        await getAvailable();
+
+        const picker = getContactIngestionFunnel().picker;
+        expect(picker!.sourceDisabled).toBe(0);
+        expect(picker!.shown).toBe(1);
+      });
+
+      it("warns ONCE for two records sharing one unrecognised source", async () => {
+        // The loop runs over ~1000 rows; a per-record line would be a log flood.
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-p1", "carrier_pigeon", 1), row("ext-p2", "carrier_pigeon", 2)]);
+
+        const result = await getAvailable();
+        expect(result.contacts.map((c: { id: string }) => c.id).sort()).toEqual(["ext-p1", "ext-p2"]);
+
+        const warned = (logService.warn as jest.Mock).mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.includes("unrecognised source"));
+        expect(warned).toHaveLength(1);
+        expect(warned[0]).toContain("1 unrecognised source(s): carrier_pigeon");
+      });
+
+      it("lists each distinct unrecognised source once, sorted", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([
+          row("ext-p1", "zebra_sync", 1),
+          row("ext-p2", "carrier_pigeon", 2),
+          row("ext-p3", null, 3),
+        ]);
+        await getAvailable();
+
+        const warned = (logService.warn as jest.Mock).mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.includes("unrecognised source"));
+        expect(warned).toHaveLength(1);
+        expect(warned[0]).toContain("3 unrecognised source(s): (null/empty), carrier_pigeon, zebra_sync");
+      });
+
+      it("says nothing when every source is recognised", async () => {
+        mockIsContactSourceEnabled.mockResolvedValue(true);
+        withCorpus([row("ext-a", "android_sync", 1), row("ext-m", "macos", 2)]);
+        await getAvailable();
+
+        const warned = (logService.warn as jest.Mock).mock.calls
+          .map((c) => String(c[0]))
+          .filter((m) => m.includes("unrecognised source"));
+        expect(warned).toHaveLength(0);
+      });
     });
   });
 

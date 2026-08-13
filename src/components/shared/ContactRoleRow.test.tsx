@@ -106,7 +106,8 @@ describe("ContactRoleRow", () => {
       );
     });
 
-    it("shows Unknown Contact when no name available", () => {
+    // BACKLOG-2461: was "Unknown Contact". See src/utils/contactDisplayLabel.ts.
+    it("falls back to the organisation when there is no name", () => {
       renderContactRoleRow({
         contact: createTestContact({
           name: undefined,
@@ -114,7 +115,22 @@ describe("ContactRoleRow", () => {
         }),
       });
       expect(screen.getByTestId("contact-role-row-name")).toHaveTextContent(
-        "Unknown Contact"
+        "Acme Inc"
+      );
+    });
+
+    it('shows "No name" only when we hold nothing at all', () => {
+      renderContactRoleRow({
+        contact: createTestContact({
+          name: undefined,
+          display_name: undefined,
+          company: undefined,
+          phone: undefined,
+          email: undefined,
+        }),
+      });
+      expect(screen.getByTestId("contact-role-row-name")).toHaveTextContent(
+        "No name"
       );
     });
 
@@ -130,7 +146,7 @@ describe("ContactRoleRow", () => {
       );
     });
 
-    it("shows ? initial when no name available", () => {
+    it("takes the avatar initial from whatever the label resolved to", () => {
       renderContactRoleRow({
         contact: createTestContact({
           name: undefined,
@@ -138,8 +154,8 @@ describe("ContactRoleRow", () => {
         }),
       });
       const avatar = screen.getByTestId("contact-role-row-avatar");
-      // Shows "U" from "Unknown Contact" fallback
-      expect(avatar).toHaveTextContent("U");
+      // "A" from "Acme Inc" — the organisation, not a placeholder.
+      expect(avatar).toHaveTextContent("A");
     });
   });
 
@@ -352,6 +368,58 @@ describe("ContactRoleRow", () => {
       expect(row).toHaveClass("p-3");
       expect(row).toHaveClass("rounded-lg");
       expect(row).toHaveClass("my-custom-class");
+    });
+  });
+
+  /**
+   * BACKLOG-2567 — the "(Auto)" badge is gone from BOTH layouts.
+   *
+   * WHY THIS TEST LIVES HERE AND NOT IN A PARENT SUITE. Before this change NO
+   * test anywhere asserted the badge (grep for "auto-filled-badge" or "(Auto)"
+   * across src/ test files returned zero hits), so removing it passed every
+   * existing suite whether or not it worked. The obvious place to add coverage
+   * — EditContactsModal.test.tsx, which drives the role rows — CANNOT see it:
+   * that suite MOCKS ContactRoleRow with its own stub that renders only a
+   * <select>. A badge assertion there would go green because the mock has no
+   * badge to render, which proves nothing about the component. Hence: here,
+   * against the real one.
+   *
+   * BOTH layouts matter. ContactRoleRow renders its mobile and desktop layouts
+   * SIMULTANEOUSLY and hides one with CSS, so the badge existed twice in the
+   * DOM and deleting one occurrence would leave the other live at the other
+   * breakpoint. queryAllBy* sees both.
+   */
+  describe("BACKLOG-2567: no auto badge", () => {
+    it("renders no auto badge in either layout when a role is filled in", () => {
+      const contact = createTestContact();
+      renderContactRoleRow({ contact, currentRole: "buyer" });
+
+      // The old testid, in both its mobile and desktop instances.
+      expect(
+        screen.queryAllByTestId(`auto-filled-badge-${contact.id}`)
+      ).toHaveLength(0);
+
+      // And the word itself, however it might be re-spelled — catches a
+      // re-introduction under a different testid.
+      expect(screen.queryAllByText(/auto/i)).toHaveLength(0);
+    });
+
+    it("still renders the role as an editable control in both layouts", () => {
+      // The founder kept the auto-assignment; only the label went. If "(Auto)"
+      // had been the only signal that a value was suggested rather than chosen,
+      // removing it would have meant making the field look editable instead —
+      // it did not, because the role has always been a native <select>.
+      // Asserted so a later refactor to a read-only display goes red here.
+      const contact = createTestContact();
+      renderContactRoleRow({ contact, currentRole: "buyer" });
+
+      const selects = screen.getAllByTestId(`role-select-${contact.id}`);
+      expect(selects).toHaveLength(2); // mobile + desktop
+      for (const select of selects) {
+        expect(select.tagName).toBe("SELECT");
+        expect(select).not.toBeDisabled();
+        expect(select).toHaveValue("buyer");
+      }
     });
   });
 });

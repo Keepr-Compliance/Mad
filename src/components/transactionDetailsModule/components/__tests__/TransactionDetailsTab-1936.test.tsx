@@ -122,7 +122,7 @@ function makeThread(
 ): ContactMessageThread {
   return {
     thread_id: "thread-1",
-    phoneNumber: "+15551234567",
+    phoneNumber: "+15555550112",
     messages: [makeMessage()],
     transaction_id: "txn-1",
     ...overrides,
@@ -135,7 +135,7 @@ const mockEmails: Communication[] = [
 ];
 
 const mockThreads: ContactMessageThread[] = [
-  makeThread({ thread_id: "thread-1", phoneNumber: "+15551234567", transaction_id: "txn-1" }),
+  makeThread({ thread_id: "thread-1", phoneNumber: "+15555550112", transaction_id: "txn-1" }),
 ];
 
 const mockTransaction = {
@@ -149,7 +149,7 @@ const assignment: ContactAssignment = {
   contact_id: "c1",
   contact_name: "Jane Buyer",
   contact_email: "jane@example.com",
-  contact_phone: "+15551234567",
+  contact_phone: "+15555550112",
   role: "buyer",
 };
 
@@ -246,7 +246,7 @@ describe("TransactionDetailsTab — unified Key Contacts pane (BACKLOG-1936)", (
 
     const modal = await screen.findByTestId("stub-conversation-view-modal");
     expect(modal).toBeInTheDocument();
-    expect(screen.getByTestId("stub-thread-phone")).toHaveTextContent("+15551234567");
+    expect(screen.getByTestId("stub-thread-phone")).toHaveTextContent("+15555550112");
     // T4 decision: NO "See transaction" button here either.
     expect(
       screen.queryByTestId("stub-thread-see-transaction"),

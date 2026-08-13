@@ -1,6 +1,7 @@
 import React from "react";
-import { SourcePill, ImportStatusPill, mapToSourcePillSource } from "./SourcePill";
+import { SourcePill, ImportStatusPill, mapToSourcePillSources } from "./SourcePill";
 import type { ExtendedContact } from "../../types/components";
+import { labelForContact } from "../../utils/contactDisplayLabel";
 
 /**
  * Role option for the dropdown
@@ -25,8 +26,19 @@ export interface ContactRoleRowProps {
   onClick?: () => void;
   /** Whether this row has a validation error (missing role) */
   hasError?: boolean;
-  /** Whether the current role was auto-filled from contact default_role (BACKLOG-1355) */
-  isAutoFilled?: boolean;
+  /*
+   * BACKLOG-2567: `isAutoFilled` and its "(Auto)" badge are GONE, in both
+   * layouts. The role is still filled in automatically from the contact's
+   * default_role (BACKLOG-1355) — that behaviour is untouched and lives in the
+   * parents (`ContactAssignmentStep.applyAutoRole` /
+   * `EditContactsModal.applyAutoRole`). The label just stopped announcing it.
+   *
+   * "Auto" described how the software works, not what the user is looking at:
+   * they see a role, and whether the app filled it in is the app's business.
+   * The role still READS as editable without the badge — it is a native
+   * <select> with a visible chevron in both layouts, and the badge always sat
+   * beside that control, never inside it.
+   */
   /** Additional CSS classes */
   className?: string;
 }
@@ -43,18 +55,24 @@ function getInitial(name: string | undefined): string {
  * Gets the display name for a contact, preferring display_name over name
  */
 function getDisplayName(contact: ExtendedContact): string {
-  return contact.display_name || contact.name || "Unknown Contact";
+  // BACKLOG-2461: see src/utils/contactDisplayLabel.ts.
+  return labelForContact(contact);
 }
 
 /**
- * Gets the primary email for display
+ * Gets the primary email for display.
+ *
+ * BACKLOG-2461: returns undefined when the email is ALREADY the row's label
+ * (a contact with no name falls back to it), because printing it on both lines
+ * reads as a rendering fault rather than as a contact.
  */
 function getPrimaryEmail(contact: ExtendedContact): string | undefined {
   // Prefer allEmails array if available, otherwise fall back to email field
-  if (contact.allEmails && contact.allEmails.length > 0) {
-    return contact.allEmails[0];
-  }
-  return contact.email;
+  const email =
+    contact.allEmails && contact.allEmails.length > 0
+      ? contact.allEmails[0]
+      : contact.email;
+  return email === getDisplayName(contact) ? undefined : email;
 }
 
 /**
@@ -92,7 +110,6 @@ export function ContactRoleRow({
   onRemove,
   onClick,
   hasError = false,
-  isAutoFilled = false,
   className = "",
 }: ContactRoleRowProps): React.ReactElement {
   const displayName = getDisplayName(contact);
@@ -168,11 +185,6 @@ export function ContactRoleRow({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
           </svg>
           </div>
-          {isAutoFilled && (
-            <span className="text-xs text-purple-500 ml-1 font-medium" data-testid={`auto-filled-badge-${contact.id}`}>
-              (Auto)
-            </span>
-          )}
         </div>
       </div>
 
@@ -201,10 +213,15 @@ export function ContactRoleRow({
               >
                 {displayName}
               </p>
-              <SourcePill
-                source={mapToSourcePillSource(contact.source, isExternal)}
-                size="sm"
-              />
+              {/* BACKLOG-2472: one pill per live crosswalk source, falling back
+                  to the `source` scalar when there are no links. */}
+              {mapToSourcePillSources(
+                contact.source,
+                contact.source_types,
+                isExternal,
+              ).map((pillSource) => (
+                <SourcePill key={pillSource} source={pillSource} size="sm" />
+              ))}
               <ImportStatusPill isImported={!isExternal} size="sm" />
             </div>
             {email && (
@@ -232,11 +249,6 @@ export function ContactRoleRow({
                 </option>
               ))}
             </select>
-            {isAutoFilled && (
-              <span className="text-xs text-purple-500 ml-1 font-medium" data-testid={`auto-filled-badge-${contact.id}`}>
-                (Auto)
-              </span>
-            )}
           </div>
           {onRemove && (
             <button

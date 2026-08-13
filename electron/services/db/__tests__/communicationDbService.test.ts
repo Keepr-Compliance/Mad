@@ -11,7 +11,6 @@
  * to be correct. These tests document and verify the expected behavior.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock the dbConnection module
 const mockDbGet = jest.fn();
@@ -138,12 +137,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-1",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+15551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550112"] }),
           },
           {
             id: "msg-2",
             thread_id: null,
-            participants: JSON.stringify({ from: "+15551234567", to: ["me"] }),
+            participants: JSON.stringify({ from: "+15555550112", to: ["me"] }),
           },
         ]);
 
@@ -158,12 +157,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-1",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+15551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550112"] }),
           },
           {
             id: "msg-2",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+15559876543"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550121"] }),
           },
         ]);
 
@@ -179,12 +178,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-1",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+1 (555) 123-4567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+1 (555) 555-0112"] }),
           },
           {
             id: "msg-2",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["5551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["5555550112"] }),
           },
         ]);
 
@@ -205,12 +204,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-3",
             thread_id: null,
-            participants: JSON.stringify({ from: "me", to: ["+15551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550112"] }),
           },
           {
             id: "msg-4",
             thread_id: null,
-            participants: JSON.stringify({ from: "+15551234567", to: ["me"] }),
+            participants: JSON.stringify({ from: "+15555550112", to: ["me"] }),
           },
           // Message with no thread_id or participants (becomes its own thread)
           { id: "msg-5", thread_id: null, participants: null },
@@ -228,12 +227,12 @@ describe("communicationDbService", () => {
           {
             id: "msg-1",
             thread_id: "same-thread",
-            participants: JSON.stringify({ from: "me", to: ["+15551234567"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550112"] }),
           },
           {
             id: "msg-2",
             thread_id: "same-thread",
-            participants: JSON.stringify({ from: "me", to: ["+15559876543"] }),
+            participants: JSON.stringify({ from: "me", to: ["+15555550121"] }),
           },
         ]);
 
@@ -391,8 +390,17 @@ describe("communicationDbService", () => {
       ) as [string, unknown[]];
       expect(insert).toBeDefined();
       expect(insert[0]).toContain("match_reason");
-      // match_reason is the LAST param (after reason).
-      expect(insert[1][insert[1].length - 1]).toBe("user_confirmed");
+      // BACKLOG-2632: was `insert[1][length - 1]`, on the assumption that
+      // match_reason is the last bound param. It no longer is — `ignored_at` is
+      // now bound EXPLICITLY rather than falling back to the column's
+      // DEFAULT CURRENT_TIMESTAMP. Bind by COLUMN NAME so the next column added
+      // here cannot silently move this assertion onto the wrong value.
+      const columns = insert[0]
+        .slice(insert[0].indexOf("(") + 1, insert[0].indexOf(")"))
+        .split(",")
+        .map((c) => c.trim());
+      expect(columns).toContain("match_reason");
+      expect(insert[1][columns.indexOf("match_reason")]).toBe("user_confirmed");
     });
 
     it("confirmEmailLinksByEmailIds updates only the given emails on the given transaction", () => {

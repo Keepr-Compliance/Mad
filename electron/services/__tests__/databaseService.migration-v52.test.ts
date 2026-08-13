@@ -13,7 +13,6 @@
  */
 
 import path from "path";
-import { jest } from "@jest/globals";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 jest.mock("electron", () => ({ app: { getPath: jest.fn(() => "/mock/user/data") } }));
@@ -127,10 +126,14 @@ describe("databaseService migration v52 (BACKLOG-2280 — reactions/tapbacks)", 
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
     // Seeded at v51 → the runner advances to the LATEST migration version.
-    // BACKLOG-2319 added v55 (match_reason) on top of develop's v52–v54, so the
-    // chain now terminates at 55 (v53/v54/v55 no-op on this reactions fixture but
-    // still advance schema_version).
-    expect(row.version).toBe(55);
+    // BACKLOG-2364 added v56 (tombstone columns) on top of v55 match_reason and
+    // develop's v52–v54, so the chain now terminates at 56 (v53..v56 no-op on
+    // this reactions fixture but still advance schema_version). BACKLOG-2401
+    // then added v57 (contact_source_links), BACKLOG-2407 v58
+    // (external_contacts.source_identity_json), BACKLOG-2410 v59 (the contact
+    // link review queue) and BACKLOG-2427 v60 (hand-typed contact value
+    // provenance recovery, data-only), so the chain terminates at 60.
+    expect(row.version).toBe(62);
   });
 
   it("lets a reaction row be written after the migration", async () => {

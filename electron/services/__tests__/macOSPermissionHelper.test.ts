@@ -7,7 +7,6 @@
  * Tests macOS-specific permission handling with mocked system calls
  */
 
-import { jest } from "@jest/globals";
 import path from "path";
 
 // Set HOME environment variable before imports

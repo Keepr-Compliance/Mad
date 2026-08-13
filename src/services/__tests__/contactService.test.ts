@@ -25,9 +25,6 @@ import type { Contact, NewContact } from "@/types";
 // ============================================
 
 // Mock functions for window.api.contacts methods
-const mockGetAll = jest.fn();
-const mockGetAvailable = jest.fn();
-const mockGetSortedByActivity = jest.fn();
 const mockCreate = jest.fn();
 const mockUpdate = jest.fn();
 const mockDelete = jest.fn();
@@ -40,9 +37,6 @@ beforeAll(() => {
   Object.defineProperty(window, "api", {
     value: {
       contacts: {
-        getAll: mockGetAll,
-        getAvailable: mockGetAvailable,
-        getSortedByActivity: mockGetSortedByActivity,
         create: mockCreate,
         update: mockUpdate,
         delete: mockDelete,
@@ -65,7 +59,9 @@ beforeEach(() => {
 // TEST FIXTURES
 // ============================================
 
-const mockContact: Contact = {
+// `source` is required on Contact but is not exercised by these tests, so the
+// fixtures are asserted rather than annotated (keeps the payloads untouched).
+const mockContact = {
   id: "contact-123",
   user_id: "user-123",
   display_name: "John Doe",
@@ -74,191 +70,20 @@ const mockContact: Contact = {
   company: "Acme Corp",
   created_at: "2024-01-01T00:00:00Z",
   updated_at: "2024-01-01T00:00:00Z",
-};
-
-const mockContactList: Contact[] = [
-  mockContact,
-  {
-    id: "contact-456",
-    user_id: "user-123",
-    display_name: "Jane Smith",
-    email: "jane@example.com",
-    phone: "555-5678",
-    created_at: "2024-01-02T00:00:00Z",
-    updated_at: "2024-01-02T00:00:00Z",
-  },
-];
+} as Contact;
 
 const mockUserId = "user-123";
 const mockContactId = "contact-123";
 
-// ============================================
-// GET ALL METHOD TESTS
-// ============================================
-
+/*
+  BACKLOG-2631 — the `getAll` / `getAvailable` / `getSortedByActivity` blocks are
+  gone with the methods they covered. Those three were `{success, contacts}` ->
+  `{success, data}` rewraps with no application caller left: the picker's two
+  halves are read in `src/hooks/contacts/useContactDirectory.ts` now, by all
+  three containers. Tests for a deleted function are the last thing that makes it
+  look alive.
+*/
 describe("contactService", () => {
-  describe("getAll", () => {
-    it("should return all contacts successfully", async () => {
-      mockGetAll.mockResolvedValue({ success: true, contacts: mockContactList });
-
-      const result = await contactService.getAll(mockUserId);
-
-      expect(result.success).toBe(true);
-      expect(result.data).toEqual(mockContactList);
-      expect(mockGetAll).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it("should return empty array when no contacts exist", async () => {
-      mockGetAll.mockResolvedValue({ success: true, contacts: [] });
-
-      const result = await contactService.getAll(mockUserId);
-
-      expect(result.success).toBe(true);
-      expect(result.data).toEqual([]);
-    });
-
-    it("should handle undefined contacts field", async () => {
-      mockGetAll.mockResolvedValue({ success: true });
-
-      const result = await contactService.getAll(mockUserId);
-
-      expect(result.success).toBe(true);
-      expect(result.data).toEqual([]);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockGetAll.mockResolvedValue({ success: false, error: "User not found" });
-
-      const result = await contactService.getAll(mockUserId);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("User not found");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockGetAll.mockRejectedValue(new Error("Database connection lost"));
-
-      const result = await contactService.getAll(mockUserId);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Database connection lost");
-    });
-  });
-
-  // ============================================
-  // GET AVAILABLE METHOD TESTS
-  // ============================================
-
-  describe("getAvailable", () => {
-    it("should return available contacts successfully", async () => {
-      mockGetAvailable.mockResolvedValue({ success: true, contacts: mockContactList });
-
-      const result = await contactService.getAvailable(mockUserId);
-
-      expect(result.success).toBe(true);
-      expect(result.data).toEqual(mockContactList);
-      expect(mockGetAvailable).toHaveBeenCalledWith(mockUserId);
-    });
-
-    it("should return empty array when no contacts available", async () => {
-      mockGetAvailable.mockResolvedValue({ success: true, contacts: [] });
-
-      const result = await contactService.getAvailable(mockUserId);
-
-      expect(result.success).toBe(true);
-      expect(result.data).toEqual([]);
-    });
-
-    it("should handle undefined contacts field", async () => {
-      mockGetAvailable.mockResolvedValue({ success: true });
-
-      const result = await contactService.getAvailable(mockUserId);
-
-      expect(result.success).toBe(true);
-      expect(result.data).toEqual([]);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockGetAvailable.mockResolvedValue({ success: false, error: "Access denied" });
-
-      const result = await contactService.getAvailable(mockUserId);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Access denied");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockGetAvailable.mockRejectedValue(new Error("Query timeout"));
-
-      const result = await contactService.getAvailable(mockUserId);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Query timeout");
-    });
-  });
-
-  // ============================================
-  // GET SORTED BY ACTIVITY METHOD TESTS
-  // ============================================
-
-  describe("getSortedByActivity", () => {
-    it("should return contacts sorted by activity successfully", async () => {
-      mockGetSortedByActivity.mockResolvedValue({ success: true, contacts: mockContactList });
-
-      const result = await contactService.getSortedByActivity(mockUserId);
-
-      expect(result.success).toBe(true);
-      expect(result.data).toEqual(mockContactList);
-      expect(mockGetSortedByActivity).toHaveBeenCalledWith(mockUserId, undefined);
-    });
-
-    it("should pass property address filter to API", async () => {
-      const propertyAddress = "123 Main St";
-      mockGetSortedByActivity.mockResolvedValue({ success: true, contacts: [mockContact] });
-
-      const result = await contactService.getSortedByActivity(mockUserId, propertyAddress);
-
-      expect(result.success).toBe(true);
-      expect(mockGetSortedByActivity).toHaveBeenCalledWith(mockUserId, propertyAddress);
-    });
-
-    it("should return empty array when no contacts", async () => {
-      mockGetSortedByActivity.mockResolvedValue({ success: true, contacts: [] });
-
-      const result = await contactService.getSortedByActivity(mockUserId);
-
-      expect(result.success).toBe(true);
-      expect(result.data).toEqual([]);
-    });
-
-    it("should handle undefined contacts field", async () => {
-      mockGetSortedByActivity.mockResolvedValue({ success: true });
-
-      const result = await contactService.getSortedByActivity(mockUserId);
-
-      expect(result.success).toBe(true);
-      expect(result.data).toEqual([]);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockGetSortedByActivity.mockResolvedValue({ success: false, error: "Sort failed" });
-
-      const result = await contactService.getSortedByActivity(mockUserId);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Sort failed");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockGetSortedByActivity.mockRejectedValue(new Error("Network error"));
-
-      const result = await contactService.getSortedByActivity(mockUserId);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Network error");
-    });
-  });
-
   // ============================================
   // CREATE METHOD TESTS
   // ============================================
@@ -313,8 +138,15 @@ describe("contactService", () => {
   // ============================================
 
   describe("update", () => {
+    /**
+     * BACKLOG-2528: `name`, not `display_name`. This fixture described a call
+     * the `contacts:update` channel cannot honour — `validateContactData` reads
+     * only `name`, so a `display_name` key is discarded before any writer sees
+     * it. Every case here mocks `window.api`, so the wrong spelling stayed
+     * green while standing for a save that would never have landed.
+     */
     const updateInput = {
-      display_name: "Updated Name",
+      name: "Updated Name",
       email: "updated@example.com",
     };
 
@@ -451,13 +283,31 @@ describe("contactService", () => {
   // ============================================
 
   describe("import", () => {
-    const contactsToImport: NewContact[] = [
+    // See note above: `source` is required on Contact/NewContact but unused here.
+    const contactsToImport = [
       { display_name: "Import 1", email: "import1@example.com", user_id: mockUserId },
       { display_name: "Import 2", email: "import2@example.com", user_id: mockUserId },
+    ] as NewContact[];
+
+    /**
+     * BACKLOG-2510 — these fixtures used to send `{ success: true, imported: 2 }`.
+     *
+     * `contacts:import` has never returned an `imported` field. It returns
+     * `contacts` — the created rows (`contactHandlers.ts:2052-2055`). So the
+     * fixture described a response the handler cannot emit, the production code
+     * read the field the fixture invented, and the two agreed with each other
+     * about a number that was `0` in the real app every single time.
+     *
+     * Transcribed to the real shape, so the count is now derived from the rows
+     * the handler actually sends.
+     */
+    const importedRows = [
+      { id: "contact-import-1", display_name: "Import 1" },
+      { id: "contact-import-2", display_name: "Import 2" },
     ];
 
-    it("should import contacts successfully", async () => {
-      mockImport.mockResolvedValue({ success: true, imported: 2 });
+    it("should count the contacts the handler actually returned", async () => {
+      mockImport.mockResolvedValue({ success: true, contacts: importedRows });
 
       const result = await contactService.import(mockUserId, contactsToImport);
 
@@ -467,7 +317,7 @@ describe("contactService", () => {
     });
 
     it("should handle zero imports", async () => {
-      mockImport.mockResolvedValue({ success: true, imported: 0 });
+      mockImport.mockResolvedValue({ success: true, contacts: [] });
 
       const result = await contactService.import(mockUserId, []);
 
@@ -475,7 +325,7 @@ describe("contactService", () => {
       expect(result.data).toEqual({ imported: 0 });
     });
 
-    it("should handle undefined imported field", async () => {
+    it("should handle a success response carrying no contacts array", async () => {
       mockImport.mockResolvedValue({ success: true });
 
       const result = await contactService.import(mockUserId, contactsToImport);

@@ -11,7 +11,7 @@
  *
  * This computes a populated `last_communication_at` per imported contact,
  * SET-BASED (correlated scalar subqueries scoped to the contact's own few
- * emails/phones — NOT an N+1 JS loop; safe on 1000+ contacts). It takes the
+ * emails/phones — NOT an N+1 JS loop). It takes the
  * most-recent across four channels, reusing the patterns already in
  * contactDbService:
  *   1. text/SMS/iMessage via `phone_last_message` (mirrors
@@ -34,6 +34,56 @@
  * This is a pure string constant with NO imports so it can be shared by the
  * Electron main process (contactDbService) AND the query worker thread
  * (contactQueryWorker) without either copy drifting.
+ *
+ * ## BACKLOG-2633 — this fragment has the same defect, and needs the same index
+ * "Scoped to the contact's own few emails/phones" is a statement about what the
+ * subquery MEANS, not about what SQLite executes. `LOWER(ep_lc.email_address)`
+ * makes `idx_email_participants_email_address` unusable, so with no by-address
+ * path the planner drives the email half from `emails` — the whole mailbox, once
+ * per contact. Measured at 1,162 contacts / 3,073 emails, no
+ * `idx_email_participants_lower_address`, plain `JOIN`s: **3,859 ms**, driving
+ * from `emails`. With the index: 5.1 ms. It is cheap in the founder's database
+ * today ONLY because he has 4 imported contacts, and would have surfaced the
+ * moment an address book was imported.
+ *
+ * The index that fixes it is the one the external fragment needs —
+ * `idx_email_participants_lower_address`, in schema.sql — because both probe
+ * `email_participants` under `LOWER(email_address)`.
+ *
+ * ## Honest note: GIVEN the index, the CROSS JOINs below change nothing here
+ * Unlike the external fragment — where the index alone is worth 1.0x and the
+ * pin is the whole fix — the index alone closes this one, and the plan is
+ * identical with or without the pin. The two differ in what sits leftmost:
+ * `json_each` is a virtual table with no cost estimate and is always ranked
+ * LAST, whereas `contact_emails` constrained by `contact_id = c.id` is served by
+ * a UNIQUE covering index the planner already treats as a cheap entry point.
+ *
+ * The pins are kept for defence in depth — the external half is the standing
+ * proof that "the index will save us" is not a general truth. But BE PRECISE
+ * ABOUT WHICH OF THEM A TEST CAN CATCH, because the answer differs per join and
+ * an over-broad claim here is worse than no claim: it teaches the next engineer
+ * to distrust a suite that is working correctly.
+ *
+ *   EMAIL half (`ce_lc` -> `ep_lc` -> `em`) — FALSIFIABLE.
+ *     `contactRecencySql.queryPlan.test.ts` removes
+ *     `idx_email_participants_lower_address` and asserts the plan still refuses
+ *     to fall back to the mailbox (CROSS: 1,450 ms from contact_emails; plain
+ *     JOIN: 3,859 ms from emails). Revert those two `CROSS JOIN`s and that test,
+ *     and only that test, goes red. Confirmed by running exactly that.
+ *
+ *   PHONE half (`cp_lc` -> `plm`) — NOT FALSIFIABLE. THE SUITE CANNOT SEE IT.
+ *     Reverting this one `CROSS JOIN` to a plain `JOIN` leaves every test green,
+ *     and that is correct rather than a weak test: `contact_phones` constrained
+ *     by `contact_id = c.id` resolves through an index regardless of join order,
+ *     so the plan and the timing are IDENTICAL either way. Measured at 1,162
+ *     contacts against a 5,000-row phone cache, all EIGHT combinations of
+ *     {idx_contact_phones_contact_id present / dropped} x {ANALYZE on / off} x
+ *     {JOIN / CROSS JOIN}: always `SEARCH cp_lc USING INDEX ... (contact_id=?)`,
+ *     always 1.1-1.3 ms. Dropping the named index does not change it either —
+ *     the UNIQUE(contact_id, phone_e164) autoindex serves it.
+ *     This pin is therefore DEFENSIVE ONLY, kept for consistency with its
+ *     neighbours. If you revert it and see green, the suite is not failing you;
+ *     there is genuinely nothing there to catch.
  */
 export const IMPORTED_CONTACT_LAST_COMMUNICATION_SQL = `
       NULLIF(
@@ -41,7 +91,7 @@ export const IMPORTED_CONTACT_LAST_COMMUNICATION_SQL = `
           COALESCE((
             SELECT MAX(plm.last_message_at)
             FROM contact_phones cp_lc
-            JOIN phone_last_message plm
+            CROSS JOIN phone_last_message plm
               ON plm.user_id = c.user_id
              AND plm.phone_normalized = cp_lc.phone_normalized
             WHERE cp_lc.contact_id = c.id
@@ -50,9 +100,9 @@ export const IMPORTED_CONTACT_LAST_COMMUNICATION_SQL = `
           COALESCE((
             SELECT MAX(COALESCE(em.sent_at, em.received_at))
             FROM contact_emails ce_lc
-            JOIN email_participants ep_lc
+            CROSS JOIN email_participants ep_lc
               ON LOWER(ep_lc.email_address) = LOWER(ce_lc.email)
-            JOIN emails em
+            CROSS JOIN emails em
               ON em.id = ep_lc.email_id
              AND em.user_id = c.user_id
             WHERE ce_lc.contact_id = c.id
@@ -104,26 +154,83 @@ export const IMPORTED_CONTACT_LAST_COMMUNICATION_SQL = `
  * This is a bare SQL expression (no alias). It references the `external_contacts`
  * table by name, so the consuming statement MUST select from / update
  * `external_contacts` (unaliased). `emails_json` / `phones_normalized_json` are
- * COALESCE'd to '[]' so `json_each` never receives NULL. SET-BASED: two indexed
- * correlated subqueries per row (phone_last_message PK; email_participants
- * indexed on email_address) — no N+1 JS loop; safe on 1000+ contacts.
+ * COALESCE'd to '[]' so `json_each` never receives NULL.
+ *
+ * ## BACKLOG-2633 — WHY BOTH SUBQUERIES START AT `json_each` AND SAY `CROSS JOIN`
+ *
+ * This docblock used to claim "two indexed correlated subqueries per row
+ * (phone_last_message PK; email_participants indexed on email_address) — no N+1
+ * JS loop; safe on 1000+ contacts". Every clause of that was true about the
+ * INTENT and false about the EXECUTION, and the gap cost the founder 7.4 seconds
+ * on every contacts-picker load.
+ *
+ * `EXPLAIN QUERY PLAN` on the shipped expression, on a database with no
+ * `sqlite_stat1` (the normal state — `ANALYZE` runs only from
+ * maintenanceDbService, never at startup):
+ *
+ *     CORRELATED SCALAR SUBQUERY 1
+ *       SEARCH plm USING INDEX idx_phone_last_msg_user (user_id=?)   <- ALL his phone rows
+ *       SEARCH p_lc VIRTUAL TABLE INDEX 1:
+ *     CORRELATED SCALAR SUBQUERY 2
+ *       SEARCH em USING INDEX idx_emails_user_sent (user_id=?)       <- his WHOLE MAILBOX
+ *       SEARCH ep_lc USING INDEX idx_email_participants_email_id (email_id=?)
+ *       SEARCH e_lc VIRTUAL TABLE INDEX 1:
+ *
+ * Both halves drive from the big table and probe the contact's own handful of
+ * values LAST, so the real cost is `external_contacts x mailbox`, linear in
+ * mailbox size — not the per-contact constant the comment promised. `json_each`
+ * is a virtual table with no useful cost estimate, which is why the planner
+ * ranks it last and puts it at the bottom of the loop nest.
+ *
+ * THE FIX IS TWO THINGS AND NEITHER WORKS ALONE. Measured at the founder's own
+ * record count (1,162 external_contacts / 3,073 emails / 9,219 participants /
+ * 762 phone_last_message), no ANALYZE:
+ *
+ *     as shipped                                     7,410 ms
+ *     + idx_email_participants_lower_address ONLY    7,457 ms   (1.0x — nothing)
+ *     + CROSS JOIN ONLY (no index to probe)          3,792 ms   (2.0x)
+ *     + both, email half only                          247 ms   (30x)
+ *     + both, BOTH halves pinned                        12 ms   (602x)
+ *
+ * The index alone changes nothing because the planner keeps the mailbox-first
+ * order and never opens a by-address path. The order alone helps only until it
+ * has nothing to probe with. `CROSS JOIN` in SQLite means exactly "do not
+ * reorder these" — it is not a cartesian product and the row set is identical;
+ * the ON clauses still constrain it. So the leftmost table is now the contact's
+ * own values, which is what the docblock always said this did.
+ *
+ * The 247 ms line is why the PHONE half is pinned too. `phone_last_message` is a
+ * precomputed cache (762 rows for the founder, written at ingest by
+ * messageDbService), so it is far smaller than the mailbox — but 762 x 1,162 is
+ * still 885k probes, and it is the term that remains once the email half is
+ * fixed. The `messages` table (164k rows) is NOT on this path and appears in no
+ * plan: the cache is what stands in for it.
+ *
+ * The index is declared in schema.sql beside the other `email_participants`
+ * indexes, with no migration behind it — see the comment there for why that
+ * reaches existing installs, and the guard test that proves it.
+ *
+ * IF YOU EDIT THESE SUBQUERIES: keep `json_each` leftmost and keep every JOIN a
+ * CROSS JOIN. A plain `JOIN` here reads identically and silently restores a
+ * whole-mailbox scan per contact. The plan is asserted, in both stats regimes,
+ * by contactRecencySql.queryPlan.test.ts.
  */
 export const EXTERNAL_CONTACT_LAST_MESSAGE_EXPR = `
       NULLIF(
         MAX(
           COALESCE((
             SELECT MAX(plm.last_message_at)
-            FROM phone_last_message plm,
-                 json_each(COALESCE(external_contacts.phones_normalized_json, '[]')) AS p_lc
-            WHERE plm.user_id = external_contacts.user_id
-              AND plm.phone_normalized = p_lc.value
+            FROM json_each(COALESCE(external_contacts.phones_normalized_json, '[]')) AS p_lc
+            CROSS JOIN phone_last_message plm
+              ON plm.phone_normalized = p_lc.value
+             AND plm.user_id = external_contacts.user_id
           ), ''),
           COALESCE((
             SELECT MAX(COALESCE(em.sent_at, em.received_at))
             FROM json_each(COALESCE(external_contacts.emails_json, '[]')) AS e_lc
-            JOIN email_participants ep_lc
+            CROSS JOIN email_participants ep_lc
               ON LOWER(ep_lc.email_address) = LOWER(e_lc.value)
-            JOIN emails em
+            CROSS JOIN emails em
               ON em.id = ep_lc.email_id
              AND em.user_id = external_contacts.user_id
           ), '')
@@ -150,7 +257,10 @@ export const EXTERNAL_CONTACTS_GET_ALL_SQL = `
   SELECT * FROM (
     SELECT id, user_id, name, phones_json, emails_json, company,
            ${EXTERNAL_CONTACT_LAST_MESSAGE_EXPR} as last_message_at,
-           external_record_id, source, synced_at
+           external_record_id, source, synced_at,
+           -- BACKLOG-2401: carried so an import can record ZEXTERNALUUID on the
+           -- crosswalk row at the one moment the answer is certain. Never matched on.
+           external_uuid
     FROM external_contacts
     WHERE user_id = ?
   )

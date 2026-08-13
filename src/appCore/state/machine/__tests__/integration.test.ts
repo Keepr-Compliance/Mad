@@ -370,7 +370,11 @@ describe("AppState Integration Tests", () => {
       const wrapper = ({ children }: { children: React.ReactNode }) =>
         React.createElement(
           AppStateProvider,
-          { initialState: errorState },
+          // children is passed as createElement's 3rd arg, so the props
+          // object legitimately omits it.
+          { initialState: errorState } as React.ComponentProps<
+            typeof AppStateProvider
+          >,
           children
         );
 
@@ -411,7 +415,11 @@ describe("AppState Integration Tests", () => {
       const wrapper = ({ children }: { children: React.ReactNode }) =>
         React.createElement(
           AppStateProvider,
-          { initialState: errorState },
+          // children is passed as createElement's 3rd arg, so the props
+          // object legitimately omits it.
+          { initialState: errorState } as React.ComponentProps<
+            typeof AppStateProvider
+          >,
           children
         );
 
@@ -450,7 +458,11 @@ describe("AppState Integration Tests", () => {
       const wrapper = ({ children }: { children: React.ReactNode }) =>
         React.createElement(
           AppStateProvider,
-          { initialState: nonRecoverableError },
+          // children is passed as createElement's 3rd arg, so the props
+          // object legitimately omits it.
+          { initialState: nonRecoverableError } as React.ComponentProps<
+            typeof AppStateProvider
+          >,
           children
         );
 
@@ -730,7 +742,11 @@ describe("AppState Integration Tests", () => {
       const wrapper = ({ children }: { children: React.ReactNode }) =>
         React.createElement(
           AppStateProvider,
-          { initialState: loadingState },
+          // children is passed as createElement's 3rd arg, so the props
+          // object legitimately omits it.
+          { initialState: loadingState } as React.ComponentProps<
+            typeof AppStateProvider
+          >,
           children
         );
 
@@ -771,7 +787,11 @@ describe("AppState Integration Tests", () => {
       const wrapper = ({ children }: { children: React.ReactNode }) =>
         React.createElement(
           AppStateProvider,
-          { initialState: loadingState },
+          // children is passed as createElement's 3rd arg, so the props
+          // object legitimately omits it.
+          { initialState: loadingState } as React.ComponentProps<
+            typeof AppStateProvider
+          >,
           children
         );
 
@@ -805,7 +825,11 @@ describe("AppState Integration Tests", () => {
       const wrapper = ({ children }: { children: React.ReactNode }) =>
         React.createElement(
           AppStateProvider,
-          { initialState: loadingState },
+          // children is passed as createElement's 3rd arg, so the props
+          // object legitimately omits it.
+          { initialState: loadingState } as React.ComponentProps<
+            typeof AppStateProvider
+          >,
           children
         );
 

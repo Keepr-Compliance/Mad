@@ -226,7 +226,7 @@
     },
     {
       "id": 51,
-      "identifier": "+14155559999",
+      "identifier": "+14155550105",
       "service": "SMS"
     }
   ],
@@ -266,7 +266,7 @@
     },
     {
       "id": 4,
-      "guid": "chat-jennifer-individual",
+      "guid": "chat-wendy-individual",
       "chatIdentifier": "+15105550301",
       "displayName": null,
       "style": 45,
@@ -567,7 +567,7 @@
     {
       "id": 30,
       "guid": "chat-spam",
-      "chatIdentifier": "+14155559999",
+      "chatIdentifier": "+14155550105",
       "displayName": null,
       "style": 45,
       "handleIds": [

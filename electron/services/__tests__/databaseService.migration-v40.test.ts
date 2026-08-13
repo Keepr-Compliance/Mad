@@ -29,7 +29,6 @@
 
 import path from "path";
 import crypto from "crypto";
-import { jest } from "@jest/globals";
 
 // ---------------------------------------------------------------------------
 // MOCKS — keep minimal. The harness uses the REAL better-sqlite3 driver, but
@@ -119,9 +118,9 @@ const USER_ID = "user-v40-test";
 
 const TEST_PHONES = {
   usFormatted: {
-    raw: "+1 (415) 555-1234",
-    e164: "+14155551234",
-    normalized: "4155551234",
+    raw: "+1 (415) 555-0109",
+    e164: "+14155550109",
+    normalized: "4155550109",
   },
   ukFormatted: {
     // After normalizeToE164 (which strips non-digits then prefixes +) this becomes
@@ -376,7 +375,7 @@ describe("databaseService migration v40 (BACKLOG-1727)", () => {
           display_name: `Alice ${_label}`,
           phone: rawPhone,
           is_imported: true,
-        });
+        }, { kind: "derived" });
 
         const stored = harness.db
           .prepare(
@@ -398,6 +397,7 @@ describe("databaseService migration v40 (BACKLOG-1727)", () => {
           display_name: "Batch Alice",
           phone: TEST_PHONES.usFormatted.raw,
           is_imported: true,
+          origin: { kind: "derived" },
         },
       ]);
       expect(id).toBeTruthy();

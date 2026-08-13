@@ -12,7 +12,6 @@
  * Uses mocked better-sqlite3 matching existing test patterns.
  */
 
-import { jest } from "@jest/globals";
 
 // Mock Electron modules
 jest.mock("electron", () => ({
@@ -39,7 +38,10 @@ const mockDb = {
       _sql: string,
       _params: unknown[],
       callback: (err: Error | null) => void,
-    ) => {
+      // Explicit return type breaks the self-reference cycle (mockDb is
+      // returned from inside its own initializer), which would otherwise make
+      // the whole mock implicitly `any`.
+    ): unknown => {
       if (callback) callback(null);
       return mockDb;
     },
@@ -429,7 +431,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toBeDefined();
       expect(plan).toEqual({
         currentVersion: 29,
-        targetVersion: 55,
+        targetVersion: 62,
         pendingMigrations: [
           {
             version: 30,
@@ -535,8 +537,36 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 55,
             description: expect.stringContaining("BACKLOG-2319"),
           },
+          {
+            version: 56,
+            description: expect.stringContaining("BACKLOG-2364"),
+          },
+          {
+            version: 57,
+            description: expect.stringContaining("BACKLOG-2401"),
+          },
+          {
+            version: 58,
+            description: expect.stringContaining("BACKLOG-2407"),
+          },
+          {
+            version: 59,
+            description: expect.stringContaining("BACKLOG-2410"),
+          },
+          {
+            version: 60,
+            description: expect.stringContaining("BACKLOG-2427"),
+          },
+          {
+            version: 61,
+            description: expect.stringContaining("BACKLOG-2473"),
+          },
+          {
+            version: 62,
+            description: expect.stringContaining("BACKLOG-2513"),
+          },
         ],
-        wouldRunCount: 26,
+        wouldRunCount: 33,
       });
 
       // Verify no transaction was started (migration wasn't executed)
@@ -548,11 +578,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: version = 55 (all applied, including BACKLOG-2319 v55 match_reason on
-      // top of BACKLOG-2300 v54 sync_session_id indexes)
+      // Setup: version = 62 (all applied — BACKLOG-2513's v62
+      // emails.bulk_mail_headers is the chain head)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 55 });
+        .mockReturnValueOnce({ version: 62 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -564,8 +594,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: 55,
-        targetVersion: 55,
+        currentVersion: 62,
+        targetVersion: 62,
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -674,7 +704,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
 
       await databaseService._runVersionedMigrations();
 
-      // Transaction should have been called twenty-six times (for migrations 30-55;
+      // Transaction should have been called twenty-nine times (for migrations 30-58;
       // BACKLOG-1722 adds v41, BACKLOG-1718 R3 adds v42, BACKLOG-1768 adds v43,
       // BACKLOG-1769 adds v44, BACKLOG-1771 adds v45, BACKLOG-1801 adds v46,
       // BACKLOG-1861 adds v47, BACKLOG-1900 adds v48 (P0.1) + v49 (P0.4),
@@ -683,8 +713,19 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       // BACKLOG-2280 adds v52 (messages reaction columns),
       // BACKLOG-2292 adds v53 (message_import_state + idx_messages_user_sent),
       // BACKLOG-2300 adds v54 (sync_session_id indexes),
-      // BACKLOG-2319 adds v55 (communications/ignored_communications match_reason)).
-      expect(mockDb.transaction).toHaveBeenCalledTimes(26);
+      // BACKLOG-2319 adds v55 (communications/ignored_communications match_reason),
+      // BACKLOG-2364 adds v56 (contacts/transaction_contacts tombstone columns),
+      // BACKLOG-2401 adds v57 (contact_source_links crosswalk),
+      // BACKLOG-2407 adds v58 (external_contacts.source_identity_json),
+      // BACKLOG-2410 adds v59 (contact link review queue + verdicts),
+      // BACKLOG-2427 adds v60 (recover hand-typed contact value provenance),
+      // BACKLOG-2473 adds v61 (crosswalk origin vocabulary),
+      // BACKLOG-2513 adds v62 (emails.bulk_mail_headers)).
+      //
+      // BACKLOG-2571 briefly added a v63 (emails.sent_at_source) and took it
+      // out again — founder decision, 2026-08-09. The count going back to 33 is
+      // the enumeration doing its job in the removal direction.
+      expect(mockDb.transaction).toHaveBeenCalledTimes(33);
     });
 
     it("should skip already-applied migrations", async () => {
@@ -692,10 +733,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 55, all migrations applied (including BACKLOG-2319 v55 match_reason)
+      // version = 62, all migrations applied (BACKLOG-2513's v62
+      // emails.bulk_mail_headers is the chain head)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 55 });
+        .mockReturnValueOnce({ version: 62 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -920,8 +962,9 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
   describe("_ensureFailureLogTable (TASK-2279)", () => {
     it("should create failure_log table when it does not exist", () => {
       // Call the safety check method directly
-      (databaseService as unknown as { _ensureFailureLogTable: (db: typeof mockDb) => void })
-        ._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
+      (databaseService as unknown as {
+        _ensureFailureLogTable: (db: import("better-sqlite3").Database) => void;
+      })._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
 
       // Verify exec was called with CREATE TABLE IF NOT EXISTS
       expect(mockDb.exec).toHaveBeenCalledWith(
@@ -938,13 +981,15 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
 
     it("should be idempotent -- no error when table already exists", () => {
       // First call creates the table
-      (databaseService as unknown as { _ensureFailureLogTable: (db: typeof mockDb) => void })
-        ._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
+      (databaseService as unknown as {
+        _ensureFailureLogTable: (db: import("better-sqlite3").Database) => void;
+      })._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
 
       // Second call should also succeed (IF NOT EXISTS handles this)
       expect(() => {
-        (databaseService as unknown as { _ensureFailureLogTable: (db: typeof mockDb) => void })
-          ._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
+        (databaseService as unknown as {
+          _ensureFailureLogTable: (db: import("better-sqlite3").Database) => void;
+        })._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
       }).not.toThrow();
     });
 
@@ -955,8 +1000,9 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
 
       // Should not throw -- the method catches errors internally
       expect(() => {
-        (databaseService as unknown as { _ensureFailureLogTable: (db: typeof mockDb) => void })
-          ._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
+        (databaseService as unknown as {
+          _ensureFailureLogTable: (db: import("better-sqlite3").Database) => void;
+        })._ensureFailureLogTable(mockDb as unknown as import("better-sqlite3").Database);
       }).not.toThrow();
     });
   });

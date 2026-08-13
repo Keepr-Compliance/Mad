@@ -14,7 +14,6 @@
  * - Network error handling
  */
 
-import { jest } from "@jest/globals";
 
 // TASK-2040: Track auth state change callback for testing token refresh
 let capturedAuthStateCallback: ((event: string, session: unknown) => void) | null = null;
@@ -23,7 +22,11 @@ const mockUnsubscribe = jest.fn();
 // BACKLOG-2332: sessionService.updateSession is called (fire-and-forget) on TOKEN_REFRESHED to
 // persist rotated tokens to session.json. Default impl returns a resolved Promise so the `.catch`
 // in the writeback never throws; clearAllMocks() keeps the implementation, only clears call data.
-const mockUpdateSession = jest.fn(() => Promise.resolve(true));
+// BACKLOG-2414: params declared as `unknown[]` because the writeback really is
+// called WITH a session object (see the `toHaveBeenCalledWith` assertion below);
+// declaring zero params made the forwarder's spread a TS2556. The body is
+// unchanged — it still ignores its arguments and resolves true.
+const mockUpdateSession = jest.fn((..._args: unknown[]) => Promise.resolve(true));
 
 // Mock Supabase client
 const mockSupabaseClient = {
@@ -1134,3 +1137,10 @@ describe("SupabaseService", () => {
     });
   });
 });
+
+// BACKLOG-2414: this file has no top-level import/export, so TypeScript treats it as a
+// script and its top-level `const mockSupabaseClient` lands in the GLOBAL scope — colliding
+// with the identically-named const in the sibling suite (TS2451). Jest already isolates
+// these at runtime (one module registry per test file), so this marker only makes the file a
+// module for the type-checker; it changes no test behaviour.
+export {};

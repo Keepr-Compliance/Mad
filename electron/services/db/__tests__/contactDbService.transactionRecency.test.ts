@@ -23,7 +23,6 @@
  * backfill (irrelevant here) never runs.
  */
 
-import { jest } from "@jest/globals";
 import path from "path";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Database = require(
@@ -36,7 +35,30 @@ import crypto from "crypto";
 const mockDbGet = jest.fn();
 const mockDbAll = jest.fn();
 const mockDbRun = jest.fn();
-const mockDbTransaction = jest.fn((fn: () => unknown) => fn());
+/**
+ * The live in-memory database, at MODULE scope.
+ *
+ * It used to be declared inside the `describe`, which is out of reach of the
+ * `jest.mock` factory below — babel hoists that factory above everything, so a
+ * block-scoped `db` gives `TS2304: Cannot find name 'db'`. Assigned in
+ * `beforeEach`, read at call time, so the deferral still works.
+ */
+let db: DatabaseType;
+
+/**
+ * A REAL TRANSACTION, NOT A PASSTHROUGH (BACKLOG-2537).
+ *
+ * This was `jest.fn((fn) => fn())`. `db` is the shipping driver and is assigned
+ * in `beforeEach`, so the delegation is deferred rather than captured — the
+ * implementation reads `db` at call time.
+ *
+ * Nothing in this file reaches a transaction today — measured, by replacing
+ * this with a throwing stub and watching all 4 tests stay green. It is a
+ * read-path suite (`getContactsSortedByActivity`). The passthrough is removed
+ * anyway: the hazard is the atomicity test somebody writes here NEXT, which
+ * under a passthrough would pass with or without a transaction in production.
+ */
+const mockDbTransaction = jest.fn((fn: () => unknown) => db.transaction(fn)());
 
 jest.mock("../core/dbConnection", () => ({
   dbGet: mockDbGet,
@@ -79,7 +101,27 @@ function createSchema(db: DatabaseType): void {
       source TEXT,
       is_imported INTEGER DEFAULT 0,
       last_inbound_at DATETIME,
-      last_outbound_at DATETIME
+      last_outbound_at DATETIME,
+      -- Migration v56 tombstone columns. Present because the activity-sorted
+      -- picker now filters removed contacts (BACKLOG-2365). Every fixture row
+      -- leaves them NULL = active, so these assertions are unaffected.
+      removed_at DATETIME,
+      removed_reason TEXT
+    );
+
+    -- Migration v57. BACKLOG-2618: the activity-sorted producer now suppresses a
+    -- message-derived person only when a saved contact's NAME is the whole of
+    -- its identity, and that question is answered here. Declared rather than
+    -- left out, so the fixture exercises the real predicate instead of the
+    -- table-missing fallback. No fixture row links anything, so every seeded
+    -- contact is name-only and these assertions are unaffected.
+    CREATE TABLE contact_source_links (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      contact_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      source_record_id TEXT NOT NULL,
+      match_method TEXT NOT NULL
     );
 
     CREATE TABLE contact_phones (
@@ -141,7 +183,11 @@ function createSchema(db: DatabaseType): void {
       last_message_at DATETIME,
       external_record_id TEXT,
       source TEXT,
-      synced_at DATETIME
+      synced_at DATETIME,
+      -- BACKLOG-2401: ZEXTERNALUUID capture, added by migration v57 and
+      -- selected by EXTERNAL_CONTACTS_GET_ALL_SQL. Declared here because
+      -- this fixture hand-rolls the table instead of running the chain.
+      external_uuid TEXT
     );
   `);
 }
@@ -205,7 +251,6 @@ function externalRecency(db: DatabaseType, id: string): string | null {
 }
 
 describe("getContactsSortedByActivity — transaction-flow recency (BACKLOG-2357, real SQLite)", () => {
-  let db: DatabaseType;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -268,12 +313,12 @@ describe("getContactsSortedByActivity — transaction-flow recency (BACKLOG-2357
       id: "imp-both",
       name: "Both Channels",
       emails: ["both@x.com"],
-      phonesE164: ["+14155551234"],
+      phonesE164: ["+14155550109"],
     });
     // Phone message OLDER than the email; email should win.
     db.prepare(
       "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)",
-    ).run("4155551234", USER_ID, "2026-01-01T00:00:00Z");
+    ).run("4155550109", USER_ID, "2026-01-01T00:00:00Z");
 
     const result = await getContactsSortedByActivity(USER_ID);
     expect(result.find((c) => c.id === "imp-both")?.last_communication_at).toBe(
