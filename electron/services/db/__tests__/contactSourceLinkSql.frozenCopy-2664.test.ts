@@ -565,16 +565,19 @@ describe("BACKLOG-2664 — the copy is a consequence of the link, never a siblin
     });
 
     /**
-     * The legacy self-heal, preserved. An unfrozen contact with no record-backed
-     * link still resolves through the content fallback — that is what carries a
-     * pre-crosswalk contact's addresses, and the narrowing comment on this item
-     * says not to restructure it.
+     * INVERTED BY BACKLOG-2669, and this test is the record of why.
      *
-     * IT ALSO DOCUMENTS THE RESIDUAL: this record was REFUSED (the names
-     * disagree) and its second number is copied anyway. Same rule broken, for an
-     * unfrozen contact. Out of scope here — flagged on the item.
+     * As written for 2664 it asserted the residual that item deliberately left
+     * behind: this record is REFUSED (the names disagree, so the linker files a
+     * question instead of linking), and the backfill copied its second number
+     * onto an unfrozen contact anyway. 2664 gated the content branches on the
+     * FREEZE only, so the same rule stayed broken one population over.
+     *
+     * 2669 deleted those branches. The question is still asked — that assertion
+     * is unchanged below and is the point: **the ask survives, only the
+     * unilateral copy is gone.** Robin keeps exactly the number he was given.
      */
-    it("still resolves an unfrozen contact by content, even from a refused record", () => {
+    it("no longer resolves an unfrozen contact by content — the question stands, the copy does not", () => {
       // Two people sharing an office line, so the names disagree and the linker
       // refuses. BOTH NAMES ARE FROM `FICTIONAL_NAMES` in
       // `scripts/ci/check-fixture-pii.mjs`: this repository is public, and a
@@ -591,9 +594,11 @@ describe("BACKLOG-2664 — the copy is a consequence of the link, never a siblin
 
       runSweep([robin]);
 
+      // The ask is unchanged — this is the leg that must NOT move.
       expect(questionsFor(robin)).toEqual(["macos rec-office (name_mismatch)"]);
-      expect(copyPlanFor(robin)).toEqual(["phone:rec-office"]);
-      expect(phonesOf(robin)).toEqual(["+15035550140", "+15035550141"]);
+      // BACKLOG-2669: no link, so no row and no copy. Both were non-empty before.
+      expect(copyPlanFor(robin)).toEqual([]);
+      expect(phonesOf(robin)).toEqual(["+15035550140"]);
     });
   });
 
