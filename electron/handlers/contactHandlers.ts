@@ -114,6 +114,10 @@ import {
 // nothing else. Those are deleted, so the imports go with them — a helper kept
 // "in case" is how a deleted rule grows a second call site.
 import { contactInfoSourceFor } from "../utils/contactValueProvenance";
+import {
+  hasNothingToImport,
+  NOTHING_TO_IMPORT_REASON,
+} from "../utils/importableRecord";
 import { applyLinkedSourceValues } from "../services/contactSourceValues";
 // BACKLOG-2617: `recordContactOrigin` was imported here for the duplicate-by-name
 // early return in `contacts:create` and nothing else. That branch is deleted, so
@@ -1856,8 +1860,41 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // rather than one line per contact (BACKLOG-2458 I2).
         const linkOutcomes: Array<{ contactId: string; outcome: LinkImportOutcome }> = [];
 
-        for (const contact of contactsToImport) {
+        for (const [index, contact] of contactsToImport.entries()) {
           const sanitizedContact = sanitizeObject(contact) as ImportableContact;
+
+          /**
+           * BACKLOG-2684 — REFUSE A RECORD WITH NOTHING ON IT.
+           *
+           * BACKLOG-2672 stopped this in the renderer: the Import button is
+           * disabled and says why. This is the door behind that button. Before
+           * this guard, `contacts:import` accepted the founder's own
+           * message-derived record — `{ name: "unknown", phone: "unknown" }` —
+           * because the literal "unknown" is a non-empty string as far as
+           * `validateContactData` is concerned. Measured on the pre-fix tree:
+           * it succeeded and created a row whose `display_name` was "unknown",
+           * exactly the state BACKLOG-2461 exists to eliminate.
+           *
+           * The renderer guard cannot protect a caller that does not go
+           * through the renderer, and the next engineer wiring a new import
+           * entry point inherits this handler.
+           *
+           * BEFORE `validateContactData` on purpose: that check refuses a
+           * missing name with "name is required", which describes the field
+           * rather than the record. "Nothing to import" is the true reason and
+           * is the one the user was already shown on the button.
+           *
+           * REFUSES THE WHOLE BATCH, by throwing rather than skipping. A
+           * silently-dropped import is worse than a rejected one: the caller
+           * would have no way to tell which of its records landed.
+           */
+          if (hasNothingToImport(sanitizedContact)) {
+            throw new ValidationError(
+              `Record ${index + 1} has ${NOTHING_TO_IMPORT_REASON.toLowerCase()}`,
+              "contactsToImport",
+            );
+          }
+
           const validatedData = validateContactData(sanitizedContact, false);
           const sourceIdentities = toSourceIdentities(sanitizedContact);
 
