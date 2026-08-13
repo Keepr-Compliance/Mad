@@ -229,11 +229,40 @@ describe("contact origin links (BACKLOG-2473)", () => {
   // =========================================================================
   // THE PROPERTY THAT PROTECTS ADDRESS RESOLUTION
   // =========================================================================
-  describe("an origin row and the content fallback", () => {
+  /**
+   * ===========================================================================
+   * INVERTED BY BACKLOG-2669 — AND THE FOUR CASES ARE KEPT ON PURPOSE
+   * ===========================================================================
+   * These four cases were written for BACKLOG-2473, when `CONTACT_SOURCE_RECORDS_SQL`
+   * carried an email/phone CONTENT FALLBACK that switched on for a contact with
+   * no record-backed crosswalk row. They asserted that the fallback resolved,
+   * and kept resolving once every contact gained an origin row — because a gate
+   * that counted origin rows would have killed address resolution for the whole
+   * database in silence.
+   *
+   * 2669 deleted the fallback: a record contributes values only when it is
+   * linked. On the founder's machine those branches copied four values off three
+   * strangers' records onto a contact linked to none of them, and each stolen
+   * value widened the match surface for the next sweep.
+   *
+   * SO THE ASSERTIONS FLIP, AND THAT MAKES THEM A REINTRODUCTION GUARD: a
+   * content match now resolves to NOTHING, on either channel, with or without an
+   * origin row. Re-add either branch and these four go red. Both channels are
+   * kept for the reason the #2198 SR note below gives — they are separate SQL
+   * branches and neither generalises to the other.
+   *
+   * 2473's own lesson is not lost: an origin row is still not a claim on a source
+   * record. It is now enforced by the JOIN (a synthetic `source_record_id`
+   * matches nothing — the last case here) and by
+   * `contactSourceLinker.resolveSourceRecord`'s conflict filter, rather than by a
+   * gate in this query.
+   */
+  describe("an origin row and the (deleted) content fallback", () => {
     /**
-     * Sets up the situation the gate governs: a contact whose stored email also
-     * appears in an address-book record it has NO record-backed link to. The
-     * content fallback is the only thing that can connect them.
+     * Sets up the situation the deleted gate governed: a contact whose stored
+     * email also appears in an address-book record it has NO record-backed link
+     * to. The content fallback used to be the only thing that could connect
+     * them; nothing connects them now until a link is made.
      */
     function seedContentMatchable(contactId: string): void {
       addContact(contactId, "manual");
@@ -281,28 +310,33 @@ describe("contact origin links (BACKLOG-2473)", () => {
       ).map((r) => `${r.matched_by}:${r.external_record_id}`);
     }
 
-    it("resolves by email when the contact has no links at all (the baseline)", () => {
+    it("resolves NOTHING by email when the contact has no links at all", () => {
       seedContentMatchable("c-base");
-      expect(resolvedRecords("c-base")).toEqual(["email:MAC-SHARED"]);
+      // Was `["email:MAC-SHARED"]` before BACKLOG-2669. The record still matches
+      // on content; content is no longer a reason to copy from it.
+      expect(resolvedRecords("c-base")).toEqual([]);
     });
 
     /**
-     * THE REGRESSION THIS FILE EXISTS TO PREVENT. Identical to the baseline
-     * except the contact now carries its origin row. If the gate counted it,
-     * this returns [] — and in production that means a contact quietly stops
-     * inheriting addresses it used to inherit.
+     * The origin row makes no difference either way now — which is the point.
+     * Before 2669 this case existed because a gate that counted the origin row
+     * would have switched address resolution off for every contact in the
+     * database, silently. The gate is gone, so the two cases agree at [] instead
+     * of agreeing at ["email:MAC-SHARED"], and the pair still witnesses that the
+     * origin row is not treated as a link.
      */
-    it("STILL resolves by email once the contact carries an origin row", () => {
+    it("resolves NOTHING by email once the contact carries an origin row", () => {
       seedContentMatchable("c-origin");
       recordContactOrigin(USER_ID, "c-origin", "manual");
 
       expect(linksOf("c-origin")).toHaveLength(1);
-      expect(resolvedRecords("c-origin")).toEqual(["email:MAC-SHARED"]);
+      expect(resolvedRecords("c-origin")).toEqual([]);
     });
 
-    it("resolves by phone when the contact has no links at all (the baseline)", () => {
+    it("resolves NOTHING by phone when the contact has no links at all", () => {
       seedPhoneMatchable("c-phone-base");
-      expect(resolvedRecords("c-phone-base")).toEqual(["phone:MAC-PHONE"]);
+      // Was `["phone:MAC-PHONE"]` before BACKLOG-2669.
+      expect(resolvedRecords("c-phone-base")).toEqual([]);
     });
 
     /**
@@ -321,21 +355,25 @@ describe("contact origin links (BACKLOG-2473)", () => {
      * "simplification" of that one line would have shipped silently. Nothing
      * about the email test generalises to this one; they are separate SQL
      * branches and each needs its own witness.
+     *
+     * That argument is why both channels are kept after BACKLOG-2669 inverted
+     * them: reintroducing ONE branch must be caught by a case that runs it.
      */
-    it("STILL resolves by phone once the contact carries an origin row", () => {
+    it("resolves NOTHING by phone once the contact carries an origin row", () => {
       seedPhoneMatchable("c-phone-origin");
       recordContactOrigin(USER_ID, "c-phone-origin", "manual");
 
       expect(linksOf("c-phone-origin")).toHaveLength(1);
-      expect(resolvedRecords("c-phone-origin")).toEqual(["phone:MAC-PHONE"]);
+      expect(resolvedRecords("c-phone-origin")).toEqual([]);
     });
 
     /**
-     * The other direction: a RECORD-BACKED link must still switch the fallback
-     * off. Without this, the gate change could have been "delete the gate", and
-     * a contact explicitly linked to one card would start content-matching every
-     * other record that shares an address — which is the behaviour the crosswalk
-     * was built to end.
+     * The other direction, and the one branch that survives: a RECORD-BACKED
+     * link resolves, and resolves to the CLAIMED record only. Before BACKLOG-2669
+     * this case carried the extra weight of proving the fallback switched off
+     * when a real link appeared; that is now unconditional, but the assertion is
+     * unchanged and still pins priority 1 to the crosswalk rather than to
+     * content — `MAC-SHARED` matches this contact's email and is still absent.
      */
     it("stops resolving by content once a REAL record-backed link exists", () => {
       seedContentMatchable("c-linked");

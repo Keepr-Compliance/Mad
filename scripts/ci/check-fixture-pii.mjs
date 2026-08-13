@@ -266,6 +266,17 @@ const FICTIONAL_NAMES = new Set([
   "rehearsal user",
   "external fran",
   "external gus",
+  // BACKLOG-2669 — the founder's OWN seeded test contacts, transcribed from the
+  // live reproduction on his machine (the `# LIVE REPRODUCTION` comment on that
+  // item, which states plainly that these are test contacts and that no real
+  // data is affected). Kept under their original names rather than renamed,
+  // because the value of that fixture is that it is his trail and not an
+  // invention: the two-hop cascade in
+  // `contactSourceLinkSql.unlinkedCopy-2669.test.ts` is his timestamps, his
+  // numbers and his addresses.
+  "wendell marchetti",
+  "bianca okafor",
+  "bea okafor",
 ]);
 
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));

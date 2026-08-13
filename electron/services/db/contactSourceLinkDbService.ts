@@ -67,9 +67,11 @@ import type { ExternalContactSource } from "./externalContactDbService";
  *   CONTACT CAME FROM (typed by hand, inferred from an email or text thread) so
  *   provenance has one source of truth, instead of being read from the crosswalk
  *   for imported contacts and from the `contacts.source` scalar for everyone
- *   else. It points at a synthetic `source_record_id` that JOINs nothing, and
- *   `CONTACT_SOURCE_RECORDS_SQL` must exclude it from its content-fallback gate
- *   or address resolution dies for every contact — see db/contactOriginLink.ts.
+ *   else. It points at a synthetic `source_record_id` that JOINs nothing, so it
+ *   never contributes an address. Until BACKLOG-2669,
+ *   `CONTACT_SOURCE_RECORDS_SQL` also had to exclude it from a content-fallback
+ *   gate or address resolution died for every contact; those branches are now
+ *   deleted — see db/contactOriginLink.ts for why that trap existed.
  */
 export type ContactMatchMethod =
   | "source_id"

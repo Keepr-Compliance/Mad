@@ -89,6 +89,11 @@
  * (BACKLOG-2664, gated inside `CONTACT_SOURCE_RECORDS_SQL`). Three doors, and
  * only the first one was locked.
  *
+ * BACKLOG-2669 then REMOVED the third door instead of gating it: that query's
+ * content branches are deleted, so the backfill reads crosswalk-linked records
+ * only and can no longer copy onto any contact, frozen or not. The lock this
+ * file adds is still load-bearing — it links by NAME, which no other path does.
+ *
  * The refusal here FILES THE SAME QUESTION the content path files, rather than
  * going quiet: the pair is still probably one person, and a rule that silently
  * dropped it would leave the user with no way to reach a link the freeze is not

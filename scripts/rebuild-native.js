@@ -35,18 +35,66 @@ const ELECTRON_ABI_MODULES = ['better-sqlite3-multiple-ciphers'];
 /** Node-API: ABI-stable, so one binary serves both jest (Node) and Electron. */
 const NAPI_MODULES = ['sqlite3'];
 
+/**
+ * node-gyp pinned for the from-source fallback.
+ *
+ * NOT the version a module vendors. `sqlite3` ships node-gyp 8.4.1, whose VS
+ * detection knows only majors 15/16/17 (2017/2019/2022). The GitHub
+ * `windows-latest` image is now `windows-2025-vs2026`, which ships Visual
+ * Studio major 18 at `C:\Program Files\Microsoft Visual Studio\18\Enterprise`,
+ * so 8.4.1 reports `unknown version "undefined"` and then
+ * `Could not find any Visual Studio installation to use` — the fallback is dead
+ * on that image (BACKLOG-2698). 12.4.0 maps major 18 -> year 2026.
+ *
+ * Pinned exact, not `@latest`: 13.x requires Node >=22.22.2 and CI runs Node
+ * 20.x, so `@latest` would silently stop running here. 12.4.0's engines are
+ * `^20.17.0 || >=22.9.0`.
+ */
+const NODE_GYP_PIN = 'node-gyp@12.4.0';
+
+/** Attempts for network-bound prebuild downloads, which flake in CI. */
+const PREBUILD_ATTEMPTS = 3;
+
+/** Sleep without pulling in a dependency — blocking is fine in a build script. */
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Run `fn` until it reports success, with a short linear backoff.
+ *
+ * `prebuild-install` reaches the network, and a single `socket hang up` used to
+ * be harmless because the from-source fallback caught it. It no longer is
+ * (see NODE_GYP_PIN), so the download itself has to stop being a single point
+ * of failure.
+ */
+function withRetry(label, fn, attempts = PREBUILD_ATTEMPTS) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (fn()) return true;
+    if (attempt < attempts) {
+      console.log(`[rebuild-native] ${label}: attempt ${attempt}/${attempts} failed, retrying...`);
+      sleep(attempt * 2000);
+    }
+  }
+  return false;
+}
+
 function getElectronVersion() {
+  // Read package.json FIRST. Under `npm_config_ignore_scripts` Electron's
+  // postinstall never runs, so `npx electron --version` throws "Electron failed
+  // to install correctly" — which is expected here, but was loud enough on
+  // stderr to get BACKLOG-2698 filed against it as the cause of a failure it
+  // had nothing to do with. It appears in green runs too, on every platform.
+  const pkgPath = path.join(__dirname, '..', 'node_modules', 'electron', 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    return pkg.version;
+  }
+
   try {
-    // Try to get version from installed electron
-    const result = execSync('npx electron --version', { encoding: 'utf-8' });
+    const result = execSync('npx electron --version', { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
     return result.trim().replace('v', '');
   } catch {
-    // Fall back to package.json
-    const pkgPath = path.join(__dirname, '..', 'node_modules', 'electron', 'package.json');
-    if (fs.existsSync(pkgPath)) {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-      return pkg.version;
-    }
     throw new Error('Could not determine Electron version');
   }
 }
@@ -70,19 +118,22 @@ function tryPrebuildInstall(moduleName, electronVersion) {
 
   console.log(`[rebuild-native] ${moduleName}: prebuild-install for Electron ${electronVersion}...`);
 
-  const result = spawnSync('npx', [
-    'prebuild-install',
-    '--runtime=electron',
-    `--target=${electronVersion}`,
-    `--arch=${getArch()}`,
-    `--platform=${getPlatform()}`
-  ], {
-    cwd: modulePath,
-    stdio: 'inherit',
-    shell: true
-  });
+  // Same network exposure as the NAPI path, so the same retry.
+  return withRetry(`${moduleName} prebuild-install`, () => {
+    const result = spawnSync('npx', [
+      'prebuild-install',
+      '--runtime=electron',
+      `--target=${electronVersion}`,
+      `--arch=${getArch()}`,
+      `--platform=${getPlatform()}`
+    ], {
+      cwd: modulePath,
+      stdio: 'inherit',
+      shell: true
+    });
 
-  return result.status === 0;
+    return result.status === 0;
+  });
 }
 
 /**
@@ -104,19 +155,20 @@ function buildNapiModule(moduleName) {
   }
 
   console.log(`[rebuild-native] ${moduleName}: prebuild-install -r napi...`);
-  const prebuilt = spawnSync('npx', ['prebuild-install', '-r', 'napi'], {
-    cwd: modulePath,
-    stdio: 'inherit',
-    shell: true
+  const downloaded = withRetry(`${moduleName} prebuild-install`, () => {
+    const prebuilt = spawnSync('npx', ['prebuild-install', '-r', 'napi'], {
+      cwd: modulePath,
+      stdio: 'inherit',
+      shell: true
+    });
+    return prebuilt.status === 0 && Boolean(findBinding(modulePath));
   });
 
-  if (prebuilt.status === 0 && findBinding(modulePath)) {
-    return true;
-  }
+  if (downloaded) return true;
 
   // No prebuild for this platform/arch — compile it.
-  console.log(`[rebuild-native] ${moduleName}: no prebuild, falling back to node-gyp rebuild...`);
-  const built = spawnSync('npx', ['node-gyp', 'rebuild'], {
+  console.log(`[rebuild-native] ${moduleName}: no prebuild, falling back to ${NODE_GYP_PIN} rebuild...`);
+  const built = spawnSync('npx', ['--yes', NODE_GYP_PIN, 'rebuild'], {
     cwd: modulePath,
     stdio: 'inherit',
     shell: true

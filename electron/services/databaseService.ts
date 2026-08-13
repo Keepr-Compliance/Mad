@@ -3310,6 +3310,9 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // The full rationale — including why an origin row must NOT suppress the
         // content fallback in CONTACT_SOURCE_RECORDS_SQL, which is the way this
         // change could break address resolution — is in db/contactOriginLink.ts.
+        // (BACKLOG-2669 has since deleted that content fallback, so the hazard is
+        // retired rather than merely avoided. The rationale is kept because it is
+        // the reason a reintroduced content branch would need the same care.)
 
         // ------------------------------------------------------------------
         // WIDEN THE VOCABULARY — the 12-step table rebuild, again
