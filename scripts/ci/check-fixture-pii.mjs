@@ -254,6 +254,29 @@ const FICTIONAL_NAMES = new Set([
   // reader connects them. It fires there and not in `contactTombstone` only
   // because that fixture puts the name and the address on separate lines.
   "dana example",
+  // BACKLOG-2700 — the migration-chain rehearsal corpus
+  // (electron/services/__tests__/fixtures/rehearsalCorpus.ts). Invented to seed
+  // the database that gets upgraded v55 -> v62; none refers to anyone. The two
+  // "External" names are deliberately literal: they label rows in
+  // `external_contacts`, the address-book side of the crosswalk, so a reader can
+  // tell at a glance which side of the join a row is on. Every address in that
+  // corpus uses the reserved `.test` domain and every number is 415-555-01xx.
+  // Listed here rather than baselined because they are invented, and the
+  // baseline is for values a human confirmed are safe.
+  "rehearsal user",
+  "external fran",
+  "external gus",
+  // BACKLOG-2669 — the founder's OWN seeded test contacts, transcribed from the
+  // live reproduction on his machine (the `# LIVE REPRODUCTION` comment on that
+  // item, which states plainly that these are test contacts and that no real
+  // data is affected). Kept under their original names rather than renamed,
+  // because the value of that fixture is that it is his trail and not an
+  // invention: the two-hop cascade in
+  // `contactSourceLinkSql.unlinkedCopy-2669.test.ts` is his timestamps, his
+  // numbers and his addresses.
+  "wendell marchetti",
+  "bianca okafor",
+  "bea okafor",
 ]);
 
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));

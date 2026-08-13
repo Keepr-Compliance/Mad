@@ -48,13 +48,20 @@
  * THIS IS THE SUBTLE ONE, AND GETTING IT WRONG PRODUCES A REMOVAL THAT SILENTLY
  * DOES NOTHING.
  *
- * That query's priority-2/3 branches are guarded by
+ * That query's priority-2/3 branches were guarded by
  * `NOT EXISTS (SELECT 1 FROM contact_source_links x WHERE x.contact_id = @contactId)`
- * — they switch ON precisely when the contact has no crosswalk rows left. So
+ * — they switched ON precisely when the contact had no crosswalk rows left. So
  * unlinking a contact's LAST source would make the content fallback re-match
  * the very record just unlinked (by the email or phone we are about to remove),
  * every value would look "still contributed by a remaining source", and nothing
  * would be removed. The one case where the whole rejection matters most.
+ *
+ * BACKLOG-2669 deleted those branches, so that specific hazard is gone and the
+ * two queries would now agree. This module keeps its own read anyway: the
+ * removal path must be legible on its own terms — "what do the links that
+ * REMAIN contribute" — and it must not silently acquire whatever a future
+ * priority added to the shared query would return. Unifying them would be a
+ * separate change with its own argument, not a tidy-up.
  *
  * Remaining values are therefore read straight from
  * `contact_source_links JOIN external_contacts` — crosswalk rows only, no
