@@ -28,6 +28,13 @@ import {
   getRoleDisplayName,
 } from "../../../../utils/transactionRoleUtils";
 import { labelForTransactionContact } from "../../../../utils/contactDisplayLabel";
+import {
+  findContactsMissingRoles,
+  hasClientAssigned,
+  missingRolesMessage,
+  LAST_CLIENT_REMOVED_MESSAGE,
+  type RoleContactIds,
+} from "../../../../utils/transactionContactRules";
 import { settingsService } from "../../../../services";
 import logger from '../../../../utils/logger';
 import { OfflineNotice } from '../../../common/OfflineNotice';
@@ -270,19 +277,70 @@ export function EditContactsModal({
     });
   }, []);
 
-  const handleSave = async () => {
-    // First, validate that all assigned contacts have roles
-    const contactsInRoles = new Set<string>();
-    for (const contactIds of Object.values(roleAssignments)) {
-      for (const contactId of contactIds) {
-        contactsInRoles.add(contactId);
-      }
+  /**
+   * The roles the deal held when this modal opened, in the same shape as the
+   * staged `roleAssignments` so the two can be compared by the same function.
+   *
+   * Built exactly the way the save diff builds its `originalSet` below —
+   * `role || specific_role` — so "did this deal have a Client?" is answered off
+   * the same reading of the same rows that decides what gets removed.
+   */
+  const originalRoleAssignments = useMemo((): RoleContactIds => {
+    const out: RoleContactIds = {};
+    for (const assignment of originalAssignments) {
+      const role = assignment.role || assignment.specific_role;
+      if (!role) continue;
+      (out[role] ??= []).push(assignment.contact_id);
     }
+    return out;
+  }, [originalAssignments]);
 
-    const missingRoles = assignedContactIds.filter((id) => !contactsInRoles.has(id));
+  const handleSave = async () => {
+    /**
+     * The role-less check, unchanged in behaviour but now stated in
+     * `transactionContactRules` so the wizard can ask it the same way
+     * (BACKLOG-2680). This surface is where the rule already shipped; the
+     * wizard is the one that was missing it.
+     */
+    const missingRoles = findContactsMissingRoles(assignedContactIds, roleAssignments);
     if (missingRoles.length > 0) {
       setContactsWithoutRoles(new Set(missingRoles));
-      setError(`Please assign a role to all contacts (${missingRoles.length} contact${missingRoles.length !== 1 ? "s" : ""} missing roles)`);
+      setError(missingRolesMessage(missingRoles.length));
+      return;
+    }
+
+    /**
+     * BACKLOG-2681 — THIS SURFACE COULD TAKE THE LAST CLIENT OFF A DEAL.
+     *
+     * The "at least one Client" rule existed in exactly one place: the wizard's
+     * step-3 gate. So it held at the moment a deal was created and nowhere
+     * afterwards — open the deal, press Edit Contacts, change the Client to
+     * Buyer Agent, Save, and the deal now has no Client at all. A state the
+     * wizard would have refused to create, reached in two clicks from the deal
+     * it refused to create it for.
+     *
+     * The rule is real rather than onboarding scaffolding, and that is on the
+     * record: the BACKLOG-2677 founder decision says *"Do not delete that check
+     * — it still guards a transaction whose roles were all changed away from
+     * Client by hand"*, which is this scenario exactly.
+     *
+     * NARROWED TO "MUST NOT REMOVE THE LAST CLIENT", deliberately. A blanket
+     * "every transaction must have a Client" would block every future edit to
+     * any deal that ALREADY has no Client — auto-detected deals, imported
+     * deals, and every deal created before this rule existed. That set cannot
+     * be bounded from here; it lives in the user's local database. Refusing
+     * only the transition from "has a Client" to "has none" cannot strand a
+     * deal that is already in that state.
+     *
+     * THIS IS THE MESSAGE, NOT THE ENFORCEMENT. The authority is
+     * `transactions:batchUpdateContacts` in the main process, which refuses the
+     * same save whether or not a renderer asked first — BACKLOG-2681 is
+     * explicit that a rule living in two renderers is a rule that drifts, and
+     * these two already had.
+     */
+    const hadClient = hasClientAssigned(originalRoleAssignments);
+    if (hadClient && !hasClientAssigned(roleAssignments)) {
+      setError(LAST_CLIENT_REMOVED_MESSAGE);
       return;
     }
 

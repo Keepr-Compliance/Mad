@@ -28,6 +28,10 @@ import { getContactNames } from "../contactsService";
 import { FIRST_SCAN_LOOKBACK_MONTHS } from "../../constants";
 import { createCommunicationReference } from "../messageMatchingService";
 import { autoLinkCommunicationsForContact } from "../autoLinkService";
+import {
+  wouldRemoveLastClient,
+  LAST_CLIENT_REMOVED_ERROR,
+} from "../../utils/transactionClientRule";
 import emailSyncService from "../emailSyncService";
 import { dbGet, dbAll } from "../db/core/dbConnection";
 import { isTransactionFrozen } from "../transactionFreezePolicy";
@@ -1361,6 +1365,32 @@ class TransactionService {
   ): Promise<void> {
     // BACKLOG-2150 — party add AND remove are allowed after first export; no
     // freeze guard here (identity anchors are enforced at the db layer).
+
+    /**
+     * BACKLOG-2681 — THE LAST CLIENT MAY NOT BE TAKEN OFF A DEAL.
+     *
+     * Enforced HERE rather than in `transactionCrudHandlers` so it covers every
+     * caller of this service and not only the one IPC channel. The item asks
+     * for the check to live "in the main process where every route passes
+     * through, not duplicated in two renderers that will drift (they already
+     * have)"; this is one level deeper than the handler it names, for the same
+     * reason.
+     *
+     * `EditContactsModal` asks the same question before it calls, so the user
+     * normally sees a named reason instead of this error. That copy is a
+     * message; this is the rule.
+     *
+     * Reads the CURRENT rows first because the operations are a DELTA — the
+     * renderer sends only what changed, so the resulting state cannot be
+     * derived from the operations alone.
+     */
+    const current = await databaseService.getTransactionContactsWithRoles(
+      transactionId,
+    );
+    if (wouldRemoveLastClient(current, operations)) {
+      throw new Error(LAST_CLIENT_REMOVED_ERROR);
+    }
+
     return await databaseService.batchUpdateContactAssignments(
       transactionId,
       operations,
