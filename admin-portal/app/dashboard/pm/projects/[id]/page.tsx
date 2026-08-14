@@ -38,6 +38,11 @@ import { DraggableItemRow } from './components/DraggableItemRow';
 import { useProjectDragDrop } from './hooks/useProjectDragDrop';
 import { useResizableColumn } from './hooks/useResizableColumn';
 import { AssignSprintControl } from './components/AssignSprintControl';
+import {
+  DEFAULT_PROJECT_VIEW,
+  PROJECT_VIEW_STORAGE_KEY,
+  resolveProjectView,
+} from './lib/projectViewPreference';
 import { BulkActionBar } from '../../components/BulkActionBar';
 
 // ---------------------------------------------------------------------------
@@ -267,16 +272,17 @@ export default function ProjectDetailPage() {
     });
   }, []);
 
-  // Workspace view: Sprints (default) or Epics (BACKLOG-2386). Persisted so the
-  // preference sticks across reloads/navigation (same pattern as full-width).
-  const [view, setView] = useState<ProjectView>('sprints');
+  // Workspace view: Epics (default, BACKLOG-2706) or Sprints (BACKLOG-2386).
+  // Persisted so the preference sticks across reloads/navigation (same pattern
+  // as full-width). The default seeds the first render; the effect then applies
+  // a stored choice, so a view the user picked always wins over the default.
+  const [view, setView] = useState<ProjectView>(DEFAULT_PROJECT_VIEW);
   useEffect(() => {
-    const stored = window.localStorage.getItem('pm-project-view');
-    if (stored === 'epics' || stored === 'sprints') setView(stored);
+    setView(resolveProjectView(window.localStorage.getItem(PROJECT_VIEW_STORAGE_KEY)));
   }, []);
   const handleViewChange = useCallback((next: ProjectView) => {
     setView(next);
-    window.localStorage.setItem('pm-project-view', next);
+    window.localStorage.setItem(PROJECT_VIEW_STORAGE_KEY, next);
   }, []);
 
   // Update project field handler
