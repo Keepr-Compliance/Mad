@@ -1361,6 +1361,22 @@ class TransactionService {
   ): Promise<void> {
     // BACKLOG-2150 — party add AND remove are allowed after first export; no
     // freeze guard here (identity anchors are enforced at the db layer).
+
+    /**
+     * NO CONTACT RULE IS ENFORCED HERE (BACKLOG-2683, founder decision 13 Aug).
+     *
+     * A "must not remove the last Client" guard briefly lived at this line. The
+     * founder dropped the "at least one Client" requirement entirely — a deal
+     * may be saved with nobody holding the Client role — so there is no last
+     * Client to protect and the guard went out with the rule.
+     *
+     * This seam is still the right home for a main-process contact rule: it
+     * covers every caller of this service rather than the one IPC channel. The
+     * role-presence rule BACKLOG-2680 enforces in the renderer has no
+     * main-process backing on this route, while the wizard route does
+     * (`electron/utils/validation.ts`). Filed as a follow-up on BACKLOG-2680
+     * rather than added here, where it would be unreviewed scope.
+     */
     return await databaseService.batchUpdateContactAssignments(
       transactionId,
       operations,

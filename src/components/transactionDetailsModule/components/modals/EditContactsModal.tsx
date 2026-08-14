@@ -28,6 +28,11 @@ import {
   getRoleDisplayName,
 } from "../../../../utils/transactionRoleUtils";
 import { labelForTransactionContact } from "../../../../utils/contactDisplayLabel";
+import {
+  findContactsMissingRoles,
+  missingRolesMessage,
+  type RoleContactIds,
+} from "../../../../utils/transactionContactRules";
 import { settingsService } from "../../../../services";
 import logger from '../../../../utils/logger';
 import { OfflineNotice } from '../../../common/OfflineNotice';
@@ -271,20 +276,28 @@ export function EditContactsModal({
   }, []);
 
   const handleSave = async () => {
-    // First, validate that all assigned contacts have roles
-    const contactsInRoles = new Set<string>();
-    for (const contactIds of Object.values(roleAssignments)) {
-      for (const contactId of contactIds) {
-        contactsInRoles.add(contactId);
-      }
-    }
-
-    const missingRoles = assignedContactIds.filter((id) => !contactsInRoles.has(id));
+    /**
+     * The role-less check, unchanged in behaviour but now stated in
+     * `transactionContactRules` so the wizard can ask it the same way
+     * (BACKLOG-2680). This surface is where the rule already shipped; the
+     * wizard is the one that was missing it.
+     */
+    const missingRoles = findContactsMissingRoles(assignedContactIds, roleAssignments);
     if (missingRoles.length > 0) {
       setContactsWithoutRoles(new Set(missingRoles));
-      setError(`Please assign a role to all contacts (${missingRoles.length} contact${missingRoles.length !== 1 ? "s" : ""} missing roles)`);
+      setError(missingRolesMessage(missingRoles.length));
       return;
     }
+
+    /**
+     * THIS SURFACE MAY TAKE THE LAST CLIENT OFF A DEAL (BACKLOG-2683).
+     *
+     * A "you would leave this deal with no Client" refusal briefly stood here.
+     * The founder deleted the underlying requirement on 13 Aug — a deal may be
+     * saved with nobody holding the Client role — so the refusal went with it.
+     * Changing the only Client to a Buyer Agent and saving is now allowed, on
+     * this surface and in the wizard alike.
+     */
 
     // Clear any previous validation errors
     setContactsWithoutRoles(new Set());

@@ -1,6 +1,6 @@
 /**
- * Shared SQL for resolving a saved contact to its external source records
- * (BACKLOG-2401).
+ * Shared SQL for resolving a saved contact to its LINKED external source records
+ * (BACKLOG-2401; narrowed to links only by BACKLOG-2669).
  *
  * Lives in its own module because there are TWO backfill implementations that
  * must not drift apart: the main-thread path in
@@ -12,19 +12,96 @@
  * field, so it is expressed exactly once, here.
  *
  * ---------------------------------------------------------------------------
- * RESOLUTION ORDER — mirrors contactSourceLinker.ts, and never uses NAME
+ * THE RULE: A RECORD CONTRIBUTES VALUES ONLY WHEN IT IS LINKED (BACKLOG-2669)
  * ---------------------------------------------------------------------------
- *   pri 1  source_id  — the crosswalk claims this record. Immune to a rename,
- *                       and immune to an identifier moving between people.
- *   pri 2  email      — content fallback for a contact with no crosswalk row.
- *   pri 3  phone      — weakest, last.
+ * READ THIS BEFORE ADDING A BRANCH THAT SELECTS `external_contacts` BY CONTENT.
  *
- * Display name is ABSENT on purpose. `... WHERE name = ?` against
- * `contacts.display_name` was the entire previous mechanism and the defect this
- * work removes: rename yourself in Contacts.app and your saved record orphaned.
+ * This query is not a reader. Its two consumers COPY every row it returns onto
+ * the contact's `contact_emails` / `contact_phones`. So it resolves through the
+ * crosswalk and through nothing else. A link is made by the source-id path, by
+ * the user linking a source by hand, or by a human answering a question. There
+ * is no fourth way, and none of the three runs through this query.
+ *
+ * WHAT USED TO BE HERE. Two further branches selected `external_contacts` by
+ * CONTENT ALONE — priority 2 on a shared email, priority 3 on a shared phone —
+ * gated only on the contact holding no record-backed crosswalk row. No link, no
+ * name check, no verdict, and no answer.
+ *
+ * Founder's machine, 12 Aug (full trail on BACKLOG-2669). A contact created by
+ * hand, holding ONE phone number the founder typed, whose only crosswalk row was
+ * `origin` — linked to no source record at all — acquired four values belonging
+ * to other people inside thirty minutes:
+ *
+ *     +15035550181             manual   23:34:51   the founder typed it
+ *     bianca@example.com       import   23:50:33   from a record sharing that phone
+ *     +15035550180             import   23:54:26
+ *     bea.okafor@example.net   import   00:03:08   from a record sharing THAT email
+ *     bianca.reyes@example.org import   00:03:08
+ *
+ * (His two numbers ended `0301` and `0300`. They are shown here — and spelled in
+ * the tests — shifted into the `555-0100..555-0199` block that
+ * `scripts/ci/check-fixture-pii.mjs` reserves for fictional use, which rejected
+ * the originals. Nothing else about the trail is altered.)
+ *
+ * AND IT CASCADED, which is what made it urgent rather than untidy. The copied
+ * email widened the contact's match surface, so the next sweep matched further
+ * records through a value the previous sweep had taken. Each stolen value steals
+ * more. A single-hop test cannot see that, which is why the control in
+ * `__tests__/contactSourceLinkSql.unlinkedCopy-2669.test.ts` runs two sweeps.
+ *
+ * THE OBJECTION, ANSWERED: "then a new record's values never reach the contact."
+ * They do. An unlinked content match ALREADY files a proposal
+ * (`contactSourceLinker.resolveSourceRecord`); the user answers, the link is
+ * created, `applyLinkedSourceValues` copies, and priority 1 below carries it on
+ * every sweep after. Measured on the founder's own fixture: with these branches
+ * gone he is still ASKED about the record that matched his phone — and is no
+ * longer asked about the second record, which became a candidate only because
+ * the defect had already put a stranger's email on him. The branches were
+ * redundant with the ask, not complementary to it.
+ *
+ * Every proposal in the founder's trail was still `pending`. The branches did
+ * not merely ignore a verdict; they did not wait for one to exist.
+ *
+ * DELETING BRANCHES FROM A `UNION ALL` IS MONOTONICALLY RESTRICTIVE. For every
+ * input the result set is a subset of what it was, so no contact — frozen or
+ * not, linked or not — can gain a value it could not gain before.
  *
  * ---------------------------------------------------------------------------
- * ALL MATCHES ARE RETURNED, IN AN EXPLICIT ORDER — not one arbitrary row
+ * THE TWO LESSONS THOSE BRANCHES COST, KEPT BECAUSE THEY ARE WHY NOBODY SHOULD
+ * RE-ADD THEM
+ * ---------------------------------------------------------------------------
+ * BACKLOG-2473 — the gate that switched them on had to read
+ * `NOT EXISTS (... AND x.match_method <> 'origin')`, never a bare `NOT EXISTS`.
+ * v61 gives EVERY contact an origin row recording where it came from, and an
+ * origin row points at a synthetic `source_record_id` that JOINs nothing. The
+ * bare gate would have been false for every contact in the database, both
+ * fallbacks would have been silently dead, and nothing would have failed — the
+ * addresses would simply have stopped arriving. Any future content branch
+ * inherits that trap: a row in `contact_source_links` is NOT the same thing as a
+ * link to a source record.
+ *
+ * BACKLOG-2664 — they were made to stop at the freeze, because a copy with no
+ * link behind it must never reach a contact an exported audit depends on. A
+ * frozen contact can never earn a record-backed link by content matching
+ * (`contactSourceLinker.resolveSourceRecord` refuses at its
+ * `frozen_audit_contact` branch), so the gate never closed for her and every
+ * sweep re-copied every content-matching record, forever. That freeze gate is
+ * now UNNECESSARY RATHER THAN ABSENT: no contact gains anything from an unlinked
+ * content match, so the frozen subset is covered by the stronger rule. Measured,
+ * not argued — the 2664 suite's three founder cases and its parity block pass
+ * unmodified against this query.
+ *
+ * ---------------------------------------------------------------------------
+ * DISPLAY NAME IS ABSENT ON PURPOSE (BACKLOG-2401)
+ * ---------------------------------------------------------------------------
+ * `... WHERE name = ?` against `contacts.display_name` was the entire previous
+ * mechanism and the defect that work removed: rename yourself in Contacts.app
+ * and the next sync refreshes the shadow row under the new name, so the lookup
+ * finds nothing and the saved record is orphaned in silence. The crosswalk is
+ * keyed on the source record, which a rename does not change.
+ *
+ * ---------------------------------------------------------------------------
+ * EVERY LINKED RECORD IS RETURNED, IN AN EXPLICIT ORDER — not one arbitrary row
  * ---------------------------------------------------------------------------
  * A contact can legitimately map to several source records at once (the same
  * person in macOS, Outlook and an iPhone). Backfill is ADDITIVE — it inserts
@@ -48,77 +125,26 @@
  * every machine and every run.
  *
  * ---------------------------------------------------------------------------
- * WHY THE FALLBACK GATE SAYS `match_method <> 'origin'` (BACKLOG-2473)
+ * ONE ASYMMETRY, RECORDED RATHER THAN CLAIMED (BACKLOG-2669)
  * ---------------------------------------------------------------------------
- * READ THIS BEFORE SIMPLIFYING THE GATE BACK TO A BARE `NOT EXISTS`.
- *
- * Priorities 2 and 3 are a fallback for a contact the crosswalk does not claim,
- * so they switch on when the contact has no crosswalk row. v61 gives EVERY
- * contact an origin row — the row that records where it came from (typed by
- * hand, inferred from a thread) so provenance has one source of truth.
- *
- * An origin row is not a claim about an external record; it points at a
- * synthetic `source_record_id` that JOINs nothing. If it counted here, the bare
- * gate would be false for every contact in the database and BOTH content
- * fallbacks would be dead code — every contact whose addresses are resolved by
- * email/phone matching against `external_contacts` would silently stop resolving.
- * No error, no failing row count; the addresses simply stop arriving.
- *
- * The gate therefore counts only RECORD-BACKED links. Spelled as a literal
- * rather than an interpolated constant because this string is also read verbatim
- * by `contactQueryWorker`, which holds its own driver handle.
- *
- * ---------------------------------------------------------------------------
- * AND WHY PRIORITIES 2 AND 3 ALSO ASK ABOUT THE FREEZE (BACKLOG-2664)
- * ---------------------------------------------------------------------------
- * READ THIS BEFORE REMOVING THE `NOT EXISTS ... transactions` CLAUSE.
- *
- * This query is not a reader. Its two consumers — the backfill on the main
- * thread and its worker twin — COPY every row it returns onto the contact's
- * `contact_emails` / `contact_phones`. Priorities 2 and 3 select records by
- * CONTENT ALONE: no link, no name check, no verdict, and until this ticket no
- * freeze check. So the query was a copy path that had never agreed to anything.
- *
- * Founder QA, 11 Aug. Dana Whitlock, a party to a FILED transaction, holding one
- * number she had approved. A sweep refused to link all three of her source
- * records — filing them as `frozen_audit_contact` questions, which is correct —
- * and copied two numbers off them anyway. There was no link to unlink, so no
- * answer to those questions could take the numbers back: answering "different
- * people" would have left a stranger's number on a filed audit's party
- * permanently.
- *
- * AND THE FREEZE IS WHY SHE WAS THE ONE IT HAPPENED TO. A contact on a filed
- * transaction can never acquire a record-backed crosswalk row by content
- * matching, because `contactSourceLinker.resolveSourceRecord` refuses at its
- * `frozen_audit_contact` branch. The gate above therefore never closes for her,
- * so the fallback re-copies every content-matching record on every sweep,
- * forever. An unfrozen contact converges out of it the first time a link is
- * written — which is why the same sweep left the founder's unfrozen control
- * contact byte-identical.
- *
- * The rule this restores: THE COPY IS A CONSEQUENCE OF THE LINK, NEVER A SIBLING
- * OF IT. Priority 1 is untouched, because a linked record's values ARE a
- * consequence of its link and stay correct when the contact is frozen; a frozen
- * contact still receives values the moment a human confirms a question or links
- * a source by hand. Only the two branches that copy without a link now stop at
- * the freeze.
- *
- * The predicate is `frozenContactSql.FROZEN_CONTACT_EXISTS_SQL` — the same
- * constant `frozenContactDbService.isContactOnFrozenTransaction` is built from,
- * so the gate cannot drift from the function that decides the identical question
- * one module away. It is interpolated rather than inlined for that reason, and
- * `contactQueryWorker` picks it up transitively: the constant is a leaf module
- * with no db imports, which is what makes it reachable from a worker thread.
+ * The linker's email probe compares against an UNTRIMMED stored address
+ * (`contactMatchIndex.ts:159` — deliberate, and documented there); the deleted
+ * priority-2 branch trimmed both sides. Neither the engineer nor the SR review
+ * could reach a writer that stores an untrimmed address
+ * (`backfillContactEmailsSync` stores `email.toLowerCase().trim()`), so this is
+ * recorded, not asserted. Its consequence has flipped sign under this change: it
+ * used to mean "the fallback copies where the linker refuses", and now means
+ * "nothing happens and nobody is asked".
  */
-
-import { FROZEN_CONTACT_EXISTS_SQL } from "./frozenContactSql";
 
 /**
  * Params: @userId = user_id, @contactId = contact_id.
  * Columns: emails_json, phones_json, matched_by, pri, source_rank, external_record_id.
  *
- * `COALESCE(..., '[]')` guards `json_each` against a NULL json column, which is
- * an error rather than an empty set.
+ * The wrapper subquery and the constant `pri` survive the removal of priorities
+ * 2 and 3 (BACKLOG-2669): the row shape and the declared ordering are unchanged
+ * for both consumers, and a future priority — if one is ever justified — is
+ * added to a query that already sorts.
  */
 export const CONTACT_SOURCE_RECORDS_SQL = `
   SELECT emails_json, phones_json, matched_by, pri, source_rank, external_record_id FROM (
@@ -138,59 +164,6 @@ export const CONTACT_SOURCE_RECORDS_SQL = `
      AND ec.source = csl.source_type
      AND ec.external_record_id = csl.source_record_id
     WHERE csl.user_id = @userId AND csl.contact_id = @contactId
-
-    UNION ALL
-
-    SELECT
-      ec.emails_json, ec.phones_json, 'email', 2,
-      CASE ec.source
-        WHEN 'macos' THEN 1 WHEN 'iphone' THEN 2 WHEN 'outlook' THEN 3
-        WHEN 'google_contacts' THEN 4 WHEN 'android_sync' THEN 5 ELSE 6
-      END,
-      ec.external_record_id
-    FROM external_contacts ec
-    WHERE ec.user_id = @userId
-      AND NOT EXISTS (
-            SELECT 1 FROM contact_source_links x
-             WHERE x.contact_id = @contactId
-               AND x.match_method <> 'origin'
-          )
-      -- BACKLOG-2664: a copy with no link behind it must not reach a contact an
-      -- exported audit depends on. See the header.
-      AND NOT ${FROZEN_CONTACT_EXISTS_SQL}
-      AND EXISTS (
-        SELECT 1 FROM contact_emails ce, json_each(COALESCE(ec.emails_json, '[]')) j
-         WHERE ce.contact_id = @contactId
-           AND LOWER(TRIM(ce.email)) = LOWER(TRIM(j.value))
-           AND TRIM(j.value) <> ''
-      )
-
-    UNION ALL
-
-    SELECT
-      ec.emails_json, ec.phones_json, 'phone', 3,
-      CASE ec.source
-        WHEN 'macos' THEN 1 WHEN 'iphone' THEN 2 WHEN 'outlook' THEN 3
-        WHEN 'google_contacts' THEN 4 WHEN 'android_sync' THEN 5 ELSE 6
-      END,
-      ec.external_record_id
-    FROM external_contacts ec
-    WHERE ec.user_id = @userId
-      AND NOT EXISTS (
-            SELECT 1 FROM contact_source_links x
-             WHERE x.contact_id = @contactId
-               AND x.match_method <> 'origin'
-          )
-      -- BACKLOG-2664: same gate as priority 2. The founder's records each
-      -- carried one number, so this branch is the one his case may NOT have
-      -- taken — it is closed for the same reason regardless.
-      AND NOT ${FROZEN_CONTACT_EXISTS_SQL}
-      AND EXISTS (
-        SELECT 1 FROM contact_phones cp, json_each(COALESCE(ec.phones_normalized_json, '[]')) j
-         WHERE cp.contact_id = @contactId
-           AND COALESCE(NULLIF(cp.phone_normalized, ''), cp.phone_e164) = j.value
-           AND TRIM(j.value) <> ''
-      )
   )
   ORDER BY pri, source_rank, external_record_id
 `;
@@ -198,6 +171,13 @@ export const CONTACT_SOURCE_RECORDS_SQL = `
 export interface ContactSourceRecordRow {
   emails_json: string | null;
   phones_json: string | null;
+  /**
+   * Always `"source_id"` since BACKLOG-2669 removed the content branches.
+   * `"email"` and `"phone"` are KEPT in the union deliberately: they are the
+   * vocabulary of `contact_source_links.match_method`, a link the linker made by
+   * content matching still carries one of them, and narrowing this type would
+   * ripple through consumers of a row whose shape has not changed.
+   */
   matched_by: "source_id" | "email" | "phone";
   pri: number;
   source_rank: number;

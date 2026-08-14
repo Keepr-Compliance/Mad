@@ -879,8 +879,10 @@ async function loadContactsFromDatabase(
  *
  * BACKLOG-2401 replaced that join with a real source-identity crosswalk, and
  * both consumers were re-checked against the shipped code before this flip:
- *   - backfill — `CONTACT_SOURCE_RECORDS_SQL` resolves source id, then email,
- *     then phone. Display name appears nowhere in the SQL.
+ *   - backfill — `CONTACT_SOURCE_RECORDS_SQL` resolves by source id. (It also
+ *     resolved by email then phone until BACKLOG-2669 deleted those branches;
+ *     the point that survives both revisions is that display name appears
+ *     nowhere in the SQL.)
  *   - already-imported filter — `linkedSourceKeys` (source_type,
  *     source_record_id) is tested FIRST, then the email and phone sets. Name
  *     matching was removed by BACKLOG-2316.
