@@ -66,6 +66,8 @@ PHASE D: Merge & Cleanup (Steps 12-15)
 
 Before ANY handoff or task completion, you MUST document issues encountered.
 
+**This applies to work with no task, too.** A branch prune, a hook edit, a one-off script — ad-hoc work produces the same lessons and loses them faster, because nothing surfaces them at a handoff. If there is no task item, put the lesson on the item the work was for, or the item it is a lesson ABOUT, or file a new one. **Anything that cost more than ten minutes to diagnose gets written down — even when the fix was one line and nothing was blocked.**
+
 ### When to Document
 
 - Something doesn't work as expected
