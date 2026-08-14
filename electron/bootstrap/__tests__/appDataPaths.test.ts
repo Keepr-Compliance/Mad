@@ -116,6 +116,13 @@ describe("notice text", () => {
     expect(buildFirstRunNotice(applied).detail).toMatch(/NOT data loss/i);
   });
 
+  it("warns that a sign-in will be required", () => {
+    // Found by running the control, not by reading the code: an isolated dev
+    // profile has no session at all, so the first dev launch lands on the login
+    // screen rather than on an empty contact list.
+    expect(buildFirstRunNotice(applied).detail).toMatch(/sign in/i);
+  });
+
   it("prints both directories in the terminal banner", () => {
     const banner = buildConsoleNotice(applied);
     expect(banner).toContain(applied.dir);
