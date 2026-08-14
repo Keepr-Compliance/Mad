@@ -277,6 +277,16 @@ const FICTIONAL_NAMES = new Set([
   "wendell marchetti",
   "bianca okafor",
   "bea okafor",
+  // BACKLOG-2684 — the persona in the empty-import suite. Invented, and this
+  // repo's established name for the "two different people, same name" case:
+  // `contact-handlers.wizardClaimsRecord-2638.test.ts` is built on the question
+  // "is Dana Whitlock the same person as Dana Whitlock?", and
+  // `contactSourceLinkSql.frozenCopy-2664.test.ts` uses it for the same reason.
+  // It fires in the 2684 suite and not in those two only because this fixture
+  // puts the name and the number on ONE line. Listed here rather than baselined
+  // because it is invented, and the baseline is for values a human confirmed
+  // are safe, not for invented ones.
+  "dana whitlock",
 ]);
 
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));
