@@ -8,7 +8,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { sortProjects, type ProjectSortKey } from '../sortProjects';
+import {
+  sortProjects,
+  DEFAULT_PROJECT_SORT_KEY,
+  DEFAULT_PROJECT_SORT_DIR,
+  type ProjectSortKey,
+} from '../sortProjects';
 import type { PmProject, ItemPriority, ProjectStatus } from '@/lib/pm-types';
 
 /** Build a PmProject with sensible defaults; override only what a test cares about. */
@@ -164,6 +169,52 @@ describe('sortProjects - purity', () => {
 
   it('returns an empty array unchanged', () => {
     expect(sortProjects([], 'name', 'asc')).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2706: the list's DEFAULT sort (days open ascending = newest first)
+// ---------------------------------------------------------------------------
+//
+// Asserts the exported defaults produce a newest-first ORDER, not just that two
+// constants hold two strings. The fixture's name order is deliberately the
+// reverse of its recency order, so the previous default ('name' + 'asc') gives
+// the opposite list and cannot pass these assertions.
+//
+// Control (run 2026-08-13): reverting DEFAULT_PROJECT_SORT_KEY to 'name' turns
+// "opens newest-first" red with received ['oldest','middle','newest'].
+describe('sortProjects - default sort (BACKLOG-2706)', () => {
+  // z-name is the NEWEST, a-name is the OLDEST: alphabetical and recency
+  // disagree on every pair, so the two orders are fully distinguishable.
+  const newest = makeProject({ id: 'newest', name: 'zulu', created_at: '2026-08-01T00:00:00.000Z' });
+  const middle = makeProject({ id: 'middle', name: 'mike', created_at: '2026-02-01T00:00:00.000Z' });
+  const oldest = makeProject({ id: 'oldest', name: 'alpha', created_at: '2020-01-01T00:00:00.000Z' });
+  const unsorted = [middle, oldest, newest];
+
+  it('is days open, ascending', () => {
+    expect(DEFAULT_PROJECT_SORT_KEY).toBe('days_open');
+    expect(DEFAULT_PROJECT_SORT_DIR).toBe('asc');
+  });
+
+  it('opens the list newest-first', () => {
+    expect(ids(sortProjects(unsorted, DEFAULT_PROJECT_SORT_KEY, DEFAULT_PROJECT_SORT_DIR)))
+      .toEqual(['newest', 'middle', 'oldest']);
+  });
+
+  it('produces a different order than the previous name-ascending default', () => {
+    // Guards the fixture itself: if these two orders ever coincide, the test
+    // above would pass under the old default and prove nothing.
+    const byDefault = ids(sortProjects(unsorted, DEFAULT_PROJECT_SORT_KEY, DEFAULT_PROJECT_SORT_DIR));
+    const byName = ids(sortProjects(unsorted, 'name', 'asc'));
+    expect(byName).toEqual(['oldest', 'middle', 'newest']);
+    expect(byDefault).not.toEqual(byName);
+  });
+
+  it('still lets the user reach oldest-first by toggling direction', () => {
+    // The default changes; the options do not. Desc on the same key is the
+    // longest-open-first view the founder had before.
+    expect(ids(sortProjects(unsorted, DEFAULT_PROJECT_SORT_KEY, 'desc')))
+      .toEqual(['oldest', 'middle', 'newest']);
   });
 });
 
