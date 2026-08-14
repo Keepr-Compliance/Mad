@@ -341,6 +341,27 @@ const FICTIONAL_NAMES = new Set([
   // because it is invented, and the baseline is for values a human confirmed
   // are safe, not for invented ones.
   "dana whitlock",
+  // BACKLOG-2670 — the discriminating negative in the shared-office-line suites.
+  // Invented; neither refers to anyone. They are a PAIR by design, for the same
+  // reason as the 2556 names above: the rule under test is that a shared
+  // identifier is not evidence of one person, so the case needs two people who
+  // share ONE office line — `(415) 555-0120`, inside the reserved fictional
+  // range — and nothing else. `contact-handlers.foldDeleted-2556.test.ts:43`
+  // names them as its control 4, the case that would silently invert if the
+  // `namesAreCompatible` guard had been removed instead of the fold;
+  // `contactSourceLinker.nameGuard-2619.test.ts` and
+  // `autoLinkNameGuard-2624.test.ts` are built on the same pair, which is why
+  // both names are recorded together — they share every fixture line.
+  //
+  // This entry SILENCES NOTHING. Measured at `bc12fec8b`: neither name is
+  // reported under the same-line rule (0 occurrences), and both appear only
+  // once the identity-context window is widened past one line. It is recorded
+  // here because the same-line gap at `:200-203` is deliberate and depends on
+  // this list being written down — the point of BACKLOG-2670 is that "nobody
+  // has said" and "a human recorded this, and why" look identical in a repo
+  // until someone writes the second one.
+  "marcus ord",
+  "priya raman",
 ]);
 
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));
