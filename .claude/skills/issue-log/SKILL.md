@@ -31,6 +31,20 @@ Document issues when:
 - Before ANY handoff to another agent
 - Before marking a task complete
 
+### This applies to work with NO task, too
+
+**The trigger is the lesson, not the workflow.** Ad-hoc work — a branch prune, a hook edit, an audit, a one-off script, anything the main session does outside the 15-step lifecycle — produces the same lessons and loses them faster, because there is no task item they naturally attach to and no handoff that would surface them.
+
+**If you cannot name a task, the lesson still gets written down.** Put it on:
+
+1. **The backlog item the work was for**, if there is one; otherwise
+2. **The item it is a lesson ABOUT** — a tooling trap on the tooling item, a schema surprise on the schema item; otherwise
+3. **A new item.** *"Nothing to attach it to"* is a reason to file, not a reason to skip.
+
+**Written because it was skipped, 14 Aug 2026.** Deleting 368 merged branches silently did nothing three times before the cause was found: zsh does not word-split unquoted variables, `>/dev/null 2>&1` had already discarded the reason, and the exit-code check could not tell pass from fail. **~15 minutes, a repeatable trap every agent on this machine will hit — and it was said once in chat and nearly lost**, because it was not a task and so this skill read as not applying. Filed afterwards as BACKLOG-2728.
+
+**The rule that follows: anything that cost more than ten minutes to diagnose gets written down — even when the fix was one line, and even when nothing was blocked.** The cost of the next person rediscovering it is the same either way.
+
 ---
 
 ## Issue Entry Format
@@ -38,7 +52,7 @@ Document issues when:
 ```markdown
 ### Issue #[N]: [Brief descriptive title]
 
-- **When:** Step X / Phase Y of workflow
+- **When:** Step X / Phase Y of workflow — or, for work outside the lifecycle, what you were doing ("pruning merged branches", "auditing the PII baseline")
 - **What happened:** [Clear description of the problem]
 - **Root cause:** [If known, otherwise "Unknown - needs investigation"]
 - **Resolution:** [How it was fixed OR workaround used OR "Unresolved"]
