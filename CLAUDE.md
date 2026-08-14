@@ -137,6 +137,44 @@ When verifying a fix or process (sync jobs, reindexing, CI automations), confirm
 
 Three occurrences in one night, 10–11 Aug 2026 (BACKLOG-2645). Worked example: `.claude/docs/PR-SOP.md` → §4.4.
 
+### Derive sets by execution, not by grep (MANDATORY)
+
+**grep finds a TOKEN. It does not find the PROPERTY you are counting.** A symbol appears in a comment, a test, a dead branch, a file grep skips because one raw NUL byte makes it read as binary. Every one of those inflates or deflates a count, and the number reaches the founder with no way to tell.
+
+1. **Cite the command next to any number you state.** "17 call sites (`git grep -c ... | wc -l`)" is checkable; "17 call sites" is not.
+2. **To count things with a property, break the property and see what goes red.** Reachability, "is this filtered", "does this path run" — none of these are greppable. Run it.
+3. **An empty grep result is a claim, not a fact.** Run `file <path>` before concluding a symbol is absent — `contactManualLink.ts` read as binary for weeks and every repo-wide sweep silently skipped it (BACKLOG-2637).
+
+Three separate undercounts in one night, 30 Jul 2026.
+
+### State a mechanism as traced, or mark it untraced (MANDATORY)
+
+**An item's stated mechanism becomes the engineer's fixture.** Whoever picks the item up builds a test that reproduces the mechanism as written. If it was inferred rather than traced, they build a fixture for a state the code cannot produce — and it passes, because nothing contradicts it.
+
+1. **Trace the mechanism to a running line, or write "MECHANISM UNTRACED" in the item.** Either is fine. Silence is not.
+2. **Name the real producer.** BACKLOG-2672 was filed as an `external_contacts` row when the records are synthesised from `messages` by `getMessageDerivedContacts` — a fix keyed on `isExternal` would have missed every one. Caught by the engineer *after* implementation began.
+3. **Quote literals from the code, not from memory.** A string assembled by interpolation has no fixed literal to quote — cite the template and the variable's fallback instead.
+4. **Do not infer a universal negative from a local trace.** *"This function falls back to Y, therefore Z never appears"* is not established until you check **every writer of that function's input.** A fallback only tells you what happens when the input is empty — it says nothing about what the input contains.
+5. **A CORRECTION IS A CLAIM TOO, and carries the same burden.** It is trusted *more* than the original and therefore checked *less*.
+
+### The worked example — three passes over one sentence, in the rule about mechanisms
+
+**Pass 1.** This rule's first draft cited BACKLOG-2679's string as emitted from `contactDbService.ts:529`. Wrong **citation**: `:529` is `[`, the parameter-array opener. The sentence is assembled at `electron/services/contactLinkEvidence.ts:187` — `` `…saved against ${who} — but ${who}'s own entry in that ${ctx.sourceLabel} no longer lists it.` `` — which is where 2679 already pointed. The mistake was conflating the **writer** of `"Unknown"` with the **emitter** of the sentence.
+
+**Pass 2.** SR review called it false in all three parts, having traced `contactDisplayName()` (`contactLinkEvidence.ts:274-280`) to `return name && name.length > 0 ? name : "this contact"` and concluded `"Unknown"` never appears there.
+
+**Pass 3.** The delta review overturned its own finding. `contactDisplayName()` returns `contacts.display_name` **verbatim**; the fallback fires only when the column is empty, and **five live writers guarantee it is not**:
+
+```
+electron/handlers/contactHandlers.ts:1875, :2355   display_name: validatedData.name || "Unknown"
+electron/services/db/contactDbService.ts:371, :532 contactData.display_name || "Unknown"
+electron/services/localSyncService.ts:1581         display_name: contact.displayName || "Unknown"
+```
+
+**So `"Unknown's own entry in that Mac address book"` IS emittable, and the first draft was substantively right about the literal while wrong about where it comes from.** Verified at `develop` @ `a2a98d540`.
+
+Pass 2 is the instance of rule 4, and it is the one to learn from: **a single function's fallback was traced correctly, and a universal negative was inferred from it.** Emittability is not prevalence — gate 4 found zero such rows in the founder's own corpus.
+
 ---
 
 ## MANDATORY: Follow Instructions Exactly

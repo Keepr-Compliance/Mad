@@ -48,8 +48,6 @@ jest.mock("../../services", () => ({
   },
 }));
 
-const BUYER_ERROR = "At least one contact must be assigned the Buyer (Client) role";
-
 /**
  * `phone` and `company` are OMITTED rather than set to `null`: on `Contact` they
  * are `string | undefined`, and writing `null` needs a cast that
@@ -201,9 +199,7 @@ describe("BACKLOG-2677: saving succeeds without the user touching the role field
     // The role field is NEVER touched. Press Create.
     await user.click(screen.getByTestId("wizard-next"));
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(setError).not.toHaveBeenCalledWith(BUYER_ERROR);
-  });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));  });
 
   it("submits a deal whose ONLY contact has no record in `contacts` yet", async () => {
     // The imported-twin window: the id is selected, its record has not landed.
@@ -224,9 +220,7 @@ describe("BACKLOG-2677: saving succeeds without the user touching the role field
     await walkToStepThree(user);
     await user.click(screen.getByTestId("wizard-next"));
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(setError).not.toHaveBeenCalledWith(BUYER_ERROR);
-  });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));  });
 
   it("submits a THREE-contact deal the user never touched — every one of them Client", async () => {
     // The first-only reading dies here: it would default contact-1, leave
@@ -274,17 +268,33 @@ describe("BACKLOG-2677: saving succeeds without the user touching the role field
     );
 
     await user.click(screen.getByTestId("wizard-next"));
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(setError).not.toHaveBeenCalledWith(BUYER_ERROR);
-  });
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));  });
 });
 
-describe("BACKLOG-2677: the 'at least one Buyer' validation is unreachable, NOT deleted", () => {
-  it("still refuses the save when every role has been changed away from Client by hand", async () => {
-    // CONTROL 4. The two contacts arrive already holding non-Client roles — the
-    // state a user reaches by changing both by hand. The fill records them as
-    // decided and does not put Client back, so the validation is reached and
-    // must still fire. Delete the check in useAuditSteps and this goes red.
+/**
+ * BACKLOG-2683, FOUNDER DECISION 13 Aug — THE 'AT LEAST ONE BUYER' VALIDATION
+ * IS GONE, AND THESE TWO ARE THE GUARD ON ITS ABSENCE.
+ *
+ * Until 13 Aug the wizard refused to save a deal on which nobody held the
+ * Client role, and these two tests asserted that refusal. The founder deleted
+ * the requirement outright — *"lets just drop this requirement i don't think
+ * it's necessary"* — so both now assert the OPPOSITE: the save goes through.
+ *
+ * They are kept rather than deleted because inverted they still carry a fact
+ * that can fail. Re-introduce a Client gate anywhere in `useAuditSteps` and
+ * both go red, because such a gate returns before `onSubmit`. Deleting them
+ * would have left the decision unguarded.
+ *
+ * The role-less rule (BACKLOG-2680) is NOT affected and is asserted elsewhere:
+ * every contact must still be classified as something. None of them has to be
+ * the Client.
+ */
+describe("BACKLOG-2683: a deal with nobody in the Client role saves", () => {
+  it("saves when every role has been changed away from Client by hand", async () => {
+    // Formerly BACKLOG-2677 control 4, inverted. The two contacts arrive
+    // already holding non-Client roles — the state a user reaches by changing
+    // both by hand. Both ARE classified, so the role-less gate passes, and
+    // there is no longer a Client gate behind it to refuse the save.
     const user = userEvent.setup();
     const onSubmit = jest.fn();
     const setError = jest.fn();
@@ -312,13 +322,13 @@ describe("BACKLOG-2677: the 'at least one Buyer' validation is unreachable, NOT 
     await walkToStepThree(user);
     await user.click(screen.getByTestId("wizard-next"));
 
-    await waitFor(() => expect(setError).toHaveBeenCalledWith(BUYER_ERROR));
-    expect(onSubmit).not.toHaveBeenCalled();
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
   });
 
-  it("still refuses the save when the user changes the ONE defaulted role away from Client", async () => {
-    // The same guard reached the way a real user reaches it: let the default
-    // land, then change it in the UI, then press Create.
+  it("saves when the user changes the ONE defaulted role away from Client", async () => {
+    // The same path a real user takes: let the default land, change it in the
+    // UI, then press Create. The deal ends up with a single Inspector and no
+    // Client at all, which is now a legal deal.
     const user = userEvent.setup();
     const onSubmit = jest.fn();
     const setError = jest.fn();
@@ -350,8 +360,7 @@ describe("BACKLOG-2677: the 'at least one Buyer' validation is unreachable, NOT 
 
     await user.click(screen.getByTestId("wizard-next"));
 
-    await waitFor(() => expect(setError).toHaveBeenCalledWith(BUYER_ERROR));
-    expect(onSubmit).not.toHaveBeenCalled();
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
   });
 
   it("does not hand Client back to a role the user changed by hand", async () => {
@@ -400,7 +409,5 @@ describe("BACKLOG-2677: the 'at least one Buyer' validation is unreachable, NOT 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(screen.getAllByTestId("role-select-contact-2")[0]).toHaveValue(
       SPECIFIC_ROLES.SELLER_AGENT,
-    );
-    expect(setError).not.toHaveBeenCalledWith(BUYER_ERROR);
-  });
+    );  });
 });

@@ -46,6 +46,11 @@
 #   PREPUSH_ELECTRON_BIN=<path>             override electron resolution.
 #   PREPUSH_DRYRUN=1            echo remote / commit count / base / route /
 #                               selected suites, then exit 0 before any runner.
+#   PREPUSH_SKIP_PII=1          skip the PII scan. Announces itself loudly.
+#                               ONLY for untracked scratch files unrelated to
+#                               what is being pushed. Never to get past a real
+#                               finding: this repo is PUBLIC and a pushed
+#                               commit cannot be unpublished.
 #
 # ## Shell notes
 #
@@ -202,6 +207,62 @@ if [ "$total_commits" -gt 50 ]; then
          "Base in use: $base_desc" \
          "Test selection will be much wider than a normal push." \
          "If this is wrong, check the remote name, or set PREPUSH_BASE=<rev>."
+fi
+
+# --- PII scan: before ANY early exit, because a push cannot be taken back ----
+# (BACKLOG-2725)
+#
+# `npm run check:pii` ran at ci.yml:221 and nowhere local. This repo is PUBLIC,
+# so CI reported exposures only after the commit was already on GitHub and
+# unpublishable. Fixing the PR afterwards moves the branch tip; it does not
+# remove the object. Hence the open GitHub Support ticket asking them to
+# garbage-collect commits from December 2025.
+#
+# PLACEMENT: above the `changed_files` empty-exit. A merge commit lists no
+# files without --cc (measured: 0 on a2a98d540), so a routine sync-merge push
+# would otherwise skip the scan entirely. Gated on total_commits so a
+# delete-ref or up-to-date push still skips -- nothing to publish there.
+#
+# THREE LIMITS, written down because a guard whose gaps are unstated gets
+# trusted past them:
+#   1. INTERMEDIATE COMMITS. This scans the WORKING TREE, not each commit in
+#      the pushed range. Fixing a finding in a NEW commit and pushing both
+#      still publishes the offending one. That is why the message below says
+#      amend/rebase -- do not soften it. It is PR #2314's exact shape.
+#   2. UNTRACKED FILES are scanned, so a stray scratch file can block an
+#      unrelated push. PREPUSH_SKIP_PII exists for that, and announces itself.
+#   3. NUL BYTES. A file containing a raw NUL reads as binary and is skipped
+#      SILENTLY (BACKLOG-2657; how contactManualLink.ts hid for weeks,
+#      BACKLOG-2637). CI has the same hole, so this does not widen it.
+#
+# TIME: 1.24-1.31s user, 1.26-1.82s wall, constant regardless of diff size.
+# BACKLOG-2573 rewrote this hook because the old one made --no-verify routine
+# -- "a hook that is always bypassed is not a hook". If this scan ever grows
+# slow enough to train that habit, REMOVE IT.
+if [ "$total_commits" -gt 0 ] 2>/dev/null; then
+  if [ -n "$PREPUSH_SKIP_PII" ]; then
+    banner "PREPUSH_SKIP_PII is set -- the PII scan was SKIPPED." \
+           "This repository is PUBLIC and a pushed commit cannot be unpublished." \
+           "Only for untracked scratch files unrelated to what you are pushing." \
+           "Unset it and re-run before pushing anything you have not read."
+  elif ! npm run check:pii --silent; then
+    echo ""
+    echo "[pre-push] PII scan failed. Push blocked."
+    echo "[pre-push] This repository is PUBLIC -- a pushed commit cannot be unpublished."
+    echo ""
+    echo "[pre-push] AMEND or REBASE the commit that introduced the value."
+    echo "[pre-push] Do NOT fix it in a new commit on top: this scan reads the"
+    echo "[pre-push] working tree, so a follow-up commit passes while the"
+    echo "[pre-push] offending one still publishes. That is what happened in"
+    echo "[pre-push] PR #2314, and why there is an open GitHub ticket."
+    echo ""
+    echo "[pre-push] Replace the value with a reserved one:"
+    echo "[pre-push]   emails  -> example.com / *.test  (RFC 2606)"
+    echo "[pre-push]   phones  -> +1 <area> 555-01xx    (555-0100..555-0199)"
+    echo "[pre-push] If the value IS invented, add it to FICTIONAL_NAMES in"
+    echo "[pre-push] scripts/ci/check-fixture-pii.mjs -- never to the baseline."
+    exit 1
+  fi
 fi
 
 changed_files=$(echo "$all_files" | sed '/^$/d' | sort -u)

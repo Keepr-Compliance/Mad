@@ -20,6 +20,17 @@
  * drift from the rule it enforces — and this one is load-bearing for an audit
  * guarantee, so drift would be silent and consequential.
  *
+ * BACKLOG-2669 UPDATE — READ THIS BEFORE ASSUMING THE QUERY STILL GATES ON IT.
+ * `CONTACT_SOURCE_RECORDS_SQL` no longer interpolates this fragment, because the
+ * branches it gated are deleted: the backfill reads crosswalk-linked records
+ * only, so it cannot copy onto a frozen contact for the same reason it cannot
+ * copy onto any contact. The gate became UNNECESSARY, not wrong — the two
+ * writers above still cannot run TypeScript, and if either ever needs the freeze
+ * question again, this is the one place to ask it. The sole consumer today is
+ * `frozenContactDbService.isContactOnFrozenTransaction`, and the parity block in
+ * `__tests__/contactSourceLinkSql.frozenCopy-2664.test.ts` still pins the string
+ * and the function to the same answers.
+ *
  * ===========================================================================
  * WHAT IT ASKS
  * ===========================================================================
