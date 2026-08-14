@@ -6,7 +6,7 @@
  * on its own rather than being masked by the others.
  *
  * The case that matters most is `isPackaged: true -> null`: that is the guard
- * standing between a code change and the founder's real 247MB database.
+ * standing between a code change and the real, installed database.
  */
 
 import path from "path";
