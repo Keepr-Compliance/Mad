@@ -7,7 +7,7 @@
  * that are backfilled from PHONE/SMS/iMessage ONLY (never email). So a
  * freshly-imported EMAIL-ONLY contact read NULL there, and on select->import its
  * date flipped real->null and the row dropped to the alphabetical tail = the
- * founder's select-jump (Paul, Daniel).
+ * founder's select-jump (Casey, Daniel).
  *
  * Fix A swaps that expression for the SHARED `IMPORTED_CONTACT_LAST_COMMUNICATION_SQL`
  * fragment (phone + email + denormalized). These tests run the REAL

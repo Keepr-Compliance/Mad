@@ -215,7 +215,7 @@ async function persistSessionForUser(
       },
       expiresAt: Date.now() + sessionService.getSessionExpirationMs(),
       createdAt: Date.now(),
-      // Required for RLS-protected operations on app restart (Dorian's T&C fix)
+      // Required for RLS-protected operations on app restart (BACKLOG-546 T&C fix)
       supabaseTokens: {
         access_token: tokens.accessToken,
         refresh_token: tokens.refreshToken,

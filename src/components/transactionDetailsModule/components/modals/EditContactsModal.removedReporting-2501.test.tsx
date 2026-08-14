@@ -33,7 +33,7 @@
  *   }
  *
  * The sibling suite `EditContactsModal.twoPane.test.tsx` stubs an assignment as
- * `{ id: "a1", contact_id: "db-paul", role: "client" }` — no `contact_name`.
+ * `{ id: "a1", contact_id: "db-casey", role: "client" }` — no `contact_name`.
  * Reusing that shape here would have produced a toast reading "No name removed"
  * and looked like a bug in the label rule rather than a hole in the fixture.
  * `contact_name` is ALWAYS set on this row (it is `c.display_name` through a

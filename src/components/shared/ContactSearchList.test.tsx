@@ -2089,7 +2089,7 @@ describe("ContactSearchList — order stability on select/import (BACKLOG-2355)"
 // missed. externalContacts resolve a beat AFTER imported contacts (getAvailable),
 // so the freeze — which snapshots orderKeys once on first data — never captured
 // them: they were positioned LIVE by projectOntoOrder and jumped the instant
-// their recency changed on select/import (the founder's email-only Paul/Daniel).
+// their recency changed on select/import (the founder's email-only Casey/Daniel).
 // Fix B additively merges late identities into the frozen order. These tests use
 // EXACT rendered DOM order / indices (never bare counts).
 // ---------------------------------------------------------------------------
@@ -2113,8 +2113,8 @@ describe("ContactSearchList — late-loading external gets a frozen slot (BACKLO
 
   /**
    * Imported contacts render first; externals arrive on a "load externals" click
-   * (the real getAvailable-resolves-later timing). `paulDate` places email-only
-   * Paul between Alice (Jun) and Bob (May); Daniel (Apr) sorts last.
+   * (the real getAvailable-resolves-later timing). `caseyDate` places email-only
+   * Casey between Alice (Jun) and Bob (May); Daniel (Apr) sorts last.
    */
   function LateLoadHarness({ onImportRecency }: { onImportRecency?: string }): React.ReactElement {
     const [contacts, setContacts] = useState<ExtendedContact[]>([alice(), bob()]);
@@ -2128,15 +2128,15 @@ describe("ContactSearchList — late-loading external gets a frozen slot (BACKLO
     // that is not under test only makes a later failure harder to read.
     const loadExternals = (): void =>
       setExternalContacts([
-        createExternalContact({ id: "ext-paul", display_name: "Paul", name: "Paul", email: "paul@x.com", phone: undefined, last_communication_at: "2026-05-15T00:00:00Z" }),
+        createExternalContact({ id: "ext-casey", display_name: "Casey", name: "Casey", email: "casey@x.com", phone: undefined, last_communication_at: "2026-05-15T00:00:00Z" }),
         createExternalContact({ id: "ext-daniel", display_name: "Daniel", name: "Daniel", email: "daniel@x.com", phone: undefined, last_communication_at: "2026-04-15T00:00:00Z" }),
       ]);
 
     // Newest-date refresh for the SAME identity (would jump a non-frozen row to top).
-    const refreshPaulRecency = (): void =>
+    const refreshCaseyRecency = (): void =>
       setExternalContacts((prev) =>
         prev.map((c) =>
-          c.id === "ext-paul" ? { ...c, last_communication_at: "2026-12-01T00:00:00Z" } : c,
+          c.id === "ext-casey" ? { ...c, last_communication_at: "2026-12-01T00:00:00Z" } : c,
         ),
       );
 
@@ -2157,7 +2157,7 @@ describe("ContactSearchList — late-loading external gets a frozen slot (BACKLO
     return (
       <>
         <button type="button" data-testid="load-externals" onClick={loadExternals} />
-        <button type="button" data-testid="refresh-paul" onClick={refreshPaulRecency} />
+        <button type="button" data-testid="refresh-casey" onClick={refreshCaseyRecency} />
         <ContactSearchList
           contacts={contacts}
           externalContacts={externalContacts}
@@ -2176,46 +2176,46 @@ describe("ContactSearchList — late-loading external gets a frozen slot (BACKLO
 
     fireEvent.click(screen.getByTestId("load-externals"));
 
-    // Paul (May 15) lands BETWEEN Alice (Jun) and Bob (May 1); Daniel (Apr) last.
+    // Casey (May 15) lands BETWEEN Alice (Jun) and Bob (May 1); Daniel (Apr) last.
     await waitFor(() => {
-      expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]);
+      expect(names()).toEqual(["Alice", "Casey", "Bob", "Daniel"]);
     });
   });
 
-  it("keeps a late-loaded email-only external at its EXACT index after select/import (Paul/Daniel)", async () => {
-    // On import Paul's recency flips to the NEWEST date — a LIVE re-sort would send
+  it("keeps a late-loaded email-only external at its EXACT index after select/import (Casey/Daniel)", async () => {
+    // On import Casey's recency flips to the NEWEST date — a LIVE re-sort would send
     // him to the top. The frozen slot from the additive merge must hold him at idx 1.
     render(<LateLoadHarness onImportRecency="2026-12-01T00:00:00Z" />);
     fireEvent.click(screen.getByTestId("load-externals"));
-    await waitFor(() => expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]));
-    expect(names().indexOf("Paul")).toBe(1);
+    await waitFor(() => expect(names()).toEqual(["Alice", "Casey", "Bob", "Daniel"]));
+    expect(names().indexOf("Casey")).toBe(1);
 
-    // Select Paul -> auto-import (new UUID + newest recency).
-    fireEvent.click(rowByName("Paul")!);
+    // Select Casey -> auto-import (new UUID + newest recency).
+    fireEvent.click(rowByName("Casey")!);
     await waitFor(() => {
-      expect(screen.getByTestId("contact-row-db-ext-paul")).toBeInTheDocument();
+      expect(screen.getByTestId("contact-row-db-ext-casey")).toBeInTheDocument();
     });
 
-    // No jump: Paul stays at index 1 (a live re-sort would be ["Paul","Alice","Bob","Daniel"]).
-    expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]);
-    expect(names().indexOf("Paul")).toBe(1);
-    expect(rowByName("Paul")?.getAttribute("data-selected")).toBe("true");
+    // No jump: Casey stays at index 1 (a live re-sort would be ["Casey","Alice","Bob","Daniel"]).
+    expect(names()).toEqual(["Alice", "Casey", "Bob", "Daniel"]);
+    expect(names().indexOf("Casey")).toBe(1);
+    expect(rowByName("Casey")?.getAttribute("data-selected")).toBe("true");
   });
 
   it("a background refresh AFTER the late external loaded still does NOT reorder (additive merge, not a re-freeze)", async () => {
     render(<LateLoadHarness />);
     fireEvent.click(screen.getByTestId("load-externals"));
-    await waitFor(() => expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]));
+    await waitFor(() => expect(names()).toEqual(["Alice", "Casey", "Bob", "Daniel"]));
 
-    // Paul's recency jumps to the newest date via a silent refresh (same identity).
-    fireEvent.click(screen.getByTestId("refresh-paul"));
+    // Casey's recency jumps to the newest date via a silent refresh (same identity).
+    fireEvent.click(screen.getByTestId("refresh-casey"));
 
-    // Additive merge finds NO new key (Paul already frozen) -> returns the same
+    // Additive merge finds NO new key (Casey already frozen) -> returns the same
     // orderKeys reference -> no reorder. If Fix B had instead added contacts/
-    // externalContacts to the freeze deps, this would re-sort to ["Paul", ...].
+    // externalContacts to the freeze deps, this would re-sort to ["Casey", ...].
     await waitFor(() => {
-      expect(names()).toEqual(["Alice", "Paul", "Bob", "Daniel"]);
+      expect(names()).toEqual(["Alice", "Casey", "Bob", "Daniel"]);
     });
-    expect(names().indexOf("Paul")).toBe(1);
+    expect(names().indexOf("Casey")).toBe(1);
   });
 });
