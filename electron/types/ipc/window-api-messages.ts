@@ -4,6 +4,11 @@
  */
 
 import type { ConversationSummary, MessageAttachmentInfo } from "./common";
+// BACKLOG-2743: ONE definition of the refusal shape. Re-exported here so the
+// renderer imports it from the IPC contract rather than re-spelling the literal.
+import type { AttachmentsRefusedForSpace } from "../../services/macOSMessagesImportService/types";
+
+export type { AttachmentsRefusedForSpace };
 
 /**
  * BACKLOG-2743: Filters for the selection-time import estimate.
@@ -62,7 +67,7 @@ export interface WindowApiMessages {
     totalAvailable?: number;
     wasCapped?: boolean;
     /** BACKLOG-2743: pre-flight free-space check refused the attachment copy */
-    attachmentsRefusedForSpace?: { estimatedBytes: number; availableBytes: number; attachmentCount: number };
+    attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
     /** BACKLOG-2743: user chose to import without attachments */
     attachmentsSkippedByChoice?: boolean;
   }>;

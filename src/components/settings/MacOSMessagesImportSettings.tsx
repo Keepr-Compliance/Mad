@@ -279,8 +279,10 @@ export function MacOSMessagesImportSettings({
     }
   };
 
-  // BACKLOG-2743: Persist the "without attachments" choice, then re-run the
-  // estimate so the blocking state clears immediately once it can fit.
+  // BACKLOG-2743: Persist the "without attachments" choice. The block clears via
+  // `spaceBlocked`, which reads this flag directly — no re-estimate is triggered
+  // or needed, because skipping attachments changes what gets COPIED, not what
+  // the selected window CONTAINS.
   const handleSkipAttachmentsChange = async (skip: boolean) => {
     setSkipAttachments(skip);
     setLastResult(null);
@@ -605,15 +607,17 @@ export function MacOSMessagesImportSettings({
           two ways through — a narrower window, or without attachments. There is
           no "import anyway": macOS would make room by deleting the user's local
           Time Machine snapshots, which is the failure this guard exists for. */}
-      {!isImporting && spaceBlocked && (
+      {!isImporting && spaceBlocked && sizeEstimate && (
         <div
           data-testid="import-space-block"
           className="mb-3 p-3 bg-red-50 border border-red-200 rounded"
         >
           <p className="text-xs text-red-800 font-medium mb-2">
-            This import needs {formatGb(sizeEstimate!.attachmentBytes)} for attachments
-            {sizeEstimate!.availableDiskBytes !== null && (
-              <> but only {formatGb(sizeEstimate!.availableDiskBytes)} is available</>
+            {/* "up to": the figure is an upper bound by construction — identical
+                files are copied once, and that is not subtracted here. */}
+            This import needs up to {formatGb(sizeEstimate.attachmentBytes)} for attachments
+            {sizeEstimate.availableDiskBytes !== null && (
+              <> but only {formatGb(sizeEstimate.availableDiskBytes)} is available</>
             )}
             . It will not start.
           </p>

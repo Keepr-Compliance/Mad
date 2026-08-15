@@ -18,6 +18,10 @@ import * as Sentry from "@sentry/electron/renderer";
 import { isMacOS } from '../utils/platform';
 import type { ImportSource, UserPreferences } from './settingsService';
 import logger from '../utils/logger';
+// BACKLOG-2743: type-only import of the shared refusal shape (one definition,
+// re-exported by the IPC contract). Type-only is the only safe direction across
+// the renderer-main boundary.
+import type { AttachmentsRefusedForSpace } from '@electron/types/ipc/window-api-messages';
 
 export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
   | 'reindex' | 'backup' | 'restore' | 'ccpa-export';
@@ -486,7 +490,7 @@ class SyncOrchestratorServiceClass {
             wasCapped?: boolean;
             totalAvailable?: number;
             /** BACKLOG-2743: pre-flight free-space check refused the attachment copy. */
-            attachmentsRefusedForSpace?: { estimatedBytes: number; availableBytes: number; attachmentCount: number };
+            attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
           }>;
           const result = await importFn(userId, options?.forceReimport);
           if (!result.success) {

@@ -75,6 +75,7 @@ import {
   isReactionAssociationType,
   summarizeAttachmentEstimate,
   filterUnstoredAttachments,
+  filterResolvableAttachments,
   attachmentStoredKey,
 } from "./importHelpers";
 import type { AttachmentSizeRow } from "./importHelpers";
@@ -1115,13 +1116,25 @@ class MacOSMessagesImportService {
     // time an import actually starts, which is why the authority is here and not
     // in the renderer.
     //
-    // Sized over the attachments that are NOT already stored. This method is
-    // handed the user's ENTIRE attachment history on every sync (the import's
-    // attachment SELECT is unbounded), and the copy loop skips the already-stored
-    // ones before touching the disk. Summing the raw set would mean that once a
-    // large library HAD imported — consuming the space it needed — every
-    // subsequent sync would re-sum the whole history against the now-smaller free
-    // space and refuse forever, while genuinely new attachments never imported.
+    // The set sized here must be the set the copy loop would WRITE, which means
+    // subtracting on BOTH axes the loop skips on. This method is handed the
+    // user's ENTIRE attachment history on every sync (the import's attachment
+    // SELECT is unbounded), so the raw set overstates the copy twice over:
+    //
+    //   1. ALREADY STORED — re-sync hands over everything imported previously.
+    //      Summing those would mean that once a large library HAD imported and
+    //      consumed the space it needed, every later sync re-summed the whole
+    //      history against the now-smaller free space and refused forever.
+    //
+    //   2. UNRESOLVABLE — attachments whose message falls outside the selected
+    //      window was never imported, so the loop finds no message ID and skips
+    //      them (see the `internalMessageId` resolution below). Summing those
+    //      breaks the refusal's own advice: the renderer's estimate IS
+    //      date-bounded, so narrowing the window re-enables Import, and an
+    //      unbounded pre-flight would then refuse again at every setting.
+    //
+    // Both refusals return before any INSERT, so neither would ever clear on its
+    // own. Hence the message-id map is loaded HERE rather than at the copy loop.
     //
     // Still deliberately conservative on what remains: content-hash dedup is not
     // subtracted (that would mean hashing every source file up front), so the
@@ -1136,7 +1149,26 @@ class MacOSMessagesImportService {
       const key = attachmentStoredKey(row.external_message_id, row.filename);
       if (key) alreadyStoredKeys.add(key);
     }
-    const pendingAttachments = filterUnstoredAttachments(attachments, alreadyStoredKeys);
+
+    // Messages stored by PREVIOUS runs. Combined with this run's messageIdMap,
+    // these are the only messages an attachment can be linked to — anything else
+    // is skipped by the copy loop without writing a byte.
+    const existingMessageIdMap = new Map<string, string>();
+    const existingMsgRows = db
+      .prepare(`SELECT id, external_id FROM messages WHERE external_id IS NOT NULL`)
+      .all() as { id: string; external_id: string }[];
+    for (const row of existingMsgRows) {
+      existingMessageIdMap.set(row.external_id, row.id);
+    }
+    const resolvableGuids = new Set<string>([
+      ...messageIdMap.keys(),
+      ...existingMessageIdMap.keys(),
+    ]);
+
+    const pendingAttachments = filterResolvableAttachments(
+      filterUnstoredAttachments(attachments, alreadyStoredKeys),
+      resolvableGuids
+    );
     const spaceEstimate = summarizeAttachmentEstimate(pendingAttachments);
     const availableBytes = await getAvailableDiskBytes(app.getPath("userData"));
     const verdict = evaluateAttachmentSpace(spaceEstimate.eligibleBytes, availableBytes);
@@ -1198,8 +1230,12 @@ class MacOSMessagesImportService {
       .all() as { id: string; message_id: string; external_message_id: string; filename: string }[];
 
     for (const row of existingExternalRows) {
-      // Key: external_message_id:filename for unique identification
-      existingByExternalId.set(`${row.external_message_id}:${row.filename}`, {
+      // Key: external_message_id:filename for unique identification.
+      // BACKLOG-2743: built by attachmentStoredKey so this and the pre-flight's
+      // exclusion set cannot drift into two different spellings of one format.
+      const externalIdKey = attachmentStoredKey(row.external_message_id, row.filename);
+      if (!externalIdKey) continue;
+      existingByExternalId.set(externalIdKey, {
         id: row.id,
         message_id: row.message_id,
       });
@@ -1226,14 +1262,9 @@ class MacOSMessagesImportService {
       UPDATE attachments SET message_id = ? WHERE id = ?
     `);
 
-    // Also need to query existing message IDs from DB for messages imported in previous runs
-    const existingMessageIdMap = new Map<string, string>();
-    const existingMsgRows = db
-      .prepare(`SELECT id, external_id FROM messages WHERE external_id IS NOT NULL`)
-      .all() as { id: string; external_id: string }[];
-    for (const row of existingMsgRows) {
-      existingMessageIdMap.set(row.external_id, row.id);
-    }
+    // BACKLOG-2743: existingMessageIdMap (messages imported by previous runs) is
+    // loaded ABOVE, before the pre-flight — the guard needs it to size only the
+    // attachments this loop could actually link and write.
 
     // Process attachments with progress reporting and event loop yielding
     const totalAttachments = attachments.length;
@@ -1328,8 +1359,10 @@ class MacOSMessagesImportService {
 
         // TASK-1122: Check if attachment exists by external_message_id (stable identifier)
         // If so, update its message_id to the new internal ID (fixes stale references after re-sync)
-        const externalKey = `${attachment.message_guid}:${filename}`;
-        const existingByExternal = existingByExternalId.get(externalKey);
+        // BACKLOG-2743: same helper as the pre-flight's exclusion set — one
+        // spelling of the key format, not three identical-by-inspection copies.
+        const externalKey = attachmentStoredKey(attachment.message_guid, filename);
+        const existingByExternal = externalKey ? existingByExternalId.get(externalKey) : undefined;
         if (existingByExternal) {
           // Attachment exists but may have stale message_id
           if (existingByExternal.message_id !== internalMessageId) {

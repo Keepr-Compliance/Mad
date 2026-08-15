@@ -322,6 +322,95 @@ describe("BACKLOG-2743 — pre-flight free-space guard", () => {
     expect(result.stored).toBe(1);
   });
 
+  it("sizes only attachments whose message is STORED, not the whole unbounded history", async () => {
+    // SR acceptance fixture for the review blocker on PR #2324.
+    //
+    // storeAttachments is handed the ENTIRE attachment history on every sync —
+    // the import's attachment SELECT carries no date clause. Attachments whose
+    // message falls outside the selected window were never imported, so the copy
+    // loop resolves no message ID for them and skips them without writing a byte.
+    //
+    // Sizing them anyway made the refusal's OWN advice a dead end: the renderer's
+    // estimate is date-bounded, so narrowing the window showed a small number and
+    // re-enabled Import, and then the unbounded pre-flight refused again. At the
+    // reported scale (unstored history larger than free space) attachments could
+    // never import at ANY window setting, permanently — the refusal returns
+    // before any INSERT, so nothing ever cleared it.
+    //
+    // One 50 KB attachment whose guid IS resolvable, plus four 60 MB attachments
+    // whose guids are in NO map and NO messages row. Free space is set so the
+    // resolvable 50 KB clears the headroom comfortably while the 240 MB of
+    // unreachable history does not.
+    const reachable = await makeAttachment("reachable.jpg", "k".repeat(50_000), {
+      guid: "resolvable-1",
+    });
+    const unreachable = [];
+    for (let i = 0; i < 4; i++) {
+      const u = await makeAttachment(`out-of-window${i}.mov`, "u".repeat(1_000), {
+        totalBytesOverride: 60 * 1024 * 1024,
+        guid: `no-such-message-${i}`,
+      });
+      unreachable.push(u.row);
+    }
+
+    // Only the reachable attachment's message resolves. The four others appear
+    // in neither this run's map nor the messages table.
+    const map = new Map([[reachable.row.message_guid, "internal-reachable"]]);
+    mockFreeSpace(2.1);
+
+    const result = await storeAttachments(USER, [reachable.row, ...unreachable], map);
+
+    // Pre-fix this refused with estimatedBytes 251,708,240 for a copy that would
+    // have written 50,000 — and stored nothing.
+    expect(result.refusedForSpace).toBeUndefined();
+    expect(result.stored).toBe(1);
+
+    const written = await bytesOnDisk(nodePath.join(scratchDir, ATTACHMENTS_DIR));
+    expect(written.files).toBe(1);
+    expect(written.bytes).toBe(reachable.realBytes);
+  });
+
+  it("still refuses when the RESOLVABLE attachments alone exceed free space", async () => {
+    // The resolvability filter must not become a blanket bypass: a large batch
+    // whose messages all resolve is still refused.
+    const rows = [];
+    for (let i = 0; i < 4; i++) {
+      const r = await makeAttachment(`big${i}.mov`, "g".repeat(1_000), {
+        totalBytesOverride: 60 * 1024 * 1024,
+        guid: `real-${i}`,
+      });
+      rows.push(r.row);
+    }
+    const map = new Map(rows.map((r, i) => [r.message_guid, `internal-real-${i}`]));
+    mockFreeSpace(0.1);
+
+    const result = await storeAttachments(USER, rows, map);
+
+    expect(result.stored).toBe(0);
+    expect(result.refusedForSpace!.estimatedBytes).toBe(4 * 60 * 1024 * 1024);
+  });
+
+  it("counts attachments whose message was stored by an EARLIER run", async () => {
+    // Resolvability is this run's messageIdMap UNION the messages already in the
+    // app DB. Reading only this run's map would UNDER-count a re-sync that adds
+    // new attachments to previously-imported messages — the unsafe direction,
+    // where the guard waves through a copy that overruns the disk.
+    mockDb
+      .prepare("INSERT INTO messages (id, external_id) VALUES (?, ?)")
+      .run("internal-prior", "prior-run-guid");
+    const a = await makeAttachment("late.mov", "p".repeat(1_000), {
+      totalBytesOverride: 60 * 1024 * 1024,
+      guid: "prior-run-guid",
+    });
+    mockFreeSpace(0.1);
+
+    // Empty map for THIS run: the owning message came from a previous import.
+    const result = await storeAttachments(USER, [a.row], new Map());
+
+    expect(result.refusedForSpace).toBeDefined();
+    expect(result.refusedForSpace!.estimatedBytes).toBe(60 * 1024 * 1024);
+  });
+
   it("does NOT refuse a re-sync of attachments it has already stored", async () => {
     // The regression this guards against: storeAttachments is handed the user's
     // ENTIRE attachment history on every sync, not just what is new. A guard

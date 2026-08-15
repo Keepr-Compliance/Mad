@@ -355,6 +355,34 @@ export function filterUnstoredAttachments<T extends AttachmentSizeRow>(
 }
 
 /**
+ * Drop attachments whose owning message is not stored, leaving only what a copy
+ * could actually link and write (BACKLOG-2743).
+ *
+ * WHY THIS EXISTS — this is the SECOND axis of the mistake `filterUnstoredAttachments`
+ * fixes, and it bites harder. The import's attachment SELECT is unbounded, so
+ * `storeAttachments` receives attachments belonging to messages OUTSIDE the
+ * selected window, which were never imported. The copy loop resolves each
+ * attachment's message ID and `continue`s when it finds none, so those bytes are
+ * never written.
+ *
+ * Sizing them anyway breaks the refusal's OWN advice. The renderer's estimate is
+ * date-bounded, so narrowing the window shows a small number and re-enables
+ * Import — and then the unbounded pre-flight refuses again on the whole history.
+ * "Choose a shorter time period", which the refusal block recommends, would be a
+ * dead end at every setting, and the refusal would be permanent because it
+ * returns before any INSERT.
+ *
+ * Rows with no GUID are KEPT, matching filterUnstoredAttachments: an
+ * unrecognised row inflates the estimate rather than escaping the guard.
+ */
+export function filterResolvableAttachments<T extends AttachmentSizeRow>(
+  rows: T[],
+  resolvableGuids: ReadonlySet<string>
+): T[] {
+  return rows.filter((row) => !row.message_guid || resolvableGuids.has(row.message_guid));
+}
+
+/**
  * Result of sizing a set of attachments (BACKLOG-2743).
  */
 export interface AttachmentEstimate {
