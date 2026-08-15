@@ -562,10 +562,17 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
 
     expect(importedGuids()).toEqual(IMPORTABLE_GUIDS_ASC);
     expect(result.wasCapped).toBe(false);
-    // THIS is the discriminator for the `importWasCapped` guard. Above the total,
-    // OFFSET (cap - 1) goes out of range, the query resolves nothing, and an
-    // unguarded call would take the fallback path and log a failure for an import
-    // that was never truncated. Widening the guard to `capApplies` turns this red.
+    // Above the total, OFFSET (cap - 1) goes out of range and the window-start
+    // query would resolve nothing — so this asserts the thing that matters: an
+    // import that was never truncated never reports an abandoned cap.
+    //
+    // Note what it does NOT prove. The `if (capWouldTruncate)` guard on the query
+    // is a performance skip, not a correctness one: widening it to `capApplies`
+    // leaves all 17 tests green, because `capWindowUnresolved` is itself gated on
+    // `capWouldTruncate`, so an unresolved row here informs nothing downstream.
+    // The guard saves a query; the gating carries the correctness. An earlier
+    // revision of this comment claimed the widened guard turned this test red —
+    // true of the first structure of this fix, false of this one.
     expect(windowStartFailures()).toHaveLength(0);
   });
 

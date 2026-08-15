@@ -391,6 +391,12 @@ class MacOSMessagesImportService {
         // asserting the opposite. Deciding the target from the RESOLVED window is
         // what makes the fallback mean what it says.
         let capWindowStartRowId: number | null = null;
+        // Guarded on `capWouldTruncate` as a PERFORMANCE skip, not for correctness.
+        // Widening it to `capApplies` would run one extra query whose OFFSET is out
+        // of range whenever the cap cannot truncate, and change nothing else:
+        // `capWindowUnresolved` below is gated on `capWouldTruncate` too, so a null
+        // from that wasted query informs nothing. Do not read this guard as the
+        // thing that keeps the fallback from misfiring — that is the gating below.
         if (capWouldTruncate) {
           const startRowResult = await dbAll<{ start_rowid: number }>(`
             SELECT message.ROWID as start_rowid
