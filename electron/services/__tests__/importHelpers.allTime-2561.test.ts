@@ -149,7 +149,9 @@ describe("BACKLOG-2561 · an all-time import over an all-old corpus", () => {
 
   it("imports every message when the preference is an explicit All time", () => {
     const lookbackMonths = resolveLookbackMonths({ lookbackMonths: null });
-    const cutoff = computeImportCutoffNano({ lookbackMonths, maxMessages: null }, NOW);
+    // `computeImportCutoffNano` takes only the two date-bearing filters; passing
+    // `maxMessages` here was an excess property the test-suite type check caught.
+    const cutoff = computeImportCutoffNano({ lookbackMonths }, NOW);
     expect(importedIds(cutoff)).toEqual(ALL_IDS);
   });
 
