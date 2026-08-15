@@ -74,6 +74,8 @@ import {
   shouldRetainMessageContent,
   isReactionAssociationType,
   summarizeAttachmentEstimate,
+  filterUnstoredAttachments,
+  attachmentStoredKey,
 } from "./importHelpers";
 import type { AttachmentSizeRow } from "./importHelpers";
 import { normalizeAssociatedGuid } from "../../utils/reactionUtils";
@@ -1113,11 +1115,29 @@ class MacOSMessagesImportService {
     // time an import actually starts, which is why the authority is here and not
     // in the renderer.
     //
-    // Deliberately conservative: the estimate does not subtract content-hash
-    // dedup (which would require hashing every source file up front), so it is
-    // an upper bound. Erring toward refusal is correct for a guard whose failure
-    // mode is a full disk.
-    const spaceEstimate = summarizeAttachmentEstimate(attachments);
+    // Sized over the attachments that are NOT already stored. This method is
+    // handed the user's ENTIRE attachment history on every sync (the import's
+    // attachment SELECT is unbounded), and the copy loop skips the already-stored
+    // ones before touching the disk. Summing the raw set would mean that once a
+    // large library HAD imported — consuming the space it needed — every
+    // subsequent sync would re-sum the whole history against the now-smaller free
+    // space and refuse forever, while genuinely new attachments never imported.
+    //
+    // Still deliberately conservative on what remains: content-hash dedup is not
+    // subtracted (that would mean hashing every source file up front), so the
+    // figure stays an upper bound. Erring toward refusal is correct for a guard
+    // whose failure mode is a full disk.
+    const alreadyStoredKeys = new Set<string>();
+    for (const row of db
+      .prepare(
+        `SELECT external_message_id, filename FROM attachments WHERE external_message_id IS NOT NULL`
+      )
+      .all() as { external_message_id: string; filename: string }[]) {
+      const key = attachmentStoredKey(row.external_message_id, row.filename);
+      if (key) alreadyStoredKeys.add(key);
+    }
+    const pendingAttachments = filterUnstoredAttachments(attachments, alreadyStoredKeys);
+    const spaceEstimate = summarizeAttachmentEstimate(pendingAttachments);
     const availableBytes = await getAvailableDiskBytes(app.getPath("userData"));
     const verdict = evaluateAttachmentSpace(spaceEstimate.eligibleBytes, availableBytes);
     if (!verdict.fits && verdict.availableBytes !== null) {
@@ -1662,7 +1682,8 @@ class MacOSMessagesImportService {
           SELECT
             attachment.filename as filename,
             attachment.transfer_name as transfer_name,
-            attachment.total_bytes as total_bytes
+            attachment.total_bytes as total_bytes,
+            message.guid as message_guid
           FROM attachment
           JOIN message_attachment_join ON attachment.ROWID = message_attachment_join.attachment_id
           JOIN message ON message.ROWID = message_attachment_join.message_id
@@ -1672,7 +1693,33 @@ class MacOSMessagesImportService {
 
         await dbClose();
 
-        const estimate = summarizeAttachmentEstimate(attachmentRows);
+        // Exclude attachments already in app storage, exactly as the pre-flight
+        // does. Without this the panel would show the FIRST import's size
+        // forever and block a user who had already imported successfully.
+        // Failure to read the app DB leaves the set unfiltered (a higher, safer
+        // estimate) rather than aborting the count.
+        const alreadyStoredKeys = new Set<string>();
+        try {
+          const appDb = databaseService.getRawDatabase();
+          for (const row of appDb
+            .prepare(
+              `SELECT external_message_id, filename FROM attachments WHERE external_message_id IS NOT NULL`
+            )
+            .all() as { external_message_id: string; filename: string }[]) {
+            const key = attachmentStoredKey(row.external_message_id, row.filename);
+            if (key) alreadyStoredKeys.add(key);
+          }
+        } catch (dbError) {
+          logService.warn(
+            "Could not read stored attachments for the import estimate; reporting the unfiltered total",
+            MacOSMessagesImportService.SERVICE_NAME,
+            { error: dbError instanceof Error ? dbError.message : String(dbError) }
+          );
+        }
+
+        const estimate = summarizeAttachmentEstimate(
+          filterUnstoredAttachments(attachmentRows, alreadyStoredKeys)
+        );
         const availableDiskBytes = await getAvailableDiskBytes(app.getPath("userData"));
         const verdict = evaluateAttachmentSpace(estimate.eligibleBytes, availableDiskBytes);
 

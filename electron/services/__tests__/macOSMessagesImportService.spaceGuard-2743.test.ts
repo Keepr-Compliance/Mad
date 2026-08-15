@@ -322,6 +322,79 @@ describe("BACKLOG-2743 — pre-flight free-space guard", () => {
     expect(result.stored).toBe(1);
   });
 
+  it("does NOT refuse a re-sync of attachments it has already stored", async () => {
+    // The regression this guards against: storeAttachments is handed the user's
+    // ENTIRE attachment history on every sync, not just what is new. A guard
+    // that sized the raw set would, once a large library HAD imported and
+    // consumed the space it needed, re-sum that whole history against the
+    // now-smaller free space and refuse on every subsequent sync — while
+    // genuinely new attachments silently stopped importing.
+    const a = await makeAttachment("holiday.jpg", "r".repeat(300_000), { guid: "r1" });
+    const b = await makeAttachment("plans.pdf", "s".repeat(200_000), { guid: "r2" });
+    const rows = [a.row, b.row];
+    const map = new Map([
+      [a.row.message_guid, "internal-r1"],
+      [b.row.message_guid, "internal-r2"],
+    ]);
+
+    // First import: plenty of room, everything copies.
+    mockFreeSpace(100);
+    const first = await storeAttachments(USER, rows, map);
+    expect(first.stored).toBe(2);
+
+    const attachmentsDir = nodePath.join(scratchDir, ATTACHMENTS_DIR);
+    const afterFirst = await bytesOnDisk(attachmentsDir);
+    expect(afterFirst.files).toBe(2);
+
+    // Second sync hands over the SAME history, and the disk is now tight —
+    // tighter than the raw set would need.
+    jest.restoreAllMocks();
+    mockFreeSpace(0.2);
+    const second = await storeAttachments(USER, rows, map);
+
+    // Not refused: the copy would write nothing, so there is nothing to refuse.
+    expect(second.refusedForSpace).toBeUndefined();
+    expect(second.stored).toBe(0);
+
+    // And nothing new was written.
+    const afterSecond = await bytesOnDisk(attachmentsDir);
+    expect(afterSecond.bytes).toBe(afterFirst.bytes);
+    expect(afterSecond.files).toBe(2);
+  });
+
+  it("still refuses a re-sync when the NEW attachments alone do not fit", async () => {
+    // The exclusion must not become a blanket bypass: once anything is stored,
+    // a genuinely large batch of NEW attachments is still refused.
+    const old = await makeAttachment("old.jpg", "o".repeat(1_000), { guid: "o1" });
+    mockFreeSpace(100);
+    await storeAttachments(USER, [old.row], new Map([[old.row.message_guid, "internal-o1"]]));
+
+    const fresh = [];
+    for (let i = 0; i < 4; i++) {
+      const f = await makeAttachment(`new${i}.mov`, "n".repeat(1_000), {
+        totalBytesOverride: 60 * 1024 * 1024,
+        guid: `n${i}`,
+      });
+      fresh.push(f.row);
+    }
+
+    jest.restoreAllMocks();
+    mockFreeSpace(0.1);
+    const result = await storeAttachments(
+      USER,
+      [old.row, ...fresh],
+      new Map([
+        [old.row.message_guid, "internal-o1"],
+        ...fresh.map((r, i) => [r.message_guid, `internal-n${i}`] as [string, string]),
+      ]),
+    );
+
+    expect(result.stored).toBe(0);
+    expect(result.refusedForSpace).toBeDefined();
+    // Sized over the NEW attachments only — the already-stored one is excluded.
+    expect(result.refusedForSpace!.estimatedBytes).toBe(4 * 60 * 1024 * 1024);
+  });
+
   it("refuses on the TOTAL size even though every single file passes the per-file cap", async () => {
     // This is the exact shape of the reported failure: the 100 MB per-file cap
     // is satisfied by every attachment, and the set still does not fit.

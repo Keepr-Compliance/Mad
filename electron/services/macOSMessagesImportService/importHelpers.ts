@@ -304,6 +304,54 @@ export interface AttachmentSizeRow {
   filename: string | null;
   transfer_name: string | null;
   total_bytes: number;
+  /**
+   * macOS message GUID owning this attachment. Needed to recognise attachments
+   * that are ALREADY stored — see filterUnstoredAttachments.
+   */
+  message_guid?: string | null;
+}
+
+/**
+ * Key identifying a stored attachment: `<macOS message GUID>:<display name>`.
+ *
+ * Must match the key storeAttachments uses for its `existingByExternalId`
+ * lookup, and the `external_message_id` + `filename` pair it writes. The display
+ * name is `transfer_name || filename` in BOTH places; keying on the raw
+ * `filename` alone would never match a row stored under its transfer name.
+ */
+export function attachmentStoredKey(
+  messageGuid: string | null | undefined,
+  displayName: string | null | undefined
+): string | null {
+  if (!messageGuid || !displayName) return null;
+  return `${messageGuid}:${displayName}`;
+}
+
+/**
+ * Drop attachments that are ALREADY stored, leaving only what a copy would
+ * actually write (BACKLOG-2743).
+ *
+ * WHY THIS EXISTS. The import's attachment query is unbounded — every sync hands
+ * `storeAttachments` the user's ENTIRE attachment history, not just what is new.
+ * The copy loop then skips the already-stored ones before touching the disk. An
+ * estimate that summed the raw set would therefore describe the FIRST import
+ * forever: after a large library imported successfully and consumed the space it
+ * needed, the next routine sync would re-sum the whole history, compare it to the
+ * now-smaller free space, and refuse — permanently, and while genuinely new
+ * attachments went unimported.
+ *
+ * Rows that cannot be keyed (no GUID or no name) are KEPT, so an unrecognised
+ * row inflates the estimate rather than silently escaping the guard.
+ */
+export function filterUnstoredAttachments<T extends AttachmentSizeRow>(
+  rows: T[],
+  storedKeys: ReadonlySet<string>
+): T[] {
+  if (storedKeys.size === 0) return rows;
+  return rows.filter((row) => {
+    const key = attachmentStoredKey(row.message_guid, row.transfer_name || row.filename);
+    return key === null || !storedKeys.has(key);
+  });
 }
 
 /**

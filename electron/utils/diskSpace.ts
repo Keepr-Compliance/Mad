@@ -127,6 +127,21 @@ export function evaluateAttachmentSpace(
     };
   }
 
+  // Nothing to copy means nothing to guard. Without this the headroom ALONE
+  // would refuse a zero-byte operation on a tight disk — which is precisely what
+  // a routine re-sync of an already-imported library looks like once the
+  // already-stored attachments are excluded. That would block imports forever
+  // while writing nothing.
+  if (estimatedBytes <= 0) {
+    return {
+      fits: true,
+      estimatedBytes,
+      availableBytes,
+      shortfallBytes: 0,
+      headroomBytes,
+    };
+  }
+
   const required = estimatedBytes + headroomBytes;
   const shortfall = required - availableBytes;
 

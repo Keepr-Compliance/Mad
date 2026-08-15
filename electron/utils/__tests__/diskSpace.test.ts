@@ -139,9 +139,21 @@ describe("evaluateAttachmentSpace — the single verdict (BACKLOG-2743)", () => 
     expect(verdict.availableBytes).toBeNull();
   });
 
-  it("allows an import with no attachments regardless of disk pressure", () => {
-    // The "import without attachments" escape hatch must never be blocked by
-    // the guard it exists to escape.
-    expect(evaluateAttachmentSpace(0, 3 * GB).fits).toBe(true);
+  it("allows a zero-byte copy even when free space is below the headroom", () => {
+    // 0.2 GB free is BELOW the 2 GB headroom, so this goes red if the zero case
+    // is not special-cased — the headroom alone would refuse an operation that
+    // writes nothing. (A larger figure here would pass either way and prove
+    // nothing.)
+    expect(0.2 * GB).toBeLessThan(ATTACHMENT_SPACE_HEADROOM_BYTES);
+
+    const verdict = evaluateAttachmentSpace(0, 0.2 * GB);
+
+    expect(verdict.fits).toBe(true);
+    expect(verdict.shortfallBytes).toBe(0);
+  });
+
+  it("allows the 'without attachments' escape hatch on a nearly-full disk", () => {
+    // The escape hatch must never be blocked by the guard it exists to escape.
+    expect(evaluateAttachmentSpace(0, 1024).fits).toBe(true);
   });
 });
