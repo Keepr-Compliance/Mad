@@ -479,7 +479,15 @@ class SyncOrchestratorServiceClass {
           const importFn = window.api.messages.importMacOSMessages as (
             userId: string,
             forceReimport?: boolean
-          ) => Promise<{ success: boolean; messagesImported: number; error?: string; wasCapped?: boolean; totalAvailable?: number }>;
+          ) => Promise<{
+            success: boolean;
+            messagesImported: number;
+            error?: string;
+            wasCapped?: boolean;
+            totalAvailable?: number;
+            /** BACKLOG-2743: pre-flight free-space check refused the attachment copy. */
+            attachmentsRefusedForSpace?: { estimatedBytes: number; availableBytes: number; attachmentCount: number };
+          }>;
           const result = await importFn(userId, options?.forceReimport);
           if (!result.success) {
             throw new Error(result.error || 'Message import failed');
@@ -495,6 +503,18 @@ class SyncOrchestratorServiceClass {
           if (result.wasCapped && result.totalAvailable) {
             const excluded = result.totalAvailable - result.messagesImported;
             warning = `${excluded.toLocaleString()} messages excluded by import limit. Adjust in Settings.`;
+          }
+          // BACKLOG-2743: the pre-flight free-space check refused the attachment
+          // copy. The messages themselves imported fine, so this is a warning and
+          // not an error — but it must be SAID, or attachments would go missing
+          // with the UI reporting unqualified success.
+          if (result.attachmentsRefusedForSpace) {
+            const needGb = result.attachmentsRefusedForSpace.estimatedBytes / 1e9;
+            const haveGb = result.attachmentsRefusedForSpace.availableBytes / 1e9;
+            const spaceWarning =
+              `Attachments were not imported: they need ${needGb.toFixed(1)} GB ` +
+              `but only ${haveGb.toFixed(1)} GB is free. Messages imported normally.`;
+            warning = warning ? `${warning} ${spaceWarning}` : spaceWarning;
           }
           return { warning, importedCount: result.messagesImported };
         } finally {
