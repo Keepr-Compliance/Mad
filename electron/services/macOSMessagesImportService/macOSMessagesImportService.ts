@@ -345,10 +345,7 @@ class MacOSMessagesImportService {
         const maxMessages = filters?.maxMessages ?? null;
         const auditPeriodActive = !!filters?.auditPeriodStart;
         const capApplies = !auditPeriodActive && maxMessages !== null && maxMessages > 0;
-        const targetMessageCount = capApplies
-          ? Math.min(filteredMessageCount, maxMessages as number)
-          : filteredMessageCount;
-        const importWasCapped = capApplies && filteredMessageCount > (maxMessages as number);
+        const capWouldTruncate = capApplies && filteredMessageCount > (maxMessages as number);
         if (
           auditPeriodActive &&
           maxMessages !== null &&
@@ -358,6 +355,88 @@ class MacOSMessagesImportService {
           logService.warn(
             `Audit-period window has ${filteredMessageCount} messages, exceeding the ${maxMessages} cap — ` +
               `importing the FULL audit window for completeness (cap relaxed; not truncating newest-first)`,
+            MacOSMessagesImportService.SERVICE_NAME
+          );
+        }
+
+        // BACKLOG-2744: when the cap bites, keep the NEWEST N — not the oldest.
+        //
+        // The fetch further down is keyset pagination cursored on ROWID ASC, so
+        // stopping once `targetMessageCount` rows have been read walks ROWID upward
+        // from 0 and keeps the OLDEST N: the archive, where the Settings copy
+        // promises "most recent". Do NOT fix this by flipping the ORDER BY — the
+        // ascending ROWID order IS the pagination cursor, and reversing it breaks
+        // the batching. Instead, find the ROWID of the Nth-newest importable row
+        // and start the forward walk there. The loop, dedup and attachment logic
+        // are untouched.
+        //
+        // Two things make this query's row set identical to the filtered COUNT
+        // above, which is what the offset is taken against:
+        //   - it reuses the same `dateFilterClause` string, so the two cannot drift;
+        //   - it repeats `guid IS NOT NULL` and takes NO join. The count is
+        //     join-free; joining chat_message_join here would let a message that
+        //     belongs to two chats occupy two offset slots and land the window
+        //     start on the wrong row.
+        // ROWID is a unique integer primary key, so there are no ties to break, and
+        // gaps are harmless: `lastRowId = startRowId - 1` with the strict `>` in the
+        // fetch starts the walk exactly AT startRowId whether or not startRowId - 1
+        // exists.
+        //
+        // THIS RUNS BEFORE THE TARGET COUNT IS DECIDED, AND THAT ORDER IS
+        // LOAD-BEARING. The first version of this fix resolved the window start
+        // AFTER `targetMessageCount` had already been pinned to `maxMessages`, so
+        // the unresolved branch fell back to `lastRowId = 0` and still stopped at
+        // `maxMessages` rows — walking from the beginning and keeping the OLDEST N.
+        // It reproduced the exact defect this code exists to fix, behind a comment
+        // asserting the opposite. Deciding the target from the RESOLVED window is
+        // what makes the fallback mean what it says.
+        let capWindowStartRowId: number | null = null;
+        if (capWouldTruncate) {
+          const startRowResult = await dbAll<{ start_rowid: number }>(`
+            SELECT message.ROWID as start_rowid
+            FROM message
+            WHERE message.guid IS NOT NULL
+              ${dateFilterClause}
+            ORDER BY message.ROWID DESC
+            LIMIT 1 OFFSET ?
+          `, [(maxMessages as number) - 1]);
+
+          capWindowStartRowId = startRowResult[0]?.start_rowid ?? null;
+        }
+
+        // The cap is honoured only when we know where its window starts. If the
+        // window start cannot be resolved we import the FULL filtered window —
+        // more recent history than the user asked for, which they never notice —
+        // rather than silently handing them the archive.
+        //
+        // Reachable in at least two ways, neither of them a throw: each `all()` is
+        // its own read against a live WAL-mode chat.db that Messages is writing to,
+        // so a bulk prune between the filtered COUNT above and this query drops the
+        // row count below `maxMessages` and sends OFFSET out of range; and the
+        // `dbAll<{ start_rowid: number }>` cast is unchecked, so a renamed column
+        // alias would yield `undefined` here rather than raising.
+        const capWindowUnresolved = capWouldTruncate && capWindowStartRowId === null;
+        const importWasCapped = capWouldTruncate && !capWindowUnresolved;
+        const targetMessageCount = importWasCapped
+          ? (maxMessages as number)
+          : filteredMessageCount;
+
+        if (capWindowUnresolved) {
+          // ERROR, not warn: this is the silent-wrong-data class. The import still
+          // completes and still contains everything the user asked for, but the
+          // reason it ignored their cap has to be visible in a support trace
+          // without anyone reasoning about ROWIDs. `cap_window_unresolved` in the
+          // supportTrace payload below carries the same signal.
+          logService.error(
+            `Cap of ${maxMessages} applies but the window-start ROWID could not be resolved — ` +
+              `importing the FULL filtered window of ${filteredMessageCount} messages instead of the newest ${maxMessages}. ` +
+              `The cap is NOT applied; the newest messages are present.`,
+            MacOSMessagesImportService.SERVICE_NAME,
+            { filteredMessageCount, maxMessages }
+          );
+        } else if (capWindowStartRowId !== null) {
+          logService.info(
+            `Cap of ${maxMessages} applies: starting at ROWID ${capWindowStartRowId} to keep the NEWEST ${maxMessages} messages`,
             MacOSMessagesImportService.SERVICE_NAME
           );
         }
@@ -443,59 +522,6 @@ class MacOSMessagesImportService {
         );
 
         await yieldToEventLoop();
-
-        // BACKLOG-2744: when the cap bites, keep the NEWEST N — not the oldest.
-        //
-        // The fetch below is keyset pagination cursored on ROWID ASC, so stopping
-        // once `targetMessageCount` rows have been read walks ROWID upward from 0
-        // and keeps the OLDEST N: the archive, where the Settings copy promises
-        // "most recent". Do NOT fix this by flipping the ORDER BY — the ascending
-        // ROWID order IS the pagination cursor, and reversing it breaks the
-        // batching. Instead, find the ROWID of the Nth-newest importable row and
-        // start the forward walk there. The loop, dedup and attachment logic below
-        // are untouched.
-        //
-        // Two things make this query's row set identical to the filtered COUNT
-        // above, which is what the offset is taken against:
-        //   - it reuses the same `dateFilterClause` string, so the two cannot drift;
-        //   - it repeats `guid IS NOT NULL` and takes NO join. The count is
-        //     join-free; joining chat_message_join here would let a message that
-        //     belongs to two chats occupy two offset slots and land the window
-        //     start on the wrong row.
-        // ROWID is a unique integer primary key, so there are no ties to break, and
-        // gaps are harmless: `lastRowId = startRowId - 1` with the strict `>` in the
-        // fetch starts the walk exactly AT startRowId whether or not startRowId - 1
-        // exists.
-        let capWindowStartRowId: number | null = null;
-        if (importWasCapped) {
-          const startRowResult = await dbAll<{ start_rowid: number }>(`
-            SELECT message.ROWID as start_rowid
-            FROM message
-            WHERE message.guid IS NOT NULL
-              ${dateFilterClause}
-            ORDER BY message.ROWID DESC
-            LIMIT 1 OFFSET ?
-          `, [(maxMessages as number) - 1]);
-
-          capWindowStartRowId = startRowResult[0]?.start_rowid ?? null;
-
-          if (capWindowStartRowId === null) {
-            // Unreachable given the guard above (the count already proved there are
-            // more than `maxMessages` rows), but a missing row here must not throw:
-            // falling back to the full forward walk imports MORE than the cap, which
-            // is a perf regression, not data loss.
-            logService.warn(
-              `Cap of ${maxMessages} applies but the window-start ROWID could not be resolved — ` +
-                `walking from the beginning instead`,
-              MacOSMessagesImportService.SERVICE_NAME
-            );
-          } else {
-            logService.info(
-              `Cap of ${maxMessages} applies: starting at ROWID ${capWindowStartRowId} to keep the NEWEST ${maxMessages} messages`,
-              MacOSMessagesImportService.SERVICE_NAME
-            );
-          }
-        }
 
         // Fetch messages using cursor-based pagination to avoid loading all 600K+ at once
         // This prevents the UI from freezing during the initial query
@@ -658,6 +684,9 @@ class MacOSMessagesImportService {
           // text on my phone but not in Keepr" needs to distinguish "older than
           // the cap window" from "never read".
           cap_window_start_rowid: capWindowStartRowId,
+          // Separates "no cap was in play" from "the cap was abandoned because its
+          // window start could not be resolved" — both leave the ROWID above null.
+          cap_window_unresolved: capWindowUnresolved,
           max_messages: maxMessages,
           audit_period_active: auditPeriodActive,
           read_from_source: allMessages.length,

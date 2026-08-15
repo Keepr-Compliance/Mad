@@ -55,15 +55,72 @@ jest.mock("sqlite3", () =>
 );
 
 const mockLogWarn = jest.fn();
+const mockLogError = jest.fn();
 jest.mock("../logService", () => ({
   __esModule: true,
   default: {
     info: jest.fn(),
     warn: (...args: unknown[]) => mockLogWarn(...args),
-    error: jest.fn(),
+    error: (...args: unknown[]) => mockLogError(...args),
     debug: jest.fn(),
   },
 }));
+
+/**
+ * Fault-injection seam for the cap window-start query.
+ *
+ * The `capWindowStartRowId === null` branch cannot be reached through any input:
+ * the filtered COUNT has already proved there are more rows than the cap, so the
+ * OFFSET is in range by construction. In production it is reachable by a race —
+ * each `all()` is its own read against a live WAL-mode chat.db, so a bulk prune
+ * between the COUNT and the window-start query sends OFFSET out of range — or by
+ * an unchecked-cast bug, since `dbAll<{ start_rowid: number }>` yields
+ * `undefined` for a renamed column alias rather than raising.
+ *
+ * The branch is therefore driven here rather than through the fixture: the real
+ * `openSqliteReadOnly` handle is wrapped and the window-start query alone is made
+ * to resolve nothing. Matching on SQL text would be a poor basis for production
+ * routing; for injecting one fault into one query it is exactly right, and the
+ * alternative — a test-only hook on the service — would put production code in a
+ * path only tests use.
+ *
+ * The flag is an object, not a boolean, so the hoisted `jest.mock` factory closes
+ * over a stable binding it dereferences only at call time. The `mock` prefix is
+ * what permits referencing it from the factory at all.
+ */
+const mockWindowStartFault = {
+  active: false,
+  /**
+   * How many times the fault actually replaced a result. Asserted by the tests
+   * that use it: a fault seam that quietly stops matching turns a real control
+   * into a test of the ordinary path, and it does so silently — the assertions
+   * would simply describe the unfaulted behaviour and stay green.
+   */
+  hits: 0,
+  /** The window-start query is the only one that orders ROWID descending. */
+  matches: (sql: string): boolean => /ORDER BY\s+message\.ROWID\s+DESC/i.test(sql),
+};
+
+jest.mock("../db/readOnlySqlite", () => {
+  const actual = jest.requireActual("../db/readOnlySqlite");
+  return {
+    ...actual,
+    openSqliteReadOnly: async (dbPath: string, context?: string) => {
+      const handle = await actual.openSqliteReadOnly(dbPath, context);
+      return {
+        ...handle,
+        all: (sql: string, params?: unknown) => {
+          if (mockWindowStartFault.active && mockWindowStartFault.matches(sql)) {
+            mockWindowStartFault.hits += 1;
+            // Exactly what a raced, out-of-range OFFSET returns: no rows, no error.
+            return Promise.resolve([]);
+          }
+          return handle.all(sql, params);
+        },
+      };
+    },
+  };
+});
 
 jest.mock("../permissionService", () => ({
   __esModule: true,
@@ -354,9 +411,15 @@ function importedGuids(): string[] {
   return capturedMessages.map((m) => m.guid);
 }
 
-/** Warnings emitted by the cap window-start fallback. */
-function windowStartWarnings(): string[] {
-  return mockLogWarn.mock.calls
+/**
+ * Errors emitted by the cap window-start fallback.
+ *
+ * Asserted as ERROR, not warn: an import that silently ignores the user's cap is
+ * a wrong-data class, and the level is the difference between a support trace
+ * that answers "why did I get everything?" and one that does not.
+ */
+function windowStartFailures(): string[] {
+  return mockLogError.mock.calls
     .map((c) => String(c[0]))
     .filter((m) => m.includes("window-start ROWID could not be resolved"));
 }
@@ -393,6 +456,9 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
   beforeEach(() => {
     capturedMessages = [];
     mockLogWarn.mockClear();
+    mockLogError.mockClear();
+    mockWindowStartFault.active = false;
+    mockWindowStartFault.hits = 0;
     installStorageSpies();
   });
 
@@ -477,12 +543,12 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
 
     expect(importedGuids()).toEqual(IMPORTABLE_GUIDS_ASC);
     expect(result.wasCapped).toBe(false);
-    // The window-start query must not run at all here. It is guarded on
-    // `importWasCapped` rather than `capApplies` precisely so this case skips
-    // it: with the cap at or above the total, OFFSET (cap - 1) is out of range,
-    // the query returns no row, and the fallback would cry wolf in every support
-    // trace for an import that was never truncated.
-    expect(windowStartWarnings()).toHaveLength(0);
+    // At cap EXACTLY equal to the total this assertion cannot fail, and saying so
+    // is the point. OFFSET (cap - 1) is still in range here: the query would
+    // succeed, return the oldest row, and seed a walk over the identical window
+    // that seed 0 walks. The guard is behaviour-neutral at this boundary — it is
+    // the cap > total case below that gives it its reason to exist.
+    expect(windowStartFailures()).toHaveLength(0);
   });
 
   it("cap above the total imports everything and does not report a cap", async () => {
@@ -496,7 +562,11 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
 
     expect(importedGuids()).toEqual(IMPORTABLE_GUIDS_ASC);
     expect(result.wasCapped).toBe(false);
-    expect(windowStartWarnings()).toHaveLength(0);
+    // THIS is the discriminator for the `importWasCapped` guard. Above the total,
+    // OFFSET (cap - 1) goes out of range, the query resolves nothing, and an
+    // unguarded call would take the fallback path and log a failure for an import
+    // that was never truncated. Widening the guard to `capApplies` turns this red.
+    expect(windowStartFailures()).toHaveLength(0);
   });
 
   it("no cap at all imports everything", async () => {
@@ -595,6 +665,76 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
       warned.some((m) => m.includes("importing the FULL audit window")),
     ).toBe(false);
   });
+
+  // ==========================================================================
+  // 5. The unresolved-window fallback (fault-injected — no input reaches it)
+  // ==========================================================================
+
+  it("imports the FULL filtered window — not the oldest N — when the window start cannot be resolved", async () => {
+    // The first version of this fix got exactly this wrong. It resolved the
+    // window start AFTER the target count had been pinned to `maxMessages`, so
+    // the fallback fell back to ROWID 0 and still stopped at `maxMessages` rows:
+    // the oldest N, the original defect, behind a comment claiming the opposite.
+    // Nothing in the suite caught it, because nothing drove this branch.
+    mockWindowStartFault.active = true;
+
+    const result = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      false,
+      { maxMessages: 5 },
+    );
+
+    expect(mockWindowStartFault.hits).toBe(1);
+    expect(result.success).toBe(true);
+    // The whole filtered window, in ROWID order — over-importing is the safe
+    // direction. Above all: NOT the oldest 5.
+    expect(importedGuids()).toEqual(IMPORTABLE_GUIDS_ASC);
+    expect(importedGuids()).not.toEqual(oldestGuids(5));
+    // The newest message is present, which is the claim the Settings copy makes
+    // and the only thing the user would notice going wrong.
+    expect(importedGuids()).toContain("msg-12");
+  });
+
+  it("reports the unresolved window honestly rather than claiming a cap it did not apply", async () => {
+    mockWindowStartFault.active = true;
+
+    const result = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      false,
+      { maxMessages: 5 },
+    );
+
+    expect(mockWindowStartFault.hits).toBe(1);
+    // Nothing was truncated, so `wasCapped` must not say it was — the renderer
+    // shows a "capped" notice off this flag.
+    expect(result.wasCapped).toBe(false);
+    expect(result.totalAvailable).toBe(IMPORTABLE_GUIDS_ASC.length);
+    expect(result.messagesImported).toBe(IMPORTABLE_GUIDS_ASC.length);
+
+    // ERROR, not warn. An import that quietly ignores the user's cap has to be
+    // findable in a support trace without anyone reasoning about ROWIDs.
+    expect(windowStartFailures()).toHaveLength(1);
+    expect(windowStartFailures()[0]).toContain("importing the FULL filtered window");
+    expect(mockLogWarn.mock.calls.map((c) => String(c[0]))).not.toContain(
+      expect.stringContaining("window-start ROWID could not be resolved"),
+    );
+  });
+
+  it("does not take the fallback path when the window start resolves normally", async () => {
+    // The control that keeps the two tests above honest: same cap, fault off.
+    const result = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      false,
+      { maxMessages: 5 },
+    );
+
+    expect(importedGuids()).toEqual(newestGuids(5));
+    expect(result.wasCapped).toBe(true);
+    expect(windowStartFailures()).toHaveLength(0);
+  });
 });
 
 // ============================================================================
@@ -671,4 +811,119 @@ macOnly("cap window survives multi-batch pagination (BACKLOG-2744)", () => {
     expect(importedGuids()[0]).toBe("bulk-000031");
     expect(importedGuids()[importedGuids().length - 1]).toBe("bulk-010050");
   }, 120_000);
+});
+
+// ============================================================================
+// 6. The window start must apply the DATE filter, not just the guid filter
+// ============================================================================
+
+/**
+ * The corpus above cannot tell whether the window-start query carries
+ * `${dateFilterClause}`. Date-excluded rows are always OLD, and in a corpus
+ * where age tracks ROWID they therefore sit BELOW the window start — so the
+ * offset lands on the same row with or without the clause, for every cap that
+ * triggers the cap at all.
+ *
+ * The shape that separates them is a row that is old by DATE but high by ROWID,
+ * and macOS Messages does emit it: ROWID is local insert order while `date` is
+ * the original send time, so an iCloud restore or a device sync writes years-old
+ * messages at the top of the ROWID space. This is not a state the producer
+ * cannot reach (the BACKLOG-2439 prohibition) — it is the same divergence
+ * recorded as a caveat on this fix, made observable.
+ *
+ * With the clause: the offset is measured over the date-filtered set and the cap
+ * delivers its full N. Without it: the backfilled row occupies an offset slot,
+ * the window starts one row too high, and the user gets N-1.
+ */
+macOnly("the cap window respects the date filter, not just the guid filter (BACKLOG-2744)", () => {
+  const BACKFILL_GUID = "backfill-01";
+
+  let tmpHome: string;
+  let realHome: string | undefined;
+
+  beforeAll(async () => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-2744-backfill-"));
+    const messagesDir = path.join(tmpHome, "Library", "Messages");
+    fs.mkdirSync(messagesDir, { recursive: true });
+
+    // The recent block, plus one row restored from iCloud: written between
+    // msg-11 (110) and msg-12 (120) in ROWID order, but sent 200 days ago.
+    const rows: FixtureRow[] = [
+      ...RECENT_ROWS,
+      {
+        rowid: 118,
+        guid: BACKFILL_GUID,
+        text: "fixture message restored from backup",
+        dateMs: NOW_MS - 200 * DAY_MS,
+        handleRowId: 1,
+        chatId: 1,
+      },
+    ];
+    await writeFixtureDb(path.join(messagesDir, "chat.db"), rows);
+
+    realHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+  });
+
+  afterAll(() => {
+    if (realHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = realHome;
+    }
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    capturedMessages = [];
+    mockLogWarn.mockClear();
+    mockLogError.mockClear();
+    mockWindowStartFault.active = false;
+    mockWindowStartFault.hits = 0;
+    installStorageSpies();
+  });
+
+  afterEach(() => {
+    storeMessagesSpy.mockRestore();
+    storeAttachmentsSpy.mockRestore();
+  });
+
+  it("the backfilled row IS importable — without this the test below proves nothing", async () => {
+    // If the row failed to insert, or were excluded for some reason other than
+    // its date, the capped assertion below would pass vacuously. Import with no
+    // date filter and no cap: the row must be there, high in ROWID order.
+    const result = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      false,
+      {},
+    );
+
+    expect(result.success).toBe(true);
+    expect(importedGuids()).toEqual([
+      ...RECENT_GUIDS_ASC.slice(0, 11), // msg-01 … msg-11 (ROWIDs 10 … 110)
+      BACKFILL_GUID, // ROWID 118
+      "msg-12", // ROWID 120
+    ]);
+  });
+
+  it("delivers the full cap: a backfilled old row must not consume a slot in the window", async () => {
+    // One month back excludes the 200-day-old row by DATE while leaving it above
+    // the window start by ROWID — the only arrangement that can tell whether the
+    // window-start query filters on date.
+    const result = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      false,
+      { lookbackMonths: 1, maxMessages: 4 },
+    );
+
+    expect(importedGuids()).toEqual(["msg-09", "msg-10", "msg-11", "msg-12"]);
+    expect(importedGuids()).not.toContain(BACKFILL_GUID);
+    // The cap promised four and four arrived. Dropping the date clause from the
+    // window-start query yields three.
+    expect(importedGuids()).toHaveLength(4);
+    expect(result.wasCapped).toBe(true);
+    expect(result.totalAvailable).toBe(RECENT_GUIDS_ASC.length);
+  });
 });
