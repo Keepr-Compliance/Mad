@@ -63,19 +63,31 @@ beforeEach(() => {
 });
 
 describe("BACKLOG-2561 · the lookback dropdown tells the truth about stored state", () => {
+  /**
+   * The absent-key case needs an ANCHOR. The component's initial state is
+   * already 3 months, so "Last 3 months" is on screen before the stored
+   * preference has been read — an assertion made at that moment passes whatever
+   * the component does with the preference. (The Android mirror of this test was
+   * written without an anchor and stayed GREEN with the fix reverted.)
+   *
+   * The fixture stores a cap of 10,000, which differs from the component's
+   * initial 50,000. Waiting for "10,000" proves the SAME `loadFilters` pass has
+   * landed. 10,000 is a real dropdown option, and `{ maxMessages: N }` with no
+   * lookback key is exactly what `handleMaxMessagesChange` plus the preference
+   * deep-merge leave behind for a user who has only ever changed the cap.
+   */
   it("shows Last 3 months when the lookbackMonths KEY is absent", async () => {
-    // Exactly what handleMaxMessagesChange + the preference deep-merge leave
-    // behind for a user who has only ever changed the cap.
     mockGetPreferences.mockResolvedValue({
       success: true,
-      data: { messageImport: { filters: { maxMessages: 50000 } } },
+      data: { messageImport: { filters: { maxMessages: 10000 } } },
     });
 
     renderStrict(<MacOSMessagesImportSettings userId="user-2561" />);
 
     await waitFor(() => {
-      expect(screen.getByDisplayValue("Last 3 months")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("10,000")).toBeInTheDocument();
     });
+    expect(screen.getByDisplayValue("Last 3 months")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("All time")).not.toBeInTheDocument();
   });
 
