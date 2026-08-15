@@ -37,6 +37,17 @@ interface AndroidMessagesSettingsProps {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Lookback window shown when the user has stored NO `lookbackMonths` preference.
+ *
+ * BACKLOG-2561: this panel writes and reads the SAME `messageImport.filters` key
+ * as the macOS panel, so it must resolve an absent key the same way the main
+ * process does (`DEFAULT_LOOKBACK_MONTHS` in
+ * `electron/services/macOSMessagesImportService/importHelpers.ts`). Only an
+ * explicit `null` — what this dropdown writes for "All time" — means unbounded.
+ */
+const DEFAULT_LOOKBACK_MONTHS = 3;
+
 function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
   const diffMs = now - timestamp;
@@ -70,7 +81,9 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
   const [clearResult, setClearResult] = useState<{ messagesDeleted: number; contactsDeleted: number } | null>(null);
 
   // Import filter state
-  const [lookbackMonths, setLookbackMonths] = useState<number | null>(3);
+  const [lookbackMonths, setLookbackMonths] = useState<number | null>(
+    DEFAULT_LOOKBACK_MONTHS
+  );
   const [maxMessages, setMaxMessages] = useState<number | null>(50000);
 
   // Load sync status and filter preferences
@@ -103,7 +116,14 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
             | { filters?: { lookbackMonths?: number | null; maxMessages?: number | null } }
             | undefined;
           if (messageImport?.filters) {
-            setLookbackMonths(messageImport.filters.lookbackMonths ?? null);
+            // BACKLOG-2561: absent key = "no preference" (default), explicit
+            // `null` = the user chose "All time". `?? null` conflated them and
+            // showed "All time" for a preference the import treated as 3 months.
+            setLookbackMonths(
+              messageImport.filters.lookbackMonths === undefined
+                ? DEFAULT_LOOKBACK_MONTHS
+                : messageImport.filters.lookbackMonths
+            );
             setMaxMessages(messageImport.filters.maxMessages ?? null);
           }
         }
