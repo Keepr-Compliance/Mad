@@ -424,6 +424,22 @@ function windowStartFailures(): string[] {
     .filter((m) => m.includes("window-start ROWID could not be resolved"));
 }
 
+/**
+ * The same message at WARN level — which must never appear.
+ *
+ * Filtered into an array rather than asserted with
+ * `expect(warns).not.toContain(expect.stringContaining(...))`, which is how this
+ * was first written and which CANNOT FAIL: `toContain` compares with `===`, so a
+ * matcher object is never equal to any string in the array and the negation is
+ * satisfied vacuously. SR proved it by adding a duplicate warn-level log beside
+ * the error and watching the suite stay green.
+ */
+function windowStartWarnings(): string[] {
+  return mockLogWarn.mock.calls
+    .map((c) => String(c[0]))
+    .filter((m) => m.includes("window-start ROWID could not be resolved"));
+}
+
 // The import is macOS-only — `doImport` returns early on any other platform, so
 // on Windows every assertion below would be asserting on that early return.
 const macOnly = process.platform === "darwin" ? describe : describe.skip;
@@ -724,9 +740,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     // findable in a support trace without anyone reasoning about ROWIDs.
     expect(windowStartFailures()).toHaveLength(1);
     expect(windowStartFailures()[0]).toContain("importing the FULL filtered window");
-    expect(mockLogWarn.mock.calls.map((c) => String(c[0]))).not.toContain(
-      expect.stringContaining("window-start ROWID could not be resolved"),
-    );
+    expect(windowStartWarnings()).toHaveLength(0);
   });
 
   it("does not take the fallback path when the window start resolves normally", async () => {
