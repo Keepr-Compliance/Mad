@@ -3449,6 +3449,148 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 63,
+      description:
+        "Add the 7 columns the pre-consolidation migration system used to add, and move their standalone schema.sql indexes into the chain, so a real pre-2026-02-17 upgrade does not die in exec(schema.sql) (BACKLOG-2750)",
+      migrate: (d) => {
+        // BACKLOG-2750 — SAME CLASS AS BACKLOG-2298 / BACKLOG-2300, seven more instances.
+        //
+        // WHAT BROKE, AND WHEN. Not TASK-1110. `847d6eec4` (2026-01-17) shipped
+        // `attachments.external_message_id` WITH a working upgrade path — a legacy
+        // `addMissingColumns('attachments', [...ALTER TABLE...])` plus a `runSafe`
+        // index create. `db3733343` (2026-02-17, "consolidate 28 migrations into
+        // schema.sql with version-based runner", shipped v2.4.1) DELETED that legacy
+        // system and left the standalone `CREATE INDEX` statements in schema.sql.
+        // `git log -S "addMissingColumns('attachments'"` returns exactly those two
+        // commits; `grep -rn "ALTER TABLE attachments" electron/` returns nothing.
+        //
+        // WHY IT IS FATAL. runMigrations() does `exec(schemaSql)` and THEN
+        // `_runVersionedMigrations()`. `CREATE TABLE IF NOT EXISTS` is a no-op on an
+        // existing table, so a DB created before a column's date keeps its old table
+        // shape forever — nothing at any version adds these columns. The standalone
+        // `CREATE INDEX ... ON <table>(<missing column>)` in schema.sql then throws
+        // "no such column" and aborts the ENTIRE migration before the chain starts
+        // (auto-restore → stuck on "Starting up your secure database").
+        //
+        // The consolidation's premise — BASELINE_VERSION's "schema.sql contains
+        // everything through migration 28" — holds for TABLES and for fresh installs,
+        // and is false for COLUMNS on pre-existing tables. That is the whole bug.
+        //
+        // MEASURED, NOT ASSUMED. A real pre-TASK-1110 DB built from git history
+        // (`git show 847d6eec4^:electron/database/schema.sql | sqlite3 old.db`) then
+        // fed today's schema.sql with the sqlite3 CLI (no `.bail`, so it enumerates
+        // every failure instead of stopping at the first) produces ELEVEN
+        // "no such column" errors. Seven are fixed here. The other four are on
+        // `communications` (email_id, thread_id and two composites) and are NOT the
+        // same shape: migration v43 rebuilds that table and recreates those indexes,
+        // so they need index-deferral only — and v43 itself throws on such a DB
+        // (its rebuild SELECTs email_id/thread_id from communications_old, which a
+        // pre-email DB does not have). Filed separately rather than half-fixed here.
+        //
+        // WHY THIS MIGRATION ADDS RATHER THAN SKIPS. v54, the nearest precedent,
+        // SKIPS when the column is absent because v32 guaranteed it. Here NOTHING
+        // adds these columns, so skipping would leave them absent forever. The column
+        // guard below is therefore an add-if-absent, not a skip-if-absent.
+        //
+        // BOTH PATHS. Fresh installs seed schema_version 32, so this migration (63)
+        // runs there too: it finds every column already present from CREATE TABLE and
+        // only creates the indexes — which is what preserves fresh-install index
+        // parity now that the standalone statements are gone from schema.sql.
+        //
+        // ACCEPTED DIVERGENCE: `schema.sql` declares a table-level
+        // `FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE` on
+        // attachments. SQLite cannot add a table-level FK via ALTER TABLE ADD COLUMN
+        // without a full table rebuild, so an UPGRADED DB gets the column and index
+        // but not that FK clause. A rebuild of `attachments` is a much larger blast
+        // radius than the crash being fixed; this mirrors the cost accepted by v54.
+        // Column bodies (type, DEFAULT, CHECK) are kept byte-for-byte in sync with
+        // the CREATE TABLE declarations in electron/database/schema.sql.
+        const specs: Array<{
+          table: string;
+          column: string;
+          addSql: string;
+          indexSql: string;
+        }> = [
+          {
+            table: "users_local",
+            column: "license_type",
+            addSql:
+              "ALTER TABLE users_local ADD COLUMN license_type TEXT DEFAULT 'individual' CHECK (license_type IN ('individual', 'team', 'enterprise'))",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_users_local_license_type ON users_local(license_type)",
+          },
+          {
+            table: "users_local",
+            column: "organization_id",
+            addSql: "ALTER TABLE users_local ADD COLUMN organization_id TEXT",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_users_local_organization ON users_local(organization_id)",
+          },
+          {
+            table: "attachments",
+            column: "email_id",
+            addSql: "ALTER TABLE attachments ADD COLUMN email_id TEXT",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_attachments_email_id ON attachments(email_id)",
+          },
+          {
+            table: "attachments",
+            column: "external_message_id",
+            addSql: "ALTER TABLE attachments ADD COLUMN external_message_id TEXT",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_attachments_external_message_id ON attachments(external_message_id)",
+          },
+          {
+            table: "transactions",
+            column: "last_exported_on",
+            addSql: "ALTER TABLE transactions ADD COLUMN last_exported_on DATETIME",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_transactions_last_exported_on ON transactions(last_exported_on)",
+          },
+          {
+            table: "transactions",
+            column: "submission_status",
+            addSql:
+              "ALTER TABLE transactions ADD COLUMN submission_status TEXT DEFAULT 'not_submitted' CHECK (submission_status IN ('not_submitted', 'submitted', 'under_review', 'needs_changes', 'resubmitted', 'approved', 'rejected'))",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_transactions_submission_status ON transactions(submission_status)",
+          },
+          {
+            table: "transactions",
+            column: "submission_id",
+            addSql: "ALTER TABLE transactions ADD COLUMN submission_id TEXT",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_transactions_submission_id ON transactions(submission_id)",
+          },
+        ];
+
+        for (const { table, column, addSql, indexSql } of specs) {
+          // Table guard mirrors v48/v52..v56/v62: a real install always has these
+          // three tables, but a minimal partial-schema fixture may not.
+          const hasTable = d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .get(table);
+          if (!hasTable) continue;
+
+          const cols = (
+            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
+
+          if (!cols.includes(column)) {
+            d.exec(addSql);
+            console.log(
+              `[migration v63] added ${table}.${column} column (BACKLOG-2750)`,
+            );
+          }
+
+          // Idempotent, and reached whether or not the ALTER just ran — this is the
+          // statement that replaces the standalone CREATE INDEX removed from
+          // schema.sql, so it must run on the fresh-install path too.
+          d.exec(indexSql);
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

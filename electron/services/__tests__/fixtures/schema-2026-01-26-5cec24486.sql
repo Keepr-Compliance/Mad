@@ -1,3 +1,34 @@
+-- ===========================================================================
+-- HISTORICAL SCHEMA SNAPSHOT — DO NOT EDIT, DO NOT "FIX"
+-- ===========================================================================
+-- PROVENANCE: this file is `electron/database/schema.sql` exactly as it stood
+-- at commit 5cec24486 ("feat(db): drop legacy columns from communications
+-- table (BACKLOG-506)", 2026-01-26), transcribed verbatim by:
+--
+--     git show 5cec24486:electron/database/schema.sql
+--
+-- It is NOT hand-written and NOT trimmed. It is the real producer's real
+-- output, per the rule that a fixture standing in for a real producer must be
+-- transcribed from that producer rather than invented.
+--
+-- WHY THIS PARTICULAR COMMIT (BACKLOG-2750). It is the newest historical
+-- schema that still reproduces the defect while remaining upgradeable:
+--   - it DECLARES schema_version 23, so the real chain (30..HEAD) runs;
+--   - its `attachments` table LACKS `email_id` (that column arrives 5 days
+--     later, c90a869f8, 2026-01-31), which is what the standalone
+--     `CREATE INDEX idx_attachments_email_id` in today's schema.sql crashes on;
+--   - its `communications` table ALREADY HAS `email_id`/`thread_id` (added in
+--     THIS commit), which is what lets migration v43's rebuild survive. An
+--     older snapshot dies inside v43 for an unrelated, deeper reason
+--     (v43 SELECTs those columns from communications_old) and so cannot
+--     demonstrate a clean end-to-end upgrade at all.
+--
+-- Measured against today's schema.sql with the sqlite3 CLI (no `.bail`, so it
+-- enumerates every failure rather than stopping at the first):
+--   BEFORE the BACKLOG-2750 fix: 1 error — `no such column: email_id` (:1060)
+--   AFTER  the BACKLOG-2750 fix: 0 errors
+-- ===========================================================================
+
 -- ============================================
 -- MAD - LOCAL SQLite DATABASE SCHEMA
 -- ============================================
@@ -59,9 +90,6 @@ CREATE TABLE IF NOT EXISTS users_local (
   ai_detection_enabled INTEGER DEFAULT 0,
   organization_id TEXT,
 
-  -- Email onboarding (Migration 1)
-  email_onboarding_completed_at DATETIME,
-
   -- Sync tracking
   last_cloud_sync_at DATETIME,
 
@@ -122,17 +150,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- ============================================
 -- Contacts are looked up at query time via contact_emails/contact_phones
 -- This allows retroactive matching when users add missing info
---
--- DANGER — DO NOT ADD COLUMNS TO THIS TABLE (documented by BACKLOG-2364).
--- Migration v36 (databaseService.ts:984) copies this table POSITIONALLY —
--- `INSERT OR IGNORE INTO contacts_new SELECT * FROM contacts;` — into a
--- contacts_new that declares exactly the same 15 columns declared below.
--- Fresh installs seed schema_version = 32 (~line 1333) and so DO run v36, so a
--- 16th column here would supply 16 values to a 15-column table: a PREPARE-time
--- error (OR IGNORE does NOT suppress it) that breaks EVERY new install.
--- Add contacts columns ONLY as a guarded ALTER in a new migration — see v56.
--- And NEVER "fix" a red schema-parity Path A by bumping that seeded version:
--- it goes green while silently stripping v33..vN from every fresh install.
 CREATE TABLE IF NOT EXISTS contacts (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -143,26 +160,7 @@ CREATE TABLE IF NOT EXISTS contacts (
   title TEXT,
 
   -- Source of this contact
-  -- BACKLOG-1900 (P0.1): distinct per-origin sources (iphone, outlook, google_contacts,
-  -- android_sync) so the Source filter can show friendly per-origin labels. Migration v48
-  -- widens this CHECK for existing installs. NOTE: 'messages'/'is_message_derived' are
-  -- SELECT-time synthetic labels in contactDbService.ts, NOT column values — kept OUT.
-  --
-  -- BACKLOG-2473 — FIRST-IMPORT PROVENANCE ONLY. IT MUST NEVER BE READ FOR FILTERING.
-  --
-  -- This records where a contact came from AT THE MOMENT IT WAS CREATED, and is
-  -- never revised afterwards. A contact assembled from several sources — the same
-  -- person in the Mac address book AND in Outlook — still carries the single value
-  -- it was first written with, so filtering on it answers a different question from
-  -- the one the user asked and silently omits rows.
-  --
-  -- The authoritative answer to "where did this contact come from" is the
-  -- contact_source_links crosswalk, which holds one row per source INCLUDING an
-  -- 'origin' row for contacts that were typed in by hand or inferred from a thread.
-  -- The column is KEPT rather than dropped because it is the only record of which
-  -- source came FIRST; every read for display or filtering goes to the crosswalk.
-  -- See electron/services/db/contactOriginLink.ts.
-  source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
+  source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred')),
 
   -- Engagement Metrics (for CRM/Relationship Agent)
   last_inbound_at DATETIME,              -- Last time they messaged us
@@ -172,9 +170,6 @@ CREATE TABLE IF NOT EXISTS contacts (
 
   -- Import tracking
   is_imported INTEGER DEFAULT 1,         -- 1 = imported contact, 0 = manually created
-
-  -- Auto-role (BACKLOG-1355)
-  default_role TEXT,                     -- Most-recently-assigned role for auto-fill
 
   -- Metadata
   metadata TEXT,                         -- JSON for additional notes/data
@@ -213,9 +208,8 @@ CREATE TABLE IF NOT EXISTS contact_phones (
   id TEXT PRIMARY KEY,
   contact_id TEXT NOT NULL,
 
-  phone_e164 TEXT NOT NULL,              -- Normalized: +14155550102
-  phone_display TEXT,                    -- Display format: (415) 555-0102
-  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key (last 10 digits)
+  phone_e164 TEXT NOT NULL,              -- Normalized: +14155550000
+  phone_display TEXT,                    -- Display format: (415) 555-0000
   is_primary INTEGER DEFAULT 0,
   label TEXT,                            -- mobile, home, work, etc.
   source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
@@ -288,15 +282,6 @@ CREATE TABLE IF NOT EXISTS messages (
   content_hash TEXT,                     -- SHA-256 hash of normalized content for fallback dedup
   duplicate_of TEXT,                     -- ID of original message if this is a duplicate
 
-  -- Message Type (Migration 28, TASK-1799)
-  message_type TEXT CHECK (message_type IS NULL OR message_type IN ('text', 'voice_message', 'location', 'attachment_only', 'system', 'unknown')),
-
-  -- Reactions / Tapbacks (Migration 52, BACKLOG-2280)
-  -- Apple raw tapback code: 2000-2005 add, 3000-3005 remove; NULL for normal messages.
-  associated_message_type INTEGER,
-  -- Normalized guid of the message this reaction targets (matches parent external_id); NULL for normal messages.
-  associated_message_guid TEXT,
-
   -- LLM Analysis (Migration 11)
   llm_analysis TEXT,                     -- Full LLM analysis response stored as JSON string
 
@@ -305,22 +290,17 @@ CREATE TABLE IF NOT EXISTS messages (
 
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
-  -- Sync session tracking (TASK-2110: ACID rollback on cancelled sync)
-  sync_session_id TEXT,
-
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL
 );
 
 -- ============================================
--- ATTACHMENTS TABLE (Files attached to messages and emails)
+-- ATTACHMENTS TABLE (Files attached to messages)
 -- ============================================
 -- Separate table enables document classification and OCR
--- TASK-1775: Added email_id for Gmail/Outlook email attachments
 CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY,
-  message_id TEXT,                       -- FK to messages (iMessage attachments) - nullable for email attachments
-  email_id TEXT,                         -- TASK-1775: FK to emails (Gmail/Outlook attachments)
+  message_id TEXT NOT NULL,
   external_message_id TEXT,              -- TASK-1110: macOS message GUID for stable linking
 
   -- File Info
@@ -341,16 +321,9 @@ CREATE TABLE IF NOT EXISTS attachments (
   -- Contains extracted fields: dates, amounts, parties, etc.
   analysis_metadata TEXT,
 
-  -- Sync session tracking (TASK-2110: ACID rollback on cancelled sync)
-  sync_session_id TEXT,
-
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
-  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
-  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
-  -- Note: CHECK (message_id IS NOT NULL OR email_id IS NOT NULL) enforced by service layer
-  -- because SQLite CREATE TABLE IF NOT EXISTS won't update existing tables
-  CHECK (message_id IS NOT NULL OR email_id IS NOT NULL)
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
 );
 
 -- ============================================
@@ -387,18 +360,6 @@ CREATE TABLE IF NOT EXISTS emails (
   references_header TEXT,              -- References header for threading
 
   -- Timestamps
-  -- BACKLOG-2571: sent_at is the SENDER-ASSERTED send time (Gmail `Date:`
-  -- header, Outlook `sentDateTime`); received_at is when the server took
-  -- delivery. They were the same value on every row until BACKLOG-2571, because
-  -- both derived from the provider's receive timestamp. A difference between
-  -- them is now meaningful — it is the send↔receive delta.
-  --
-  -- Rows written BEFORE that fix still hold a receive time in sent_at, and
-  -- nothing on disk distinguishes them: the send time was never stored (Outlook's
-  -- sentDateTime reached only the content hash; Gmail's `Date:` header was not
-  -- read at all), so there is nothing to backfill from. A provider re-sync
-  -- rewrites them; no marker column records the difference, by founder decision
-  -- 2026-08-09 — the only rows affected were one developer's test data.
   sent_at DATETIME,
   received_at DATETIME,
 
@@ -412,30 +373,6 @@ CREATE TABLE IF NOT EXISTS emails (
 
   -- Metadata
   labels TEXT,                         -- JSON: Gmail labels, Outlook categories
-  classification TEXT,                 -- BACKLOG-1722: nullable JSON landing zone for future AI classifier output (no consumer today)
-  -- BACKLOG-2513: retained bulk-mail headers as JSON (List-Unsubscribe,
-  -- List-Unsubscribe-Post, Precedence, Auto-Submitted, Authentication-Results).
-  -- Negative-filter input for auto-detection (BACKLOG-2500 s4.2). No reader
-  -- today, by design: raw facts are stored, classification is deferred.
-  --
-  -- Kept in sync with migration v62 (ALTER TABLE ... ADD COLUMN), which is the
-  -- ONLY source of this column on an existing install. This declaration is a
-  -- READABILITY convention (matching validated_at/ingest_source below), NOT a
-  -- parity requirement: schema-parity exec's schema.sql on BOTH of its paths,
-  -- so the migration alone would satisfy it (cf. v56's tombstone columns, which
-  -- are declared on neither table and still converge). It is safe here only
-  -- because `emails` is never positionally copied by any migration.
-  --
-  -- NEVER add a standalone CREATE INDEX on this column to this file: schema.sql
-  -- is exec'd BEFORE the migration chain, so an index on a not-yet-added column
-  -- throws "no such column" on every real upgrade (BACKLOG-2298/2300).
-  bulk_mail_headers TEXT,
-
-  -- Lifecycle provenance (BACKLOG-1801, Phase 2 "Validated Evidence Cache").
-  -- Kept byte-for-byte in sync with migration v46 (ALTER TABLE ... ADD COLUMN).
-  validated_at TEXT,                   -- when a $search-sourced row was existence-confirmed server-side (NULL = not validated)
-  ingest_source TEXT NOT NULL DEFAULT 'legacy' CHECK (ingest_source IN ('legacy', 'filter', 'search_validated', 'manual')),
-
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
@@ -448,178 +385,8 @@ CREATE INDEX IF NOT EXISTS idx_emails_thread_id ON emails(thread_id);
 CREATE INDEX IF NOT EXISTS idx_emails_sent_at ON emails(sent_at);
 CREATE INDEX IF NOT EXISTS idx_emails_sender ON emails(sender);
 CREATE INDEX IF NOT EXISTS idx_emails_external_id ON emails(external_id);
--- BACKLOG-1801 (Phase 2 T1): per-account identity re-scope. The user-scoped
--- idx_emails_user_external (UNIQUE user_id,external_id) and idx_emails_message_id_header
--- (NON-unique user_id,message_id_header, from v44) are REPLACED by per-account
--- UNIQUE partial indexes below. account_id (= oauth_tokens.id) is now backfilled,
--- so uniqueness is enforced within an account — the correct scope for multi-account
--- (the same Message-ID / provider id fetched into two accounts must not collide).
--- Kept byte-for-byte in sync with migration v46.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_external ON emails(account_id, external_id) WHERE external_id IS NOT NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_message_id_header ON emails(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
--- BACKLOG-1771 (DB hardening S4): composite for per-user chronological reads
--- (`WHERE user_id = ? ORDER BY sent_at`). Kept byte-for-byte in sync with
--- migration v45.
-CREATE INDEX IF NOT EXISTS idx_emails_user_sent ON emails(user_id, sent_at);
-
--- ============================================
--- EMAIL_PARTICIPANTS JUNCTION TABLE (BACKLOG-1722)
--- ============================================
--- One row per (email, role, position). Replaces denormalized scans against
--- emails.sender/recipients/cc/bcc with indexed exact-match lookups.
---
--- role: 'from' | 'to' | 'cc' | 'bcc'
--- position: 0-based ordinal within (email_id, role) — preserves header order
--- email_address: ALWAYS lowercased+trimmed (see normalizeEmailAddress)
--- display_name: original verbatim display (case preserved)
--- resolved_contact_id: nullable, NO FK constraint — populated by a later sprint
-CREATE TABLE IF NOT EXISTS email_participants (
-  email_id TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
-  position INTEGER NOT NULL,
-  participant_hash TEXT NOT NULL,      -- BACKLOG-1722: deterministic SHA-256 of email_id|role|position|email_address; stable cross-row dedup key + future embedding key
-  email_address TEXT NOT NULL,
-  display_name TEXT,
-  resolved_contact_id TEXT,
-  PRIMARY KEY (email_id, role, position),
-  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_email_participants_email_address
-  ON email_participants(email_address);
-CREATE INDEX IF NOT EXISTS idx_email_participants_address_role
-  ON email_participants(email_address, role);
-CREATE INDEX IF NOT EXISTS idx_email_participants_email_id
-  ON email_participants(email_id);
-
--- BACKLOG-2633 — the index the contacts picker's recency subquery probes by.
---
--- WHAT IT SERVES. `EXTERNAL_CONTACT_LAST_MESSAGE_EXPR` and
--- `IMPORTED_CONTACT_LAST_COMMUNICATION_SQL` (db/contactRecencySql.ts) both look a
--- contact's own addresses up in this table under `LOWER(ep.email_address) =
--- LOWER(<the contact's address>)`. `LOWER()` on the left makes
--- `idx_email_participants_email_address` above unusable, so without this index
--- there is NO access path by address and the planner falls back to driving the
--- subquery from `emails` — cost `contacts x mailbox` rather than
--- `contacts x that contact's own addresses`. Measured at the founder's record
--- count (1,162 external contacts, 3,073 emails): 7,410 ms -> 12 ms.
---
--- IT IS HALF OF A FIX AND USELESS ALONE. Measured: adding this index and
--- changing nothing else is worth 1.0x on a database with no `sqlite_stat1` —
--- the planner keeps the mailbox-first order and never probes by address. The
--- other half is the `CROSS JOIN` that pins the order, in contactRecencySql.ts.
--- Do not delete one believing the other covers it; see that file's docblock.
---
--- WHY NO MIGRATION ACCOMPANIES IT. `runMigrations()` execs this file
--- UNCONDITIONALLY (databaseService.ts) before the versioned chain, so
--- `CREATE INDEX IF NOT EXISTS` is reached on every start including installs with
--- nothing pending — the same reasoning BACKLOG-2621 shipped
--- `idx_contact_emails_email_lower` on, and guarded with a real on-disk test
--- (databaseService.onDiskUpgrade.test.ts) because neutering that one exec left
--- the whole suite green. A sibling test guards this index the same way.
---
--- It is safe as a standalone CREATE INDEX ONLY because both `email_participants`
--- and `email_address` are declared ABOVE in this same file. The BACKLOG-2298/2300
--- failure — "no such column" on every real upgrade — bites an index on a column a
--- LATER migration adds, since this file runs first. That is not the case here.
-CREATE INDEX IF NOT EXISTS idx_email_participants_lower_address
-  ON email_participants(LOWER(email_address));
-
--- Backfill error table — populated by migration v41 for rows whose denormalized
--- headers cannot be parsed. Used by support to triage edge cases.
-CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  email_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  raw_value TEXT,
-  reason TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- ============================================
--- EMAIL LIFECYCLE TABLES (BACKLOG-1801, Phase 2 "Validated Evidence Cache")
--- ============================================
--- Full design: BACKLOG-1767 §2. These three tables are the socket the Phase-2
--- reconciliation + data-clear + (next-sprint) delta engine plug into. CREATE
--- bodies are kept byte-for-byte in sync with migration v46 (schema-parity CI).
-
--- email_tombstones: records emails hard-deleted from the local cache so a later
--- fetch cannot resurrect a ghost. Keyed per account. reason distinguishes the
--- three deletion paths (server 404 during reconcile vs user Clear vs sweep).
--- account_id + external_id are NOT NULL: a tombstone is meaningless without both,
--- and nullable PK columns would let SQLite store duplicate logical keys.
-CREATE TABLE IF NOT EXISTS email_tombstones (
-  user_id TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  external_id TEXT NOT NULL,
-  message_id_header TEXT,
-  reason TEXT NOT NULL CHECK (reason IN ('server_gone', 'user_clear', 'reconcile')),
-  deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id, account_id, external_id),
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_email_tombstones_msgid ON email_tombstones(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
-
--- email_sync_state: per-account sync bookkeeping. account_id = oauth_tokens.id
--- with NO foreign key (disposition B3: token rows are recreated on re-auth, so a
--- FK would cascade-delete sync state on every reconnect); NOT NULL is enforced at
--- the DB level and the app layer keys on it. cursor/newest/oldest/failure_count
--- are the exact columns the next-sprint Graph-delta / Gmail-history engine needs,
--- so it slots in without schema churn. phase=cleared blocks auto-refetch.
-CREATE TABLE IF NOT EXISTS email_sync_state (
-  user_id TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  provider TEXT NOT NULL CHECK (provider IN ('google', 'microsoft')),
-  phase TEXT NOT NULL DEFAULT 'active' CHECK (phase IN ('active', 'cleared', 'invalid')),
-  cursor TEXT,
-  newest_cached_at DATETIME,
-  oldest_cached_at DATETIME,
-  last_reconciled_at DATETIME,
-  last_error TEXT,
-  failure_count INTEGER NOT NULL DEFAULT 0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id, account_id),
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-);
-
--- data_clear_events: durable outbox for Clear-Data audit records. The row is
--- committed in the SAME transaction as (and BEFORE) the deletes it describes;
--- cloud_synced_at IS NULL means the cloud push is still pending (flushed on
--- start + reconnect). This table is SPARED by Clear All (the audit trail must
--- survive the very action it records).
-CREATE TABLE IF NOT EXISTS data_clear_events (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  scope TEXT NOT NULL CHECK (scope IN ('emails', 'messages', 'contacts', 'all')),
-  account_id TEXT,
-  counts_json TEXT,
-  app_version TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  cloud_synced_at DATETIME,
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_data_clear_events_pending ON data_clear_events(cloud_synced_at) WHERE cloud_synced_at IS NULL;
-
--- message_import_state: per-user watermarks for the audit-window messages-
--- completeness system (BACKLOG-2292). NOT the gap-detection floor-of-record —
--- the messages import floor is always MIN(sent_at) over non-reaction sms/imessage
--- rows (index-backed, ground truth). This table stores only:
---   - last_import_at    : when a targeted audit import last ran (via the trigger)
---   - last_expansion_at : when expandAttachedThreadsForUser last completed
---   - deepest_import_start : earliest auditPeriodStart any targeted import has
---       actually scanned the device back to. The export completeness gate
---       requires deepest_import_start <= the audit start so a prior shallow
---       import can never falsely report a later-widened window complete.
--- Body kept byte-for-byte in sync with the v53 migration.
-CREATE TABLE IF NOT EXISTS message_import_state (
-  user_id TEXT PRIMARY KEY,
-  last_import_at DATETIME,
-  last_expansion_at DATETIME,
-  deepest_import_start DATETIME,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_user_external ON emails(user_id, external_id) WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL;
 
 -- ============================================
 -- TRANSACTIONS TABLE (Real estate deals)
@@ -644,12 +411,6 @@ CREATE TABLE IF NOT EXISTS transactions (
   started_at DATETIME,                   -- Representation start / first contact
   closed_at DATETIME,                    -- Closing date
   last_activity_at DATETIME,             -- Last message/update
-  representation_start_date DATE,        -- Migration 2: Representation start date
-  closing_date_verified INTEGER DEFAULT 0, -- Migration 2: Whether closing date was verified
-
-  -- Date Confidence (Migration 2)
-  representation_start_confidence INTEGER,
-  closing_date_confidence INTEGER,
 
   -- Confidence (how sure we are this is a real transaction cluster)
   confidence_score REAL,
@@ -681,9 +442,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   export_status TEXT DEFAULT 'not_exported' CHECK (export_status IN ('not_exported', 'exported', 're_export_needed')),
   export_format TEXT CHECK (export_format IN ('pdf', 'csv', 'json', 'txt_eml', 'excel', 'folder')),
   export_count INTEGER DEFAULT 0,
-  last_exported_at DATETIME,             -- Declared but NOT written by the export path; prefer last_exported_on
-  last_exported_on DATETIME,             -- The column the export handlers actually write + list SELECT returns; use this for "last exported" (BACKLOG-2109)
-  first_exported_at DATETIME,            -- BACKLOG-2013: freeze boundary — set once on first successful export; write-once (only when NULL); cleared by admin unfreeze
+  last_exported_at DATETIME,
+  last_exported_on DATETIME,             -- Legacy alias (migration 4), use last_exported_at for new code
 
   -- AI Detection Fields (Migration 11)
   detection_source TEXT DEFAULT 'manual' CHECK (detection_source IN ('manual', 'auto', 'hybrid')),
@@ -694,21 +454,11 @@ CREATE TABLE IF NOT EXISTS transactions (
   reviewed_at DATETIME,
   rejection_reason TEXT,
 
-  -- Agent/Contact References (Migration 2)
-  buyer_agent_id TEXT,
-  seller_agent_id TEXT,
-  escrow_officer_id TEXT,
-  inspector_id TEXT,
-  other_contacts TEXT,                   -- JSON array of additional contact IDs
-
   -- B2B Submission Tracking (BACKLOG-390)
   submission_status TEXT DEFAULT 'not_submitted' CHECK (submission_status IN ('not_submitted', 'submitted', 'under_review', 'needs_changes', 'resubmitted', 'approved', 'rejected')),
   submission_id TEXT,                    -- UUID reference to transaction_submissions in Supabase cloud
   submitted_at DATETIME,
   last_review_notes TEXT,
-
-  -- Email Auto-Link Settings (BACKLOG-1364)
-  skip_address_filter INTEGER DEFAULT 0, -- 1 = link ALL emails from contacts, 0 = filter by property address
 
   -- Metadata
   metadata TEXT,                         -- JSON for additional data
@@ -786,14 +536,12 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   user_id TEXT NOT NULL,
   session_id TEXT,
   action TEXT NOT NULL CHECK (action IN (
-    'LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'SESSION_REFRESH',
+    'LOGIN', 'LOGOUT', 'SESSION_REFRESH',
     'TRANSACTION_CREATE', 'TRANSACTION_UPDATE', 'TRANSACTION_DELETE',
-    'TRANSACTION_SUBMIT',
     'CONTACT_CREATE', 'CONTACT_UPDATE', 'CONTACT_DELETE',
-    'DATA_ACCESS', 'DATA_EXPORT', 'DATA_DELETE',
     'EXPORT_START', 'EXPORT_COMPLETE', 'EXPORT_FAIL',
     'MAILBOX_CONNECT', 'MAILBOX_DISCONNECT',
-    'SETTINGS_CHANGE', 'SETTINGS_UPDATE', 'TERMS_ACCEPT'
+    'SETTINGS_UPDATE', 'TERMS_ACCEPT'
   )),
   resource_type TEXT,
   resource_id TEXT,
@@ -929,12 +677,7 @@ CREATE TABLE IF NOT EXISTS llm_settings (
   use_platform_allowance INTEGER DEFAULT 0,
 
   -- Feature Flags
-  -- BACKLOG-2313: auto-detect defaults OFF. The transaction auto-detect scan is
-  -- now gated on BOTH ai_detection entitlement AND this opt-in toggle (see
-  -- emailSyncHandlers.isAutoDetectAllowed), so fresh installs must not auto-create
-  -- transactions until the user explicitly opts in. Existing rows are unchanged
-  -- (no migration); only new rows created via createLLMSettings pick up this default.
-  enable_auto_detect INTEGER DEFAULT 0,
+  enable_auto_detect INTEGER DEFAULT 1,
   enable_role_extraction INTEGER DEFAULT 1,
 
   -- Consent (Security Option C)
@@ -981,18 +724,8 @@ CREATE TABLE IF NOT EXISTS extracted_transaction_data (
 
 -- Users & Auth
 CREATE INDEX IF NOT EXISTS idx_users_local_email ON users_local(email);
--- BACKLOG-2750: idx_users_local_license_type / idx_users_local_organization are
--- created by migration v63 ONLY. `license_type` and `organization_id` entered
--- schema.sql on 2026-01-22 (efb444a0b) through the PRE-CONSOLIDATION migration
--- system, which db3733343 (2026-02-17, shipped v2.4.1) deleted without moving them
--- into the versioned chain. `CREATE TABLE IF NOT EXISTS users_local` is a no-op on
--- an existing DB, so a real upgrade from a DB created before 2026-01-22 still has
--- no such column, and a standalone CREATE INDEX here throws
--- "no such column: license_type" out of exec(schema.sql) — which runs BEFORE the
--- versioned chain (runMigrations: exec(schemaSql) → _runVersionedMigrations), so
--- the whole migration aborts and the app cannot start. The COLUMNS stay in CREATE
--- TABLE above for fresh-install parity. Same deferred-index pattern as
--- idx_messages_sync_session / idx_attachments_sync_session (v54, BACKLOG-2300).
+CREATE INDEX IF NOT EXISTS idx_users_local_license_type ON users_local(license_type);
+CREATE INDEX IF NOT EXISTS idx_users_local_organization ON users_local(organization_id);
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_provider ON oauth_tokens(user_id, provider, purpose);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
@@ -1004,28 +737,8 @@ CREATE INDEX IF NOT EXISTS idx_contacts_is_imported ON contacts(is_imported);
 CREATE INDEX IF NOT EXISTS idx_contacts_user_imported ON contacts(user_id, is_imported);
 CREATE INDEX IF NOT EXISTS idx_contact_emails_contact_id ON contact_emails(contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_emails_email ON contact_emails(email);
--- BACKLOG-2621: every case-insensitive email lookup asks for `LOWER(email)`, and
--- a plain index on `email` cannot serve a function-wrapped column. This
--- EXPRESSION index matches the predicate exactly, so the matching queries stop
--- being driven from `contacts` (one child seek per contact) and start being
--- driven by the value being looked up.
---
--- An expression index rather than storing the address lowercased: case is part
--- of what the user typed and of what gets printed into the compliance export.
--- Case-folding stored addresses would be a data mutation and a visible change,
--- and this change must be provably behaviour-neutral. The index changes zero rows.
---
--- Safe to declare here rather than in a migration (unlike
--- idx_contact_phones_normalized below): `contact_emails.email` is an original
--- table column, so it already exists on every upgrade path at the point
--- schema.sql runs. SQLite's LOWER() is ASCII-only — unchanged either way, since
--- the same LOWER() is what the query already asked for.
-CREATE INDEX IF NOT EXISTS idx_contact_emails_email_lower ON contact_emails(LOWER(email));
 CREATE INDEX IF NOT EXISTS idx_contact_phones_contact_id ON contact_phones(contact_id);
 CREATE INDEX IF NOT EXISTS idx_contact_phones_phone ON contact_phones(phone_e164);
--- BACKLOG-1727: idx_contact_phones_normalized is created by migration v40 only.
--- Do not declare it here — schema.sql runs BEFORE migrations during startup,
--- and on upgrade the phone_normalized column does not exist yet at this point.
 
 -- Messages
 CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
@@ -1037,52 +750,16 @@ CREATE INDEX IF NOT EXISTS idx_messages_external_id ON messages(external_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_user_external_id ON messages(user_id, external_id) WHERE external_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_messages_is_transaction_related ON messages(is_transaction_related);
-CREATE INDEX IF NOT EXISTS idx_messages_user_sent ON messages(user_id, sent_at);
 CREATE INDEX IF NOT EXISTS idx_messages_participants_flat ON messages(participants_flat);
--- BACKLOG-2280 / BACKLOG-2298: idx_messages_assoc_guid is created by migration v52
--- ONLY — it must NOT be declared here. schema.sql runs BEFORE the versioned
--- migrations (databaseService.runMigrations execs schema.sql, then the chain), and
--- on a real UPGRADE the pre-existing messages table has not yet gained the v52
--- `associated_message_guid` / `associated_message_type` columns at that point, so a
--- standalone CREATE INDEX on them here throws "no such column: associated_message_guid"
--- and aborts the whole migration (auto-restore). The v52 migration adds the columns
--- and then creates this index idempotently, covering BOTH the fresh-install path
--- (columns declared in CREATE TABLE messages above) and the upgrade path. Same
--- deferred-index pattern as idx_contact_phones_normalized (v40) above.
 -- Deduplication indexes (TASK-905)
 CREATE INDEX IF NOT EXISTS idx_messages_message_id_header ON messages(message_id_header);
 CREATE INDEX IF NOT EXISTS idx_messages_content_hash ON messages(content_hash);
 CREATE INDEX IF NOT EXISTS idx_messages_duplicate_of ON messages(duplicate_of);
--- BACKLOG-2300 / BACKLOG-2298: idx_messages_sync_session is created by migration
--- v54 ONLY — it must NOT be declared here. schema.sql runs BEFORE the versioned
--- migrations (runMigrations execs schema.sql, then the chain). On a real UPGRADE
--- from schema_version <= 31 the pre-existing messages table has not yet gained the
--- v32 `sync_session_id` column at exec(schema.sql) time, so a standalone CREATE
--- INDEX on it here throws "no such column: sync_session_id" and aborts the whole
--- migration (auto-restore → app stuck on "Starting up your secure database"). The
--- `sync_session_id` column stays in CREATE TABLE messages above for fresh-install
--- parity; v54 creates this index idempotently for BOTH install paths — fresh
--- installs SKIP v32 (schema.sql declares version 32) so v32's own index-create
--- cannot cover them. Same deferred-index pattern as idx_messages_assoc_guid (v52).
 
 -- Attachments
 CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
--- BACKLOG-2750: idx_attachments_email_id (TASK-1775) and
--- idx_attachments_external_message_id (TASK-1110) are created by migration v63 ONLY.
--- TASK-1110 (847d6eec4, 2026-01-17) originally shipped BOTH a legacy
--- `addMissingColumns('attachments', ...)` upgrade path AND this standalone index, so
--- upgrades were covered at the time. db3733343 (2026-02-17, shipped v2.4.1) deleted
--- the legacy migration system and left the standalone index behind — after which
--- nothing added the column to a pre-existing table at ANY version. `email_id`
--- (c90a869f8, 2026-01-31) never had an upgrade path at all. Exposed: any DB whose
--- `attachments` table was created before those dates and that never ran a build in
--- the v2.0.0..v2.4.0 window. The COLUMNS stay in CREATE TABLE above for
--- fresh-install parity. Same deferred-index pattern as v54 (BACKLOG-2300).
+CREATE INDEX IF NOT EXISTS idx_attachments_external_message_id ON attachments(external_message_id);
 CREATE INDEX IF NOT EXISTS idx_attachments_document_type ON attachments(document_type);
--- BACKLOG-2300: idx_attachments_sync_session is created by migration v54 ONLY —
--- see the idx_messages_sync_session note above for the full rationale (a standalone
--- CREATE INDEX on the v32 `sync_session_id` column throws "no such column" on a real
--- <= v31 upgrade because exec(schema.sql) precedes the v32 ALTER that adds it).
 
 -- Transactions
 CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
@@ -1090,15 +767,9 @@ CREATE INDEX IF NOT EXISTS idx_transactions_property_address ON transactions(pro
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
 CREATE INDEX IF NOT EXISTS idx_transactions_stage ON transactions(stage);
 CREATE INDEX IF NOT EXISTS idx_transactions_export_status ON transactions(export_status);
--- BACKLOG-2750: idx_transactions_last_exported_on / _submission_status /
--- _submission_id are created by migration v63 ONLY. `last_exported_on` (6c0e67ed5,
--- 2025-11-17) and `submission_status` / `submission_id` (b7b9d1367, 2026-01-22)
--- entered schema.sql through the PRE-CONSOLIDATION migration system that db3733343
--- (2026-02-17) deleted without moving them into the versioned chain. `CREATE TABLE
--- IF NOT EXISTS transactions` is a no-op on an existing DB, so a standalone CREATE
--- INDEX here throws "no such column: last_exported_on" out of exec(schema.sql) on a
--- real upgrade and aborts the whole migration. The COLUMNS stay in CREATE TABLE
--- above for fresh-install parity. Same deferred-index pattern as v54 (BACKLOG-2300).
+CREATE INDEX IF NOT EXISTS idx_transactions_last_exported_on ON transactions(last_exported_on);
+CREATE INDEX IF NOT EXISTS idx_transactions_submission_status ON transactions(submission_status);
+CREATE INDEX IF NOT EXISTS idx_transactions_submission_id ON transactions(submission_id);
 
 -- Transaction Participants
 CREATE INDEX IF NOT EXISTS idx_transaction_participants_transaction ON transaction_participants(transaction_id);
@@ -1211,19 +882,13 @@ END;
 -- - messages (texts/SMS/iMessage) -> communications -> transactions
 -- - emails (Gmail/Outlook)        -> communications -> transactions
 --
--- Content link invariant (BACKLOG-1768, enforced below):
---   * exactly one of message_id / email_id (never both), OR
---   * thread_id alone (SMS thread batch link).
--- Email rows must also carry the linked email's thread_id — enforced by the
--- communications_email_thread_required trigger (a CHECK cannot subquery emails).
--- NOTE: the CREATE TABLE body below is kept byte-for-byte in sync with migration
--- v43 (databaseService.ts) so fresh-install and migrated DBs match (BACKLOG-1770).
+-- One of message_id, email_id, or thread_id must be set.
 CREATE TABLE IF NOT EXISTS communications (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   transaction_id TEXT,                     -- Nullable: may link content before transaction exists
 
-  -- Link to content (exactly one of message_id / email_id; or thread_id alone)
+  -- Link to content (ONE of these should be set)
   message_id TEXT,                         -- FK to messages (for texts)
   email_id TEXT,                           -- FK to emails (for emails)
   thread_id TEXT,                          -- For batch-linking all texts in a thread
@@ -1235,26 +900,14 @@ CREATE TABLE IF NOT EXISTS communications (
 
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
-  -- BACKLOG-2319: why this email is attached, drives the "Needs review" surface.
-  -- 'address_found' | 'address_missing' | 'manual' | 'user_confirmed'.
-  -- NULL = legacy pre-2319 link → treated as address_found (Linked) by the UI.
-  -- MUST be the LAST column: migration v55 adds it via ALTER TABLE ADD COLUMN,
-  -- which SQLite appends at the end, so fresh-install order must match the
-  -- migrated order (parity guard — BACKLOG-2298). No index (see BACKLOG-2298).
-  match_reason TEXT,
-
-  -- Foreign keys (BACKLOG-1768: transaction_id CASCADE — link rows die with their transaction)
+  -- Foreign keys
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
-  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
   FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
   FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
 
-  -- BACKLOG-1768: reject both-set (message AND email) and neither-set (links to nothing)
-  CHECK (
-    (message_id IS NOT NULL AND email_id IS NULL)
-    OR (email_id IS NOT NULL AND message_id IS NULL)
-    OR (message_id IS NULL AND email_id IS NULL AND thread_id IS NOT NULL)
-  )
+  -- Constraint: Must link to something
+  CHECK (message_id IS NOT NULL OR email_id IS NOT NULL OR thread_id IS NOT NULL)
 );
 
 -- Communications indexes
@@ -1263,55 +916,30 @@ CREATE INDEX IF NOT EXISTS idx_communications_transaction_id ON communications(t
 CREATE INDEX IF NOT EXISTS idx_communications_message_id ON communications(message_id);
 CREATE INDEX IF NOT EXISTS idx_communications_email_id ON communications(email_id);
 CREATE INDEX IF NOT EXISTS idx_communications_thread_id ON communications(thread_id);
-CREATE INDEX IF NOT EXISTS idx_communications_txn_msg ON communications(transaction_id, message_id);
 
 -- Unique constraints to prevent duplicates
 CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_msg_txn ON communications(message_id, transaction_id)
   WHERE message_id IS NOT NULL;
--- BACKLOG-1768: require transaction_id too so the same email cannot be linked to the
--- same transaction twice (NULL transaction_id rows are pre-link and excluded).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_email_txn ON communications(email_id, transaction_id)
-  WHERE email_id IS NOT NULL AND transaction_id IS NOT NULL;
+  WHERE email_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_thread_txn ON communications(thread_id, transaction_id)
   WHERE thread_id IS NOT NULL AND message_id IS NULL AND email_id IS NULL;
-
--- BACKLOG-1768: a communications row that links an email MUST carry that email's
--- thread_id so unlink expands to every thread sibling. A CHECK cannot subquery the
--- emails table, so the invariant is enforced by a BEFORE INSERT trigger. Legacy
--- emails whose own thread_id is NULL/'' are exempt (the row may keep a NULL thread_id).
--- Kept byte-for-byte in sync with migration v43 (databaseService.ts).
-CREATE TRIGGER IF NOT EXISTS communications_email_thread_required
-BEFORE INSERT ON communications
-FOR EACH ROW
-WHEN NEW.email_id IS NOT NULL
-  AND NULLIF(NEW.thread_id, '') IS NULL
-  AND NULLIF((SELECT thread_id FROM emails WHERE id = NEW.email_id), '') IS NOT NULL
-BEGIN
-  SELECT RAISE(ABORT, 'communications.thread_id required: linked email has a thread_id (BACKLOG-1768)');
-END;
 
 -- ============================================
 -- IGNORED COMMUNICATIONS TABLE
 -- ============================================
 -- Stores communications that have been explicitly ignored/hidden from transactions.
 -- This prevents them from being re-added during future email scans.
--- NOTE: the CREATE TABLE body below is kept byte-for-byte in sync with migration
--- v43 (databaseService.ts) for fresh-install / migrated parity (BACKLOG-1770).
 CREATE TABLE IF NOT EXISTS ignored_communications (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   transaction_id TEXT NOT NULL,
 
-  -- Denormalized display/match cache (BACKLOG-1768): NOT authoritative — retained to
-  -- match incoming emails during scans. email_id below is the real reference.
+  -- Email identification fields (used to match incoming emails)
   email_subject TEXT,
   email_sender TEXT,
   email_sent_at TEXT,
   email_thread_id TEXT,
-
-  -- BACKLOG-1560: Direct ID references for reliable suppression during auto-link
-  email_id TEXT,                          -- FK to emails table (for email suppression)
-  thread_id TEXT,                         -- Thread ID (for text message thread suppression)
 
   -- Original communication reference (if available)
   original_communication_id TEXT,
@@ -1321,19 +949,8 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
 
   ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
-  -- BACKLOG-2319: preserve the link's match_reason across removal so a restore
-  -- reclassifies correctly (address_missing → Needs review; address_found /
-  -- user_confirmed → Linked). NULL = legacy → restores to Linked.
-  -- MUST be the LAST column: migration v55 adds it via ALTER TABLE ADD COLUMN
-  -- (appended at the end), so fresh-install order must match the migrated order
-  -- (parity guard — BACKLOG-2298).
-  match_reason TEXT,
-
-  -- BACKLOG-1768: email_id gains a real FK (was convention-only) so suppression rows
-  -- are cleaned up when their email is deleted.
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
-  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
-  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
 );
 
 -- Index for quick lookups during email scanning
@@ -1342,76 +959,6 @@ CREATE INDEX IF NOT EXISTS idx_ignored_comms_user_email
 
 CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction
   ON ignored_communications(transaction_id);
-
--- BACKLOG-1560: Indexes for auto-link suppression lookups
--- These indexes are created by migration 37 (which also adds the columns).
--- They cannot be in schema.sql because existing databases don't have these
--- columns yet when schema.sql runs (before versioned migrations).
-
--- ============================================
--- PHONE LAST MESSAGE TABLE (BACKLOG-567, Migration 24)
--- ============================================
--- Lookup table for fast contact sorting by last message date
--- Enables O(1) lookup instead of O(n) LIKE scans
-CREATE TABLE IF NOT EXISTS phone_last_message (
-  phone_normalized TEXT NOT NULL,
-  user_id TEXT NOT NULL,
-  last_message_at DATETIME NOT NULL,
-  PRIMARY KEY (phone_normalized, user_id),
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_phone_last_msg_user ON phone_last_message(user_id);
-
--- ============================================
--- EXTERNAL CONTACTS TABLE (BACKLOG-569, SPRINT-068, Migrations 25+27)
--- ============================================
--- Caches contacts from external sources (macOS Contacts, iPhone sync, etc.)
--- with pre-computed last_message_at for instant sorted loading
-CREATE TABLE IF NOT EXISTS external_contacts (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  name TEXT,
-  phones_json TEXT,
-  phones_normalized_json TEXT,           -- BACKLOG-1727: JSON array of lookup keys parallel to phones_json
-  emails_json TEXT,
-  company TEXT,
-  last_message_at DATETIME,
-  external_record_id TEXT,
-  source TEXT DEFAULT 'macos',
-  synced_at DATETIME,
-  -- Sync session tracking (TASK-2110: ACID rollback on cancelled sync)
-  sync_session_id TEXT,
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
-  UNIQUE(user_id, source, external_record_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_external_contacts_user ON external_contacts(user_id);
-CREATE INDEX IF NOT EXISTS idx_external_contacts_last_msg ON external_contacts(user_id, last_message_at DESC);
-CREATE INDEX IF NOT EXISTS idx_external_contacts_source ON external_contacts(user_id, source);
--- BACKLOG-2300: idx_external_contacts_sync_session is created by migration v54 ONLY
--- — see the idx_messages_sync_session note above for the full rationale (a standalone
--- CREATE INDEX on the v32 `sync_session_id` column throws "no such column" on a real
--- <= v31 upgrade because exec(schema.sql) precedes the v32 ALTER that adds it).
-
--- ============================================
--- FAILURE LOG (offline diagnostics)
--- ============================================
--- Folded from migration v31 for fresh-install parity (BACKLOG-1774, S6). Fresh
--- installs start at schema.sql's declared version (v32) and skip migrations
--- 30-32, so without this block they never received the failure_log table + its
--- indexes that upgraded installs have. Kept byte-for-byte in sync with migration
--- v31 and databaseService._ensureFailureLogTable().
-CREATE TABLE IF NOT EXISTS failure_log (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-  operation TEXT NOT NULL,
-  error_message TEXT NOT NULL,
-  metadata TEXT,
-  acknowledged INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_failure_log_timestamp ON failure_log(timestamp);
-CREATE INDEX IF NOT EXISTS idx_failure_log_acknowledged ON failure_log(acknowledged);
 
 -- ============================================
 -- VIEWS (Convenient queries for common operations)
@@ -1443,7 +990,7 @@ SELECT
   t.message_count,
   t.attachment_count,
   t.confidence_score,
-  (SELECT COUNT(*) FROM transaction_contacts tc WHERE tc.transaction_id = t.id) as participant_count,
+  (SELECT COUNT(*) FROM transaction_participants tp WHERE tp.transaction_id = t.id) as participant_count,
   (SELECT COUNT(*) FROM audit_packages ap WHERE ap.transaction_id = t.id) as audit_count
 FROM transactions t;
 
@@ -1459,5 +1006,5 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 -- Initialize schema version if not exists
--- Version 32: Consolidated schema (includes sync_session_id columns from TASK-2110)
-INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 32);
+-- Version 23: BACKLOG-506 pure junction communications table (content columns removed)
+INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 23);
