@@ -263,9 +263,13 @@ describe("databaseService migration v63 (BACKLOG-2750 — legacy columns + defer
   });
 
   it("is idempotent — re-running throws no duplicate-column error", async () => {
-    // Not hypothetical: the baseline clamp at databaseService.ts:3756 makes a
-    // below-baseline database replay the whole chain, so v63 really does run
-    // twice on the databases it targets (BACKLOG-2752).
+    // Not hypothetical, and not only about the replay. Deleting the
+    // `!cols.includes(column)` guard reds the upgrade suite 9-of-11 on the FIRST
+    // pass with "duplicate column name: license_type" — fresh installs included,
+    // since their tables already carry every column from CREATE TABLE. On top of
+    // that, the baseline clamp at databaseService.ts:3756 makes a below-baseline
+    // database replay the whole chain, so v63 genuinely runs twice on the
+    // databases it targets (BACKLOG-2752). This test covers the second path.
     await runV63();
     await expect(runV63()).resolves.toBeUndefined();
     for (const { table, column } of REPAIRED) {

@@ -3536,6 +3536,18 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         // only creates the indexes — which is what preserves fresh-install index
         // parity now that the standalone statements are gone from schema.sql.
         //
+        // WHICH IS WHY THE `!cols.includes(column)` GUARD IS LOAD-BEARING FOR
+        // EVERY INSTALL, NOT AN EDGE CASE. Measured: delete the guard so the
+        // ALTER runs unconditionally, and the upgrade suite goes 9-of-11 RED with
+        //     Migration 63 ... failed: duplicate column name: license_type
+        // on the FIRST pass — including the FRESH INSTALL test, because a fresh
+        // `users_local` already carries every one of these columns from CREATE
+        // TABLE. Without the guard this migration bricks new installs and current
+        // ones, which is a far larger blast radius than the crash it fixes.
+        // (It is additionally required for the chain REPLAY that the baseline
+        // clamp at :3756 forces on below-baseline databases — BACKLOG-2752 — but
+        // that is the second reason, not the first.)
+        //
         // ACCEPTED DIVERGENCE: `schema.sql` declares a table-level
         // `FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE` on
         // attachments. SQLite cannot add a table-level FK via ALTER TABLE ADD COLUMN

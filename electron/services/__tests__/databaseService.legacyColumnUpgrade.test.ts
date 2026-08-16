@@ -91,6 +91,14 @@
  *   That is precisely why every CI run has been green while shipped databases
  *   were exposed.
  *
+ * CONTROL 2b — delete v63's `!cols.includes(column)` guard so the ALTER runs
+ *   unconditionally.
+ *   RESULT: 9 of 11 RED with
+ *       Migration 63 ... failed: duplicate column name: license_type
+ *   on the FIRST pass, FRESH INSTALL included. The guard is not defensive
+ *   decoration protecting a replay edge case — without it this migration breaks
+ *   every install, new and existing.
+ *
  * CONTROL 2 — revert the migration half: `return;` as the first statement of
  *   v63's `migrate` (neutered rather than deleted, so the runner's sequence
  *   guard is still satisfied and the chain still lands on 63 — the sharper
@@ -427,10 +435,13 @@ describe("databaseService — 2026-01-26 legacy-column upgrade (BACKLOG-2750)", 
     // migration, and replays the ENTIRE chain on its next launch.
     //
     // Consequence that matters for THIS PR: migration v63 runs TWICE on exactly
-    // the databases it was written for. Its `if (!cols.includes(column))` guard
-    // is therefore load-bearing, not defensive decoration — without it the
-    // second pass throws "duplicate column name". The idempotency test below is
-    // what proves that, and it is only meaningful because of this clamp.
+    // the databases it was written for, so its `if (!cols.includes(column))`
+    // guard must survive a replay. That is the SECOND reason the guard exists,
+    // and the weaker one — measured, the guard is load-bearing on the FIRST pass
+    // for EVERY install: delete it and this suite goes 9-of-11 RED with
+    // "duplicate column name: license_type", the FRESH INSTALL test included,
+    // because a fresh `users_local` already carries the column from CREATE
+    // TABLE. The replay merely adds a second way to reach the same throw.
     await upgrade();
     expect(schemaVersion()).toBe(29);
   });
