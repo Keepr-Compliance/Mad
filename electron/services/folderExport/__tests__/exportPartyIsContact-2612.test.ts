@@ -329,6 +329,55 @@ function partyDetailValues(html: string, name: string): string[] {
   return [...details.matchAll(/<span>([^<]*)<\/span>/g)].map((m) => m[1]);
 }
 
+/**
+ * The WHOLE Contacts section — the heading plus EVERY party block — found by
+ * balanced `<div>` matching over `contact-list`.
+ *
+ * It THROWS on any miss, and it never falls back to the full document.
+ *
+ * Both properties are here because their absence shipped a broken control in
+ * PR #2328 and SR caught it. The original extractor was
+ * `html.match(/<h3>Contacts[\s\S]*?<\/div>\s*<\/div>\s*$/m)?.[0] ?? html`. The
+ * lazy quantifier stopped at the first `</div>\s*</div>` at end-of-line — which
+ * closes the FIRST contact block — so it captured 318 of 5507 characters and
+ * the comparison never saw the second party at all. The `?? html` fallback then
+ * meant a total miss would silently degrade into comparing entire documents,
+ * which is a different assertion wearing this one's name.
+ *
+ * A regex that quietly captures the wrong region produces a green test that
+ * cannot fail. Throwing is the point: a miss must be loud.
+ */
+function contactsSection(html: string): string {
+  const headingIdx = html.indexOf("<h3>Contacts");
+  if (headingIdx === -1) {
+    throw new Error("Contacts heading not found — the export did not render a party section");
+  }
+  const listIdx = html.indexOf('<div class="contact-list">', headingIdx);
+  if (listIdx === -1) {
+    throw new Error("contact-list container not found after the Contacts heading");
+  }
+
+  const tagRe = /<div\b[^>]*>|<\/div>/g;
+  tagRe.lastIndex = listIdx;
+  let depth = 0;
+  let end = -1;
+  for (let m = tagRe.exec(html); m !== null; m = tagRe.exec(html)) {
+    if (m[0].startsWith("</")) {
+      depth -= 1;
+      if (depth === 0) {
+        end = m.index + m[0].length;
+        break;
+      }
+    } else {
+      depth += 1;
+    }
+  }
+  if (end === -1) {
+    throw new Error("contact-list container is unbalanced — cannot delimit the Contacts section");
+  }
+  return html.slice(headingIdx, end);
+}
+
 describe("BACKLOG-2612 — the export party unit is the contact", () => {
   describe("live parties (two contacts sharing an identifier)", () => {
     let fx: ExportFixture;
@@ -524,16 +573,20 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
     });
 
     test("C5: no marker distinguishes the tombstoned line — pinned CURRENT behaviour", () => {
-      // Founder decisions of 13 Aug (BACKLOG-2612 pm_comments): on a closed
-      // deal a merged-away line WILL be labelled ("merged into …"), boundary =
-      // transactions.status. That is POST-BACKLOG-2369 behaviour; neither the
-      // merge mechanism nor the marker exists on develop today. This pin makes
-      // the flip a VISIBLE EDIT for 2369's engineer, not a silent change.
+      // The party query fetches `contact_removed_at` and the renderer never
+      // reads it, so a tombstoned party's line is indistinguishable from a live
+      // one. That is what this pins, and all it pins.
+      //
+      // Scope, stated honestly: this fixture is a PLAIN tombstone with no
+      // merge-ledger row, and this transaction is 'active'. Founder decision O2
+      // (a "merged into …" marker on a CLOSED deal) therefore cannot be
+      // observed here at all. The marker is asserted absent at BOTH statuses in
+      // the "PLAIN TOMBSTONE renders identically" block below — and even there,
+      // only for a plain tombstone. BACKLOG-2369 must bring its own
+      // merged-party fixture; neither assertion is a substitute for one.
       const html = summaryHtml();
       expect(html).not.toContain("merged into");
       expect(html).not.toContain("archived");
-      // The query fetches contact_removed_at and the renderer never reads it —
-      // a tombstoned party's line is indistinguishable from a live one.
     });
 
     test("C5: her handles still resolve to her name in filenames (removal does not redact history)", () => {
@@ -546,11 +599,31 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
     });
   });
 
-  describe("transaction status does not change party rendering today", () => {
-    // The discriminator the 13 Aug founder decision names: post-2369, an
-    // ACTIVE deal shows the survivor only and a CLOSED deal shows both lines
-    // labelled. TODAY the party section is status-independent. Pinning that
-    // makes 2369's behaviour change land as a deliberate red here.
+  describe("a PLAIN TOMBSTONE renders identically at every transaction status", () => {
+    // WHAT THIS PINS, stated at exactly the strength it has.
+    //
+    // The fixture's leftover party is a plain `deleteContact` tombstone with NO
+    // MERGE-LEDGER ROW, because no merge mechanism exists on develop today.
+    // So this block pins one thing: a tombstoned-but-attached contact renders
+    // complete, unmarked, and byte-identically whether the deal is 'active' or
+    // 'closed'.
+    //
+    // WHAT IT DOES NOT PIN. The founder's 13 Aug decisions (O1: the survivor
+    // takes over on a non-closed deal; O2: the archived line on a closed deal
+    // carries a "merged into …" marker) describe post-BACKLOG-2369 behaviour
+    // keyed on a MERGED party. If 2369 branches on the merge-ledger row — the
+    // natural implementation, and the only one that can distinguish "merged
+    // away" from "deleted from the address book" — then a CORRECT 2369 leaves
+    // this block green, legitimately, because this fixture has no ledger row.
+    //
+    // **BACKLOG-2369 must bring its own merged-party fixture.** This block is
+    // not a substitute for one, and must not be read as covering O1 or O2.
+    //
+    // What IS caught here today: any change that makes a plain tombstone render
+    // differently by status, or that starts marking a plain tombstone. The O1
+    // half is separately caught by C5's exact party-name-set assertion above
+    // (dropping the leftover's line reds it) — that is the assertion doing the
+    // work, NOT this status comparison.
     let active: string;
     let closed: string;
 
@@ -561,16 +634,39 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
         seedScenario(fx, { txStatus: status });
         await deleteContact(DANA.id, "user_deleted");
         await runFolderExport(fx);
-        const section = summaryHtml().match(/<h3>Contacts[\s\S]*?<\/div>\s*<\/div>\s*$/m)?.[0] ?? summaryHtml();
+        // Whole section, and it throws rather than falling back — see
+        // contactsSection's docblock for the control this replaces.
+        const section = contactsSection(summaryHtml());
         if (status === "active") active = section;
         else closed = section;
         await fx.cleanup();
       }
     }, 240_000);
 
-    test("the rendered Contacts section is byte-identical at status='active' and status='closed'", () => {
-      expect(active).toBeTruthy();
+    test("the compared region actually contains BOTH parties (extractor self-check)", () => {
+      // Without this, the comparison below is worth whatever the extractor
+      // happened to capture. The shipped-and-rejected version captured 318 of
+      // 5507 characters — the first party only — so the tombstoned party was
+      // never in the compared region and no change to her line could fail it.
+      for (const section of [active, closed]) {
+        expect(section).toBeTruthy();
+        expect(section).toContain(CHRIS.name);
+        expect(section).toContain(DANA.name);
+      }
+    });
+
+    test("the whole Contacts section is byte-identical at status='active' and status='closed'", () => {
       expect(active).toEqual(closed);
+    });
+
+    test("no merged-away marker on the tombstoned line at EITHER status", () => {
+      // Asserted against the CLOSED section too, not only the open case.
+      // 'closed' is the status under which founder decision O2 calls for the
+      // marker, so an implementation that renders it there must red here.
+      for (const section of [active, closed]) {
+        expect(section).not.toContain("merged into");
+        expect(section).not.toContain("archived");
+      }
     });
   });
 });
