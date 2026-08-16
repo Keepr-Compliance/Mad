@@ -8,13 +8,21 @@
  *
  * Two canonical functions:
  *   - `toE164(raw)` → "+15555550112" form (used for display / contact storage / matching)
- *   - `toLookupKey(raw)` → "5555550112" (last 10 digits) (used as JOIN key against
+ *   - `toLookupKey(raw)` → "5555550112" (used as JOIN key against
  *     `phone_last_message.phone_normalized` / `contact_phones.phone_normalized` /
  *     `external_contacts.phones_normalized_json`)
  *
- * Output semantics for `toLookupKey` MUST stay byte-equivalent to the
- * pre-consolidation `normalizePhoneLookupKey` because production databases
- * are backfilled by migration v40 using that function.
+ * BACKLOG-2635 SUPERSEDED the "byte-equivalent to migration v40" rule that
+ * used to live here. The v40 rule (≥10 digits → last 10, under 10 → kept
+ * whole) had two defects: a number stored without its country code could
+ * never key-match the same number stored with one, and slice(-10) mangled
+ * 11+-digit international numbers into keys of no real number. The key is
+ * still byte-identical to v40 for 10-digit national numbers, 11-digit
+ * NANP ("1…"), short codes and alphanumeric senders — the overwhelming
+ * majority of every store — but Israeli national forms and CC-included
+ * international forms now key differently, so rows PERSISTED under the old
+ * rule need a re-key migration (scoped on the BACKLOG-2635 PR; v40 itself is
+ * immutable and now floats on this helper for fresh upgrade paths).
  *
  * Behavioural changes adopted during consolidation (see PR description for audit):
  *   - `toE164("")` returns `""` (not `"+"` as the old phoneNormalization version did).
@@ -66,31 +74,139 @@ export function toE164(phone: string | null | undefined): string {
 }
 
 /**
- * Normalize a phone number to its JOIN/lookup key — the byte-equivalent of the
- * BACKLOG-1727 writer in `messageDbService.backfillPhoneLastMessageTable`.
+ * The national-number conventions `toLookupKey` understands (BACKLOG-2635).
  *
- * Semantics (MUST stay stable — migration v40 backfilled with these):
- *   - Strip ALL non-digit characters
- *   - If ≥10 digits remain → keep last 10 (country-code-agnostic match)
- *   - If 1–9 digits → keep all (short-code path)
- *   - If 0 digits (alphanumeric senders like "VERIZON") → return trimmed original
- *   - Null / undefined / empty / whitespace-only input → `""`
+ * The founder's book is US + Israeli, and the two regions' national shapes are
+ * DISJOINT — a NANP number never begins with 0, an Israeli national form
+ * always does — so both can be recognized at once without a per-call region
+ * hint. The parameter exists so a caller with better knowledge can narrow the
+ * assumption; every production caller uses the default.
+ */
+export type PhoneRegion = "US" | "IL";
+
+/** The default-region assumption, explicit and overridable per call. */
+export const DEFAULT_PHONE_REGIONS: readonly PhoneRegion[] = ["US", "IL"];
+
+/**
+ * Normalize a phone number to its JOIN/lookup key.
+ *
+ * BACKLOG-2635 REPLACED the v40 rule (≥10 digits → slice(-10), under 10 →
+ * kept whole). That rule had two defects, both live in the founder's book
+ * (61 values, 4.8%):
+ *   1. A number stored domestically ("03-555-0121" → "035550121") and the
+ *      same number stored E.164 ("+972 3 555 0121" → "7235550121") produced
+ *      different keys — never linked, never flagged.
+ *   2. slice(-10) dropped long country codes, so the E.164 key above was a
+ *      fabrication that COLLIDED with the genuine NANP (723) 555-0121.
+ *
+ * The key is now a function of the DIGIT STRING alone (a "+" carries no
+ * information the digits do not), which is what keeps the BACKLOG-2620
+ * invariant `toLookupKey(formatPhoneNumber(p)) === toLookupKey(p)` true:
+ * formatPhoneNumber never adds, drops or reorders digits. It is idempotent
+ * (`toLookupKey(toLookupKey(x)) === toLookupKey(x)`) — stores re-normalize
+ * already-normalized keys — and it agrees with the write path, which keys
+ * from `phone_e164` while the matchers key from the raw string:
+ * `toLookupKey(toE164(x)) === toLookupKey(x)` for every digit-bearing input.
+ *
+ * Semantics, by digit count after stripping non-digits:
+ *   - 0 digits (alphanumeric senders like "VERIZON") → trimmed original;
+ *     null / undefined / empty / whitespace-only → `""`        [unchanged]
+ *   - 1–8 digits → kept whole (short codes, partials)          [unchanged]
+ *   - 9 digits leading 0 → "972" + rest (IL national landline: trunk 0 +
+ *     area + subscriber — keys with the "+972…" form)          [BACKLOG-2635]
+ *   - 10 digits leading 05/07 → "972" + rest (IL mobile / VoIP)[BACKLOG-2635]
+ *   - other 10-digit → kept whole (the NANP national population —
+ *     byte-identical to the v40 backfill)                      [unchanged]
+ *   - 11 digits leading 1 → the NANP country code is stripped and the
+ *     remainder RE-interpreted — for a real US number that is the same last-10
+ *     key as v40; for "+10525550123" (toE164 prepends "1" to ANY 10-digit
+ *     input, including Israeli mobiles) the remainder takes the IL reading
+ *   - other 11+ digits → kept whole, country code included     [BACKLOG-2635]
+ *   - international exit prefixes "011" (NANP, ≥13 digits) and "00"
+ *     (ITU, ≥12 digits) are stripped and the remainder re-read, so a number
+ *     dialed "011 972 …" keys with its "+972 …" form
+ *
+ * A 7-digit local ("555-0121") stays AMBIGUOUS-NOT-EQUAL to any full form:
+ * its area code is not in the input, and suffix-matching is forbidden (the
+ * item's own rule — a shared 7-digit suffix across area codes is common).
+ * Surfacing those as questions is BACKLOG-2630's job.
+ *
+ * PERSISTENCE: `contact_phones.phone_normalized`,
+ * `external_contacts.phones_normalized_json` and `phone_last_message` hold
+ * keys built with the OLD rule until the re-key migration scoped on the
+ * BACKLOG-2635 PR lands. Fresh v40 upgrades backfill through this function
+ * and get the new keys.
  *
  * @example
  * toLookupKey("+1 (415) 555-0109")  // "4155550109"
- * toLookupKey("+44 20 7946 0958")    // "2079460958"
+ * toLookupKey("03-555-0121")         // "97235550121"  (== toLookupKey("+972 3 555 0121"))
+ * toLookupKey("+44 20 7946 0958")    // "442079460958" (country code kept)
  * toLookupKey("12345")               // "12345"
  * toLookupKey("VERIZON")             // "VERIZON"
  * toLookupKey(null)                  // ""
  */
 export function toLookupKey(raw: string | null | undefined): string {
+  return toLookupKeyForRegions(raw, DEFAULT_PHONE_REGIONS);
+}
+
+/**
+ * `toLookupKey` with the region assumption overridden.
+ *
+ * A SEPARATE export rather than an optional second parameter on purpose:
+ * `toLookupKey` is used as a bare callback (`phones.map(toLookupKey)`), and an
+ * optional `regions` parameter would silently receive Array.map's INDEX — the
+ * `map(parseInt)` trap. Keeping the canonical function unary makes that call
+ * shape safe forever; callers with better region knowledge name their intent.
+ */
+export function toLookupKeyForRegions(
+  raw: string | null | undefined,
+  regions: readonly PhoneRegion[],
+): string {
   if (raw === null || raw === undefined) return "";
   const trimmed = raw.trim();
   if (trimmed.length === 0) return "";
 
   const digits = trimmed.replace(/\D/g, "");
   if (digits.length === 0) return trimmed;
-  if (digits.length >= 10) return digits.slice(-10);
+  return keyFromDigits(digits, regions);
+}
+
+/** The digit-shape rule behind `toLookupKey`. Recursion is bounded: every
+ *  recursive call strictly shortens the string. */
+function keyFromDigits(digits: string, regions: readonly PhoneRegion[]): string {
+  // International exit prefixes fold onto the "+" form: "011 972 …" and
+  // "00 972 …" must key like "+972 …". The length floors keep short runs
+  // (which cannot be exit-prefixed full numbers) out of the strip.
+  if (digits.length >= 13 && digits.startsWith("011")) {
+    return keyFromDigits(digits.slice(3), regions);
+  }
+  if (digits.length >= 12 && digits.startsWith("00")) {
+    return keyFromDigits(digits.slice(2), regions);
+  }
+
+  // NANP: country code "1" + 10-digit national number. The remainder is
+  // RE-interpreted rather than returned, because toE164 prepends "1" to ANY
+  // 10-digit input — "+10525550123" is an Israeli mobile wearing a US coat,
+  // and its key must still reach the IL reading below.
+  if (regions.includes("US") && digits.length === 11 && digits.startsWith("1")) {
+    return keyFromDigits(digits.slice(1), regions);
+  }
+
+  // Israeli national forms: trunk "0" + subscriber. Disjoint from NANP, which
+  // never begins with 0. Dropping the trunk and prepending the country code
+  // lands on the same key as the E.164 form.
+  if (regions.includes("IL")) {
+    if (digits.length === 9 && digits.startsWith("0")) {
+      return "972" + digits.slice(1);
+    }
+    if (digits.length === 10 && (digits.startsWith("05") || digits.startsWith("07"))) {
+      return "972" + digits.slice(1);
+    }
+  }
+
+  // Everything else keys as its full digit string: 10-digit NANP nationals
+  // (byte-identical to v40), short codes, and CC-included international runs
+  // (previously mangled by slice(-10)).
   return digits;
 }
 

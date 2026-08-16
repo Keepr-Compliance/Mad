@@ -175,6 +175,26 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
     });
 
     it("matches UK international with spaces", () => {
+      // BACKLOG-2635: the writer keys messages through the same live helper,
+      // so a message from "+442079460958" is stored under the full-CC key —
+      // no longer the slice(-10) "2079460958" this fixture used to transcribe.
+      db.prepare(
+        "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
+      ).run("442079460958", userId, "2026-04-01T09:00:00Z");
+
+      insertContactWithPhone(db, userId, "Bob", "+44 20 7946 0958");
+
+      const row = db.prepare(READER_SQL).get(userId) as { last_communication_at: string | null };
+      expect(row.last_communication_at).toBe("2026-04-01T09:00:00Z");
+    });
+
+    it("a row persisted under the PRE-2635 rule no longer joins — the re-key migration is load-bearing", () => {
+      // "2079460958" is what migration v40 / the old writer persisted for
+      // "+44 20 7946 0958". Fresh computations now produce "442079460958", so
+      // this stale row is unreachable until the BACKLOG-2635 re-key migration
+      // recomputes it. This pin DOCUMENTS that coexistence miss; if it starts
+      // matching again, either the rule regressed to slicing or the fixture
+      // was "fixed" without understanding what it proves.
       db.prepare(
         "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
       ).run("2079460958", userId, "2026-04-01T09:00:00Z");
@@ -182,7 +202,7 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
       insertContactWithPhone(db, userId, "Bob", "+44 20 7946 0958");
 
       const row = db.prepare(READER_SQL).get(userId) as { last_communication_at: string | null };
-      expect(row.last_communication_at).toBe("2026-04-01T09:00:00Z");
+      expect(row.last_communication_at).toBeNull();
     });
 
     it("returns NULL when no message exists for the phone", () => {
