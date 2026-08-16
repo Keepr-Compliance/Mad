@@ -21,6 +21,20 @@ import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { parseLocalCalendarDay } from '../../utils/dateRangeUtils';
 
+/**
+ * Lookback window shown when the user has stored NO `lookbackMonths` preference.
+ *
+ * BACKLOG-2561: must equal `DEFAULT_LOOKBACK_MONTHS` in
+ * `electron/services/macOSMessagesImportService/importHelpers.ts`, which is what
+ * the main process actually imports with. The renderer cannot import from
+ * `electron/` (the Vite renderer build parses it as JavaScript and `rootDir`
+ * forbids the reverse), so the value is duplicated here on purpose and pinned by
+ * `__tests__/MacOSMessagesImportSettings.allTime-2561.test.tsx`, which asserts the
+ * dropdown reads "Last 3 months" for the exact preference shape the app writes
+ * when only the message cap has ever been changed.
+ */
+const DEFAULT_LOOKBACK_MONTHS = 3;
+
 /** Import progress state for inline display */
 interface ImportProgressState {
   phase: "deleting" | "attachments" | "importing";
@@ -93,7 +107,9 @@ export function MacOSMessagesImportSettings({
   } | null>(null);
 
   // TASK-1952: Import filter state
-  const [lookbackMonths, setLookbackMonths] = useState<number | null>(3);
+  const [lookbackMonths, setLookbackMonths] = useState<number | null>(
+    DEFAULT_LOOKBACK_MONTHS
+  );
   const [maxMessages, setMaxMessages] = useState<number | null>(50000);
 
   // BACKLOG-2286: Effective (audit-aware) import window for a truthful label.
@@ -185,7 +201,17 @@ export function MacOSMessagesImportSettings({
           | { filters?: { lookbackMonths?: number | null; maxMessages?: number | null } }
           | undefined;
         if (messageImport?.filters) {
-          setLookbackMonths(messageImport.filters.lookbackMonths ?? null);
+          // BACKLOG-2561: an ABSENT key is "no preference", not "All time".
+          // `?? null` showed "All time" in the dropdown while the main process
+          // imported the 3-month default — reachable today, because changing only
+          // the message cap writes `{ maxMessages: N }` and the preferences
+          // deep-merge leaves `lookbackMonths` absent. Only an explicit `null`
+          // (what this dropdown writes for "All time") means unbounded.
+          setLookbackMonths(
+            messageImport.filters.lookbackMonths === undefined
+              ? DEFAULT_LOOKBACK_MONTHS
+              : messageImport.filters.lookbackMonths
+          );
           setMaxMessages(messageImport.filters.maxMessages ?? null);
         }
       }

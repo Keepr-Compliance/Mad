@@ -895,7 +895,7 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
 
     sessionSecurityService.recordActivity(session.sessionToken);
 
-    // DORIAN'S T&C FIX: Restore Supabase SDK session for returning users
+    // BACKLOG-546 T&C FIX: Restore Supabase SDK session for returning users
     // The Supabase SDK uses persistSession: false, so on app restart the SDK has no session.
     // This causes RLS policy failures (auth.uid() = null) when accepting T&C.
     // We manually restore the session from stored tokens.

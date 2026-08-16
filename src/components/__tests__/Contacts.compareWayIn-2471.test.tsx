@@ -87,10 +87,10 @@ const USER = "user-2471f";
  * click however unratified it is.
  */
 const combined = {
-  id: "c-paul",
-  name: "Paul Dorian",
-  display_name: "Paul Dorian",
-  email: "paul@example.com",
+  id: "c-casey",
+  name: "Casey Lane",
+  display_name: "Casey Lane",
+  email: "casey@example.com",
   source: "contacts_app",
   review_state: {
     columns: 2,
@@ -126,9 +126,9 @@ const plain = {
 } as unknown as Contact;
 
 const compareView = {
-  contactId: "c-paul",
+  contactId: "c-casey",
   isConfirmed: false,
-  title: "Is this the same Paul Dorian?",
+  title: "Is this the same Casey Lane?",
   reason: "Both records list the phone number +1 (206) 555-0142, and the names match.",
   namesMatch: true,
   columns: [
@@ -136,8 +136,8 @@ const compareView = {
       linkId: "l-origin",
       kind: "contact",
       columnLabel: "Mac address book",
-      displayName: "Paul Dorian",
-      name: { value: "Paul Dorian", matched: true },
+      displayName: "Casey Lane",
+      name: { value: "Casey Lane", matched: true },
       emails: [],
       phones: [],
       company: null,
@@ -149,8 +149,8 @@ const compareView = {
       linkId: "l-outlook",
       kind: "source",
       columnLabel: "Outlook contacts",
-      displayName: "Paul Dorian",
-      name: { value: "Paul Dorian", matched: true },
+      displayName: "Casey Lane",
+      name: { value: "Casey Lane", matched: true },
       emails: [],
       phones: [],
       company: null,
@@ -186,14 +186,14 @@ afterEach(() => {
 async function renderList(narrow = false) {
   installMatchMedia(narrow);
   render(<Contacts userId={USER} onClose={jest.fn()} />);
-  await waitFor(() => expect(screen.getByText("Paul Dorian")).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByText("Casey Lane")).toBeInTheDocument());
 }
 
 describe("what a click opens", () => {
   /**
    * THE DELETED INTERCEPTION, ASSERTED AS AN ABSENCE.
    *
-   * Paul holds an unratified auto-link and NO open question. Under PR F that was
+   * Casey holds an unratified auto-link and NO open question. Under PR F that was
    * the interception's headline case; under BACKLOG-2626 it must open his card.
    *
    * OBSERVED RED: restore the single deleted line —
@@ -205,7 +205,7 @@ describe("what a click opens", () => {
   it("opens the ORDINARY CARD for unratified links with no question open", async () => {
     await renderList();
 
-    await userEvent.click(screen.getByText("Paul Dorian"));
+    await userEvent.click(screen.getByText("Casey Lane"));
 
     await waitFor(() =>
       expect(screen.getByTestId("contact-preview-modal")).toBeInTheDocument(),
@@ -283,16 +283,16 @@ describe("the search box survives the round trip", () => {
    * lift) and the NARROW case goes red while the wide one stays green — which
    * is exactly how the defect behaved before it was fixed.
    */
-  const PAUL_QUESTION = {
-    proposalId: "p-paul-search",
-    contactId: "c-paul",
-    contactName: "Paul Dorian",
+  const CASEY_QUESTION = {
+    proposalId: "p-casey-search",
+    contactId: "c-casey",
+    contactName: "Casey Lane",
     contactCompany: null,
     sourceType: "outlook",
-    sourceRecordId: "out-paul",
+    sourceRecordId: "out-casey",
     sourceLabel: "Outlook contacts",
-    sourceName: "Paul Dorian",
-    recordEmails: ["paul@example.com"],
+    sourceName: "Casey Lane",
+    recordEmails: ["casey@example.com"],
     recordPhones: [],
     reason: "ambiguous_identifier",
     matchedOn: "email",
@@ -314,10 +314,10 @@ describe("the search box survives the round trip", () => {
         ? []
         : [
             {
-              clusterKey: "contact:c-paul",
-              question: "Is this the same Paul Dorian?",
+              clusterKey: "contact:c-casey",
+              question: "Is this the same Casey Lane?",
               exclusive: false,
-              items: [PAUL_QUESTION],
+              items: [CASEY_QUESTION],
             },
           ],
     }));
@@ -333,15 +333,15 @@ describe("the search box survives the round trip", () => {
   ])("%s viewport", async (_name, narrow) => {
     await renderList(narrow as boolean);
 
-    await userEvent.type(screen.getByTestId("contact-search-input"), "Paul");
-    expect(screen.getByTestId("contact-search-input")).toHaveValue("Paul");
+    await userEvent.type(screen.getByTestId("contact-search-input"), "Casey");
+    expect(screen.getByTestId("contact-search-input")).toHaveValue("Casey");
 
-    await userEvent.click(screen.getByText("Paul Dorian"));
+    await userEvent.click(screen.getByText("Casey Lane"));
     await waitFor(() =>
       expect(screen.getByTestId("review-duplicates-modal")).toBeInTheDocument(),
     );
 
-    await userEvent.click(screen.getByTestId(`review-confirm-${PAUL_QUESTION.proposalId}`));
+    await userEvent.click(screen.getByTestId(`review-confirm-${CASEY_QUESTION.proposalId}`));
 
     await waitFor(() =>
       expect(screen.queryByTestId("review-duplicates-modal")).not.toBeInTheDocument(),
@@ -352,7 +352,7 @@ describe("the search box survives the round trip", () => {
       await userEvent.click(screen.getByTestId("contacts-detail-back"));
     }
     await waitFor(() =>
-      expect(screen.getByTestId("contact-search-input")).toHaveValue("Paul"),
+      expect(screen.getByTestId("contact-search-input")).toHaveValue("Casey"),
     );
   });
 });
@@ -361,7 +361,7 @@ describe("the row badges and the Autolinked filter (BACKLOG-2626)", () => {
   it("names each state with the founder's own word", async () => {
     await renderList();
 
-    // Paul holds an unratified auto-link; Ada's are all her own doing. Asserted
+    // Casey holds an unratified auto-link; Ada's are all her own doing. Asserted
     // as name -> badge PAIRS, not as a bag of words: a bag would stay green if
     // the two badges swapped rows, which is the failure that would tell the
     // founder the app had decided something he did.
@@ -371,7 +371,7 @@ describe("the row badges and the Autolinked filter (BACKLOG-2626)", () => {
     ]);
     expect(pairs).toEqual(
       expect.arrayContaining([
-        ["Paul Dorian", "Autolinked"],
+        ["Casey Lane", "Autolinked"],
         ["Ada Lovelace", "You linked these"],
         ["Grace Hopper", null],
       ]),
@@ -399,7 +399,7 @@ describe("the row badges and the Autolinked filter (BACKLOG-2626)", () => {
 
     await waitFor(() =>
       expect(screen.getAllByTestId("contact-row-name").map((n) => n.textContent)).toEqual([
-        "Paul Dorian",
+        "Casey Lane",
       ]),
     );
   });
@@ -452,15 +452,15 @@ describe("the row badges and the Autolinked filter (BACKLOG-2626)", () => {
  */
 describe("Confirm & edit, from both entry paths", () => {
   const REVIEW_ITEM = {
-    proposalId: "p-paul",
-    contactId: "c-paul",
-    contactName: "Paul Dorian",
+    proposalId: "p-casey",
+    contactId: "c-casey",
+    contactName: "Casey Lane",
     contactCompany: null,
     sourceType: "outlook",
-    sourceRecordId: "out-paul",
+    sourceRecordId: "out-casey",
     sourceLabel: "Outlook contacts",
-    sourceName: "Paul Dorian",
-    recordEmails: ["paul@example.com"],
+    sourceName: "Casey Lane",
+    recordEmails: ["casey@example.com"],
     recordPhones: [],
     reason: "ambiguous_identifier",
     matchedOn: "email",
@@ -486,7 +486,7 @@ describe("Confirm & edit, from both entry paths", () => {
           sourceLabel: "Outlook contacts",
           matchMethod: "email",
           matchDescription: "Matched by an email address you already had for this person",
-          sourceName: "Paul Dorian",
+          sourceName: "Casey Lane",
           sourceRecordPresent: true,
           matchedAt: null,
           lastSyncedAt: null,
@@ -497,8 +497,8 @@ describe("Confirm & edit, from both entry paths", () => {
       success: true,
       clusters: [
         {
-          clusterKey: "contact:c-paul",
-          question: "Is this the same Paul Dorian?",
+          clusterKey: "contact:c-casey",
+          question: "Is this the same Casey Lane?",
           exclusive: false,
           items: [REVIEW_ITEM],
         },
@@ -539,8 +539,8 @@ describe("Confirm & edit, from both entry paths", () => {
     */
     const listPath = render(<Contacts userId={USER} onClose={jest.fn()} />);
     installMatchMedia(false);
-    await waitFor(() => expect(screen.getByText("Paul Dorian")).toBeInTheDocument());
-    await userEvent.click(screen.getByText("Paul Dorian"));
+    await waitFor(() => expect(screen.getByText("Casey Lane")).toBeInTheDocument());
+    await userEvent.click(screen.getByText("Casey Lane"));
     await waitFor(() =>
       expect(screen.getByTestId("review-duplicates-modal")).toBeInTheDocument(),
     );
@@ -557,11 +557,11 @@ describe("Confirm & edit, from both entry paths", () => {
 
     // ---- PATH B: the duplicates queue, via the compare screen inside it.
     render(<Contacts userId={USER} onClose={jest.fn()} />);
-    await waitFor(() => expect(screen.getByText("Paul Dorian")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Casey Lane")).toBeInTheDocument());
     await userEvent.click(await screen.findByTestId("review-duplicates-button"));
     // The candidate's own eye — R7 removed `Compare` from the queue card's
     // contact row, where it had to pick one of the contact's candidates.
-    await userEvent.click(await screen.findByTestId("review-view-p-paul"));
+    await userEvent.click(await screen.findByTestId("review-view-p-casey"));
     await waitFor(() => expect(screen.getByTestId("contact-compare-screen")).toBeInTheDocument());
     await userEvent.click(screen.getByTestId("compare-confirm-edit"));
     await waitFor(() => expect(screen.queryAllByText("Edit Contact").length).toBeGreaterThan(0));
@@ -570,7 +570,7 @@ describe("Confirm & edit, from both entry paths", () => {
     // The answer went through the PROPOSAL channel on the queue route — it is a
     // different write from the card route's `confirmSources`, and only the
     // destination is shared.
-    expect(window.api.contacts.confirmLink).toHaveBeenCalledWith(USER, "p-paul");
+    expect(window.api.contacts.confirmLink).toHaveBeenCalledWith(USER, "p-casey");
 
     // THE ASSERTION THIS BLOCK EXISTS FOR.
     // CONTROL: give the queue route its own destination — for instance drop
@@ -581,7 +581,7 @@ describe("Confirm & edit, from both entry paths", () => {
     expect(fromTheQueue).toEqual(fromTheList);
     expect(fromTheList).toEqual({
       editFormOpen: true,
-      editingWho: "Paul Dorian",
+      editingWho: "Casey Lane",
       cardStillMountedUnderIt: true,
       compareScreenClosed: true,
       queueClosed: true,

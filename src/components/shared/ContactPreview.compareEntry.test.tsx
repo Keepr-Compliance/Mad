@@ -28,10 +28,10 @@ import type { ExtendedContact } from "../../types/components";
 import type { ContactSourceProvenance } from "@/types/contactProvenance";
 
 const contact = {
-  id: "c-paul",
+  id: "c-casey",
   user_id: "u1",
-  display_name: "Paul Dorian",
-  email: "paul@example.com",
+  display_name: "Casey Lane",
+  email: "casey@example.com",
   created_at: "2026-01-01T00:00:00.000Z",
 } as unknown as ExtendedContact;
 
@@ -50,7 +50,7 @@ function makeSource(
     sourceLabel: "Mac address book",
     matchMethod,
     matchDescription: "Recognised by its own entry in your Mac address book",
-    sourceName: "Paul Dorian",
+    sourceName: "Casey Lane",
     sourceRecordPresent: true,
     matchedAt: "2026-08-02T00:00:00.000Z",
     lastSyncedAt: "2026-08-02T00:00:00.000Z",
