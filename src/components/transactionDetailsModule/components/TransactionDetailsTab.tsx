@@ -250,7 +250,7 @@ export function TransactionDetailsTab({
         /**
          * BACKLOG-2493: the contact object above is built by hand from the
          * transaction assignment, so its `source` is the stale INSERT-time
-         * scalar — the field that made the founder's Paul Dorian read "Outlook"
+         * scalar — the field that made the founder's Casey Lane read "Outlook"
          * after his Outlook link was removed. This pane mounts the SAME
          * `ContactPreview` as the Clients & Contacts card, so without the live
          * set the two would name different sources for the same person on the

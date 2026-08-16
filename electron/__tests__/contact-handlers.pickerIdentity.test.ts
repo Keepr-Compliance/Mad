@@ -178,9 +178,9 @@ const USER = "550e8400-e29b-41d4-a716-446655440000";
 const mockEvent = {} as IpcMainInvokeEvent;
 
 // The founder's case.
-const PAUL = "contact-paul-dorian";
-const PAUL_PHONE_E164 = "+14085550101";
-const PAUL_PHONE_RAW = "(408) 555-0101";
+const CASEY = "contact-casey-lane";
+const CASEY_PHONE_E164 = "+14085550101";
+const CASEY_PHONE_RAW = "(408) 555-0101";
 
 // ---------------------------------------------------------------------------
 // SEED HELPERS
@@ -276,20 +276,20 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
    */
   beforeEach(() => {
     mockImportedContacts = [
-      importedContact(PAUL, "Casey Lane", PAUL_PHONE_E164, "paul@pauljdorian.com"),
+      importedContact(CASEY, "Casey Lane", CASEY_PHONE_E164, "casey@example.com"),
     ];
     mockShadowRows = [
-      shadowRow("out-paul", "Casey Lane", "outlook", ["dorian@bluespaces.com"], [PAUL_PHONE_RAW]),
+      shadowRow("out-casey", "Casey Lane", "outlook", ["casey@bluespaces.com"], [CASEY_PHONE_RAW]),
     ];
   });
 
   it("hides the record while it is still linked to the contact", async () => {
-    seedContactRow(PAUL, "Casey Lane");
+    seedContactRow(CASEY, "Casey Lane");
     createLink({
       userId: USER,
-      contactId: PAUL,
+      contactId: CASEY,
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       matchMethod: "email",
     });
 
@@ -314,9 +314,9 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
   it("OFFERS the record once the user has said it is a different person", async () => {
     recordVerdict({
       userId: USER,
-      contactId: PAUL,
+      contactId: CASEY,
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       identityVerdict: "different_people",
       reason: "manual_unlink",
       decidedBy: "provenance_unlink",
@@ -347,17 +347,17 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
   it("hides it again when the mind-change writes the link, and not on the verdict alone", async () => {
     recordVerdict({
       userId: USER,
-      contactId: PAUL,
+      contactId: CASEY,
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       identityVerdict: "different_people",
       decidedBy: "provenance_unlink",
     });
     recordVerdict({
       userId: USER,
-      contactId: PAUL,
+      contactId: CASEY,
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       identityVerdict: "same_person",
       decidedBy: "review_queue",
     });
@@ -366,12 +366,12 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
     expect(await pickerNames()).toEqual(["Casey Lane"]);
 
     // The link is what the picker reads.
-    seedContactRow(PAUL, "Casey Lane");
+    seedContactRow(CASEY, "Casey Lane");
     createLink({
       userId: USER,
-      contactId: PAUL,
+      contactId: CASEY,
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       matchMethod: "manual",
     });
 
@@ -379,14 +379,14 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
   });
 
   it("keeps a released record hidden if ANOTHER contact legitimately claims it", async () => {
-    // Rejected from Paul, but the crosswalk says it belongs to someone else.
+    // Rejected from Casey, but the crosswalk says it belongs to someone else.
     // The crosswalk check runs first and must win — otherwise a rejection from
     // one contact would re-offer a record that is already imported as another.
     recordVerdict({
       userId: USER,
-      contactId: PAUL,
+      contactId: CASEY,
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       identityVerdict: "different_people",
       decidedBy: "provenance_unlink",
     });
@@ -395,7 +395,7 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
       userId: USER,
       contactId: "some-other-contact",
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       matchMethod: "source_id",
     });
 
@@ -414,7 +414,7 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
    *
    * The crosswalk keys on the PAIR too, and it is now the only suppressor, so
    * the same property is asserted where it is now load-bearing: link
-   * `outlook/out-paul`, leave `google_contacts/out-paul` alone, and only the
+   * `outlook/out-casey`, leave `google_contacts/out-casey` alone, and only the
    * Google record is offered.
    *
    * The verdict's own pair keying is still asserted directly on
@@ -427,21 +427,21 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
    */
   it("keys suppression on the PAIR, so another source's identical id is unaffected", async () => {
     mockShadowRows.push(
-      shadowRow("out-paul", "Casey Lane", "google_contacts", [], [PAUL_PHONE_RAW]),
+      shadowRow("out-casey", "Casey Lane", "google_contacts", [], [CASEY_PHONE_RAW]),
     );
-    seedContactRow(PAUL, "Casey Lane");
+    seedContactRow(CASEY, "Casey Lane");
     createLink({
       userId: USER,
-      contactId: PAUL,
+      contactId: CASEY,
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       matchMethod: "source_id",
     });
     recordVerdict({
       userId: USER,
-      contactId: PAUL,
+      contactId: CASEY,
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       identityVerdict: "different_people",
       decidedBy: "provenance_unlink",
     });
@@ -451,7 +451,7 @@ describe("BACKLOG-2427 — a released record comes back to the picker", () => {
     expect(
       (result.contacts as Array<{ source: string }>).map((c) => c.source),
     ).toEqual(["google_contacts"]);
-    expect([...getRejectedSourceKeys(USER)]).toEqual([sourceKey("outlook", "out-paul")]);
+    expect([...getRejectedSourceKeys(USER)]).toEqual([sourceKey("outlook", "out-casey")]);
   });
 });
 

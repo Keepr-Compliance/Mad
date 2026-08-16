@@ -3,9 +3,9 @@
  *
  * THE DEFECT THIS FILE PINS
  *
- * The founder's Paul Dorian card read:
+ * The founder's Casey Lane card read:
  *
- *     Paul Dorian
+ *     Casey Lane
  *     Outlook
  *     Imported · Added Aug 3, 2026
  *
@@ -62,19 +62,19 @@ import type { ExtendedContact } from "../../types/components";
  * reserved range (and not a valid NANP area code at all), which the repo's
  * fixture PII guard rejects — as it did to the first draft of this file.
  */
-const paulBase = {
-  id: "c-paul",
+const caseyBase = {
+  id: "c-casey",
   user_id: "u1",
-  display_name: "Paul Dorian",
-  name: "Paul Dorian",
-  email: "p.dorian@example.com",
-  allEmails: ["p.dorian@example.com", "paul.dorian@example.test"],
+  display_name: "Casey Lane",
+  name: "Casey Lane",
+  email: "p.lane@example.com",
+  allEmails: ["p.lane@example.com", "casey.lane@example.test"],
   allPhones: ["+1 (206) 555-0142"],
   created_at: "2026-08-03T00:00:00.000Z",
 } as unknown as ExtendedContact;
 
 function makeContact(overrides: Partial<ExtendedContact>): ExtendedContact {
-  return { ...paulBase, ...overrides } as ExtendedContact;
+  return { ...caseyBase, ...overrides } as ExtendedContact;
 }
 
 /**
@@ -115,7 +115,7 @@ describe("ContactPreview source pills — live sources (BACKLOG-2493)", () => {
   });
 
   it("THE FOUNDER'S CASE: shows the surviving source, not the stale scalar", () => {
-    // Paul after his Outlook link was unlinked: the scalar still says the
+    // Casey after his Outlook link was unlinked: the scalar still says the
     // address book that imported him FIRST, the crosswalk holds only macOS.
     renderCard(makeContact({ source: "outlook", source_types: ["contacts_app"] }));
 

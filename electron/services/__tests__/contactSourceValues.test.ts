@@ -86,19 +86,19 @@ import { getContactEmailsForTransaction } from "../db/contactDbService";
 const USER = "user-2427";
 
 // The founder's actual case, 2026-08-02.
-const PAUL = "contact-paul-dorian";
+const CASEY = "contact-casey-lane";
 const TXN = "txn-571-dale-st-n";
 
 /** Outlook-only. The address that must GO. */
-const OUTLOOK_ONLY_EMAIL = "dorian@bluespaces.com";
+const OUTLOOK_ONLY_EMAIL = "casey@bluespaces.com";
 /** On BOTH source records. Must SURVIVE losing one of them. */
-const SHARED_EMAIL = "paul@pauljdorian.com";
+const SHARED_EMAIL = "casey@example.com";
 /**
  * On the Outlook record too — so "not contributed by the rejected source" is
  * NOT what saves it. Only `source = 'manual'` saves it. That makes this a real
  * test of the typed-value guarantee rather than an accident of the fixture.
  */
-const MANUAL_EMAIL = "paul.typed@example.com";
+const MANUAL_EMAIL = "casey.typed@example.com";
 /** On BOTH records. The number that stranded the released record. */
 const SHARED_PHONE_E164 = "+14085550101";
 const SHARED_PHONE_KEY = "4085550101";
@@ -215,12 +215,12 @@ function linkKeysFor(contactId: string): string[] {
  * Outlook record, with the Outlook record's unique address already copied onto
  * him by the backfill.
  */
-function seedPaulDorian(opts: { exported?: boolean } = {}): { outlookLinkId: string } {
-  addContact(PAUL, "Casey Lane");
+function seedCaseyLane(opts: { exported?: boolean } = {}): { outlookLinkId: string } {
+  addContact(CASEY, "Casey Lane");
 
-  addExternal("mac-paul", "Casey Lane", "macos", [SHARED_EMAIL], [SHARED_PHONE_RAW]);
+  addExternal("mac-casey", "Casey Lane", "macos", [SHARED_EMAIL], [SHARED_PHONE_RAW]);
   addExternal(
-    "out-paul",
+    "out-casey",
     "Casey Lane",
     "outlook",
     [OUTLOOK_ONLY_EMAIL, SHARED_EMAIL, MANUAL_EMAIL],
@@ -229,27 +229,27 @@ function seedPaulDorian(opts: { exported?: boolean } = {}): { outlookLinkId: str
 
   // What the backfill left behind: everything both records carry, plus the one
   // address only Outlook has. Plus one the user typed.
-  addEmail(PAUL, SHARED_EMAIL, "import", 1);
-  addEmail(PAUL, OUTLOOK_ONLY_EMAIL, "import");
-  addEmail(PAUL, MANUAL_EMAIL, "manual");
-  addPhone(PAUL, SHARED_PHONE_E164, SHARED_PHONE_KEY, "import");
+  addEmail(CASEY, SHARED_EMAIL, "import", 1);
+  addEmail(CASEY, OUTLOOK_ONLY_EMAIL, "import");
+  addEmail(CASEY, MANUAL_EMAIL, "manual");
+  addPhone(CASEY, SHARED_PHONE_E164, SHARED_PHONE_KEY, "import");
 
   createLink({
     userId: USER,
-    contactId: PAUL,
+    contactId: CASEY,
     sourceType: "macos",
-    sourceRecordId: "mac-paul",
+    sourceRecordId: "mac-casey",
     matchMethod: "source_id",
   });
   const outlook = createLink({
     userId: USER,
-    contactId: PAUL,
+    contactId: CASEY,
     sourceType: "outlook",
-    sourceRecordId: "out-paul",
+    sourceRecordId: "out-casey",
     matchMethod: "email",
   });
 
-  addTransactionWithContact(TXN, PAUL, opts.exported ?? false);
+  addTransactionWithContact(TXN, CASEY, opts.exported ?? false);
 
   return { outlookLinkId: outlook.id! };
 }
@@ -319,7 +319,7 @@ describe("BACKLOG-2427 — the founder's case: unlink must reverse the copy", ()
    *
    * He pressed "Not this person" on the Outlook source of his saved contact
    * Casey Lane, who is a party to 571 Dale St N. Before this fix the link went,
-   * the verdict was recorded, and `dorian@bluespaces.com` — an address that
+   * the verdict was recorded, and `casey@bluespaces.com` — an address that
    * exists ONLY in that Outlook record — stayed on the contact, so the audit for
    * that transaction went on searching for the correspondence of a person he had
    * just said was somebody else.
@@ -329,26 +329,26 @@ describe("BACKLOG-2427 — the founder's case: unlink must reverse the copy", ()
    * fails on the first assertion, with the Outlook-only address still present.
    */
   it("removes what only the rejected source had, and keeps everything else", () => {
-    const { outlookLinkId } = seedPaulDorian();
+    const { outlookLinkId } = seedCaseyLane();
 
-    const outcome = unlinkContactSource(USER, PAUL, outlookLinkId);
+    const outcome = unlinkContactSource(USER, CASEY, outlookLinkId);
 
     expect(outcome).toMatchObject({ ok: true, remaining: 1 });
 
     // 1. The Outlook-only address is GONE — the whole point.
     // 2. The shared address SURVIVES — the macOS card still carries it.
     // 3. The typed address SURVIVES — even though the rejected record had it too.
-    expect(emailsOn(PAUL)).toEqual([MANUAL_EMAIL, SHARED_EMAIL]);
+    expect(emailsOn(CASEY)).toEqual([MANUAL_EMAIL, SHARED_EMAIL]);
 
     // The shared phone survives: the still-linked macOS record carries it.
-    expect(phonesOn(PAUL)).toEqual([SHARED_PHONE_E164]);
+    expect(phonesOn(CASEY)).toEqual([SHARED_PHONE_E164]);
 
     // The contact and the other source are untouched.
-    expect(linkKeysFor(PAUL)).toEqual(["macos/mac-paul"]);
+    expect(linkKeysFor(CASEY)).toEqual(["macos/mac-casey"]);
   });
 
   it("takes the rejected address out of the transaction's audit sweep", () => {
-    const { outlookLinkId } = seedPaulDorian();
+    const { outlookLinkId } = seedCaseyLane();
 
     // This is what the email sync actually reads, and what made the leftover
     // address a correctness problem rather than a cosmetic one.
@@ -356,7 +356,7 @@ describe("BACKLOG-2427 — the founder's case: unlink must reverse the copy", ()
       [MANUAL_EMAIL, OUTLOOK_ONLY_EMAIL, SHARED_EMAIL].sort(),
     );
 
-    unlinkContactSource(USER, PAUL, outlookLinkId);
+    unlinkContactSource(USER, CASEY, outlookLinkId);
 
     expect(getContactEmailsForTransaction(TXN).sort()).toEqual(
       [MANUAL_EMAIL, SHARED_EMAIL].sort(),
@@ -364,8 +364,8 @@ describe("BACKLOG-2427 — the founder's case: unlink must reverse the copy", ()
   });
 
   it("reports what it took back, so the UI can stop promising more than it does", () => {
-    const { outlookLinkId } = seedPaulDorian();
-    const outcome = unlinkContactSource(USER, PAUL, outlookLinkId);
+    const { outlookLinkId } = seedCaseyLane();
+    const outcome = unlinkContactSource(USER, CASEY, outlookLinkId);
     expect(outcome).toEqual({
       ok: true,
       remaining: 1,
@@ -375,19 +375,19 @@ describe("BACKLOG-2427 — the founder's case: unlink must reverse the copy", ()
   });
 
   it("still records the different_people verdict that makes the unlink stick", () => {
-    const { outlookLinkId } = seedPaulDorian();
-    unlinkContactSource(USER, PAUL, outlookLinkId);
+    const { outlookLinkId } = seedCaseyLane();
+    unlinkContactSource(USER, CASEY, outlookLinkId);
 
     const verdicts = mockDb!
       .prepare(
         `SELECT source_type, source_record_id, identity_verdict, decided_by
            FROM contact_link_verdicts WHERE user_id = ? AND contact_id = ?`,
       )
-      .all(USER, PAUL);
+      .all(USER, CASEY);
     expect(verdicts).toEqual([
       {
         source_type: "outlook",
-        source_record_id: "out-paul",
+        source_record_id: "out-casey",
         identity_verdict: "different_people",
         decided_by: "provenance_unlink",
       },
@@ -418,11 +418,11 @@ describe("BACKLOG-2427 — the founder's case: unlink must reverse the copy", ()
   });
 
   it("never removes a value another still-linked source also contributes", () => {
-    const { outlookLinkId } = seedPaulDorian();
-    removeUnlinkedSourceValues(USER, PAUL, "outlook", "out-paul");
+    const { outlookLinkId } = seedCaseyLane();
+    removeUnlinkedSourceValues(USER, CASEY, "outlook", "out-casey");
     // The link is still in place here, so the macOS AND Outlook records both
     // count as remaining — nothing may be removed at all.
-    expect(emailsOn(PAUL).sort()).toEqual(
+    expect(emailsOn(CASEY).sort()).toEqual(
       [MANUAL_EMAIL, OUTLOOK_ONLY_EMAIL, SHARED_EMAIL].sort(),
     );
     expect(outlookLinkId).toBeTruthy();
@@ -459,9 +459,9 @@ describe("BACKLOG-2427 — frozen audits: refuse the removal and explain", () =>
    * merge on the transactions where a wrong merge costs the most.
    */
   it("keeps the addresses, removes the link, and says which happened", () => {
-    const { outlookLinkId } = seedPaulDorian({ exported: true });
+    const { outlookLinkId } = seedCaseyLane({ exported: true });
 
-    const outcome = unlinkContactSource(USER, PAUL, outlookLinkId);
+    const outcome = unlinkContactSource(USER, CASEY, outlookLinkId);
 
     expect(outcome).toEqual({
       ok: true,
@@ -471,11 +471,11 @@ describe("BACKLOG-2427 — frozen audits: refuse the removal and explain", () =>
       retainedReason: "frozen_transaction",
     });
     // Nothing was taken from the exported audit's search set.
-    expect(emailsOn(PAUL).sort()).toEqual(
+    expect(emailsOn(CASEY).sort()).toEqual(
       [MANUAL_EMAIL, OUTLOOK_ONLY_EMAIL, SHARED_EMAIL].sort(),
     );
     // The correction the user asked for still happened.
-    expect(linkKeysFor(PAUL)).toEqual(["macos/mac-paul"]);
+    expect(linkKeysFor(CASEY)).toEqual(["macos/mac-casey"]);
   });
 
   it("does not claim a refusal when there was nothing to remove anyway", () => {
@@ -524,29 +524,29 @@ describe("BACKLOG-2427 — the released record becomes reachable again", () => {
    * person's office line" — which is why the picker has to read the verdict.
    */
   it("publishes the released record as a rejected source key the picker can honour", () => {
-    const { outlookLinkId } = seedPaulDorian();
+    const { outlookLinkId } = seedCaseyLane();
 
     expect([...getRejectedSourceKeys(USER)]).toEqual([]);
 
-    unlinkContactSource(USER, PAUL, outlookLinkId);
+    unlinkContactSource(USER, CASEY, outlookLinkId);
 
-    expect([...getRejectedSourceKeys(USER)]).toEqual([sourceKey("outlook", "out-paul")]);
+    expect([...getRejectedSourceKeys(USER)]).toEqual([sourceKey("outlook", "out-casey")]);
     // And the phone that stranded it is STILL on the contact — proving the
     // release does not depend on the removal having taken it away.
-    expect(phonesOn(PAUL)).toEqual([SHARED_PHONE_E164]);
+    expect(phonesOn(CASEY)).toEqual([SHARED_PHONE_E164]);
   });
 
   it("stops treating a record as released once the user changes their mind", () => {
-    const { outlookLinkId } = seedPaulDorian();
-    unlinkContactSource(USER, PAUL, outlookLinkId);
-    expect([...getRejectedSourceKeys(USER)]).toEqual([sourceKey("outlook", "out-paul")]);
+    const { outlookLinkId } = seedCaseyLane();
+    unlinkContactSource(USER, CASEY, outlookLinkId);
+    expect([...getRejectedSourceKeys(USER)]).toEqual([sourceKey("outlook", "out-casey")]);
 
     // Latest verdict wins — `recordVerdict` appends, never updates.
     recordVerdict({
       userId: USER,
-      contactId: PAUL,
+      contactId: CASEY,
       sourceType: "outlook",
-      sourceRecordId: "out-paul",
+      sourceRecordId: "out-casey",
       identityVerdict: "same_person",
       decidedBy: "review_queue",
     });

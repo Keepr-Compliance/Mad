@@ -290,9 +290,11 @@ const FICTIONAL_NAMES = new Set([
   "sam hale",
   "lee park",
   "mo park",
-  // Already this repo's established scrub name for the founder's own case —
-  // see `contact-handlers.importLinking.test.ts`, where the surrounding
-  // `mac-paul` / `out-paul` variables still carry the pre-scrub spelling.
+  // This repo's established scrub name for the founder's own case. BACKLOG-2731
+  // finished the job: an earlier pass replaced the display name and left the
+  // address, the surname and the surrounding variable names in place, so the
+  // fixtures still identified a real person under a fictional label. Name, both
+  // domains and every record id now agree on this persona.
   "casey lane",
   // BACKLOG-2514 — the message-derived person in the projection-parity fixture.
   // Invented. It must be a PLAIN NAME (not an email, not a number) because that

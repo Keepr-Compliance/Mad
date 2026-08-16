@@ -309,21 +309,21 @@ describe("BACKLOG-2370 — an unlinked record comes back, and stays back", () =>
    * crosswalk row, and the crosswalk is the only suppressor, so "not this
    * person" is honoured by the ABSENCE of a rule rather than by an exemption.
    */
-  const CONTACT_ID = "saved-dorian";
+  const CONTACT_ID = "saved-lane";
 
   beforeEach(() => {
     mockImportedContacts = [
-      saved(CONTACT_ID, "Paul Example", [], ["+1 (555) 0143"]),
+      saved(CONTACT_ID, "Casey Example", [], ["+1 (555) 0143"]),
     ];
     mockShadowRows = [
       // Still legitimately linked — the macOS card really is this person, and it
       // is where the shared number lives.
-      shadowRow("mac-paul", "Paul Example", "macos", [], ["+1 (555) 0143"]),
+      shadowRow("mac-casey", "Casey Example", "macos", [], ["+1 (555) 0143"]),
       // RELEASED by the user. Same name, same number.
-      shadowRow("out-paul", "Paul Example", "outlook", [], ["+1 (555) 0143"]),
+      shadowRow("out-casey", "Casey Example", "outlook", [], ["+1 (555) 0143"]),
     ];
-    recordCrosswalkLink(CONTACT_ID, "Paul Example", "macos", "mac-paul");
-    recordUnlinkVerdict(CONTACT_ID, "outlook", "out-paul");
+    recordCrosswalkLink(CONTACT_ID, "Casey Example", "macos", "mac-casey");
+    recordUnlinkVerdict(CONTACT_ID, "outlook", "out-casey");
   });
 
   it("the main process releases it — the decision the user made is honoured", async () => {
@@ -331,7 +331,7 @@ describe("BACKLOG-2370 — an unlinked record comes back, and stays back", () =>
 
     // The macOS record is suppressed because the crosswalk claims it. The
     // released Outlook record is not claimed by anything, so it is offered.
-    expect(externals.map((c) => (c as any).externalRecordId).sort()).toEqual(["out-paul"]);
+    expect(externals.map((c) => (c as any).externalRecordId).sort()).toEqual(["out-casey"]);
   });
 
   it("and the renderer still shows it — this is the assertion that used to fail", async () => {
@@ -343,11 +343,11 @@ describe("BACKLOG-2370 — an unlinked record comes back, and stays back", () =>
     );
 
     // BEFORE BACKLOG-2370 the released record was absent from this set: the
-    // renderer's dedup pass matched it to `saved-dorian` on the shared phone
+    // renderer's dedup pass matched it to `saved-lane` on the shared phone
     // with a compatible name and dropped it. The row was unreachable on Clients
     // & Contacts AND on the transaction contact picker, both of which
     // `ContactSearchList` backs, so the unlink could not be completed or undone.
-    expect(idsOf(rendered)).toEqual([CONTACT_ID, "ext-out-paul"].sort());
+    expect(idsOf(rendered)).toEqual([CONTACT_ID, "ext-out-casey"].sort());
   });
 
   it("the released record is importable — it is a row of its own, not a fold", async () => {
@@ -357,11 +357,11 @@ describe("BACKLOG-2370 — an unlinked record comes back, and stays back", () =>
       externals,
     );
 
-    const released = rendered.find((c) => c.id === "ext-out-paul");
+    const released = rendered.find((c) => c.id === "ext-out-casey");
     expect(released).toBeDefined();
     // It carries its own source identity, so selecting it writes a crosswalk row
     // for the record the user chose rather than re-deriving one by resemblance.
-    expect((released as any).externalRecordId).toBe("out-paul");
+    expect((released as any).externalRecordId).toBe("out-casey");
     expect((released as any).externalSourceType).toBe("outlook");
     // And nothing claims to have absorbed it.
     for (const row of rendered) {
@@ -482,7 +482,7 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
   beforeEach(() => {
     mockImportedContacts = [
       saved("s-alice", "Alice Example", ["alice@example.test"], []),
-      saved("s-paul", "Paul Example", [], ["+1 (555) 0143"]),
+      saved("s-casey", "Casey Example", [], ["+1 (555) 0143"]),
     ];
     mockShadowRows = [
       // Same person in two books on one email -> main folds one away.
@@ -499,7 +499,7 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
       // to be about.
       shadowRow("out-alice", "Alice Example", "outlook", ["alice@example.test"], []),
       // Released by the user -> main returns it.
-      shadowRow("out-paul", "Paul Example", "outlook", [], ["+1 (555) 0143"]),
+      shadowRow("out-casey", "Casey Example", "outlook", [], ["+1 (555) 0143"]),
       // Name and nothing else, twice. Main keeps BOTH (BACKLOG-2316 removed
       // name matching because it hid distinct people who share a name). The
       // removed renderer pass kept ONE — this is the name-only divergence
@@ -511,7 +511,7 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
       shadowRow("mac-gus", "Gus Example", "macos", ["gus@example.test"], []),
     ];
     recordCrosswalkLink("s-alice", "Alice Example", "outlook", "out-alice");
-    recordUnlinkVerdict("s-paul", "outlook", "out-paul");
+    recordUnlinkVerdict("s-casey", "outlook", "out-casey");
   });
 
   it("the rendered set is EXACTLY the main process's answer, plus the saved rows", async () => {
@@ -535,12 +535,12 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
       "mac-nameonly",
       "out-bea",
       "out-nameonly",
-      "out-paul",
+      "out-casey",
     ].sort());
 
     // And the renderer adds nothing and removes nothing.
     expect(idsOf(rendered)).toEqual(
-      ["s-alice", "s-paul", ...externals.map((c) => c.id)].sort(),
+      ["s-alice", "s-casey", ...externals.map((c) => c.id)].sort(),
     );
   });
 
@@ -554,7 +554,7 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
 
     // 1. THE DEFECT. Released by the user; the removed pass re-hid it on the
     //    shared phone plus a compatible name.
-    expect(shown.has("ext-out-paul")).toBe(true);
+    expect(shown.has("ext-out-casey")).toBe(true);
 
     // 2. THE NAME-ONLY DIVERGENCE. Two address-book cards carrying a name and
     //    nothing else. The removed pass kept one. Each is a REACHABLE record
@@ -617,11 +617,11 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
    */
   it("KNOWN CONSEQUENCE: a card filed under a saved contact's SECONDARY email is now shown", async () => {
     mockImportedContacts = [
-      // Primary paul@work.example.test, secondary paul@home.example.test.
-      saved("s-multi", "Paul Multi", ["paul@work.example.test", "paul@home.example.test"], []),
+      // Primary casey@work.example.test, secondary casey@home.example.test.
+      saved("s-multi", "Casey Multi", ["casey@work.example.test", "casey@home.example.test"], []),
     ];
     mockShadowRows = [
-      shadowRow("out-multi", "Paul Multi", "outlook", ["paul@home.example.test"], []),
+      shadowRow("out-multi", "Casey Multi", "outlook", ["casey@home.example.test"], []),
     ];
 
     const externals = await externalsFromMain();
@@ -680,12 +680,12 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
    */
   it("but a card the crosswalk claims is still suppressed by main", async () => {
     mockImportedContacts = [
-      saved("s-multi", "Paul Multi", ["paul@work.example.test", "paul@home.example.test"], []),
+      saved("s-multi", "Casey Multi", ["casey@work.example.test", "casey@home.example.test"], []),
     ];
     mockShadowRows = [
-      shadowRow("out-multi", "Paul Multi", "outlook", ["paul@work.example.test"], []),
+      shadowRow("out-multi", "Casey Multi", "outlook", ["casey@work.example.test"], []),
     ];
-    recordCrosswalkLink("s-multi", "Paul Multi", "outlook", "out-multi");
+    recordCrosswalkLink("s-multi", "Casey Multi", "outlook", "out-multi");
 
     const externals = await externalsFromMain();
     expect(externals).toEqual([]);
@@ -723,8 +723,8 @@ describe("BACKLOG-2370 — MEASUREMENT: what removing the layer actually changes
       "mac-gus",
       "mac-nameonly",
       "out-bea",
+      "out-casey",
       "out-nameonly",
-      "out-paul",
     ]);
     for (const row of externals) {
       expect((row as any).absorbedRecords).toBeUndefined();
