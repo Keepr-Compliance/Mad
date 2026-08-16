@@ -468,8 +468,11 @@ export interface ValidatedTransactionData {
   closing_deadline?: string;
   // AI detection fields
   detection_status?: string;
-  reviewed_at?: string;
+  /** `null` is meaningful: the column's "never reviewed" state (BACKLOG-2558). */
+  reviewed_at?: string | null;
+  /** `null` is meaningful: how Restore clears the reason (BACKLOG-2558). */
   rejection_reason?: string | null;
+  /** `null` is meaningful: how the last suggestion is dismissed (BACKLOG-2737). */
   suggested_contacts?: string | null;
   // Contact assignments (for audited transaction creation)
   contact_assignments?: ContactAssignmentData[];
@@ -744,23 +747,51 @@ export function validateTransactionData(
     validated.detection_status = detectionStatus;
   }
 
-  // Reviewed at timestamp (for AI-detected transactions)
-  if (data.reviewed_at !== undefined && data.reviewed_at !== null) {
-    if (typeof data.reviewed_at === "string" && data.reviewed_at.trim()) {
+  // ===========================================================================
+  // BACKLOG-2558 — A NULL IS A VALUE HERE, NOT AN ABSENCE.
+  // ===========================================================================
+  // Both guards below used to read `!== undefined && !== null`, which collapses
+  // "clear this column" into "say nothing about this column". For a nullable
+  // column whose NULL state is meaningful those are opposite instructions, and
+  // the writer never got to tell them apart because the key had already been
+  // dropped here.
+  //
+  // `undefined` still means "not mentioned" and is still skipped. Only an
+  // explicit `null` is now forwarded.
+
+  // Reviewed at timestamp (for AI-detected transactions).
+  //
+  // NULL is this column's "never reviewed" state. No caller sends
+  // `reviewed_at: null` today — this one was LATENT, not live — but it is the
+  // identical shape to the `rejection_reason` defect below, one line away from
+  // it, and an un-review or restore-to-pending path would meet the same trap.
+  if (data.reviewed_at !== undefined) {
+    if (data.reviewed_at === null) {
+      validated.reviewed_at = null;
+    } else if (typeof data.reviewed_at === "string" && data.reviewed_at.trim()) {
       validated.reviewed_at = data.reviewed_at.trim();
     }
   }
 
-  // Rejection reason (for rejected AI-detected transactions)
-  if (data.rejection_reason !== undefined && data.rejection_reason !== null) {
-    validated.rejection_reason = validateString(
-      data.rejection_reason,
-      "rejection_reason",
-      {
-        required: false,
-        maxLength: 1000,
-      },
-    );
+  // Rejection reason (for rejected AI-detected transactions).
+  //
+  // THE LIVE ONE. `restore()` (src/services/transactionService.ts:223-233)
+  // sends `rejection_reason: null`, and that is the ONLY way this column is
+  // ever cleared. Stripping the null here left the old reason on the row — the
+  // third effect BACKLOG-2558 reports, and the one the WRITER already handles
+  // correctly: `TRANSACTION_COLUMN_POLICY.rejection_reason` states the rule
+  // outright ("CLEARED BY RESTORE — which is why null must land as null rather
+  // than being skipped as 'no value'"). The writer honoured it; this validator
+  // did not. Two hand-maintained lists on one path, drifting on a VALUE instead
+  // of on a NAME — the same defect class wearing a different coat.
+  if (data.rejection_reason !== undefined) {
+    validated.rejection_reason =
+      data.rejection_reason === null
+        ? null
+        : validateString(data.rejection_reason, "rejection_reason", {
+            required: false,
+            maxLength: 1000,
+          });
   }
 
   // Suggested contacts (JSON array of parties a detection proposed).

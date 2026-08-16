@@ -645,9 +645,16 @@ describe("transaction writer — detection fields and the review queue (BACKLOG-
         reviewed_at: REVIEWED_AT,
       });
 
+      // Every key `approve()` sends is asserted, not a subset. A partial
+      // assertion is how the RESTORE gap below survived the first review.
       const r = row(created.id);
-      expect({ detection_status: r.detection_status, reviewed_at: r.reviewed_at }).toEqual({
+      expect({
+        detection_status: r.detection_status,
+        status: r.status,
+        reviewed_at: r.reviewed_at,
+      }).toEqual({
         detection_status: "confirmed",
+        status: "active",
         reviewed_at: REVIEWED_AT,
       });
     });
@@ -671,9 +678,80 @@ describe("transaction writer — detection fields and the review queue (BACKLOG-
       expect({
         detection_status: r.detection_status,
         rejection_reason: r.rejection_reason,
+        reviewed_at: r.reviewed_at,
       }).toEqual({
         detection_status: "rejected",
         rejection_reason: "Not one of my deals",
+        reviewed_at: REVIEWED_AT,
+      });
+    });
+
+    /**
+     * THE ACTION THIS BLOCK WAS MISSING, AND THE ONE THAT MATTERED MOST.
+     *
+     * The block is headed "the same three actions" and carried two. RESTORE was
+     * tested writer-direct only, which skips the validator — and RESTORE is the
+     * single action whose payload carries a MEANINGFUL NULL. `rejection_reason:
+     * null` is the only way that column is ever cleared, and the validator's
+     * `!== null` guard dropped the key before the writer could see it.
+     *
+     * So the writer honoured the rule its own policy states — "CLEARED BY
+     * RESTORE, which is why null must land as null rather than being skipped as
+     * 'no value'" — the validator did not, and the one test covering that gap
+     * sat on the blind side of it. A test that skips a layer proves nothing
+     * about the layer it skipped, however carefully the other layer is written.
+     */
+    it("RESTORE clears rejection_reason THROUGH THE VALIDATOR (pre-fix: the null was stripped)", async () => {
+      const created = createTransactionSync(MANUAL);
+      db.prepare(
+        "UPDATE transactions SET detection_status = 'rejected', status = 'rejected', rejection_reason = ?, reviewed_at = ? WHERE id = ?",
+      ).run("Not one of my deals", "2026-08-01T00:00:00.000Z", created.id);
+
+      // The exact payload restore() sends — src/services/transactionService.ts:223-233.
+      await throughValidator(created.id, {
+        detection_status: "confirmed",
+        status: "active",
+        reviewed_at: REVIEWED_AT,
+        rejection_reason: null,
+      });
+
+      const r = row(created.id);
+      expect({
+        detection_status: r.detection_status,
+        status: r.status,
+        reviewed_at: r.reviewed_at,
+        rejection_reason: r.rejection_reason,
+      }).toEqual({
+        detection_status: "confirmed",
+        status: "active",
+        reviewed_at: REVIEWED_AT,
+        rejection_reason: null,
+      });
+    });
+
+    /**
+     * `reviewed_at` carried the IDENTICAL null-strip shape one line above
+     * `rejection_reason`. No caller sends `reviewed_at: null` today, so it was
+     * LATENT, not live — closed anyway, and recorded as a decision rather than
+     * left unnamed: NULL is this column's "never reviewed" state, so it has to
+     * be expressible, and the next un-review or restore-to-pending path would
+     * have met exactly the trap RESTORE just did.
+     */
+    it("a null reviewed_at survives the validator and clears the column (was latent)", async () => {
+      const created = createTransactionSync(MANUAL);
+      db.prepare(
+        "UPDATE transactions SET detection_status = 'confirmed', reviewed_at = ? WHERE id = ?",
+      ).run(REVIEWED_AT, created.id);
+
+      await throughValidator(created.id, {
+        detection_status: "pending",
+        reviewed_at: null,
+      });
+
+      const r = row(created.id);
+      expect({ detection_status: r.detection_status, reviewed_at: r.reviewed_at }).toEqual({
+        detection_status: "pending",
+        reviewed_at: null,
       });
     });
 

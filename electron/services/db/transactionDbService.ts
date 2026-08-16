@@ -432,21 +432,23 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
 };
 
 /**
- * Columns whose value comes from the caller, derived once at module load.
+ * The columns `createTransactionSync` will take from its caller, derived once
+ * at module load.
  *
  * `TABLE_FIELDS.transactions` is a `readonly` tuple of literal column names, so
- * these are `TransactionColumn[]` with no cast anywhere — which is what lets
+ * this is a `TransactionColumn[]` with no cast anywhere — which is what lets
  * `` `${column} = ?` `` below satisfy `validateFields` directly and made the
  * BACKLOG-2739 Phase 1 seam cast unnecessary.
+ *
+ * There is deliberately NO matching `UPDATABLE_COLUMNS` set. The update path
+ * iterates the caller's keys rather than the schema's — it has to report which
+ * keys it dropped and why — so it reads `TRANSACTION_COLUMN_POLICY[key].update`
+ * at the point of decision. A precomputed set would be a second derived
+ * definition that nothing consults, which is the exact thing this PR argues
+ * against.
  */
 const INSERTABLE_COLUMNS: readonly TransactionColumn[] = TABLE_FIELDS.transactions.filter(
   (column) => TRANSACTION_COLUMN_POLICY[column].insert === "writable",
-);
-
-const UPDATABLE_COLUMNS: ReadonlySet<TransactionColumn> = new Set(
-  TABLE_FIELDS.transactions.filter(
-    (column) => TRANSACTION_COLUMN_POLICY[column].update === "writable",
-  ),
 );
 
 /**
