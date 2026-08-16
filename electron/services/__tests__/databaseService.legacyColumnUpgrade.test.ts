@@ -76,22 +76,41 @@
  * ===========================================================================
  * A test that has never failed is not evidence.
  *
- * CONTROL 1 — revert the schema.sql half (restore the 7 standalone CREATE INDEX
- *   statements) while keeping migration v63.
- *   RESULT: RED, and specifically the upgrade throws before the chain runs:
+ * All three were EXECUTED, the tree restored, and `git status --porcelain`
+ * verified clean afterwards. Full output is on BACKLOG-2750 in pm_comments.
+ *
+ * CONTROL 1 — revert the schema.sql half: restore the standalone
+ *   `CREATE INDEX ... ON attachments(email_id)` while keeping migration v63.
+ *   RESULT: 9 of 11 RED, the upgrade rejecting before the chain ever runs, with
  *       SqliteError: no such column: email_id
- *   Recorded with full output on BACKLOG-2750 in pm_comments.
+ *   — the BACKLOG-2750 crash itself, reproduced.
+ *   The two that stayed GREEN are the finding: "PRECONDITION: the fixture is a
+ *   populated 2026-01-26 database" and "FRESH INSTALL". A fresh install cannot
+ *   detect this defect BY CONSTRUCTION — its `attachments` table is built by
+ *   CREATE TABLE, so the column is always there and the index always succeeds.
+ *   That is precisely why every CI run has been green while shipped databases
+ *   were exposed.
  *
- * CONTROL 2 — revert the migration half (delete v63) while keeping the
- *   schema.sql edits.
- *   RESULT: RED on the column/index assertions — exec(schema.sql) no longer
- *   crashes, but nothing ever adds the columns, which is the "silently
- *   index-less forever" end state this migration exists to prevent.
+ * CONTROL 2 — revert the migration half: `return;` as the first statement of
+ *   v63's `migrate` (neutered rather than deleted, so the runner's sequence
+ *   guard is still satisfied and the chain still lands on 63 — the sharper
+ *   mutation).
+ *   RESULT: exactly 4 RED, and they are exactly the column/index assertions:
+ *   "adds every repaired column AND its index", "backfills the new columns with
+ *   the SAME defaults", "survives the REPLAY", and "FRESH INSTALL". The last of
+ *   those is the one worth naming: with the standalone statements gone from
+ *   schema.sql and nothing putting them back, a FRESH install silently loses
+ *   seven indexes — a slow query, never a crash, and invisible without that
+ *   test. Both halves of this fix are load-bearing, and this is the proof.
  *
- * CONTROL 3 — fresh-install parity, measured rather than asserted: a database
- *   built from scratch pre-fix and post-fix has an IDENTICAL
- *   `PRAGMA table_info` set and index set for all three tables (see the
- *   fresh-install test below, and the diff recorded on the item).
+ * CONTROL 3 — fresh-install parity, measured rather than asserted. A database
+ *   built from scratch through the real `runMigrations()` under the PRE-fix
+ *   tree and under the POST-fix tree, dumping `PRAGMA table_info`, the full
+ *   index list with each index's SQL, and the CREATE TABLE SQL for all three
+ *   tables. The two dumps differ in exactly ONE line:
+ *       "schema_version": 62  ->  63
+ *   Every column, every index, every table body identical. The fresh-install
+ *   path is unchanged in behaviour; only the migration counter moves.
  */
 
 import fs from "fs";

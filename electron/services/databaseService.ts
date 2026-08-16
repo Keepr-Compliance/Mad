@@ -2569,9 +2569,30 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         if (has("last_exported_on")) flagConditions.push("last_exported_on IS NOT NULL");
 
         if (tsCandidates.length > 0 && flagConditions.length > 0) {
+          // BACKLOG-2750: SQLite's COALESCE requires AT LEAST TWO arguments —
+          // `COALESCE(x)` is not a one-element identity, it throws
+          // "wrong number of arguments to function COALESCE()". The guard above
+          // is `length > 0`, so a `transactions` table carrying EXACTLY ONE of
+          // the three candidate timestamps emitted a one-argument COALESCE and
+          // failed the entire migration with "Migration 51 ... failed", which
+          // the runner escalates to a restore-from-backup.
+          //
+          // Latent until now only because every shape previously exercised had
+          // either NONE of the three (backfill skipped by the guard) or all
+          // three. v63 made it reachable in the test chain by adding
+          // `last_exported_on` to tables that had none of them — but it is
+          // reachable in production independently of v63: an old database with
+          // `updated_at` and an export FLAG, but neither `last_exported_at` nor
+          // `last_exported_on`, produces exactly one candidate and crashes here.
+          //
+          // A single candidate is its own coalesce, so emit the bare column.
+          const tsExpr =
+            tsCandidates.length === 1
+              ? tsCandidates[0]
+              : `COALESCE(${tsCandidates.join(", ")})`;
           d.exec(`
             UPDATE transactions
-               SET first_exported_at = COALESCE(${tsCandidates.join(", ")})
+               SET first_exported_at = ${tsExpr}
              WHERE first_exported_at IS NULL
                AND (${flagConditions.join(" OR ")});
           `);
