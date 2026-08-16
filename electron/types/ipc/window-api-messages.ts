@@ -4,6 +4,45 @@
  */
 
 import type { ConversationSummary, MessageAttachmentInfo } from "./common";
+// BACKLOG-2743: ONE definition of the refusal shape. Re-exported here so the
+// renderer imports it from the IPC contract rather than re-spelling the literal.
+import type { AttachmentsRefusedForSpace } from "../../services/macOSMessagesImportService/types";
+
+export type { AttachmentsRefusedForSpace };
+
+/**
+ * BACKLOG-2743: Filters for the selection-time import estimate.
+ * `auditPeriodStart` mirrors the value the import itself uses to widen the
+ * window, so the estimate describes the import that would actually run.
+ */
+export interface MessageImportCountFilters {
+  lookbackMonths?: number | null;
+  maxMessages?: number | null;
+  auditPeriodStart?: string | null;
+}
+
+/**
+ * BACKLOG-2743: Selection-time import estimate.
+ *
+ * `fitsOnDisk` is computed in the MAIN process by the same helper the pre-flight
+ * check uses. The renderer must render this verdict, never recompute it from
+ * `attachmentBytes` vs `availableDiskBytes` — two comparisons would drift, and
+ * the headroom rule lives on the main side.
+ */
+export interface MessageImportCountResult {
+  success: boolean;
+  count?: number;
+  filteredCount?: number;
+  error?: string;
+  /** Bytes of attachments that would be copied for the selected window. */
+  attachmentBytes?: number;
+  /** Number of attachments that would be copied. */
+  attachmentCount?: number;
+  /** df-equivalent free space available to the app; null when unreadable. */
+  availableDiskBytes?: number | null;
+  /** False only when free space is known AND insufficient. */
+  fitsOnDisk?: boolean;
+}
 
 /**
  * Messages API (iMessage/SMS - migrated from window.electron)
@@ -27,9 +66,13 @@ export interface WindowApiMessages {
     error?: string;
     totalAvailable?: number;
     wasCapped?: boolean;
+    /** BACKLOG-2743: pre-flight free-space check refused the attachment copy */
+    attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
+    /** BACKLOG-2743: user chose to import without attachments */
+    attachmentsSkippedByChoice?: boolean;
   }>;
   /** Get count of messages available for import from macOS Messages */
-  getImportCount: (filters?: { lookbackMonths?: number | null; maxMessages?: number | null }) => Promise<{ success: boolean; count?: number; filteredCount?: number; error?: string }>;
+  getImportCount: (filters?: MessageImportCountFilters) => Promise<MessageImportCountResult>;
   /** Listen for import progress updates */
   onImportProgress: (callback: (progress: { phase: "deleting" | "importing" | "attachments"; current: number; total: number; percent: number }) => void) => () => void;
   /** Get attachments for a message with base64 data (TASK-1012) */

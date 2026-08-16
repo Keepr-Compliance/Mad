@@ -25,6 +25,8 @@ import type {
   MessageImportFilters,
 } from "../services/macOSMessagesImportService";
 import type { EffectiveImportWindow } from "../services/macOSMessagesImportService/importHelpers";
+// BACKLOG-2743: shared selection-time estimate shape (attachment bytes + disk verdict).
+import type { MessageImportCountResult } from "../types/ipc/window-api-messages";
 
 /**
  * Attachment info with base64 data for IPC transfer (TASK-1012)
@@ -122,6 +124,10 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
           importFilters = {
             lookbackMonths: resolveLookbackMonths(messageImportPrefs.filters),
             maxMessages: messageImportPrefs.filters.maxMessages ?? DEFAULT_MAX_MESSAGES,
+            // BACKLOG-2743: "import without attachments" — the escape hatch shown
+            // when the attachment estimate exceeds free disk space. Defaults to
+            // false, so an absent preference imports attachments as before.
+            skipAttachments: messageImportPrefs.filters.skipAttachments === true,
           };
         }
       } catch (prefsError) {
@@ -391,7 +397,7 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
     async (
       _event: IpcMainInvokeEvent,
       filters?: MessageImportFilters
-    ): Promise<{ success: boolean; count?: number; filteredCount?: number; error?: string }> => {
+    ): Promise<MessageImportCountResult> => {
       logService.info(
         `Getting macOS Messages count`,
         "MessageImportHandlers",

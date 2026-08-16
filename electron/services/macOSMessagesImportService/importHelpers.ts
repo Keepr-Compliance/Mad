@@ -17,6 +17,7 @@ import type {
 import {
   MAX_GUID_LENGTH,
   ALL_SUPPORTED_EXTENSIONS,
+  MAX_ATTACHMENT_SIZE,
   SUPPORTED_IMAGE_EXTENSIONS,
   MIN_QUERY_BATCH_SIZE,
   REACTION_ASSOCIATED_TYPE_MIN,
@@ -355,6 +356,155 @@ export function isSupportedMediaType(filename: string | null): boolean {
   if (!filename) return false;
   const ext = path.extname(filename).toLowerCase();
   return ALL_SUPPORTED_EXTENSIONS.includes(ext);
+}
+
+/**
+ * One attachment row considered for copying (BACKLOG-2743).
+ *
+ * Shaped to match both the chat.db estimate query and the RawMacAttachment rows
+ * the import already carries, so the SAME eligibility rules drive the
+ * selection-time estimate and the pre-flight check.
+ */
+export interface AttachmentSizeRow {
+  filename: string | null;
+  transfer_name: string | null;
+  total_bytes: number;
+  /**
+   * macOS message GUID owning this attachment. Needed to recognise attachments
+   * that are ALREADY stored — see filterUnstoredAttachments.
+   */
+  message_guid?: string | null;
+}
+
+/**
+ * Key identifying a stored attachment: `<macOS message GUID>:<display name>`.
+ *
+ * Must match the key storeAttachments uses for its `existingByExternalId`
+ * lookup, and the `external_message_id` + `filename` pair it writes. The display
+ * name is `transfer_name || filename` in BOTH places; keying on the raw
+ * `filename` alone would never match a row stored under its transfer name.
+ */
+export function attachmentStoredKey(
+  messageGuid: string | null | undefined,
+  displayName: string | null | undefined
+): string | null {
+  if (!messageGuid || !displayName) return null;
+  return `${messageGuid}:${displayName}`;
+}
+
+/**
+ * Drop attachments that are ALREADY stored, leaving only what a copy would
+ * actually write (BACKLOG-2743).
+ *
+ * WHY THIS EXISTS. The import's attachment query is unbounded — every sync hands
+ * `storeAttachments` the user's ENTIRE attachment history, not just what is new.
+ * The copy loop then skips the already-stored ones before touching the disk. An
+ * estimate that summed the raw set would therefore describe the FIRST import
+ * forever: after a large library imported successfully and consumed the space it
+ * needed, the next routine sync would re-sum the whole history, compare it to the
+ * now-smaller free space, and refuse — permanently, and while genuinely new
+ * attachments went unimported.
+ *
+ * Rows that cannot be keyed (no GUID or no name) are KEPT, so an unrecognised
+ * row inflates the estimate rather than silently escaping the guard.
+ */
+export function filterUnstoredAttachments<T extends AttachmentSizeRow>(
+  rows: T[],
+  storedKeys: ReadonlySet<string>
+): T[] {
+  if (storedKeys.size === 0) return rows;
+  return rows.filter((row) => {
+    const key = attachmentStoredKey(row.message_guid, row.transfer_name || row.filename);
+    return key === null || !storedKeys.has(key);
+  });
+}
+
+/**
+ * Drop attachments whose owning message is not stored, leaving only what a copy
+ * could actually link and write (BACKLOG-2743).
+ *
+ * WHY THIS EXISTS — this is the SECOND axis of the mistake `filterUnstoredAttachments`
+ * fixes, and it bites harder. The import's attachment SELECT is unbounded, so
+ * `storeAttachments` receives attachments belonging to messages OUTSIDE the
+ * selected window, which were never imported. The copy loop resolves each
+ * attachment's message ID and `continue`s when it finds none, so those bytes are
+ * never written.
+ *
+ * Sizing them anyway breaks the refusal's OWN advice. The renderer's estimate is
+ * date-bounded, so narrowing the window shows a small number and re-enables
+ * Import — and then the unbounded pre-flight refuses again on the whole history.
+ * "Choose a shorter time period", which the refusal block recommends, would be a
+ * dead end at every setting, and the refusal would be permanent because it
+ * returns before any INSERT.
+ *
+ * Rows with no GUID are KEPT, matching filterUnstoredAttachments: an
+ * unrecognised row inflates the estimate rather than escaping the guard.
+ */
+export function filterResolvableAttachments<T extends AttachmentSizeRow>(
+  rows: T[],
+  resolvableGuids: ReadonlySet<string>
+): T[] {
+  return rows.filter((row) => !row.message_guid || resolvableGuids.has(row.message_guid));
+}
+
+/**
+ * Result of sizing a set of attachments (BACKLOG-2743).
+ */
+export interface AttachmentEstimate {
+  /** Bytes that would be copied — supported type, under the per-file cap. */
+  eligibleBytes: number;
+  /** Number of attachments that would be copied. */
+  eligibleCount: number;
+  /** Rejected by MAX_ATTACHMENT_SIZE (the pre-existing per-file cap). */
+  skippedOversizeCount: number;
+  /** Rejected by extension (not an importable media type). */
+  skippedUnsupportedCount: number;
+}
+
+/**
+ * Sum the bytes a set of attachments would write to disk (BACKLOG-2743).
+ *
+ * Applies EXACTLY the two per-file gates the copy loop applies, in the same
+ * order: `isSupportedMediaType` on the display filename, then
+ * `MAX_ATTACHMENT_SIZE`. Any drift between this and storeAttachments turns the
+ * estimate into a number that does not describe the import.
+ *
+ * The result is an UPPER BOUND. The copy loop additionally deduplicates by file
+ * CONTENT HASH, so two distinct attachment rows holding identical bytes are
+ * counted twice here but written once. Estimating high is the safe direction
+ * for a guard: it can refuse an import that would have just fit, but it can
+ * never wave through one that overruns the disk.
+ */
+export function summarizeAttachmentEstimate(
+  rows: AttachmentSizeRow[]
+): AttachmentEstimate {
+  let eligibleBytes = 0;
+  let eligibleCount = 0;
+  let skippedOversizeCount = 0;
+  let skippedUnsupportedCount = 0;
+
+  for (const row of rows) {
+    // Mirrors storeAttachments: transfer_name wins, filename is the fallback.
+    const displayName = row.transfer_name || row.filename;
+    if (!isSupportedMediaType(displayName)) {
+      skippedUnsupportedCount++;
+      continue;
+    }
+    const bytes = Number(row.total_bytes) || 0;
+    if (bytes > MAX_ATTACHMENT_SIZE) {
+      skippedOversizeCount++;
+      continue;
+    }
+    eligibleBytes += bytes;
+    eligibleCount++;
+  }
+
+  return {
+    eligibleBytes,
+    eligibleCount,
+    skippedOversizeCount,
+    skippedUnsupportedCount,
+  };
 }
 
 /**

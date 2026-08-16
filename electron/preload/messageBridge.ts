@@ -4,6 +4,12 @@
  */
 
 import { ipcRenderer } from "electron";
+// BACKLOG-2743: shared estimate shapes — one definition for preload, renderer,
+// and the window.api surface, so the space verdict cannot drift between them.
+import type {
+  MessageImportCountFilters,
+  MessageImportCountResult,
+} from "../types/ipc/window-api-messages";
 
 /**
  * Progress event from macOS message import (TASK-1710)
@@ -74,7 +80,7 @@ export const messageBridge = {
    * Get count of messages available for import from macOS Messages
    * @returns Count of available messages
    */
-  getImportCount: (filters?: { lookbackMonths?: number | null; maxMessages?: number | null }): Promise<{ success: boolean; count?: number; filteredCount?: number; error?: string }> =>
+  getImportCount: (filters?: MessageImportCountFilters): Promise<MessageImportCountResult> =>
     ipcRenderer.invoke("messages:get-import-count", filters),
 
   /**
