@@ -138,8 +138,9 @@ describe("phoneNormalization", () => {
         expect(toLookupKey("4155550109")).toBe("4155550109");
       });
       it("keeps the country code for international (UK) — BACKLOG-2635", () => {
-        // Pre-2635 this sliced to "2079460958", a key of no real number that
-        // could collide with a genuine NANP (207) 946-0958.
+        // Pre-2635 this sliced the country code off (last 10 digits only),
+        // fabricating a key of no real number that could collide with a
+        // genuine NANP number in area code 207.
         expect(toLookupKey("+44 20 7946 0958")).toBe("442079460958");
       });
       it("folds the NANP country code; exit-prefixed forms key with their '+' form", () => {
@@ -483,31 +484,40 @@ describe("phoneNormalization", () => {
   });
 
   describe("parity snapshot — the population BACKLOG-2635 deliberately changed (old → new)", () => {
-    // [input, keyUnderOldV40Rule, keyNow]. The old keys are what production
-    // rows persisted before the re-key migration; the new keys are what every
-    // fresh computation (and the re-key itself) produces.
-    const deltas: Array<[string, string, string]> = [
+    /**
+     * The v40 rule, verbatim, so each delta's "old key" is COMPUTED rather
+     * than hand-transcribed — the table cannot drift from what production
+     * rows actually persisted before the re-key migration. (It also keeps
+     * bare 10-digit key strings out of this public file: the sliced keys are
+     * fabrications that read as real US numbers.)
+     */
+    const v40Rule = (input: string): string => {
+      const digits = input.replace(/\D/g, "");
+      return digits.length >= 10 ? digits.slice(-10) : digits;
+    };
+
+    const deltas: Array<[string, string]> = [
       // UK E.164 — slice(-10) dropped the country code and fabricated a key
-      // that collided with a genuine NANP (207) 946-0958
-      ["+44 20 7946 0958", "2079460958", "442079460958"],
+      // that collided with a genuine NANP number in area code 207
+      ["+44 20 7946 0958", "442079460958"],
       // NANP international dial form of the same number — still agrees with it
-      ["011 44 20 7946 0958", "2079460958", "442079460958"],
+      ["011 44 20 7946 0958", "442079460958"],
       // 15-digit E.164 maximum
-      ["+123456789012345", "6789012345", "123456789012345"],
+      ["+123456789012345", "123456789012345"],
       // 13-digit run with no recognizable CC — kept whole, not sliced
-      ["120-555-555-1234", "5555551234", "1205555551234"],
+      ["120-555-555-1234", "1205555551234"],
       // Israeli landline, domestic and E.164 — the 54-value population;
       // pre-2635 these two forms of ONE number keyed differently
-      ["03-555-0121", "035550121", "97235550121"],
-      ["+972 3 555 0121", "7235550121", "97235550121"],
+      ["03-555-0121", "97235550121"],
+      ["+972 3 555 0121", "97235550121"],
       // Israeli mobile, domestic and E.164
-      ["052-555-0123", "0525550123", "972525550123"],
-      ["+972 52 555 0123", "2525550123", "972525550123"],
+      ["052-555-0123", "972525550123"],
+      ["+972 52 555 0123", "972525550123"],
     ];
 
-    it.each(deltas)("toLookupKey(%p): was %p under v40, is now %p", (input, oldKey, newKey) => {
+    it.each(deltas)("toLookupKey(%p) is now %p — and differs from its v40 key", (input, newKey) => {
       expect(toLookupKey(input)).toBe(newKey);
-      expect(newKey).not.toBe(oldKey); // the delta is real, not a copy-paste
+      expect(newKey).not.toBe(v40Rule(input)); // the delta is real, not a copy-paste
     });
   });
 });
