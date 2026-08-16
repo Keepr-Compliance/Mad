@@ -97,7 +97,7 @@ beforeEach(() => {
   mockDb
     .prepare(
       `INSERT INTO contacts (id, user_id, display_name, source, is_imported)
-       VALUES ('c1', ?, 'Paul Dorian', 'contacts_app', 1)`,
+       VALUES ('c1', ?, 'Casey Lane', 'contacts_app', 1)`,
     )
     .run(USER);
   expect(recordContactOrigin(USER, "c1", "contacts_app")).toBe(true);
@@ -110,7 +110,7 @@ beforeEach(() => {
       .prepare(
         `INSERT INTO external_contacts
           (id, user_id, name, phones_json, emails_json, external_record_id, source, synced_at)
-         VALUES (?, ?, 'Paul Dorian', '[]', '[]', ?, ?, datetime('now'))`,
+         VALUES (?, ?, 'Casey Lane', '[]', '[]', ?, ?, datetime('now'))`,
       )
       .run(`ec-${record}`, USER, record, source);
     createLink({

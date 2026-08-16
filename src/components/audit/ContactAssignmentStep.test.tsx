@@ -290,8 +290,8 @@ describe("ContactAssignmentStep", () => {
     const phoneOnlyExternal: Contact = {
       id: "ext-1",
       user_id: "user-123",
-      name: "Paul Phone",
-      display_name: "Paul Phone",
+      name: "Casey Phone",
+      display_name: "Casey Phone",
       email: undefined,
       phone: "555-0001",
       company: undefined,
@@ -347,8 +347,8 @@ describe("ContactAssignmentStep", () => {
           {
             id: "db-1",
             user_id: "user-123",
-            name: "Paul Phone",
-            display_name: "Paul Phone",
+            name: "Casey Phone",
+            display_name: "Casey Phone",
             email: null,
             phone: null,
             source: "imessage",
@@ -363,13 +363,13 @@ describe("ContactAssignmentStep", () => {
       render(<Harness />);
 
       // Precondition: the external contact is in Available.
-      expect(availableNames().some((n) => n.includes("Paul Phone"))).toBe(true);
+      expect(availableNames().some((n) => n.includes("Casey Phone"))).toBe(true);
 
       // Add it via its row's "+ Add".
-      const paulRow = screen
+      const caseyRow = screen
         .getAllByTestId("contact-row")
-        .find((r) => r.textContent?.includes("Paul Phone"))!;
-      await user.click(within(paulRow).getByTestId("contact-row-add-button"));
+        .find((r) => r.textContent?.includes("Casey Phone"))!;
+      await user.click(within(caseyRow).getByTestId("contact-row-add-button"));
 
       // After import: exactly one Added chip (the imported db id), count 1, and
       // the external twin has LEFT Available — not shown in both places.
@@ -377,14 +377,14 @@ describe("ContactAssignmentStep", () => {
         expect(screen.getByTestId("added-chip-db-1")).toBeInTheDocument();
       });
       expect(screen.getByTestId("added-count")).toHaveTextContent("1");
-      expect(availableNames().some((n) => n.includes("Paul Phone"))).toBe(false);
+      expect(availableNames().some((n) => n.includes("Casey Phone"))).toBe(false);
       // The external id is never itself a chip — the chip is the imported id only.
       expect(screen.queryByTestId("added-chip-ext-1")).not.toBeInTheDocument();
 
       // ✕ on the chip returns the external contact to Available.
       await user.click(screen.getByTestId("remove-added-db-1"));
       await waitFor(() => {
-        expect(availableNames().some((n) => n.includes("Paul Phone"))).toBe(true);
+        expect(availableNames().some((n) => n.includes("Casey Phone"))).toBe(true);
       });
       expect(screen.queryByTestId("added-chip-db-1")).not.toBeInTheDocument();
     });

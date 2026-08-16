@@ -33,6 +33,52 @@ import type { MessageImportFilters } from "./types";
 const NANOS_PER_MS = 1_000_000;
 
 /**
+ * The lookback window used when the user has expressed NO preference at all
+ * (the `lookbackMonths` key is absent). Matches the Settings dropdown's initial
+ * selection.
+ *
+ * BACKLOG-2561: this lives here, exported, because it previously existed as two
+ * independent literal `3`s inside `messageImportHandlers.ts` (the import handler
+ * and the effective-window label handler). Two copies of a default is how the
+ * import and its own label drift apart.
+ */
+export const DEFAULT_LOOKBACK_MONTHS = 3;
+
+/**
+ * BACKLOG-2561: Resolve the stored `lookbackMonths` preference, distinguishing
+ * **"no preference stored"** from **"the user explicitly chose All time"**.
+ *
+ * These are two different facts and the codebase spells them differently:
+ *  - key ABSENT (`undefined`) ⇒ the user never touched the setting ⇒ default.
+ *  - explicit `null` ⇒ the user picked "All time" in the dropdown
+ *    (`MacOSMessagesImportSettings.tsx` writes `null` for `value === "all"`)
+ *    ⇒ unbounded, and it MUST survive as `null`.
+ *
+ * `??` cannot tell those two apart — `null ?? 3 === 3` — so every reader that
+ * used it silently rewrote "All time" into "last 3 months". That was the whole
+ * of BACKLOG-2561: the count preview honoured `null`, the import and the label
+ * did not, and the user was shown an all-time total next to a 3-month label
+ * while receiving 3 months of messages.
+ *
+ * Note the key can also be absent while the surrounding `filters` object exists:
+ * changing only the message cap writes `{ maxMessages: N }`, and the
+ * preferences deep-merge leaves `lookbackMonths` absent.
+ *
+ * @param filters - The stored `messageImport.filters` object (may be absent)
+ * @param defaultMonths - Window to use when no preference is stored
+ * @returns The months to look back, or `null` for an unbounded "All time" window
+ */
+export function resolveLookbackMonths(
+  filters: { lookbackMonths?: number | null } | null | undefined,
+  defaultMonths: number = DEFAULT_LOOKBACK_MONTHS
+): number | null {
+  if (!filters) return defaultMonths;
+  const stored = filters.lookbackMonths;
+  // `undefined` = absent = no preference. `null` = an explicit "All time" choice.
+  return stored === undefined ? defaultMonths : stored;
+}
+
+/**
  * BACKLOG-2276: Compute the Apple-epoch (nanoseconds since 2001-01-01) lower-bound
  * cutoff for the macOS Messages import.
  *
@@ -43,6 +89,17 @@ const NANOS_PER_MS = 1_000_000;
  *    we never omit messages an audit needs AND never regress below the user's
  *    explicit lookback preference.
  *  - Returns `null` (no date filter → import everything) when neither is set.
+ *
+ * BACKLOG-2561: an EXPLICIT "All time" preference (`lookbackMonths === null`, or a
+ * non-positive number) is itself unbounded, so it already reaches back further
+ * than any audit period and short-circuits to `null`. Without that short-circuit
+ * this function was a fourth reader that could not tell an explicit `null` from an
+ * absent key: `null` is falsy, so it contributed no cutoff entry, but the audit
+ * entry still did — and `Math.min` of that single entry BOUNDED an "All time"
+ * import at the earliest audit start. `computeEffectiveImportWindow` below has
+ * always returned an unbounded window for the same input, so the label and the
+ * import disagreed. An ABSENT key keeps the previous behaviour: `messagesSyncTrigger`
+ * passes `{ auditPeriodStart }` alone and depends on the audit period governing.
  *
  * @param filters - Import filters (lookbackMonths and/or auditPeriodStart)
  * @param now - Reference "now" (injectable for deterministic tests)
@@ -55,6 +112,14 @@ export function computeImportCutoffNano(
   now: Date = new Date()
 ): number | null {
   const cutoffs: number[] = [];
+
+  // BACKLOG-2561: explicit "All time" ⇒ unbounded, overrides the audit floor
+  // (which only ever WIDENS a bounded window and cannot widen an unbounded one).
+  // `undefined` falls through — absence is not a choice.
+  const lookback = filters?.lookbackMonths;
+  if (lookback === null || (typeof lookback === "number" && lookback <= 0)) {
+    return null;
+  }
 
   if (filters?.lookbackMonths && filters.lookbackMonths > 0) {
     const cutoffDate = new Date(now.getTime());

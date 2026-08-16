@@ -196,8 +196,8 @@ export const SOURCE_LEAF_TO_CONTACT_SOURCES: Record<string, readonly string[]> =
  * `manual` source_type for them to link to) and contacts predating the v57
  * crosswalk. Returning `[]` for them instead would hide them from every leaf.
  *
- * Note the UNION is deliberately not taken. Scalar-plus-links would keep Paul
- * Dorian under Outlook forever, which is the bug.
+ * Note the UNION is deliberately not taken. Scalar-plus-links would keep Casey
+ * Lane under Outlook forever, which is the bug.
  */
 export function liveSourcesOf(contact: SourceFilterable): readonly string[] {
   const links = contact.source_types;

@@ -297,33 +297,33 @@ describe("the founder's case still works after the pass", () => {
    * The pass must protect typed values WITHOUT disarming BACKLOG-2427.
    *
    * Casey Lane has two live links at migration time, and the Outlook record
-   * carries `dorian@bluespaces.com`. So that address stays 'import' and stays
+   * carries `casey@bluespaces.com`. So that address stays 'import' and stays
    * removable — while anything he typed becomes 'manual'.
    */
   it("leaves the rejected source's address removable, and protects the typed one", () => {
-    addContact("paul");
-    addEmail("paul", "dorian@bluespaces.com", "import"); // Outlook only
-    addEmail("paul", "paul@pauljdorian.com", "import"); // both sources
-    addEmail("paul", "paul.typed@example.com", "import"); // typed, mislabelled
-    addPhone("paul", "+14085550101", "import"); // both sources
+    addContact("casey");
+    addEmail("casey", "casey@bluespaces.com", "import"); // Outlook only
+    addEmail("casey", "casey@example.com", "import"); // both sources
+    addEmail("casey", "casey.typed@example.com", "import"); // typed, mislabelled
+    addPhone("casey", "+14085550101", "import"); // both sources
 
-    addLinkedSource("paul", "mac-paul", "macos", ["paul@pauljdorian.com"], ["(408) 555-0101"]);
+    addLinkedSource("casey", "mac-casey", "macos", ["casey@example.com"], ["(408) 555-0101"]);
     addLinkedSource(
-      "paul",
-      "out-paul",
+      "casey",
+      "out-casey",
       "outlook",
-      ["dorian@bluespaces.com", "paul@pauljdorian.com"],
+      ["casey@bluespaces.com", "casey@example.com"],
       ["(408) 555-0101"],
     );
 
     relabelTypedContactValues(db);
 
-    expect(emailSources("paul")).toEqual({
-      "dorian@bluespaces.com": "import", // still removable — the fix survives
-      "paul@pauljdorian.com": "import",
-      "paul.typed@example.com": "manual", // now protected
+    expect(emailSources("casey")).toEqual({
+      "casey@bluespaces.com": "import", // still removable — the fix survives
+      "casey@example.com": "import",
+      "casey.typed@example.com": "manual", // now protected
     });
-    expect(phoneSources("paul")).toEqual({ "+14085550101": "import" });
+    expect(phoneSources("casey")).toEqual({ "+14085550101": "import" });
   });
 });
 

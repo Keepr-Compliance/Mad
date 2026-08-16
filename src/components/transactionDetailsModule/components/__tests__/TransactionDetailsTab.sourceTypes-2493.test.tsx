@@ -12,7 +12,7 @@
  * `attachLiveSources` before it ever reaches the renderer.
  *
  * So fixing only the Clients & Contacts card would have produced a WORSE state
- * than the bug: the card would say "Contacts App" for Paul while this pane still
+ * than the bug: the card would say "Contacts App" for Casey while this pane still
  * said "Outlook" — the same component, the same person, two answers on screen at
  * once. Today both are wrong, which at least is consistent.
  *
@@ -52,7 +52,7 @@ jest.mock("../../../shared/ContactPreview", () => ({
 }));
 jest.mock("../../../contact", () => ({ ContactFormModal: () => null }));
 
-const CONTACT_ID = "contact-paul";
+const CONTACT_ID = "contact-casey";
 
 const mockGetEditData = jest.fn();
 const mockCheckCanDelete = jest.fn();
@@ -79,15 +79,15 @@ beforeEach(() => {
 });
 
 /**
- * Paul as the transaction knows him: `contact_source` is "outlook", the stale
+ * Casey as the transaction knows him: `contact_source` is "outlook", the stale
  * scalar left behind after his Outlook link was unlinked.
  */
-function paulAssignment(): ContactAssignment {
+function caseyAssignment(): ContactAssignment {
   return {
-    id: "tc-paul",
+    id: "tc-casey",
     contact_id: CONTACT_ID,
-    contact_name: "Paul Dorian",
-    contact_email: "p.dorian@example.com",
+    contact_name: "Casey Lane",
+    contact_email: "p.lane@example.com",
     contact_phone: "+12065550142",
     contact_company: "Example Realty",
     contact_source: "outlook",
@@ -106,11 +106,11 @@ const mockTransaction = {
   transaction_type: "purchase",
 } as unknown as Transaction;
 
-function openPaulsCard() {
+function openCaseysCard() {
   render(
     <TransactionDetailsTab
       transaction={mockTransaction}
-      contactAssignments={[paulAssignment()]}
+      contactAssignments={[caseyAssignment()]}
       loading={false}
     />,
   );
@@ -126,13 +126,13 @@ describe("Key Contacts pane hands ContactPreview the live source set (BACKLOG-24
   it("merges source_types from getEditData, overriding the stale scalar", () => {
     mockGetEditData.mockResolvedValue({
       success: true,
-      emails: [{ id: "e1", email: "p.dorian@example.com", is_primary: true }],
+      emails: [{ id: "e1", email: "p.lane@example.com", is_primary: true }],
       phones: [{ id: "p1", phone: "+12065550142", is_primary: true }],
-      // Paul's only surviving link is the Mac address book.
+      // Casey's only surviving link is the Mac address book.
       source_types: ["contacts_app"],
     });
 
-    openPaulsCard();
+    openCaseysCard();
 
     return waitFor(() => {
       expect(latestPreviewContact().source_types).toEqual(["contacts_app"]);
@@ -147,14 +147,14 @@ describe("Key Contacts pane hands ContactPreview the live source set (BACKLOG-24
     // The handler omits the field entirely for a contact with no crosswalk rows.
     mockGetEditData.mockResolvedValue({
       success: true,
-      emails: [{ id: "e1", email: "p.dorian@example.com", is_primary: true }],
+      emails: [{ id: "e1", email: "p.lane@example.com", is_primary: true }],
       phones: [],
     });
 
-    openPaulsCard();
+    openCaseysCard();
 
     await waitFor(() => {
-      expect(latestPreviewContact().allEmails).toEqual(["p.dorian@example.com"]);
+      expect(latestPreviewContact().allEmails).toEqual(["p.lane@example.com"]);
     });
 
     const contact = latestPreviewContact();
@@ -168,7 +168,7 @@ describe("Key Contacts pane hands ContactPreview the live source set (BACKLOG-24
   it("still shows the card when the edit-data fetch fails", async () => {
     mockGetEditData.mockRejectedValue(new Error("IPC unavailable"));
 
-    openPaulsCard();
+    openCaseysCard();
 
     await waitFor(() => {
       expect(screen.getByTestId("contact-preview-stub")).toBeInTheDocument();

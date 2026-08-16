@@ -287,22 +287,22 @@ describe("exportUtils - contact resolution", () => {
         ])
         .mockReturnValueOnce([
           {
-            email: "paul@icloud.com",
-            display_name: "Paul Johnson",
+            email: "casey@icloud.com",
+            display_name: "Casey Johnson",
           },
         ]);
 
       const handles = [
         "+15555550112",
         "+15555550121",
-        "paul@icloud.com",
+        "casey@icloud.com",
       ];
 
       const result = getContactNamesByHandles(handles);
 
       expect(result["5555550112"]).toBe("Morgan Reed");
       expect(result["5555550121"]).toBe("John Doe");
-      expect(result["paul@icloud.com"]).toBe("Paul Johnson");
+      expect(result["casey@icloud.com"]).toBe("Casey Johnson");
     });
   });
 });
