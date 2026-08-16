@@ -457,16 +457,16 @@ describe("matchesContactFilters — combined default behaviour", () => {
  * Contacts App.
  */
 describe("matchesSourceFilter — live crosswalk sources (BACKLOG-2472)", () => {
-  /** Paul BEFORE the unlink: one contact, two live links. */
-  const paulLinkedToBoth = makeContact({
-    id: "paul",
+  /** Casey BEFORE the unlink: one contact, two live links. */
+  const caseyLinkedToBoth = makeContact({
+    id: "casey",
     source: "outlook" as ContactSource, // first import wrote this and never revised it
     source_types: ["contacts_app", "outlook"] as ContactSource[],
   });
 
-  /** Paul AFTER the Outlook link was removed. The scalar is UNCHANGED — that is the point. */
-  const paulAfterOutlookUnlink = makeContact({
-    id: "paul",
+  /** Casey AFTER the Outlook link was removed. The scalar is UNCHANGED — that is the point. */
+  const caseyAfterOutlookUnlink = makeContact({
+    id: "casey",
     source: "outlook" as ContactSource,
     source_types: ["contacts_app"] as ContactSource[],
   });
@@ -496,18 +496,18 @@ describe("matchesSourceFilter — live crosswalk sources (BACKLOG-2472)", () => 
   const idsUnder = (population: Contact[], ...leaves: string[]): string[] =>
     population.filter((c) => matchesSourceFilter(c, sel(...leaves))).map((c) => c.id).sort();
 
-  const population = [paulLinkedToBoth, outlookOnly, manualNoLinks, legacyNoLinks];
-  const populationAfterUnlink = [paulAfterOutlookUnlink, outlookOnly, manualNoLinks, legacyNoLinks];
+  const population = [caseyLinkedToBoth, outlookOnly, manualNoLinks, legacyNoLinks];
+  const populationAfterUnlink = [caseyAfterOutlookUnlink, outlookOnly, manualNoLinks, legacyNoLinks];
 
   it("a contact linked to BOTH macOS and Outlook appears under BOTH filters", () => {
-    expect(idsUnder(population, SOURCE_LEAF.CONTACTS_APP)).toEqual(["legacy-no-links", "paul"]);
-    expect(idsUnder(population, SOURCE_LEAF.EMAIL_OUTLOOK)).toEqual(["paul", "single-outlook"]);
+    expect(idsUnder(population, SOURCE_LEAF.CONTACTS_APP)).toEqual(["casey", "legacy-no-links"]);
+    expect(idsUnder(population, SOURCE_LEAF.EMAIL_OUTLOOK)).toEqual(["casey", "single-outlook"]);
   });
 
   it("after the Outlook link is deleted it leaves Outlook and stays under Contacts App", () => {
     // The founder's exact report. `source` is still 'outlook' in both rows.
     expect(idsUnder(populationAfterUnlink, SOURCE_LEAF.EMAIL_OUTLOOK)).toEqual(["single-outlook"]);
-    expect(idsUnder(populationAfterUnlink, SOURCE_LEAF.CONTACTS_APP)).toEqual(["legacy-no-links", "paul"]);
+    expect(idsUnder(populationAfterUnlink, SOURCE_LEAF.CONTACTS_APP)).toEqual(["casey", "legacy-no-links"]);
   });
 
   it("a single-source contact is unaffected by the change", () => {
@@ -519,12 +519,12 @@ describe("matchesSourceFilter — live crosswalk sources (BACKLOG-2472)", () => 
 
   it("a contact with ZERO crosswalk links still appears under its scalar's leaf", () => {
     expect(idsUnder(population, SOURCE_LEAF.MANUAL)).toEqual(["manual-no-links"]);
-    // The legacy macOS contact is under Contacts App alongside linked Paul —
+    // The legacy macOS contact is under Contacts App alongside linked Casey —
     // asserted above. Neither falls out of the list entirely:
     expect(idsUnder(population, ...ALL_SOURCE_LEAF_IDS)).toEqual([
+      "casey",
       "legacy-no-links",
       "manual-no-links",
-      "paul",
       "single-outlook",
     ]);
   });
@@ -537,15 +537,15 @@ describe("matchesSourceFilter — live crosswalk sources (BACKLOG-2472)", () => 
   });
 
   it("the live set REPLACES the scalar — the union is never taken", () => {
-    // If the union were taken, Paul would stay under Outlook forever and the
+    // If the union were taken, Casey would stay under Outlook forever and the
     // unlink could never be reflected. This is the assertion that fails first if
     // anyone 'helpfully' merges the two.
-    expect(matchesSourceFilter(paulAfterOutlookUnlink, sel(SOURCE_LEAF.EMAIL_OUTLOOK))).toBe(false);
+    expect(matchesSourceFilter(caseyAfterOutlookUnlink, sel(SOURCE_LEAF.EMAIL_OUTLOOK))).toBe(false);
   });
 
   it("a multi-source contact is visible under the DEFAULT selection", () => {
-    expect(matchesSourceFilter(paulLinkedToBoth, defaultSourceSelection())).toBe(true);
-    expect(matchesSourceFilter(paulAfterOutlookUnlink, defaultSourceSelection())).toBe(true);
+    expect(matchesSourceFilter(caseyLinkedToBoth, defaultSourceSelection())).toBe(true);
+    expect(matchesSourceFilter(caseyAfterOutlookUnlink, defaultSourceSelection())).toBe(true);
   });
 
   it("crosswalk links do NOT move a contact into or out of the Inferred leaves", () => {

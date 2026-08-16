@@ -38,9 +38,9 @@ const OUTLOOK_LINK = "link-outlook";
  */
 function makeView(overrides: Partial<ContactCompareView> = {}): ContactCompareView {
   return {
-    contactId: "c-paul",
+    contactId: "c-casey",
     isConfirmed: false,
-    title: "Is this the same Paul Dorian?",
+    title: "Is this the same Casey Lane?",
     reason: "Both records list the phone number +1 (206) 555-0142, and the names match.",
     namesMatch: true,
     columns: [
@@ -48,8 +48,8 @@ function makeView(overrides: Partial<ContactCompareView> = {}): ContactCompareVi
         linkId: CONTACT_LINK,
         kind: "contact",
         columnLabel: "Mac address book",
-        displayName: "Paul Dorian",
-        name: { value: "Paul Dorian", matched: true },
+        displayName: "Casey Lane",
+        name: { value: "Casey Lane", matched: true },
         emails: [],
         phones: [{ value: "+1 (206) 555-0142", matched: true }],
         company: null,
@@ -69,9 +69,9 @@ function makeView(overrides: Partial<ContactCompareView> = {}): ContactCompareVi
         linkId: OUTLOOK_LINK,
         kind: "source",
         columnLabel: "Outlook contacts",
-        displayName: "Paul Dorian",
-        name: { value: "Paul Dorian", matched: true },
-        emails: [{ value: "pdorian@example.com", matched: false }],
+        displayName: "Casey Lane",
+        name: { value: "Casey Lane", matched: true },
+        emails: [{ value: "plane@example.com", matched: false }],
         phones: [{ value: "+1 (206) 555-0142", matched: true }],
         company: "Example Realty",
         /*
@@ -90,7 +90,7 @@ function makeView(overrides: Partial<ContactCompareView> = {}): ContactCompareVi
             channel: "email",
             title: "571 Dale St — signed disclosures attached",
             occurredAt: "2026-08-01T10:00:00.000Z",
-            matchedIdentifier: "pdorian@example.com",
+            matchedIdentifier: "plane@example.com",
           },
         ],
         sourceRecordPresent: true,
@@ -116,7 +116,7 @@ async function renderScreen(
 ) {
   stubApi(result);
   const utils = render(
-    <ContactCompareSources userId="u1" contactId="c-paul" onClose={onClose} />,
+    <ContactCompareSources userId="u1" contactId="c-casey" onClose={onClose} />,
   );
   await waitFor(() => expect(screen.queryByTestId("compare-loading")).toBeNull());
   return { ...utils, onClose };
@@ -152,7 +152,7 @@ async function renderDeciding(
   const utils = render(
     <ContactCompareSources
       userId="u1"
-      contactId="c-paul"
+      contactId="c-casey"
       unlinkingLinkId={opts.unlinkingLinkId ?? null}
       {...handlers}
     />,
@@ -244,7 +244,7 @@ describe("the footer", () => {
     fireEvent.click(screen.getByTestId("compare-confirm"));
 
     await waitFor(() => expect(onConfirmed).toHaveBeenCalledTimes(1));
-    expect(confirmSources).toHaveBeenCalledWith("u1", "c-paul");
+    expect(confirmSources).toHaveBeenCalledWith("u1", "c-casey");
     expect(onConfirmedAndEdit).not.toHaveBeenCalled();
   });
 
@@ -430,8 +430,8 @@ describe("BACKLOG-2628 — the wording of a record that belongs to nobody", () =
     linkId: PROPOSED_LINK,
     kind: "proposed",
     columnLabel: "Android phone",
-    displayName: "Paul Dorian",
-    name: { value: "Paul Dorian", matched: true },
+    displayName: "Casey Lane",
+    name: { value: "Casey Lane", matched: true },
     emails: [],
     phones: [{ value: "+1 (206) 555-0142", matched: true }],
     company: null,
@@ -747,7 +747,7 @@ describe("marking", () => {
       screen.getByTestId(`compare-row-phone-${OUTLOOK_LINK}`).textContent,
     ).toBe("+1 (206) 555-0142match");
     expect(screen.getByTestId(`compare-row-emails-${OUTLOOK_LINK}`).textContent).toBe(
-      "pdorian@example.com",
+      "plane@example.com",
     );
   });
 });
@@ -784,7 +784,7 @@ describe("the header and the edge states", () => {
     await renderScreen();
 
     expect(screen.getByTestId("compare-title").textContent).toBe(
-      "Is this the same Paul Dorian?",
+      "Is this the same Casey Lane?",
     );
     expect(screen.getByTestId("compare-reason").textContent).toBe(
       "Both records list the phone number +1 (206) 555-0142, and the names match.",

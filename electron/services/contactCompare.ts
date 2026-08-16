@@ -134,7 +134,7 @@ export interface ContactCompareColumn {
 
 export interface ContactCompareView {
   contactId: string;
-  /** "Is this the same Paul Dorian?" */
+  /** "Is this the same Casey Lane?" */
   title: string;
   /** Why these records were joined, in words. Never a score. */
   reason: string;
@@ -142,8 +142,8 @@ export interface ContactCompareView {
   columns: ContactCompareColumn[];
   /**
    * True when EVERY column carries the same name. Distinct from the per-value
-   * `matched` flag on `name`: with three columns reading "Paul Dorian", "Paul
-   * Dorian" and "Paul J. Dorian", the first two are marked (the value is on two
+   * `matched` flag on `name`: with three columns reading "Casey Lane", "Casey
+   * Lane" and "Casey J. Lane", the first two are marked (the value is on two
    * columns) while this is false (they are not all the same) — which is why the
    * sentence does not claim the names match.
    */
@@ -915,7 +915,7 @@ export async function getContactCompareColumns(
   // built from. Two places must not mean two different things by "same value".
   //
   // The name is marked the SAME way rather than only when all columns agree:
-  // with "Paul Dorian", "Paul Dorian" and "Paul J. Dorian" the first two are
+  // with "Casey Lane", "Casey Lane" and "Casey J. Lane" the first two are
   // the match the founder asked to see highlighted, and requiring unanimity
   // would mark none of them.
   const sharedKeys = (pick: (c: (typeof raw)[number]) => string[], key: (v: string) => string) => {

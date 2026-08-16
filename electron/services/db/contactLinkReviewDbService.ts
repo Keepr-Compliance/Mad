@@ -467,7 +467,7 @@ export function listVerdicts(userId: string): LinkVerdictRow[] {
  * not bring it back.
  *
  * The picker's already-imported filter inferred ownership from a PHONE NUMBER:
- * the released record carries `4085550101`, the saved Paul carries it too (the
+ * the released record carries `4085550101`, the saved Casey carries it too (the
  * backfill copied it there), so the record was filtered as "already imported"
  * because of the very data the unlink had failed to remove.
  *

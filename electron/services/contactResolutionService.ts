@@ -236,7 +236,7 @@ export async function resolvePhoneNames(
  * Resolve email addresses to contact names via the contact_emails table.
  *
  * NEW in TASK-2026: Enables resolution of iMessage email handles
- * (e.g., paul@icloud.com, quincypoe@example.com).
+ * (e.g., casey@icloud.com, quincypoe@example.com).
  */
 export async function resolveEmailNames(
   emails: string[],
