@@ -8,6 +8,13 @@
  */
 
 import { getErrorMessage } from "./index";
+// BACKLOG-2743: type-only import of the shared estimate shapes. Type-only is the
+// ONLY direction that is safe across the renderer/main boundary — a value import
+// from electron/ would be parsed as JavaScript by Vite and break the build.
+import type {
+  MessageImportCountFilters,
+  MessageImportCountResult,
+} from "@electron/types/ipc/window-api-messages";
 
 /**
  * Message import status (from getImportStatus)
@@ -62,8 +69,8 @@ export const messageService = {
    * Accepts optional filters for lookback period and max count.
    */
   async getImportCount(
-    filters?: { lookbackMonths?: number | null; maxMessages?: number | null }
-  ): Promise<{ success: boolean; count?: number; filteredCount?: number; error?: string }> {
+    filters?: MessageImportCountFilters
+  ): Promise<MessageImportCountResult> {
     try {
       if (!window.api.messages) {
         return { success: false, error: "Messages API not available" };
