@@ -344,3 +344,208 @@ describe("MacOSMessagesImportSettings — completion count (BACKLOG-2329)", () =
     );
   });
 });
+
+/**
+ * BACKLOG-2743 — the import must show its size and refuse when it will not fit.
+ *
+ * Pre-state these tests replace: selecting "All time" showed a message count and
+ * nothing about size, and nothing on the path checked free disk space — so an
+ * import needing more space than the volume held looked identical to one that
+ * fit, right up until the copy filled the disk.
+ *
+ * The `fitsOnDisk` verdict is computed in the MAIN process; these tests feed it
+ * over the mocked IPC boundary rather than recomputing it, which is the same
+ * contract the component honors.
+ */
+describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () => {
+  const userId = "user-2743";
+  const GB = 1e9;
+
+  /** Selection-time estimate as the main process would return it. */
+  function estimateResponse(opts: {
+    messages: number;
+    attachmentBytes: number;
+    availableDiskBytes: number;
+    fitsOnDisk: boolean;
+    attachmentCount?: number;
+  }) {
+    return {
+      success: true,
+      count: opts.messages,
+      filteredCount: opts.messages,
+      attachmentBytes: opts.attachmentBytes,
+      attachmentCount: opts.attachmentCount ?? 1000,
+      availableDiskBytes: opts.availableDiskBytes,
+      fitsOnDisk: opts.fitsOnDisk,
+    };
+  }
+
+  it("shows the size estimate in real numbers for the selected window", async () => {
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      estimateResponse({
+        messages: 480000,
+        attachmentBytes: 80 * GB,
+        availableDiskBytes: 40 * GB,
+        fitsOnDisk: false,
+      }),
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    const estimate = await screen.findByTestId("import-size-estimate");
+    // Messages, attachment size, and the user's own free space — no adjectives.
+    expect(estimate).toHaveTextContent("480,000 messages");
+    expect(estimate).toHaveTextContent("80.0 GB of attachments");
+    expect(estimate).toHaveTextContent("40.0 GB available");
+    // Explicitly NOT the vague framing the item rejects: this is a disk
+    // capacity fact, not a performance hint.
+    expect(estimate).not.toHaveTextContent(/slow/i);
+  });
+
+  it("BLOCKS the import when the attachments do not fit, with no override", async () => {
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      estimateResponse({
+        messages: 480000,
+        attachmentBytes: 80 * GB,
+        availableDiskBytes: 40 * GB,
+        fitsOnDisk: false,
+      }),
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    await screen.findByTestId("import-space-block");
+    expect(screen.getByRole("button", { name: /Import Messages/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Force Re-import/i })).toBeDisabled();
+
+    // The two ways through are offered...
+    expect(screen.getByTestId("import-without-attachments")).toBeInTheDocument();
+    expect(screen.getByTestId("import-space-block")).toHaveTextContent(
+      /shorter time period/i,
+    );
+
+    // ...and there is deliberately NO "import anyway" escape. An override is
+    // exactly what would let macOS evict the user's Time Machine snapshots to
+    // make room, which is the failure this guard exists to prevent.
+    const block = screen.getByTestId("import-space-block");
+    expect(block).not.toHaveTextContent(/anyway/i);
+    expect(block).not.toHaveTextContent(/import all/i);
+  });
+
+  it("clears the block when the user chooses to import without attachments", async () => {
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      estimateResponse({
+        messages: 480000,
+        attachmentBytes: 80 * GB,
+        availableDiskBytes: 40 * GB,
+        fitsOnDisk: false,
+      }),
+    );
+    const { settingsService } = jest.requireMock("../../../services");
+
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    fireEvent.click(await screen.findByTestId("import-without-attachments"));
+
+    // The block lifts and the import becomes runnable — the escape hatch is what
+    // makes a refusal acceptable rather than a dead end.
+    await waitFor(() =>
+      expect(screen.queryByTestId("import-space-block")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: /Import Messages/i })).toBeEnabled();
+
+    // And the choice is persisted so the import actually honors it.
+    await waitFor(() =>
+      expect(settingsService.updatePreferences).toHaveBeenCalledWith(userId, {
+        messageImport: { filters: { skipAttachments: true } },
+      }),
+    );
+  });
+
+  it("adds no block and no dialog when the library fits comfortably", async () => {
+    // CONTROL 4: a small library must see no friction at all.
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      estimateResponse({
+        messages: 4200,
+        attachmentBytes: 0.8 * GB,
+        availableDiskBytes: 300 * GB,
+        fitsOnDisk: true,
+      }),
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    await screen.findByTestId("import-size-estimate");
+    expect(screen.queryByTestId("import-space-block")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Import Messages/i })).toBeEnabled();
+  });
+
+  it("asks for the estimate over the audit-widened window, not the raw lookback", async () => {
+    // The real import reaches back to the earliest transaction audit period, so
+    // an estimate scoped to the bare lookback preference would describe a
+    // narrower import than the one that runs.
+    (window.api.messages.getEffectiveImportWindow as jest.Mock).mockResolvedValue({
+      success: true,
+      effectiveCutoffISO: "2024-01-01T00:00:00.000Z",
+      source: "audit-period",
+      lookbackMonths: 3,
+    });
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      estimateResponse({
+        messages: 100,
+        attachmentBytes: 1 * GB,
+        availableDiskBytes: 300 * GB,
+        fitsOnDisk: true,
+      }),
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    await waitFor(() =>
+      expect(window.api.messages.getImportCount).toHaveBeenCalledWith(
+        expect.objectContaining({ auditPeriodStart: "2024-01-01T00:00:00.000Z" }),
+      ),
+    );
+  });
+
+  it("reports skipped attachments after an import rather than claiming plain success", async () => {
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      estimateResponse({
+        messages: 100,
+        attachmentBytes: 1 * GB,
+        availableDiskBytes: 300 * GB,
+        fitsOnDisk: true,
+      }),
+    );
+
+    const { rerender } = renderStrict(
+      <MacOSMessagesImportSettings userId={userId} />,
+    );
+
+    // Orchestrator reports the pre-flight refusal on its warning channel.
+    mockQueue = [
+      {
+        type: "messages",
+        status: "complete",
+        progress: 100,
+        importedCount: 5000,
+        warning:
+          "Attachments were not imported: they need 80.0 GB but only 40.0 GB is free. Messages imported normally.",
+      },
+    ];
+    rerender(
+      <React.StrictMode>
+        <MacOSMessagesImportSettings userId={userId} />
+      </React.StrictMode>,
+    );
+
+    // The messages DID import, so this is a warning and not an error — but the
+    // missing attachments must be stated, not silently omitted.
+    await waitFor(() =>
+      expect(screen.getByTestId("import-warning")).toHaveTextContent(
+        /Attachments were not imported/i,
+      ),
+    );
+    expect(screen.getByTestId("import-result")).toHaveTextContent("5,000");
+  });
+});

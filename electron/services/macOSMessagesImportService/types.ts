@@ -22,6 +22,27 @@ export interface MessageImportFilters {
    * of truth the email fetch uses (transaction started_at/created_at).
    */
   auditPeriodStart?: Date | string | null;
+  /**
+   * BACKLOG-2743: Import message TEXT ONLY, copying no attachment files. This is
+   * the escape hatch offered when the attachment estimate exceeds free disk
+   * space — the text of even a very large library is a fraction of the size of
+   * its attachments, so "narrower window" and "without attachments" are the two
+   * ways through a refusal. Defaults to false (attachments are imported).
+   */
+  skipAttachments?: boolean;
+}
+
+/**
+ * BACKLOG-2743: Why an import copied no attachments despite finding some.
+ * Present on MacOSImportResult when the pre-flight space check refused.
+ */
+export interface AttachmentsRefusedForSpace {
+  /** Bytes the attachment copy would have needed. */
+  estimatedBytes: number;
+  /** Bytes actually available to the app (df-equivalent). */
+  availableBytes: number;
+  /** Attachments that were left uncopied. */
+  attachmentCount: number;
 }
 
 /**
@@ -40,6 +61,14 @@ export interface MacOSImportResult {
   totalAvailable?: number;
   /** True when maxMessages cap truncated results */
   wasCapped?: boolean;
+  /**
+   * BACKLOG-2743: Set when the pre-flight free-space check refused the
+   * attachment copy. The messages themselves ARE imported (this is why the
+   * result still reports success) — only the attachment files were skipped.
+   */
+  attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
+  /** BACKLOG-2743: True when the user chose to import without attachments. */
+  attachmentsSkippedByChoice?: boolean;
 }
 
 /**

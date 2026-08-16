@@ -100,6 +100,8 @@ export function MacOSMessagesImportSettings({
     // BACKLOG-2329: true when the completed import was a force re-import, so the
     // result copy reads "Re-imported N messages" rather than "imported N new".
     wasForceReimport?: boolean;
+    /** BACKLOG-2743: non-fatal notice (e.g. attachments skipped for disk space). */
+    warning?: string;
   } | null>(null);
   const [importStatus, setImportStatus] = useState<{
     messageCount?: number;
@@ -125,6 +127,21 @@ export function MacOSMessagesImportSettings({
   // Available message count for pre-import cap warning
   const [availableCount, setAvailableCount] = useState<number | null>(null);
 
+  // BACKLOG-2743: Selection-time size estimate. Before this, choosing "All time"
+  // showed a message count and nothing about size, so an import whose
+  // attachments exceeded the disk looked identical to one that fit.
+  const [sizeEstimate, setSizeEstimate] = useState<{
+    attachmentBytes: number;
+    attachmentCount: number;
+    availableDiskBytes: number | null;
+    fitsOnDisk: boolean;
+  } | null>(null);
+
+  // BACKLOG-2743: "Import without attachments" — the escape hatch that makes a
+  // refusal actionable. Message text is a small fraction of attachment size, so
+  // this always fits when the full import does not.
+  const [skipAttachments, setSkipAttachments] = useState(false);
+
   // Confirmation prompt when cap would be exceeded
   // Stores whether the pending import is a force re-import, or null if no prompt
   const [capPromptForce, setCapPromptForce] = useState<boolean | null>(null);
@@ -143,22 +160,41 @@ export function MacOSMessagesImportSettings({
   }, [isMacOS, userId]);
 
   // Fetch available count when filters change (for pre-import cap warning)
+  //
+  // BACKLOG-2743: also fetches the attachment-size estimate and the disk verdict
+  // for the SAME window. `auditPeriodStart` is passed because the real import
+  // widens the window to cover transaction audit periods — without it the
+  // estimate would describe a narrower import than the one that actually runs.
   useEffect(() => {
     if (!isMacOS) return;
     const fetchCount = async () => {
       try {
         const result = await window.api.messages.getImportCount({
           lookbackMonths,
+          auditPeriodStart: effectiveWindow?.effectiveCutoffISO ?? null,
         });
         if (result.success) {
           setAvailableCount(result.filteredCount ?? result.count ?? null);
+          setSizeEstimate(
+            result.attachmentBytes !== undefined
+              ? {
+                  attachmentBytes: result.attachmentBytes,
+                  attachmentCount: result.attachmentCount ?? 0,
+                  availableDiskBytes: result.availableDiskBytes ?? null,
+                  // The main process owns this verdict. Recomputing it here from
+                  // bytes vs available would duplicate the headroom rule and let
+                  // the shown number drift from the enforced one.
+                  fitsOnDisk: result.fitsOnDisk !== false,
+                }
+              : null
+          );
         }
       } catch {
         // Silently handle
       }
     };
     fetchCount();
-  }, [isMacOS, lookbackMonths]);
+  }, [isMacOS, lookbackMonths, effectiveWindow?.effectiveCutoffISO]);
 
   const loadImportStatus = async () => {
     try {
@@ -198,7 +234,13 @@ export function MacOSMessagesImportSettings({
       if (result?.success && result.data) {
         const prefs = result.data as Record<string, unknown>;
         const messageImport = prefs.messageImport as
-          | { filters?: { lookbackMonths?: number | null; maxMessages?: number | null } }
+          | {
+              filters?: {
+                lookbackMonths?: number | null;
+                maxMessages?: number | null;
+                skipAttachments?: boolean;
+              };
+            }
           | undefined;
         if (messageImport?.filters) {
           // BACKLOG-2561: an ABSENT key is "no preference", not "All time".
@@ -213,6 +255,8 @@ export function MacOSMessagesImportSettings({
               : messageImport.filters.lookbackMonths
           );
           setMaxMessages(messageImport.filters.maxMessages ?? null);
+          // BACKLOG-2743: absent preference means "import attachments" (prior behavior).
+          setSkipAttachments(messageImport.filters.skipAttachments === true);
         }
       }
     } catch {
@@ -259,6 +303,36 @@ export function MacOSMessagesImportSettings({
     } catch {
       // Silently handle
     }
+  };
+
+  // BACKLOG-2743: Persist the "without attachments" choice. The block clears via
+  // `spaceBlocked`, which reads this flag directly — no re-estimate is triggered
+  // or needed, because skipping attachments changes what gets COPIED, not what
+  // the selected window CONTAINS.
+  const handleSkipAttachmentsChange = async (skip: boolean) => {
+    setSkipAttachments(skip);
+    setLastResult(null);
+    try {
+      await settingsService.updatePreferences(userId, {
+        messageImport: { filters: { skipAttachments: skip } },
+      });
+    } catch {
+      // Silently handle
+    }
+  };
+
+  // BACKLOG-2743: True when the attachment copy does NOT fit and the user has
+  // not chosen to skip attachments. Import is BLOCKED in this state — there is
+  // deliberately no "import anyway" override, because an override is exactly
+  // what would let the disk fill and evict the user's Time Machine snapshots.
+  const spaceBlocked =
+    sizeEstimate !== null && !sizeEstimate.fitsOnDisk && !skipAttachments;
+
+  // BACKLOG-2743: Plain size formatting — real numbers, no adjectives.
+  const formatGb = (bytes: number): string => {
+    const gb = bytes / 1e9;
+    if (gb < 0.1) return `${Math.max(1, Math.round(bytes / 1e6))} MB`;
+    return `${gb.toFixed(1)} GB`;
   };
 
   // Format the last import time for display
@@ -362,6 +436,10 @@ export function MacOSMessagesImportSettings({
         messagesImported,
         wasForceReimport,
         wasCapped: messagesItem.warning ? true : undefined,
+        // BACKLOG-2743: surface the warning text itself. The pre-flight
+        // free-space refusal arrives on this channel, and discarding it would
+        // report unqualified success while attachments were silently skipped.
+        warning: messagesItem.warning,
       });
     } else if (messagesItem?.status === 'error') {
       setLastResult({
@@ -515,7 +593,73 @@ export function MacOSMessagesImportSettings({
             which exceeds the {maxMessages!.toLocaleString()} limit.
           </p>
         )}
+
+        {/* BACKLOG-2743: Size estimate for the selected window. Real numbers
+            only — messages, attachment size, and the user's own free space.
+            Deliberately NOT worded as "may slow your computer": this is a disk
+            capacity fact, and a vague warning trains people to dismiss it. */}
+        {!isImporting && sizeEstimate !== null && sizeEstimate.attachmentCount > 0 && (
+          <p
+            data-testid="import-size-estimate"
+            className="text-xs text-gray-600 mt-2"
+          >
+            {availableCount !== null && (
+              <>This selection covers {availableCount.toLocaleString()} messages and </>
+            )}
+            about {formatGb(sizeEstimate.attachmentBytes)} of attachments
+            {sizeEstimate.availableDiskBytes !== null && (
+              <>. You have {formatGb(sizeEstimate.availableDiskBytes)} available</>
+            )}
+            .
+          </p>
+        )}
+
+        {/* BACKLOG-2743: Import without attachments. Also reachable from the
+            block below; kept here so it is a normal, always-available choice. */}
+        <label className="flex items-center gap-2 mt-2 text-xs text-gray-600">
+          <input
+            type="checkbox"
+            checked={skipAttachments}
+            onChange={(e) => handleSkipAttachmentsChange(e.target.checked)}
+            disabled={controlsDisabled}
+            data-testid="skip-attachments-toggle"
+            className="rounded border-gray-300"
+          />
+          Import message text only (no attachment files)
+        </label>
       </div>
+
+      {/* BACKLOG-2743: The attachment copy does not fit. Import is BLOCKED with
+          two ways through — a narrower window, or without attachments. There is
+          no "import anyway": macOS would make room by deleting the user's local
+          Time Machine snapshots, which is the failure this guard exists for. */}
+      {!isImporting && spaceBlocked && sizeEstimate && (
+        <div
+          data-testid="import-space-block"
+          className="mb-3 p-3 bg-red-50 border border-red-200 rounded"
+        >
+          <p className="text-xs text-red-800 font-medium mb-2">
+            {/* "up to": the figure is an upper bound by construction — identical
+                files are copied once, and that is not subtracted here. */}
+            This import needs up to {formatGb(sizeEstimate.attachmentBytes)} for attachments
+            {sizeEstimate.availableDiskBytes !== null && (
+              <> but only {formatGb(sizeEstimate.availableDiskBytes)} is available</>
+            )}
+            . It will not start.
+          </p>
+          <p className="text-xs text-red-700 mb-2">
+            Choose a shorter time period above, or import the message text
+            without attachment files.
+          </p>
+          <button
+            onClick={() => handleSkipAttachmentsChange(true)}
+            data-testid="import-without-attachments"
+            className="w-full px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium rounded transition-all"
+          >
+            Import without attachments
+          </button>
+        </div>
+      )}
 
       {/* Result display */}
       {lastResult && !isImporting && (
@@ -558,6 +702,13 @@ export function MacOSMessagesImportSettings({
           ) : (
             <>Import failed: {safeErrorMessage(lastResult.error)}</>
           )}
+          {/* BACKLOG-2743: non-fatal notice alongside a successful import —
+              e.g. the pre-flight refused the attachment copy for disk space. */}
+          {lastResult.success && lastResult.warning && (
+            <span data-testid="import-warning" className="block mt-1 text-amber-700">
+              {lastResult.warning}
+            </span>
+          )}
         </div>
       )}
 
@@ -599,14 +750,16 @@ export function MacOSMessagesImportSettings({
               handleImport(false);
             }
           }}
-          disabled={controlsDisabled}
+          // BACKLOG-2743: blocked when the attachment copy would not fit.
+          disabled={controlsDisabled || spaceBlocked}
+          title={spaceBlocked ? "Not enough free disk space for attachments" : undefined}
           className="flex-1 px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isImporting ? "Importing..." : "Import Messages"}
         </button>
         <button
           onClick={() => setShowForceWarning(true)}
-          disabled={controlsDisabled}
+          disabled={controlsDisabled || spaceBlocked}
           className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           title="Delete all existing messages and re-import from scratch"
         >

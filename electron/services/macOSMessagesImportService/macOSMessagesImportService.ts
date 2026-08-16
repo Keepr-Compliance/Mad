@@ -46,6 +46,7 @@ import type {
   ChatMemberRow,
   ChatAccountRow,
   RawMacAttachment,
+  AttachmentsRefusedForSpace,
 } from "./types";
 
 import {
@@ -72,8 +73,15 @@ import {
   computeImportCutoffNano,
   shouldRetainMessageContent,
   isReactionAssociationType,
+  summarizeAttachmentEstimate,
+  filterUnstoredAttachments,
+  filterResolvableAttachments,
+  attachmentStoredKey,
 } from "./importHelpers";
+import type { AttachmentSizeRow } from "./importHelpers";
 import { normalizeAssociatedGuid } from "../../utils/reactionUtils";
+// BACKLOG-2743: df-equivalent free space + the single space verdict helper.
+import { getAvailableDiskBytes, evaluateAttachmentSpace } from "../../utils/diskSpace";
 
 /**
  * macOS Messages Import Service
@@ -620,7 +628,14 @@ class MacOSMessagesImportService {
 
         // Query attachments linked to messages (TASK-1012)
         // We join through message_attachment_join to get the message relationship
-        const attachments = await dbAll<RawMacAttachment>(`
+        //
+        // BACKLOG-2743: When the user chose "import without attachments" (the
+        // escape hatch offered when the attachment estimate exceeds free disk
+        // space), skip the query entirely — no rows fetched, no files copied,
+        // and the message text still imports.
+        const attachments = filters?.skipAttachments
+          ? []
+          : await dbAll<RawMacAttachment>(`
           SELECT
             attachment.ROWID as attachment_id,
             message.ROWID as message_id,
@@ -735,6 +750,12 @@ class MacOSMessagesImportService {
           duration,
           totalAvailable: filteredMessageCount,
           wasCapped: importWasCapped,
+          // BACKLOG-2743: success stays TRUE here on purpose. By the time the
+          // attachment pre-flight runs the messages are already stored, so a
+          // false would render "Import failed" over a genuinely successful
+          // message import. The refusal is reported as its own fact.
+          attachmentsRefusedForSpace: attachmentResult.refusedForSpace,
+          attachmentsSkippedByChoice: filters?.skipAttachments || undefined,
         };
       } catch (error) {
         await dbClose();
@@ -1162,7 +1183,12 @@ class MacOSMessagesImportService {
     attachments: RawMacAttachment[],
     messageIdMap: Map<string, string>,
     onProgress?: ImportProgressCallback
-  ): Promise<{ stored: number; skipped: number; updated: number }> {
+  ): Promise<{
+    stored: number;
+    skipped: number;
+    updated: number;
+    refusedForSpace?: AttachmentsRefusedForSpace;
+  }> {
     if (attachments.length === 0) {
       return { stored: 0, skipped: 0, updated: 0 };
     }
@@ -1173,6 +1199,95 @@ class MacOSMessagesImportService {
 
     // Get database instance
     const db = databaseService.getRawDatabase();
+
+    // BACKLOG-2743: PRE-FLIGHT FREE-SPACE CHECK.
+    //
+    // This runs BEFORE the attachments directory is created and before the copy
+    // loop is entered, so a library that does not fit fails having written
+    // nothing — rather than filling the volume and failing midway with a
+    // half-copied set. The selection-time estimate can be minutes stale by the
+    // time an import actually starts, which is why the authority is here and not
+    // in the renderer.
+    //
+    // The set sized here must be the set the copy loop would WRITE, which means
+    // subtracting on BOTH axes the loop skips on. This method is handed the
+    // user's ENTIRE attachment history on every sync (the import's attachment
+    // SELECT is unbounded), so the raw set overstates the copy twice over:
+    //
+    //   1. ALREADY STORED — re-sync hands over everything imported previously.
+    //      Summing those would mean that once a large library HAD imported and
+    //      consumed the space it needed, every later sync re-summed the whole
+    //      history against the now-smaller free space and refused forever.
+    //
+    //   2. UNRESOLVABLE — attachments whose message falls outside the selected
+    //      window was never imported, so the loop finds no message ID and skips
+    //      them (see the `internalMessageId` resolution below). Summing those
+    //      breaks the refusal's own advice: the renderer's estimate IS
+    //      date-bounded, so narrowing the window re-enables Import, and an
+    //      unbounded pre-flight would then refuse again at every setting.
+    //
+    // Both refusals return before any INSERT, so neither would ever clear on its
+    // own. Hence the message-id map is loaded HERE rather than at the copy loop.
+    //
+    // Still deliberately conservative on what remains: content-hash dedup is not
+    // subtracted (that would mean hashing every source file up front), so the
+    // figure stays an upper bound. Erring toward refusal is correct for a guard
+    // whose failure mode is a full disk.
+    const alreadyStoredKeys = new Set<string>();
+    for (const row of db
+      .prepare(
+        `SELECT external_message_id, filename FROM attachments WHERE external_message_id IS NOT NULL`
+      )
+      .all() as { external_message_id: string; filename: string }[]) {
+      const key = attachmentStoredKey(row.external_message_id, row.filename);
+      if (key) alreadyStoredKeys.add(key);
+    }
+
+    // Messages stored by PREVIOUS runs. Combined with this run's messageIdMap,
+    // these are the only messages an attachment can be linked to — anything else
+    // is skipped by the copy loop without writing a byte.
+    const existingMessageIdMap = new Map<string, string>();
+    const existingMsgRows = db
+      .prepare(`SELECT id, external_id FROM messages WHERE external_id IS NOT NULL`)
+      .all() as { id: string; external_id: string }[];
+    for (const row of existingMsgRows) {
+      existingMessageIdMap.set(row.external_id, row.id);
+    }
+    const resolvableGuids = new Set<string>([
+      ...messageIdMap.keys(),
+      ...existingMessageIdMap.keys(),
+    ]);
+
+    const pendingAttachments = filterResolvableAttachments(
+      filterUnstoredAttachments(attachments, alreadyStoredKeys),
+      resolvableGuids
+    );
+    const spaceEstimate = summarizeAttachmentEstimate(pendingAttachments);
+    const availableBytes = await getAvailableDiskBytes(app.getPath("userData"));
+    const verdict = evaluateAttachmentSpace(spaceEstimate.eligibleBytes, availableBytes);
+    if (!verdict.fits && verdict.availableBytes !== null) {
+      logService.warn(
+        `Refusing attachment import: needs ~${Math.round(spaceEstimate.eligibleBytes / 1e9)} GB ` +
+          `but only ~${Math.round(verdict.availableBytes / 1e9)} GB is available. No files were copied.`,
+        MacOSMessagesImportService.SERVICE_NAME,
+        {
+          estimatedBytes: spaceEstimate.eligibleBytes,
+          availableBytes: verdict.availableBytes,
+          headroomBytes: verdict.headroomBytes,
+          attachmentCount: spaceEstimate.eligibleCount,
+        }
+      );
+      return {
+        stored: 0,
+        skipped: attachments.length,
+        updated: 0,
+        refusedForSpace: {
+          estimatedBytes: spaceEstimate.eligibleBytes,
+          availableBytes: verdict.availableBytes,
+          attachmentCount: spaceEstimate.eligibleCount,
+        },
+      };
+    }
 
     // Create attachments directory if it doesn't exist
     const attachmentsDir = path.join(app.getPath("userData"), ATTACHMENTS_DIR);
@@ -1208,8 +1323,12 @@ class MacOSMessagesImportService {
       .all() as { id: string; message_id: string; external_message_id: string; filename: string }[];
 
     for (const row of existingExternalRows) {
-      // Key: external_message_id:filename for unique identification
-      existingByExternalId.set(`${row.external_message_id}:${row.filename}`, {
+      // Key: external_message_id:filename for unique identification.
+      // BACKLOG-2743: built by attachmentStoredKey so this and the pre-flight's
+      // exclusion set cannot drift into two different spellings of one format.
+      const externalIdKey = attachmentStoredKey(row.external_message_id, row.filename);
+      if (!externalIdKey) continue;
+      existingByExternalId.set(externalIdKey, {
         id: row.id,
         message_id: row.message_id,
       });
@@ -1236,14 +1355,9 @@ class MacOSMessagesImportService {
       UPDATE attachments SET message_id = ? WHERE id = ?
     `);
 
-    // Also need to query existing message IDs from DB for messages imported in previous runs
-    const existingMessageIdMap = new Map<string, string>();
-    const existingMsgRows = db
-      .prepare(`SELECT id, external_id FROM messages WHERE external_id IS NOT NULL`)
-      .all() as { id: string; external_id: string }[];
-    for (const row of existingMsgRows) {
-      existingMessageIdMap.set(row.external_id, row.id);
-    }
+    // BACKLOG-2743: existingMessageIdMap (messages imported by previous runs) is
+    // loaded ABOVE, before the pre-flight — the guard needs it to size only the
+    // attachments this loop could actually link and write.
 
     // Process attachments with progress reporting and event loop yielding
     const totalAttachments = attachments.length;
@@ -1338,8 +1452,10 @@ class MacOSMessagesImportService {
 
         // TASK-1122: Check if attachment exists by external_message_id (stable identifier)
         // If so, update its message_id to the new internal ID (fixes stale references after re-sync)
-        const externalKey = `${attachment.message_guid}:${filename}`;
-        const existingByExternal = existingByExternalId.get(externalKey);
+        // BACKLOG-2743: same helper as the pre-flight's exclusion set — one
+        // spelling of the key format, not three identical-by-inspection copies.
+        const externalKey = attachmentStoredKey(attachment.message_guid, filename);
+        const existingByExternal = externalKey ? existingByExternalId.get(externalKey) : undefined;
         if (existingByExternal) {
           // Attachment exists but may have stale message_id
           if (existingByExternal.message_id !== internalMessageId) {
@@ -1598,6 +1714,19 @@ class MacOSMessagesImportService {
     count?: number;
     filteredCount?: number;
     error?: string;
+    /** BACKLOG-2743: Bytes of attachments that would be copied for this window. */
+    attachmentBytes?: number;
+    /** BACKLOG-2743: Number of attachments that would be copied. */
+    attachmentCount?: number;
+    /** BACKLOG-2743: df-equivalent free space, or null when unreadable. */
+    availableDiskBytes?: number | null;
+    /**
+     * BACKLOG-2743: Whether the attachment copy fits (estimate + headroom vs
+     * available). Computed HERE, in main, by the same helper the pre-flight
+     * check uses — the renderer is never asked to redo this comparison, so the
+     * number the user is shown and the number the import enforces cannot drift.
+     */
+    fitsOnDisk?: boolean;
   }> {
     // Check platform
     if (os.platform() !== "darwin") {
@@ -1626,6 +1755,7 @@ class MacOSMessagesImportService {
       // the app whenever chat.db could not be opened.
       const db = await openSqliteReadOnly(messagesDbPath, MacOSMessagesImportService.SERVICE_NAME);
       const dbGet = (sql: string) => db.get<{ count: number }>(sql);
+      const dbAllSizes = (sql: string) => db.all<AttachmentSizeRow>(sql);
       const dbClose = db.close;
 
       // BACKLOG-2280: Reactions are imported now, so the available-count scope must
@@ -1652,12 +1782,81 @@ class MacOSMessagesImportService {
           filteredCount = filteredResult?.count || 0;
         }
 
+        // BACKLOG-2743: Size the attachment copy for the SAME window, before any
+        // byte is copied. Every figure needed is queryable from chat.db up front;
+        // previously nothing on this path looked at attachment size at all, so a
+        // library whose attachments exceeded the disk was discovered only by
+        // running out of space partway through the copy.
+        //
+        // Scoped by the same date cutoff as the count: storeAttachments only
+        // copies an attachment whose message resolves to a stored message ID, so
+        // the window bounds the attachment set in practice even though the
+        // import's own attachment SELECT is unbounded. (An attachment belonging
+        // to a message imported by an EARLIER run with a wider window can still
+        // be copied, which makes reality marginally exceed this estimate for
+        // narrow windows; for "All time" — the case that overruns a disk — there
+        // is no such gap.)
+        //
+        // GROUP BY attachment.ROWID: one source file counts ONCE even when it is
+        // joined to several messages. Same ROWID = same source path = same
+        // content hash = a single copy on disk.
+        const attachmentWhere =
+          appleDateCutoffNano !== null
+            ? `WHERE message.guid IS NOT NULL AND attachment.filename IS NOT NULL AND message.date > ${appleDateCutoffNano}`
+            : `WHERE message.guid IS NOT NULL AND attachment.filename IS NOT NULL`;
+        const attachmentRows = await dbAllSizes(`
+          SELECT
+            attachment.filename as filename,
+            attachment.transfer_name as transfer_name,
+            attachment.total_bytes as total_bytes,
+            message.guid as message_guid
+          FROM attachment
+          JOIN message_attachment_join ON attachment.ROWID = message_attachment_join.attachment_id
+          JOIN message ON message.ROWID = message_attachment_join.message_id
+          ${attachmentWhere}
+          GROUP BY attachment.ROWID
+        `);
+
         await dbClose();
+
+        // Exclude attachments already in app storage, exactly as the pre-flight
+        // does. Without this the panel would show the FIRST import's size
+        // forever and block a user who had already imported successfully.
+        // Failure to read the app DB leaves the set unfiltered (a higher, safer
+        // estimate) rather than aborting the count.
+        const alreadyStoredKeys = new Set<string>();
+        try {
+          const appDb = databaseService.getRawDatabase();
+          for (const row of appDb
+            .prepare(
+              `SELECT external_message_id, filename FROM attachments WHERE external_message_id IS NOT NULL`
+            )
+            .all() as { external_message_id: string; filename: string }[]) {
+            const key = attachmentStoredKey(row.external_message_id, row.filename);
+            if (key) alreadyStoredKeys.add(key);
+          }
+        } catch (dbError) {
+          logService.warn(
+            "Could not read stored attachments for the import estimate; reporting the unfiltered total",
+            MacOSMessagesImportService.SERVICE_NAME,
+            { error: dbError instanceof Error ? dbError.message : String(dbError) }
+          );
+        }
+
+        const estimate = summarizeAttachmentEstimate(
+          filterUnstoredAttachments(attachmentRows, alreadyStoredKeys)
+        );
+        const availableDiskBytes = await getAvailableDiskBytes(app.getPath("userData"));
+        const verdict = evaluateAttachmentSpace(estimate.eligibleBytes, availableDiskBytes);
 
         return {
           success: true,
           count: totalCount,
           filteredCount: filteredCount !== totalCount ? filteredCount : undefined,
+          attachmentBytes: estimate.eligibleBytes,
+          attachmentCount: estimate.eligibleCount,
+          availableDiskBytes,
+          fitsOnDisk: verdict.fits,
         };
       } catch (error) {
         await dbClose();

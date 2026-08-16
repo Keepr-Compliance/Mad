@@ -18,6 +18,10 @@ import * as Sentry from "@sentry/electron/renderer";
 import { isMacOS } from '../utils/platform';
 import type { ImportSource, UserPreferences } from './settingsService';
 import logger from '../utils/logger';
+// BACKLOG-2743: type-only import of the shared refusal shape (one definition,
+// re-exported by the IPC contract). Type-only is the only safe direction across
+// the renderer-main boundary.
+import type { AttachmentsRefusedForSpace } from '@electron/types/ipc/window-api-messages';
 
 export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
   | 'reindex' | 'backup' | 'restore' | 'ccpa-export';
@@ -479,7 +483,15 @@ class SyncOrchestratorServiceClass {
           const importFn = window.api.messages.importMacOSMessages as (
             userId: string,
             forceReimport?: boolean
-          ) => Promise<{ success: boolean; messagesImported: number; error?: string; wasCapped?: boolean; totalAvailable?: number }>;
+          ) => Promise<{
+            success: boolean;
+            messagesImported: number;
+            error?: string;
+            wasCapped?: boolean;
+            totalAvailable?: number;
+            /** BACKLOG-2743: pre-flight free-space check refused the attachment copy. */
+            attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
+          }>;
           const result = await importFn(userId, options?.forceReimport);
           if (!result.success) {
             throw new Error(result.error || 'Message import failed');
@@ -495,6 +507,18 @@ class SyncOrchestratorServiceClass {
           if (result.wasCapped && result.totalAvailable) {
             const excluded = result.totalAvailable - result.messagesImported;
             warning = `${excluded.toLocaleString()} messages excluded by import limit. Adjust in Settings.`;
+          }
+          // BACKLOG-2743: the pre-flight free-space check refused the attachment
+          // copy. The messages themselves imported fine, so this is a warning and
+          // not an error — but it must be SAID, or attachments would go missing
+          // with the UI reporting unqualified success.
+          if (result.attachmentsRefusedForSpace) {
+            const needGb = result.attachmentsRefusedForSpace.estimatedBytes / 1e9;
+            const haveGb = result.attachmentsRefusedForSpace.availableBytes / 1e9;
+            const spaceWarning =
+              `Attachments were not imported: they need ${needGb.toFixed(1)} GB ` +
+              `but only ${haveGb.toFixed(1)} GB is free. Messages imported normally.`;
+            warning = warning ? `${warning} ${spaceWarning}` : spaceWarning;
           }
           return { warning, importedCount: result.messagesImported };
         } finally {
