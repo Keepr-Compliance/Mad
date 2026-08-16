@@ -2577,13 +2577,30 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
           // failed the entire migration with "Migration 51 ... failed", which
           // the runner escalates to a restore-from-backup.
           //
-          // Latent until now only because every shape previously exercised had
-          // either NONE of the three (backfill skipped by the guard) or all
-          // three. v63 made it reachable in the test chain by adding
-          // `last_exported_on` to tables that had none of them — but it is
-          // reachable in production independently of v63: an old database with
-          // `updated_at` and an export FLAG, but neither `last_exported_at` nor
-          // `last_exported_on`, produces exactly one candidate and crashes here.
+          // WHERE IT IS AND IS NOT REACHABLE — measured, because the first
+          // version of this comment asserted a production crash and was WRONG.
+          //
+          // NOT reachable on any shipped database. The condition needs EXACTLY
+          // ONE of the three timestamps present, plus at least one export flag.
+          // Checked against every historical `schema.sql` state carrying a
+          // `transactions` table (70 of 70) by rebuilding each and reading
+          // `PRAGMA table_info`: ZERO match. No shipped route — neither the
+          // pre-consolidation heal paths nor the versioned chain — yields export
+          // flags without an export timestamp, because the flag and timestamp
+          // columns arrived together (6c0e67ed5, 2025-11-17).
+          //
+          // Reachable from the MIGRATION TEST HARNESS's minimal `transactions`
+          // table, which carries `updated_at` and an export flag but neither
+          // `last_exported_*`. v63 adds `last_exported_on` to exactly such a
+          // table, producing the single candidate — which is why the whole
+          // `migration-v43` suite went red the moment v63 landed.
+          //
+          // So this is a PREREQUISITE for v63, not an independent production
+          // bug fix. It remains a genuine latent defect — the guard says `> 0`
+          // where the SQL requires `>= 2` — and any future migration or schema
+          // re-baseline that adds one of these columns without the others would
+          // reach it for real. Directly regression-tested in
+          // `databaseService.migration-v51.coalesce.test.ts`.
           //
           // A single candidate is its own coalesce, so emit the bare column.
           const tsExpr =
