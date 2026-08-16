@@ -23,6 +23,29 @@
 --     (v43 SELECTs those columns from communications_old) and so cannot
 --     demonstrate a clean end-to-end upgrade at all.
 --
+-- THE ONE DEVIATION FROM VERBATIM, AND WHY IT IS SAFE. Two COMMENT strings were
+-- changed, and nothing else: the trailing `--` comments on `contact_phones`
+-- that document the phone format (the "Normalized:" and "Display format:"
+-- examples) had their example number's last four digits moved into the reserved
+-- fictional range, landing on the SAME value today's schema.sql already uses on
+-- that line (555-0102). They are documentation placeholders, never data.
+--
+-- The repository is PUBLIC and its fixture-PII guard reserves 555-0100..555-0199
+-- for fictional numbers; the historical example predates that convention. The
+-- old value is deliberately not reproduced here — quoting it in this header
+-- would republish exactly what the guard exists to keep out of the tree.
+--
+-- No SQL statement was touched. SQLite stores the CREATE TABLE text verbatim,
+-- comments included, so diffing the STORED schema shows those two comment lines
+-- and — the point — nothing else:
+--     git show 5cec24486:electron/database/schema.sql | sqlite3 a.db
+--     sqlite3 b.db < <this file>
+--     diff <(sqlite3 a.db .schema) <(sqlite3 b.db .schema)
+--       -> exactly 2 lines, both `-- Normalized:` / `-- Display format:` comments
+--     diff <(sqlite3 a.db .schema | sed "s/--.*//") \
+--          <(sqlite3 b.db .schema | sed "s/--.*//")
+--       -> no output: every table, column, type, constraint and index identical
+--
 -- Measured against today's schema.sql with the sqlite3 CLI (no `.bail`, so it
 -- enumerates every failure rather than stopping at the first):
 --   BEFORE the BACKLOG-2750 fix: 1 error — `no such column: email_id` (:1060)
@@ -208,8 +231,8 @@ CREATE TABLE IF NOT EXISTS contact_phones (
   id TEXT PRIMARY KEY,
   contact_id TEXT NOT NULL,
 
-  phone_e164 TEXT NOT NULL,              -- Normalized: +14155550000
-  phone_display TEXT,                    -- Display format: (415) 555-0000
+  phone_e164 TEXT NOT NULL,              -- Normalized: +14155550102
+  phone_display TEXT,                    -- Display format: (415) 555-0102
   is_primary INTEGER DEFAULT 0,
   label TEXT,                            -- mobile, home, work, etc.
   source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
