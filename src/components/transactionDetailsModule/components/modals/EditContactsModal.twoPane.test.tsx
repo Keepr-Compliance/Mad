@@ -73,15 +73,15 @@ beforeAll(() => {
 
 // A contact ALREADY assigned to the deal, imported with TWO emails. getAvailable
 // only matches on the PRIMARY email, so an address-book entry under the SECONDARY
-// email (paul@home.com) is not recognized as already-imported and is returned —
+// email (casey@home.com) is not recognized as already-imported and is returned —
 // the realistic id-swap leak. (allEmails carries both, so the frontend dedup CAN
 // bridge them once the DB row is present.)
 const assignedTwoEmail: ExtendedContact = {
-  id: "db-paul",
-  name: "Paul Multi",
-  display_name: "Paul Multi",
-  email: "paul@work.com",
-  allEmails: ["paul@work.com", "paul@home.com"],
+  id: "db-casey",
+  name: "Casey Multi",
+  display_name: "Casey Multi",
+  email: "casey@work.com",
+  allEmails: ["casey@work.com", "casey@home.com"],
   user_id: "user-1",
   source: "contacts_app",
   created_at: "2024-02-01",
@@ -109,10 +109,10 @@ const janeUnassigned: ExtendedContact = {
 // in `contact-handlers.oneMatchingRule.test.ts`. Do NOT re-add a renderer rule
 // to hide it — fix main'"'"'s already-imported set, or let the crosswalk converge.
 const externalTwin: ExtendedContact = {
-  id: "ext-paul",
-  name: "Paul Multi",
-  display_name: "Paul Multi",
-  email: "paul@home.com",
+  id: "ext-casey",
+  name: "Casey Multi",
+  display_name: "Casey Multi",
+  email: "casey@home.com",
   user_id: "user-1",
   source: "contacts_app",
   created_at: "2024-02-01",
@@ -206,7 +206,7 @@ describe("EditContactsModal two-pane (BACKLOG-2405, real ContactSearchList)", ()
     mockGetDetails.mockResolvedValue({
       success: true,
       transaction: {
-        contact_assignments: [{ id: "a1", contact_id: "db-paul", role: "client" }],
+        contact_assignments: [{ id: "a1", contact_id: "db-casey", role: "client" }],
       },
     });
     // The saved half, as the provider reads it for a deal with an address.
@@ -248,15 +248,15 @@ describe("EditContactsModal two-pane (BACKLOG-2405, real ContactSearchList)", ()
     // address-book twin, never also as its own DB row (excluded by selection).
     // That is what keeping it in `contacts` buys, and stripping it — the
     // regression this suite was written for — breaks both.
-    expect(screen.getByTestId("added-chip-db-paul")).toBeInTheDocument();
-    expect(availableNames().filter((n) => n.includes("Paul Multi"))).toHaveLength(1);
+    expect(screen.getByTestId("added-chip-db-casey")).toBeInTheDocument();
+    expect(availableNames().filter((n) => n.includes("Casey Multi"))).toHaveLength(1);
   });
 
   it("BACKLOG-2370: the address-book twin under a SECONDARY email is now shown, deliberately", async () => {
     // This is the assertion that used to read `.toBe(false)`. It changed because
     // the rule that made it true was deleted, not because this surface changed.
     //
-    // `getAvailable` returned `ext-paul` — the fixture says so, and it is what
+    // `getAvailable` returned `ext-casey` — the fixture says so, and it is what
     // the real handler does for a card filed under a saved contact's secondary
     // address. The renderer used to hide it by re-deciding identity from
     // `allEmails`. It no longer decides identity at all, so main's answer stands.
@@ -277,11 +277,11 @@ describe("EditContactsModal two-pane (BACKLOG-2405, real ContactSearchList)", ()
       expect(availableNames().some((n) => n.includes("Zoe New"))).toBe(true);
     });
 
-    // ONE "Paul Multi" row, and it is the external twin: the DB row stays
+    // ONE "Casey Multi" row, and it is the external twin: the DB row stays
     // excluded by selection, so this is main's answer rendered unchanged rather
     // than the assigned contact leaking back in.
-    const pauls = availableNames().filter((n) => n.includes("Paul Multi"));
-    expect(pauls).toHaveLength(1);
+    const caseys = availableNames().filter((n) => n.includes("Casey Multi"));
+    expect(caseys).toHaveLength(1);
     // Jane and Zoe are unaffected — the exact set, not just a count.
     expect(availableNames().some((n) => n.includes("Jane Doe"))).toBe(true);
     expect(availableNames().some((n) => n.includes("Zoe New"))).toBe(true);
@@ -297,14 +297,14 @@ describe("EditContactsModal two-pane (BACKLOG-2405, real ContactSearchList)", ()
     await user.click(screen.getByTestId("add-contacts-button"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("added-chip-db-paul")).toBeInTheDocument();
+      expect(screen.getByTestId("added-chip-db-casey")).toBeInTheDocument();
     });
 
     // ✕ the existing contact.
-    await user.click(screen.getByTestId("remove-added-db-paul"));
-    expect(screen.queryByTestId("added-chip-db-paul")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("remove-added-db-casey"));
+    expect(screen.queryByTestId("added-chip-db-casey")).not.toBeInTheDocument();
 
-    // Close overlay, Save -> a remove op for db-paul, never a re-add.
+    // Close overlay, Save -> a remove op for db-casey, never a re-add.
     await user.click(screen.getByTestId("add-contacts-overlay-close"));
     await waitFor(() => {
       expect(screen.getByTestId("edit-contacts-modal-save")).toBeInTheDocument();
@@ -318,7 +318,7 @@ describe("EditContactsModal two-pane (BACKLOG-2405, real ContactSearchList)", ()
       action: string;
       contactId: string;
     }>;
-    expect(ops.some((o) => o.action === "remove" && o.contactId === "db-paul")).toBe(true);
-    expect(ops.some((o) => o.action === "add" && o.contactId === "db-paul")).toBe(false);
+    expect(ops.some((o) => o.action === "remove" && o.contactId === "db-casey")).toBe(true);
+    expect(ops.some((o) => o.action === "add" && o.contactId === "db-casey")).toBe(false);
   });
 });

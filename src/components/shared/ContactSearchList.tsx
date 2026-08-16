@@ -532,7 +532,7 @@ export function ContactSearchList({
   // and genuinely-new contacts can appear on a refresh; the freeze above snapshots
   // ONLY what was present on first data, so those identities never get a frozen
   // slot and are positioned LIVE by projectOntoOrder — free to move when their
-  // recency changes on select/import (the founder's Paul/Daniel jump). This
+  // recency changes on select/import (the founder's Casey/Daniel jump). This
   // appends ONLY keys not already frozen, at their sorted position, and preserves
   // the existing order EXACTLY. It is NOT a re-freeze: adding contacts/
   // externalContacts to the freeze effect's deps instead would re-sort on every

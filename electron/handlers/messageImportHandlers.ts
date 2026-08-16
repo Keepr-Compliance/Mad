@@ -13,7 +13,11 @@ import macOSMessagesImportService from "../services/macOSMessagesImportService";
 import * as externalContactDb from "../services/db/externalContactDbService";
 import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
 import { computeEarliestAuditStart } from "../utils/emailDateRange";
-import { computeEffectiveImportWindow } from "../services/macOSMessagesImportService/importHelpers";
+import {
+  computeEffectiveImportWindow,
+  resolveLookbackMonths,
+  DEFAULT_LOOKBACK_MONTHS,
+} from "../services/macOSMessagesImportService/importHelpers";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
   MacOSImportResult,
@@ -100,7 +104,12 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
 
       // TASK-1952: Load message import filter preferences
       // Defaults: 3 months lookback, 50K max messages (matches UI defaults)
-      const DEFAULT_LOOKBACK_MONTHS = 3;
+      //
+      // BACKLOG-2561: `lookbackMonths` is resolved through `resolveLookbackMonths`,
+      // NOT `??`. "All time" is stored as an explicit `null`, and `null ?? 3` is 3 —
+      // so the old operator silently rewrote every all-time import into a 3-month
+      // one while the count preview on the same screen showed the all-time total.
+      // The label handler below must resolve it the same way or the two disagree.
       const DEFAULT_MAX_MESSAGES = 50000;
       let importFilters: MessageImportFilters = {
         lookbackMonths: DEFAULT_LOOKBACK_MONTHS,
@@ -111,7 +120,7 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         const messageImportPrefs = preferences?.messageImport;
         if (messageImportPrefs?.filters) {
           importFilters = {
-            lookbackMonths: messageImportPrefs.filters.lookbackMonths ?? DEFAULT_LOOKBACK_MONTHS,
+            lookbackMonths: resolveLookbackMonths(messageImportPrefs.filters),
             maxMessages: messageImportPrefs.filters.maxMessages ?? DEFAULT_MAX_MESSAGES,
           };
         }
@@ -617,17 +626,21 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
       _event: IpcMainInvokeEvent,
       userId: string
     ): Promise<EffectiveImportWindow & { success: boolean }> => {
-      // Matches the import handler's default when no preference is stored.
-      const DEFAULT_LOOKBACK_MONTHS = 3;
-
-      // 1) Resolve the lookback preference. Mirror the import handler exactly
-      //    (`?? DEFAULT`) so the displayed window equals the imported window.
+      // 1) Resolve the lookback preference. Mirror the import handler exactly —
+      //    the SAME `resolveLookbackMonths` call, off the SAME shared default —
+      //    so the displayed window equals the imported window.
+      //
+      //    BACKLOG-2561: this line used to be its own `?? DEFAULT_LOOKBACK_MONTHS`
+      //    against a second local `const DEFAULT_LOOKBACK_MONTHS = 3`. It mirrored
+      //    the import faithfully, which is exactly why the bug was invisible: both
+      //    collapsed an explicit "All time" `null` to 3, so the label truthfully
+      //    reported a window that was itself wrong.
       let lookbackMonths: number | null = DEFAULT_LOOKBACK_MONTHS;
       try {
         const preferences = await supabaseService.getPreferences(userId);
         const filters = preferences?.messageImport?.filters;
         if (filters) {
-          lookbackMonths = filters.lookbackMonths ?? DEFAULT_LOOKBACK_MONTHS;
+          lookbackMonths = resolveLookbackMonths(filters);
         }
       } catch (prefsError) {
         logService.warn(
