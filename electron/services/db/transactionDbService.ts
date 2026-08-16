@@ -254,7 +254,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   sale_price: {
     insert: "db-default",
     update: "writable",
-    why: "Entered by the user after the deal exists; no creating caller supplies it. Already accepted on the update path and forwarded by the IPC validator.",
+    why: "Entered by the user after the deal exists. Already accepted on the update path and forwarded by the IPC validator. NOTE the one creating caller that names it — `_createTransactionFromSummary` (transactionService.ts:530) — is a PRIVATE method with zero callers repo-wide, so opening this would change no live behaviour and would give a dead path its first effect. If that method is ever revived, revisit this entry rather than assuming the drop is still harmless.",
   },
   earnest_money_amount: {
     insert: "db-default",
