@@ -112,7 +112,7 @@ import {
   getPendingTransactionCount,
   TRANSACTION_COLUMN_POLICY,
 } from "../transactionDbService";
-import { validateTransactionData } from "../../../utils/validation";
+import { sanitizeObject, validateTransactionData } from "../../../utils/validation";
 import type { NewTransaction, Transaction } from "../../../types";
 
 // Bypass the Jest moduleNameMapper that rewrites better-sqlite3-multiple-ciphers
@@ -614,11 +614,22 @@ describe("transaction writer — detection fields and the review queue (BACKLOG-
   describe("the handler chain — validator and writer agree (SR finding F6)", () => {
     const REVIEWED_AT = "2026-08-15T10:30:00.000Z";
 
+    /**
+     * The handler's chain verbatim, `sanitizeObject` included
+     * (transactionCrudHandlers.ts:356-360).
+     *
+     * `sanitizeObject` is in here rather than assumed away because
+     * `suggested_contacts` is a JSON string full of quotes and brackets, and
+     * before this change it never crossed the IPC boundary at all — the
+     * detection path is main-process-internal. Starting the test one hop later
+     * would leave the only step that has never carried this value untested.
+     */
     async function throughValidator(
       id: string,
       payload: Record<string, unknown>,
     ): Promise<void> {
-      const validated = validateTransactionData(payload, true);
+      const sanitized = sanitizeObject(payload);
+      const validated = validateTransactionData(sanitized, true);
       await updateTransaction(id, validated as unknown as Partial<Transaction>);
     }
 
