@@ -19,7 +19,11 @@ import {
   assignContactToTransactionSync,
   type TransactionContactData,
 } from "./transactionContactDbService";
-import { validateFields } from "../../utils/sqlFieldWhitelist";
+import {
+  validateFields,
+  type ColumnOf,
+  type FieldExpression,
+} from "../../utils/sqlFieldWhitelist";
 import {
   isTransactionFrozen,
   frozenFieldsInUpdate,
@@ -555,8 +559,19 @@ export async function updateTransaction(
     throw new DatabaseError("No valid fields to update");
   }
 
-  // Validate fields against whitelist before SQL construction
-  validateFields("transactions", fields);
+  // Validate fields against whitelist before SQL construction.
+  //
+  // BACKLOG-2739 PHASE 1 SEAM — the cast is the finding, not the fix.
+  // `fields` is built above as `${column} = ?` from plain strings, so it is
+  // `string[]` and cannot satisfy the column union `validateFields` now takes.
+  // The cast keeps the build green WITHOUT touching this writer's field list,
+  // which is deliberately Phase 2 (BACKLOG-2738): the writer must declare an
+  // exhaustive `Record<Column, Decision>` so an OMITTED column is a build
+  // error. Until then a wrong name here is still only caught at runtime.
+  validateFields(
+    "transactions",
+    fields as ReadonlyArray<FieldExpression<ColumnOf<"transactions">>>,
+  );
 
   values.push(transactionId);
 

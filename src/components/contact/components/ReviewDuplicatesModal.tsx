@@ -547,7 +547,7 @@ function initialOf(name: string): string {
   return trimmed ? trimmed.charAt(0).toUpperCase() : "?";
 }
 
-/** "Paul Dorian" → "Paul", for "Accept the ones that are this Paul." */
+/** "Casey Lane" → "Casey", for "Accept the ones that are this Casey." */
 function firstNameOf(name: string): string {
   const first = name.trim().split(/\s+/)[0];
   return first || name.trim();

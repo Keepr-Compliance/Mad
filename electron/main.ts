@@ -728,7 +728,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
               subscription,
               expiresAt: Date.now() + sessionService.getSessionExpirationMs(),
               createdAt: Date.now(),
-              // Store Supabase tokens for SDK session restoration (Dorian's T&C fix)
+              // Store Supabase tokens for SDK session restoration (BACKLOG-546 T&C fix)
               // Required for RLS-protected operations on app restart
               supabaseTokens: {
                 access_token: accessToken,

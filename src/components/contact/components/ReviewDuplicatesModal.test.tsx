@@ -230,7 +230,7 @@ describe("ReviewDuplicatesModal", () => {
                 sourceRecordId: "out-1",
                 sourceLabel: "Outlook contacts",
                 matchedOn: "name",
-                recordEmails: ["dorian@example.com"],
+                recordEmails: ["lane@example.com"],
                 recordPhones: [],
               }),
             ],
@@ -258,7 +258,7 @@ describe("ReviewDuplicatesModal", () => {
     await screen.findByTestId("review-contact-c-daniel");
     expect(screen.getAllByTestId(/^review-contact-c-/)).toHaveLength(1);
     expect(screen.getByTestId("review-source-p-out").textContent).toBe("Outlook contacts");
-    expect(screen.getByTestId("review-value-p-out").textContent).toBe("dorian@example.com");
+    expect(screen.getByTestId("review-value-p-out").textContent).toBe("lane@example.com");
     expect(screen.getByTestId("review-source-p-mac").textContent).toBe("Mac address book");
     expect(screen.getByTestId("review-value-p-mac").textContent).toBe("+14155550188");
 

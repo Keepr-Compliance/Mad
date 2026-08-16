@@ -13,7 +13,7 @@
  *   Founder QA, 2026-08-02. Casey Lane, a party to transaction 571 Dale St N,
  *   assembled from a macOS card and an Outlook record. The founder pressed
  *   "Not this person" on the Outlook one. The link was deleted and a
- *   `different_people` verdict recorded — and `dorian@bluespaces.com`, an
+ *   `different_people` verdict recorded — and `casey@bluespaces.com`, an
  *   address that exists ONLY in that Outlook record, stayed on the contact.
  *   `getContactEmailsForTransaction` reads `contact_emails`, so the audit for
  *   that transaction went on searching for the correspondence of a person the
