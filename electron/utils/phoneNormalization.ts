@@ -137,6 +137,23 @@ export const DEFAULT_PHONE_REGIONS: readonly PhoneRegion[] = ["US", "IL"];
  * BACKLOG-2635 PR lands. Fresh v40 upgrades backfill through this function
  * and get the new keys.
  *
+ * NOT IMPLEMENTED HERE — the minimum-digit floor (founder decision, BACKLOG-2635
+ * comment 13 Aug): "below the floor, emit NO key at all", so an extension
+ * ("4021") or a typo ("11") can never make two unrelated contacts look like
+ * duplicates. It is deliberately absent from THIS function because a key-level
+ * floor breaks two shipped behaviours that have nothing to do with duplicate
+ * suggestions:
+ *   - `messageDbService` skips empty keys (`normalized.length === 0`), so short
+ *     codes would drop out of `phone_last_message` — undoing BACKLOG-1493,
+ *     which removed exactly such a ≥7-digit filter on purpose.
+ *   - the search paths build `LIKE '%' || key || '%'`, so an empty key becomes
+ *     `'%%'` and every row matches a 3–6-digit query
+ *     (`contactDbService.ts:2433`, `transactionSearchDbService.ts:291,628`).
+ * The floor belongs to the MATCHING layer — the founder's own wording is "never
+ * used for matching" — over the candidate-key sets in `contactMatchIndex`,
+ * `contactSourceLinker`, `contactValueDedup` and `autoLinkNameGuard`. That is a
+ * separate change with its own controls and is NOT covered by this fix.
+ *
  * @example
  * toLookupKey("+1 (415) 555-0109")  // "4155550109"
  * toLookupKey("03-555-0121")         // "97235550121"  (== toLookupKey("+972 3 555 0121"))
