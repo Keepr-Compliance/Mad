@@ -180,7 +180,7 @@ const RealDatabase = require(
 const FIXTURE_SQL_PATH = path.join(__dirname, "fixtures", "v2.27.0-populated.sql");
 
 /** The version the chain must land on — the LAST entry in MIGRATIONS. */
-const HEAD_VERSION = 62;
+const HEAD_VERSION = 63;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyService = any;
