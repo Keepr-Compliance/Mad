@@ -76,6 +76,20 @@ beforeEach(() => {
   });
 });
 
+/**
+ * BACKLOG-2760: Import and Force Re-import are refused until the size estimate
+ * for the SELECTED window has resolved — an unknown attachment size used to
+ * permit the copy, which is how a ~61 GB import stayed one click away on a disk
+ * with ~59 GB free. Interaction tests must therefore let the estimate settle
+ * before clicking, exactly as a user waits for the panel to finish loading.
+ */
+const awaitEstimateSettled = async () =>
+  waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: /force re-import/i }),
+    ).toBeEnabled(),
+  );
+
 /** Expected display string for a cutoff ISO, via the component's own formatter. */
 function expectedCutoffLabel(iso: string): string {
   const d = parseLocalCalendarDay(iso)!;
@@ -154,6 +168,7 @@ describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLO
 
   it("does NOT start the import until the confirm dialog is accepted", async () => {
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+    await awaitEstimateSettled();
 
     fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
 
@@ -171,6 +186,7 @@ describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLO
 
   it("starts a FORCE import once the destructive confirm is clicked", async () => {
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+    await awaitEstimateSettled();
 
     fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
     fireEvent.click(await screen.findByTestId("force-reimport-confirm"));
@@ -183,6 +199,7 @@ describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLO
 
   it("aborts when the dialog is cancelled (no import, dialog closes)", async () => {
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+    await awaitEstimateSettled();
 
     fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
     expect(
@@ -201,6 +218,7 @@ describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLO
 
   it("does NOT gate the normal import behind the dialog", async () => {
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+    await awaitEstimateSettled();
 
     fireEvent.click(screen.getByRole("button", { name: /^import messages$/i }));
 
@@ -275,10 +293,15 @@ describe("MacOSMessagesImportSettings — inactive-source gating (BACKLOG-2335)"
     expect(selects).toHaveLength(2);
     selects.forEach((select) => expect(select).not.toBeDisabled());
 
-    // Import + Force Re-import are clickable.
-    expect(
-      screen.getByRole("button", { name: /^import messages$/i }),
-    ).not.toBeDisabled();
+    // Import + Force Re-import are clickable — once the BACKLOG-2760 size
+    // estimate for the selected window has resolved. Being briefly disabled
+    // while that is unknown is the guard working, not the inactive-source
+    // gating this test is about.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^import messages$/i }),
+      ).not.toBeDisabled(),
+    );
     expect(
       screen.getByRole("button", { name: /force re-import/i }),
     ).not.toBeDisabled();
@@ -317,6 +340,7 @@ describe("MacOSMessagesImportSettings — completion count (BACKLOG-2329)", () =
     const { rerender } = renderStrict(
       <MacOSMessagesImportSettings userId={userId} />,
     );
+    await awaitEstimateSettled();
 
     // Trigger the force path through the confirm dialog so the component records it.
     fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
