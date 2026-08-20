@@ -424,6 +424,33 @@ export function validateContactData(
 /**
  * Validated transaction data interface
  */
+/**
+ * What survives validation on the way to `updateTransaction` / the create paths.
+ *
+ * ===========================================================================
+ * BACKLOG-2558 (SR finding F6) — THIS LIST AND THE WRITER'S USED TO DISAGREE
+ * ===========================================================================
+ * This validator and `transactionDbService`'s `allowedFields` array were two
+ * hand-maintained lists on the SAME path, and they had drifted in both
+ * directions:
+ *
+ *  - It validated and forwarded `detection_status`, `reviewed_at` and
+ *    `rejection_reason`, which the writer then silently discarded — so Approve
+ *    wrote 1 of its 3 fields and Reject hard-failed.
+ *  - It forwarded `amount` and `notes`, which are columns of NO table and were
+ *    read by nothing on any path.
+ *  - It STRIPPED `suggested_contacts`, which the review UI genuinely sends
+ *    (`useTransactionDetails.ts:283`, dismissing a suggested party) — so that
+ *    payload arrived at the writer empty and threw "No valid fields to update".
+ *
+ * The writer no longer keeps a list: it derives its accepted set from an
+ * exhaustive `Record<TransactionColumn, ColumnPolicy>` (BACKLOG-2737). This
+ * interface is now the OTHER half of that contract, and every key on it below
+ * `contact_assignments` is a real column the writer accepts.
+ *
+ * `contact_assignments` is deliberately NOT a column — it is a sibling payload
+ * consumed by `createAuditedTransaction`, never by the update path.
+ */
 export interface ValidatedTransactionData {
   property_address?: string | null;
   property_street?: string | null;
@@ -432,9 +459,7 @@ export interface ValidatedTransactionData {
   property_zip?: string | null;
   property_coordinates?: string | null;
   transaction_type?: string;
-  amount?: number;
   status?: string;
-  notes?: string | null;
   sale_price?: number;
   listing_price?: number;
   closing_date_verified?: number;
@@ -443,8 +468,12 @@ export interface ValidatedTransactionData {
   closing_deadline?: string;
   // AI detection fields
   detection_status?: string;
-  reviewed_at?: string;
+  /** `null` is meaningful: the column's "never reviewed" state (BACKLOG-2558). */
+  reviewed_at?: string | null;
+  /** `null` is meaningful: how Restore clears the reason (BACKLOG-2558). */
   rejection_reason?: string | null;
+  /** `null` is meaningful: how the last suggestion is dismissed (BACKLOG-2737). */
+  suggested_contacts?: string | null;
   // Contact assignments (for audited transaction creation)
   contact_assignments?: ContactAssignmentData[];
 }
@@ -482,6 +511,7 @@ export interface RawTransactionData {
   detection_status?: unknown;
   reviewed_at?: unknown;
   rejection_reason?: unknown;
+  suggested_contacts?: unknown;
   // Contact assignments
   contact_assignments?: unknown;
 }
@@ -575,6 +605,11 @@ export function validateTransactionData(
   }
 
   // Amount (if provided)
+  //
+  // BACKLOG-2558 F6: CHECKED BUT NOT FORWARDED. `transactions` has no `amount`
+  // column — on any path — so forwarding it only handed the writer a key it had
+  // to discard. The check stays: deleting it would turn today's ValidationError
+  // on `amount: -5` into silence, which is the wrong direction for this epic.
   if (data.amount !== undefined && data.amount !== null) {
     const amount = Number(data.amount);
     if (isNaN(amount) || amount < 0) {
@@ -583,7 +618,6 @@ export function validateTransactionData(
         "amount",
       );
     }
-    validated.amount = amount;
   }
 
   // Status
@@ -601,8 +635,13 @@ export function validateTransactionData(
   }
 
   // Notes (optional)
+  //
+  // BACKLOG-2558 F6: CHECKED BUT NOT FORWARDED, for the same reason as `amount`
+  // — `transactions` has no `notes` column. (Contact assignments carry their own
+  // `notes`, on `transaction_contacts`; that is a different field and is handled
+  // under `contact_assignments` below.)
   if (data.notes !== undefined && data.notes !== null) {
-    validated.notes = validateString(data.notes, "notes", {
+    validateString(data.notes, "notes", {
       required: false,
       maxLength: 10000,
     });
@@ -708,23 +747,74 @@ export function validateTransactionData(
     validated.detection_status = detectionStatus;
   }
 
-  // Reviewed at timestamp (for AI-detected transactions)
-  if (data.reviewed_at !== undefined && data.reviewed_at !== null) {
-    if (typeof data.reviewed_at === "string" && data.reviewed_at.trim()) {
+  // ===========================================================================
+  // BACKLOG-2558 — A NULL IS A VALUE HERE, NOT AN ABSENCE.
+  // ===========================================================================
+  // Both guards below used to read `!== undefined && !== null`, which collapses
+  // "clear this column" into "say nothing about this column". For a nullable
+  // column whose NULL state is meaningful those are opposite instructions, and
+  // the writer never got to tell them apart because the key had already been
+  // dropped here.
+  //
+  // `undefined` still means "not mentioned" and is still skipped. Only an
+  // explicit `null` is now forwarded.
+
+  // Reviewed at timestamp (for AI-detected transactions).
+  //
+  // NULL is this column's "never reviewed" state. No caller sends
+  // `reviewed_at: null` today — this one was LATENT, not live — but it is the
+  // identical shape to the `rejection_reason` defect below, one line away from
+  // it, and an un-review or restore-to-pending path would meet the same trap.
+  if (data.reviewed_at !== undefined) {
+    if (data.reviewed_at === null) {
+      validated.reviewed_at = null;
+    } else if (typeof data.reviewed_at === "string" && data.reviewed_at.trim()) {
       validated.reviewed_at = data.reviewed_at.trim();
     }
   }
 
-  // Rejection reason (for rejected AI-detected transactions)
-  if (data.rejection_reason !== undefined && data.rejection_reason !== null) {
-    validated.rejection_reason = validateString(
-      data.rejection_reason,
-      "rejection_reason",
-      {
-        required: false,
-        maxLength: 1000,
-      },
-    );
+  // Rejection reason (for rejected AI-detected transactions).
+  //
+  // THE LIVE ONE. `restore()` (src/services/transactionService.ts:223-233)
+  // sends `rejection_reason: null`, and that is the ONLY way this column is
+  // ever cleared. Stripping the null here left the old reason on the row — the
+  // third effect BACKLOG-2558 reports, and the one the WRITER already handles
+  // correctly: `TRANSACTION_COLUMN_POLICY.rejection_reason` states the rule
+  // outright ("CLEARED BY RESTORE — which is why null must land as null rather
+  // than being skipped as 'no value'"). The writer honoured it; this validator
+  // did not. Two hand-maintained lists on one path, drifting on a VALUE instead
+  // of on a NAME — the same defect class wearing a different coat.
+  if (data.rejection_reason !== undefined) {
+    validated.rejection_reason =
+      data.rejection_reason === null
+        ? null
+        : validateString(data.rejection_reason, "rejection_reason", {
+            required: false,
+            maxLength: 1000,
+          });
+  }
+
+  // Suggested contacts (JSON array of parties a detection proposed).
+  //
+  // BACKLOG-2737/2558 F6: this was validated by NOTHING and forwarded by
+  // nothing, while `useTransactionDetails.ts:283` sends it as the SOLE key of
+  // its payload when the user dismisses a suggested party. The payload was
+  // therefore emptied here and the writer threw "No valid fields to update" —
+  // the same drift as the review actions, in the opposite direction.
+  //
+  // `null` is meaningful and must survive: it is how the last remaining
+  // suggestion is cleared.
+  if (data.suggested_contacts !== undefined) {
+    if (data.suggested_contacts === null) {
+      validated.suggested_contacts = null;
+    } else if (typeof data.suggested_contacts === "string") {
+      validated.suggested_contacts = data.suggested_contacts;
+    } else {
+      throw new ValidationError(
+        "Suggested contacts must be a JSON string or null",
+        "suggested_contacts",
+      );
+    }
   }
 
   // Contact assignments (for audited transaction creation)
