@@ -233,7 +233,7 @@ const PRE_UPGRADE_VERSION = 55;
  * themselves to 56 locally via runChainThrough(), so they keep their original
  * meaning as the head moves on.
  */
-const HEAD_VERSION = 62;
+const HEAD_VERSION = 63;
 /** The version whose isolated effects the BACKLOG-2364 assertions describe. */
 const TOMBSTONE_VERSION = 56;
 /**
