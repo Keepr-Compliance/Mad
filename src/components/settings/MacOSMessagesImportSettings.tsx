@@ -137,6 +137,46 @@ export function MacOSMessagesImportSettings({
     fitsOnDisk: boolean;
   } | null>(null);
 
+  /**
+   * BACKLOG-2760: What we currently know about the selected window's size.
+   *
+   * `sizeEstimate === null` used to carry three different meanings at once —
+   * "not asked yet", "asked and failed", and "asked, nothing to report" — and
+   * every one of them left Import ENABLED. An unknown size therefore permitted
+   * the copy, which is the wrong direction for a disk-capacity guard. This makes
+   * the state explicit so the unknown cases can refuse.
+   *
+   * - `pending`     a request for THIS window is in flight (or not yet gated in)
+   * - `ready`       a response for THIS window arrived; `sizeEstimate` is its verdict
+   * - `unavailable` main could not size this window (`{success:false}`, or the IPC threw)
+   */
+  const [estimateStatus, setEstimateStatus] = useState<
+    "pending" | "ready" | "unavailable"
+  >("pending");
+
+  /**
+   * BACKLOG-2760: Monotonic id of the newest estimate request.
+   *
+   * The IPC cannot be aborted, so a superseded request WILL still resolve; the
+   * only defence is to ignore its answer. Captured per effect run and compared
+   * on resolution. It is never reset, which is what makes it safe under
+   * StrictMode's double-invoked effects (both requests go out, only the newer
+   * one is allowed to write).
+   */
+  const estimateRequestIdRef = useRef(0);
+
+  /**
+   * BACKLOG-2760: Whether the two async inputs to the estimate have SETTLED.
+   *
+   * Both are flipped in a `finally`, not on success: `loadFilterPreferences` and
+   * `loadEffectiveWindow` both swallow their errors, and a failed load still
+   * means "this is as much as we will ever know", so the estimate must proceed
+   * from the component's defaults rather than hang pending forever.
+   */
+  const [prefsSettled, setPrefsSettled] = useState(false);
+  const [windowSettled, setWindowSettled] = useState(false);
+  const estimateInputsReady = prefsSettled && windowSettled;
+
   // BACKLOG-2743: "Import without attachments" — the escape hatch that makes a
   // refusal actionable. Message text is a small fraction of attachment size, so
   // this always fits when the full import does not.
@@ -165,36 +205,85 @@ export function MacOSMessagesImportSettings({
   // for the SAME window. `auditPeriodStart` is passed because the real import
   // widens the window to cover transaction audit periods — without it the
   // estimate would describe a narrower import than the one that actually runs.
+  //
+  // BACKLOG-2760: this effect used to run on MOUNT, against the component's
+  // initial `useState(DEFAULT_LOOKBACK_MONTHS)`, before the stored preference had
+  // loaded — and then again once it had. Nothing sequenced the two responses.
+  // On the founder's machine (707,956 messages, ~61 GB of attachments) the cheap
+  // 3-month response resolved LAST and overwrote the correct all-time one, so
+  // Settings reported "12,074 messages and about 2.6 GB". 2.6 GB fits in 59 GB,
+  // so `fitsOnDisk` was true and BACKLOG-2743's refusal never fired for a copy
+  // that could not possibly fit. Traced from the main-process request log, which
+  // shows all four requests going out with the RIGHT filters — the bug was never
+  // in what was asked, only in which answer was allowed to win.
+  //
+  // Three changes, each load-bearing:
+  //   1. GATE on `estimateInputsReady` — no estimate is requested for a window
+  //      the user did not choose, so the stale answer no longer exists to race.
+  //      Gating on the preference alone is not enough: a lookback of 3 months
+  //      that an audit period widens to 12 would be estimated at 3 months if we
+  //      fired between the two loads, which under-states in the same direction.
+  //   2. SEQUENCE-GUARD every response, because the IPC cannot be aborted and a
+  //      superseded request still resolves.
+  //   3. Go PENDING on every run, not just the first. Without that, switching
+  //      from a window that fits to one that does not leaves the old "fits"
+  //      verdict on screen — and Import clickable — for as long as the new
+  //      estimate takes, which on a large library is seconds of open door.
   useEffect(() => {
     if (!isMacOS) return;
+    if (!estimateInputsReady) return;
+
+    const requestId = ++estimateRequestIdRef.current;
+    // Nothing known about THIS window yet. Import is refused until it is.
+    setEstimateStatus("pending");
+    setSizeEstimate(null);
+    setAvailableCount(null);
+
     const fetchCount = async () => {
       try {
         const result = await window.api.messages.getImportCount({
           lookbackMonths,
           auditPeriodStart: effectiveWindow?.effectiveCutoffISO ?? null,
         });
-        if (result.success) {
-          setAvailableCount(result.filteredCount ?? result.count ?? null);
-          setSizeEstimate(
-            result.attachmentBytes !== undefined
-              ? {
-                  attachmentBytes: result.attachmentBytes,
-                  attachmentCount: result.attachmentCount ?? 0,
-                  availableDiskBytes: result.availableDiskBytes ?? null,
-                  // The main process owns this verdict. Recomputing it here from
-                  // bytes vs available would duplicate the headroom rule and let
-                  // the shown number drift from the enforced one.
-                  fitsOnDisk: result.fitsOnDisk !== false,
-                }
-              : null
-          );
+        // A newer window is being estimated; this answer describes a window the
+        // user is no longer looking at. Dropping it is the whole fix.
+        if (requestId !== estimateRequestIdRef.current) return;
+
+        if (!result.success) {
+          // `getAvailableMessageCount` returns `{success:false}` for any internal
+          // failure and logs nothing. This branch used to be absent, so a failed
+          // estimate silently left whatever was on screen standing.
+          setEstimateStatus("unavailable");
+          return;
         }
+
+        setAvailableCount(result.filteredCount ?? result.count ?? null);
+        setSizeEstimate(
+          result.attachmentBytes !== undefined
+            ? {
+                attachmentBytes: result.attachmentBytes,
+                attachmentCount: result.attachmentCount ?? 0,
+                availableDiskBytes: result.availableDiskBytes ?? null,
+                // The main process owns this verdict. Recomputing it here from
+                // bytes vs available would duplicate the headroom rule and let
+                // the shown number drift from the enforced one.
+                fitsOnDisk: result.fitsOnDisk !== false,
+              }
+            : null
+        );
+        setEstimateStatus("ready");
       } catch {
-        // Silently handle
+        if (requestId !== estimateRequestIdRef.current) return;
+        setEstimateStatus("unavailable");
       }
     };
     fetchCount();
-  }, [isMacOS, lookbackMonths, effectiveWindow?.effectiveCutoffISO]);
+  }, [
+    isMacOS,
+    estimateInputsReady,
+    lookbackMonths,
+    effectiveWindow?.effectiveCutoffISO,
+  ]);
 
   const loadImportStatus = async () => {
     try {
@@ -224,6 +313,11 @@ export function MacOSMessagesImportSettings({
       }
     } catch (error) {
       logger.error("Failed to load effective import window:", error);
+    } finally {
+      // BACKLOG-2760: settled, not succeeded. A failed read means the label falls
+      // back to the plain lookback copy — that IS the final answer for this input,
+      // so the estimate must be allowed to proceed rather than wait forever.
+      setWindowSettled(true);
     }
   };
 
@@ -261,6 +355,11 @@ export function MacOSMessagesImportSettings({
       }
     } catch {
       // Silently handle - use defaults
+    } finally {
+      // BACKLOG-2760: settled, not succeeded — see loadEffectiveWindow. On a
+      // failed read the component's defaults ARE the effective preference, so
+      // estimating from them is correct; hanging pending would not be.
+      setPrefsSettled(true);
     }
   };
 
@@ -321,12 +420,41 @@ export function MacOSMessagesImportSettings({
     }
   };
 
+  // BACKLOG-2760: the estimate has produced an answer for the CURRENT window.
+  // `ready` with a null `sizeEstimate` is a real answer — main reported no
+  // attachment figures for this window, so there is nothing to enforce. That is
+  // not the same as not knowing, and it is unreachable in production (the
+  // success path always carries the figures); it is kept permissive so a
+  // response that says nothing about size cannot deadlock the panel.
+  const estimateResolved = estimateStatus === "ready";
+
   // BACKLOG-2743: True when the attachment copy does NOT fit and the user has
   // not chosen to skip attachments. Import is BLOCKED in this state — there is
   // deliberately no "import anyway" override, because an override is exactly
   // what would let the disk fill and evict the user's Time Machine snapshots.
+  //
+  // BACKLOG-2760: an UNKNOWN size now blocks too. Previously the block required a
+  // resolved-and-negative verdict, so "still loading" and "could not size it"
+  // both sailed through — the guard's default answer was yes. A disk-capacity
+  // control has to default to no.
+  //
+  // Still gated on `!skipAttachments`: the verdict concerns the ATTACHMENT copy,
+  // and message text is a small fraction of it. Text-only always fits, so an
+  // unknown attachment size must not strand the user with no way through —
+  // that escape hatch is the reason the refusal is actionable at all.
   const spaceBlocked =
-    sizeEstimate !== null && !sizeEstimate.fitsOnDisk && !skipAttachments;
+    !skipAttachments &&
+    (!estimateResolved || (sizeEstimate !== null && !sizeEstimate.fitsOnDisk));
+
+  // BACKLOG-2760: why Import is refused, for the button tooltip. Three distinct
+  // reasons now share one disabled state, and "not enough space" would be a lie
+  // for the two where the space is simply unknown.
+  const spaceBlockedReason =
+    estimateStatus === "pending"
+      ? "Still checking how much space this import needs"
+      : estimateStatus === "unavailable"
+        ? "Keepr could not work out how much space this import needs"
+        : "Not enough free disk space for attachments";
 
   // BACKLOG-2743: Plain size formatting — real numbers, no adjectives.
   const formatGb = (bytes: number): string => {
@@ -598,7 +726,7 @@ export function MacOSMessagesImportSettings({
             only — messages, attachment size, and the user's own free space.
             Deliberately NOT worded as "may slow your computer": this is a disk
             capacity fact, and a vague warning trains people to dismiss it. */}
-        {!isImporting && sizeEstimate !== null && sizeEstimate.attachmentCount > 0 && (
+        {!isImporting && estimateResolved && sizeEstimate !== null && sizeEstimate.attachmentCount > 0 && (
           <p
             data-testid="import-size-estimate"
             className="text-xs text-gray-600 mt-2"
@@ -611,6 +739,33 @@ export function MacOSMessagesImportSettings({
               <>. You have {formatGb(sizeEstimate.availableDiskBytes)} available</>
             )}
             .
+          </p>
+        )}
+
+        {/* BACKLOG-2760: the size for this window is not known yet. Import is
+            refused meanwhile, so say why rather than leaving a dead button. */}
+        {!isImporting && !skipAttachments && estimateStatus === "pending" && (
+          <p
+            data-testid="import-estimate-pending"
+            className="text-xs text-gray-500 mt-2 flex items-center gap-2"
+          >
+            <span className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+            Checking how much space this import needs&hellip;
+          </p>
+        )}
+
+        {/* BACKLOG-2760: the size could not be determined. The import is refused
+            rather than attempted, because the failure mode this guard exists for
+            — filling the disk and evicting the user's Time Machine snapshots —
+            is not one worth risking on an unread number. */}
+        {!isImporting && !skipAttachments && estimateStatus === "unavailable" && (
+          <p
+            data-testid="import-estimate-unavailable"
+            className="text-xs text-amber-700 mt-2"
+          >
+            Keepr could not work out how much space this import needs, so it will
+            not start. Try again, or import the message text without attachment
+            files.
           </p>
         )}
 
@@ -751,8 +906,9 @@ export function MacOSMessagesImportSettings({
             }
           }}
           // BACKLOG-2743: blocked when the attachment copy would not fit.
+          // BACKLOG-2760: and while its size is unknown — see `spaceBlocked`.
           disabled={controlsDisabled || spaceBlocked}
-          title={spaceBlocked ? "Not enough free disk space for attachments" : undefined}
+          title={spaceBlocked ? spaceBlockedReason : undefined}
           className="flex-1 px-3 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isImporting ? "Importing..." : "Import Messages"}
