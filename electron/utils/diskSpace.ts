@@ -37,6 +37,7 @@
  */
 
 import * as fs from "fs";
+import { app } from "electron";
 import logService from "../services/logService";
 
 const SERVICE_NAME = "DiskSpace";
@@ -56,6 +57,93 @@ const SERVICE_NAME = "DiskSpace";
 export const ATTACHMENT_SPACE_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024;
 
 /**
+ * Env var carrying the DEV-ONLY free-space override (BACKLOG-2762).
+ *
+ * ============================================================================
+ * WHY THIS EXISTS, AND WHY IT IS SAFE
+ * ============================================================================
+ *
+ * The guard above only refuses when a disk is genuinely too full. That state is
+ * covered by automated tests (which inject a fake `statfs` result), but it is
+ * invisible to a person looking at the screen: reproducing it by hand means
+ * actually filling the volume. The founder hit the real refusal once, on
+ * 2026-08-16 at 62.6 GB free vs 61.3 GB needed; his machine now has 124 GB free
+ * and there is no way back. Every human review of the refusal copy, the
+ * confirmation dialog and the toggle states needs that condition on demand.
+ *
+ * So this override makes ONLY the reported available-bytes figure fakeable, and
+ * only in a dev build:
+ *
+ *   - DOUBLE-GATED, exactly like `KEEPR_E2E` (see main.ts `isE2EServeDistMode`):
+ *     `!app.isPackaged` AND the env var explicitly set. A packaged/notarized
+ *     artifact always has `app.isPackaged === true`, so the branch is dead code
+ *     in anything that ships, regardless of the environment it is launched with.
+ *   - It changes the DECIDED/DISPLAYED number only. Nothing here is written to
+ *     the database, to settings, or to any synced surface — both call sites use
+ *     the value transiently (one refusal decision, one IPC estimate response).
+ *   - It CANNOT make the guard more permissive in a way that damages data: the
+ *     worst a fake number does in dev is refuse an import that would have fitted,
+ *     or allow one that then hits `copyFile`'s own ENOSPC backstop.
+ *
+ * WHY THE LOG LINE ON EVERY READ IS NOT OPTIONAL:
+ * `KEEPR_E2E` once burned a founder QA session — it blanks the contact list by
+ * design, and a session run with it set looked like a contacts bug for real.
+ * The trap is a dev flag whose effect is indistinguishable from a real symptom.
+ * Here the loud per-read warning is the mitigation: any log or screen recording
+ * taken while the override is active carries the disclaimer inline, so a fake
+ * measurement can never be mistaken for a real one. A once-only or cached log
+ * would defeat this — the line must accompany EVERY overridden read.
+ */
+export const FAKE_FREE_BYTES_ENV_VAR = "KEEPR_FAKE_FREE_BYTES";
+
+/**
+ * Resolve the dev-only free-space override, or null to use the real measurement.
+ *
+ * Parses defensively. A typo must never become `NaN` free bytes flowing into the
+ * guard's arithmetic (`NaN <= 0` is false, so a NaN shortfall would refuse every
+ * import while claiming an unreadable number). Anything that is not a finite,
+ * non-negative number is IGNORED with one warning and the real figure is used.
+ *
+ * `0` IS honoured — "the disk is completely full" is a state worth reviewing.
+ */
+function resolveFakeFreeBytesOverride(): number | null {
+  // GATE 1 — packaged builds ignore the env var unconditionally.
+  if (app.isPackaged) {
+    return null;
+  }
+
+  // GATE 2 — the var must be explicitly set. Note this is NOT a truthiness test:
+  // an explicitly-empty value (`KEEPR_FAKE_FREE_BYTES= npm run dev`) is a typo
+  // that deserves the warning below, whereas an unset var is the normal dev path
+  // and must stay silent.
+  const raw = process.env[FAKE_FREE_BYTES_ENV_VAR];
+  if (raw === undefined) {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  const parsed = trimmed === "" ? Number.NaN : Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    logService.warn(
+      `[diskSpace] ${FAKE_FREE_BYTES_ENV_VAR}=${JSON.stringify(raw)} is not a non-negative ` +
+        `number — IGNORING the override and reporting the REAL available space`,
+      SERVICE_NAME,
+      { rawValue: raw }
+    );
+    return null;
+  }
+
+  const overrideBytes = Math.floor(parsed);
+  logService.warn(
+    `[diskSpace] ${FAKE_FREE_BYTES_ENV_VAR}=${overrideBytes} in force — this is NOT a real ` +
+      `measurement. Free-space decisions in this session are SIMULATED (dev build only).`,
+    SERVICE_NAME,
+    { overrideBytes, isPackaged: false }
+  );
+  return overrideBytes;
+}
+
+/**
  * Bytes currently available to this (unprivileged) process on the volume
  * containing `targetPath`.
  *
@@ -65,6 +153,15 @@ export const ATTACHMENT_SPACE_HEADROOM_BYTES = 2 * 1024 * 1024 * 1024;
  *   guards against, and `copyFile`'s own ENOSPC remains the final backstop.
  */
 export async function getAvailableDiskBytes(targetPath: string): Promise<number | null> {
+  // BACKLOG-2762: dev-only override, resolved on EVERY read so the warning that
+  // accompanies it is never cached away. Returns null in any packaged build and
+  // whenever the env var is unset or unparseable, leaving the real read below
+  // as the only path.
+  const overrideBytes = resolveFakeFreeBytesOverride();
+  if (overrideBytes !== null) {
+    return overrideBytes;
+  }
+
   try {
     // `fs.promises.statfs` is available on Node 18.15+ / Electron 25+.
     // bavail = blocks available to NON-superuser = the `df` "Avail" column.
