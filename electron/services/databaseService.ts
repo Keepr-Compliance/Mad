@@ -3847,11 +3847,17 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
             fold(row.user_id, toLookupKey(row.phone_normalized), row.last_message_at);
           }
 
-          // COLUMN guard, not just a table guard: several migration suites seed a
-          // `messages` table with only (id, user_id, thread_id), so probing for
-          // the table alone would make this migration throw "no such column:
-          // channel" on every chain run that starts below 64. Same shape as
-          // v48/v52..v58's "no-ops without `emails`" guard. When the rebuild is
+          // COLUMN guard, not just a table guard. Real installs always have
+          // these columns; partial-schema fixtures do not — the shared
+          // migration harness seeds `messages` as (id, user_id, thread_id)
+          // only. Probing the table alone would throw "no such column: channel"
+          // on any such database that ALSO has `phone_last_message`. Measured:
+          // removing the column half of this guard turns the "carries and
+          // re-keys existing rows when `messages` lacks the columns the rebuild
+          // needs" case RED and leaves every other suite green — today's
+          // harness has no `phone_last_message`, so the guard is protecting the
+          // next fixture rather than an existing one. Same shape as
+          // v48/v52..v58's "no-ops without `emails`". When the rebuild is
           // skipped the existing rows are still carried and re-keyed above.
           const MESSAGE_COLUMNS_REQUIRED = [
             "user_id",

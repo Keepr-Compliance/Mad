@@ -603,6 +603,26 @@ describe("migration v64 — re-key persisted phone lookup keys (BACKLOG-2753)", 
         `${USER_ID}|${toLookupKey(IL_MOBILE_DOMESTIC)}|2026-09-09 09:00:00`,
       ]);
     });
+
+    it("...and the SAME PK collision with the dates swapped still keeps the later one", () => {
+      // The mirror of the case above. Rows are folded in rowid order, so with
+      // only one ordering a plain last-write-wins would pass and MAX would be
+      // proven by coincidence. Measured: replacing the MAX with an
+      // unconditional `byKey.set` leaves the case above GREEN and turns this
+      // one RED.
+      db.prepare(
+        "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)",
+      ).run(v40Key(IL_MOBILE_DOMESTIC), USER_ID, "2026-09-09 09:00:00");
+      db.prepare(
+        "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)",
+      ).run(toLookupKey(IL_MOBILE_DOMESTIC), USER_ID, "2026-03-03 03:00:00");
+
+      runV64();
+
+      expect(plmRows(db)).toEqual([
+        `${USER_ID}|${toLookupKey(IL_MOBILE_DOMESTIC)}|2026-09-09 09:00:00`,
+      ]);
+    });
   });
 
   // -------------------------------------------------------------------------
