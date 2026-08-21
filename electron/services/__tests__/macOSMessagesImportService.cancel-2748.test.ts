@@ -327,6 +327,33 @@ describe("BACKLOG-2748 — cancelling a running import (message phase)", () => {
   });
 });
 
+describe("BACKLOG-2748 — a cancel sent before the import starts is DROPPED", () => {
+  beforeEach(() => {
+    messageCount = 500;
+    attachmentCount = 0;
+  });
+
+  it("does not carry over: requestCancellation with nothing running leaves the next import untouched", async () => {
+    // `requestCancellation()` is guarded by `if (this.isImporting)`, and each
+    // run builds a FRESH AbortController — so a cancel that arrives before the
+    // import is in flight reaches nothing and cannot be replayed.
+    //
+    // This is not a defect being enshrined; it is the fact the UI has to
+    // respect. The renderer therefore offers the Cancel button ONLY while the
+    // orchestrator item is 'running' (never while it is merely queued as
+    // 'pending'), because a button that sends into this gap is precisely the
+    // placebo BACKLOG-2748 was filed about — pinned renderer-side by
+    // `MacOSMessagesImportSettings.cancel-2748.test.tsx`.
+    macOSMessagesImportService.requestCancellation();
+
+    const result = await importToCompletion();
+
+    expect(result.cancelled).toBeUndefined();
+    expect(result.messagesImported).toBe(500);
+    expect(storedGuids()).toEqual(guidRange(1, 500));
+  });
+});
+
 describe("BACKLOG-2748 — cancelling during the attachment phase", () => {
   beforeEach(async () => {
     messageCount = 12;

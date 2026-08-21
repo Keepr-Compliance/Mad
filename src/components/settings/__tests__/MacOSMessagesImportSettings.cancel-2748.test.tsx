@@ -79,15 +79,26 @@ describe("BACKLOG-2748 — the Cancel control's lifecycle", () => {
     expect(cancelButton()).toHaveTextContent("Cancel import");
   });
 
-  it("renders while the import is still pending in the queue", async () => {
-    // 'pending' also reads as importing to this panel (the run is committed;
-    // it just has not reached the front of the queue), so the escape hatch has
-    // to be there too — otherwise there is a window with no way out.
+  it("does NOT render while the import is only PENDING in the queue", async () => {
+    // The cancel IPC is a no-op unless an import is actually in flight:
+    // `requestCancellation()` is guarded by `if (this.isImporting)`, and every
+    // run builds a fresh AbortController, so a cancel sent during 'pending'
+    // reaches nothing and is not replayed when the run starts (proved main-side
+    // in macOSMessagesImportService.cancel-2748.test.ts).
+    //
+    // A button here would therefore be the same lie the item was filed about —
+    // a control the user presses that changes nothing. The window is real: a
+    // dashboard sync of ['contacts','emails','messages'] leaves the messages
+    // item pending for the whole contacts+emails run, and this panel shows
+    // "Preparing import..." the entire time.
     mockQueue = messagesQueue({ status: "pending", progress: 0 });
 
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
 
-    await waitFor(() => expect(cancelButton()).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Preparing import/i)).toBeInTheDocument()
+    );
+    expect(cancelButton()).not.toBeInTheDocument();
   });
 
   it("renders during a force re-import's delete phase — the other entry button's run", async () => {
@@ -164,7 +175,27 @@ describe("BACKLOG-2748 — pressing Cancel", () => {
     // so there IS a wait. The button says so instead of appearing dead, and
     // cannot be pressed a second time.
     await waitFor(() => expect(cancelButton()).toHaveTextContent("Cancelling..."));
-    expect(cancelButton()).toBeDisabled();
+  });
+
+  it("can be pressed again — a cancel dropped in the startup gap is recoverable", async () => {
+    // Between the queue item turning 'running' and the service setting its own
+    // `isImporting`, the sync fn reads the import source and the handler
+    // validates the user and loads preferences. A cancel landing in that gap is
+    // dropped. If the button disabled itself on the first press, the user would
+    // sit in "Cancelling..." for the rest of a run that was never cancelled.
+    const user = userEvent.setup();
+    mockQueue = messagesQueue({ status: "running", progress: 2, phase: "querying" });
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    await waitFor(() => expect(cancelButton()).toBeInTheDocument());
+
+    await user.click(cancelButton()!);
+    await waitFor(() => expect(cancelButton()).toHaveTextContent("Cancelling..."));
+
+    expect(cancelButton()).toBeEnabled();
+    await user.click(cancelButton()!);
+
+    expect(window.api.messages.cancelImport).toHaveBeenCalledTimes(2);
   });
 
   it("does not abandon the in-flight import by cancelling the orchestrator queue", async () => {

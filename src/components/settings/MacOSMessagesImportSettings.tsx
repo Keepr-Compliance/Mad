@@ -83,6 +83,18 @@ export function MacOSMessagesImportSettings({
   // reads to the user as "Re-imported 0 messages".
   const controlsDisabled = !enabled || isImporting;
 
+  // BACKLOG-2748: Cancel is offered ONLY while the import is actually running,
+  // never while the queue item is merely 'pending'. `requestCancellation()` is
+  // guarded by `if (this.isImporting)` in the main process and each run builds a
+  // fresh AbortController, so a cancel sent before the import is in flight
+  // reaches nothing and cannot be replayed — a button there would be exactly the
+  // placebo this item was filed about. The pending window is not hypothetical: a
+  // dashboard sync of ['contacts', 'emails', 'messages'] leaves the messages item
+  // pending for the whole contacts+emails run, and this panel shows "Preparing
+  // import..." throughout it. Dropped-cancel proof:
+  // `macOSMessagesImportService.cancel-2748.test.ts`.
+  const cancelAvailable = messagesItem?.status === 'running';
+
   // Derive progress from orchestrator queue item
   const importProgress = isImporting && messagesItem?.phase ? {
     phase: messagesItem.phase as ImportProgressState['phase'],
@@ -1074,23 +1086,35 @@ export function MacOSMessagesImportSettings({
             </div>
           )}
 
-          {/* BACKLOG-2748: the way out of a running import.
-              Deliberately INSIDE the `isImporting` block: the button cannot
-              outlive the run it cancels, and there is no second condition that
-              could drift out of step with the progress bar it belongs to. */}
-          <button
-            type="button"
-            onClick={handleCancelImport}
-            disabled={cancelRequested}
-            data-testid="cancel-import"
-            className="mt-2 px-3 py-1.5 text-xs font-medium rounded border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
-          >
-            {cancelRequested ? "Cancelling..." : "Cancel import"}
-          </button>
-          {cancelRequested && (
-            <p className="text-xs text-gray-500 mt-1">
-              Finishing the current batch — messages already imported are kept.
-            </p>
+          {/* BACKLOG-2748: the way out of a running import. Inside the
+              `isImporting` block so it cannot outlive the run it cancels, and
+              gated on `cancelAvailable` so it is never offered in the window
+              where the cancel would reach nothing (see that derivation).
+
+              It stays CLICKABLE after the first press on purpose. There is a
+              sub-second gap between the queue item turning 'running' and the
+              service setting its own `isImporting` (the sync fn reads the import
+              source, the handler validates the user and loads preferences), and
+              a cancel that lands in that gap is dropped. Disabling the button
+              would strand the user in "Cancelling..." for the rest of a run that
+              was never cancelled; pressing again re-sends, and an extra abort on
+              an already-aborted import is a no-op. */}
+          {cancelAvailable && (
+            <>
+              <button
+                type="button"
+                onClick={handleCancelImport}
+                data-testid="cancel-import"
+                className="mt-2 px-3 py-1.5 text-xs font-medium rounded border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 transition-all"
+              >
+                {cancelRequested ? "Cancelling..." : "Cancel import"}
+              </button>
+              {cancelRequested && (
+                <p className="text-xs text-gray-500 mt-1">
+                  Finishing the current batch — messages already imported are kept.
+                </p>
+              )}
+            </>
           )}
         </div>
       )}
