@@ -272,6 +272,10 @@ if (typeof window !== 'undefined') {
         lookbackMonths: 3,
       }),
       onImportProgress: jest.fn(() => jest.fn()),
+      // BACKLOG-2748: the Cancel control on the import progress surface. One-way
+      // send, so it resolves to nothing — the outcome arrives on the import
+      // result as `cancelled: true` with the partial counts.
+      cancelImport: jest.fn(),
     },
     // Outlook integration - migrated from window.electron
     outlook: {

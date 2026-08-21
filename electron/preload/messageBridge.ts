@@ -10,6 +10,8 @@ import type {
   MessageImportCountFilters,
   MessageImportCountResult,
 } from "../types/ipc/window-api-messages";
+// BACKLOG-2748: ONE spelling of the cancel channel, shared with the handler.
+import { MESSAGES_IMPORT_CANCEL_CHANNEL } from "../types/ipc/messageChannels";
 
 /**
  * Progress event from macOS message import (TASK-1710)
@@ -127,10 +129,15 @@ export const messageBridge = {
 
   /**
    * Cancel the current import operation (TASK-1710)
-   * Gracefully stops the import, preserving partial data
+   * Gracefully stops the import, preserving partial data.
+   *
+   * BACKLOG-2748: this existed here from TASK-1710 with NO caller — the import
+   * progress UI shipped without a Cancel control, so a running import could only
+   * be escaped by force-quitting the app. The channel name is now shared with
+   * the handler rather than spelled out on both sides (PR-SOP §6.2e).
    */
   cancelImport: (): void => {
-    ipcRenderer.send("messages:import-cancel");
+    ipcRenderer.send(MESSAGES_IMPORT_CANCEL_CHANNEL);
   },
 
   /**

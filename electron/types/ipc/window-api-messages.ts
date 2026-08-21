@@ -70,9 +70,24 @@ export interface WindowApiMessages {
     attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
     /** BACKLOG-2743: user chose to import without attachments */
     attachmentsSkippedByChoice?: boolean;
+    /**
+     * BACKLOG-2748: the user cancelled the run. Partial counts, not a failure —
+     * branch on this rather than on the `error` text.
+     */
+    cancelled?: boolean;
   }>;
   /** Get count of messages available for import from macOS Messages */
   getImportCount: (filters?: MessageImportCountFilters) => Promise<MessageImportCountResult>;
+  /**
+   * Cancel the running macOS Messages import (BACKLOG-2748).
+   *
+   * One-way send; the outcome arrives on the normal import result with
+   * `cancelled: true` and the partial counts. The preload bridge has exposed
+   * this since TASK-1710, but it was missing from this interface, so no renderer
+   * code could reach it — which is exactly how the app shipped with a running
+   * import that could not be stopped.
+   */
+  cancelImport: () => void;
   /** Listen for import progress updates */
   onImportProgress: (callback: (progress: { phase: "deleting" | "importing" | "attachments"; current: number; total: number; percent: number }) => void) => () => void;
   /** Get attachments for a message with base64 data (TASK-1012) */

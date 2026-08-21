@@ -473,8 +473,22 @@ export function useAutoRefresh({
     // Detect transition from syncing to not syncing
     const hasCompleted = queue.some(item => item.status === 'complete');
     const hasErrors = queue.some(item => item.status === 'error');
-    // Only notify if items actually completed/errored — not if they were removed (cancel)
-    if (wasSyncingRef.current && !isRunning && (hasCompleted || hasErrors) && notificationsEnabled) {
+    // BACKLOG-2748: an INTERNAL cancel (the import Cancel button) does not empty
+    // the queue — it leaves the item at status 'complete' carrying `cancelled`.
+    // The guard below was written for the external kind, where the queue empties
+    // and `hasCompleted` goes false on its own; an internal cancel walks straight
+    // past it and fires an OS notification reading "Sync Complete — your data has
+    // been synchronized" for the run the user just stopped. That notification
+    // outlives the window: it sits in Notification Center whether or not Keepr is
+    // even focused.
+    //
+    // Suppressed only when the run had no errors, matching SyncStatusIndicator:
+    // a cancel may silence a success notice, never a failure one.
+    const wasCancelled = queue.some(item => item.cancelled);
+    const suppressForCancel = wasCancelled && !hasErrors;
+    // Only notify if items actually completed/errored — not if they were removed
+    // (external cancel) and not if the user cancelled the run (internal cancel).
+    if (wasSyncingRef.current && !isRunning && (hasCompleted || hasErrors) && notificationsEnabled && !suppressForCancel) {
       const title = hasErrors ? "Sync Failed" : "Sync Complete";
       const body = hasErrors
         ? "One or more sync operations failed. Open Keepr for details."

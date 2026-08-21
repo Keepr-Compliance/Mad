@@ -60,6 +60,12 @@ export interface SyncItem {
    * can report the true count instead of always showing 0.
    */
   importedCount?: number;
+  /**
+   * BACKLOG-2748: the user cancelled this sync from the UI. The item still
+   * lands in status 'complete' — a cancel is not an error — but consumers must
+   * report it as a cancel with a PARTIAL `importedCount`, not as a clean finish.
+   */
+  cancelled?: boolean;
   /** True for externally-managed syncs (e.g., iPhone) that the orchestrator does not drive */
   external?: boolean;
   /**
@@ -103,6 +109,11 @@ export interface SyncResult {
   warning?: string;
   /** Number of rows imported by this sync (e.g., messages). */
   importedCount?: number;
+  /**
+   * BACKLOG-2748: the sync stopped because the user cancelled it. `importedCount`
+   * is then the real partial count of what was kept.
+   */
+  cancelled?: boolean;
 }
 
 /**
@@ -491,8 +502,24 @@ class SyncOrchestratorServiceClass {
             totalAvailable?: number;
             /** BACKLOG-2743: pre-flight free-space check refused the attachment copy. */
             attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
+            /** BACKLOG-2748: the user cancelled; counts are partial, not failed. */
+            cancelled?: boolean;
           }>;
           const result = await importFn(userId, options?.forceReimport);
+          // BACKLOG-2748: the cancel check comes BEFORE the success check on
+          // purpose. A cancel during the query phase returns success:false with
+          // error:"Import cancelled", and the throw below would turn the user's
+          // own Cancel press into a red "Import failed" card. Cancelling later
+          // returns success:true with partial counts. Both are the same outcome
+          // to the user, so both leave here as a cancelled result carrying
+          // whatever was actually kept.
+          if (result.cancelled) {
+            logger.info(
+              '[SyncOrchestrator] Messages sync cancelled by user, imported:',
+              result.messagesImported
+            );
+            return { cancelled: true, importedCount: result.messagesImported };
+          }
           if (!result.success) {
             throw new Error(result.error || 'Message import failed');
           }
@@ -911,6 +938,11 @@ class SyncOrchestratorServiceClass {
           const warning = typeof rawResult === 'string' ? rawResult : rawResult?.warning;
           const importedCount =
             rawResult && typeof rawResult === 'object' ? rawResult.importedCount : undefined;
+          // BACKLOG-2748: a user cancel travels the SAME path as a completion —
+          // it is not an error — so the flag has to be carried onto the queue
+          // item or the settings panel reports a stopped import as a clean one.
+          const cancelled =
+            rawResult && typeof rawResult === 'object' ? rawResult.cancelled : undefined;
 
           Sentry.addBreadcrumb({
             category: 'sync',
@@ -923,7 +955,7 @@ class SyncOrchestratorServiceClass {
           });
 
           // Mark complete (clear phase), attach warning + imported count if returned
-          this.updateQueueItem(type, { status: 'complete', progress: 100, phase: undefined, warning: warning || undefined, importedCount });
+          this.updateQueueItem(type, { status: 'complete', progress: 100, phase: undefined, warning: warning || undefined, importedCount, cancelled });
         } catch (error) {
           // Check if it was cancelled
           if (this.abortController?.signal.aborted) {
