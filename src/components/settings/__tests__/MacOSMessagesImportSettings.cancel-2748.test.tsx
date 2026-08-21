@@ -90,6 +90,36 @@ describe("BACKLOG-2748 — the Cancel control's lifecycle", () => {
     await waitFor(() => expect(cancelButton()).toBeInTheDocument());
   });
 
+  it("renders during a force re-import's delete phase — the other entry button's run", async () => {
+    // "Import Messages" and "Force Re-import" are two buttons but ONE queue
+    // item, so the control is shared by construction. The force path is still
+    // worth its own row because it has a phase the plain import never shows,
+    // and the phase drives the progress block the button lives in.
+    //
+    // Honest limit, documented rather than papered over: the main-side delete
+    // loop (`clearMacOSMessages`) has no abort check, so a cancel pressed here
+    // takes effect at the query-phase check that follows the delete rather than
+    // immediately. The button is present and says "Cancelling..." throughout.
+    mockQueue = messagesQueue({ status: "running", progress: 15, phase: "deleting" });
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+
+    await waitFor(() => expect(cancelButton()).toBeInTheDocument());
+    expect(screen.getByText(/Clearing existing messages/i)).toBeInTheDocument();
+  });
+
+  it("renders during the attachment phase — the expensive one", async () => {
+    // The phase the founder was stuck in, and the one where cancelling actually
+    // saves disk: the service honours the abort between individual file copies
+    // (pinned main-side by macOSMessagesImportService.cancel-2748.test.ts).
+    mockQueue = messagesQueue({ status: "running", progress: 80, phase: "attachments" });
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+
+    await waitFor(() => expect(cancelButton()).toBeInTheDocument());
+    expect(screen.getByText(/Processing attachments/i)).toBeInTheDocument();
+  });
+
   it("does NOT render when no import is running", async () => {
     mockQueue = [];
 
