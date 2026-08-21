@@ -114,6 +114,21 @@ export function SyncStatusIndicator({
   // real completion and suppress the card instead of surfacing it.
   const externalCancelCountRef = useRef(0);
   const cancelCountAtSyncStartRef = useRef(0);
+  // BACKLOG-2748: the same problem for INTERNAL syncs, which became cancellable
+  // only with the import Cancel button. An internal cancel does NOT empty the
+  // queue — it lands `status: 'complete'` carrying `cancelled: true` — so the
+  // 2330 counter above cannot see it, and the completion card would read the
+  // 'complete' status and render green "Sync Complete / All data synced
+  // successfully" for a run the user stopped. That is the exact defect
+  // BACKLOG-2748 exists to fix, one surface over: the founder cancels in the
+  // Settings modal, reads the honest "Import cancelled — N messages imported",
+  // closes the modal, and the dashboard behind it congratulates him.
+  //
+  // Tracked in a ref rather than read off `queue` at completion time for the
+  // same reason the error tracking above is: the completion branch also fires
+  // when the queue has already emptied, and a flag read from an empty queue is
+  // always false.
+  const cancelledDuringSync = useRef(false);
 
   // Get feature gate status for AI-specific features (pending count, Review Now button)
   const { isAllowed } = useFeatureGate();
@@ -161,6 +176,8 @@ export function SyncStatusIndicator({
         errorItemsDuringSync.current = [];
         errorMessagesDuringSync.current = [];
         reconnectProviderDuringSync.current = null;
+        // BACKLOG-2748: a cancel belongs to the run it stopped, not the next one.
+        cancelledDuringSync.current = false;
         // BACKLOG-2330: baseline the cancel counter so a cancel during THIS
         // sync is detectable when it finishes.
         cancelCountAtSyncStartRef.current = externalCancelCountRef.current;
@@ -169,6 +186,12 @@ export function SyncStatusIndicator({
       setDismissed(false);
       // Track errors as they happen during sync
       for (const item of queue) {
+        // BACKLOG-2748: a multi-type run (contacts, emails, messages) can land
+        // the cancelled messages item while the others are still going, so the
+        // flag has to be observed here too and not only at the transition.
+        if (item.cancelled) {
+          cancelledDuringSync.current = true;
+        }
         if (item.status === 'error' && !errorItemsDuringSync.current.includes(item.type)) {
           hadErrorsDuringSync.current = true;
           errorItemsDuringSync.current.push(item.type);
@@ -196,19 +219,17 @@ export function SyncStatusIndicator({
       // it resets to the clean idle start screen. Cancel = no card, no screen.)
       // This suppression keys off externalCancelCount (bumped by
       // removeExternalSync), independent of the iPhone hook's syncStatus.
-      if (externalCancelCountRef.current !== cancelCountAtSyncStartRef.current) {
-        wasSyncingRef.current = false;
-        if (autoDismissTimerRef.current) {
-          clearTimeout(autoDismissTimerRef.current);
-          autoDismissTimerRef.current = null;
-        }
-        setShowCompletion(false);
-        setDismissed(true);
-        return;
-      }
-      // Just finished syncing - show completion message
-      // BACKLOG-1368: Track errors in ref so they persist after queue is cleaned
+      // BACKLOG-1368/2127/2748: scan the finished queue ONCE, before deciding
+      // whether to suppress. This loop used to run only after the cancel gate
+      // below, which meant a cancel returned early and the run's errors were
+      // never recorded — see the ordering note on that gate.
       for (const item of queue) {
+        // BACKLOG-2748: catch an internal cancel that only became visible on
+        // the transition itself (the single-sync case: the messages item flips
+        // to complete+cancelled and `isRunning` goes false in one update).
+        if (item.cancelled) {
+          cancelledDuringSync.current = true;
+        }
         if (item.status === 'error' && !errorItemsDuringSync.current.includes(item.type)) {
           hadErrorsDuringSync.current = true;
           errorItemsDuringSync.current.push(item.type);
@@ -221,6 +242,39 @@ export function SyncStatusIndicator({
           }
         }
       }
+
+      // A user-initiated cancel gets no card, whichever kind of sync it was:
+      // external (2330, queue emptied by removeExternalSync) or internal (2748,
+      // queue item completed carrying `cancelled`). Silence rather than a
+      // "Sync Cancelled" card is the established answer here, and it is the
+      // right one for the import: the Settings panel the user pressed Cancel in
+      // already reports the outcome WITH the real partial count, and a second
+      // card behind the modal could only repeat it with less information.
+      //
+      // BUT NEVER over an error. A cancel silences a SUCCESS notice, which
+      // costs the user nothing; silencing a FAILURE notice costs them the
+      // reason their email stopped syncing and the "Reconnect" CTA that fixes
+      // it (BACKLOG-2127). Cancelling the messages leg of a full sync must not
+      // hide that the emails leg died. This condition applies to the 2330
+      // external path too — deliberately, because two kinds of cancel with two
+      // different rules is the hand-kept-rule shape that drifts.
+      if (
+        (externalCancelCountRef.current !== cancelCountAtSyncStartRef.current ||
+          cancelledDuringSync.current) &&
+        !hadErrorsDuringSync.current
+      ) {
+        wasSyncingRef.current = false;
+        if (autoDismissTimerRef.current) {
+          clearTimeout(autoDismissTimerRef.current);
+          autoDismissTimerRef.current = null;
+        }
+        setShowCompletion(false);
+        setDismissed(true);
+        return;
+      }
+      // Just finished syncing - show completion message.
+      // BACKLOG-1368: errors are tracked in refs (scanned above, before the
+      // cancel gate) so they persist after the queue is cleaned.
       logger.info(`[SyncStatusIndicator] Completion: hadErrors=${hadErrorsDuringSync.current}, queue=${JSON.stringify(queue.map(q => ({ type: q.type, status: q.status })))}`);
       setShowCompletion(true);
       wasSyncingRef.current = false;
