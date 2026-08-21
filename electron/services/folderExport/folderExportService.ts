@@ -169,6 +169,21 @@ class FolderExportService {
   ): Promise<string> {
     const { includeEmails, includeTexts, includeAttachments, attachmentType = "all", emailExportMode, onProgress } = options;
 
+    // BACKLOG-2769: the user's attachment selection, decided ONCE and reused by
+    // every phase that acts on it. The per-thread email attachment phase below
+    // used to carry no reference to the selector at all, so "None" (and "Text
+    // only") still wrote emails/<thread>/attachments/<file> to disk AND pulled
+    // the declined attachments from Gmail/Outlook. Each phase re-deriving the
+    // predicate by hand is what allowed the two to drift apart; keep them
+    // reading the same two names.
+    // (BACKLOG-2771 will replace these with a shared selector resolver used by
+    // every export format; at that point the `attachmentType === "text"`
+    // ternary at the exportAttachments() call site — now redundant, since
+    // emailAttachmentResult is only ever assigned when email attachments are
+    // selected — should be dropped along with them.)
+    const attachmentsEnabled = includeAttachments && attachmentType !== "none";
+    const emailAttachmentsSelected = attachmentsEnabled && attachmentType !== "text";
+
     try {
       logService.info("[Folder Export] Starting folder export", "FolderExport", {
         transactionId: transaction.id,
@@ -329,8 +344,11 @@ class FolderExportService {
 
       // TASK-2050: Export email attachments into per-thread subdirectories
       // TASK-2061: Pass threadNameMap so folders match PDF names
+      // BACKLOG-2769: only when the user's attachment selection includes email
+      // attachments — this phase both writes files and downloads them from the
+      // provider, so an excluded selection must not reach it.
       let emailAttachmentResult: AttachmentExportResult | undefined;
-      if (includeEmails && emails.length > 0) {
+      if (includeEmails && emails.length > 0 && emailAttachmentsSelected) {
         emailAttachmentResult = await exportEmailAttachmentsToThreadDirs(
           emails,
           emailsPath,
@@ -365,7 +383,8 @@ class FolderExportService {
       }
 
       // Export attachments with manifest
-      if (includeAttachments && attachmentType !== "none") {
+      // BACKLOG-2769: same selector decision as the email-thread phase above.
+      if (attachmentsEnabled) {
         onProgress?.({
           stage: "attachments",
           current: 0,
