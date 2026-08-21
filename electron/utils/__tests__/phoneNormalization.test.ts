@@ -7,8 +7,9 @@
  * "Test-case migration map" for the mapping; intentional removals are justified
  * inline next to their replacements.
  *
- * Parity snapshot (≥25 inputs) at the bottom is the byte-equivalence guard
- * against migration-v40-backfilled rows in production.
+ * Parity snapshot (≥25 inputs) at the bottom pins which populations stayed
+ * byte-equivalent to the migration-v40 backfill and which BACKLOG-2635
+ * deliberately changed (old→new pairs, cross-referencing the re-key report).
  */
 
 import {
@@ -113,8 +114,12 @@ describe("phoneNormalization", () => {
   // -------------------------------------------------------------------------
   // toLookupKey
   //
-  // Output semantics MUST stay byte-equivalent to pre-consolidation
-  // `normalizePhoneLookupKey` because production rows are migration-v40 backfilled.
+  // BACKLOG-2635 superseded the pre-consolidation byte-equivalence rule: keys
+  // are still byte-identical to the v40 backfill for NANP shapes, short codes
+  // and alphanumeric senders, but Israeli national forms and CC-included
+  // international forms key differently (country code kept, not sliced).
+  // The old→new deltas are pinned in the parity snapshot below; persisted
+  // rows need the re-key migration scoped on the BACKLOG-2635 PR.
   //
   // Migrated from: phoneLookupKey.test.ts.
   // -------------------------------------------------------------------------
@@ -132,12 +137,18 @@ describe("phoneNormalization", () => {
       it("handles 10-digit raw input", () => {
         expect(toLookupKey("4155550109")).toBe("4155550109");
       });
-      it("keeps last 10 digits for international (UK)", () => {
-        expect(toLookupKey("+44 20 7946 0958")).toBe("2079460958");
+      it("keeps the country code for international (UK) — BACKLOG-2635", () => {
+        // Pre-2635 this sliced the country code off (last 10 digits only),
+        // fabricating a key of no real number that could collide with a
+        // genuine NANP number in area code 207.
+        expect(toLookupKey("+44 20 7946 0958")).toBe("442079460958");
       });
-      it("keeps last 10 digits when country code makes >10 digits", () => {
+      it("folds the NANP country code; exit-prefixed forms key with their '+' form", () => {
         expect(toLookupKey("+1 415 555 0109")).toBe("4155550109");
-        expect(toLookupKey("011 44 20 7946 0958")).toBe("2079460958");
+        // "011 44 …" is the NANP international dial form of "+44 …" — the two
+        // must share a key, and since BACKLOG-2635 that key keeps the CC.
+        expect(toLookupKey("011 44 20 7946 0958")).toBe("442079460958");
+        expect(toLookupKey("011 44 20 7946 0958")).toBe(toLookupKey("+44 20 7946 0958"));
       });
       it("ignores leading/trailing whitespace", () => {
         expect(toLookupKey("  +14155550109  ")).toBe("4155550109");
@@ -412,20 +423,20 @@ describe("phoneNormalization", () => {
   });
 
   // -------------------------------------------------------------------------
-  // BACKLOG-1729 parity snapshot — byte-equivalence guard for migration v40
+  // Parity snapshot — BACKLOG-1729 established it as a byte-equivalence guard
+  // for the migration-v40 backfill; BACKLOG-2635 split it in two:
   //
-  // For every input below, the new `toLookupKey` MUST return the exact value
-  // listed (which IS what the pre-consolidation `normalizePhoneLookupKey`
-  // produced — they share the same code path). Any divergence on this table
-  // indicates a regression that would silently break the v40 backfill
-  // invariant for new inserts.
-  //
-  // ≥25 inputs as required by the SR-approved plan; covers: clean E.164,
-  // formatted US/UK/intl, short codes, alphanumeric senders, null/empty/
-  // whitespace, emails (preserved), edge whitespace, '+' alone, vanity,
-  // emoji, uppercase email, 7/9/15-digit boundaries.
+  //   1. THE UNCHANGED POPULATION stays pinned byte-equal to v40. This is the
+  //      item's control 4: the 1,203 ten-digit values (and every NANP, short-
+  //      code and alphanumeric shape) behave exactly as they always did, so
+  //      persisted rows in these shapes never go stale.
+  //   2. THE CHANGED POPULATION is pinned as old→new pairs. These are the
+  //      deliberate BACKLOG-2635 deltas — rows persisted under the old rule
+  //      in these shapes are stale until the re-key migration scoped on the
+  //      BACKLOG-2635 PR runs. If one of these pins fails, the re-key
+  //      migration's target values are wrong too: fix both together.
   // -------------------------------------------------------------------------
-  describe("BACKLOG-1729 parity snapshot — toLookupKey output is stable", () => {
+  describe("parity snapshot — the population byte-equal to the v40 backfill (unchanged by 2635)", () => {
     const snapshot: Array<[string | null | undefined, string]> = [
       // clean E.164
       ["+14155550109", "4155550109"],
@@ -435,14 +446,11 @@ describe("phoneNormalization", () => {
       ["+1-415-555-0109", "4155550109"],
       ["+1.415.555.0109", "4155550109"],
       ["4155550109", "4155550109"],
-      // formatted UK / international
-      ["+44 20 7946 0958", "2079460958"],
-      ["011 44 20 7946 0958", "2079460958"],
       // short codes
       ["12345", "12345"],
       ["555-1234", "5551234"],
       ["5", "5"],
-      // 9-digit boundary
+      // 9-digit boundary — NOT leading 0, so no IL reading applies
       ["123456789", "123456789"],
       // alphanumeric senders
       ["VERIZON", "VERIZON"],
@@ -464,27 +472,52 @@ describe("phoneNormalization", () => {
       ["  +14155550109  ", "4155550109"],
       // emoji-bearing input
       ["📞4155550109", "4155550109"],
-      // 15-digit E.164 max
-      ["+123456789012345", "6789012345"],
-      // 7-digit local
+      // 7-digit local — ambiguous-not-equal, unchanged (see BACKLOG-2635)
       ["1234567", "1234567"],
-      // 11-digit number with leading 1
+      // 11-digit NANP with leading 1 — the fold lands on the same last-10 key
       ["15555550112", "5555550112"],
-      // 12-digit (drops first 2 → keeps last 10)
-      ["120-555-555-1234", "5555551234"],
     ];
 
     it.each(snapshot)("toLookupKey(%p) === %p", (input, expected) => {
       expect(toLookupKey(input)).toBe(expected);
     });
+  });
 
-    // -----------------------------------------------------------------------
-    // Cross-check: every entry above is also what the pre-consolidation
-    // normalizePhoneLookupKey would have produced. This is verified by
-    // structural equivalence — toLookupKey IS the consolidated version of
-    // that function with no logic change. If anyone refactors toLookupKey
-    // and breaks this test, they must also update migration v40 backfill
-    // (which is forbidden under MIGRATION-GUIDE.md immutability).
-    // -----------------------------------------------------------------------
+  describe("parity snapshot — the population BACKLOG-2635 deliberately changed (old → new)", () => {
+    /**
+     * The v40 rule, verbatim, so each delta's "old key" is COMPUTED rather
+     * than hand-transcribed — the table cannot drift from what production
+     * rows actually persisted before the re-key migration. (It also keeps
+     * bare 10-digit key strings out of this public file: the sliced keys are
+     * fabrications that read as real US numbers.)
+     */
+    const v40Rule = (input: string): string => {
+      const digits = input.replace(/\D/g, "");
+      return digits.length >= 10 ? digits.slice(-10) : digits;
+    };
+
+    const deltas: Array<[string, string]> = [
+      // UK E.164 — slice(-10) dropped the country code and fabricated a key
+      // that collided with a genuine NANP number in area code 207
+      ["+44 20 7946 0958", "442079460958"],
+      // NANP international dial form of the same number — still agrees with it
+      ["011 44 20 7946 0958", "442079460958"],
+      // 15-digit E.164 maximum
+      ["+123456789012345", "123456789012345"],
+      // 13-digit run with no recognizable CC — kept whole, not sliced
+      ["120-555-555-1234", "1205555551234"],
+      // Israeli landline, domestic and E.164 — the 54-value population;
+      // pre-2635 these two forms of ONE number keyed differently
+      ["03-555-0121", "97235550121"],
+      ["+972 3 555 0121", "97235550121"],
+      // Israeli mobile, domestic and E.164
+      ["052-555-0123", "972525550123"],
+      ["+972 52 555 0123", "972525550123"],
+    ];
+
+    it.each(deltas)("toLookupKey(%p) is now %p — and differs from its v40 key", (input, newKey) => {
+      expect(toLookupKey(input)).toBe(newKey);
+      expect(newKey).not.toBe(v40Rule(input)); // the delta is real, not a copy-paste
+    });
   });
 });

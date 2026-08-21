@@ -124,9 +124,17 @@ const TEST_PHONES = {
   },
   ukFormatted: {
     // After normalizeToE164 (which strips non-digits then prefixes +) this becomes
-    // +442079460958. normalizePhoneLookupKey then takes the last 10 digits → 2079460958.
+    // +442079460958.
+    //
+    // BACKLOG-2635 FINDING, recorded here on purpose: migration v40 requires
+    // the LIVE helper (`normalizePhoneLookupKey` → `toLookupKey`), so its
+    // backfill output is upgrade-date-dependent. A database that ran v40
+    // BEFORE 2635 holds "2079460958" (last 10, CC sliced off); a database
+    // running v40 today gets "442079460958" (CC kept) — consistent with every
+    // fresh computation, which is the desirable direction. Already-migrated
+    // databases keep the stale keys until the 2635 re-key migration lands.
     raw: "+44 20 7946 0958",
-    normalized: "2079460958",
+    normalized: "442079460958",
   },
   shortCode: {
     raw: "12345",

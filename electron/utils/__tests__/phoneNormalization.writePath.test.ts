@@ -220,7 +220,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         .get(USER_ID) as { id: string };
       const rows = readPhoneRows(db, contact.id);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("2079460958");
+      expect(rows[0].phone_normalized).toBe("442079460958"); // BACKLOG-2635: CC kept, no longer slice(-10)
     });
   });
 
@@ -231,7 +231,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
     it("persists toLookupKey for every contact in the batch", () => {
       const inputs = [
         { phone: "+1 (415) 555-0109", expected: "4155550109" },
-        { phone: "+44 20 7946 0958", expected: "2079460958" },
+        { phone: "+44 20 7946 0958", expected: "442079460958" }, // BACKLOG-2635: CC kept
         { phone: "12345", expected: "12345" },
       ];
       const ids = createContactsBatch(
@@ -311,7 +311,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const rows = readPhoneRows(db, contactId);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("2079461212");
+      expect(rows[0].phone_normalized).toBe("442079461212"); // BACKLOG-2635: CC kept
     });
   });
 
@@ -406,7 +406,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         toLookupKey("+1 (415) 555-0109"),
         toLookupKey("+44 20 7946 0958"),
       ]);
-      expect(persisted).toEqual(["4155550109", "2079460958"]);
+      expect(persisted).toEqual(["4155550109", "442079460958"]); // BACKLOG-2635: CC kept
     });
 
     it("filters out empty-key inputs (whitespace, empty)", () => {
@@ -491,7 +491,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const row = readExternalPhones(db, recordId);
       const persisted = JSON.parse(row!.phones_normalized_json!);
       expect(persisted).toEqual([toLookupKey("+44 20 7946 0123")]);
-      expect(persisted).toEqual(["2079460123"]);
+      expect(persisted).toEqual(["442079460123"]); // BACKLOG-2635: CC kept
     });
   });
 });
