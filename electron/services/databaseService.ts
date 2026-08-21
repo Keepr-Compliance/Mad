@@ -3641,6 +3641,289 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 64,
+      description:
+        "Re-key every persisted phone lookup key with the country-code-aware rule so rows written under the pre-BACKLOG-2635 rule stay reachable (BACKLOG-2753)",
+      migrate: (d) => {
+        // BACKLOG-2753 — the migration half of BACKLOG-2635 / PR #2325.
+        //
+        // WHY THIS EXISTS. The phone lookup key is PERSISTED, not computed on
+        // the fly. Three stores hold one:
+        //
+        //   contact_phones.phone_normalized
+        //   external_contacts.phones_normalized_json
+        //   phone_last_message.phone_normalized      <- the key IS the PK
+        //
+        // BACKLOG-2635 changed the rule so an Israeli number stored
+        // domestically and the same number stored E.164 land on ONE key.
+        // Every row already on disk carries the OLD key. Ship that rule
+        // without this migration and a stored "035550121" becomes unreachable
+        // from the new "97235550121" computation: contact search
+        // (contactDbService.searchContactsForSelection builds
+        // `LIKE '%' || toLookupKey(query) || '%'`), the contact_phones ->
+        // phone_last_message recency JOIN, transaction search and Android
+        // promotion all miss the row. On the founder's already-migrated
+        // database that is a REGRESSION of a lookup that works today, which is
+        // why PR #2325 must not merge alone.
+        //
+        // WHY THE SOURCE COLUMN AND NOT THE STORED KEY. The old rule was
+        // LOSSY: `digits.length >= 10 ? digits.slice(-10) : digits` threw away
+        // country codes. "+972 3 555 0121" was stored as "7235550121", and
+        // feeding THAT back through the new rule returns "7235550121" again
+        // (ten digits, no 05/07 lead, so it is kept whole) — never
+        // "97235550121". The dropped digits only exist in the source column,
+        // so contact_phones is recomputed from `phone_e164` and
+        // external_contacts from `phones_json` — the same sources migration
+        // v40 backfilled from.
+        //
+        // WHY THE LIVE HELPER, NOT A FROZEN COPY. `require`d exactly as v40
+        // does at :1206. This migration's whole purpose is to make the stored
+        // keys agree with what the code computes; a transcribed rule could
+        // drift from the function it is supposed to agree with, which is the
+        // one failure this migration cannot afford. The cost of that choice is
+        // stated plainly: like v40, this migration FLOATS. If the rule ever
+        // changes again, a replay recomputes with the newer rule (self-healing
+        // under the BACKLOG-2752 baseline clamp), but already-migrated
+        // databases still need their own re-key item — being floating is not a
+        // substitute for one.
+        //
+        // IDEMPOTENT BY CONSTRUCTION, not by a version guard. The first two
+        // stores recompute from immutable source columns, so a second pass
+        // writes the same bytes. The third re-reads keys that are already
+        // new-rule, and `toLookupKey` is idempotent (pinned on #2325). This
+        // matters because BACKLOG-2752's clamp replays the whole chain on
+        // every launch of a below-baseline database.
+        //
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { toLookupKey } = require("../utils/phoneNormalization") as
+          typeof import("../utils/phoneNormalization");
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { LOCAL_REACTION_EXCLUSION } = require("./db/reactionExclusion") as
+          typeof import("./db/reactionExclusion");
+
+        // Table / column guards mirror v40, v48, v52..v56, v62 and v63: a real
+        // install always has these, a minimal partial-schema fixture may not.
+        const hasTable = (name: string): boolean =>
+          !!d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .get(name);
+        const hasColumn = (table: string, column: string): boolean =>
+          (d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
+            (c) => c.name === column,
+          );
+
+        // ---- 1. contact_phones -------------------------------------------
+        // No uniqueness constraint on this column, so a collision here needs
+        // no policy: two rows are simply allowed to share a key, which is what
+        // "these two contacts hold the same number" has always meant.
+        if (hasTable("contact_phones") && hasColumn("contact_phones", "phone_normalized")) {
+          const rows = d
+            .prepare("SELECT id, phone_e164, phone_normalized FROM contact_phones")
+            .all() as Array<{ id: string; phone_e164: string | null; phone_normalized: string | null }>;
+          const update = d.prepare("UPDATE contact_phones SET phone_normalized = ? WHERE id = ?");
+          let changed = 0;
+          for (const row of rows) {
+            const next = toLookupKey(row.phone_e164);
+            if (next === row.phone_normalized) continue;
+            update.run(next, row.id);
+            changed++;
+          }
+          console.log(
+            `[migration v64] re-keyed ${changed} of ${rows.length} contact_phones rows (BACKLOG-2753)`,
+          );
+        }
+
+        // ---- 2. external_contacts ----------------------------------------
+        // Same map -> filter-empties -> invalid-JSON-becomes-[] convention as
+        // v40 (:1238) and as the live writer (externalContactDbService), so the
+        // array this produces is byte-identical to what a re-sync would write.
+        if (
+          hasTable("external_contacts") &&
+          hasColumn("external_contacts", "phones_normalized_json") &&
+          hasColumn("external_contacts", "phones_json")
+        ) {
+          const rows = d
+            .prepare("SELECT id, phones_json, phones_normalized_json FROM external_contacts")
+            .all() as Array<{
+            id: string;
+            phones_json: string | null;
+            phones_normalized_json: string | null;
+          }>;
+          const update = d.prepare(
+            "UPDATE external_contacts SET phones_normalized_json = ? WHERE id = ?",
+          );
+          let changed = 0;
+          for (const row of rows) {
+            let phones: unknown[] = [];
+            try {
+              const parsed = row.phones_json ? JSON.parse(row.phones_json) : [];
+              phones = Array.isArray(parsed) ? parsed : [];
+            } catch {
+              phones = [];
+            }
+            const next = JSON.stringify(
+              phones
+                .map((p: unknown) => (typeof p === "string" ? toLookupKey(p) : ""))
+                .filter((s: string) => s.length > 0),
+            );
+            if (next === row.phones_normalized_json) continue;
+            update.run(next, row.id);
+            changed++;
+          }
+          console.log(
+            `[migration v64] re-keyed ${changed} of ${rows.length} external_contacts rows (BACKLOG-2753)`,
+          );
+        }
+
+        // ---- 3. phone_last_message ---------------------------------------
+        // THE HARD ONE: the key is half the PRIMARY KEY and the table keeps NO
+        // raw phone, so there is no source column to recompute from. Two
+        // consequences drive the shape below.
+        //
+        // (a) RE-KEYING THE STORED KEY IS NOT ENOUGH, and this is the dominant
+        //     case rather than an edge one. Message participants arrive in
+        //     E.164 ("+972525550123"), so the OLD rule stored the sliced
+        //     "2525550123" and the country code survives only in
+        //     `messages.participants_flat`. The table is therefore REBUILT
+        //     from `messages` with the writer's own predicate — the same
+        //     channel filter, the same non-empty `participants_flat` guard,
+        //     the same LOCAL_REACTION_EXCLUSION (required live, not copied),
+        //     the same split on "," and the same per-phone MAX in JS as
+        //     `messageDbService.backfillPhoneLastMessageTable` (:367). If that
+        //     predicate ever drifts from the writer's, this rebuild stops
+        //     reproducing what the writer would produce, which is the claim the
+        //     collision policy below rests on.
+        //
+        // (b) A REBUILD ALONE WOULD LOSE ROWS. `backfillPhoneLastMessageTable`
+        //     only ever INSERT-OR-REPLACEs; it never deletes. Meanwhile
+        //     syncDbService deletes messages by sync session (:187) and by
+        //     source (:255). A database can therefore hold a legitimate
+        //     phone_last_message row whose messages are gone, and rebuilding
+        //     from `messages` alone would silently drop it. Every pre-existing
+        //     row is therefore carried too, under its re-keyed key.
+        //
+        // COLLISION POLICY: MAX(last_message_at), AND IT IS A FOLD, NOT A
+        // TIE-BREAK. Two old keys can land on one new key — a stored
+        // "0525550123" and a message "+972 52 555 0123" both become
+        // "972525550123". Nothing is discarded: this table IS a materialised
+        // "most recent message per phone key" aggregate, and the writer
+        // already resolves two raw phones sharing a key by keeping the later
+        // date. The merged row's value is the max of both inputs, which is
+        // precisely the value a full rebuild would compute. No row is lost;
+        // the loser's data is the smaller half of a max.
+        //
+        // KNOWN RESIDUAL, RETAINED DELIBERATELY. A stale sliced key
+        // ("2525550123") that `messages` can no longer explain survives as an
+        // orphan under the union rule. Nothing computes it any more — except a
+        // genuine NANP (252) 555-0123, which could pick up a foreign recency.
+        // That collision is exactly the pre-BACKLOG-2635 slice(-10) defect and
+        // it exists on disk TODAY; this migration neither creates nor worsens
+        // it. Keeping the row is preferred over deleting data we cannot prove
+        // is stale.
+        if (hasTable("phone_last_message")) {
+          // user_id -> newKey -> last_message_at
+          const folded = new Map<string, Map<string, string>>();
+          const fold = (userId: string, key: string, at: string): void => {
+            if (!key || key.length === 0) return;
+            let byKey = folded.get(userId);
+            if (!byKey) {
+              byKey = new Map<string, string>();
+              folded.set(userId, byKey);
+            }
+            const seen = byKey.get(key);
+            // Same string comparison the writer uses on these DATETIME values.
+            if (seen === undefined || at > seen) byKey.set(key, at);
+          };
+
+          const existing = d
+            .prepare("SELECT phone_normalized, user_id, last_message_at FROM phone_last_message")
+            .all() as Array<{
+            phone_normalized: string;
+            user_id: string;
+            last_message_at: string;
+          }>;
+          for (const row of existing) {
+            fold(row.user_id, toLookupKey(row.phone_normalized), row.last_message_at);
+          }
+
+          // COLUMN guard, not just a table guard: several migration suites seed a
+          // `messages` table with only (id, user_id, thread_id), so probing for
+          // the table alone would make this migration throw "no such column:
+          // channel" on every chain run that starts below 64. Same shape as
+          // v48/v52..v58's "no-ops without `emails`" guard. When the rebuild is
+          // skipped the existing rows are still carried and re-keyed above.
+          const MESSAGE_COLUMNS_REQUIRED = [
+            "user_id",
+            "participants_flat",
+            "sent_at",
+            "channel",
+            "associated_message_type",
+          ];
+          const canRebuildFromMessages =
+            hasTable("messages") &&
+            MESSAGE_COLUMNS_REQUIRED.every((c) => hasColumn("messages", c));
+
+          if (canRebuildFromMessages) {
+            // Only users that really exist get NEW rows. The writer is always
+            // called with a validated user id, so this keeps the rebuild from
+            // inventing an orphan FK that the live path never would. Rows that
+            // are ALREADY here are carried above regardless of this check —
+            // dropping them would be the row loss this design exists to avoid.
+            const validUsers = hasTable("users_local")
+              ? new Set(
+                  (d.prepare("SELECT id FROM users_local").all() as Array<{ id: string }>).map(
+                    (u) => u.id,
+                  ),
+                )
+              : null;
+
+            const msgRows = d
+              .prepare(
+                `SELECT user_id, participants_flat, MAX(sent_at) AS last_date
+                   FROM messages
+                  WHERE (channel = 'sms' OR channel = 'imessage')
+                    AND participants_flat IS NOT NULL
+                    AND participants_flat != ''
+                    AND ${LOCAL_REACTION_EXCLUSION}
+                  GROUP BY user_id, participants_flat`,
+              )
+              .all() as Array<{
+              user_id: string;
+              participants_flat: string;
+              last_date: string;
+            }>;
+
+            for (const msg of msgRows) {
+              if (validUsers && !validUsers.has(msg.user_id)) continue;
+              // BACKLOG-1493: short codes and alphanumeric senders belong here
+              // too, so there is no minimum-length filter — same as the writer.
+              for (const phone of msg.participants_flat.split(",")) {
+                if (phone.trim().length === 0) continue;
+                fold(msg.user_id, toLookupKey(phone), msg.last_date);
+              }
+            }
+          }
+
+          // One atomic swap. Each migration already runs inside a transaction
+          // (:3782), so a failure anywhere above leaves the table untouched.
+          d.prepare("DELETE FROM phone_last_message").run();
+          const insert = d.prepare(
+            "INSERT OR REPLACE INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)",
+          );
+          let written = 0;
+          for (const [userId, byKey] of folded) {
+            for (const [key, at] of byKey) {
+              insert.run(key, userId, at);
+              written++;
+            }
+          }
+          console.log(
+            `[migration v64] rebuilt phone_last_message: ${existing.length} rows in, ${written} rows out (BACKLOG-2753)`,
+          );
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
