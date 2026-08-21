@@ -192,6 +192,50 @@ describe("BACKLOG-2748 — a cancelled import gets no completion card", () => {
     expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
   });
 
+  it("an EXTERNAL cancel does not mask a failure either (2330 path, behaviour changed by 2748)", () => {
+    // Written by SR review of PR #2332 and added verbatim in shape.
+    //
+    // The "never suppress over an error" condition was applied to the 2330
+    // EXTERNAL-cancel path as well as the new internal one — a deliberate change
+    // to pre-existing behaviour, ratified on measurement: before it, an external
+    // cancel during a run whose emails leg had failed produced SILENCE; now it
+    // renders "Sync Completed with Errors / Outlook connection expired".
+    //
+    // That half was unpinned. Row 165 above is an INTERNAL cancel, and the four
+    // pre-existing 2330 rows are external cancels with NO error, so dropping the
+    // error guard redded only via the internal row — a future edit to the shared
+    // gate could have silently reverted the external behaviour with nothing going
+    // red. The external shape is genuinely distinct: the queue is EMPTIED by
+    // removeExternalSync and the counter is bumped, so the error is recorded in
+    // the syncing branch rather than by the completion scan.
+    const err = syncItem("emails", "error", {
+      progress: 0,
+      error: "Outlook connection expired",
+      reconnectProvider: "microsoft",
+    });
+    const iphone = syncItem("iphone", "running", { progress: 10, external: true });
+
+    mockUseSyncOrchestrator.mockReturnValue(
+      orchestratorState([syncItem("emails", "running"), iphone], true, 0),
+    );
+    const { rerender } = render(<SyncStatusIndicator />);
+
+    // emails fails while the external sync is still going
+    mockUseSyncOrchestrator.mockReturnValue(orchestratorState([err, iphone], true, 0));
+    act(() => {
+      rerender(<SyncStatusIndicator />);
+    });
+
+    // user cancels the external sync: item removed, counter bumped, run ends
+    mockUseSyncOrchestrator.mockReturnValue(orchestratorState([err], false, 1));
+    act(() => {
+      rerender(<SyncStatusIndicator />);
+    });
+
+    expect(screen.getByText("Sync Completed with Errors")).toBeInTheDocument();
+    expect(screen.getByText("Outlook connection expired")).toBeInTheDocument();
+  });
+
   it("a cancel does not suppress the NEXT run's completion card", () => {
     // The flag belongs to the run it stopped. If it leaked, one cancelled
     // import would silence the dashboard for the rest of the session.
