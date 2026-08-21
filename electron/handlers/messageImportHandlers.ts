@@ -27,6 +27,8 @@ import type {
 import type { EffectiveImportWindow } from "../services/macOSMessagesImportService/importHelpers";
 // BACKLOG-2743: shared selection-time estimate shape (attachment bytes + disk verdict).
 import type { MessageImportCountResult } from "../types/ipc/window-api-messages";
+// BACKLOG-2748: ONE spelling of the cancel channel, shared with the preload bridge.
+import { MESSAGES_IMPORT_CANCEL_CHANNEL } from "../types/ipc/messageChannels";
 
 /**
  * Attachment info with base64 data for IPC transfer (TASK-1012)
@@ -552,8 +554,12 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
    * Cancel the current import operation (TASK-1710)
    * IPC: messages:import-cancel
    * Uses ipcMain.on (not handle) since this is a one-way event
+   *
+   * BACKLOG-2748: from TASK-1710 until now nothing sent on this channel — the
+   * handler and the service's cancellation flag were both live, and the import
+   * progress UI had no control that reached them.
    */
-  ipcMain.on("messages:import-cancel", () => {
+  ipcMain.on(MESSAGES_IMPORT_CANCEL_CHANNEL, () => {
     logService.info("Import cancel requested via IPC", "MessageImportHandlers");
     macOSMessagesImportService.requestCancellation();
   });

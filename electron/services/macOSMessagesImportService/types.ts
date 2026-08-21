@@ -69,6 +69,19 @@ export interface MacOSImportResult {
   attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
   /** BACKLOG-2743: True when the user chose to import without attachments. */
   attachmentsSkippedByChoice?: boolean;
+  /**
+   * BACKLOG-2748: the user cancelled this run from the UI.
+   *
+   * A cancel is NOT a failure and NOT a normal finish: the messages stored
+   * before the stop are real and are kept, so `messagesImported` is a genuine
+   * partial count. Without this discriminator the two outcomes are
+   * indistinguishable at the boundary — a mid-import cancel returned
+   * `success: true` with a partial count, and the UI reported it as
+   * "Successfully imported N new messages" for a run the user stopped.
+   *
+   * Consumers must branch on this flag rather than parsing `error` text.
+   */
+  cancelled?: boolean;
 }
 
 /**

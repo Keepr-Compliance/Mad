@@ -108,6 +108,12 @@ export function MacOSMessagesImportSettings({
     lastImportAt?: string | null;
   } | null>(null);
 
+  // BACKLOG-2748: the cancel has been sent and the import has not stopped yet.
+  // The main process honours cancellation at the next batch/attachment
+  // boundary, so there is a real gap between the click and the stop — the
+  // button says so rather than looking dead.
+  const [cancelRequested, setCancelRequested] = useState(false);
+
   // TASK-1952: Import filter state
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(
     DEFAULT_LOOKBACK_MONTHS
@@ -562,6 +568,10 @@ export function MacOSMessagesImportSettings({
       setLastResult({
         success: true,
         messagesImported,
+        // BACKLOG-2748: a cancelled run completes rather than errors, so it
+        // arrives here — and must be reported as a cancel with the partial
+        // count it really kept, not as "Successfully imported N new messages".
+        cancelled: messagesItem.cancelled || undefined,
         wasForceReimport,
         wasCapped: messagesItem.warning ? true : undefined,
         // BACKLOG-2743: surface the warning text itself. The pre-flight
@@ -576,7 +586,36 @@ export function MacOSMessagesImportSettings({
         error: safeErrorMessage(messagesItem.error, 'Import failed'),
       });
     }
-  }, [messagesItem?.status, messagesItem?.error, messagesItem?.warning, messagesItem?.importedCount]);
+  }, [messagesItem?.status, messagesItem?.error, messagesItem?.warning, messagesItem?.importedCount, messagesItem?.cancelled]);
+
+  // BACKLOG-2748: clear the "Cancelling..." state once the import is no longer
+  // running. Without this the NEXT import would render its Cancel button
+  // already disabled and mid-cancel.
+  useEffect(() => {
+    if (!isImporting && cancelRequested) {
+      setCancelRequested(false);
+    }
+  }, [isImporting, cancelRequested]);
+
+  /**
+   * BACKLOG-2748: stop the running import.
+   *
+   * Sends the main-process cancel (which aborts the import between message
+   * batches and between attachment copies) and does NOT touch the orchestrator
+   * queue: `syncOrchestrator.cancel()` would empty the queue and abandon the
+   * in-flight import, so the main process would keep importing while the UI
+   * claimed to be idle. Letting the import return normally is what produces the
+   * honest "Import cancelled — N messages were imported" result.
+   */
+  const handleCancelImport = useCallback(() => {
+    setCancelRequested(true);
+    try {
+      window.api.messages.cancelImport();
+    } catch (err) {
+      logger.error("[MacOSMessagesImportSettings] Cancel import failed:", err);
+      setCancelRequested(false);
+    }
+  }, []);
 
 
   // Only render on macOS
@@ -1033,6 +1072,25 @@ export function MacOSMessagesImportSettings({
               <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
               Preparing import...
             </div>
+          )}
+
+          {/* BACKLOG-2748: the way out of a running import.
+              Deliberately INSIDE the `isImporting` block: the button cannot
+              outlive the run it cancels, and there is no second condition that
+              could drift out of step with the progress bar it belongs to. */}
+          <button
+            type="button"
+            onClick={handleCancelImport}
+            disabled={cancelRequested}
+            data-testid="cancel-import"
+            className="mt-2 px-3 py-1.5 text-xs font-medium rounded border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+          >
+            {cancelRequested ? "Cancelling..." : "Cancel import"}
+          </button>
+          {cancelRequested && (
+            <p className="text-xs text-gray-500 mt-1">
+              Finishing the current batch — messages already imported are kept.
+            </p>
           )}
         </div>
       )}

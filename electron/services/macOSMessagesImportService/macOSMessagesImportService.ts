@@ -566,6 +566,11 @@ class MacOSMessagesImportService {
               attachmentsSkipped: 0,
               duration: Date.now() - startTime,
               error: "Import cancelled",
+              // BACKLOG-2748: the discriminator, not the message text. Consumers
+              // must not have to string-match "Import cancelled" to tell a user
+              // cancel apart from a real failure — the orchestrator checks this
+              // flag BEFORE it turns a non-success result into a thrown error.
+              cancelled: true,
             };
           }
 
@@ -756,6 +761,14 @@ class MacOSMessagesImportService {
           // message import. The refusal is reported as its own fact.
           attachmentsRefusedForSpace: attachmentResult.refusedForSpace,
           attachmentsSkippedByChoice: filters?.skipAttachments || undefined,
+          // BACKLOG-2748: a cancel that lands after the query phase leaves this
+          // path — the message batch loop and the attachment loop both `break`,
+          // and everything already written is kept. `success` stays TRUE (the
+          // stored messages ARE imported) but the counts are partial, so the
+          // outcome must say so or the UI reports a stopped import as a clean
+          // finish. The controller is still live here; `importMessages` nulls it
+          // in its `finally`, after this return.
+          cancelled: this.abortController?.signal.aborted || undefined,
         };
       } catch (error) {
         await dbClose();
@@ -889,6 +902,9 @@ class MacOSMessagesImportService {
 
     for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
       // Check for cancellation at start of each batch (legacy flag and AbortSignal)
+      // BACKLOG-2748: pinned by `macOSMessagesImportService.cancel-2748.test.ts`
+      // — cancelling on the first progress event must leave exactly the first
+      // BATCH_SIZE messages stored, not the whole corpus.
       if (this.abortController?.signal.aborted) {
         msgProgressBar.stop();
         logService.warn(
@@ -1367,6 +1383,14 @@ class MacOSMessagesImportService {
 
     for (const attachment of attachments) {
       // Check for cancellation (legacy flag and AbortSignal)
+      //
+      // BACKLOG-2748: this check is PER ATTACHMENT, not per batch, and that is
+      // the property that makes Cancel worth pressing — the attachment phase is
+      // the expensive one (hashing and copying files, gigabytes of them), and a
+      // cancel honoured only between message batches would keep filling the disk
+      // long after the user asked it to stop. Pinned by
+      // `macOSMessagesImportService.cancel-2748.test.ts`, which cancels at the
+      // third of twelve attachments and asserts exactly three files exist.
       if (this.abortController?.signal.aborted) {
         attachProgressBar.stop();
         logService.warn(
