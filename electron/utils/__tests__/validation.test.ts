@@ -260,7 +260,41 @@ describe("Transaction Validation", () => {
       expect(validated.closing_date_verified).toBe(1);
       expect(validated.sale_price).toBe(500000);
       expect(validated.listing_price).toBe(525000);
-      expect(validated.notes).toBe("Test transaction with all fields");
+
+      // BACKLOG-2558 (SR finding F6): `notes` is CHECKED but no longer
+      // FORWARDED — `transactions` has no `notes` column on any path, so
+      // forwarding it only handed the writer a key it had to discard. The
+      // validation itself is still in force; see the rejection cases below.
+      expect("notes" in validated).toBe(false);
+    });
+
+    it("still REJECTS a malformed notes value even though it is not forwarded", () => {
+      // The check must not have been deleted along with the forwarding — that
+      // would turn today's ValidationError into silence.
+      expect(() =>
+        validateTransactionData({ notes: "x".repeat(10001) }, true),
+      ).toThrow();
+    });
+
+    it("still REJECTS a malformed amount even though it is not forwarded", () => {
+      expect(() => validateTransactionData({ amount: -5 }, true)).toThrow(
+        "Amount must be a non-negative number",
+      );
+    });
+
+    it("forwards suggested_contacts, which the review UI sends as its only key", () => {
+      // BACKLOG-2737/2558 (F6): stripped here before the fix, so dismissing a
+      // suggested party reached the writer with an empty payload and threw
+      // "No valid fields to update".
+      const payload = JSON.stringify([{ name: "Dana Example", role: "buyer_agent" }]);
+      expect(
+        validateTransactionData({ suggested_contacts: payload }, true).suggested_contacts,
+      ).toBe(payload);
+
+      // null is how the LAST remaining suggestion is cleared; it must survive.
+      const cleared = validateTransactionData({ suggested_contacts: null }, true);
+      expect("suggested_contacts" in cleared).toBe(true);
+      expect(cleared.suggested_contacts).toBeNull();
     });
 
     it("should validate partial update with only dates", () => {

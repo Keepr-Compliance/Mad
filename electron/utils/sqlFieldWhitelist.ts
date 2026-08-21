@@ -353,6 +353,46 @@ export function validateFields<T extends ValidatableTable>(
 }
 
 /**
+ * BACKLOG-2741 — THIS FUNCTION IS NEVER CALLED, AND THAT IS THE POINT.
+ *
+ * ===========================================================================
+ * WHAT WENT WRONG
+ * ===========================================================================
+ * BACKLOG-2739 added an `@ts-expect-error` to prove that a made-up column name
+ * is rejected. It pins the `FieldExpression<ColumnOf<T>>` TYPE ALIAS. It does
+ * NOT pin `validateFields`' PARAMETER — which is the thing callers actually
+ * meet. Measured by SR review of PR #2322: widening the parameter back to
+ * `ReadonlyArray<string>` — undoing that PR's entire point — left
+ * `npm run type-check` at exit 0, `npm run type-check:tests` at zero errors,
+ * and the whitelist suite 28/28 green.
+ *
+ * A guard that cannot observe its own removal is a convention, not a guard —
+ * the same defect class the epic exists to close, in the epic's own first
+ * deliverable.
+ *
+ * ===========================================================================
+ * WHY THIS SHAPE
+ * ===========================================================================
+ * `runtimeName` is typed `string`, not a literal — a plain string is exactly
+ * what a widened signature would start accepting. Under the correct (narrow)
+ * signature the call is an error, the directive below is used, and the build is
+ * green. Widen the parameter and the call becomes legal, so the directive
+ * becomes UNNECESSARY — and an unnecessary `@ts-expect-error` is itself a
+ * compile error (TS2578). That is what makes the technique self-verifying:
+ * the guard fails loudly when the thing it guards is removed.
+ *
+ * Do not "clean up" this function, do not call it, and do not replace the
+ * `string` annotation with a literal.
+ */
+export function validateFieldsSignatureGuard(): void {
+  const runtimeName: string = "a_name_that_arrived_from_outside_the_type_system";
+  // @ts-expect-error — validateFields must NOT accept a plain `string`. If this
+  // directive ever reports as unused, the parameter has been widened and the
+  // compile-time half of the whitelist has stopped working.
+  validateFields("transactions", [runtimeName]);
+}
+
+/**
  * Checks if a field is valid for a given table without throwing.
  *
  * **Takes `string` on purpose.** This function exists to interrogate a name
