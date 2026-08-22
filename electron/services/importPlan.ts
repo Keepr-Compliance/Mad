@@ -325,7 +325,30 @@ export function resolveImportPlan(
   for (const span of auditSpans) {
     const startNano = isoToNano(span.startISO);
     if (startNano === null) continue;
-    protectedSpans.push({ startNano, endNano: isoToNano(span.endISO) });
+
+    // `endISO === null` is a DELIBERATE open end — a deal that has not closed,
+    // whose audit period runs to the present. An endISO that was SUPPLIED but
+    // cannot be read is a data fault, and the two must not collapse into the
+    // same value: reading a corrupt `closed_at` as "open-ended" would silently
+    // exempt everything after that deal's start from the cap, forever. That is
+    // BACKLOG-2749's complaint (a cap the user set being ignored) reintroduced
+    // by a parse failure.
+    //
+    // Such a span still WIDENS the window — its start is valid and the deal's
+    // history must still be fetched — but it protects nothing, because a period
+    // whose end cannot be described cannot be honestly exempted. Widening reads
+    // `startISO` directly in `earliestRequiredStartISO`, so dropping it here
+    // costs no coverage.
+    //
+    // Unreachable from `deriveAuditSpans`, which passes an explicit `null` for
+    // an open deal and a valid Date otherwise — which is exactly the kind of
+    // assumption that stops being true quietly.
+    const endNano = isoToNano(span.endISO);
+    if (span.endISO !== null && span.endISO !== undefined && endNano === null) {
+      continue;
+    }
+
+    protectedSpans.push({ startNano, endNano });
   }
 
   return {

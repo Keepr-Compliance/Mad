@@ -15,6 +15,15 @@ export type { AttachmentsRefusedForSpace };
  * `auditPeriodStart` mirrors the value the import itself uses to widen the
  * window, so the estimate describes the import that would actually run.
  */
+/**
+ * Payload of the background-import announcements (BACKLOG-2772).
+ */
+export interface BackgroundImportSignal {
+  userId: string;
+  /** Which lifecycle event asked for the import (create / date-change / ...). */
+  reason: string;
+}
+
 export interface MessageImportCountFilters {
   lookbackMonths?: number | null;
   maxMessages?: number | null;
@@ -110,6 +119,14 @@ export interface WindowApiMessages {
     userId: string,
     selection?: MessageImportCountFilters
   ) => Promise<MessageImportCountResult>;
+  /**
+   * Subscribe to macOS Messages imports the renderer did not start
+   * (BACKLOG-2772). See the preload bridge for why this exists.
+   */
+  onBackgroundImport: (callbacks: {
+    onStarted: (signal: BackgroundImportSignal) => void;
+    onFinished: (signal: BackgroundImportSignal) => void;
+  }) => () => void;
   /**
    * Cancel the running macOS Messages import (BACKLOG-2748).
    *

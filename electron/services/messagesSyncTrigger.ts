@@ -16,17 +16,31 @@
 // planFetchWindows / per-account bound here. The required lower bound is
 //   proposedStartISO ?? computeEarliestAuditStart(all non-rejected txns)
 // and when it predates the MIN(sent_at) floor AND the importer is available we
-// run ONE global re-import via macOSMessagesImportService.importMessages(...,
-// { auditPeriodStart }) — reusing the BACKLOG-2276 auditPeriodStart filter (NO
-// importer change). expandAttachedThreadsForUser ALWAYS runs after. Degrades
-// gracefully on non-macOS / no-FDA (skip import, still expand, floor unchanged;
-// the export gate still warns).
+// run ONE global import. expandAttachedThreadsForUser ALWAYS runs after.
+// Degrades gracefully on non-macOS / no-FDA (skip import, still expand, floor
+// unchanged; the export gate still warns).
 //
-// The 50K cap keeps OLDEST / drops NEWEST and is OFF when auditPeriodActive
-// (SR-correction d) — so the MIN(sent_at) floor is authoritative and the cap
-// never "eats the oldest". The global import is a full device scan → callers run
-// it in the BACKGROUND with the inline progress indicator, never synchronously
-// blocking the update IPC (SR-correction d).
+// BACKLOG-2772 — WHAT CHANGED HERE, because the paragraph this replaces was
+// still being read as live:
+//
+// This module used to call importMessages() with a hand-built
+// `{ auditPeriodStart }` and nothing else, and the old service rule was "any
+// non-rejected transaction switches the 50K cap OFF". Both are gone.
+//
+//   - The run is planned by `resolveImportPlanForUser`, the SAME resolver the
+//     Settings buttons and the estimate use, so this path now carries the
+//     user's lookback, cap and attachment preference instead of ignoring them.
+//   - The cap is no longer switched off wholesale. Under Cap' it does not apply
+//     INSIDE the audit periods of non-rejected deals — which is what keeps the
+//     MIN(sent_at) floor authoritative and the cap from "eating the oldest" —
+//     and it does apply to everything outside them.
+//   - The run announces itself (see messagesBackgroundImportSignal) so the
+//     renderer can mirror it into the sync queue. Before that it had no queue
+//     item and therefore no Cancel button at all.
+//
+// The global import is a full device scan → callers run it in the BACKGROUND
+// with the inline progress indicator, never synchronously blocking the update
+// IPC (SR-correction d).
 // ============================================
 
 import * as Sentry from "@sentry/electron/main";

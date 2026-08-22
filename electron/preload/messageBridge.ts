@@ -9,9 +9,14 @@ import { ipcRenderer } from "electron";
 import type {
   MessageImportCountFilters,
   MessageImportCountResult,
+  BackgroundImportSignal,
 } from "../types/ipc/window-api-messages";
 // BACKLOG-2748: ONE spelling of the cancel channel, shared with the handler.
-import { MESSAGES_IMPORT_CANCEL_CHANNEL } from "../types/ipc/messageChannels";
+import {
+  MESSAGES_IMPORT_CANCEL_CHANNEL,
+  MESSAGES_BACKGROUND_IMPORT_STARTED_CHANNEL,
+  MESSAGES_BACKGROUND_IMPORT_FINISHED_CHANNEL,
+} from "../types/ipc/messageChannels";
 
 /**
  * Progress event from macOS message import (TASK-1710)
@@ -106,6 +111,38 @@ export const messageBridge = {
     ipcRenderer.on("messages:import-progress", handler);
     return () => {
       ipcRenderer.removeListener("messages:import-progress", handler);
+    };
+  },
+
+  /**
+   * Listen for a macOS Messages import that the RENDERER did not start
+   * (BACKLOG-2772).
+   *
+   * The sync queue lives in the renderer, so a main-initiated import — the one
+   * the transaction trigger runs when a deal is created or its start date moves
+   * earlier — cannot enqueue itself. It announces instead, and the orchestrator
+   * mirrors it into the queue as an EXTERNAL item.
+   *
+   * That queue item is what renders the Cancel button. The cancel MECHANISM was
+   * never missing (`cancelImport` below is global to the import service and
+   * would already have stopped such a run); what was missing was any surface
+   * from which a user could press it.
+   *
+   * @returns Cleanup function to remove both listeners
+   */
+  onBackgroundImport: (callbacks: {
+    onStarted: (signal: BackgroundImportSignal) => void;
+    onFinished: (signal: BackgroundImportSignal) => void;
+  }): (() => void) => {
+    const started = (_e: Electron.IpcRendererEvent, s: BackgroundImportSignal) =>
+      callbacks.onStarted(s);
+    const finished = (_e: Electron.IpcRendererEvent, s: BackgroundImportSignal) =>
+      callbacks.onFinished(s);
+    ipcRenderer.on(MESSAGES_BACKGROUND_IMPORT_STARTED_CHANNEL, started);
+    ipcRenderer.on(MESSAGES_BACKGROUND_IMPORT_FINISHED_CHANNEL, finished);
+    return () => {
+      ipcRenderer.removeListener(MESSAGES_BACKGROUND_IMPORT_STARTED_CHANNEL, started);
+      ipcRenderer.removeListener(MESSAGES_BACKGROUND_IMPORT_FINISHED_CHANNEL, finished);
     };
   },
 

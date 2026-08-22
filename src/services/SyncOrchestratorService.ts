@@ -580,6 +580,9 @@ class SyncOrchestratorServiceClass {
       });
     }
 
+    // BACKLOG-2772: mirror main-initiated imports into the queue.
+    this.subscribeToBackgroundImports();
+
     // =========================================================================
     // TASK-2150: Maintenance / utility operations
     // These operations bypass the orchestrator today. Registering them here
@@ -747,6 +750,40 @@ class SyncOrchestratorServiceClass {
    * Idempotent: if an item for this type already exists with status 'running',
    * the call is a no-op (safe for hot-reload reconnect).
    */
+  /**
+   * Mirror a macOS Messages import that MAIN started into the queue
+   * (BACKLOG-2772).
+   *
+   * `messagesSyncTrigger` runs a global import when a deal is created or its
+   * start date moves earlier. That import cannot enqueue itself — this queue
+   * lives in the renderer and every sync function here dereferences
+   * `window.api` — so main announces and this mirrors, the same shape the
+   * iPhone sync has used since BACKLOG-2195.
+   *
+   * The queue item is the point: it is what renders the Cancel button. The
+   * cancel mechanism already reached these runs (`requestCancellation` is
+   * global to the import service), but nothing ever offered the user the
+   * button, so creating a deal on a large library started a scan that could
+   * only be escaped by force-quitting.
+   *
+   * `registerExternalSync` returns early when an item of this type is already
+   * running, so a user-initiated import in flight is never displaced by a
+   * mirrored one — and `completeExternalSync` no-ops when no EXTERNAL item
+   * exists, so the pair is safe in either order.
+   */
+  private subscribeToBackgroundImports(): void {
+    if (typeof window === 'undefined' || !window.api?.messages?.onBackgroundImport) return;
+
+    window.api.messages.onBackgroundImport({
+      onStarted: () => {
+        this.registerExternalSync('messages');
+      },
+      onFinished: () => {
+        this.completeExternalSync('messages', { status: 'complete' });
+      },
+    });
+  }
+
   registerExternalSync(type: SyncType): void {
     const existing = this.state.queue.find((item) => item.type === type);
     if (existing && existing.status === 'running') {

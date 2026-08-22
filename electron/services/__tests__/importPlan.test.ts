@@ -516,18 +516,40 @@ describe("resolveImportPlan — protectedSpans (Cap': the exemption, scoped)", (
     expect(plan.fetchStartISO).toBe(CLOSED_DEAL_START);
   });
 
-  it("FLAGGED: an unparseable END is read as open-ended rather than dropped", () => {
+  it("an unparseable END protects nothing, but still widens the window", () => {
     /*
-     * Pins CURRENT behaviour, and it is not obviously the behaviour the module
-     * wants. `isoToNano` returns null for an unparseable `endISO`, and `null`
-     * already means "open-ended" — so a corrupt `closed_at` widens that deal's
-     * cap exemption to [start, infinity) instead of being dropped, which is the
-     * same silent outcome the resolver's own comment gives as the reason for
-     * dropping an unparseable START. Raised with the module's author under
-     * BACKLOG-2772; this test exists so a deliberate change reds it, rather
-     * than the behaviour changing unnoticed either way.
+     * This test was written FLAGGED, pinning the opposite behaviour, and reding
+     * it is what produced the fix — recorded here because the sequence is the
+     * point.
+     *
+     * `isoToNano` returns null for an unparseable `endISO`, and `null` already
+     * means "open-ended". So a corrupt `closed_at` used to widen that deal's cap
+     * exemption to [start, infinity): the cap would stop governing everything
+     * after that deal's start, permanently and silently. That is BACKLOG-2749's
+     * complaint — a cap the user set being ignored — reintroduced by a parse
+     * failure, and it is the same silent outcome the resolver gives as its
+     * reason for dropping an unparseable START.
+     *
+     * The resolver now separates the two facts. A period whose end cannot be
+     * described cannot be honestly exempted, so it protects nothing; but its
+     * START is valid and the deal's history must still be fetched, so it still
+     * widens the window. Both halves are asserted, because dropping the span
+     * outright would silently narrow an audit window — the opposite defect.
      */
-    const plan = testImportPlan({ auditSpans: [span(CLOSED_DEAL_START, "not-a-date")] });
+    const plan = testImportPlan({
+      storedFilters: { lookbackMonths: 3 },
+      auditSpans: [span(CLOSED_DEAL_START, "not-a-date")],
+    });
+
+    expect(plan.protectedSpans).toEqual([]);
+    expect(plan.fetchStartISO).toBe(CLOSED_DEAL_START);
+  });
+
+  it("a DELIBERATE open end (endISO null) is not confused with an unparseable one", () => {
+    // The distinguishing input for the rule above: an unclosed deal must keep
+    // its open-ended protection. Collapse the two cases and this reds.
+    const plan = testImportPlan({ auditSpans: [span(CLOSED_DEAL_START, null)] });
+
     expect(plan.protectedSpans).toEqual([
       { startNano: toAppleNano(CLOSED_DEAL_START), endNano: null },
     ]);
