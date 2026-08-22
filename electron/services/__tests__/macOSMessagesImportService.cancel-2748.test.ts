@@ -669,29 +669,33 @@ describe("BACKLOG-2775 — a cancelled FORCE re-import changes nothing", () => {
     expect(phases).not.toContain("deleting");
   });
 
-  it("STOPS the clear when the cancel lands during it, and rolls back", async () => {
-    // The founder's own timing: the cancel lands while the clear is underway.
-    // The first `deleting` progress event is emitted before any message row is
-    // deleted, so cancelling on it exercises the abort check inside the delete
-    // loop. (With 500 seeded messages the whole clear is one batch of
-    // DELETE_BATCH_SIZE=5000, so this proves the loop stops before its first
-    // delete rather than between two of them — the founder's 162,961 would take
-    // 33 batches, each now interruptible.)
+  it("BACKLOG-2790: the store never shrinks at ANY point during the run", async () => {
+    // The test this replaces cancelled on the first `deleting` progress event
+    // and asserted that not one delete batch ran afterwards — the 35 seconds the
+    // founder waited out. It was the right assertion for a design that deleted
+    // first and restored on failure. There is no `deleting` phase to cancel on
+    // any more, and the property it was protecting is now available directly, as
+    // an invariant over the WHOLE run rather than a fact about one exit:
     //
-    // The identity assertion alone would NOT prove the in-loop check: with the
-    // transaction in place, a clear that ran to completion and was cancelled at
-    // the query phase afterwards also rolls back to the same rows. The
-    // distinguishing assertion is the progress trail — deleting must never
-    // report having deleted anything, because the delete never happened.
+    //   at no instant is the live message store emptier than it was before the
+    //   run started.
+    //
+    // That is stronger than what the old design could offer. Under BACKLOG-2775
+    // the store WAS empty for most of the run — the guarantee was only that an
+    // interruption would restore it, which is a promise about the exit path.
+    // Here it is a fact about every instant, so a crash (which runs no exit
+    // path at all) is covered by the same assertion.
     const before = storedRowIdentities();
-    const deletingProgress: number[] = [];
+    const observedCounts: number[] = [];
+    const phasesSeen = new Set<string>();
 
     let cancelSent = false;
     const result = await macOSMessagesImportService.importMessages(
       USER,
       (progress) => {
-        if (progress.phase === "deleting") deletingProgress.push(progress.current);
-        if (!cancelSent && progress.phase === "deleting") {
+        phasesSeen.add(progress.phase);
+        observedCounts.push(storedRowIdentities().length);
+        if (!cancelSent && progress.phase === "importing" && progress.current >= 1) {
           cancelSent = true;
           macOSMessagesImportService.requestCancellation();
         }
@@ -706,9 +710,19 @@ describe("BACKLOG-2775 — a cancelled FORCE re-import changes nothing", () => {
     expect(result.rolledBack).toBe(true);
     expect(storedRowIdentities()).toEqual(before);
 
-    // The 35 seconds the founder waited out: not one delete batch ran after his
-    // cancel was in.
-    expect(deletingProgress).toEqual([0]);
+    // The invariant. Sampling only proves it where it was sampled, which is why
+    // the sampling is at every progress event of every phase, and why the
+    // architecture — not this test — is what makes it true everywhere else.
+    expect(observedCounts.length).toBeGreaterThan(0);
+    expect(Math.min(...observedCounts)).toBe(before.length);
+
+    // The declared, founder-visible consequence, asserted rather than assumed:
+    // there is no "Clearing existing messages…" step any more, because nothing
+    // is cleared until the rebuild has finished. Emitting a `deleting` phase
+    // late would also drive the orchestrator's weighted progress bar backwards
+    // (it maps phases positionally), so its absence is load-bearing for the UI
+    // as well as descriptive of the architecture.
+    expect(phasesSeen.has("deleting")).toBe(false);
   });
 
   it("restores the attachment rows the clear deleted, too", async () => {
@@ -761,15 +775,32 @@ describe("BACKLOG-2775 — a cancelled FORCE re-import changes nothing", () => {
   });
 });
 
-describe("BACKLOG-2775 — the force transaction cannot swallow background writes", () => {
+describe("BACKLOG-2790 — a force re-import cannot swallow background writes, and no longer has to pause them", () => {
+  // WHAT CHANGED, AND WHY THESE TESTS DID.
+  //
   // Every write in the main process goes through the SAME better-sqlite3 handle
-  // (`databaseService` shares it with `db/core/dbConnection` via `setDb`), so a
-  // write from anywhere while the force transaction is open JOINS it and is
-  // rolled back with it. Two 60-second timers write on that handle:
-  // auditService's cloud sync (markAuditLogsSynced) and submissionSyncService's
-  // poll. Rollback is the NORMAL path for a cancelled force re-import, so
-  // without quiescing them the fix for BACKLOG-2775 would have introduced a
-  // quieter bug of its own.
+  // (`databaseService` shares it with `db/core/dbConnection` via `setDb`). Under
+  // BACKLOG-2775 the force path held one BEGIN IMMEDIATE transaction open for
+  // the whole run, so any write landing in that window silently JOINED it and
+  // was destroyed by the rollback that a cancelled force re-import performs as
+  // its NORMAL path. The fix was to pause the two 60-second timers that write
+  // there — auditService's cloud sync and submissionSyncService's poll — and to
+  // wait out any tick already in the air.
+  //
+  // That mechanism is gone, and the tests that pinned it went with it: five
+  // tests asserting that the suspends happened, in the right order, restarted
+  // only what they stopped, and waited for in-flight syncs. They were correct
+  // about a mechanism that no longer exists, and none of them asserted the thing
+  // the user cares about.
+  //
+  // What remains is that thing, asserted directly. The rebuild writes to a
+  // staging table with ordinary short transactions and swaps it in with one that
+  // contains no `await`, so there is no window for anything to fall into. The
+  // quiesce is not merely unnecessary — the exposure it bounded, and the two
+  // residuals it could NOT bound (event-driven `insertAuditLog`, and
+  // submissionSyncService's realtime subscription, which writes by the same path
+  // as its poll but is not stopped by suspending the timer), are all structurally
+  // impossible now.
 
   /** Rows the audit sync has uploaded to the cloud. */
   let cloudRows: string[] = [];
@@ -779,7 +810,8 @@ describe("BACKLOG-2775 — the force transaction cannot swallow background write
    * rows, then mark them synced locally — on the shared connection.
    *
    * Honours `auditSyncRunning` because that is what the real thing does: a
-   * cleared interval does not fire.
+   * cleared interval does not fire. Nothing clears it any more, which is the
+   * point of the first test below.
    */
   function auditTimerTick(): void {
     if (!auditSyncRunning) return;
@@ -809,19 +841,30 @@ describe("BACKLOG-2775 — the force transaction cannot swallow background write
       .run("audit-1", "user.login", "2026-08-21T00:00:00.000Z");
   });
 
-  it("stops the audit sync before opening the transaction, so its mark cannot be rolled back", async () => {
-    // The failure this prevents: the tick uploads the row to the cloud and marks
-    // it synced locally, the user cancels, and the rollback erases only the
-    // LOCAL mark — leaving a row that is in the cloud and looks unsynced here,
-    // so it uploads again. The local store and the cloud disagree, and nothing
+  it("keeps a background sync's write when the force re-import is cancelled", async () => {
+    // The failure this prevents, in full: the tick uploads the row to the cloud
+    // and marks it synced locally, the user cancels, and the rollback erases
+    // only the LOCAL mark — leaving a row that exists in the cloud and looks
+    // unsynced here, so it uploads again. The two stores disagree and nothing
     // reports it.
+    //
+    // The old fix was to make sure the tick could not fire. This one lets it
+    // fire and keeps its work: the tick's write is its own short transaction and
+    // commits immediately, so the cancelled re-import has nothing to roll it
+    // back with.
+    //
+    // The distinguishing assertion is AGREEMENT between the two stores, not the
+    // local value on its own — under the old design the correct state was
+    // "neither", here it is "both", and only checking the cloud side tells a
+    // correct state apart from a corrupt one.
     let cancelSent = false;
     const result = await macOSMessagesImportService.importMessages(
       USER,
       (progress) => {
         if (!cancelSent && progress.phase === "importing" && progress.current >= 1) {
           cancelSent = true;
-          // The timer fires mid-transaction — or would, if it were still running.
+          // The timer fires mid-rebuild. Nothing has stopped it, and nothing
+          // needs to.
           auditTimerTick();
           macOSMessagesImportService.requestCancellation();
         }
@@ -833,227 +876,35 @@ describe("BACKLOG-2775 — the force transaction cannot swallow background write
     );
 
     expect(result.rolledBack).toBe(true);
-
-    // The distinguishing assertion is AGREEMENT between the two stores, not the
-    // local value alone: rolled back to NULL is the correct state here and the
-    // corrupt state in the mutation, and only the cloud side tells them apart.
-    expect(syncedAtOf("audit-1")).toBeNull();
-    expect(cloudRows).toEqual([]);
+    expect(cloudRows).toEqual(["audit-1"]);
+    expect(syncedAtOf("audit-1")).toBe("2026-08-21T00:00:00.000Z");
   });
 
-  it("suspends both writers BEFORE the clear starts and resumes them after the rollback", async () => {
-    // Note: a cancel that arrives BEFORE the run starts returns at the pre-clear
-    // check, without opening a transaction and therefore without quiescing
-    // anything — correct, and the reason this test cancels mid-import instead.
-    const trail: string[] = [];
-    const seen = new Set<string>();
-
-    let cancelSent = false;
-    await macOSMessagesImportService.importMessages(
-      USER,
-      (progress) => {
-        if (!seen.has(progress.phase)) {
-          seen.add(progress.phase);
-          writerEvents.push(`phase:${progress.phase}`);
-        }
-        // Cancel mid-import, so this run genuinely ends in a ROLLBACK — a
-        // pre-run cancel would return before the transaction was ever opened
-        // and would prove nothing about the ordering around it.
-        if (!cancelSent && progress.phase === "importing" && progress.current >= 1) {
-          cancelSent = true;
-          macOSMessagesImportService.requestCancellation();
-        }
-      },
-      testImportPlan({
-        mode: "reprocess",
-        storedFilters: { lookbackMonths: null, maxMessages: null },
-      }),
-    );
-    trail.push(...writerEvents);
-
-    // Both stopped, both restarted, and the stops come first — a suspend issued
-    // after BEGIN would leave a window the timer could fire in.
-    expect(trail.slice(0, 2)).toEqual(["audit:suspend", "submissions:suspend"]);
-    expect(trail.slice(-2)).toEqual(["audit:resume", "submissions:resume"]);
-  });
-
-  it("restarts only what it stopped", async () => {
-    // The audit timer was already stopped by the app (e.g. never initialized).
-    // Starting it here would be this feature switching cloud sync ON behind the
-    // user's back.
-    auditSyncRunning = false;
-
+  it("suspends nothing, on any force path", async () => {
+    // The mechanism's absence, asserted where its presence used to be. If a
+    // future change reintroduces a long transaction on this path it will almost
+    // certainly reintroduce the quiesce with it, and this is what notices.
     await forceImportToCompletion();
-
-    expect(writerEvents).toContain("submissions:resume");
-    expect(writerEvents).not.toContain("audit:resume");
-  });
-
-  it("a force run cancelled BEFORE the clear neither suspends nor resumes anything", async () => {
-    // The last uncovered force exit, and the SR found it the only way it can be
-    // found: they hoisted the quiesce above the pre-clear cancel check and all
-    // 24 tests in this file stayed green. Every other test steers around this
-    // path deliberately, so nothing was watching it.
-    //
-    // The property is that the quiesce belongs INSIDE the branch that opens a
-    // transaction. A run that stops before the clear has nothing to protect, so
-    // suspending the app's cloud sync for it would be a cost with no purchase —
-    // and the regression is silent, because the `finally` still resumes.
-    writerEvents.length = 0;
-
-    macOSMessagesImportService.requestCancellation();
-    const result = await forceImportToCompletion();
-
-    expect(result.rolledBack).toBe(true);
     expect(writerEvents).toEqual([]);
     expect(auditSyncRunning).toBe(true);
     expect(submissionSyncRunning).toBe(true);
+
+    // ...including the exit that stops before doing any work at all.
+    writerEvents.length = 0;
+    macOSMessagesImportService.requestCancellation();
+    const cancelled = await forceImportToCompletion();
+    expect(cancelled.rolledBack).toBe(true);
+    expect(writerEvents).toEqual([]);
   });
 
   it("leaves the background writers alone for a DELTA import", async () => {
-    // Only the force path takes the long transaction, so only it has any reason
-    // to stop the app's cloud sync.
+    // Unchanged, and it never had anything to do with the transaction: the delta
+    // path has never taken one.
     mockDb.prepare("DELETE FROM messages").run();
 
     await importToCompletion();
 
     expect(writerEvents).toEqual([]);
-  });
-
-  it("waits for a SUBMISSION sync that is already in flight", async () => {
-    // submissionSyncService awaits its cloud-status fetch before writing via
-    // updateTransactionSubmissionStatus, exactly as the audit sync does. Until
-    // BACKLOG-2775's re-review it had no in-flight guard at all, so stopping its
-    // interval was the only thing the quiesce could do for it — and a poll
-    // already in the air would still write inside the transaction. The audit
-    // shape is now mirrored, and the wait covers both.
-    submissionSyncInFlight = true;
-    let checks = 0;
-    (
-      jest.requireMock("../submissionSyncService") as {
-        default: { isSyncInFlight: jest.Mock };
-      }
-    ).default.isSyncInFlight.mockImplementation(() => {
-      checks += 1;
-      if (checks >= 3) submissionSyncInFlight = false;
-      return submissionSyncInFlight;
-    });
-
-    await forceImportToCompletion();
-
-    expect(checks).toBeGreaterThanOrEqual(3);
-    expect(submissionSyncInFlight).toBe(false);
-  });
-
-  it("waits for an audit sync that is already in flight", async () => {
-    // Stopping an interval prevents new ticks; it cannot cancel one already
-    // awaiting its network round trip before it reaches markAuditLogsSynced.
-    auditSyncInFlight = true;
-    let checks = 0;
-    (
-      jest.requireMock("../auditService") as {
-        default: { isSyncInFlight: jest.Mock };
-      }
-    ).default.isSyncInFlight.mockImplementation(() => {
-      // Settles after a few polls, as a finishing round trip would.
-      checks += 1;
-      if (checks >= 3) auditSyncInFlight = false;
-      return auditSyncInFlight;
-    });
-
-    await forceImportToCompletion();
-
-    expect(checks).toBeGreaterThanOrEqual(3);
-    expect(auditSyncInFlight).toBe(false);
-  });
-});
-
-describe("BACKLOG-2775 — the structural guard on the force transaction", () => {
-  // The COMMIT sits at the end of a ~600-line try block with several exits. A
-  // future `return { success: true, ... }` added anywhere inside it would be
-  // rolled back by the `finally` while reporting success to the user — an
-  // emptied message store with tsc, lint and every other test still green.
-  //
-  // Every exit that means to leave the transaction open declares it. This test
-  // simulates the undeclared one, which is the only way to know the guard is
-  // wired to anything.
-
-  beforeEach(async () => {
-    messageCount = 500;
-    attachmentCount = 0;
-    await importToCompletion();
-  });
-
-  it("throws rather than return a result describing data it rolled back", async () => {
-    const before = storedRowIdentities();
-
-    // The simulated regression, reproduced by its END STATE: the try returns a
-    // success-shaped result while the transaction is still open and nothing has
-    // declared a rollback. Swallowing the COMMIT produces exactly that — the
-    // import runs to its success `return`, and the `finally` finds the
-    // transaction it was supposed to have committed still open.
-    //
-    // This also pins the reason the `finally` asks the CONNECTION whether a
-    // transaction is open rather than trusting `forceTxnOpen`, which is cleared
-    // on the line after the COMMIT: written the other way, this exact state
-    // skips the rollback entirely and leaks the write lock for the life of the
-    // process. That is how this test was found — it failed, and the code was
-    // wrong, not the test.
-    //
-    // (Throwing from inside the try does NOT stand in for this: the outer catch
-    // catches anything, Error or not, and DOES declare a rollback — so the guard
-    // correctly stays silent, as the CONTROL below shows.)
-    const realExec = mockDb.exec.bind(mockDb);
-    const execSpy = jest
-      .spyOn(mockDb, "exec")
-      .mockImplementation((sql: string) => {
-        if (sql.trim().toUpperCase() === "COMMIT") return mockDb; // never lands
-        return realExec(sql);
-      });
-
-    await expect(forceImportToCompletion()).rejects.toThrow(
-      /open transaction and no declared rollback/i,
-    );
-
-    execSpy.mockRestore();
-
-    // The guard's whole purpose: the data is safe FIRST, and the misleading
-    // result is discarded second.
-    expect(storedRowIdentities()).toEqual(before);
-    // ...and the background writers were restarted despite the throw.
-    expect(writerEvents.slice(-2)).toEqual(["audit:resume", "submissions:resume"]);
-  });
-
-  it("CONTROL: a declared rollback exit does NOT trip the guard", async () => {
-    // The distinguishing input. If the guard fired on every rollback, an
-    // ordinary cancel — the feature's normal path — would blow up in the user's
-    // face instead of reporting "nothing changed".
-    const result = await forceImportCancellingAt("importing", 1);
-
-    expect(result.cancelled).toBe(true);
-    expect(result.rolledBack).toBe(true);
-    expect(result.error).toBe("Import cancelled");
-  });
-
-  it("CONTROL: a thrown error is a declared exit and surfaces as itself", async () => {
-    // A genuine failure inside the try must still arrive as that failure, not
-    // be replaced by the guard's message.
-    const storeSpy = jest
-      .spyOn(
-        macOSMessagesImportService as unknown as {
-          storeMessages: () => Promise<unknown>;
-        },
-        "storeMessages",
-      )
-      .mockRejectedValue(new Error("disk I/O error"));
-
-    const result = await forceImportToCompletion();
-
-    expect(result.success).toBe(false);
-    expect(result.error).toBe("disk I/O error");
-    expect(result.rolledBack).toBe(true);
-
-    storeSpy.mockRestore();
   });
 });
 
