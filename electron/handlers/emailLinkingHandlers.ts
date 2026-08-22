@@ -791,6 +791,22 @@ export function registerEmailLinkingHandlers(): void {
         throw new ValidationError("Message IDs must be a non-empty array", "messageIds");
       }
 
+      // BACKLOG-2791: if this row is a REVIEW REJECTION, restoring it returns it
+      // to the Needs Review queue — it must NOT become a link. Restoring used to
+      // call linkMessages unconditionally, and the text link path writes no
+      // match_reason, so a rejected text came back as an ordinary link: in the
+      // audit, in exports, never approved. One click, straight around the
+      // approval gate. Emails were already safe (their restore preserves
+      // address_missing); this makes both halves behave the same.
+      const { restoreRejectedToQueue } = await import("../services/reviewStateService");
+      if (await restoreRejectedToQueue(ignoredCommId)) {
+        logService.info("Restored a rejected item to the review queue", "Transactions", {
+          ignoredCommId,
+          transactionId: validatedTransactionId,
+        });
+        return { success: true };
+      }
+
       // Step 1: Remove the suppression record so auto-link does not suppress again
       await removeIgnoredCommunication(ignoredCommId);
 

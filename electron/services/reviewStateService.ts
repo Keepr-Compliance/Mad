@@ -533,6 +533,64 @@ export async function syncReviewQueueForTransaction(opts: {
   return { added, outstanding: countReviewItems(transactionId) };
 }
 
+/**
+ * Restore a REJECTED item back into the review queue.
+ *
+ * Returns true when the ignored row was a review rejection and has been put back
+ * on the queue (its suppression row removed), false when it is an ordinary
+ * removal the caller should restore its own way.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * `ignored_communications` rows are also what the Removed sections render, and
+ * the RESTORE affordance there recreates a LINK. For emails that is already
+ * safe: the row carries match_reason='address_missing', and the email restore
+ * path preserves it, so a restored email lands back in needs-review.
+ *
+ * The text restore path had no such carry — `createThreadCommunicationReference`
+ * writes no match_reason at all — so a rejected TEXT restored from the Removed
+ * section became an ordinary link: in the audit, in exports, never approved.
+ * Same defect class as the email side door, and only the email half had been
+ * closed. Routing a review rejection back to PENDING is the text-side equivalent
+ * of "returns to needs-review", and it makes both halves behave identically.
+ */
+export async function restoreRejectedToQueue(ignoredCommId: string): Promise<boolean> {
+  const row = dbGet<{
+    id: string;
+    user_id: string;
+    transaction_id: string;
+    email_id: string | null;
+    thread_id: string | null;
+    match_reason: string | null;
+    reason: string | null;
+  }>(
+    `SELECT id, user_id, transaction_id, email_id, thread_id, match_reason, reason
+       FROM ignored_communications WHERE id = ?`,
+    [ignoredCommId],
+  );
+  if (!row) return false;
+
+  // `reason` is the discriminator: only this service writes 'rejected_in_review'.
+  // match_reason alone would also match a legacy 2319 removal, whose restore
+  // must keep its existing link-recreating behaviour.
+  if (row.reason !== "rejected_in_review") return false;
+
+  dbRun(
+    `INSERT OR IGNORE INTO pending_review_communications
+       (id, user_id, transaction_id, email_id, thread_id, found_at)
+     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    [crypto.randomUUID(), row.user_id, row.transaction_id, row.email_id, row.thread_id],
+  );
+  dbRun("DELETE FROM ignored_communications WHERE id = ?", [ignoredCommId]);
+
+  await logService.debug("Restored a rejected item to the review queue", MODULE, {
+    ignoredCommId,
+    transactionId: row.transaction_id,
+    kind: row.email_id ? "email" : "text",
+  });
+  return true;
+}
+
 /* ------------------------------------------------------------------ *
  * Approve / Reject — uniform regardless of which surface acted
  * ------------------------------------------------------------------ */

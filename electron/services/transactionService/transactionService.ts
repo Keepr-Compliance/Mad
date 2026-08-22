@@ -1190,30 +1190,39 @@ class TransactionService {
       const transactionId = transaction.id;
 
       if (contact_assignments && contact_assignments.length > 0) {
-        let totalEmailsLinked = 0;
-        let totalMessagesLinked = 0;
-
-        for (const assignment of contact_assignments) {
-          try {
-            const autoLinkResult = await autoLinkCommunicationsForContact({
-              contactId: assignment.contact_id,
-              transactionId,
-            });
-            totalEmailsLinked += autoLinkResult.emailsLinked;
-            totalMessagesLinked += autoLinkResult.messagesLinked;
-          } catch (error) {
-            await logService.warn(
-              `Auto-link failed for contact ${assignment.contact_id}: ${error instanceof Error ? error.message : "Unknown"}`,
+        // BACKLOG-2791: creating a deal WITH parties is a discovery event on the
+        // deal surface, so it QUEUES for review rather than linking.
+        //
+        // This writer was missed in the first enumeration, and it is the worst
+        // one to miss: it fires at the most common entry point of all. Left
+        // linking, everything discoverable was already in the audit before the
+        // deal was ever opened, so the queue was empty on first open and
+        // "nothing is ever silently linked" was bypassed for the majority of
+        // real deals while every test still passed.
+        //
+        // The sweep is identity-scoped to the parties just assigned, on the
+        // contact-change axis — the deal has no watermark yet and its parties'
+        // mail is older than "now" by definition.
+        try {
+          const { syncReviewQueueForTransaction } = await import(
+            "../reviewStateService"
+          );
+          const queued = await syncReviewQueueForTransaction({
+            transactionId,
+            reason: "contact-change",
+            contactIds: contact_assignments.map((a) => a.contact_id),
+          });
+          if (queued.added > 0) {
+            await logService.info(
+              `Queued ${queued.added} communication(s) for review on the new transaction`,
               "TransactionService.createAuditedTransaction",
+              { transactionId, contactCount: contact_assignments.length },
             );
           }
-        }
-
-        if (totalEmailsLinked > 0 || totalMessagesLinked > 0) {
-          await logService.info(
-            `Auto-linked ${totalEmailsLinked} emails and ${totalMessagesLinked} messages for new transaction`,
+        } catch (error) {
+          await logService.warn(
+            `[BACKLOG-2791] review-queue sync failed on create: ${error instanceof Error ? error.message : "Unknown"}`,
             "TransactionService.createAuditedTransaction",
-            { transactionId, contactCount: contact_assignments.length },
           );
         }
       }
@@ -1309,15 +1318,26 @@ class TransactionService {
         };
       }
 
-      // Fallback: if transaction not found, still try local-only auto-link
-      const autoLinkResult = await autoLinkCommunicationsForContact({
-        contactId,
+      // Fallback: transaction row not found by the lookup above. BACKLOG-2791 —
+      // this residual path used to auto-link, inside the very function the
+      // redirect was applied to, so the redirect could be bypassed by whatever
+      // made getTransactionById return null. It queues like every other branch.
+      const { syncReviewQueueForTransaction } = await import("../reviewStateService");
+      const queued = await syncReviewQueueForTransaction({
         transactionId,
+        reason: "contact-change",
+        contactIds: [contactId],
       });
 
       return {
         success: true,
-        autoLink: autoLinkResult,
+        autoLink: {
+          emailsLinked: 0,
+          messagesLinked: 0,
+          alreadyLinked: 0,
+          errors: 0,
+          queuedForReview: queued.added,
+        },
       };
     } catch (error) {
       await logService.warn(

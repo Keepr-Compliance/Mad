@@ -1,24 +1,21 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-2791 — CONTROL 5: every discovery TRIGGER is actually wired.
+ * BACKLOG-2791 — CONTROL 5, rebuilt.
  *
- * The behaviour of a sync is covered by reviewStateService-2791. What this file
- * pins is that the sync is CALLED from each place the founder's design requires,
- * and — just as important — NOT called from the three global writers the founder
- * scoped out. A trigger silently dropped during a refactor is invisible to every
- * behavioural test: the queue simply stops filling, and nothing goes red.
+ * WHY IT WAS REBUILT. The first version grepped whole files for
+ * `syncReviewQueueForTransaction || queueForReviewInsteadOfLinking`. A 1700-line
+ * file containing the string ANYWHERE passed — so it certified
+ * emailSyncService's "on-open provider-fetch branch" as wired while an early
+ * return at :942 leaked straight past the flag and silently linked every text on
+ * a phone-only deal. Its inputs could not separate pass from fail, which is the
+ * one thing a control has to do.
  *
- * Structural by necessity (the same reasoning as singleReadPath-2791): the
- * failure mode is a MISSING call site, and no behavioural test can observe a
- * call that no longer exists.
- *
- * The founder's scope decision, recorded so a future reader does not "fix" it:
- * discovery is contact-change/open driven — "the deal finds out on its next
- * open". The background provider sync, the message import and the debounced
- * linker KEEP auto-linking. The honest consequence is that mail auto-linked by a
- * background sync never appears in P2; P2 reports what the DEAL-SCOPED scan
- * found, which is its designed meaning.
+ * This version enumerates every CALL SITE of every link primitive by scanning
+ * for the call expressions, and requires each one to be CLASSIFIED. An
+ * unclassified call site fails the suite — so a NEW writer (the failure mode
+ * that produced blockers 5 and 6, two writers missed by an enumeration done from
+ * memory) cannot be added silently.
  */
 
 import fs from "fs";
@@ -26,72 +23,141 @@ import path from "path";
 
 const ROOT = path.join(__dirname, "../..");
 
-function read(rel: string): string {
-  return fs.readFileSync(path.join(ROOT, rel), "utf8");
-}
-
-/** Trigger sites that MUST queue for review. */
-const MUST_QUEUE: Array<{ file: string; why: string }> = [
-  {
-    file: "services/transactionSyncTrigger.ts",
-    why: "T1 — the on-open trigger's already-covered branch",
-  },
-  {
-    file: "services/emailSyncService.ts",
-    why: "T1 — the on-open trigger's provider-fetch branch, and the per-contact fetch",
-  },
-  {
-    file: "../electron/handlers/transactionCrudHandlers.ts",
-    why: "T2 — batchUpdateContacts add-ops (a contact saved ON the deal)",
-  },
-  {
-    file: "../electron/handlers/contactHandlers.ts",
-    why: "T2 — contacts:update (editing a party's email/phone changes the matcher inputs)",
-  },
+/** The primitives that put a communication into the audit. */
+const LINK_PRIMITIVES = [
+  "autoLinkCommunicationsForContact",
+  "fetchAndAutoLinkForContact",
+  "runAutoLinkOnly",
+  "autoLinkAllToTransaction",
+  "createThreadCommunicationReference",
+  "linkEmailToTransaction",
 ];
 
-describe("BACKLOG-2791 CONTROL 5 — discovery triggers are wired", () => {
-  it.each(MUST_QUEUE)("$file queues for review ($why)", ({ file }) => {
-    const src = read(file);
-    const queues =
-      src.includes("syncReviewQueueForTransaction") ||
-      src.includes("queueForReviewInsteadOfLinking");
-    expect(queues).toBe(true);
+/**
+ * Every known call site, and WHY it is allowed to behave as it does.
+ *
+ *  "queues"  — on the deal surface; must route through the review queue.
+ *  "manual"  — the user explicitly asked for a link on this deal (a sync button
+ *              or a resync); linking is the requested action, not a discovery.
+ *  "global"  — background pipelines outside the deal surface. Founder scope
+ *              decision: these KEEP auto-linking. Re-routing them would make
+ *              every synced email pend approval and flood the review screen.
+ *  "internal"— the primitive's own definition or an internal helper hop.
+ */
+type Classification = "queues" | "manual" | "global" | "internal";
+
+const CLASSIFIED: Record<string, Classification> = {
+  // --- deal surface: must queue -------------------------------------------
+  "electron/services/transactionSyncTrigger.ts": "queues",
+  "electron/handlers/transactionCrudHandlers.ts": "queues",
+  "electron/handlers/contactHandlers.ts": "queues",
+  // --- user-initiated manual link on this deal -----------------------------
+  "electron/handlers/emailAutoLinkHandlers.ts": "manual",
+  // --- global background pipelines (founder scope decision) ----------------
+  "electron/handlers/syncHandlers.ts": "global",
+  "electron/handlers/messageImportHandlers.ts": "global",
+  // --- mixed files, asserted at call-site granularity below -----------------
+  "electron/services/emailSyncService.ts": "internal",
+  "electron/services/transactionService/transactionService.ts": "internal",
+  "electron/services/autoLinkService.ts": "internal",
+  "electron/services/messageMatchingService.ts": "internal",
+  "electron/services/reviewStateService.ts": "internal",
+  // Defines createThreadCommunicationReference; a primitive, not a caller.
+  "electron/services/db/communicationDbService.ts": "internal",
+};
+
+function sourceFiles(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (["node_modules", "dist", "dist-electron", "__tests__"].includes(e.name)) continue;
+        walk(full);
+      } else if (e.name.endsWith(".ts")) out.push(full);
+    }
+  };
+  walk(ROOT);
+  return out;
+}
+
+const rel = (f: string) => path.relative(path.join(ROOT, ".."), f).split(path.sep).join("/");
+const read = (r: string) => fs.readFileSync(path.join(ROOT, "..", r), "utf8");
+
+describe("BACKLOG-2791 CONTROL 5 — every link writer is enumerated and classified", () => {
+  const files = sourceFiles();
+
+  it("the scan sees the tree (the control on the control)", () => {
+    expect(files.length).toBeGreaterThan(100);
+  });
+
+  it("every file that CALLS a link primitive is classified", () => {
+    const callers = new Set<string>();
+    for (const f of files) {
+      const src = fs.readFileSync(f, "utf8");
+      for (const prim of LINK_PRIMITIVES) {
+        // A CALL, not a mention: the identifier followed by "(".
+        if (new RegExp(`\\b${prim}\\s*\\(`).test(src)) callers.add(rel(f));
+      }
+    }
+    const unclassified = [...callers].filter((f) => !(f in CLASSIFIED)).sort();
+
+    // A new writer lands here. Blockers 5 and 6 of the SR review were exactly
+    // this: two call sites nobody had enumerated.
+    expect(unclassified).toEqual([]);
+  });
+
+  it("the on-open trigger queues on BOTH its branches, including the phone-only early return", () => {
+    const sync = read("electron/services/emailSyncService.ts");
+    // The early return that leaked: it must now forward the flag.
+    expect(sync).toMatch(
+      /return this\.runAutoLinkOnly\(\s*transactionId,\s*contactAssignments,\s*queueForReviewInsteadOfLinking,?\s*\)/,
+    );
+    // ...and runAutoLinkOnly must have a queue path, not just accept the flag.
+    const body = sync.slice(sync.indexOf("private async runAutoLinkOnly"));
+    expect(body.slice(0, 1600)).toContain("syncReviewQueueForTransaction");
+  });
+
+  it("transaction CREATION with parties queues rather than links", () => {
+    // The most common entry point of all, and the one missed first time.
+    const svc = read("electron/services/transactionService/transactionService.ts");
+    const fn = svc.slice(
+      svc.indexOf("async createAuditedTransaction"),
+      svc.indexOf("async getTransactionWithContacts"),
+    );
+    expect(fn).toContain("syncReviewQueueForTransaction");
+    expect(fn).not.toContain("autoLinkCommunicationsForContact(");
+  });
+
+  it("assign-contact queues on BOTH branches, including the transaction-not-found fallback", () => {
+    const svc = read("electron/services/transactionService/transactionService.ts");
+    const fn = svc.slice(svc.indexOf("async assignContactToTransaction"));
+    const upTo = fn.slice(0, fn.indexOf("\n  async "));
+    expect(upTo).toContain("queueForReviewInsteadOfLinking: true");
+    expect(upTo).toContain("syncReviewQueueForTransaction");
+    expect(upTo).not.toContain("autoLinkCommunicationsForContact(");
   });
 
   it("the contact-save paths use the contact-change axis, which ignores the watermark", () => {
-    // A contact-save that scanned with the OPEN axis would miss the newly
-    // relevant contact's older mail entirely — the exact bug the two axes exist
-    // to prevent — and nothing would look wrong.
-    for (const file of [
-      "../electron/handlers/transactionCrudHandlers.ts",
-      "../electron/handlers/contactHandlers.ts",
+    for (const f of [
+      "electron/handlers/transactionCrudHandlers.ts",
+      "electron/handlers/contactHandlers.ts",
     ]) {
-      expect(read(file)).toContain('reason: "contact-change"');
+      expect(read(f)).toContain('reason: "contact-change"');
     }
   });
 
-  it("assign-contact (confirming a suggested match) queues rather than links", () => {
-    expect(read("services/transactionService/transactionService.ts")).toContain(
-      "queueForReviewInsteadOfLinking: true",
+  it("ONLY the open path advances the watermark", () => {
+    const src = read("electron/services/reviewStateService.ts");
+    expect(src.match(/UPDATE transactions SET last_pending_scan_at/g) ?? []).toHaveLength(1);
+    expect(src.slice(src.indexOf('if (reason === "open") {'))).toContain(
+      "UPDATE transactions SET last_pending_scan_at",
     );
   });
 
-  it("ONLY the open path advances the watermark", () => {
-    const src = read("services/reviewStateService.ts");
-    const advances = src.match(/UPDATE transactions SET last_pending_scan_at/g) ?? [];
-    // Exactly one write site, and it is inside the reason === "open" branch.
-    expect(advances).toHaveLength(1);
-    const branch = src.slice(src.indexOf('if (reason === "open") {'));
-    expect(branch).toContain("UPDATE transactions SET last_pending_scan_at");
-  });
-
-  it("the three GLOBAL writers still auto-link — the founder's scope decision", () => {
-    // If someone later routes these through the queue, every synced email would
-    // pend approval and the review screen would flood. That is a founder call,
-    // not a refactor, so it goes red here first.
-    for (const file of ["../electron/handlers/syncHandlers.ts", "../electron/handlers/messageImportHandlers.ts"]) {
-      const src = read(file);
+  it("the global writers still auto-link — the founder's scope decision", () => {
+    for (const f of ["electron/handlers/syncHandlers.ts", "electron/handlers/messageImportHandlers.ts"]) {
+      const src = read(f);
       expect(src).not.toContain("syncReviewQueueForTransaction");
       expect(src).not.toContain("queueForReviewInsteadOfLinking");
     }

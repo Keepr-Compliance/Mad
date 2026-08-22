@@ -940,8 +940,19 @@ class EmailSyncService {
     });
 
     if (contactEmails.length === 0) {
-      // No contact emails -- still run auto-link for phone-based message matching
-      return this.runAutoLinkOnly(transactionId, contactAssignments);
+      // No contact emails -- still resolve phone-based message matching.
+      //
+      // BACKLOG-2791: this early return sits ~150 lines ABOVE the
+      // queueForReviewInsteadOfLinking branch, so before the flag was threaded
+      // here it leaked straight past the redirect: a deal whose assigned parties
+      // are all PHONE-ONLY had its text messages SILENTLY LINKED on every open —
+      // never queued, never announced — on the very path this feature claims to
+      // have redirected. runAutoLinkOnly took no flag and had no queue path.
+      return this.runAutoLinkOnly(
+        transactionId,
+        contactAssignments,
+        queueForReviewInsteadOfLinking,
+      );
     }
 
     // Diagnostic: how many emails are in the local DB for this user?
@@ -1212,10 +1223,27 @@ class EmailSyncService {
   private async runAutoLinkOnly(
     transactionId: string,
     contactAssignments: TransactionContactResult[],
+    // BACKLOG-2791: same contract as syncTransactionEmails — on the deal surface
+    // this QUEUES for review; every other caller keeps auto-linking.
+    queueForReviewInsteadOfLinking = false,
   ): Promise<TransactionResponse> {
     let totalMessagesLinked = 0;
     let totalAlreadyLinked = 0;
     let totalErrors = 0;
+
+    if (queueForReviewInsteadOfLinking) {
+      const { syncReviewQueueForTransaction } = await import("./reviewStateService");
+      try {
+        await syncReviewQueueForTransaction({ transactionId, reason: "background" });
+      } catch (error) {
+        totalErrors++;
+        logService.warn("[BACKLOG-2791] review-queue sync failed (phone-only path)", "EmailSync", {
+          transactionId,
+          error: error instanceof Error ? error.message : "Unknown",
+        });
+      }
+      return { success: totalErrors === 0, linked: 0, skipped: 0 };
+    }
 
     for (const assignment of contactAssignments) {
       try {
