@@ -711,9 +711,15 @@ export function MacOSMessagesImportSettings({
    *
    * Captured at the moment the run is requested, so the completion surface
    * reports the arithmetic the user consented to rather than re-deriving it
-   * from whatever the panel knows afterwards. It cannot go stale: every control
-   * is disabled for the duration of the run, and these figures describe the
-   * source library plus the resolved plan — neither of which the import changes.
+   * from whatever the panel knows afterwards. Every control is disabled for the
+   * duration of the run, and these figures describe the source library plus the
+   * resolved plan — neither of which the import changes.
+   *
+   * The ONE way it can be wrong is a run whose window is not the window the
+   * estimate described, and there is exactly one such path: the refusal
+   * dialog's fitting-window button, which changes the lookback and imports in
+   * the same click. That path passes `windowChanged` and this ref is left null,
+   * so the panel says nothing rather than something false. See `handleImport`.
    *
    * This exists because the completion surface got the arithmetic wrong. The
    * orchestrator computes `window - imported-this-run`, which counted the
@@ -757,7 +763,24 @@ export function MacOSMessagesImportSettings({
   }, [messagesItem?.status, userId]);
 
   const handleImport = useCallback(
-    async (forceReimport = false, overrideCap = false) => {
+    async (
+      forceReimport = false,
+      overrideCap = false,
+      /**
+       * BACKLOG-2749: this run uses a DIFFERENT window from the one the panel's
+       * estimate describes, so there is no coverage it can honestly promise.
+       *
+       * Exactly one path sets it: the refusal dialog's fitting-window button,
+       * which moves the lookback and imports in the same click. `windowCount` /
+       * `availableCount` still hold the figures for the window the user just
+       * declined, so reporting "covers 62,824 of 708,400" after a 12-month run
+       * would put a false statement on the completion surface — the single
+       * thing this item exists to stop. The panel could instead wait for the
+       * new estimate, but that is a race against an IPC for a sentence it can
+       * simply decline to say.
+       */
+      windowChanged = false
+    ) => {
       if (!userId || isImporting) return;
 
       // BACKLOG-2329: record the path so the completion copy matches it.
@@ -767,7 +790,7 @@ export function MacOSMessagesImportSettings({
       // completion surface can state the coverage arithmetic rather than the
       // fetch-volume one. See `runCoverageRef`.
       runCoverageRef.current =
-        windowCount !== null && availableCount !== null
+        !windowChanged && windowCount !== null && availableCount !== null
           ? {
               windowCount,
               admittedCount: availableCount,
@@ -1411,7 +1434,9 @@ export function MacOSMessagesImportSettings({
               // it succeeds to the run stage; the run's own pre-flight
               // re-verifies fit exactly as it does for every other path.
               await handleLookbackChange(String(months));
-              handleImport(dialog.isReimport);
+              // `windowChanged`: this run covers the window just chosen, not
+              // the one the panel's estimate still describes.
+              handleImport(dialog.isReimport, false, true);
             }}
             onTextOnly={async () => {
               closeDialog();

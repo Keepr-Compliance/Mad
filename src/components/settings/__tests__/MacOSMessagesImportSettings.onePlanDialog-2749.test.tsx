@@ -676,6 +676,73 @@ describe("BACKLOG-2749 — the space refusal names a window that fits", () => {
     );
     await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
   });
+
+  it("CONTROL: the completion surface promises NO coverage for a window-changing run", async () => {
+    /*
+     * The one way the coverage snapshot can lie, and it took a second look to
+     * see it: this button changes the lookback and imports in the same click,
+     * so the panel's `windowCount` / `availableCount` still describe the window
+     * the user just DECLINED. Without `windowChanged`, completing a 24-month
+     * run renders "covers 62,824 of 708,400" — figures belonging to neither the
+     * old run nor the new one.
+     *
+     * Saying nothing is the correct answer here. A completion sentence exists
+     * to be true, and the panel does not yet know the new window's coverage.
+     */
+    // The shorter window is a DIFFERENT size, which is what gives the final
+    // assertion teeth: with both windows reporting 708,400 the panel could
+    // carry the stale figure and look correct.
+    (window.api.messages.getImportCount as jest.Mock).mockImplementation(
+      (_userId: string, selection?: { lookbackMonths: number | null }) =>
+        Promise.resolve(
+          selection?.lookbackMonths === null
+            ? TOO_BIG
+            : {
+                ...TOO_BIG,
+                count: 120000,
+                windowCount: 120000,
+                filteredCount: 55000,
+                attachmentBytes: 8_200_000_000,
+                fitsOnDisk: true,
+              }
+        )
+    );
+
+    const { rerender } = renderStrict(
+      <MacOSMessagesImportSettings userId={USER_ID} />
+    );
+    const dialog = await openDialog();
+
+    await act(async () => {
+      fireEvent.click(
+        await within(dialog).findByTestId("import-plan-fitting-window")
+      );
+    });
+    await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
+
+    mockQueue = [
+      {
+        type: "messages",
+        status: "complete",
+        progress: 100,
+        importedCount: IMPORTED_THIS_RUN,
+      },
+    ];
+    await act(async () => {
+      rerender(
+        <React.StrictMode>
+          <MacOSMessagesImportSettings userId={USER_ID} />
+        </React.StrictMode>
+      );
+    });
+
+    await screen.findByTestId("import-result");
+    expect(screen.queryByTestId("import-coverage")).not.toBeInTheDocument();
+    // And emphatically not the declined window's figures.
+    expect(screen.getByTestId("macos-messages-import")).not.toHaveTextContent(
+      "708,400"
+    );
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
