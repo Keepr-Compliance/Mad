@@ -892,19 +892,24 @@ export function MacOSMessagesImportSettings({
    * BACKLOG-2749: a dialog action is mid-flight.
    *
    * The two window-changing buttons became ASYNCHRONOUS when they started
-   * waiting for their preference write to land, which LOOKS like it opens a
-   * window in which the dialog is still on screen with live buttons.
+   * waiting for their preference write to land, which leaves the dialog on
+   * screen with live buttons for the duration of the await.
    *
-   * MEASURED, not assumed: with this guard removed, two synchronous clicks
-   * still produce exactly ONE `requestSync`. `handleLookbackChange` moves the
-   * lookback, the estimate effect resets the counts to null, and the dialog's
-   * render guard unmounts it before the second click lands. The double-fire is
-   * therefore unreachable today and NO TEST CAN PIN THIS GUARD — one was
-   * written, stayed green under the mutation, and was removed.
+   * LOAD-BEARING, and the two paths differ — measure each, do not generalise
+   * from one (I did, and was wrong):
    *
-   * It stays as defence-in-depth: what makes the double-fire unreachable is an
-   * unrelated effect's reset order, not anything this code promises. Recorded
-   * as latent rather than claimed as verified.
+   *   - `onTextOnly` — the guard is what prevents the double-fire. It writes
+   *     `skipAttachments`, which touches neither the lookback nor the counts,
+   *     so the dialog stays mounted throughout. With the guard removed, two
+   *     synchronous clicks request TWO imports. Pinned by
+   *     `onePlanDialog-2749`'s "a second click cannot request a second import".
+   *
+   *   - `onChooseWindow` — incidentally protected as well, so no test can pin
+   *     the guard there: `handleLookbackChange` moves the lookback, the
+   *     estimate effect resets the counts to null, and the dialog's render
+   *     guard unmounts it before a second click lands. That protection belongs
+   *     to an unrelated effect's reset order, not to this code, so the guard
+   *     covers this path too rather than relying on it.
    *
    * A ref rather than state: it gates an event handler and must take effect on
    * the very next click rather than after a render.

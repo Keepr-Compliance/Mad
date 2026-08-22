@@ -884,27 +884,50 @@ describe("BACKLOG-2749 — a failed preference write stops the run", () => {
     expect(screen.queryByTestId("import-plan-dialog")).not.toBeInTheDocument();
   });
 
-  /*
-   * NOT PINNED, deliberately: re-entrant clicks while the save is in flight.
-   *
-   * The two window-changing buttons became asynchronous when they started
-   * waiting for their write, which looks like it opens a double-fire window.
-   * It does not, and I measured rather than assumed: with the re-entrancy
-   * guard REMOVED, two synchronous clicks still produce exactly ONE
-   * `requestSync`. The reason is incidental — `handleLookbackChange` sets the
-   * lookback, the estimate effect resets `windowCount`/`availableCount` to
-   * null, and the dialog's render guard unmounts it before the second click
-   * lands.
-   *
-   * So a test here can assert nothing: it is green with the guard and green
-   * without it. I wrote one, watched it stay green under the mutation, and
-   * removed it — a control that cannot go red is not a control, and leaving it
-   * in would tell the next reader the guard is proven when it is not.
-   *
-   * The guard STAYS as defence-in-depth, because what makes the double-fire
-   * unreachable is an unrelated effect's reset order, not anything this code
-   * promises. It is recorded as latent, not claimed as verified.
-   */
+  it("CONTROL: a second click cannot request a second import (text-only path)", async () => {
+    /*
+     * The re-entrancy guard, and a correction to my own measurement.
+     *
+     * I first tested this on the FITTING-WINDOW button, found the double-fire
+     * unreachable, and generalised — writing in both the guard and this suite
+     * that no test could pin it. The SR removed the guard and double-clicked
+     * TEXT-ONLY: `requestSync` fired twice. Both halves of my claim were wrong
+     * in the way that matters, because I sampled one path instead of sweeping
+     * them.
+     *
+     * The mechanism I described is real but path-specific. `onChooseWindow`
+     * calls `handleLookbackChange`, which moves the lookback; the estimate
+     * effect then resets `windowCount`/`availableCount` to null and the
+     * dialog's render guard unmounts it before a second click can land. That
+     * is incidental protection, and TEXT-ONLY does not get it: it writes
+     * `skipAttachments`, which touches neither the lookback nor the counts, so
+     * the dialog stays mounted with a live button for the whole await.
+     *
+     * So the guard is LOAD-BEARING on this path, and this is the control that
+     * says so. The fitting-window path stays unpinned for the reason above —
+     * documented next to the guard, not used to justify deleting it.
+     */
+    let release!: (v: { success: boolean }) => void;
+    // ONE shared pending promise for every call: a fresh deferred per call
+    // would keep only the newest resolver, leaving the first click pending
+    // forever and letting exactly one path complete either way.
+    const pending = new Promise<{ success: boolean }>((res) => {
+      release = res;
+    });
+    mockUpdatePreferences.mockImplementation(() => pending);
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    const dialog = await openDialog();
+    const textOnly = within(dialog).getByTestId("import-without-attachments");
+
+    fireEvent.click(textOnly);
+    fireEvent.click(textOnly);
+    await act(async () => {
+      release({ success: true });
+    });
+
+    await waitFor(() => expect(mockRequestSync).toHaveBeenCalledTimes(1));
+  });
 });
 
 // ───────────────────────────────────────────────────────────────────────────
