@@ -3643,19 +3643,43 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     },
     {
       version: 64,
-      // VERSION NUMBER — READ BEFORE MERGING.
-      // The PM arbitrated 64 to the parallel phone-slice work and asked for 65
-      // here. 65 cannot ship on its own: validateNoVersionGaps (below) throws
+      // VERSION NUMBER — THIS IS TEMPORARILY 64 AND MUST BECOME 65 BEFORE MERGE.
+      //
+      // WHY IT IS 64 NOW. validateNoVersionGaps (below) throws
       // `Migration sequence error: Missing migration version 64` on EVERY
-      // database init when the chain runs 63 -> 65, so a branch holding 65
-      // without 64 will not boot and cannot run its own migration tests.
-      // Measured, not assumed.
-      // As of develop @ 50fea8cae no branch anywhere claims 64+, so this takes
-      // 64. If the phone-slice v64 merges first, renumber THIS to 65 — three
-      // literals: the `version:` below, the two `[migration v64]` log strings,
-      // and the seed/clip constants in databaseService.migration-v64.test.ts.
-      // The two migrations touch disjoint objects, so either order is safe once
-      // both are present.
+      // database init when the chain runs 63 -> 65. So a branch holding 65
+      // without 64 present will not boot and cannot run its own migration
+      // tests. Measured, not assumed. PR #2346 (BACKLOG-2630 phone re-key)
+      // holds 64 for exactly the same reason.
+      //
+      // AGREED SEQUENCING (PM, 2026-08-22): #2346 merges FIRST with v64. Then,
+      // as part of this branch's merge-time update — AFTER #2346 is on develop,
+      // never before, or this branch stops booting — renumber to 65 and re-run
+      // the migration suites against the then-valid 63 -> 64 -> 65 chain.
+      //
+      // EXACT RENUMBER CHECKLIST (verified by grep at 99c9719; the earlier
+      // "three literals" note in this comment undercounted):
+      //   FUNCTIONAL
+      //     1. `version: 64` immediately below                     -> 65
+      //     2. test: `all.filter((m) => m.version <= 64)`          -> 65
+      //     3. test: both `VALUES (1, 63)` seeds                   -> 64
+      //     4. test: both `expect(schemaVersion(...)).toBe(64)`    -> 65
+      //   COSMETIC (keep consistent so the next reader is not misled)
+      //     5. the `[migration v64]` log string below
+      //     6. schema.sql: "migration v64" + "Migration 64" comments
+      //     7. rename databaseService.migration-v64.test.ts -> -v65
+      //
+      // The two migrations touch DISJOINT objects (this one: a new table +
+      // transactions.last_pending_scan_at; #2346: phone lookup keys), so once
+      // both are present either execution order is safe.
+      //
+      // CORRECTION, recorded because it was asserted wrongly first: an earlier
+      // revision of this comment claimed "no branch anywhere claims 64+". That
+      // was false. The scan behind it ran `git show $b:electron/...` unquoted
+      // under zsh, where `$b:e` is the extension MODIFIER — so it resolved a
+      // garbage revision, printed nothing, and read as "no hits". Four branches
+      // claim 64 (#2306 and #2333, both CLOSED; #2346, OPEN; and this one).
+      // An empty grep is a claim about the grep until proven otherwise.
       description:
         "Add pending_review_communications (the persistent Needs-Review queue) + transactions.last_pending_scan_at (the delta watermark) (BACKLOG-2791)",
       migrate: (d) => {
