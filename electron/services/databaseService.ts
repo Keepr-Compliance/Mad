@@ -3643,6 +3643,19 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     },
     {
       version: 64,
+      // VERSION NUMBER — READ BEFORE MERGING.
+      // The PM arbitrated 64 to the parallel phone-slice work and asked for 65
+      // here. 65 cannot ship on its own: validateNoVersionGaps (below) throws
+      // `Migration sequence error: Missing migration version 64` on EVERY
+      // database init when the chain runs 63 -> 65, so a branch holding 65
+      // without 64 will not boot and cannot run its own migration tests.
+      // Measured, not assumed.
+      // As of develop @ 50fea8cae no branch anywhere claims 64+, so this takes
+      // 64. If the phone-slice v64 merges first, renumber THIS to 65 — three
+      // literals: the `version:` below, the two `[migration v64]` log strings,
+      // and the seed/clip constants in databaseService.migration-v64.test.ts.
+      // The two migrations touch disjoint objects, so either order is safe once
+      // both are present.
       description:
         "Add pending_review_communications (the persistent Needs-Review queue) + transactions.last_pending_scan_at (the delta watermark) (BACKLOG-2791)",
       migrate: (d) => {
