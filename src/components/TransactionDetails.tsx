@@ -55,6 +55,7 @@ import { useReviewQueue } from "./transactionDetailsModule/hooks/useReviewQueue"
 import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
 import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
 import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
+import { ReviewQueueSection } from "./transactionDetailsModule/components/ReviewQueueSection";
 import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitForReview";
 import type {
   AutoLinkResult,
@@ -1010,6 +1011,17 @@ function TransactionDetails({
           )}
 
           {activeTab === "emails" && (
+            <>
+              {/* BACKLOG-2791: the SAME set the badge counts and the Complete
+                  gate blocks on, filtered to emails. Not re-derived here — that
+                  is what stopped the badge and this section disagreeing. */}
+              <ReviewQueueSection
+                items={reviewQueue.items}
+                kind="email"
+                onApprove={reviewQueue.approve}
+                onReject={reviewQueue.reject}
+                onOpenAll={() => setShowNeedsReview(true)}
+              />
             <TransactionEmailsTab
               communications={emailCommunications}
               loading={loading || (autoSyncRunning && emailCommunications.length === 0)}
@@ -1045,10 +1057,23 @@ function TransactionDetails({
               highlightTarget={highlightTarget}
               onHighlightConsumed={clearHighlightTarget}
             />
+            </>
           )}
 
 
           {activeTab === "messages" && (
+            <>
+              {/* BACKLOG-2791: the texts half of the same set. Texts never had a
+                  needs-review state before this item — match_reason is written
+                  only on the email insert — so this section is new, not a
+                  re-skin of an existing one. */}
+              <ReviewQueueSection
+                items={reviewQueue.items}
+                kind="text"
+                onApprove={reviewQueue.approve}
+                onReject={reviewQueue.reject}
+                onOpenAll={() => setShowNeedsReview(true)}
+              />
             <TransactionMessagesTab
               messages={textMessages}
               loading={messagesLoading || loading}
@@ -1075,6 +1100,7 @@ function TransactionDetails({
               highlightTarget={highlightTarget}
               onHighlightConsumed={clearHighlightTarget}
             />
+            </>
           )}
 
           {activeTab === "attachments" && (

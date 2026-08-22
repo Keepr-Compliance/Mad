@@ -295,6 +295,23 @@ describe("reviewStateService (BACKLOG-2791)", () => {
       expect(again.added).toBe(0);
       expect(getReviewState(TXN).count).toBe(0);
     });
+
+    it("a rejected item RESTORED from the Removed section returns to review, not to Linked", async () => {
+      // The suppression row is also what the Removed section renders, and the
+      // existing restore path recreates the link with the STORED classification
+      // — where NULL means "legacy, treat as address_found", i.e. Linked. If a
+      // pending rejection stored NULL there would be a one-click path from
+      // "rejected, never linked" to "silently linked, never approved", straight
+      // through existing UI and around the whole point of this feature.
+      addEmail(db, "e1", "Offer");
+      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+      await rejectReviewItems([getReviewState(TXN).items[0].id]);
+
+      const row = db
+        .prepare("SELECT match_reason FROM ignored_communications WHERE transaction_id = ?")
+        .get(TXN) as { match_reason: string | null };
+      expect(row.match_reason).toBe("address_missing");
+    });
   });
 
   describe("FOUNDER RULING — one source of trust", () => {

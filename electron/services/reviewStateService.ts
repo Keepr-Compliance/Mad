@@ -659,7 +659,17 @@ export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: 
       thread_id: item.thread_id ?? undefined,
       original_communication_id: item.origin === "legacy" ? item.rowId : undefined,
       reason: "rejected_in_review",
-      match_reason: item.origin === "legacy" ? "address_missing" : null,
+      // ALWAYS address_missing, including for a never-linked pending item.
+      //
+      // The suppression row is also what the Removed section renders and what
+      // RESTORE reads back, and restore recreates the link with the stored
+      // classification — where NULL means "legacy, treat as address_found", i.e.
+      // LINKED. A pending rejection stored as NULL would therefore have given a
+      // one-click path from "rejected, never linked" to "silently linked with no
+      // approval", straight through the existing Removed UI and around the whole
+      // point of this feature. Storing address_missing sends a restored item
+      // back into the review queue instead, which getReviewState counts.
+      match_reason: "address_missing",
     });
 
     if (item.origin === "legacy") {
