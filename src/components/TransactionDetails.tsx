@@ -1023,6 +1023,7 @@ function TransactionDetails({
                 onOpenAll={() => setShowNeedsReview(true)}
               />
             <TransactionEmailsTab
+              hasReviewItems={reviewQueue.items.some((i) => i.kind === "email")}
               communications={emailCommunications}
               loading={loading || (autoSyncRunning && emailCommunications.length === 0)}
               unlinkingCommId={unlinkingCommId}

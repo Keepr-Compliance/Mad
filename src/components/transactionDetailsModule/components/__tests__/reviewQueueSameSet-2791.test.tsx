@@ -22,7 +22,15 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { ReviewQueueSection } from "../ReviewQueueSection";
 import { NeedsReviewScreen } from "../NeedsReviewScreen";
+import { TransactionEmailsTab } from "../TransactionEmailsTab";
+import type { Communication } from "../../types";
 import type { ReviewItemDto } from "../../../../../electron/types/ipc/window-api-transactions";
+
+// TransactionEmailsTab reads the signed-in user to filter it out of participant
+// display. Mocked at the same seam TransactionEmailsTab-2319 uses.
+jest.mock("../../../../contexts", () => ({
+  useAuth: () => ({ currentUser: { id: "user-1", email: "me@example.com" } }),
+}));
 
 function item(over: Partial<ReviewItemDto> & { id: string }): ReviewItemDto {
   return {
@@ -119,6 +127,63 @@ describe("BACKLOG-2791 — the three renderings show the same set", () => {
     // actually act on — the disagreement the ruling forbids.
     render(<ReviewQueueSection items={SET} kind="email" onApprove={noop} onReject={noop} />);
     expect(renderedIds()).toContain("legacy:l1");
+  });
+
+  /**
+   * THE REGRESSION THIS FILE MISSED THE FIRST TIME.
+   *
+   * The original version of this suite rendered ReviewQueueSection and
+   * NeedsReviewScreen in ISOLATION from hand-made props. It therefore could not
+   * observe that TransactionEmailsTab was STILL mounting its own
+   * self-classifying BACKLOG-2319 section underneath — so every legacy
+   * address_missing email rendered twice, at two different granularities, and
+   * this suite stayed green through all of it.
+   *
+   * Mounting the REAL tab alongside the real shared section is the only shape
+   * that can see it.
+   */
+  it("the REAL Emails tab renders no review item of its own — one item, one rendering", () => {
+    const legacyEmail: Communication = {
+      id: "c-legacy",
+      user_id: "user-1",
+      transaction_id: "tx-1",
+      email_id: "e3",
+      communication_type: "email",
+      subject: "Ambiguous",
+      sender: "paul@example.com",
+      recipients: "me@example.com",
+      sent_at: "2026-06-01T00:00:00.000Z",
+      created_at: "2026-06-01T00:00:00.000Z",
+      has_attachments: false,
+      match_reason: "address_missing",
+    } as unknown as Communication;
+
+    render(
+      <>
+        <ReviewQueueSection items={SET} kind="email" onApprove={noop} onReject={noop} />
+        <TransactionEmailsTab
+          communications={[legacyEmail]}
+          loading={false}
+          unlinkingCommId={null}
+          onViewEmail={jest.fn()}
+          onShowUnlinkConfirm={jest.fn()}
+          userId="user-1"
+          transactionId="tx-1"
+          hasReviewItems
+        />
+      </>,
+    );
+
+    // Exactly the shared section's items are rendered as review items — the tab
+    // contributes none.
+    expect(renderedIds()).toEqual(["legacy:l1", "pending:p1", "pending:p2"]);
+
+    // And the tab mounts no needs-review surface of its own.
+    expect(screen.queryByTestId("needs-review-section")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("needs-review-list")).not.toBeInTheDocument();
+
+    // The ambiguous subject appears ONCE in the whole tree, not twice.
+    expect(screen.queryAllByText("Ambiguous")).toHaveLength(0);
   });
 
   it("a section with nothing of its kind renders nothing at all", () => {

@@ -15,7 +15,6 @@ import {
   threadMatchReason,
   type EmailThread,
 } from "./EmailThreadCard";
-import { NeedsReviewSection } from "./NeedsReviewSection";
 import { RemovedEmailsSection } from "./RemovedEmailsSection";
 import { BulkSelectionBar, BulkRemoveConfirmModal } from "./BulkSelectionBar";
 import { useContactNameMap } from "../../../hooks/useContactNameMap";
@@ -84,7 +83,18 @@ interface TransactionEmailsTabProps {
    * Wired to refreshCommunicationsSilently in TransactionDetails so the card
    * moves to Linked with no spinner/scroll jump. Falls back to onEmailsChanged.
    */
+  /**
+   * @deprecated BACKLOG-2791 — the Confirm affordance that used this moved to
+   * ReviewQueueSection, which refreshes the review queue itself. Kept so
+   * existing callers type-check; this tab ignores it.
+   */
   onConfirmComplete?: () => Promise<void>;
+  /**
+   * BACKLOG-2791: whether the shared ReviewQueueSection is showing anything
+   * above this tab. Passed in, never re-derived — this tab classifying for
+   * itself is exactly what produced the duplicate-section bug.
+   */
+  hasReviewItems?: boolean;
   /** BACKLOG-1869: Deep-navigate target from search; scroll+highlight the matching card. */
   highlightTarget?: HighlightTarget | null;
   /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
@@ -114,14 +124,13 @@ export function TransactionEmailsTab({
   onShowError,
   auditStartDate,
   auditEndDate,
-  onConfirmComplete,
+  hasReviewItems = false,
   highlightTarget,
   onHighlightConsumed,
 }: TransactionEmailsTabProps): React.ReactElement {
   const { currentUser } = useAuth();
   const [showAttachModal, setShowAttachModal] = useState(false);
   // BACKLOG-2319: thread id whose Confirm action is in flight.
-  const [confirmingThreadId, setConfirmingThreadId] = useState<string | null>(null);
   // BACKLOG-1780: lift isOpen state so it survives the loading-spinner re-mount
   const [removedSectionOpen, setRemovedSectionOpen] = useState(false);
 
@@ -337,46 +346,19 @@ export function TransactionEmailsTab({
 
   // BACKLOG-2319: split attached conversations into Needs-review (ambiguous
   // contact-only, all emails address_missing) vs Linked (everything else).
-  const needsReviewThreads = useMemo(
-    () => emailThreads.filter((t) => threadMatchReason(t) === "needs_review"),
-    [emailThreads]
-  );
   const linkedThreads = useMemo(
     () => emailThreads.filter((t) => threadMatchReason(t) !== "needs_review"),
     [emailThreads]
   );
 
-  // BACKLOG-2319: Confirm a Needs-review thread → promotes it to Linked. Passes
-  // every email id in the conversation so the whole thread flips at once.
-  const handleConfirmThread = useCallback(
-    async (thread: EmailThread) => {
-      if (!transactionId || confirmingThreadId) return;
-      const emailIds = thread.emails.map((e) => e.id).filter((id): id is string => !!id);
-      if (emailIds.length === 0) return;
-      setConfirmingThreadId(thread.id);
-      try {
-        const res = await window.api.transactions.confirmEmailLinks(emailIds, transactionId);
-        if (res?.success) {
-          // BACKLOG-2390: left as a plain toast (no Undo). Confirm sets
-          // match_reason='user_confirmed'; there is no `unconfirm` IPC to cleanly
-          // revert a thread back to Needs-review, so no exact inverse exists.
-          onShowSuccess?.(thread.emailCount > 1 ? "Conversation confirmed" : "Email confirmed");
-          if (onConfirmComplete) {
-            await onConfirmComplete();
-          } else {
-            onEmailsChanged?.();
-          }
-        } else {
-          onShowError?.(res?.error || "Failed to confirm email");
-        }
-      } catch {
-        onShowError?.("Failed to confirm email");
-      } finally {
-        setConfirmingThreadId(null);
-      }
-    },
-    [transactionId, confirmingThreadId, onShowSuccess, onShowError, onConfirmComplete, onEmailsChanged]
-  );
+  // BACKLOG-2791: handleConfirmThread (BACKLOG-2319) was DELETED here along with
+  // the section that called it. It invoked window.api.transactions.confirmEmailLinks
+  // directly and reported completion through onConfirmComplete →
+  // handleRefreshEmailsSilently, which refreshes communications and attachments
+  // and NOT the review queue — so approving from this tab left the Needs Review
+  // badge and the Complete gate stale until the deal was reopened. Approval now
+  // routes through reviewStateService, which every surface reads.
+
 
   // BACKLOG-1719: selection-mode entry/exit (matches the transaction window).
   const handleToggleSelectionMode = useCallback(() => {
@@ -743,22 +725,20 @@ export function TransactionEmailsTab({
         </button>
       </div>
 
-      {/* BACKLOG-2319: Needs review — ambiguous contact-only conversations, at
-          the TOP above the linked list. Renders nothing when there are none. */}
-      <NeedsReviewSection
-        threads={needsReviewThreads}
-        onViewEmail={onViewEmail}
-        onConfirm={handleConfirmThread}
-        onRemove={handleUnlinkThread}
-        confirmingThreadId={confirmingThreadId}
-        unlinkingThreadId={unlinkingThreadId}
-        userEmail={currentUser?.email}
-        nameMap={nameMap}
-      />
+      {/* BACKLOG-2791: the old self-classifying NeedsReviewSection (BACKLOG-2319)
+          USED TO RENDER HERE and has been DELETED, not filtered.
+          Needs-review is now owned by ReviewQueueSection, mounted above this tab
+          by TransactionDetails and fed from getReviewState — the one source of
+          trust. Leaving both mounted rendered every legacy address_missing email
+          TWICE, at two different granularities (this one per THREAD, the shared
+          one per EMAIL) with two different approve affordances; and confirming
+          from this one refreshed communications without refreshing the review
+          queue, so the badge and the Complete gate went stale until reopen. */}
 
-      {/* BACKLOG-2319: "Linked emails" divider — only when a Needs-review section
-          sits above it (a normal transaction with no review items is unchanged). */}
-      {needsReviewThreads.length > 0 && (
+      {/* "Linked emails" divider — shown when a review section sits above.
+          `hasReviewItems` comes from the shared queue, because this tab can no
+          longer see the review set and must not re-derive it. */}
+      {hasReviewItems && (
         <div className="flex items-center gap-3 mb-3" data-testid="linked-emails-divider">
           <span className="text-sm font-medium text-gray-500">Linked emails</span>
           <div className="flex-1 border-t border-gray-200" />
