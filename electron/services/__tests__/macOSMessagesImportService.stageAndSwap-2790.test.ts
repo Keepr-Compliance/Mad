@@ -491,3 +491,63 @@ describe("BACKLOG-2790 — staging left by a crashed run", () => {
     expect(storedRowIdentities().some((r) => r.id === "stranded-row")).toBe(false);
   });
 });
+
+describe("BACKLOG-2790 — the staging rebuild reports progress exactly as the delta path does", () => {
+  /**
+   * Founder QA on the real build reported the progress indicator sitting on
+   * "Importing messages…" with no percentage for the whole rebuild, where the
+   * old path showed a moving per-batch figure. The first question is which side
+   * stopped producing, and it is answerable here rather than by reading the
+   * renderer: run both paths over the same corpus and compare the streams they
+   * emit.
+   *
+   * PARITY is the assertion, not a count. "The force path emits some events" is
+   * satisfied by a path that emits one; what has to be true is that a rebuild
+   * into staging is indistinguishable, from the outside, from the delta import
+   * whose progress display the founder is happy with.
+   */
+  const collect = async (mode: "delta" | "reprocess") => {
+    const events: Array<{ phase: string; current: number; total: number; percent: number }> = [];
+    await macOSMessagesImportService.importMessages(
+      USER,
+      (p) => events.push({ ...p }),
+      testImportPlan({ mode, storedFilters: { lookbackMonths: null, maxMessages: null } }),
+    );
+    return events;
+  };
+
+  it("emits the same phases, counts and percentages as a delta import", async () => {
+    const delta = await collect("delta");
+    const force = await collect("reprocess");
+
+    // Same events, field for field. A dropped emission, a missing `percent`, or
+    // a phase that stopped being reported all break this.
+    expect(force).toEqual(delta);
+
+    const importing = force.filter((e) => e.phase === "importing");
+    expect(importing.length).toBeGreaterThan(0);
+
+    // Every event is renderable: a `percent` that arrives undefined renders as a
+    // bare "%" in the settings bar, which is the founder's symptom exactly.
+    for (const event of force) {
+      expect(typeof event.percent).toBe("number");
+      expect(Number.isFinite(event.percent)).toBe(true);
+      expect(event.total).toBeGreaterThan(0);
+    }
+
+    // Monotonic: progress never goes backwards within a phase.
+    const counts = importing.map((e) => e.current);
+    expect(counts).toEqual([...counts].sort((a, b) => a - b));
+    expect(counts[counts.length - 1]).toBe(MESSAGE_COUNT);
+  });
+
+  it("keeps reporting while writing to staging, not only at the end", async () => {
+    // The specific regression shape: a rebuild that reports 0% until the swap
+    // and 100% after it. At least one emission must land strictly between.
+    const force = await collect("reprocess");
+    const midRun = force.filter(
+      (e) => e.phase === "importing" && e.current > 0 && e.current < MESSAGE_COUNT,
+    );
+    expect(midRun.length).toBeGreaterThan(0);
+  });
+});
