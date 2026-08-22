@@ -334,6 +334,30 @@ class SubmissionSyncService {
   }
 
   /**
+   * BACKLOG-2775: stop periodic polling and report whether it had been running,
+   * so the caller can restart exactly what it stopped.
+   *
+   * Same hazard as the audit sync: a poll tick calls
+   * `databaseService.updateTransactionSubmissionStatus` on the SHARED
+   * connection, which the macOS Messages force re-import holds a write
+   * transaction on for the length of the run. A cancelled re-import rolls back,
+   * and would take an unrelated submission-status update with it.
+   *
+   * Restores the interval it was actually using, not the default — a caller
+   * that had configured a faster poll must not silently get a slower one back.
+   */
+  suspendPeriodicSync(): boolean {
+    const wasRunning = this.syncInterval !== null;
+    this.stopPeriodicSync();
+    return wasRunning;
+  }
+
+  /** BACKLOG-2775: restart periodic polling at its previous interval. */
+  resumePeriodicSync(): void {
+    this.startPeriodicSync(this.syncIntervalMs);
+  }
+
+  /**
    * Stop all sync operations (both realtime and polling)
    */
   async stopAllSync(): Promise<void> {

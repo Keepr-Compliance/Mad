@@ -36,6 +36,11 @@ import { MAC_EPOCH } from "../../constants";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the message-import scope.
 import { supportTrace } from "../supportAccess/trace";
+// BACKLOG-2775: the two main-process timers that write on the SHARED database
+// connection. The force re-import stops them for the length of its transaction
+// so a rollback cannot discard their work — see quiesceBackgroundWriters().
+import auditService from "../auditService";
+import submissionSyncService from "../submissionSyncService";
 
 import type {
   MessageImportFilters,
@@ -127,6 +132,12 @@ class MacOSMessagesImportService {
    * only while the item is 'running'.
    */
   private static readonly PENDING_CANCEL_TTL_MS = 10 * 1000;
+  /**
+   * BACKLOG-2775: how long to wait for an already-in-flight background sync to
+   * finish before opening the force transaction. It is a network round trip, so
+   * a few seconds is generous; exceeding it is logged, not fatal.
+   */
+  private static readonly QUIESCE_TIMEOUT_MS = 5000;
 
   /**
    * Import messages from macOS Messages app
@@ -335,6 +346,28 @@ class MacOSMessagesImportService {
     // across the several return points is how one gets missed.
     const appDb = forceReimport ? databaseService.getRawDatabase() : null;
     let forceTxnOpen = false;
+    // BACKLOG-2775: set once the background writers have been stopped for this
+    // run, so the `finally` restarts exactly what was stopped and only then.
+    let forceQuiesced = false;
+    let resumeBackgroundWriters: () => void = () => {};
+    /**
+     * BACKLOG-2775 structural guard: set by every exit that INTENDS to leave the
+     * transaction open for the `finally` to roll back.
+     *
+     * The hazard it closes is a future edit, not a present bug. This try block
+     * is ~600 lines with several exits; a `return { success: true, ... }` added
+     * anywhere inside it would be rolled back by the `finally` while reporting
+     * success to the user — a silently emptied message store, with tsc, lint and
+     * every existing test still green. Making the intent explicit means the
+     * DEFAULT for a newly added return is to trip the guard rather than to lose
+     * data quietly.
+     */
+    let forceRollbackDeclared = false;
+    /** Declare a deliberate rollback exit and produce its result. */
+    const rollbackAndReturn = (): MacOSImportResult => {
+      forceRollbackDeclared = true;
+      return this.cancelledUnchangedResult(startTime);
+    };
 
     try {
       // If force reimport, delete existing macOS messages first
@@ -349,7 +382,7 @@ class MacOSMessagesImportService {
             "Force reimport cancelled before the clear phase — nothing was deleted",
             MacOSMessagesImportService.SERVICE_NAME
           );
-          return this.cancelledUnchangedResult(startTime);
+          return rollbackAndReturn();
         }
 
         // A transaction already in progress on this connection would mean the
@@ -362,13 +395,31 @@ class MacOSMessagesImportService {
           );
         }
 
+        // BACKLOG-2775: quiesce the background writers BEFORE taking the write
+        // lock. Everything below rides on one fact — every write in this process
+        // goes through the SAME better-sqlite3 handle (`databaseService` shares
+        // it with `db/core/dbConnection` via `setDb`), so a write from anywhere
+        // during this window silently JOINS this transaction and is rolled back
+        // with it. Rollback is the normal path here, not an exceptional one.
+        //
+        // Two main-process timers write on that handle every 60 seconds:
+        //   - auditService's cloud sync -> markAuditLogsSynced (DROP TRIGGER +
+        //     UPDATE audit_logs SET synced_at + CREATE TRIGGER). A rollback
+        //     erases the synced_at marks of rows already uploaded, so they
+        //     re-upload; any audit_logs row written in the window vanishes
+        //     locally while its cloud copy survives.
+        //   - submissionSyncService's poll -> updateTransactionSubmissionStatus.
+        //
+        // An earlier version of this comment claimed the exposure was bounded
+        // because "the orchestrator serializes syncs and the worker pool is
+        // read-only". Both are true and both describe only the RENDERER queue;
+        // neither says anything about these two main-process timers.
+        resumeBackgroundWriters = await this.quiesceBackgroundWriters();
+        forceQuiesced = true;
+
         // IMMEDIATE takes the write lock now rather than on first write, so a
         // conflicting writer fails here — before the clear — instead of halfway
-        // through. Note that the app's own writes on this connection during the
-        // import join this transaction and are rolled back with it if the run is
-        // cancelled; the orchestrator serializes syncs and the worker pool is
-        // read-only, so the exposure is the user editing data by hand during a
-        // force re-import they started.
+        // through.
         appDb.exec("BEGIN IMMEDIATE");
         forceTxnOpen = true;
 
@@ -384,7 +435,7 @@ class MacOSMessagesImportService {
             "Force reimport cancelled during the clear phase — rolling back",
             MacOSMessagesImportService.SERVICE_NAME
           );
-          return this.cancelledUnchangedResult(startTime);
+          return rollbackAndReturn();
         }
       }
 
@@ -867,7 +918,7 @@ class MacOSMessagesImportService {
             MacOSMessagesImportService.SERVICE_NAME
           );
           await dbClose();
-          return this.cancelledUnchangedResult(startTime);
+          return rollbackAndReturn();
         }
 
         // Send final 100% progress to update UI
@@ -927,6 +978,9 @@ class MacOSMessagesImportService {
         { duration }
       );
 
+      // A thrown error is a declared rollback exit: the `finally` is about to
+      // discard the clear, and this result already says so via `rolledBack`.
+      forceRollbackDeclared = true;
       return {
         success: false,
         messagesImported: 0,
@@ -948,7 +1002,22 @@ class MacOSMessagesImportService {
       // is re-read rather than trusted from `forceTxnOpen` alone because
       // ROLLBACK with no active transaction throws, and a throw in a `finally`
       // would replace the real result with a rollback error.
-      if (forceTxnOpen && appDb?.inTransaction) {
+      // BACKLOG-2775 structural guard. Reaching the `finally` with the
+      // transaction still open and NO exit having declared a rollback means new
+      // code returned from inside the try without knowing a transaction was
+      // open — so the store is about to be rolled back under a result that
+      // probably claims success. Roll back anyway (the data comes first), then
+      // fail loudly rather than hand back that result.
+      //
+      // Both conditions below ask the CONNECTION whether a transaction is open,
+      // not the `forceTxnOpen` bookkeeping. The bookkeeping is cleared on the
+      // line after the COMMIT, so trusting it would skip the rollback for any
+      // state where the commit did not actually take — leaking the write lock
+      // for the life of the process. On the force path a transaction open here
+      // can only be ours: the BEGIN asserted none was open before it.
+      const undeclaredExit = !!appDb?.inTransaction && !forceRollbackDeclared;
+
+      if (appDb?.inTransaction) {
         try {
           appDb.exec("ROLLBACK");
           logService.info(
@@ -966,7 +1035,101 @@ class MacOSMessagesImportService {
           );
         }
       }
+
+      // BACKLOG-2775: restart the background writers, after the transaction has
+      // been resolved either way. Ordered after the rollback deliberately — a
+      // timer that fired between the ROLLBACK and here would write outside the
+      // transaction, which is correct, but one that fired BEFORE the rollback
+      // would be discarded by it.
+      if (forceQuiesced) {
+        forceQuiesced = false;
+        try {
+          resumeBackgroundWriters();
+        } catch (resumeError) {
+          // A failure here leaves cloud sync stopped until the next app start.
+          // It must be loud: the app looks fine and silently stops syncing.
+          logService.error(
+            `Failed to resume background sync after force reimport: ${
+              resumeError instanceof Error ? resumeError.message : "Unknown error"
+            }`,
+            MacOSMessagesImportService.SERVICE_NAME
+          );
+        }
+      }
+
+      // Thrown last, after the rollback and the resume, so the guard cannot
+      // leave the transaction open or the timers stopped. Throwing from a
+      // `finally` discards whatever the try was returning — which is the point:
+      // that result described a store this rollback has just undone.
+      if (undeclaredExit) {
+        logService.error(
+          "Force reimport returned with its transaction still open and no rollback declared — the run was rolled back and the result discarded",
+          MacOSMessagesImportService.SERVICE_NAME
+        );
+        throw new Error(
+          "Force re-import exited with an open transaction and no declared rollback: its result would have described data that was rolled back"
+        );
+      }
     }
+  }
+
+  /**
+   * BACKLOG-2775: stop the main-process timers that write on the shared
+   * database connection, and return the function that restarts exactly the ones
+   * that were running.
+   *
+   * Stopping the intervals prevents NEW ticks. It cannot cancel a tick already
+   * in flight — `auditService.syncToCloud` awaits a Supabase round trip before
+   * it reaches `markAuditLogsSynced` — so this also waits, briefly, for such a
+   * tick to finish.
+   *
+   * KNOWN RESIDUAL, deliberately not fixed here (PM to file the follow-up):
+   *   - Event-driven `insertAuditLog` writes can still land inside the window.
+   *     For an audited action that was itself a database write this is coherent
+   *     (the action and its audit row roll back together); for auth or export
+   *     events it is not — the event happened, and its local audit row does not
+   *     survive the rollback.
+   *   - `submissionSyncService`'s REALTIME subscription writes by the same path
+   *     as its poll tick. Only the poll is stopped here; unsubscribing and
+   *     resubscribing a realtime channel is a heavier lifecycle change than
+   *     this fix should make.
+   *   - If the in-flight wait below times out, the run proceeds anyway. The
+   *     alternative — refusing to re-import — would leave the user with the
+   *     non-atomic clear this whole item exists to remove, which is strictly
+   *     worse than a rare rolled-back sync mark.
+   */
+  private async quiesceBackgroundWriters(): Promise<() => void> {
+    const auditWasRunning = auditService.suspendPeriodicSync();
+    const submissionWasRunning = submissionSyncService.suspendPeriodicSync();
+
+    // Bounded wait for a tick that was already mid-flight when we stopped it.
+    const deadline = Date.now() + MacOSMessagesImportService.QUIESCE_TIMEOUT_MS;
+    while (auditService.isSyncInFlight() && Date.now() < deadline) {
+      await yieldToEventLoop();
+    }
+    if (auditService.isSyncInFlight()) {
+      logService.warn(
+        "Force reimport starting while an audit sync is still in flight — its synced_at marks may be rolled back if the run is cancelled",
+        MacOSMessagesImportService.SERVICE_NAME
+      );
+    }
+
+    logService.info(
+      `Background writers quiesced for force reimport (audit: ${auditWasRunning}, submissions: ${submissionWasRunning})`,
+      MacOSMessagesImportService.SERVICE_NAME
+    );
+
+    return () => {
+      // Restart ONLY what was actually running: starting a timer the app had
+      // deliberately stopped would be this feature turning something on behind
+      // the user's back.
+      if (auditWasRunning) auditService.resumePeriodicSync();
+      if (submissionWasRunning) submissionSyncService.resumePeriodicSync();
+      logService.info(
+        "Background writers resumed after force reimport",
+        MacOSMessagesImportService.SERVICE_NAME
+      );
+    };
   }
 
   /**

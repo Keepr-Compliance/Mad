@@ -511,29 +511,18 @@ class SyncOrchestratorServiceClass {
             cleanup();
             return;
           }
-          // TASK-2150: Pass forceReimport option through to IPC call
-          // Type assertion: window.d.ts has the correct 2-arg signature but electron/types/ipc.ts
-          // only declares 1 arg. The preload bridge accepts both. See BACKLOG-199.
-          const importFn = window.api.messages.importMacOSMessages as (
-            userId: string,
-            forceReimport?: boolean
-          ) => Promise<{
-            success: boolean;
-            messagesImported: number;
-            error?: string;
-            wasCapped?: boolean;
-            totalAvailable?: number;
-            /** BACKLOG-2743: pre-flight free-space check refused the attachment copy. */
-            attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
-            /** BACKLOG-2748: the user cancelled; counts are partial, not failed. */
-            cancelled?: boolean;
-            /**
-             * BACKLOG-2775: a force re-import was rolled back — counts are 0
-             * and the message store is untouched, not partially rebuilt.
-             */
-            rolledBack?: boolean;
-          }>;
-          const result = await importFn(userId, options?.forceReimport);
+          // TASK-2150: Pass forceReimport option through to IPC call.
+          //
+          // BACKLOG-2775: this used to re-declare the function's whole shape in
+          // an `as` cast, because the canonical type took one parameter while
+          // the preload bridge took two. Every field the main process added had
+          // to be re-typed HERE to be visible — which is how `rolledBack` would
+          // have gone missing. The canonical type now matches the bridge, so the
+          // call needs no cast and new fields arrive on their own.
+          const result = await window.api.messages.importMacOSMessages(
+            userId,
+            options?.forceReimport
+          );
           // BACKLOG-2748: the cancel check comes BEFORE the success check on
           // purpose. A cancel during the query phase returns success:false with
           // error:"Import cancelled", and the throw below would turn the user's

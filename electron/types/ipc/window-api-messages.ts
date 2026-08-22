@@ -55,8 +55,19 @@ export interface WindowApiMessages {
     error?: string;
   }>;
   getMessages: (chatId: string) => Promise<unknown[]>;
-  /** Import messages from macOS Messages app into the app database (macOS only) */
-  importMacOSMessages: (userId: string) => Promise<{
+  /**
+   * Import messages from macOS Messages app into the app database (macOS only)
+   *
+   * BACKLOG-2775: `forceReimport` was missing from this declaration while
+   * `messageBridge.importMacOSMessages` had taken it since TASK-2150 — so the
+   * only caller that passes it, the sync orchestrator, had to cast the function
+   * to a two-parameter shape to call it at all. A canonical type that the real
+   * bridge does not match stops being a check and becomes a cast generator.
+   *
+   * @param forceReimport - delete existing macOS messages and re-import all.
+   *   Atomic: the clear and the re-import share one transaction.
+   */
+  importMacOSMessages: (userId: string, forceReimport?: boolean) => Promise<{
     success: boolean;
     messagesImported: number;
     messagesSkipped: number;
@@ -75,6 +86,12 @@ export interface WindowApiMessages {
      * branch on this rather than on the `error` text.
      */
     cancelled?: boolean;
+    /**
+     * BACKLOG-2775: the cancelled run was a FORCE re-import and it rolled back.
+     * Every count above is 0 and the message store is exactly as it was — the
+     * UI must say "nothing changed", not report a count.
+     */
+    rolledBack?: boolean;
   }>;
   /** Get count of messages available for import from macOS Messages */
   getImportCount: (filters?: MessageImportCountFilters) => Promise<MessageImportCountResult>;
