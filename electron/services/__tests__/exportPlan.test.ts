@@ -17,7 +17,13 @@
  */
 
 import type { Communication } from "../../types/models";
-import { resolveExportPlan, orderAttachmentComms, normalizeContentType } from "../exportPlan";
+import {
+  resolveExportPlan,
+  orderAttachmentComms,
+  normalizeContentType,
+  normalizeAttachmentType,
+  normalizeEmailMode,
+} from "../exportPlan";
 
 const email = (id: string, sentAt: string | null, extra: Partial<Communication> = {}): Communication =>
   ({
@@ -296,5 +302,38 @@ describe("normalizeContentType — one vocabulary at the boundary", () => {
   it("falls back to \"both\" for missing or unrecognized values", () => {
     expect(normalizeContentType(undefined)).toBe("both");
     expect(normalizeContentType("nonsense")).toBe("both");
+  });
+});
+
+describe("normalizeEmailMode / normalizeAttachmentType — the boundary defaults", () => {
+  // BACKLOG-2771 (SR review of PR #2335): these defaults were unpinned; flipping
+  // them left every export suite green. The wire-level consequence is pinned
+  // against the real handlers in electron/__tests__/exportIncludeSet-2771.test.ts;
+  // these are the unit-level companions.
+
+  it("emailMode defaults to THREAD when the wire says nothing", () => {
+    expect(normalizeEmailMode(undefined)).toBe("thread");
+    expect(normalizeEmailMode("nonsense")).toBe("thread");
+  });
+
+  it("emailMode honors an explicit value", () => {
+    expect(normalizeEmailMode("individual")).toBe("individual");
+    expect(normalizeEmailMode("thread")).toBe("thread");
+  });
+
+  it("attachmentType falls back to the CALLER's default, which differs per channel", () => {
+    // The folder handler passes "all" (an audit package keeps its evidence);
+    // the enhanced handler passes "none" (a single-file artifact is not one).
+    // The asymmetry is deliberate — see exportIncludeSet-2771.test.ts.
+    expect(normalizeAttachmentType(undefined, "all")).toBe("all");
+    expect(normalizeAttachmentType(undefined, "none")).toBe("none");
+    expect(normalizeAttachmentType("nonsense", "all")).toBe("all");
+  });
+
+  it("attachmentType honors every explicit value regardless of the default", () => {
+    for (const v of ["all", "email", "text", "none"] as const) {
+      expect(normalizeAttachmentType(v, "none")).toBe(v);
+      expect(normalizeAttachmentType(v, "all")).toBe(v);
+    }
   });
 });

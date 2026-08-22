@@ -1180,9 +1180,18 @@ describe("FolderExportService", () => {
       expect(html).toContain('<div class="email-item" data-multi="false">');
     });
 
-    it("defaults to Thread View when emailExportMode is omitted", async () => {
+    // BACKLOG-2771: this case used to be named "defaults to Thread View when
+    // emailExportMode is omitted". It no longer tests that. Omitting `emailMode`
+    // here selects the FIXTURE HELPER's default, not the shipped
+    // `normalizeEmailMode()` default the wire actually goes through — so the old
+    // name claimed a guarantee this assertion could not make. The shipped
+    // default is pinned against the real handler in
+    // electron/__tests__/exportIncludeSet-2771.test.ts. What remains true here,
+    // and worth keeping, is the renderer half: given a thread-mode plan, the
+    // summary index groups by thread.
+    it("renders a thread-mode plan as one index row per thread", async () => {
       await folderExportService.exportTransactionToFolder(mockTransaction,
-        testExportPlan(emails(), { contentType: "emails", attachmentType: "none" }),
+        testExportPlan(emails(), { contentType: "emails", attachmentType: "none", emailMode: "thread" }),
         {
         transactionId: mockTransaction.id,
         outputPath: "/mock/output",

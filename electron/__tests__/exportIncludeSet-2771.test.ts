@@ -293,6 +293,87 @@ describe("BACKLOG-2771: every export entry point resolves its include set once",
     });
   });
 
+  describe("SHIPPED wire defaults for options the payload omits", () => {
+    /*
+     * BACKLOG-2771 (SR review of PR #2335): these three defaults were entirely
+     * unpinned. Flipping ALL of them at once — the folder wire's "all", the
+     * enhanced wire's "none", and normalizeEmailMode's "thread" — left 161
+     * tests across 8 suites green.
+     *
+     * The nearest-looking existing case, folderExportService.test.ts's
+     * "defaults to Thread View when emailExportMode is omitted", could not have
+     * caught it: after the plan migration it omits `emailMode` from the FIXTURE
+     * HELPER, whose own default supplies "thread" before the shipped normalizer
+     * is ever reached. It has been renamed accordingly.
+     *
+     * These assertions drive the real handlers with real wire payloads, so the
+     * shipped defaults are the only thing that can satisfy them.
+     */
+
+    it("folder: an omitted emailExportMode defaults to THREAD grouping", async () => {
+      await handlers.get("transactions:export-folder")(event, TX_ID, {
+        contentType: "both",
+        attachmentType: "all",
+        // emailExportMode deliberately absent
+      });
+
+      expect(folderPlan().emailRenderMode).toBe("thread");
+    });
+
+    it("folder: an omitted attachmentType defaults to ALL — attachments are PRESERVED", async () => {
+      // The safe default for the audit package is to keep the evidence. A
+      // caller that says nothing about attachments must not silently get none.
+      await handlers.get("transactions:export-folder")(event, TX_ID, {
+        contentType: "both",
+        // attachmentType deliberately absent
+      });
+
+      expect(folderPlan().writesAttachmentsToDisk).toBe(true);
+      expect(ids(folderPlan().attachmentComms)).toEqual([
+        IN_WINDOW_EMAIL.id as string,
+        CLOSING_DAY_TEXT.id as string,
+      ]);
+    });
+
+    it("enhanced: an omitted attachmentType defaults to NONE — the asymmetry with folder is deliberate", async () => {
+      // Load-bearing asymmetry, pinned on BOTH sides so neither drifts to match
+      // the other. A single-file artifact (csv/json/txt_eml, or a PDF) is not an
+      // evidence package: writing an attachments folder beside it for a caller
+      // that never asked is a surprise, and for the PDF path it would also pull
+      // declined attachments from Gmail/Outlook (the BACKLOG-2769 failure mode).
+      await handlers.get("transactions:export-enhanced")(event, TX_ID, {
+        exportFormat: "pdf",
+        contentType: "both",
+        // attachmentType deliberately absent
+      });
+
+      expect(enhancedPlan().writesAttachmentsToDisk).toBe(false);
+      expect(enhancedPlan().attachmentComms).toEqual([]);
+    });
+
+    it("enhanced: an omitted emailExportMode defaults to THREAD grouping", async () => {
+      await handlers.get("transactions:export-enhanced")(event, TX_ID, {
+        exportFormat: "pdf",
+        contentType: "both",
+      });
+
+      expect(enhancedPlan().emailRenderMode).toBe("thread");
+    });
+
+    it("ANTI-VACUITY: an EXPLICIT value on the wire still overrides each default", async () => {
+      // Without this, every assertion above would also pass against a handler
+      // that ignored the wire and hard-coded the default.
+      await handlers.get("transactions:export-folder")(event, TX_ID, {
+        contentType: "both",
+        attachmentType: "none",
+        emailExportMode: "individual",
+      });
+
+      expect(folderPlan().emailRenderMode).toBe("individual");
+      expect(folderPlan().writesAttachmentsToDisk).toBe(false);
+    });
+  });
+
   describe('CONTROL: attachmentType "none" reaches every renderer as "write nothing"', () => {
     it("folder export", async () => {
       await handlers.get("transactions:export-folder")(event, TX_ID, {

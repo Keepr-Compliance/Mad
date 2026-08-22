@@ -148,8 +148,25 @@ function communicationDate(comm: Communication): Date {
  * boundary one day makes the whole closing day inclusive. Errs toward INCLUDING
  * borderline messages, which is the safe direction for an audit export.
  *
- * This is now the ONLY copy of that boundary. Mutating the `+ 1` reds the tests
- * of every format that has an audit window, together.
+ * This is now the only copy consumed by the app's EXPORT surfaces — folder,
+ * enhanced (pdf/csv/excel/json/txt_eml) and the orphan export-pdf channel all
+ * read it. Mutating the `+ 1` reds the tests of every export format that has an
+ * audit window, together.
+ *
+ * NOT repo-wide. `submissionService.ts` builds the same audit window for broker
+ * submissions and corrects the closing day DIFFERENTLY: it passes the dates to
+ * `submissionDbService`, which does `new Date(closed_at).setHours(23,59,59,999)`
+ * (4 call sites). `setHours` is LOCAL time applied to a value `new Date()`
+ * parsed as UTC midnight, so the bound lands mid-closing-day rather than at its
+ * end. Measured in America/Chicago for closed_at "2026-07-29":
+ *
+ *     export bound     2026-07-30T00:00:00Z   (this function)
+ *     submission bound 2026-07-29T04:59:59Z   (submissionDbService)
+ *
+ * A text at 2026-07-29T05:30Z — 12:30am local ON the closing day — is exported
+ * but silently missing from the broker submission. Filed as BACKLOG-2781;
+ * deliberately out of scope here, and NOT a "missing +1": it is a second,
+ * timezone-dependent correction that needs its own fix and its own test.
  */
 function auditWindowEnd(endDate: string | null | undefined): Date | null {
   if (!endDate) return null;
