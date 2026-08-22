@@ -46,8 +46,33 @@ the before/after diff the founder reads first.
 """
 import json, sys, html
 
-STATUS_CLS = {"completed": "done", "in_progress": "prog", "testing": "prog", "pending_uat": "uat", "obsolete": "obso"}
-SUFFIX = {"completed": " ✓", "in_progress": " — in progress", "testing": " — in QA", "pending_uat": " — awaiting your test"}
+# EVERY status the tracker can hold must appear here. The map used to fall back
+# to "pend" for anything unlisted, which meant `deferred` (70 items today) and
+# `waiting_for_user` (8) rendered BYTE-IDENTICAL to `pending`: "we decided not to
+# do this" and "blocked on the founder" both read as "not started yet". That is
+# the one failure this page is supposed to be incapable of — it exists so the
+# picture cannot quietly disagree with the tracker.
+#
+# `pending` is listed EXPLICITLY rather than left to a default, so that a status
+# rendering as plain pending is always a decision someone made, never a miss.
+STATUS_CLS = {
+    "completed": "done",
+    "in_progress": "prog",
+    "testing": "prog",
+    "pending_uat": "uat",
+    "waiting_for_user": "uat",
+    "deferred": "defer",
+    "obsolete": "obso",
+    "pending": "pend",
+}
+SUFFIX = {
+    "completed": " ✓",
+    "in_progress": " — in progress",
+    "testing": " — in QA",
+    "pending_uat": " — awaiting your test",
+    "waiting_for_user": " — waiting on founder",
+    "deferred": " — deferred",
+}
 
 def load(p):
     with open(p) as f:
@@ -60,10 +85,22 @@ def mermaid(cfg, snap):
     for i in ids:
         n = cfg["nodes"][i]
         st = status[i]
-        cls = n.get("cls") or STATUS_CLS.get(st, "pend")
-        label = n["label"] + ("" if n.get("cls") == "park" else SUFFIX.get(st, ""))
+        known = st in STATUS_CLS
+        # An unmapped status is a DATA condition the reader has to see, so the
+        # loud class wins even over an explicit `cls` override: a config override
+        # is judgment about presentation, and this is not a presentation question.
+        cls = STATUS_CLS[st] if known else "unk"
+        if known and n.get("cls"):
+            cls = n["cls"]
+        label = n["label"]
         if n.get("cls") == "park":
             label += " — parked"
+        elif known:
+            label += SUFFIX.get(st, "")
+        if not known:
+            # Quote-stripped: the status comes from the DB and is interpolated
+            # into a mermaid label, where a stray `"` would break the diagram.
+            label += ' — ⚠ UNKNOWN STATUS: ' + str(st).replace('"', "'")
         lines.append(f'  n{i[8:]}["{label}"]:::{cls}')
     drawn = set()
     for d in snap["deps"]:
@@ -84,6 +121,12 @@ def mermaid(cfg, snap):
         "  classDef park fill:#f2f2f0,stroke:#a0a0a0,stroke-dasharray:4 3,color:#555;",
         "  classDef uat fill:#e8d9f5,stroke:#6b3fa0,color:#111;",
         "  classDef obso fill:#ececec,stroke:#b0b0b0,color:#888;",
+        # amber, so a deferred item cannot be mistaken for pending (neutral-grey)
+        # or obsolete (flat grey) at a glance.
+        "  classDef defer fill:#fdf0dd,stroke:#9a6700,stroke-dasharray:5 3,color:#5b4300;",
+        # red, 2px: the generator failed to map this status. Not a state of the
+        # work — a state of THIS SCRIPT, and it must be impossible to miss.
+        "  classDef unk fill:#fde7e7,stroke:#c62828,stroke-width:2px,color:#7a1414;",
     ]
     return "\n".join(lines)
 
@@ -124,7 +167,9 @@ CSS = """  :root { --bg:#f7f8f6; --surface:#ffffff; --ink:#1d2b23; --muted:#5b6b
   .sw { width:.85rem; height:.85rem; border-radius:3px; display:inline-block; border:1.5px solid #999; }
   .sw.done { background:#d3f2d9; border-color:#1a7f37; } .sw.prog { background:#cfe3f7; border-color:#1a5fa8; }
   .sw.pend { background:#eef0f4; border-color:#6e7b8a; } .sw.park { background:#f2f2f0; border-color:#a0a0a0; border-style:dashed; }
-  .sw.obso { background:#ececec; border-color:#b0b0b0; } .sw.uat { background:#e8d9f5; border-color:#6b3fa0; }"""
+  .sw.obso { background:#ececec; border-color:#b0b0b0; } .sw.uat { background:#e8d9f5; border-color:#6b3fa0; }
+  .sw.defer { background:#fdf0dd; border-color:#9a6700; border-style:dashed; }
+  .sw.unk { background:#fde7e7; border-color:#c62828; border-width:2px; }"""
 
 def main():
     cfg = load(sys.argv[1]); snap = load(sys.argv[2])
@@ -141,7 +186,9 @@ def main():
     for n in cfg.get("notes", []):
         parts.append(f'<p class="note">{n}</p>')
     parts.append('<div class="legend"><span><i class="sw done"></i> completed</span><span><i class="sw prog"></i> in build</span>'
-                 '<span><i class="sw pend"></i> pending</span><span><i class="sw uat"></i> awaiting founder test</span><span><i class="sw park"></i> parked</span><span><i class="sw obso"></i> obsolete</span></div>')
+                 '<span><i class="sw pend"></i> pending</span><span><i class="sw uat"></i> awaiting founder test</span>'
+                 '<span><i class="sw defer"></i> deferred</span><span><i class="sw park"></i> parked</span>'
+                 '<span><i class="sw obso"></i> obsolete</span><span><i class="sw unk"></i> unknown status — the generator needs updating</span></div>')
     parts.append("</main>")
     print("\n".join(parts))
 

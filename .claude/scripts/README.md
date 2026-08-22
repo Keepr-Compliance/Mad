@@ -64,9 +64,29 @@ Copy `build-line-config.example.json` and edit it. The split is the point:
 
 **Derived from the tracker — never hand-edited**
 
-- node color, from `pm_backlog_items.status`
-  (`completed` green, `in_progress`/`testing` blue, `pending_uat` purple,
-  `obsolete` grey, everything else neutral)
+- node color and label suffix, from `pm_backlog_items.status`:
+
+  | status | class | label suffix |
+  |---|---|---|
+  | `completed` | green | ` ✓` |
+  | `in_progress` | blue | `— in progress` |
+  | `testing` | blue | `— in QA` |
+  | `pending_uat` | purple | `— awaiting your test` |
+  | `waiting_for_user` | purple | `— waiting on founder` |
+  | `deferred` | amber, dashed | `— deferred` |
+  | `obsolete` | grey | *(none)* |
+  | `pending` | neutral | *(none)* |
+  | **anything else** | **red, 2px** | **`— ⚠ UNKNOWN STATUS: <status>`** |
+
+  Every status the tracker can hold is mapped **explicitly**, including
+  `pending` — so a node rendering as plain pending is always a decision, never a
+  miss. The map used to fall back to pending for anything unlisted, which meant
+  `deferred` (70 items) and `waiting_for_user` (8) came out byte-identical to
+  pending: "we decided not to do this" and "blocked on the founder" both read as
+  "not started yet". **If the tracker gains a status, this page goes red rather
+  than quiet** — that red node means the generator needs updating, not that the
+  work is in trouble. Add the status to `STATUS_CLS`/`SUFFIX` in `build-line.py`
+  and to the legend.
 - solid arrows, from `pm_dependencies`, drawn prerequisite → dependent
 - the **What changed** list, when a previous snapshot is passed
 
