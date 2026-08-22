@@ -66,6 +66,7 @@
     "check:pii:list": "node scripts/ci/check-fixture-pii.mjs --list",
     "check:hooks": "node scripts/ci/check-hooks-tracking.mjs",
     "check:text-sources": "node scripts/ci/check-text-sources.mjs",
+    "check:test-drift": "node scripts/ci/check-test-drift.mjs",
     "hooks:doctor": "node scripts/hooks-doctor.mjs",
     "prepare": "husky",
     "prestart": "node scripts/rebuild-native.js"
