@@ -472,7 +472,40 @@ class MacOSMessagesImportService {
       // never used on this Mac). The outer catch turns it into { success: false }.
       const db = await openSqliteReadOnly(messagesDbPath, MacOSMessagesImportService.SERVICE_NAME);
       const dbAll = db.all;
-      const dbClose = db.close;
+      /**
+       * BACKLOG-2775: closing the macOS Messages handle, at most once.
+       *
+       * `ReadOnlySqliteHandle.close` is `promisify(db.close.bind(db))` from
+       * node-sqlite3, and a SECOND close REJECTS with
+       * `SQLITE_MISUSE: Database is closed`. There are four close sites on this
+       * path and they are not mutually exclusive: the normal flow closes as soon
+       * as the last source query is done — before `storeMessages`, which is a
+       * long way from the end of the function — so every later exit is closing a
+       * handle that is already closed.
+       *
+       * The founder hit this live. He pressed Cancel ~1.2s into a force
+       * re-import; the run rolled back correctly and the store was safe, but the
+       * cancel exit's own `close()` rejected, the rejection replaced the
+       * cancellation result, and he was shown a red
+       * "Import failed: SQLITE_MISUSE: Database is closed" card instead of
+       * "nothing changed".
+       *
+       * The same shape silently MASKED real errors before this feature existed:
+       * anything thrown after the close reached the inner `catch`, which closes
+       * again, so a genuine `storeMessages` failure surfaced as SQLITE_MISUSE
+       * rather than as itself.
+       *
+       * No mocked suite can catch this — a `jest.fn()` close is idempotent by
+       * construction — which is why the reproduction lives in
+       * `macOSMessagesImportService.forceCancelRealDriver-2775.test.ts` against
+       * the real driver.
+       */
+      let sourceDbClosed = false;
+      const dbClose = async (): Promise<void> => {
+        if (sourceDbClosed) return;
+        sourceDbClosed = true;
+        await db.close();
+      };
 
       try {
         // TASK-1952 / BACKLOG-2276: Calculate Apple epoch cutoff for date range filter.
