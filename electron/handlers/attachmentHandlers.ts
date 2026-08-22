@@ -20,6 +20,10 @@ import outlookFetchService from "../services/outlookFetchService";
 import featureGateService from "../services/featureGateService";
 import supabaseService from "../services/supabaseService";
 import { getEmailById } from "../services/db/emailDbService";
+// BACKLOG-2781: this handler's counts are meant to match what the submission
+// service uploads, so it must use the SAME closing-day bound the export
+// resolver defines rather than a local end-of-day.
+import { auditWindowEnd } from "../services/exportPlan";
 import { wrapHandler } from "../utils/wrapHandler";
 import type { Transaction } from "../types/models";
 import {
@@ -496,11 +500,16 @@ export function registerAttachmentHandlers(
         emailDateParams.push(auditStart);
       }
 
-      if (auditEnd) {
-        // Add end of day to include all messages on the end date
-        const endDate = new Date(auditEnd);
-        endDate.setHours(23, 59, 59, 999);
-        const endDateStr = endDate.toISOString();
+      // BACKLOG-2781: `auditEnd` arrives as the caller sent it and is passed
+      // through unchanged, so the same input yields the same bound the export
+      // path computes. NOTE: the only renderer caller today
+      // (TransactionDetails.tsx via useAttachmentCounts) passes `undefined`, so
+      // this branch is currently unreached in the shipping app — it is fixed
+      // because the channel's stated contract is parity with the submission
+      // path, and the next caller that supplies a window would inherit the bug.
+      const auditEndBound = auditWindowEnd(auditEnd);
+      if (auditEndBound) {
+        const endDateStr = auditEndBound.toISOString();
         textDateFilter += " AND m.sent_at <= ?";
         textDateParams.push(endDateStr);
         emailDateFilter += " AND e.sent_at <= ?";

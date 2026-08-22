@@ -5,6 +5,10 @@
 
 import type { Message, Attachment } from "../../types";
 import { ensureDb } from "./core/dbConnection";
+// BACKLOG-2781: the closing-day end bound is the export resolver's, not a
+// local re-derivation. Each call below is its own call site on purpose —
+// four independent queries, four independent regressions to guard.
+import { auditWindowEnd } from "../exportPlan";
 
 // ============================================
 // SUBMISSION QUERIES (TASK-2100)
@@ -46,11 +50,10 @@ export function getTransactionMessages(
     sql += ` AND m.sent_at >= ?`;
     params.push(auditStartDate.toISOString());
   }
-  if (auditEndDate) {
-    const endOfDay = new Date(auditEndDate);
-    endOfDay.setHours(23, 59, 59, 999);
+  const messagesEnd = auditWindowEnd(auditEndDate);
+  if (messagesEnd) {
     sql += ` AND m.sent_at <= ?`;
-    params.push(endOfDay.toISOString());
+    params.push(messagesEnd.toISOString());
   }
 
   sql += ` ORDER BY m.sent_at ASC`;
@@ -80,11 +83,10 @@ export function getTransactionEmails(
     sql += ` AND e.sent_at >= ?`;
     params.push(auditStartDate.toISOString());
   }
-  if (auditEndDate) {
-    const endOfDay = new Date(auditEndDate);
-    endOfDay.setHours(23, 59, 59, 999);
+  const emailsEnd = auditWindowEnd(auditEndDate);
+  if (emailsEnd) {
     sql += ` AND e.sent_at <= ?`;
-    params.push(endOfDay.toISOString());
+    params.push(emailsEnd.toISOString());
   }
 
   sql += ` ORDER BY e.sent_at ASC`;
@@ -109,11 +111,10 @@ export function getTransactionAttachments(
     dateFilter += " AND m.sent_at >= ?";
     dateParams.push(auditStartDate.toISOString());
   }
-  if (auditEndDate) {
-    const endOfDay = new Date(auditEndDate);
-    endOfDay.setHours(23, 59, 59, 999);
+  const textAttachmentsEnd = auditWindowEnd(auditEndDate);
+  if (textAttachmentsEnd) {
     dateFilter += " AND m.sent_at <= ?";
-    dateParams.push(endOfDay.toISOString());
+    dateParams.push(textAttachmentsEnd.toISOString());
   }
 
   // Query 1: Text message attachments
@@ -141,11 +142,10 @@ export function getTransactionAttachments(
     emailDateFilter += " AND e.sent_at >= ?";
     emailDateParams.push(auditStartDate.toISOString());
   }
-  if (auditEndDate) {
-    const endOfDay = new Date(auditEndDate);
-    endOfDay.setHours(23, 59, 59, 999);
+  const emailAttachmentsEnd = auditWindowEnd(auditEndDate);
+  if (emailAttachmentsEnd) {
     emailDateFilter += " AND e.sent_at <= ?";
-    emailDateParams.push(endOfDay.toISOString());
+    emailDateParams.push(emailAttachmentsEnd.toISOString());
   }
 
   // Query 2: Email attachments
