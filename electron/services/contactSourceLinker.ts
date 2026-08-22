@@ -146,7 +146,7 @@ import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
 import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
 import { buildEvidence, sourceRecordName } from "./contactLinkEvidence";
 import { applyLinkedSourceValues } from "./contactSourceValues";
-import { toLookupKey } from "../utils/phoneNormalization";
+import { toMatchingKey } from "../utils/phoneNormalization";
 import { realContactName } from "../utils/contactDisplayLabel";
 import { nameSupportForAutoLink } from "../utils/autoLinkNameGuard";
 import logService from "./logService";
@@ -318,9 +318,15 @@ function sourceRecordCarriesIdentifier(
     const held = new Set(safeJsonArray(row.emails_json).map((e) => e.trim().toLowerCase()));
     return values.some((v) => v && held.has(v.trim().toLowerCase()));
   }
-  const held = new Set(safeJsonArray(row.phones_json).map((ph) => toLookupKey(ph)));
+  // BACKLOG-2630 slice 1 / BACKLOG-2754: `toMatchingKey` on BOTH sides. This is
+  // the content fallback that decides a source record and a contact are the same
+  // person on a shared identifier alone, so a below-floor value — an extension,
+  // a fragment — must not be able to carry that decision. Both sides use the
+  // same function: flooring only one would silently make the comparison
+  // asymmetric.
+  const held = new Set(safeJsonArray(row.phones_json).map((ph) => toMatchingKey(ph)));
   return values.some((v) => {
-    const key = toLookupKey(v);
+    const key = toMatchingKey(v);
     return key.length > 0 && held.has(key);
   });
 }

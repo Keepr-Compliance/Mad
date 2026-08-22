@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS contact_phones (
 
   phone_e164 TEXT NOT NULL,              -- Normalized: +14155550102
   phone_display TEXT,                    -- Display format: (415) 555-0102
-  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key (last 10 digits)
+  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key. BACKLOG-2630: E.164 digits via libphonenumber (was last 10 digits); migration v64 re-keys existing rows
   is_primary INTEGER DEFAULT 0,
   label TEXT,                            -- mobile, home, work, etc.
   source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
