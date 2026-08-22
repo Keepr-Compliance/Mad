@@ -153,22 +153,58 @@ function communicationDate(comm: Communication): Date {
  * read it. Mutating the `+ 1` reds the tests of every export format that has an
  * audit window, together.
  *
- * NOT repo-wide. `submissionService.ts` builds the same audit window for broker
- * submissions and corrects the closing day DIFFERENTLY: it passes the dates to
- * `submissionDbService`, which does `new Date(closed_at).setHours(23,59,59,999)`
- * (4 call sites). `setHours` is LOCAL time applied to a value `new Date()`
- * parsed as UTC midnight, so the bound lands mid-closing-day rather than at its
- * end. Measured in America/Chicago for closed_at "2026-07-29":
+ * BACKLOG-2781 — this is now the closing-day boundary for the export surfaces
+ * AND for the broker submission and attachment-count surfaces. It is NOT every
+ * `closed_at`-derived boundary in `electron/`: `messageMatchingService.ts`
+ * appends a literal `"T23:59:59.999Z"` to its end date and `utils/emailDateRange.ts`
+ * advances `closed_at` by a 30-day buffer. Those serve different questions
+ * (candidate matching, sync range) and their unification is separate filed work.
  *
- *     export bound     2026-07-30T00:00:00Z   (this function)
- *     submission bound 2026-07-29T04:59:59Z   (submissionDbService)
+ * Six sites used to compute the audit-window end themselves as
+ * `new Date(closed_at).setHours(23,59,59,999)`: four in `submissionDbService`
+ * (the broker submission package), one in `attachmentHandlers`
+ * (`transactions:get-attachment-counts`) and one in `attachmentDbService`
+ * (the transaction Attachments tab). `setHours` applies LOCAL hours to the
+ * UTC-midnight instant `new Date("2026-07-29")` produces, so their bound landed
+ * EARLY on the closing day itself and the divergence was timezone-dependent:
  *
- * A text at 2026-07-29T05:30Z — 12:30am local ON the closing day — is exported
- * but silently missing from the broker submission. Filed as BACKLOG-2781;
- * deliberately out of scope here, and NOT a "missing +1": it is a second,
- * timezone-dependent correction that needs its own fix and its own test.
+ *     this function      2026-07-30T00:00:00.000Z   (every timezone)
+ *     the six old sites  2026-07-29T23:59:59.999Z   under TZ=UTC
+ *                        2026-07-29T04:59:59.999Z   under TZ=America/Chicago
+ *
+ * A text at 2026-07-29T05:30Z — 12:30am local ON the closing day — was in the
+ * agent's exported audit package but silently absent from the broker's
+ * submission. All six now call this function, so a submission and an export of
+ * the same transaction cover the same days.
+ *
+ * Of the six, only the four `submissionDbService` sites are reached with a real
+ * window by the shipping app. Both attachment sites are LATENT: their renderer
+ * callers (`TransactionDetails.tsx`) pass no audit window today. They are fixed
+ * because their stated contract is parity with the submission path.
+ *
+ * Accepts a `Date` as well as a date string because those callers receive one
+ * already parsed (`submissionService.ts` does `new Date(transaction.closed_at)`).
+ * Both forms yield the same instant.
+ *
+ * `setDate` advances the LOCAL day number and preserves the local time-of-day.
+ * For a UTC-midnight value that is a 24-hour advance in UTC on an ordinary day,
+ * but 23 or 25 hours across a DST transition — measured in America/Chicago:
+ *
+ *     closed_at "2026-03-08"  ->  2026-03-08T23:00:00.000Z   (+23h, spring forward)
+ *     closed_at "2026-11-01"  ->  2026-11-02T01:00:00.000Z   (+25h, fall back)
+ *
+ * So the bound is NOT timezone-independent on those two days a year. It is left
+ * as-is deliberately: the skew is inherited from this single function, so the
+ * export and the submission skew together and still agree with each other, which
+ * is the property BACKLOG-2781 exists to restore. A DST-exact bound would be a
+ * change to the shipped export behavior and belongs in its own item.
+ *
+ * Mutating the `+ 1` reds every export format's audit-window test AND the
+ * closing-day sweeps in `submissionDbService.closingDay-2781.test.ts`,
+ * `attachmentDbService.closingDay-2781.test.ts` and
+ * `attachmentHandlers.closingDay-2781.test.ts`, together.
  */
-function auditWindowEnd(endDate: string | null | undefined): Date | null {
+export function auditWindowEnd(endDate: Date | string | null | undefined): Date | null {
   if (!endDate) return null;
   const end = new Date(endDate);
   end.setDate(end.getDate() + 1);
