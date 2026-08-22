@@ -46,6 +46,8 @@ jest.mock("../databaseService", () => ({
 }));
 
 import localSyncService from "../localSyncService";
+import databaseService from "../databaseService";
+import { toLookupKey, toMatchingKey } from "../../utils/phoneNormalization";
 import * as externalContactDb from "../db/externalContactDbService";
 import type { SyncContact } from "../../types/localSync";
 
@@ -96,6 +98,75 @@ function writtenBatch(): externalContactDb.ExternalContactInput[] {
 }
 
 beforeEach(() => jest.clearAllMocks());
+
+/**
+ * BACKLOG-2630 / SR blocker B1 — THE ANDROID PROMOTION DEDUP KEY MUST BE THE
+ * KEY THE COLUMN HOLDS.
+ *
+ * `promoteToMainContacts` asks `findContactByNormalizedPhone` whether an Android
+ * contact already exists before promoting it. That query compares
+ * `contact_phones.phone_normalized`, which migration v64 re-keyed to the
+ * libphonenumber form. The producer used to hand-roll the OLD key
+ * (`digits.slice(-10)`), so post-v64 it asked for "4155550188" while the column
+ * held "14155550188" — every lookup returns null, nothing looks like a
+ * duplicate, and per the BACKLOG-2556 note in that file a re-pairing
+ * re-promotes the ENTIRE Android address book as duplicate contacts.
+ *
+ * WHY NO EXISTING TEST CAUGHT IT: every phone fixture in reach used area code
+ * 555, which is not assignable, so libphonenumber rejects it and `toLookupKey`
+ * falls back to the pre-2630 digits. In that corpus the two key spaces coincide
+ * and a hand-rolled caller looks correct. The numbers below are area code 415
+ * with 555-01xx line numbers — parseable by the library AND inside the reserved
+ * fictional range.
+ *
+ * This asserts the ARGUMENT the real producer emits, so it cannot drift from the
+ * producer the way a transcription of its rule would.
+ */
+describe("promoteToMainContacts — the dedup probe uses the shared key (BACKLOG-2630 B1)", () => {
+  const findSpy = databaseService.findContactByNormalizedPhone as jest.Mock;
+
+  const PROMOTABLE: SyncContact[] = [
+    { id: "301", displayName: "Ada Lovelace", phones: [{ number: "+14155550188" }], emails: [] },
+    { id: "302", displayName: "Grace Hopper", phones: [{ number: "(415) 555-0177" }], emails: [] },
+  ];
+
+  it("probes with the key the re-keyed column holds, not a hand-rolled last-ten", () => {
+    storeContacts(USER, DEVICE, PROMOTABLE, true);
+
+    const probed = findSpy.mock.calls.map((c) => c[1] as string);
+
+    // Identity, not "contains": the exact set the producer emitted.
+    expect(new Set(probed)).toEqual(
+      new Set([toLookupKey("+14155550188"), toLookupKey("(415) 555-0177")]),
+    );
+    // And stated as literals too, so a change to BOTH sides at once still reds.
+    expect(new Set(probed)).toEqual(new Set(["14155550188", "14155550177"]));
+  });
+
+  it("the fixture can distinguish the bug: the old rule emits a different key", () => {
+    // Without this, the assertion above would pass under a corpus where the two
+    // key spaces coincide — which is precisely how B1 survived review.
+    const oldRule = (phone: string): string => {
+      const digits = phone.replace(/\D/g, "");
+      return digits.length >= 10 ? digits.slice(-10) : digits;
+    };
+    expect(oldRule("+14155550188")).toBe("4155550188");
+    expect(toLookupKey("+14155550188")).toBe("14155550188");
+    expect(oldRule("+14155550188")).not.toBe(toLookupKey("+14155550188"));
+  });
+
+  it("still skips a below-floor number rather than probing with it", () => {
+    // The site carried its own `< 7` floor. Routing through `toMatchingKey`
+    // keeps that behaviour in the shared helper instead of a second hand-rolled
+    // copy of it — a below-floor value emits no key and is never probed.
+    storeContacts(USER, DEVICE, [
+      { id: "303", displayName: "Short Code", phones: [{ number: "40219" }], emails: [] },
+    ], true);
+
+    expect(toMatchingKey("40219")).toBe("");
+    expect(findSpy.mock.calls.map((c) => c[1] as string)).not.toContain("40219");
+  });
+});
 
 describe("storeContacts — lookupKey capture (BACKLOG-2407)", () => {
   it("carries each contact's own lookupKey into source_identity", () => {

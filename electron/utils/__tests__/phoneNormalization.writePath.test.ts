@@ -29,7 +29,7 @@ const Database = require(
 import type { Database as DatabaseType } from "better-sqlite3";
 import crypto from "crypto";
 
-import { toLookupKey } from "../phoneNormalization";
+import { legacyDigitKey, toLookupKey } from "../phoneNormalization";
 import { setDb } from "../../services/db/core/dbConnection";
 import {
   createContact,
@@ -301,7 +301,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source) VALUES (?, ?, ?, ?, 1, 'manual')",
       ).run(phoneId, contactId, "+15550000000", toLookupKey("+15550000000"));
 
-      const input = "+44 20 7946 1212";
+      const input = "+44 20 7946 0212";
       const entries = getContactPhoneEntries(contactId).map((e) => ({
         id: e.id,
         phone: input,
@@ -311,7 +311,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const rows = readPhoneRows(db, contactId);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("442079461212");
+      expect(rows[0].phone_normalized).toBe("442079460212");
     });
   });
 
@@ -379,9 +379,33 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const rows = readPhoneRows(db, contactId);
       expect(rows[0].phone_normalized).toBe(toLookupKey(phoneE164));
-      // 555 is not a valid NANP area code, so the library declines it and the
-      // pre-2630 fallback keys it — unchanged by BACKLOG-2630, and that is the point.
+      // DELIBERATE 555-555 FALLBACK FIXTURE (BACKLOG-2630). Area code 555 is not
+      // assignable, so libphonenumber declines it and `toLookupKey` routes it
+      // through `legacyDigitKey` — the key is unchanged by this item, which is
+      // the property this case exists to pin.
       expect(rows[0].phone_normalized).toBe("5555550112");
+
+      // ...and the SAME write path on the LIBRARY path, because a suite that
+      // only ever feeds it 555 numbers never exercises the parser at all. That
+      // blindness is what hid the Android promotion defect (SR blocker B1):
+      // under a 555 corpus the parsed key and the legacy key coincide, so a
+      // caller computing the old key looks correct. 415 with a 555-01xx line is
+      // parseable AND inside the reserved fictional range.
+      const parsedE164 = "+14155550112";
+      const parsedId = crypto.randomUUID();
+      db.prepare(
+        `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
+      ).run(parsedId, contactId, parsedE164, "+1 (415) 555-0112", toLookupKey(parsedE164), 0);
+
+      // `readPhoneRows` projects phone_e164, not id — match on the value.
+      const parsedRow = readPhoneRows(db, contactId).find((r) => r.phone_e164 === parsedE164)!;
+      expect(parsedRow.phone_normalized).toBe(toLookupKey(parsedE164));
+      expect(parsedRow.phone_normalized).toBe("14155550112");
+      // The two paths genuinely differ — without this the case above could be
+      // passing for the wrong reason.
+      expect(toLookupKey(parsedE164)).not.toBe(legacyDigitKey(parsedE164));
+      expect(toLookupKey(phoneE164)).toBe(legacyDigitKey(phoneE164));
     });
   });
 

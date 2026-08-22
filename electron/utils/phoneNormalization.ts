@@ -120,8 +120,9 @@ export function legacyDigitKey(trimmed: string): string {
  * measured on a real address book: a number stored without its country code
  * could never meet the same number stored with one, and `slice(-10)` amputated
  * long country codes into keys that correspond to no real number
- * (`+972 3 602 5852` → `7236025852`, which could collide with an unrelated
- * NANP number).
+ * (an 11-digit international number lost its country code and came out as a
+ * plausible-looking 10-digit NANP number, which could collide with a real
+ * one).
  *
  * The first attempt at a fix hand-wrote digit-shape rules per country and was
  * dropped by the founder — *"overfitting for one number format without knowing
