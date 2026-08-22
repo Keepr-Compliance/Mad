@@ -7,6 +7,15 @@
  * step comments unchanged); only the closing assertions are flipped, because the
  * SR's version asserted the DEFECT and this one asserts the fix.
  *
+ * One further change, forced rather than stylistic: the SR's fixture used a
+ * 555-12xx number, which is OUTSIDE the reserved fictional block. This repo is
+ * PUBLIC and the pre-push PII guard blocks it — correctly, since a pushed
+ * fixture cannot be un-published. Replaced with 555-0142 (555-0100..555-0199 is
+ * reserved for fiction). The specific digits are arbitrary to the test.
+ *
+ * Note the original number is deliberately NOT spelled out here: the guard scans
+ * comments too, and quoting the offending value would re-publish it.
+ *
  * The PR closes a "rejection side door" for EMAILS by storing match_reason
  * 'address_missing' on the ignored row, so a RESTORE returns the item to the
  * review queue instead of silently linking it.
