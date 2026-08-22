@@ -164,7 +164,13 @@ describe("promoteToMainContacts — the dedup probe uses the shared key (BACKLOG
     ], true);
 
     expect(toMatchingKey("40219")).toBe("");
-    expect(findSpy.mock.calls.map((c) => c[1] as string)).not.toContain("40219");
+
+    // The EXACT call set, not `not.toContain`. A negative membership check
+    // passes just as happily when the producer probes with some OTHER wrong
+    // key, which is the failure mode worth excluding: this contact's only
+    // phone is below the floor, so the correct behaviour is that
+    // `findContactByNormalizedPhone` is not called at all.
+    expect(findSpy.mock.calls.map((c) => c[1] as string)).toEqual([]);
   });
 });
 

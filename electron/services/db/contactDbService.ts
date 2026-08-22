@@ -1354,8 +1354,23 @@ export async function searchContacts(
  * anchoring `contacts` as the outer loop, which is what lets
  * `idx_contact_phones_normalized` drive the join.
  *
+ * ===========================================================================
+ * WHAT `normalizedPhone` MUST BE — BACKLOG-2630. READ THIS BEFORE CALLING.
+ * ===========================================================================
+ * A key produced by `toLookupKey` (or `toMatchingKey`, which is the same key
+ * above the digit floor) — NOT "the last ten digits". Since BACKLOG-2630 the
+ * key is the libphonenumber-parsed E.164 digits, so a US number keys as
+ * "14155550109" and migration v64 re-keyed every stored row to match.
+ *
+ * The old wording of this line said "last 10 digits", and a caller that
+ * believed it hand-rolled `digits.slice(-10)`, asked for "4155550109", and got
+ * null for every real number on file — which made the Android promotion dedup
+ * treat the entire address book as new (SR blocker B1 on PR #2346, fixed at
+ * `localSyncService.promoteToMainContacts`). Compute the key, never transcribe
+ * the rule.
+ *
  * @param userId - Owning user ID
- * @param normalizedPhone - Last 10 digits of the phone number
+ * @param normalizedPhone - A `toLookupKey`/`toMatchingKey` key. See above.
  * @returns Contact ID and display_name if found, null otherwise
  */
 export function findContactByNormalizedPhone(

@@ -400,6 +400,10 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       // `readPhoneRows` projects phone_e164, not id — match on the value.
       const parsedRow = readPhoneRows(db, contactId).find((r) => r.phone_e164 === parsedE164)!;
+      // This block mirrors the worker's RAW SQL by design (the worker runs off
+      // the main thread), so the round-trip assertion is f == f and proves only
+      // that SQLite stored what it was given. The LITERAL below is the one that
+      // carries information — it is what reds if the rule moves.
       expect(parsedRow.phone_normalized).toBe(toLookupKey(parsedE164));
       expect(parsedRow.phone_normalized).toBe("14155550112");
       // The two paths genuinely differ — without this the case above could be
