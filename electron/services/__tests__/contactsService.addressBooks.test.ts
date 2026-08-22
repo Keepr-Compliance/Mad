@@ -118,6 +118,32 @@ const EXCHANGE_IDS = [
 
 describe("BACKLOG-2392: every address book is read", () => {
   const originalHome = process.env.HOME;
+
+  // -------------------------------------------------------------------------
+  // FIXTURE LIFECYCLE (BACKLOG-2735)
+  //
+  // These books are REAL sqlite files written through the real driver — that is
+  // the whole point of the suite and is not negotiable. What was negotiable is
+  // how often. Building the three-account tree per test meant 64 address-book
+  // databases and 27 create-and-destroy temp trees for one run of 27 tests,
+  // against a global 30 s per-test timeout. On a Windows runner, where every
+  // newly created file goes through Defender, that margin is thin enough that
+  // one stall failed the file at 155.954 s — and `bail: 1` then discarded 601
+  // suites that had not run yet.
+  //
+  // So the tree is built ONCE, in beforeAll, and the 17 tests that only READ it
+  // share it. The 10 tests that write their own books or delete one call
+  // useOwnHome() and are as isolated as they ever were. Nothing else changes:
+  // the log mocks and the ingestion funnel are still reset per test, and not one
+  // assertion in this file was touched.
+  // -------------------------------------------------------------------------
+
+  /** Built once in beforeAll; read by the tests that do not mutate books. */
+  let sharedHome: string;
+  /** Set by useOwnHome() for the current test only; removed in afterEach. */
+  let ownHome: string | null = null;
+
+  /** Whichever tree the CURRENT test is pointed at. */
   let home: string;
   let baseDir: string;
 
@@ -142,11 +168,74 @@ describe("BACKLOG-2392: every address book is read", () => {
   const idsOf = (contacts: Array<{ recordId?: string }> | undefined): string[] =>
     (contacts ?? []).map((c) => c.recordId!).sort();
 
-  beforeEach(() => {
-    home = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-ab-"));
+  /** An empty `$HOME/Library/Application Support/AddressBook` tree. */
+  function makeHomeTree(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-ab-"));
+    fs.mkdirSync(path.join(dir, "Library", "Application Support", "AddressBook"), {
+      recursive: true,
+    });
+    return dir;
+  }
+
+  /** Point HOME — and therefore localPath()/sourcePath() — at `dir`. */
+  function pointAt(dir: string): void {
+    home = dir;
     baseDir = path.join(home, "Library", "Application Support", "AddressBook");
-    fs.mkdirSync(baseDir, { recursive: true });
     process.env.HOME = home;
+  }
+
+  /**
+   * Opt THIS test out of the shared tree and give it a private, empty one.
+   *
+   * Required by every test that writes its own books, corrupts one, or deletes
+   * one mid-read. Those tests are unchanged in every other respect — they still
+   * get a tree nobody else can see, created and destroyed around them.
+   */
+  function useOwnHome(): void {
+    ownHome = makeHomeTree();
+    pointAt(ownHome);
+  }
+
+  /**
+   * Declares that this test reads the SHARED tree, and proves it is still whole.
+   *
+   * The tree now outlives the test that reads it, so a mutation escaping an
+   * earlier test would surface as a baffling failure several tests later. This
+   * turns that into an immediate, named error at the site that would have been
+   * misled. (Content drift is caught by the exact-ZUNIQUEID-set assertions the
+   * tests already make.)
+   */
+  function sharedThreeAccountTree(): void {
+    for (const book of [localPath(), sourcePath(SOURCE_A_DIR), sourcePath(SOURCE_B_DIR)]) {
+      if (!fs.existsSync(book)) {
+        throw new Error(
+          `shared fixture tree is missing ${path.basename(path.dirname(book))}/${path.basename(book)} — ` +
+            "an earlier test mutated it and needs useOwnHome()",
+        );
+      }
+    }
+  }
+
+  /** The three-account layout: local at the top level, two network sources. */
+  function buildThreeAccountTree(): void {
+    writeAddressBook(localPath(), LOCAL_BOOK);
+    writeAddressBook(sourcePath(SOURCE_A_DIR), ICLOUD_BOOK);
+    writeAddressBook(sourcePath(SOURCE_B_DIR), EXCHANGE_BOOK);
+  }
+
+  beforeAll(() => {
+    sharedHome = makeHomeTree();
+    pointAt(sharedHome);
+    buildThreeAccountTree();
+  });
+
+  afterAll(() => {
+    process.env.HOME = originalHome;
+    fs.rmSync(sharedHome, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    pointAt(sharedHome);
     mockLogInfo.mockClear();
     mockLogWarn.mockClear();
     mockLogError.mockClear();
@@ -156,19 +245,15 @@ describe("BACKLOG-2392: every address book is read", () => {
 
   afterEach(() => {
     process.env.HOME = originalHome;
-    fs.rmSync(home, { recursive: true, force: true });
+    if (ownHome) {
+      fs.rmSync(ownHome, { recursive: true, force: true });
+      ownHome = null;
+    }
   });
-
-  /** The three-account layout: local at the top level, two network sources. */
-  function buildThreeAccountTree(): void {
-    writeAddressBook(localPath(), LOCAL_BOOK);
-    writeAddressBook(sourcePath(SOURCE_A_DIR), ICLOUD_BOOK);
-    writeAddressBook(sourcePath(SOURCE_B_DIR), EXCHANGE_BOOK);
-  }
 
   describe("multi-account discovery", () => {
     it("returns the EXACT union of all three books, not the winner of a race", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
 
@@ -179,7 +264,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
 
     it("reads the 3-record top-level store the old >10 threshold discarded", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
 
@@ -190,6 +275,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
 
     it("reads a lone small book when it is the ONLY account", async () => {
+      useOwnHome();
       // Nothing else exists. Under the old rule nothing cleared the threshold,
       // so this fell through to the default-path fallback by luck; a small book
       // under Sources/ was simply lost.
@@ -202,7 +288,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
 
     it("reports found/read/failed so all three books are visibly read", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       await getContactNames();
       const discovery = getContactIngestionFunnel().discovery!;
@@ -226,7 +312,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // anything. Discovery sorts; this reverses what readdir hands back, so
       // its natural order is the OPPOSITE of sorted, and pins both the reported
       // order and the resulting contact set.
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
       const realReaddir = fs.promises.readdir;
       const spy = jest
         .spyOn(fs.promises, "readdir")
@@ -257,7 +343,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     it("does not read the same physical file twice via the default path", async () => {
       // The default path IS the top-level book. It must be read once, or every
       // count doubles and the funnel lies.
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
       const discovery = getContactIngestionFunnel().discovery!;
@@ -270,7 +356,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
 
     it("leaks no account name and no absolute path into the log", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       await getContactNames();
       const emitted = allLogOutput();
@@ -288,6 +374,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // and `error`, so a test that only inspects `info` would never see them —
       // and both used to emit an absolute path, which carries the account name.
       // No books exist at all: this drives the "no .abcddb files found" warn.
+      useOwnHome();
       await getContactNames();
       const emitted = allLogOutput();
 
@@ -303,6 +390,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // The reporter's Exchange store could be locked or mid-write. If that
       // takes down the whole read she gets NOTHING, when she should get all of
       // iCloud and all of "On My Mac".
+      useOwnHome();
       writeAddressBook(localPath(), LOCAL_BOOK);
       writeCorruptAddressBook(sourcePath(SOURCE_A_DIR));
       writeAddressBook(sourcePath(SOURCE_B_DIR), EXCHANGE_BOOK);
@@ -314,6 +402,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
 
     it("makes 'read 2 of 3' impossible to mistake for a clean run", async () => {
+      useOwnHome();
       writeAddressBook(localPath(), LOCAL_BOOK);
       writeCorruptAddressBook(sourcePath(SOURCE_A_DIR));
       writeAddressBook(sourcePath(SOURCE_B_DIR), EXCHANGE_BOOK);
@@ -340,6 +429,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
 
     it("still fails cleanly, without throwing, when NO book can be read", async () => {
+      useOwnHome();
       writeCorruptAddressBook(localPath());
 
       const result = await getContactNames();
@@ -353,6 +443,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // A missing path makes node-sqlite3 EMIT an 'error' event; unhandled,
       // that is an uncaught exception and a main-process crash. Contacts.app
       // and iCloud rewrite these stores underneath us, so this race is real.
+      useOwnHome();
       buildThreeAccountTree();
       const doomed = sourcePath(SOURCE_A_DIR);
       // Delete the book at the LAST moment of discovery — after the directory
@@ -391,7 +482,7 @@ describe("BACKLOG-2392: every address book is read", () => {
 
   describe("identity is ZUNIQUEID, never the Core Data row number", () => {
     it("keys every contact on ZUNIQUEID", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
 
@@ -405,7 +496,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // `String(person.person_id)` those distinct humans shared a record id —
       // and `external_record_id` is the external_contacts upsert conflict key,
       // so the collision silently overwrote real people.
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
       const ids = idsOf(result.contacts);
@@ -420,7 +511,7 @@ describe("BACKLOG-2392: every address book is read", () => {
 
   describe("record type filtering", () => {
     it("excludes groups, info and container rows from the contacts", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
       const ids = idsOf(result.contacts);
@@ -433,7 +524,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
 
     it("counts the excluded rows rather than dropping them silently", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       await getContactNames();
 
@@ -448,7 +539,7 @@ describe("BACKLOG-2392: every address book is read", () => {
 
   describe("import everything — no field is a precondition", () => {
     it("imports a nameless contact and labels it by email", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
       const nameless = result.contacts!.find((c) => c.recordId === "EXCH-0002:ABPerson");
@@ -458,7 +549,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
 
     it("imports a contact with only a phone and labels it by phone", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
       const phoneOnly = result.contacts!.find((c) => c.recordId === "EXCH-0003:ABPerson");
@@ -475,6 +566,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // `canLoadContacts: false` and tells the user to grant Full Disk Access.
       // A perfectly readable account was indistinguishable from a permissions
       // failure, and the remedy offered was wrong.
+      useOwnHome();
       writeAddressBook(localPath(), [
         { pk: 1, uid: "NAMEONLY-1:ABPerson", first: "Nora", last: "Nophone" },
         { pk: 2, uid: "NAMEONLY-2:ABPerson", first: "Ned", last: "Nomail" },
@@ -507,6 +599,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // Same ZUNIQUEID in two books: 2 rows read, 1 distinct contact out. This
       // also covers the merge path itself — the union of both books' contact
       // methods, rather than one record silently overwriting the other.
+      useOwnHome();
       writeAddressBook(sourcePath(SOURCE_A_DIR), [
         { pk: 1, uid: "SHARED-0001:ABPerson", first: "Dana", last: "Twice", phones: ["+15554440001"] },
       ]);
@@ -535,7 +628,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // It is now DERIVED (rowsRead - usable), and `nameless` measures the
       // population the old gate discarded. Both have to be real numbers for
       // "import everything" to be checkable at all.
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       await getContactNames();
       const parse = getContactIngestionFunnel().parse!;
@@ -550,7 +643,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     });
 
     it("reports zero name-drops — the gate is gone, and stays gone", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       await getContactNames();
       const parse = getContactIngestionFunnel().parse!;
@@ -581,7 +674,7 @@ describe("BACKLOG-2392: every address book is read", () => {
      * relabel by exact id.
      */
     it("shows 'Margaret', not her organisation, when she has no surname", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
       const margaret = result.contacts!.find((c) => c.recordId === "EXCH-0004:ABPerson");
@@ -597,7 +690,7 @@ describe("BACKLOG-2392: every address book is read", () => {
       // The org fallback STAYS — it moves to last resort, it does not go away.
       // A vendor card like this has no person on it and the organisation is the
       // only label it has.
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const result = await getContactNames();
       const titleCo = result.contacts!.find((c) => c.recordId === "EXCH-0005:ABPerson");
@@ -609,6 +702,7 @@ describe("BACKLOG-2392: every address book is read", () => {
     it("prefers a surname to an organisation when there is no first name", async () => {
       // The middle of the chain, which no fixture covered before: last-only
       // must beat org for the same reason first-only does.
+      useOwnHome();
       writeAddressBook(localPath(), [
         { pk: 1, uid: "LASTONLY-1:ABPerson", last: "Okonkwo", org: "Bridgeview Realty" },
       ]);
@@ -621,6 +715,7 @@ describe("BACKLOG-2392: every address book is read", () => {
 
     it("still falls back to email, then phone, when there is no name AND no org", async () => {
       // Import-everything (catalogue A11) is unchanged by the precedence flip.
+      useOwnHome();
       writeAddressBook(localPath(), [
         { pk: 1, uid: "FALLBACK-1:ABPerson", emails: ["only.email@example.com"] },
         { pk: 2, uid: "FALLBACK-2:ABPerson", phones: ["+15555550122"] },
@@ -637,7 +732,7 @@ describe("BACKLOG-2392: every address book is read", () => {
 
   describe("lookup maps span every book", () => {
     it("resolves phones and emails from all three accounts", async () => {
-      buildThreeAccountTree();
+      sharedThreeAccountTree();
 
       const { contactMap } = await getContactNames();
 
