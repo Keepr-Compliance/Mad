@@ -541,26 +541,60 @@ export function MacOSMessagesImportSettings({
     }
   };
 
-  // TASK-1952: Save lookback months filter
-  const handleLookbackChange = async (value: string) => {
+  /**
+   * TASK-1952: Save the lookback filter.
+   *
+   * BACKLOG-2749: it now REPORTS whether the save landed, and reverts the
+   * dropdown when it did not.
+   *
+   * It used to swallow the failure whole (`catch { /* Silently handle *\/ }`),
+   * which was survivable while only the `<select>` called it — a user who saw
+   * their choice fail to stick would pick it again. The refusal dialog's
+   * fitting-window button made it dangerous: that button saves the shorter
+   * window and imports in the SAME click, so a failed save left the run
+   * fetching the window the guard had just refused, with the panel showing the
+   * shorter one. The disk stayed safe (the pre-flight refuses the attachment
+   * copy independently) but the user was told one thing and given another,
+   * which is this item's own invariant.
+   *
+   * TWO failure shapes, and only one of them is a throw. `settingsService`
+   * catches its own errors and returns `{ success: false }`, so the production
+   * failure never reaches a `catch` at all — the old code would have swallowed
+   * it even with the `catch` removed. Both are handled here; testing only the
+   * throw would leave the reachable one open.
+   */
+  const handleLookbackChange = async (value: string): Promise<boolean> => {
     const months = value === "all" ? null : Number(value);
+    const previous = lookbackMonths;
     setLookbackMonths(months);
     setLastResult(null);
-    setDialog(null);
+
+    let saved = false;
     try {
-      await settingsService.updatePreferences(userId, {
+      const result = await settingsService.updatePreferences(userId, {
         messageImport: {
           filters: {
             lookbackMonths: months,
           },
         },
       });
+      saved = result?.success !== false;
     } catch {
-      // Silently handle
+      saved = false;
     }
+
+    if (!saved) {
+      // The setting did not save, so the panel must not display it as though it
+      // had: a dropdown reading "Last 12 months" over a stored "All time" is
+      // the same lie in a smaller font, and the estimate would then describe a
+      // window no run would use.
+      setLookbackMonths(previous);
+    }
+
     // BACKLOG-2286: Refresh the effective window (the pref is a floor the audit
     // period can widen past) after the save lands so the label stays truthful.
     loadEffectiveWindow();
+    return saved;
   };
 
   // TASK-1952: Save max messages filter
@@ -586,16 +620,26 @@ export function MacOSMessagesImportSettings({
   // `spaceBlocked`, which reads this flag directly — no re-estimate is triggered
   // or needed, because skipping attachments changes what gets COPIED, not what
   // the selected window CONTAINS.
-  const handleSkipAttachmentsChange = async (skip: boolean) => {
+  //
+  // BACKLOG-2749: reports whether the save landed, and reverts on failure — the
+  // milder half of the same swallow. Milder because the consequence is an
+  // import that copies attachments the user asked to skip rather than one that
+  // covers the wrong window; still a promise the run does not keep.
+  const handleSkipAttachmentsChange = async (skip: boolean): Promise<boolean> => {
+    const previous = skipAttachments;
     setSkipAttachments(skip);
     setLastResult(null);
+    let saved = false;
     try {
-      await settingsService.updatePreferences(userId, {
+      const result = await settingsService.updatePreferences(userId, {
         messageImport: { filters: { skipAttachments: skip } },
       });
+      saved = result?.success !== false;
     } catch {
-      // Silently handle
+      saved = false;
     }
+    if (!saved) setSkipAttachments(previous);
+    return saved;
   };
 
   // BACKLOG-2760: the estimate has produced an answer for the CURRENT window.
@@ -834,6 +878,65 @@ export function MacOSMessagesImportSettings({
    */
   const LOOKBACK_PRESETS = [24, 18, 12, 9, 6, 3] as const;
 
+  /**
+   * BACKLOG-2749: a dialog action could not be carried out.
+   *
+   * Both of the dialog's window-changing buttons SAVE a preference and then
+   * import. If the save does not land, the run must not start — and the user
+   * must be told, in the dialog they are looking at, rather than watching a
+   * button do nothing.
+   */
+  const [dialogActionError, setDialogActionError] = useState<string | null>(null);
+
+  /**
+   * BACKLOG-2749: a dialog action is mid-flight.
+   *
+   * The two window-changing buttons became ASYNCHRONOUS when they started
+   * waiting for their preference write to land, which LOOKS like it opens a
+   * window in which the dialog is still on screen with live buttons.
+   *
+   * MEASURED, not assumed: with this guard removed, two synchronous clicks
+   * still produce exactly ONE `requestSync`. `handleLookbackChange` moves the
+   * lookback, the estimate effect resets the counts to null, and the dialog's
+   * render guard unmounts it before the second click lands. The double-fire is
+   * therefore unreachable today and NO TEST CAN PIN THIS GUARD — one was
+   * written, stayed green under the mutation, and was removed.
+   *
+   * It stays as defence-in-depth: what makes the double-fire unreachable is an
+   * unrelated effect's reset order, not anything this code promises. Recorded
+   * as latent rather than claimed as verified.
+   *
+   * A ref rather than state: it gates an event handler and must take effect on
+   * the very next click rather than after a render.
+   */
+  const dialogActionBusyRef = useRef(false);
+  /** Set immediately below `closeDialog`, which is declared after this hook. */
+  const closeDialogRef = useRef<() => void>(() => {});
+
+  /**
+   * Run a dialog action that must PERSIST something before it imports.
+   *
+   * One place for the rule, because both buttons keep it: save, and start the
+   * run only if the save landed; otherwise say so and leave the dialog open.
+   */
+  const runDialogAction = useCallback(
+    async (save: () => Promise<boolean>, failure: string, run: () => void) => {
+      if (dialogActionBusyRef.current) return;
+      dialogActionBusyRef.current = true;
+      try {
+        if (!(await save())) {
+          setDialogActionError(failure);
+          return;
+        }
+        closeDialogRef.current();
+        run();
+      } finally {
+        dialogActionBusyRef.current = false;
+      }
+    },
+    []
+  );
+
   const [fittingWindow, setFittingWindow] =
     useState<FittingWindowCandidate | null>(null);
   const [fittingWindowStatus, setFittingWindowStatus] =
@@ -910,6 +1013,7 @@ export function MacOSMessagesImportSettings({
    */
   const beginImport = useCallback(
     (forceReimport: boolean) => {
+      setDialogActionError(null);
       if (spaceRefused) {
         const searchId = ++fittingSearchIdRef.current;
         setFittingWindow(null);
@@ -930,8 +1034,11 @@ export function MacOSMessagesImportSettings({
   /** Close the dialog and abandon any fitting-window search still running. */
   const closeDialog = useCallback(() => {
     fittingSearchIdRef.current += 1;
+    setDialogActionError(null);
     setDialog(null);
   }, []);
+  // `runDialogAction` is declared above `closeDialog` and needs to call it.
+  closeDialogRef.current = closeDialog;
 
   // Watch orchestrator queue for messages completion to update result/status
   useEffect(() => {
@@ -1419,6 +1526,7 @@ export function MacOSMessagesImportSettings({
             availableDiskBytes={sizeEstimate?.availableDiskBytes ?? null}
             fittingWindow={fittingWindow}
             fittingWindowStatus={fittingWindowStatus}
+            actionError={dialogActionError}
             onKeepLimit={() => {
               closeDialog();
               handleImport(dialog.isReimport);
@@ -1427,21 +1535,39 @@ export function MacOSMessagesImportSettings({
               closeDialog();
               handleImport(dialog.isReimport, true);
             }}
-            onChooseWindow={async (months) => {
-              closeDialog();
-              // Move the dropdown the user can see, save it, THEN run. The
-              // founder's standing invariant for this button is that clicking
-              // it succeeds to the run stage; the run's own pre-flight
-              // re-verifies fit exactly as it does for every other path.
-              await handleLookbackChange(String(months));
-              // `windowChanged`: this run covers the window just chosen, not
-              // the one the panel's estimate still describes.
-              handleImport(dialog.isReimport, false, true);
+            onChooseWindow={(months) => {
+              /*
+               * Save FIRST, and run only if the save landed.
+               *
+               * The founder's standing invariant is that clicking this button
+               * succeeds to the run stage — but "succeeds" cannot mean "starts
+               * an import of the window we just refused". `handleLookbackChange`
+               * used to swallow a failed write, so a rejected save left this
+               * running the ORIGINAL window while the dialog closed as though
+               * the narrower one had been chosen. The pre-flight still
+               * protected the disk, so the visible result was an All-time run
+               * with attachments silently skipped: the guard's refusal
+               * reversed by a button offered as the way to respect it.
+               *
+               * The run itself still re-verifies fit at the pre-flight, exactly
+               * as every other path does.
+               */
+              void runDialogAction(
+                () => handleLookbackChange(String(months)),
+                "Keepr could not save that time period, so the import was not started. Try again.",
+                // `windowChanged`: this run covers the window just chosen, not
+                // the one the panel's estimate still describes.
+                () => handleImport(dialog.isReimport, false, true)
+              );
             }}
-            onTextOnly={async () => {
-              closeDialog();
-              await handleSkipAttachmentsChange(true);
-              handleImport(dialog.isReimport);
+            onTextOnly={() => {
+              // Same rule, milder stake: a failed save here would import the
+              // attachments the user just asked to leave out.
+              void runDialogAction(
+                () => handleSkipAttachmentsChange(true),
+                "Keepr could not save that choice, so the import was not started. Try again.",
+                () => handleImport(dialog.isReimport)
+              );
             }}
             onCancel={closeDialog}
           />

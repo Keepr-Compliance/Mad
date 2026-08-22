@@ -121,12 +121,30 @@ export interface ImportPlanDialogProps {
   fittingWindow: FittingWindowCandidate | null;
   fittingWindowStatus: FittingWindowStatus;
 
+  /**
+   * BACKLOG-2749: an action was attempted and could not be carried out, so no
+   * import was started.
+   *
+   * Both window-changing buttons persist a preference before importing, and a
+   * failed write must stop the run rather than let it proceed on the old
+   * setting. When that happens the dialog STAYS OPEN and says so — a button
+   * that silently does nothing reads as a broken app, and one that silently
+   * does something else is the defect this whole item is about.
+   */
+  actionError: string | null;
+
   // ---- Callbacks ----
   /** Keep the limit: run with the cap the plan already resolved. */
   onKeepLimit: () => void;
   /** Import everything in the window: clears the cap for this run. */
   onImportEverything: () => void;
-  /** Narrow the selection to a window that fits, then import. */
+  /**
+   * Narrow the selection to a window that fits, then import.
+   *
+   * Both this and `onTextOnly` PERSIST a preference before importing, so the
+   * caller may decline to start the run — see `actionError`. The dialog fires
+   * them and renders whatever comes back; it does not assume the click won.
+   */
   onChooseWindow: (lookbackMonths: number) => void;
   /** Import message text without attachment files. */
   onTextOnly: () => void;
@@ -165,6 +183,7 @@ export function ImportPlanDialog({
   availableDiskBytes,
   fittingWindow,
   fittingWindowStatus,
+  actionError,
   onKeepLimit,
   onImportEverything,
   onChooseWindow,
@@ -291,6 +310,14 @@ export function ImportPlanDialog({
           )}
 
           <div className="flex flex-col gap-2">
+            {actionError !== null && (
+              <p
+                data-testid="import-plan-action-error"
+                className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mb-1"
+              >
+                {actionError}
+              </p>
+            )}
             {/* Founder decision 5 (`c2300351`), safe action PROMINENT.
                 Founder decision 4 (`3a4fc2b2`), the label:
 
@@ -381,6 +408,14 @@ export function ImportPlanDialog({
           )}
 
           <div className="flex flex-col gap-2 mt-3">
+            {actionError !== null && (
+              <p
+                data-testid="import-plan-action-error"
+                className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mb-1"
+              >
+                {actionError}
+              </p>
+            )}
             {fittingWindowStatus === "found" && fittingWindow !== null && (
               <button
                 onClick={() => onChooseWindow(fittingWindow.lookbackMonths)}

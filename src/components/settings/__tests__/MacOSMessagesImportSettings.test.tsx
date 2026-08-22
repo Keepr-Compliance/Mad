@@ -482,10 +482,17 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
 
     // The refusal lifts and the import becomes runnable — the escape hatch is
     // what makes a refusal acceptable rather than a dead end.
+    //
+    // BACKLOG-2749: awaited rather than checked synchronously, because the
+    // button now WAITS for its preference write to land before closing and
+    // importing. That wait is the fix — a save that fails must stop the run
+    // instead of letting it proceed on the old setting.
     await waitFor(() =>
       expect(screen.queryByTestId("import-space-notice")).not.toBeInTheDocument(),
     );
-    expect(screen.queryByTestId("import-space-block")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByTestId("import-space-block")).not.toBeInTheDocument(),
+    );
     expect(screen.getByRole("button", { name: /Import Messages/i })).toBeEnabled();
 
     // And the choice is persisted so the import actually honors it.

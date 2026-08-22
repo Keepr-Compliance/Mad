@@ -746,6 +746,168 @@ describe("BACKLOG-2749 — the space refusal names a window that fits", () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// CONTROL 5 — a dialog action that cannot save must not run (SR, PR #2345)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("BACKLOG-2749 — a failed preference write stops the run", () => {
+  /*
+   * Found by the SR review of PR #2345, by execution rather than by reading.
+   *
+   * `handleLookbackChange` swallowed a failed write, and the fitting-window
+   * button saves the shorter window and imports in the SAME click. So with the
+   * write rejected, clicking "Import last 12 months — 8.2 GB" still fired
+   * `requestSync` — and the run fetched the ORIGINAL All-time window, the very
+   * one the guard had just refused, while the dialog closed as though the
+   * narrower window had been chosen. The disk stayed safe because the
+   * pre-flight refuses the attachment copy on its own, so what the user saw
+   * was an All-time import with attachments silently skipped: the refusal
+   * reversed by the button offered as the way to respect it.
+   *
+   * TWO failure shapes are pinned below, and only one of them is a throw.
+   * `settingsService.updatePreferences` catches its own errors and returns
+   * `{ success: false }` — so the PRODUCTION failure never reaches a `catch`
+   * at all, and a fix tested only against a rejected promise would have left
+   * the reachable shape wide open.
+   */
+  const TOO_BIG_ALL_TIME = {
+    ...FOUNDER_RESULT,
+    attachmentBytes: 61_300_000_000,
+    availableDiskBytes: 59_100_000_000,
+    fitsOnDisk: false,
+  };
+
+  beforeEach(() => {
+    mockGetPreferences.mockResolvedValue({
+      success: true,
+      data: {
+        messageImport: {
+          filters: {
+            lookbackMonths: null,
+            maxMessages: CAP,
+            skipAttachments: false,
+          },
+        },
+      },
+    });
+    (window.api.messages.getImportCount as jest.Mock).mockImplementation(
+      (_userId: string, selection?: { lookbackMonths: number | null }) =>
+        Promise.resolve(
+          selection?.lookbackMonths === null
+            ? TOO_BIG_ALL_TIME
+            : {
+                ...TOO_BIG_ALL_TIME,
+                attachmentBytes: 8_200_000_000,
+                fitsOnDisk: true,
+              }
+        )
+    );
+  });
+
+  async function clickFittingWindow(): Promise<void> {
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    const dialog = await openDialog();
+    await act(async () => {
+      fireEvent.click(
+        await within(dialog).findByTestId("import-plan-fitting-window")
+      );
+    });
+  }
+
+  it("CONTROL (SR's scenario): the write REJECTS — no run, and the dialog says why", async () => {
+    mockUpdatePreferences.mockRejectedValue(new Error("preferences unavailable"));
+
+    await clickFittingWindow();
+
+    // The whole point: the guard's refusal is not reversed by its own way out.
+    expect(mockRequestSync).not.toHaveBeenCalled();
+    expect(
+      await screen.findByTestId("import-plan-action-error")
+    ).toHaveTextContent(/could not save that time period/i);
+    // Still open, so the user can retry or cancel rather than watch a dead button.
+    expect(screen.getByTestId("import-plan-dialog")).toBeInTheDocument();
+  });
+
+  it("CONTROL: the write RETURNS {success:false} — the shape production actually emits", async () => {
+    // `settingsService` never throws; it returns this. A `catch`-only fix
+    // passes the test above and leaves this one red.
+    mockUpdatePreferences.mockResolvedValue({ success: false, error: "nope" });
+
+    await clickFittingWindow();
+
+    expect(mockRequestSync).not.toHaveBeenCalled();
+    expect(
+      await screen.findByTestId("import-plan-action-error")
+    ).toBeInTheDocument();
+  });
+
+  it("the dropdown does not display a period that failed to save", async () => {
+    // A select reading "Last 24 months" over a stored "All time" is the same
+    // lie in a smaller font — and the estimate beneath it would then describe
+    // a window no run would use.
+    mockUpdatePreferences.mockResolvedValue({ success: false });
+
+    await clickFittingWindow();
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("All time")).toBeInTheDocument()
+    );
+  });
+
+  it("the text-only escape obeys the same rule", async () => {
+    mockUpdatePreferences.mockRejectedValue(new Error("preferences unavailable"));
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    const dialog = await openDialog();
+    await act(async () => {
+      fireEvent.click(within(dialog).getByTestId("import-without-attachments"));
+    });
+
+    expect(mockRequestSync).not.toHaveBeenCalled();
+    expect(
+      await screen.findByTestId("import-plan-action-error")
+    ).toHaveTextContent(/could not save that choice/i);
+    // And the checkbox does not claim a preference that was never stored.
+    expect(screen.getByTestId("skip-attachments-toggle")).not.toBeChecked();
+  });
+
+  it("ANTI-VACUITY: when the write LANDS, the run starts and no error shows", async () => {
+    // Without this, every assertion above would be equally green for a button
+    // that never started anything.
+    mockUpdatePreferences.mockResolvedValue({ success: true });
+
+    await clickFittingWindow();
+
+    await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
+    expect(
+      screen.queryByTestId("import-plan-action-error")
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("import-plan-dialog")).not.toBeInTheDocument();
+  });
+
+  /*
+   * NOT PINNED, deliberately: re-entrant clicks while the save is in flight.
+   *
+   * The two window-changing buttons became asynchronous when they started
+   * waiting for their write, which looks like it opens a double-fire window.
+   * It does not, and I measured rather than assumed: with the re-entrancy
+   * guard REMOVED, two synchronous clicks still produce exactly ONE
+   * `requestSync`. The reason is incidental — `handleLookbackChange` sets the
+   * lookback, the estimate effect resets `windowCount`/`availableCount` to
+   * null, and the dialog's render guard unmounts it before the second click
+   * lands.
+   *
+   * So a test here can assert nothing: it is green with the guard and green
+   * without it. I wrote one, watched it stay green under the mutation, and
+   * removed it — a control that cannot go red is not a control, and leaving it
+   * in would tell the next reader the guard is proven when it is not.
+   *
+   * The guard STAYS as defence-in-depth, because what makes the double-fire
+   * unreachable is an unrelated effect's reset order, not anything this code
+   * promises. It is recorded as latent, not claimed as verified.
+   */
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // The force re-import path uses the SAME gate
 // ───────────────────────────────────────────────────────────────────────────
 
