@@ -5,6 +5,12 @@
 
 import { ipcRenderer } from "electron";
 import type { NewTransaction, Transaction, TransactionStatus } from "../types/models";
+// BACKLOG-2771: one export vocabulary, defined with the other wire types.
+import type {
+  ExportAttachmentType,
+  ExportContentType,
+  ExportEmailMode,
+} from "../types/ipc/window-api-transactions";
 
 /**
  * Options for scanning emails for transactions
@@ -24,27 +30,33 @@ export interface ScanOptions {
  */
 export interface ExportEnhancedOptions {
   exportFormat?: "pdf" | "csv" | "json" | "txt_eml" | "excel";
-  contentType?: "text" | "email" | "both";
+  /** BACKLOG-2771: the ONE content vocabulary, shared with ExportFolderOptions. */
+  contentType?: ExportContentType;
   includeContacts?: boolean;
-  includeEmails?: boolean;
   includeSummary?: boolean;
   startDate?: string;
   endDate?: string;
   summaryOnly?: boolean; // If true, only export summary + indexes (no full content)
-  attachmentType?: "all" | "email" | "text" | "none";
+  attachmentType?: ExportAttachmentType;
+  /** How emails are grouped. Previously absent from this wire entirely. */
+  emailExportMode?: ExportEmailMode;
 }
 
 /**
  * Options for folder export
  */
 export interface ExportFolderOptions {
-  includeEmails?: boolean;
-  includeTexts?: boolean;
-  includeAttachments?: boolean;
-  contentType?: "both" | "emails" | "texts";
-  attachmentType?: "all" | "email" | "text" | "none";
-  /** How emails are grouped in the folder export (consumed by the folder handler). */
-  emailExportMode?: "thread" | "individual";
+  /**
+   * BACKLOG-2771: content selection is stated ONCE. The folder wire used to
+   * carry it three times — `contentType` plus `includeEmails`/`includeTexts`,
+   * read by different consumers — and attachments twice (`includeAttachments`
+   * plus `attachmentType`). Both redundant encodings are gone; the resolver
+   * derives every one of them from these three fields.
+   */
+  contentType?: ExportContentType;
+  attachmentType?: ExportAttachmentType;
+  /** How emails are grouped in the folder export. */
+  emailExportMode?: ExportEmailMode;
 }
 
 export const transactionBridge = {
@@ -457,7 +469,7 @@ export const transactionBridge = {
    * Exports transaction to an organized folder structure
    * Creates: Summary_Report.pdf, emails/, texts/, attachments/
    * @param transactionId - Transaction ID to export
-   * @param options - Export options (includeEmails, includeTexts, includeAttachments)
+   * @param options - Export options (contentType, attachmentType, emailExportMode)
    * @returns Export result with path to created folder
    */
   exportFolder: (transactionId: string, options?: ExportFolderOptions) =>

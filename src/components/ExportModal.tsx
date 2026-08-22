@@ -201,10 +201,10 @@ function ExportModal({
   const runExportCall = async (): Promise<{ success: boolean; path?: string; error?: string }> => {
     if (exportFormat === "folder") {
       // Folder export for a comprehensive audit package.
+      // BACKLOG-2771: content is stated ONCE. This used to also send
+      // includeEmails/includeTexts/includeAttachments — three encodings of the
+      // same two answers, read by different consumers on the other side.
       return window.api.transactions.exportFolder(transaction.id, {
-        includeEmails: contentType === "emails" || contentType === "both",
-        includeTexts: contentType === "texts" || contentType === "both",
-        includeAttachments: attachmentType !== "none",
         emailExportMode,
         contentType,
         attachmentType,
@@ -214,13 +214,17 @@ function ExportModal({
     // summaryOnly: true for "pdf" = report + indexes only; "combined-pdf" = full content.
     const actualFormat = exportFormat === "combined-pdf" ? "pdf" : exportFormat;
     const summaryOnly = exportFormat === "pdf";
+    // BACKLOG-2771: no vocabulary translation here any more — both channels
+    // speak "both" | "emails" | "texts", and the compiler rejects the retired
+    // "email"/"text" spelling.
     return window.api.transactions.exportEnhanced(transaction.id, {
       exportFormat: actualFormat,
-      contentType: contentType === "emails" ? "email" : contentType === "texts" ? "text" : "both",
+      contentType,
       startDate,
       endDate,
       summaryOnly,
       attachmentType,
+      emailExportMode,
     });
   };
 
