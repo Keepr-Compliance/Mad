@@ -592,12 +592,14 @@ describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () =>
      * right one does not appear either. Both are named so a future edit that
      * reintroduces the tail has to pick a side deliberately.
      *
-     * HONEST LIMIT, recorded rather than papered over: with the tail gone,
-     * `lastCoverage.excluded` is computed and never rendered, so the
-     * SUBTRACTION itself is no longer pinned by anything (mutation M3 goes
-     * green). What is still pinned is the CONDITION it guards — the strip
-     * appears only when the window exceeds the admitted coverage — and the
-     * coverage figure the strip actually shows.
+     * The subtraction itself is GONE from the panel rather than kept inert:
+     * nothing renders it, so nothing could pin it. The corrected formula lives
+     * where it is consumed — the resolver-derived dialog numbers, and
+     * BACKLOG-2794's dashboard fix, which re-derives it orchestrator-side from
+     * the resolver. What survives here is the coverage figure the strip shows,
+     * pinned below, and the CONDITION guarding the strip, pinned by the
+     * ANTI-VACUITY case further down — which exists because I first claimed
+     * that condition was pinned, checked, and found it was not.
      */
     const { rerender } = renderStrict(
       <MacOSMessagesImportSettings userId={USER_ID} />
@@ -635,6 +637,43 @@ describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () =>
     const result = await screen.findByTestId("import-result");
     expect(result).toHaveTextContent("48,781");
     expect(result).toHaveTextContent("Your store now covers 62,824 for this period");
+  });
+
+  it("ANTI-VACUITY: a run that excluded nothing gets no coverage clause", async () => {
+    /*
+     * The condition the strip is guarded by, pinned.
+     *
+     * I wrote in the test above that this condition "is still pinned" after
+     * the exclusion sentence was deleted, then checked: mutating
+     * `windowCount > admittedCount` to a tautology reds NOTHING. The claim was
+     * false, so here is the control that makes it true rather than a comment
+     * that asserts it.
+     *
+     * A window that fits under the cap excludes nothing, so a coverage clause
+     * would be noise about a limit that never acted — and it renders inside a
+     * sentence about what the run did, where a redundant figure is exactly
+     * what the founder asked to have removed.
+     */
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue({
+      ...FOUNDER_RESULT,
+      count: 4200,
+      filteredCount: 4200,
+      windowCount: 4200,
+    });
+
+    const { rerender } = renderStrict(
+      <MacOSMessagesImportSettings userId={USER_ID} />
+    );
+
+    // The window fits, so there is no dialog — Import runs straight through.
+    await waitFor(() => expect(importButton()).toBeEnabled());
+    fireEvent.click(importButton());
+    await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
+
+    await completeRun(rerender);
+
+    await screen.findByTestId("import-result");
+    expect(screen.queryByTestId("import-coverage")).not.toBeInTheDocument();
   });
 
   it("the completion strip can be dismissed, and a new run reports fresh", async () => {

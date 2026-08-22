@@ -813,20 +813,12 @@ export function MacOSMessagesImportSettings({
   /**
    * BACKLOG-2749: the completed run's coverage, for the result strip.
    *
-   * RETAINED BUT PARTLY UNRENDERED — read this before trusting `excluded`.
-   * The founder's second live-QA pass removed the exclusion sentence, so
-   * `excluded` (window − admitted coverage, the arithmetic that replaced the
-   * orchestrator's wrong `window − imported-this-run`) is now computed and
-   * displayed nowhere. It is kept by instruction, and it is honest arithmetic,
-   * but NO CONTROL CAN PIN IT: mutating the formula reds nothing, verified.
-   * What is still pinned is the condition it guards — the strip appears only
-   * when the window exceeds the admitted coverage — and `admittedCount`, which
-   * the strip shows. Treat `excluded` as inert until something renders it.
+   * Separate from `lastResult` because it is a fact about the PLAN, not about
+   * the outcome, and it must survive `lastResult` being rebuilt.
    */
   const [lastCoverage, setLastCoverage] = useState<{
     windowCount: number;
     admittedCount: number;
-    excluded: number;
   } | null>(null);
 
   // Watch orchestrator queue for messages completion to restore cap preference
@@ -1158,8 +1150,7 @@ export function MacOSMessagesImportSettings({
       const messagesImported = messagesItem.importedCount ?? 0;
       const wasForceReimport = lastForceReimportRef.current;
 
-      // BACKLOG-2749: state the COVERAGE this run was consented to, computed
-      // the way the founder settled it — window MINUS admitted coverage.
+      // BACKLOG-2749: state the COVERAGE this run was consented to.
       //
       // Only when the limit genuinely left something out: a run whose window
       // fits under the cap excluded nothing, and an "import everything" run
@@ -1175,7 +1166,6 @@ export function MacOSMessagesImportSettings({
           ? {
               windowCount: coverage.windowCount,
               admittedCount: coverage.admittedCount,
-              excluded: coverage.windowCount - coverage.admittedCount,
             }
           : null
       );
@@ -1572,27 +1562,23 @@ export function MacOSMessagesImportSettings({
           ) : (
             <>Import failed: {safeErrorMessage(lastResult.error)}</>
           )}
-          {/* BACKLOG-2749: what the store now COVERS, and what the limit left
-              out — window minus admitted coverage.
+          {/* BACKLOG-2749, founder live QA: what the store now COVERS, in one
+              short line.
 
-              The founder's live restore reported "659,619 messages excluded by
-              import limit". That was 708,400 − 48,781: the window minus what
-              that run downloaded, which counted his 14,042 already-present
-              messages as excluded. A delta import does not re-fetch what it
-              already has, so fetch volume and coverage are different numbers
-              and only coverage belongs in a sentence about exclusion. The true
-              figure was 645,576, and it is stated from the plan the run was
-              consented to rather than reconstructed afterwards. */}
-          {/* BACKLOG-2749, founder live QA: the tail is GONE — no "of [window]",
-              no "[excluded] older messages stay outside your import limit", no
-              "Adjust in Settings". What is left is one short line.
-
-              The two numbers on it measure different things and sat unlabelled
+              The two numbers here measure different things and sat unlabelled
               side by side, which read as a contradiction: the first is what
               THIS RUN imported, the second is what the store now HOLDS for the
-              period (a delta import does not re-fetch what it already had, so
-              the coverage is the larger of the two). Each is now named by the
-              clause it sits in. */}
+              period. A delta import does not re-fetch what it already had, so
+              the coverage is legitimately the larger. Each is now named by the
+              clause it sits in.
+
+              The exclusion sentence that used to follow is gone. It is worth
+              knowing why the orchestrator's version of it was wrong, because
+              its clause is still stripped from the warning channel on arrival
+              (`stripStaleCapClause`): it computed window MINUS
+              imported-this-run, which counts already-present messages as
+              excluded — 708,400 − 48,781 = 659,619 on the founder's restore,
+              where the honest figure was 645,576. */}
           {lastResult.success && !lastResult.cancelled && lastCoverage && (
             <span data-testid="import-coverage" className="text-gray-700">
               {" "}
