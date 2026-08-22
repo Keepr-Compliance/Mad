@@ -394,6 +394,45 @@ describe("BACKLOG-2772: every import entry point resolves its fetch once", () =>
     );
   });
 
+  describe("SHIPPED wire defaults for what the payload omits", () => {
+    /*
+     * The lesson from PR #2335's third commit: that PR shipped three defaults
+     * nobody had pinned, and flipping all of them left 161 tests across 8 suites
+     * green. This channel has one such default — the estimate's `selection` is
+     * optional, and omitting it must fall back to the STORED preference rather
+     * than to a hard-coded window. Every other test in this file passes a
+     * selection, so without this the fallback is unasserted.
+     */
+    it("the estimate with NO selection resolves the stored preference", async () => {
+      mockGetPreferences.mockResolvedValue({
+        messageImport: { filters: { lookbackMonths: null, maxMessages: 4321 } },
+      });
+
+      await handlers.get("messages:get-import-count")(event, USER);
+
+      const plan = estimatedPlan();
+      // Stored "All time" governs: unbounded, and the stored cap intact.
+      expect(plan.fetchStartISO).toBeNull();
+      expect(plan.effectiveCap).toBe(4321);
+    });
+
+    it("ANTI-VACUITY: an explicit selection still overrides the stored preference", async () => {
+      // Without this, the assertion above would be equally green for a handler
+      // that ignored the wire entirely and always read stored prefs.
+      mockGetPreferences.mockResolvedValue({
+        messageImport: { filters: { lookbackMonths: null, maxMessages: 4321 } },
+      });
+
+      await handlers.get("messages:get-import-count")(event, USER, { lookbackMonths: 3 });
+
+      const plan = estimatedPlan();
+      // The panel's unsaved 3-month choice bounds the window; the stored cap,
+      // which the selection says nothing about, survives the merge.
+      expect(plan.fetchStartISO).not.toBeNull();
+      expect(plan.effectiveCap).toBe(4321);
+    });
+  });
+
   describe("with no deals at all, every entry point honours the selection exactly", () => {
     it("no stretch, no protection, no overrides", async () => {
       const button = await runImportButton(false);
