@@ -50,6 +50,11 @@ import {
 import { ReviewNotesPanel } from "./transactionDetailsModule/components/ReviewNotesPanel";
 // Import Submit for Review components (BACKLOG-391)
 import { SubmitForReviewModal } from "./transactionDetailsModule/components/modals/SubmitForReviewModal";
+// BACKLOG-2791 / BACKLOG-2792: the Needs Review queue and the merged Complete flow.
+import { useReviewQueue } from "./transactionDetailsModule/hooks/useReviewQueue";
+import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
+import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
+import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
 import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitForReview";
 import type {
   AutoLinkResult,
@@ -295,6 +300,43 @@ function TransactionDetails({
   const [syncingCommunications, setSyncingCommunications] = useState<boolean>(false);
   const [syncingMessages, setSyncingMessages] = useState<boolean>(false);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
+
+  // ---- BACKLOG-2791 / BACKLOG-2792 -------------------------------------
+  // One review-state read feeds the badge, S2, P2 and the Complete gate.
+  const [showNeedsReview, setShowNeedsReview] = useState<boolean>(false);
+  const reviewQueue = useReviewQueue(transaction.id);
+  const openSubmitFlow = useCallback(async () => {
+    try {
+      const refreshed = await transactionService.getDetails(transaction.id);
+      if (refreshed.success && refreshed.data) setTransaction(refreshed.data);
+    } catch (err) {
+      logger.error("Failed to refresh transaction before submit:", err);
+    }
+    loadAttachmentCounts();
+    setShowSubmitModal(true);
+  }, [transaction.id]);
+  // T1 — the sync runs on EVERY open. The renderer owns this call because it is
+  // the one that advances the watermark, which is what makes `added` mean "new
+  // since you last looked" rather than "inserted by this particular call": the
+  // on-open provider fetch has usually queued the same items microseconds
+  // earlier under "background", and counting only our own inserts would report
+  // 0 for exactly the mail P2 exists to announce.
+  //
+  // Keyed on the transaction id ONLY, via a ref for the callback: this must fire
+  // once per open, and runSync's own identity changes whenever the queue does,
+  // so depending on it directly would re-sync in a loop.
+  const runSyncRef = useRef(reviewQueue.runSync);
+  runSyncRef.current = reviewQueue.runSync;
+  useEffect(() => {
+    void runSyncRef.current("open");
+  }, [transaction.id]);
+
+  const complete = useCompleteTransaction({
+    refreshReviewState: reviewQueue.refresh,
+    openExport: () => setShowExportModal(true),
+    openSubmit: () => { void openSubmitFlow(); },
+    openNeedsReview: () => setShowNeedsReview(true),
+  });
   // BACKLOG-1832: true while the background create-trigger sync is in flight for THIS transaction.
   // Drives the "fetching emails…" indicator on the empty emails tab.
   const [autoSyncRunning, setAutoSyncRunning] = useState<boolean>(false);
@@ -913,19 +955,9 @@ function TransactionDetails({
           onRestore={handleRestore}
           onShowExportModal={() => setShowExportModal(true)}
           onShowDeleteConfirm={() => setShowDeleteConfirm(true)}
-          onShowSubmitModal={async () => {
-            try {
-              const refreshed = await transactionService.getDetails(transaction.id);
-              if (refreshed.success && refreshed.data) {
-                setTransaction(refreshed.data);
-              }
-            } catch (err) {
-              logger.error("Failed to refresh transaction before submit:", err);
-            }
-            // Load attachment counts now (deferred from mount for perf)
-            loadAttachmentCounts();
-            setShowSubmitModal(true);
-          }}
+          reviewCount={reviewQueue.count}
+          onShowNeedsReview={() => setShowNeedsReview(true)}
+          onComplete={() => { void complete.requestComplete(); }}
         />
 
         {/* Tabs */}
@@ -1196,6 +1228,43 @@ function TransactionDetails({
         />
       )}
 
+      {/* BACKLOG-2791 S2 — the combined review screen. An OVERLAY, not an early
+          return, so the four tabs stay mounted underneath and keep their scroll
+          position, highlight state and loaded channels. */}
+      {showNeedsReview && (
+        <NeedsReviewScreen
+          items={reviewQueue.items}
+          isLoading={reviewQueue.isLoading}
+          onApprove={reviewQueue.approve}
+          onReject={reviewQueue.reject}
+          onClose={() => setShowNeedsReview(false)}
+        />
+      )}
+
+      {/* BACKLOG-2791 P2 — announces ONLY what this run newly added. Silent at
+          zero. "Later" just closes: the items are already persisted. */}
+      {reviewQueue.lastAdded > 0 && !showNeedsReview && (
+        <ReviewPromptDialog
+          variant="found"
+          count={reviewQueue.lastAdded}
+          onReview={() => {
+            reviewQueue.clearLastAdded();
+            setShowNeedsReview(true);
+          }}
+          onDismiss={reviewQueue.clearLastAdded}
+        />
+      )}
+
+      {/* BACKLOG-2792 P3 — the completeness gate. No bypass. */}
+      {complete.blockedCount !== null && (
+        <ReviewPromptDialog
+          variant="blocked"
+          count={complete.blockedCount}
+          onReview={complete.reviewFromGate}
+          onDismiss={complete.cancelGate}
+        />
+      )}
+
       {/* Submit for Review Modal (BACKLOG-391) */}
       {showSubmitModal && (
         <SubmitForReviewModal
@@ -1213,6 +1282,14 @@ function TransactionDetails({
             resetSubmit();
           }}
           onSubmit={handleSubmitForReview}
+          // BACKLOG-2792: S4's Export option. The prop already existed and had
+          // ZERO call sites; this is the founder's "the confirmation window
+          // includes an Export option that triggers the same S3 export flow an
+          // individual gets" — literally the same modal, not a parallel path.
+          onExportFirst={() => {
+            setShowSubmitModal(false);
+            setShowExportModal(true);
+          }}
         />
       )}
     </ResponsiveModal>

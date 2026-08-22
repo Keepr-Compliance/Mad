@@ -5,8 +5,8 @@
 //
 // Every one of these delegates to reviewStateService, which is the ONE source of
 // truth for review state (founder ruling 2026-08-22). No handler here queries
-// `pending_review_communications` or `communications.match_reason` directly, and
-// none may start to — reviewStateService.singleReadPath.test.ts fails if one does.
+// either backing store directly, and none may start to — the
+// singleReadPath-2791 suite fails the moment a second read path appears.
 
 import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
@@ -66,7 +66,7 @@ export function registerReviewQueueHandlers(): void {
       ): Promise<PendingSyncResult> => {
         const validated = requireTransactionId(transactionId);
         const safeReason: PendingSyncReason =
-          reason === "contact-change" ? "contact-change" : "open";
+          reason === "contact-change" || reason === "background" ? reason : "open";
         const result = await syncReviewQueueForTransaction({
           transactionId: validated,
           reason: safeReason,

@@ -133,7 +133,23 @@ export interface PendingSyncResult {
   outstanding: number;
 }
 
-export type PendingSyncReason = "open" | "contact-change";
+/**
+ * Which axis a sync scans, and — just as important — whether it OWNS the
+ * watermark.
+ *
+ *  "open"           the user opened the deal. Scans since the watermark, then
+ *                   ADVANCES it. The one caller allowed to advance, so that
+ *                   `added` can mean "new since you last looked".
+ *  "background"     the on-open provider fetch queueing what it just pulled in.
+ *                   Scans since the watermark but does NOT advance it, so the
+ *                   "open" sync that follows still counts these items as new
+ *                   and P2 does not under-report by exactly the freshly-fetched
+ *                   mail — which is the case P2 exists for.
+ *  "contact-change" a contact was added/edited/confirmed on the deal. Ignores
+ *                   the watermark entirely (the matching mail is OLDER than it)
+ *                   and does not advance it.
+ */
+export type PendingSyncReason = "open" | "background" | "contact-change";
 
 interface TxnRow {
   id: string;
@@ -315,9 +331,13 @@ function getIdentities(
     params,
   ).map((r) => r.email);
 
+  // phone_e164 is the NOT NULL normalized column on contact_phones (there is no
+  // `phone_number`); phone_normalized is the last-10-digits lookup key
+  // BACKLOG-1727 added. Both are collected because findCandidateThreadIds
+  // matches on a digit suffix and either form yields the same suffix.
   const phones = dbAll<{ phone: string }>(
-    `SELECT DISTINCT phone_number AS phone FROM contact_phones
-      WHERE contact_id ${idFilter} AND phone_number IS NOT NULL AND TRIM(phone_number) != ''`,
+    `SELECT DISTINCT phone_e164 AS phone FROM contact_phones
+      WHERE contact_id ${idFilter} AND phone_e164 IS NOT NULL AND TRIM(phone_e164) != ''`,
     params,
   ).map((r) => r.phone);
 
@@ -426,7 +446,9 @@ export async function syncReviewQueueForTransaction(opts: {
     closed_at: txn.closed_at,
   });
 
-  const since = reason === "open" ? txn.last_pending_scan_at : null;
+  // Both watermark-scoped reasons filter on it; only "open" advances it.
+  const previousWatermark = txn.last_pending_scan_at;
+  const since = reason === "contact-change" ? null : previousWatermark;
   const { emails, phones } = getIdentities(transactionId, contactIds);
 
   const rejectedEmailIds = new Set(getIgnoredEmailIdsForTransaction(transactionId));
@@ -463,10 +485,28 @@ export async function syncReviewQueueForTransaction(opts: {
     if ((res.changes ?? 0) > 0) added++;
   }
 
-  // Advance the watermark ONLY on the open path. The contact-change path scanned
-  // BEHIND the watermark for a subset of identities, so advancing it there would
-  // declare records scanned that never were.
+  // `added` is what the user has not been told about yet.
+  //
+  // For "open" that is every pending row queued SINCE THE LAST OPEN, not merely
+  // the rows this call inserted — because the provider fetch on the same open
+  // has usually queued them microseconds earlier under "background". Counting
+  // only our own inserts would report 0 for exactly the freshly-arrived mail P2
+  // exists to announce.
   if (reason === "open") {
+    const row = previousWatermark
+      ? dbGet<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM pending_review_communications WHERE transaction_id = ? AND found_at > ?",
+          [transactionId, previousWatermark],
+        )
+      : dbGet<{ n: number }>(
+          "SELECT COUNT(*) AS n FROM pending_review_communications WHERE transaction_id = ?",
+          [transactionId],
+        );
+    added = row?.n ?? added;
+
+    // Only the open path advances. A background or contact-change run scanned a
+    // narrower slice than the watermark claims to cover, so advancing there
+    // would declare records scanned that never were.
     dbRun("UPDATE transactions SET last_pending_scan_at = CURRENT_TIMESTAMP WHERE id = ?", [
       transactionId,
     ]);

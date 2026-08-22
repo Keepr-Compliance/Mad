@@ -235,7 +235,7 @@ export async function ensureTransactionEmailsSynced(params: {
       // (transactions.last_pending_scan_at), so records that already lost are
       // never re-examined — the BACKLOG-2620 convergence requirement.
       try {
-        await syncReviewQueueForTransaction({ transactionId, reason: "open" });
+        await syncReviewQueueForTransaction({ transactionId, reason: "background" });
       } catch (linkError) {
         logService.warn("[BACKLOG-2791] review-queue sync (covered path) failed", "TxnSyncTrigger", {
           transactionId,

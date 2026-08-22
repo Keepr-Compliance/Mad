@@ -1097,7 +1097,7 @@ class EmailSyncService {
     if (queueForReviewInsteadOfLinking) {
       const { syncReviewQueueForTransaction } = await import("./reviewStateService");
       try {
-        await syncReviewQueueForTransaction({ transactionId, reason: "open" });
+        await syncReviewQueueForTransaction({ transactionId, reason: "background" });
       } catch (error) {
         totalErrors++;
         logService.warn("[BACKLOG-2791] review-queue sync failed after fetch", "EmailSync", {
