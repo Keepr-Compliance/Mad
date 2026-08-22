@@ -47,7 +47,7 @@ module.exports = [
 
   // Base configuration for all files
   {
-    files: ['**/*.js', '**/*.jsx'],
+    files: ['**/*.js', '**/*.jsx', '**/*.mjs', '**/*.cjs'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
@@ -87,6 +87,9 @@ module.exports = [
         clearInterval: 'readonly',
         clearImmediate: 'readonly',
         Intl: 'readonly',
+        TextDecoder: 'readonly',
+        TextEncoder: 'readonly',
+        AbortController: 'readonly',
 
         // Jest globals
         describe: 'readonly',
@@ -334,6 +337,85 @@ module.exports = [
       react: {
         version: 'detect',
       },
+    },
+  },
+  // BACKLOG-2780 (absorbed into BACKLOG-2777) — the CI gate scripts are linted.
+  //
+  // Two holes made `scripts/**` unlintable before this block existed:
+  //   1. `npm run lint` was `eslint electron src` — scripts/ was never passed in.
+  //   2. `.mjs` matched NO `files:` block above (the base block listed only
+  //      `**/*.js|jsx`), so even `npx eslint scripts/ci/check-test-drift.mjs`
+  //      applied zero rules and always exited 0. A deliberately planted unused
+  //      variable passed clean — proof the green carried no information.
+  // (1) is fixed in package.json; (2) by `**/*.mjs`/`**/*.cjs` in the base block.
+  //
+  // This block then re-tunes three rules for the tree, because the defaults are
+  // wrong for CLI/CI scripts specifically — NOT to quiet findings:
+  //
+  //   • `no-console: 'off'` — these scripts have no other output channel. Their
+  //     console lines ARE the gate's verdict, printed for a human or for the CI
+  //     log. 130+ warnings here would bury the real findings.
+  //
+  //   • `eqeqeq` with `{ null: 'ignore' }` — every one of the 5 pre-existing
+  //     errors in this tree was the deliberate `x == null` idiom (one check for
+  //     both null and undefined) in QA measurement helpers, e.g.
+  //     `subject: (r.subject == null ? '' : String(r.subject))`. Expanding those
+  //     to `=== null || === undefined` would be a no-op reformat of files this
+  //     PR does not own. `!=`/`==` against anything OTHER than null is still an
+  //     error.
+  //
+  //   • `no-unused-vars` raised from 'warn' to 'ERROR'. This one is load-bearing
+  //     and must not be softened: `npm run lint` runs without `--max-warnings`,
+  //     so a warning exits 0. Leaving it at 'warn' would reproduce the exact bug
+  //     being fixed one layer up — coverage that reports and never fails. The
+  //     control for this item (plant an unused variable in a scripts/ci file →
+  //     lint must EXIT NON-ZERO) only works because of this line.
+  {
+    files: [
+      'scripts/**/*.js',
+      'scripts/**/*.jsx',
+      'scripts/**/*.mjs',
+      'scripts/**/*.cjs',
+      '.claude/scripts/**/*.js',
+      '.claude/scripts/**/*.mjs',
+      '.claude/scripts/**/*.cjs',
+    ],
+    rules: {
+      'no-console': 'off',
+      'eqeqeq': ['error', 'always', { null: 'ignore' }],
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    },
+  },
+
+  // TypeScript under scripts/**. `project: null` (untyped linting) is required:
+  // the root tsconfig.json includes `scripts/qa/harness/**` but NOT the rest of
+  // scripts/, so `scripts/qa/drive-pivot.ts` threw a hard parse error ("file was
+  // not found in any of the provided project(s)") the moment the tree was linted.
+  // Nothing configured here is a type-aware rule, so no check is lost — same
+  // reasoning as the packages/** block below.
+  {
+    files: ['scripts/**/*.ts', 'scripts/**/*.tsx', '.claude/scripts/**/*.ts'],
+    languageOptions: {
+      parser: tsparser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        sourceType: 'module',
+        project: null,
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint,
+    },
+    rules: {
+      'no-undef': 'off',
+      'no-unused-vars': 'off',
+      'no-console': 'off',
+      'eqeqeq': ['error', 'always', { null: 'ignore' }],
+      '@typescript-eslint/no-unused-vars': ['error', {
+        argsIgnorePattern: '^_',
+        varsIgnorePattern: '^_',
+      }],
+      '@typescript-eslint/no-explicit-any': 'warn',
     },
   },
 ];

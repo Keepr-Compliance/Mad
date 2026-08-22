@@ -1,12 +1,73 @@
-'use strict';
 /**
  * Unit tests for the QA-H6 SEARCH + ATTACH measurement helpers (BACKLOG-1853).
  *
  * Pure logic only — no Electron, no native module, no keychain, no DB. Covers
  * the query builders (replaying app SQL) + the pure derivations. Set-identity /
  * diff logic is H1's (diff.ts); this file covers only H6's DB-measure helpers.
+ *
+ * BACKLOG-2782: was `.test.js`, which tsc LOADED (allowJs) and never CHECKED
+ * (checkJs:false) — a type error here was invisible to `npm run type-check:tests`
+ * locally and in CI. The rename is the fix; assertions are untouched.
+ *
+ * The subject module is CommonJS `.js`, so it is pulled in with `require(...) as
+ * {...}` (the count-linked-by-source.test.ts pattern). Shapes are transcribed
+ * from ../search-attach-core.js (exports at :429). `normalizeQuery` is typed
+ * null-tolerant because the implementation guards it (`q === null || q === undefined`)
+ * and these tests assert that.
  */
-const core = require('../search-attach-core');
+type EmailRow = {
+  id?: string;
+  thread_id?: string | null;
+  subject?: string;
+  sent_at?: string;
+  message_id_header?: string | null;
+};
+type Built = { sql: string; params: string[] };
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const core = require('../search-attach-core') as {
+  normalizeQuery: (q: string | null | undefined) => string;
+  likeParam: (term: string) => string;
+  normalizeSubjectFamily: (subject: string) => string;
+  buildLocalSearchQuery: (opts: {
+    query: string;
+    userId?: string | null;
+    normalize?: boolean;
+  }) => Built;
+  buildSubjectSearchQuery: (opts: {
+    term: string;
+    userId?: string | null;
+    normalize?: boolean;
+  }) => Built;
+  buildParticipantSearchQuery: (opts: {
+    addresses: string[];
+    role?: string | null;
+    roles?: string[] | null;
+    userId?: string | null;
+  }) => Built;
+  buildThreadGroupingQuery: (opts: { userId?: string | null }) => Built;
+  buildThreadMembersQuery: (opts: { threadId: string; userId?: string | null }) => Built;
+  buildTransactionLinksQuery: (opts: { transactionId: string }) => Built;
+  buildGhostScanQuery: (opts: { userId?: string | null }) => Built;
+  groupByThread: (rows: EmailRow[]) => Map<string, EmailRow[]>;
+  expandLinkedEmailIds: (
+    commRows: Array<{ email_id?: string | null; thread_id?: string | null }>,
+    emailRows: EmailRow[],
+  ) => Set<string>;
+  threadAttachDelta: (
+    threadId: string,
+    emailRows: EmailRow[],
+    alreadyLinkedIds: Iterable<string>,
+  ) => { members: string[]; delta: number; newlyLinked: string[] };
+  singleAttachDelta: (
+    emailId: string,
+    alreadyLinkedIds: Iterable<string>,
+  ) => { delta: number };
+  findResurrections: (
+    emailRows: EmailRow[],
+    tombstoneRows: Array<{ message_id_header?: string | null }>,
+  ) => EmailRow[];
+};
 
 describe('normalizeQuery (whitespace-prefix regression, BACKLOG-1550/1841)', () => {
   test('trims leading/trailing and collapses internal whitespace', () => {
@@ -131,8 +192,8 @@ describe('groupByThread', () => {
     ];
     const g = core.groupByThread(rows);
     expect(g.size).toBe(2);
-    expect(g.get('T1').map((r) => r.id)).toEqual(['1', '2']);
-    expect(g.get('T2').map((r) => r.id)).toEqual(['3']);
+    expect(g.get('T1')!.map((r) => r.id)).toEqual(['1', '2']);
+    expect(g.get('T2')!.map((r) => r.id)).toEqual(['3']);
   });
 });
 
@@ -196,3 +257,5 @@ describe('findResurrections (ghost / stale-search, BACKLOG-1764)', () => {
     expect(core.findResurrections(emails, [])).toHaveLength(0);
   });
 });
+
+export {};

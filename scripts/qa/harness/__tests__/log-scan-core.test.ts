@@ -1,4 +1,3 @@
-'use strict';
 /**
  * Unit tests for the QA-H7 LOG-SCAN core (BACKLOG-1854). Pure logic — no DB, no
  * Electron. Covers the telemetry marker detector (BACKLOG-1843) and the
@@ -7,17 +6,49 @@
  * The redaction scanner MUST demonstrate a true positive (non-zero on a log with
  * a synthetic leak) AND zero on a clean log — a scanner that cannot fire is
  * worse than none (SR review requirement 6).
+ *
+ * BACKLOG-2782: was `.test.js`, which tsc LOADED (allowJs) and never CHECKED
+ * (checkJs:false) — a type error here was invisible to `npm run type-check:tests`
+ * locally and in CI. The rename is the fix; assertions are untouched.
+ *
+ * The subject module is CommonJS `.js`, so it is pulled in with `require(...) as
+ * {...}` (the count-linked-by-source.test.ts pattern). Shapes are transcribed
+ * from ../log-scan-core.js (exports at :167). `logText` is typed wider than that
+ * file's `@param {string}` because both functions open with an explicit
+ * null/undefined guard (`logText === null || logText === undefined ? '' : logText`,
+ * :68) and these tests assert that null/undefined do not throw.
  */
-const fs = require('fs');
-const path = require('path');
+import * as fs from 'fs';
+import * as path from 'path';
+
+type TelemetryMarker = { id: string; label: string; present: boolean; count: number };
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
 const {
   scanTelemetry,
   scanRedaction,
   maskEmail,
-} = require('../log-scan-core');
+} = require('../log-scan-core') as {
+  scanTelemetry: (logText: string | null | undefined) => {
+    markers: TelemetryMarker[];
+    presentCount: number;
+    totalMarkers: number;
+    allPresent: boolean;
+  };
+  scanRedaction: (
+    logText: string | null | undefined,
+    opts?: { sampleLimit?: number; allowlist?: string[] },
+  ) => {
+    leakCount: number;
+    uniqueLeakCount: number;
+    maskedSamples: string[];
+    lineNumbers: number[];
+  };
+  maskEmail: (addr: string) => string;
+};
 
 const FIX = path.join(__dirname, 'fixtures');
-const readFix = (name) => fs.readFileSync(path.join(FIX, name), 'utf8');
+const readFix = (name: string): string => fs.readFileSync(path.join(FIX, name), 'utf8');
 // The scenario-referenced telemetry fixture lives beside the scenario.
 const SCENARIO_TELEMETRY = path.join(
   __dirname, '..', '..', '..', '..', 'docs', 'qa', 'scenarios', 'fixtures', 'main-log-with-telemetry.sample.txt',
@@ -29,7 +60,7 @@ describe('scanTelemetry (BACKLOG-1843)', () => {
     const res = scanTelemetry(text);
     expect(res.allPresent).toBe(true);
     expect(res.presentCount).toBe(3);
-    const byId = Object.fromEntries(res.markers.map((m) => [m.id, m]));
+    const byId = Object.fromEntries(res.markers.map((m): [string, TelemetryMarker] => [m.id, m]));
     expect(byId['cache-hitmiss'].present).toBe(true);
     expect(byId['cache-hitmiss'].count).toBe(1);
     expect(byId['fetch'].present).toBe(true);
@@ -48,12 +79,12 @@ describe('scanTelemetry (BACKLOG-1843)', () => {
     const line =
       '[CACHE-HITMISS] transaction=abc reason=auto fetched=190 hits=190 misses=0 hitRate=1.000';
     const res = scanTelemetry(line);
-    expect(res.markers.find((m) => m.id === 'cache-hitmiss').present).toBe(true);
+    expect(res.markers.find((m) => m.id === 'cache-hitmiss')!.present).toBe(true);
   });
 
   test('a malformed CACHE-HITMISS (missing fields) does NOT match', () => {
     const res = scanTelemetry('[CACHE-HITMISS] transaction=abc');
-    expect(res.markers.find((m) => m.id === 'cache-hitmiss').present).toBe(false);
+    expect(res.markers.find((m) => m.id === 'cache-hitmiss')!.present).toBe(false);
   });
 
   test('empty/null input → all markers absent, no throw', () => {
