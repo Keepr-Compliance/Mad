@@ -34,15 +34,23 @@ export function ReviewPromptDialog({
   onDismiss,
 }: ReviewPromptDialogProps): React.ReactElement {
   const isBlocked = variant === "blocked";
+  // BACKLOG-2791: -1 means the queue could not be READ. The gate blocks on that
+  // rather than assuming empty, so the message must not claim a count it does
+  // not have.
+  const unreadable = isBlocked && count < 0;
   const plural = count === 1 ? "communication" : "communications";
 
-  const title = isBlocked
-    ? "Review needed before completing"
-    : `${count} new ${plural} found`;
+  const title = unreadable
+    ? "Couldn't check Needs Review"
+    : isBlocked
+      ? "Review needed before completing"
+      : `${count} new ${plural} found`;
 
-  const body = isBlocked
-    ? `You have ${count} ${plural} that need to be reviewed before completing the transaction.`
-    : `They've been added to Needs Review. Nothing is linked to this transaction until you approve it.`;
+  const body = unreadable
+    ? "The transaction can't be completed until the review queue can be read. Open Needs Review to try again."
+    : isBlocked
+      ? `You have ${count} ${plural} that need to be reviewed before completing the transaction.`
+      : `They've been added to Needs Review. Nothing is linked to this transaction until you approve it.`;
 
   return (
     <div

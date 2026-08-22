@@ -217,6 +217,11 @@ export const TABLE_FIELDS = {
     "last_review_notes",
     // BACKLOG-1364: Address filter toggle
     "skip_address_filter",
+    // BACKLOG-2791: the Needs-Review sync's delta watermark. Omitting it here is
+    // not cosmetic — this whitelist is the mechanism that SILENTLY DISCARDS a
+    // write to an unlisted column, so the watermark would never advance and the
+    // on-open sweep would re-examine the whole window forever.
+    "last_pending_scan_at",
     "metadata",
     "created_at",
     "updated_at",

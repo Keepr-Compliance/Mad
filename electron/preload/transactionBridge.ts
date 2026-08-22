@@ -843,4 +843,28 @@ export const transactionBridge = {
   /** Reject items — durable; a later sync cannot resurrect them. */
   rejectReviewItems: (itemIds: string[]) =>
     ipcRenderer.invoke("review:reject", itemIds),
+
+  /**
+   * BACKLOG-2791: fires whenever ANY trigger changes the queue — the on-open
+   * sweep, the provider fetch, a contact saved on the deal, a contact edited in
+   * Clients & Contacts, or deal creation.
+   *
+   * This is what lets a main-process sync reach the screen. Without it a
+   * contact-save queued items in the database and the UI showed nothing until
+   * the next open.
+   */
+  onReviewQueueChanged: (
+    callback: (data: {
+      transactionId: string;
+      added: number;
+      outstanding: number;
+      reason: "open" | "background" | "contact-change";
+    }) => void,
+  ) => {
+    const handler = (_event: unknown, data: Parameters<typeof callback>[0]) => callback(data);
+    ipcRenderer.on("review:queue-changed", handler);
+    return () => {
+      ipcRenderer.removeListener("review:queue-changed", handler);
+    };
+  },
 };

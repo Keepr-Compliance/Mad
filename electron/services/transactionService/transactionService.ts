@@ -1322,12 +1322,24 @@ class TransactionService {
       // this residual path used to auto-link, inside the very function the
       // redirect was applied to, so the redirect could be bypassed by whatever
       // made getTransactionById return null. It queues like every other branch.
-      const { syncReviewQueueForTransaction } = await import("../reviewStateService");
-      const queued = await syncReviewQueueForTransaction({
-        transactionId,
-        reason: "contact-change",
-        contactIds: [contactId],
-      });
+      // Discovery failing must never fail the ASSIGNMENT the user asked for —
+      // the contact is already assigned by this point, and the next open sweeps
+      // again anyway. Warn-log and return a well-formed result.
+      let queuedForReview = 0;
+      try {
+        const { syncReviewQueueForTransaction } = await import("../reviewStateService");
+        const queued = await syncReviewQueueForTransaction({
+          transactionId,
+          reason: "contact-change",
+          contactIds: [contactId],
+        });
+        queuedForReview = queued.added;
+      } catch (error) {
+        await logService.warn(
+          `[BACKLOG-2791] review-queue sync failed after contact assignment: ${error instanceof Error ? error.message : "Unknown"}`,
+          "TransactionService.assignContactToTransaction",
+        );
+      }
 
       return {
         success: true,
@@ -1336,7 +1348,7 @@ class TransactionService {
           messagesLinked: 0,
           alreadyLinked: 0,
           errors: 0,
-          queuedForReview: queued.added,
+          queuedForReview,
         },
       };
     } catch (error) {

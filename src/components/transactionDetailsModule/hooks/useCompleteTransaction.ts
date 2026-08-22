@@ -45,7 +45,11 @@ export interface UseCompleteTransactionArgs {
 }
 
 export interface UseCompleteTransactionResult {
-  /** Non-null while P3 is up; carries the count the gate actually read. */
+  /**
+   * Non-null while P3 is up; carries the count the gate actually read.
+   * `-1` means the queue could not be READ — the gate blocks rather than
+   * assuming empty.
+   */
   blockedCount: number | null;
   requestComplete: () => Promise<void>;
   /** P3 "Review" — straight to S2. */
@@ -74,7 +78,19 @@ export function useCompleteTransaction({
 
   const requestComplete = useCallback(async () => {
     // Re-read at click time — see note 1 above.
-    const state = await refreshReviewState();
+    //
+    // A THROW here means "cannot confirm the queue is empty", which is not the
+    // same as "the queue is empty". Completing on an unverified queue is the
+    // failure this gate exists to prevent, so an unreadable queue blocks. The
+    // hook re-throws only on a COLD failure (nothing ever loaded); once a good
+    // read exists it falls back to that rather than nagging.
+    let state: ReviewStateResult;
+    try {
+      state = await refreshReviewState();
+    } catch {
+      setBlockedCount(-1);
+      return;
+    }
     if (state.count > 0) {
       setBlockedCount(state.count);
       return;

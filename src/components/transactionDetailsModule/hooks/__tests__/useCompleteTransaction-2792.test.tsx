@@ -136,6 +136,36 @@ describe("CONTROL 2 — the completeness gate", () => {
     expect(openExport).not.toHaveBeenCalled();
     expect(openSubmit).not.toHaveBeenCalled();
   });
+
+  it("an UNREADABLE queue blocks completion — 'cannot confirm empty' is not 'empty'", async () => {
+    // The hook re-throws on a COLD read failure (nothing ever loaded). Before
+    // this, the gate received the initial empty state and completion PROCEEDED
+    // while the database queue was full — the gate failing open on exactly the
+    // path it exists to guard.
+    setLicense(false, null);
+    const openExport = jest.fn();
+    const openSubmit = jest.fn();
+    const refreshReviewState = jest.fn().mockRejectedValue(new Error("IPC down"));
+
+    const hook = renderHook(() =>
+      useCompleteTransaction({
+        refreshReviewState,
+        openExport,
+        openSubmit,
+        openNeedsReview: jest.fn(),
+      }),
+    );
+
+    await act(async () => {
+      await hook.result.current.requestComplete();
+    });
+
+    expect(openExport).not.toHaveBeenCalled();
+    expect(openSubmit).not.toHaveBeenCalled();
+    // -1 is the "unreadable" sentinel; the dialog renders a distinct message
+    // rather than claiming a count it does not have.
+    expect(hook.result.current.blockedCount).toBe(-1);
+  });
 });
 
 describe("CONTROL 3 — the license branch, both ways", () => {

@@ -979,11 +979,19 @@ export function registerTransactionCrudHandlers(
       // inputs the matchers read, so discovery runs IMMEDIATELY — no ask-step,
       // no navigation. It QUEUES for review rather than linking.
       //
-      // AWAITED, unlike the auto-link it replaces. BACKLOG-820 removed that
-      // await because a per-contact PROVIDER FETCH hung the UI for 8+ seconds;
-      // this is a purely local, identity-scoped, indexed sweep, and awaiting it
-      // is what gives the save a real completion signal. The provider fetch
-      // below stays fire-and-forget, so the 820 regression cannot return.
+      // AWAITED, unlike the auto-link it replaces — for ONE deal, the one the
+      // user is looking at. BACKLOG-820 removed that await because a per-contact
+      // PROVIDER FETCH hung the UI for 8+ seconds; this is local only.
+      //
+      // MEASURED, because the first version of this comment claimed "indexed"
+      // without checking and was half wrong: the email axis is now two indexed
+      // searches (it was a FULL `emails` scan until BACKLOG-2791 restructured
+      // the query), and the text axis is `SEARCH m USING INDEX
+      // idx_messages_user_sent` — the deal's own date window, with the phone
+      // LIKE as a residual filter, NOT a full `messages` scan. One deal, one
+      // window: bounded enough to await. The multi-deal loop in contacts:update
+      // is NOT awaited for exactly this reason. The provider fetch below stays
+      // fire-and-forget, so the 820 regression cannot return.
       let review: { added: number; outstanding: number } | undefined;
       if (addOperations.length > 0) {
         try {

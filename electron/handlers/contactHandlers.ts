@@ -2698,28 +2698,45 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // Scoped, not global: one indexed sweep per affected deal, for one
         // contact. Failures are logged and swallowed — a discovery miss must
         // never fail the contact save the user actually asked for.
-        try {
-          const { syncReviewQueueForTransaction } = await import(
-            "../services/reviewStateService"
-          );
-          const affected = dbAll<{ transaction_id: string }>(
-            "SELECT DISTINCT transaction_id FROM transaction_contacts WHERE contact_id = ?",
-            [validatedContactId],
-          );
-          for (const row of affected) {
-            await syncReviewQueueForTransaction({
-              transactionId: row.transaction_id,
-              reason: "contact-change",
-              contactIds: [validatedContactId],
-            });
+        // NOT AWAITED — deliberately, and this was changed after measuring.
+        //
+        // This loops EVERY deal the contact is on. Each sweep is bounded (the
+        // email axis is two indexed searches after BACKLOG-2791's restructure;
+        // the text axis is `SEARCH m USING INDEX idx_messages_user_sent`, i.e.
+        // the deal's own window, with the phone LIKE as a residual filter rather
+        // than the access path). Bounded is not free: a contact on N deals costs
+        // N window sweeps, and putting that on the save round-trip is how
+        // BACKLOG-820's 8-second hang happened in the first place.
+        //
+        // The renderer no longer needs the await: syncReviewQueueForTransaction
+        // broadcasts `review:queue-changed` when each sweep lands, so the badge
+        // and the popup update as results arrive instead of the save blocking on
+        // all of them. Failures warn-log; a discovery miss must never fail the
+        // contact save the user actually asked for.
+        void (async () => {
+          try {
+            const { syncReviewQueueForTransaction } = await import(
+              "../services/reviewStateService"
+            );
+            const affected = dbAll<{ transaction_id: string }>(
+              "SELECT DISTINCT transaction_id FROM transaction_contacts WHERE contact_id = ?",
+              [validatedContactId],
+            );
+            for (const row of affected) {
+              await syncReviewQueueForTransaction({
+                transactionId: row.transaction_id,
+                reason: "contact-change",
+                contactIds: [validatedContactId],
+              });
+            }
+          } catch (syncError) {
+            logService.warn(
+              "[BACKLOG-2791] review-queue sync after contact update failed",
+              "Contacts",
+              { error: syncError instanceof Error ? syncError.message : "Unknown" },
+            );
           }
-        } catch (syncError) {
-          logService.warn(
-            "[BACKLOG-2791] review-queue sync after contact update failed",
-            "Contacts",
-            { error: syncError instanceof Error ? syncError.message : "Unknown" },
-          );
-        }
+        })();
 
         return {
           success: true,

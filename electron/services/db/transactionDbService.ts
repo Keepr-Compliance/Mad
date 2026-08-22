@@ -414,6 +414,11 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
     update: "writable",
     why: "Per-transaction auto-link toggle (BACKLOG-1364), flipped from the UI after creation. Schema DEFAULT 0 is the correct starting value.",
   },
+  last_pending_scan_at: {
+    insert: "db-default",
+    update: "writable",
+    why: "BACKLOG-2791 Needs-Review delta watermark. NULL on a new deal is correct — the first open then sweeps the whole window once and sets it. Written only by reviewStateService's open sweep; if this were not 'writable' the whitelist would SILENTLY DISCARD the update and every open would re-examine the full window forever (the BACKLOG-2620 shape).",
+  },
   metadata: {
     insert: "db-default",
     update: "db-default",

@@ -155,6 +155,15 @@ describe("BACKLOG-2791 CONTROL 5 — every link writer is enumerated and classif
     );
   });
 
+  it("the queue-changed broadcast is wired end to end", () => {
+    // The renderer subscribes with optional chaining so a partial `window.api`
+    // mock cannot break the details screen. That tolerance would otherwise let a
+    // real removal pass unnoticed, so the three ends are pinned structurally.
+    expect(read("electron/services/reviewStateService.ts")).toContain('"review:queue-changed"');
+    expect(read("electron/preload/transactionBridge.ts")).toContain("onReviewQueueChanged");
+    expect(read("electron/types/ipc/window-api-transactions.ts")).toContain("onReviewQueueChanged");
+  });
+
   it("the global writers still auto-link — the founder's scope decision", () => {
     for (const f of ["electron/handlers/syncHandlers.ts", "electron/handlers/messageImportHandlers.ts"]) {
       const src = read(f);

@@ -59,6 +59,15 @@ export interface ReviewSyncResult {
   outstanding: number;
 }
 
+export interface ReviewQueueChangedDto {
+  transactionId: string;
+  /** What THAT run newly queued — drives the popup, silent at 0. */
+  added: number;
+  /** Outstanding total — drives the badge. */
+  outstanding: number;
+  reason: ReviewSyncReason;
+}
+
 /**
  * A party tombstoned off a transaction — BACKLOG-2367.
  *
@@ -935,4 +944,13 @@ export interface WindowApiTransactions {
 
   /** Reject — durable; the suppression row stops a later sync resurrecting it. */
   rejectReviewItems: (itemIds: string[]) => Promise<{ rejected: number }>;
+
+  /**
+   * BACKLOG-2791: fires whenever any trigger changes the queue, so a
+   * MAIN-PROCESS sync (contact save, contact edit elsewhere, deal creation)
+   * reaches the screen instead of waiting for the next open.
+   */
+  onReviewQueueChanged: (
+    callback: (data: ReviewQueueChangedDto) => void,
+  ) => () => void;
 }

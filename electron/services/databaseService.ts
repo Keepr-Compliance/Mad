@@ -3647,7 +3647,7 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
       //
       // WHY IT IS 64 NOW. validateNoVersionGaps (below) throws
       // `Migration sequence error: Missing migration version 64` on EVERY
-      // database init when the chain runs 63 -> 65. So a branch holding 65
+      // database init when the chain runs 63 -> 65, so a branch holding 65
       // without 64 present will not boot and cannot run its own migration
       // tests. Measured, not assumed. PR #2346 (BACKLOG-2630 phone re-key)
       // holds 64 for exactly the same reason.
@@ -3657,17 +3657,33 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
       // never before, or this branch stops booting — renumber to 65 and re-run
       // the migration suites against the then-valid 63 -> 64 -> 65 chain.
       //
-      // EXACT RENUMBER CHECKLIST (verified by grep at 99c9719; the earlier
-      // "three literals" note in this comment undercounted):
-      //   FUNCTIONAL
-      //     1. `version: 64` immediately below                     -> 65
-      //     2. test: `all.filter((m) => m.version <= 64)`          -> 65
-      //     3. test: both `VALUES (1, 63)` seeds                   -> 64
-      //     4. test: both `expect(schemaVersion(...)).toBe(64)`    -> 65
-      //   COSMETIC (keep consistent so the next reader is not misled)
-      //     5. the `[migration v64]` log string below
-      //     6. schema.sql: "migration v64" + "Migration 64" comments
-      //     7. rename databaseService.migration-v64.test.ts -> -v65
+      // RENUMBER CHECKLIST — now SHORT, because the large half of it was
+      // deleted rather than written down.
+      //
+      //   The SR found that the first checklist omitted head-version assertions
+      //   in NINE other test files. Adding a 64th migration turned 7 suites and
+      //   33 tests red, including onDiskUpgrade and migrationChainRehearsal —
+      //   the only two that upgrade a REAL shipped database file, i.e. exactly
+      //   the checks that would prove this migration is safe. A checklist that
+      //   long gets followed under merge pressure and half-applied, so those
+      //   assertions now DERIVE the head via
+      //   `__tests__/helpers/chainHead.ts#chainHeadVersion()` and need no edit
+      //   at all. Mutating that helper to head-1 turns 31 tests red, so the
+      //   derivation is load-bearing, not decorative.
+      //
+      //   What genuinely remains:
+      //     FUNCTIONAL
+      //       1. `version: 64` immediately below                       -> 65
+      //       2. migration-v64.test.ts: `m.version <= 64` clip          -> 65
+      //       3. migration-v64.test.ts: both `VALUES (1, 63)` seeds     -> 64
+      //       4. migration-v64.test.ts: both `toBe(64)` version checks  -> 65
+      //       5. databaseService.migration.test.ts:571 — the ENUMERATED
+      //          plan entry `{ version: 63, ... }` gains a sibling for the
+      //          renumbered version (the counts beside it are derived).
+      //     COSMETIC (keep consistent so the next reader is not misled)
+      //       6. the `[migration v64]` log string below
+      //       7. schema.sql's "migration v64" / "Migration 64" comments
+      //       8. rename databaseService.migration-v64.test.ts -> -v65
       //
       // The two migrations touch DISJOINT objects (this one: a new table +
       // transactions.last_pending_scan_at; #2346: phone lookup keys), so once

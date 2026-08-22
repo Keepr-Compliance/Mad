@@ -67,6 +67,7 @@
  */
 
 import crypto from "crypto";
+import { BrowserWindow } from "electron";
 import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
 import {
   getIgnoredEmailIdsForTransaction,
@@ -367,31 +368,46 @@ function findCandidateEmailIds(
 ): string[] {
   if (addresses.length === 0) return [];
   const placeholders = addresses.map(() => "?").join(", ");
+  // SHAPE CHOSEN BY MEASUREMENT, not by preference. The join-and-filter form
+  // this replaces produced:
+  //     SCAN e USING INDEX sqlite_autoindex_emails_1
+  // i.e. a FULL SCAN of `emails` on every sweep — the planner drove from `e` and
+  // probed participants by email_id, never touching the address index. Driving
+  // the address match as a subquery and keeping the window predicate on `e`
+  // gives (EXPLAIN QUERY PLAN, real schema.sql):
+  //     SEARCH e  USING INDEX idx_emails_user_sent (user_id=? AND sent_at>? AND sent_at<?)
+  //     SEARCH ep USING INDEX idx_email_participants_email_address (email_address=?)
+  //     SEARCH c  USING COVERING INDEX idx_comm_email_txn
+  // Both sides indexed, and the scan is bounded by the deal's own window. The
+  // remaining `SCAN p` is the pending queue itself, which is bounded by how much
+  // the user has left to review.
   const sql = `
     SELECT DISTINCT e.id
-      FROM email_participants ep
-      JOIN emails e ON e.id = ep.email_id
-      LEFT JOIN communications c
-        ON c.email_id = e.id AND c.transaction_id = ?
-      LEFT JOIN pending_review_communications p
-        ON p.email_id = e.id AND p.transaction_id = ?
-     WHERE ep.email_address IN (${placeholders})
-       AND e.user_id = ?
-       AND c.id IS NULL
-       AND p.id IS NULL
+      FROM emails e
+     WHERE e.user_id = ?
        AND e.sent_at >= ?
        AND e.sent_at <= ?
        ${since ? "AND e.created_at > ?" : ""}
+       AND e.id IN (
+         SELECT ep.email_id FROM email_participants ep
+          WHERE ep.email_address IN (${placeholders})
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM communications c
+          WHERE c.email_id = e.id AND c.transaction_id = ?
+       )
+       AND NOT EXISTS (
+         SELECT 1 FROM pending_review_communications p
+          WHERE p.email_id = e.id AND p.transaction_id = ?
+       )
   `;
   const params: (string | number)[] = [
-    txn.id,
-    txn.id,
-    ...addresses,
     txn.user_id,
     range.start.toISOString(),
     range.end.toISOString(),
   ];
   if (since) params.push(since);
+  params.push(...addresses, txn.id, txn.id);
   return dbAll<{ id: string }>(sql, params).map((r) => r.id);
 }
 
@@ -434,6 +450,34 @@ function findCandidateThreadIds(
   if (since) params.push(since);
   params.push(txn.id, txn.id);
   return dbAll<{ thread_id: string }>(sql, params).map((r) => r.thread_id);
+}
+
+export interface ReviewQueueChangedEvent {
+  transactionId: string;
+  /** What THIS run newly queued — drives the popup, silent at 0. */
+  added: number;
+  /** Outstanding total — drives the badge. */
+  outstanding: number;
+  reason: PendingSyncReason;
+}
+
+/**
+ * Broadcast to every window, matching messagesBackgroundImportSignal's pattern.
+ *
+ * Never throws: a signal that cannot be delivered must not take down the sweep
+ * it describes. The queue is already persisted at this point, so the worst case
+ * is the old behaviour — the user sees it on the next open.
+ */
+function broadcastReviewQueueChanged(payload: ReviewQueueChangedEvent): void {
+  try {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed() && win.webContents) {
+        win.webContents.send("review:queue-changed", payload);
+      }
+    }
+  } catch {
+    /* delivery is best-effort; the queue is already durable */
+  }
 }
 
 /**
@@ -521,6 +565,23 @@ export async function syncReviewQueueForTransaction(opts: {
       transactionId,
     ]);
   }
+
+  // Tell the renderer. EVERY trigger reports through this one call — the on-open
+  // sweep, the provider-fetch sweep, a contact saved on the deal, a contact
+  // edited in Clients & Contacts, and deal creation.
+  //
+  // Without it the main-process triggers were invisible: correcting a party's
+  // email queued three communications in the database and the screen showed
+  // nothing — no popup, and a badge still displaying the old total — until the
+  // deal was next opened. The founder's refinement 2 is explicit that the popup
+  // count shows "every time a transaction is opened OR a change was saved to
+  // contacts", so a silent T2 is not a missing nicety, it is half the feature.
+  broadcastReviewQueueChanged({
+    transactionId,
+    added,
+    outstanding: countReviewItems(transactionId),
+    reason,
+  });
 
   await logService.debug(`Review sync (${reason}) added ${added} item(s)`, MODULE, {
     transactionId,
