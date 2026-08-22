@@ -45,7 +45,8 @@
 #   PREPUSH_JEST_ROUTE=auto|node|electron   force the root-jest runner.
 #   PREPUSH_ELECTRON_BIN=<path>             override electron resolution.
 #   PREPUSH_DRYRUN=1            echo remote / commit count / base / route /
-#                               selected suites, then exit 0 before any runner.
+#                               selected suites and the test-type-check decision,
+#                               then exit 0 before any runner.
 #   PREPUSH_SKIP_PII=1          skip the PII scan. Announces itself loudly.
 #                               ONLY for untracked scratch files unrelated to
 #                               what is being pushed. Never to get past a real
@@ -272,6 +273,49 @@ if [ -z "$changed_files" ]; then
   exit 0
 fi
 
+# --- Which pushed files sit in the type-check hole? (BACKLOG-2736) -----------
+# `npm run type-check` is `tsc --noEmit` against tsconfig.json, whose `exclude`
+# lists **/*.test.js|jsx|ts|tsx. A test file that does not compile is therefore
+# INVISIBLE to it -- an engineer reported "npm run type-check clean" on a branch
+# that did not build, because the error was in a test. tsconfig.test.json
+# re-includes those files and CI runs it as its own step (ci.yml, "TypeScript
+# type check (test suite)", BACKLOG-2414). Nothing ran it locally. That gap is
+# this hook's, not tsc's.
+#
+# TWO conditions, and each answers a different question:
+#   *.test.*  -- is the file IN the hole? (tsconfig.json excludes it, so no other
+#                local gate reads it.)
+#   the tree  -- can `tsc -p tsconfig.test.json` SEE it? That config includes
+#                electron/**, src/**, tests/**, scripts/qa/harness/** and nothing
+#                else. A changed broker-portal / admin-portal / android-companion
+#                / e2e test is not in the command's file set, so running the
+#                command would let a green line imply coverage it never had.
+#                Those are NAMED as uncovered instead of silently swept in.
+#                IF tsconfig.test.json's `include` LIST CHANGES, CHANGE THIS ONE.
+#
+# Derived from `changed_files` (the paths in the pushed commits) and deliberately
+# NOT from what exists on disk: a commit that DELETES a test file still changes
+# what the suite compiles, and an `[ -f ]` guard would skip exactly that push.
+typecheck_tests=""
+typecheck_tests_uncovered=""
+for file in $changed_files; do
+  case "$file" in
+    *.snap) continue ;;   # snapshots are data; tsc never reads them
+    *.test.*) ;;
+    *) continue ;;
+  esac
+  case "$file" in
+    electron/*|src/*|tests/*|scripts/qa/harness/*)
+      typecheck_tests="$typecheck_tests $file"
+      ;;
+    *)
+      typecheck_tests_uncovered="$typecheck_tests_uncovered $file"
+      ;;
+  esac
+done
+typecheck_tests=$(echo "$typecheck_tests" | sed 's/^ *//;s/ *$//')
+typecheck_tests_uncovered=$(echo "$typecheck_tests_uncovered" | sed 's/^ *//;s/ *$//')
+
 # Find related test files for changed .ts/.tsx source files
 test_files=""
 for file in $changed_files; do
@@ -383,10 +427,67 @@ else
     echo "  - $f"
   done
 fi
+if [ -n "$typecheck_tests" ]; then
+  echo "[pre-push] test type-check: RUNNING npm run type-check:tests for:"
+  for f in $typecheck_tests; do
+    echo "  - $f"
+  done
+else
+  echo "[pre-push] test type-check: SKIPPED (the pushed commits change no *.test.* file under electron/ src/ tests/ scripts/qa/harness/)"
+fi
+if [ -n "$typecheck_tests_uncovered" ]; then
+  echo "[pre-push] test type-check: NOT covering these — outside tsconfig.test.json's include list:"
+  for f in $typecheck_tests_uncovered; do
+    echo "  - $f"
+  done
+fi
 
 if [ -n "$PREPUSH_DRYRUN" ]; then
   echo "[pre-push] PREPUSH_DRYRUN=1 — decisions reported above, no tests executed."
   exit 0
+fi
+
+# --- Test-suite type check (BACKLOG-2736) ------------------------------------
+# The SAME npm script CI runs in its "TypeScript type check (test suite)" step,
+# with the SAME NODE_OPTIONS -- that step OOM'd (exit 134) at the runner's
+# derived heap limit on PR #2212 and was pinned to 4096 MB (BACKLOG-2505,
+# ci.yml). A hook that ran a nearby-but-different command could go green while
+# CI went red, and a green that means something else is worse than no green.
+#
+# BEFORE jest, on purpose: a suite that does not compile is not worth executing,
+# and this answers in ~17s where the suites can take minutes.
+#
+# COST, measured on this repo: 16.4-17.9s wall for the whole test tree, against
+# the PII scan's 1.24-1.31s. It is far too slow to run unconditionally -- that is
+# precisely why it is gated on the pushed test files. A push that touches none
+# pays nothing beyond the string match above. BACKLOG-2573 rewrote this hook
+# because the old one made --no-verify routine; a 17s tax on every push would
+# rebuild that habit, so this stage must stay conditional.
+#
+# LIMIT, written down so nobody trusts it past its edge: the trigger is the
+# pushed TEST files. A change to a SOURCE file that breaks the types of an
+# UNCHANGED test file -- a renamed export, a narrowed signature -- does NOT fire
+# this gate. CI runs the step unconditionally and still catches that shape. So a
+# green hook is not the same statement as a green CI, and it is not meant to be.
+# Widening the trigger to "any source file that has a related test" was
+# considered and rejected: it puts 17s on ordinary pushes, i.e. it buys the CI
+# result at the cost of the hook being bypassed.
+#
+# `if !` rather than a bare command: husky runs this file under `sh -e`, so an
+# unguarded non-zero exit would kill the hook before it printed its own verdict.
+if [ -n "$typecheck_tests" ]; then
+  if ! NODE_OPTIONS="--max-old-space-size=4096" npm run type-check:tests; then
+    echo ""
+    echo "[pre-push] Test-suite type check failed. Push blocked."
+    echo "[pre-push] These errors are INVISIBLE to 'npm run type-check': tsconfig.json"
+    echo "[pre-push] excludes **/*.test.* , so a clean run there says NOTHING about the"
+    echo "[pre-push] files listed above. Reproduce, and fix, with:"
+    echo "[pre-push]   npm run type-check:tests"
+    echo "[pre-push] CI runs the same step ('TypeScript type check (test suite)'), so"
+    echo "[pre-push] without this stage the same failure would have arrived after the"
+    echo "[pre-push] push instead of before it."
+    exit 1
+  fi
 fi
 
 if [ -z "$test_files" ]; then
