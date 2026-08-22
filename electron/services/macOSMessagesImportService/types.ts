@@ -72,16 +72,39 @@ export interface MacOSImportResult {
   /**
    * BACKLOG-2748: the user cancelled this run from the UI.
    *
-   * A cancel is NOT a failure and NOT a normal finish: the messages stored
-   * before the stop are real and are kept, so `messagesImported` is a genuine
-   * partial count. Without this discriminator the two outcomes are
-   * indistinguishable at the boundary — a mid-import cancel returned
-   * `success: true` with a partial count, and the UI reported it as
-   * "Successfully imported N new messages" for a run the user stopped.
+   * A cancel is NOT a failure and NOT a normal finish. For a DELTA import the
+   * messages stored before the stop are real and are kept, so
+   * `messagesImported` is a genuine partial count. Without this discriminator
+   * the two outcomes are indistinguishable at the boundary — a mid-import
+   * cancel returned `success: true` with a partial count, and the UI reported
+   * it as "Successfully imported N new messages" for a run the user stopped.
+   *
+   * For a FORCE re-import the run is atomic (BACKLOG-2775) and a cancel keeps
+   * NOTHING — see `rolledBack`.
    *
    * Consumers must branch on this flag rather than parsing `error` text.
    */
   cancelled?: boolean;
+  /**
+   * BACKLOG-2775: the force re-import was rolled back; the message store is
+   * exactly as it was before the run started.
+   *
+   * The force path clears every existing macOS message before re-importing.
+   * Until this flag existed that clear committed on its own, so an interruption
+   * between the clear and the end of the import left the store EMPTY: the
+   * founder cancelled ~1s into a force re-import and lost 162,961 messages to a
+   * 35s delete that had already committed, with 0 imported.
+   *
+   * The clear and the re-import now share one transaction, so any interruption
+   * (cancel, crash, power loss) restores the prior rows. When this flag is set
+   * every count on this result is 0 BY CONSTRUCTION — nothing was written — and
+   * the UI must say "nothing changed", never "N messages were imported before
+   * cancellation".
+   *
+   * Scope: the FORCE path only. Delta imports keep their per-batch commits, so
+   * cancelling one keeps its partial progress and leaves this flag unset.
+   */
+  rolledBack?: boolean;
 }
 
 /**

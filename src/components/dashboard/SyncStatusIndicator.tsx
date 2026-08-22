@@ -556,7 +556,7 @@ export function SyncStatusIndicator({
   const activeProgress = runningInternalItem?.progress ?? null;
 
   // Render a status pill for each sync item in queue order
-  const renderPill = (type: SyncType, status: SyncItemStatus, progress: number, error?: string, phase?: string, isExternal?: boolean) => {
+  const renderPill = (type: SyncType, status: SyncItemStatus, progress: number, error?: string, phase?: string, isExternal?: boolean, cancelRequested?: boolean) => {
     const baseLabel = getLabelForType(type);
     // Show phase for running syncs (e.g., "Messages - querying", "iPhone - Exporting")
     const friendlyPhase = phase ? ({
@@ -566,7 +566,15 @@ export function SyncStatusIndicator({
       storing: 'Saving',
       complete: 'Done',
     }[phase] ?? phase) : undefined;
-    const label = status === 'running' && friendlyPhase ? `${baseLabel} - ${friendlyPhase}` : baseLabel;
+    // BACKLOG-2776: once the user has pressed Cancel this pill stops reporting
+    // the phase. The percentage beside it is already frozen (the orchestrator
+    // drops progress updates for a cancel-requested item), and a pill that kept
+    // announcing "Messages - querying" next to a frozen number would be the
+    // dashboard contradicting the Settings panel about whether the cancel had
+    // been heard.
+    const label = status === 'running' && cancelRequested
+      ? `${baseLabel} - Cancelling`
+      : status === 'running' && friendlyPhase ? `${baseLabel} - ${friendlyPhase}` : baseLabel;
     const colorClass = statusColors[status];
 
     // Error state - red with tooltip
@@ -666,7 +674,7 @@ export function SyncStatusIndicator({
           {isAnySyncing ? 'Syncing:' : hasError ? 'Sync Error:' : 'Sync:'}
         </span>
         {/* Render all pills in queue order (contacts, emails, messages, iphone) */}
-        {queue.map((item) => renderPill(item.type, item.status, item.progress, item.error, item.phase, item.external))}
+        {queue.map((item) => renderPill(item.type, item.status, item.progress, item.error, item.phase, item.external, item.cancelRequested))}
         {/* Show progress percentage for internal syncs only */}
         {activeProgress !== null && (
           <span className="text-xs text-blue-600 ml-auto">{Math.round(activeProgress)}%</span>
