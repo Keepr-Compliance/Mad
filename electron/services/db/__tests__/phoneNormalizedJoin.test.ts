@@ -161,11 +161,13 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
 
   describe("contact_phones JOIN to phone_last_message", () => {
     it("matches US-formatted contact phone against clean writer key", () => {
-      // Writer stored a clean E.164 key: messages came in as "+14155550109".
-      // normalizePhoneLookupKey("+14155550109") === "4155550109".
+      // Writer stored the key for the participant handle it received:
+      // messages came in as "+14155550109". BACKLOG-2630 — seeded through the
+      // SHARED helper, not a literal, so this suite keeps pinning writer/reader
+      // agreement instead of freezing whatever the key format was in 2026.
       db.prepare(
         "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
-      ).run("4155550109", userId, "2026-05-15T10:00:00Z");
+      ).run(normalizePhoneLookupKey("+14155550109"), userId, "2026-05-15T10:00:00Z");
 
       // Contact came in formatted: "+1 (415) 555-0109"
       insertContactWithPhone(db, userId, "Alice", "+1 (415) 555-0109");
@@ -177,7 +179,7 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
     it("matches UK international with spaces", () => {
       db.prepare(
         "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
-      ).run("2079460958", userId, "2026-04-01T09:00:00Z");
+      ).run(normalizePhoneLookupKey("+442079460958"), userId, "2026-04-01T09:00:00Z");
 
       insertContactWithPhone(db, userId, "Bob", "+44 20 7946 0958");
 
@@ -220,8 +222,8 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
       const insertPLM = db.prepare(
         "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
       );
-      insertPLM.run("4155551111", userId, "2026-01-01T00:00:00Z");
-      insertPLM.run("4155552222", userId, "2026-06-01T00:00:00Z");
+      insertPLM.run(normalizePhoneLookupKey("+14155551111"), userId, "2026-01-01T00:00:00Z");
+      insertPLM.run(normalizePhoneLookupKey("+14155552222"), userId, "2026-06-01T00:00:00Z");
 
       const row = db.prepare(READER_SQL).get(userId) as { last_communication_at: string };
       expect(row.last_communication_at).toBe("2026-06-01T00:00:00Z");
@@ -246,7 +248,7 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
     it("populates last_message_at for US-formatted phones in phones_json", () => {
       db.prepare(
         "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
-      ).run("4155550109", userId, "2026-05-15T10:00:00Z");
+      ).run(normalizePhoneLookupKey("+14155550109"), userId, "2026-05-15T10:00:00Z");
 
       insertExternalContact(db, userId, "Alice", ["+1 (415) 555-0109"]);
 
@@ -259,8 +261,8 @@ describe("BACKLOG-1727 phone_normalized JOIN behaviour", () => {
       const insertPLM = db.prepare(
         "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)"
       );
-      insertPLM.run("4155551111", userId, "2026-01-01T00:00:00Z");
-      insertPLM.run("4155552222", userId, "2026-08-01T00:00:00Z");
+      insertPLM.run(normalizePhoneLookupKey("+14155551111"), userId, "2026-01-01T00:00:00Z");
+      insertPLM.run(normalizePhoneLookupKey("+14155552222"), userId, "2026-08-01T00:00:00Z");
 
       insertExternalContact(db, userId, "MultiPhone", ["+1 (415) 555-1111", "+1-415-555-2222"]);
 

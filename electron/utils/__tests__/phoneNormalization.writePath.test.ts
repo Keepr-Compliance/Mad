@@ -203,7 +203,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const rows = readPhoneRows(db, contact.id);
       expect(rows).toHaveLength(1);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("4155550109");
+      expect(rows[0].phone_normalized).toBe("14155550109"); // BACKLOG-2630: key now carries the country code
     });
 
     it("persists toLookupKey-equivalent phone_normalized for UK international", async () => {
@@ -220,7 +220,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         .get(USER_ID) as { id: string };
       const rows = readPhoneRows(db, contact.id);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("2079460958");
+      expect(rows[0].phone_normalized).toBe("442079460958"); // BACKLOG-2630: +44 kept, not amputated
     });
   });
 
@@ -230,8 +230,8 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
   describe("contactDbService.createContactsBatch", () => {
     it("persists toLookupKey for every contact in the batch", () => {
       const inputs = [
-        { phone: "+1 (415) 555-0109", expected: "4155550109" },
-        { phone: "+44 20 7946 0958", expected: "2079460958" },
+        { phone: "+1 (415) 555-0109", expected: "14155550109" },
+        { phone: "+44 20 7946 0958", expected: "442079460958" },
         { phone: "12345", expected: "12345" },
       ];
       const ids = createContactsBatch(
@@ -269,7 +269,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const rows = readPhoneRows(db, contactId);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("4155559876");
+      expect(rows[0].phone_normalized).toBe("14155559876");
     });
   });
 
@@ -288,7 +288,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const rows = readPhoneRows(db, contactId);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("4155553333");
+      expect(rows[0].phone_normalized).toBe("14155553333");
     });
 
     it("persists toLookupKey on UPDATE path (existing entry id)", () => {
@@ -311,7 +311,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const rows = readPhoneRows(db, contactId);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("2079461212");
+      expect(rows[0].phone_normalized).toBe("442079461212");
     });
   });
 
@@ -331,7 +331,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const rows = readPhoneRows(db, contactId);
       expect(rows).toHaveLength(1);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("4155557777");
+      expect(rows[0].phone_normalized).toBe("14155557777");
     });
 
     it("persists toLookupKey on the UPDATE branch (existing top phone)", () => {
@@ -350,7 +350,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const rows = readPhoneRows(db, contactId);
       expect(rows).toHaveLength(1);
       expect(rows[0].phone_normalized).toBe(toLookupKey(input));
-      expect(rows[0].phone_normalized).toBe("4155550115");
+      expect(rows[0].phone_normalized).toBe("14155550115");
     });
   });
 
@@ -379,6 +379,8 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
 
       const rows = readPhoneRows(db, contactId);
       expect(rows[0].phone_normalized).toBe(toLookupKey(phoneE164));
+      // 555 is not a valid NANP area code, so the library declines it and the
+      // pre-2630 fallback keys it — unchanged by BACKLOG-2630, and that is the point.
       expect(rows[0].phone_normalized).toBe("5555550112");
     });
   });
@@ -406,7 +408,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
         toLookupKey("+1 (415) 555-0109"),
         toLookupKey("+44 20 7946 0958"),
       ]);
-      expect(persisted).toEqual(["4155550109", "2079460958"]);
+      expect(persisted).toEqual(["14155550109", "442079460958"]);
     });
 
     it("filters out empty-key inputs (whitespace, empty)", () => {
@@ -448,7 +450,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const row = readExternalPhones(db, recordId);
       const persisted = JSON.parse(row!.phones_normalized_json!);
       expect(persisted).toEqual([toLookupKey("+1-415-555-2222")]);
-      expect(persisted).toEqual(["4155552222"]);
+      expect(persisted).toEqual(["14155552222"]);
     });
   });
 
@@ -472,7 +474,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const row = readExternalPhones(db, recordId);
       const persisted = JSON.parse(row!.phones_normalized_json!);
       expect(persisted).toEqual([toLookupKey("+1.415.555.5555")]);
-      expect(persisted).toEqual(["4155555555"]);
+      expect(persisted).toEqual(["14155555555"]);
     });
 
     it("persists toLookupKey-equivalent phones_normalized_json for google_contacts source", () => {
@@ -491,7 +493,7 @@ describe("BACKLOG-1729 write-path: phone_normalized === toLookupKey(input)", () 
       const row = readExternalPhones(db, recordId);
       const persisted = JSON.parse(row!.phones_normalized_json!);
       expect(persisted).toEqual([toLookupKey("+44 20 7946 0123")]);
-      expect(persisted).toEqual(["2079460123"]);
+      expect(persisted).toEqual(["442079460123"]);
     });
   });
 });

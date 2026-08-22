@@ -119,29 +119,37 @@ describe("phoneNormalization", () => {
   // Migrated from: phoneLookupKey.test.ts.
   // -------------------------------------------------------------------------
   describe("toLookupKey", () => {
-    describe("numeric phones (>=10 digits)", () => {
+    describe("parseable phones — the library's E.164 digits (BACKLOG-2630)", () => {
       it("strips '+' from clean E.164", () => {
-        expect(toLookupKey("+14155550109")).toBe("4155550109");
+        expect(toLookupKey("+14155550109")).toBe("14155550109");
       });
       it("strips spaces, parens, dashes from US formatted", () => {
-        expect(toLookupKey("+1 (415) 555-0109")).toBe("4155550109");
-        expect(toLookupKey("(415) 555-0109")).toBe("4155550109");
-        expect(toLookupKey("+1-415-555-0109")).toBe("4155550109");
-        expect(toLookupKey("+1.415.555.0109")).toBe("4155550109");
+        expect(toLookupKey("+1 (415) 555-0109")).toBe("14155550109");
+        expect(toLookupKey("(415) 555-0109")).toBe("14155550109");
+        expect(toLookupKey("+1-415-555-0109")).toBe("14155550109");
+        expect(toLookupKey("+1.415.555.0109")).toBe("14155550109");
       });
-      it("handles 10-digit raw input", () => {
-        expect(toLookupKey("4155550109")).toBe("4155550109");
+      it("gives 10-digit raw input the SAME key as its +1 form", () => {
+        // The whole point of the default region: a number typed without its
+        // country code now meets the same number typed with one.
+        expect(toLookupKey("4155550109")).toBe("14155550109");
+        expect(toLookupKey("4155550109")).toBe(toLookupKey("+14155550109"));
       });
-      it("keeps last 10 digits for international (UK)", () => {
-        expect(toLookupKey("+44 20 7946 0958")).toBe("2079460958");
+      it("KEEPS the country code for international (UK) instead of amputating it", () => {
+        // Was "2079460958" under the last-ten rule — a key belonging to no real
+        // number, which could collide with an unrelated NANP number.
+        expect(toLookupKey("+44 20 7946 0958")).toBe("442079460958");
       });
-      it("keeps last 10 digits when country code makes >10 digits", () => {
-        expect(toLookupKey("+1 415 555 0109")).toBe("4155550109");
-        expect(toLookupKey("011 44 20 7946 0958")).toBe("2079460958");
+      it("reads an international exit prefix without any rule of ours", () => {
+        expect(toLookupKey("+1 415 555 0109")).toBe("14155550109");
+        // "011" is the NANP exit prefix; the library resolves it from the US
+        // default region, so this keys identically to the "+44" form above.
+        expect(toLookupKey("011 44 20 7946 0958")).toBe("442079460958");
+        expect(toLookupKey("011 44 20 7946 0958")).toBe(toLookupKey("+44 20 7946 0958"));
       });
       it("ignores leading/trailing whitespace", () => {
-        expect(toLookupKey("  +14155550109  ")).toBe("4155550109");
-        expect(toLookupKey("\t+14155550109\n")).toBe("4155550109");
+        expect(toLookupKey("  +14155550109  ")).toBe("14155550109");
+        expect(toLookupKey("\t+14155550109\n")).toBe("14155550109");
       });
       it("strips alphabetic characters (vanity numbers)", () => {
         // 1-800-FLOWERS — letters strip to '1800', short-code path
@@ -412,13 +420,19 @@ describe("phoneNormalization", () => {
   });
 
   // -------------------------------------------------------------------------
-  // BACKLOG-1729 parity snapshot — byte-equivalence guard for migration v40
+  // BACKLOG-1729 snapshot — the exact key for every input shape
   //
-  // For every input below, the new `toLookupKey` MUST return the exact value
-  // listed (which IS what the pre-consolidation `normalizePhoneLookupKey`
-  // produced — they share the same code path). Any divergence on this table
-  // indicates a regression that would silently break the v40 backfill
-  // invariant for new inserts.
+  // WAS a byte-equivalence guard against the pre-consolidation
+  // `normalizePhoneLookupKey`. BACKLOG-2630 ended that equivalence on purpose:
+  // `toLookupKey` now parses with libphonenumber-js at a US default region, so a
+  // parseable number keeps its country code instead of being cut to its last ten
+  // digits. Migration v64 re-keys every persisted store to match, which is what
+  // preserves the v40 backfill invariant that this table used to protect.
+  //
+  // The table is now a snapshot of the CURRENT rule, and it still does the same
+  // job: any unintended movement in any input shape reds here. Values marked
+  // "unchanged" are the ones the library declines to parse, which fall back to
+  // the pre-2630 rule — the "never worse than today" guarantee, shape by shape.
   //
   // ≥25 inputs as required by the SR-approved plan; covers: clean E.164,
   // formatted US/UK/intl, short codes, alphanumeric senders, null/empty/
@@ -428,16 +442,16 @@ describe("phoneNormalization", () => {
   describe("BACKLOG-1729 parity snapshot — toLookupKey output is stable", () => {
     const snapshot: Array<[string | null | undefined, string]> = [
       // clean E.164
-      ["+14155550109", "4155550109"],
+      ["+14155550109", "14155550109"],
       // formatted US
-      ["+1 (415) 555-0109", "4155550109"],
-      ["(415) 555-0109", "4155550109"],
-      ["+1-415-555-0109", "4155550109"],
-      ["+1.415.555.0109", "4155550109"],
-      ["4155550109", "4155550109"],
+      ["+1 (415) 555-0109", "14155550109"],
+      ["(415) 555-0109", "14155550109"],
+      ["+1-415-555-0109", "14155550109"],
+      ["+1.415.555.0109", "14155550109"],
+      ["4155550109", "14155550109"],
       // formatted UK / international
-      ["+44 20 7946 0958", "2079460958"],
-      ["011 44 20 7946 0958", "2079460958"],
+      ["+44 20 7946 0958", "442079460958"],
+      ["011 44 20 7946 0958", "442079460958"],
       // short codes
       ["12345", "12345"],
       ["555-1234", "5551234"],
@@ -461,9 +475,9 @@ describe("phoneNormalization", () => {
       [undefined, ""],
       ["   ", ""],
       ["\t\n", ""],
-      ["  +14155550109  ", "4155550109"],
+      ["  +14155550109  ", "14155550109"],
       // emoji-bearing input
-      ["📞4155550109", "4155550109"],
+      ["📞4155550109", "14155550109"],
       // 15-digit E.164 max
       ["+123456789012345", "6789012345"],
       // 7-digit local

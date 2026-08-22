@@ -101,6 +101,7 @@ import { backfillContactEmailsSync, backfillContactPhonesSync } from "../contact
 import { listPendingProposals } from "../contactLinkReviewDbService";
 import { linkExternalContactsForUser } from "../../contactSourceLinker";
 import { confirmProposal } from "../../contactLinkReview";
+import { toLookupKey } from "../../../utils/phoneNormalization";
 
 const USER = "user-2669";
 const CURRENT_SYNC = "2026-08-12T00:00:00.000Z";
@@ -141,7 +142,11 @@ describe("BACKLOG-2669 — a record contributes values only when it is linked", 
   // -------------------------------------------------------------------------
 
   /** Last 10 digits — the key `toLookupKey` produces and the schema stores. */
-  const lookupKey = (phone: string): string => phone.replace(/\D/g, "").slice(-10);
+    // BACKLOG-2630: seeds through the SHARED helper rather than a local
+  // transcription of the old last-ten rule. After migration v64 no database
+  // holds an old-rule key, so a fixture written that way describes a state the
+  // code can no longer emit — and the probe side would never meet it.
+  const lookupKey = (phone: string): string => toLookupKey(phone);
 
   /**
    * `is_imported = 1` because that is the population BOTH writers walk

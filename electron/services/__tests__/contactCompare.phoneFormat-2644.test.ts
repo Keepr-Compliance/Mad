@@ -459,7 +459,6 @@ describe("numbers stored without a country code are not mangled", () => {
     "(206) 555-0142",
     "2065550142",
     "206.555.0142",
-    "+4405550142",
     "+50664103686",
   ])("preserves both comparison keys of %s through the screen", async (raw) => {
     const phones = await comparePhones(`inv-${raw.replace(/\W/g, "") || "empty"}`, [raw], []);
@@ -470,6 +469,55 @@ describe("numbers stored without a country code are not mangled", () => {
       toLookupKey(raw),
       toE164(raw),
     ]);
+  });
+
+  /**
+   * THE ONE INPUT CLASS WHERE THE INVARIANT ABOVE NO LONGER HOLDS, AND IT IS A
+   * DELIBERATE, NAMED CONSEQUENCE OF BACKLOG-2630 — NOT A FLIPPED EXPECTATION.
+   *
+   * `+4405550142` is a "+"-prefixed number carrying exactly TEN digits. That is
+   * ambiguous by construction: the "+" says "this is E.164, read the country
+   * code off the front", and ten digits is also precisely a US national number.
+   *
+   *   - The RAW value does not parse as anything valid, so it falls back to the
+   *     pre-2630 digit rule and keys as "4405550142".
+   *   - `displayPhone` renders it "(440) 555-0142" — the ten-digit US branch of
+   *     `formatPhoneNumber`, which DROPS the "+". That is BACKLOG-2644's decided
+   *     display behaviour, asserted a few tests above, and it is not changed here.
+   *   - The RENDERED value therefore parses as a valid US number (440 is a real
+   *     Ohio area code) and keys as "14405550142".
+   *
+   * Under the old rule both sides amputated to the same last ten digits, so the
+   * divergence was invisible. It is visible now, and it is asserted rather than
+   * hidden so that nobody reads the sweep above as covering this shape.
+   *
+   * WHY IT IS NOT FIXED HERE. Two candidate fixes both cost more than the defect:
+   * making `formatPhoneNumber` keep the "+" for ten-digit input would change what
+   * the screen prints for a whole class of numbers and contradict BACKLOG-2644;
+   * teaching `toLookupKey` to treat "+" + ten digits as US would be exactly the
+   * per-country hand rule this item exists to remove.
+   *
+   * WHAT IT COSTS TODAY: nothing observable. Matching on this screen runs on the
+   * STORED value, never the printed one — pinned by the "matching is untouched"
+   * block below. This test exists so that if anything ever DOES key off the
+   * rendered value, the cost stops being nothing.
+   */
+  it("names the +-prefixed-ten-digit divergence rather than hiding it (BACKLOG-2630)", async () => {
+    const raw = "+4405550142";
+    const phones = await comparePhones("inv-plus-ten", [raw], []);
+    const rendered = phones[0][0].value.trim();
+
+    expect(rendered).toBe("(440) 555-0142");
+
+    // The raw value: unparseable, so the pre-2630 fallback key.
+    expect(toLookupKey(raw)).toBe("4405550142");
+    // The rendered value: a valid US number, so the country code is added.
+    expect(toLookupKey(rendered)).toBe("14405550142");
+    // Stated as the inequality it is, so a future change to either side reds here.
+    expect(toLookupKey(rendered)).not.toBe(toLookupKey(raw));
+
+    // `toE164` is untouched by this item and still agrees across the two forms.
+    expect(toE164(rendered)).toBe(toE164(raw));
   });
 });
 
