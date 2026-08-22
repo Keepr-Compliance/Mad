@@ -221,10 +221,27 @@ function tableDdl(db: DatabaseType, table: string): string {
  *
  * A process that dies between the rebuild and the swap leaves its staging tables
  * in the database — harmless (nothing reads them, and the live store is intact
- * precisely because the swap never ran) but not free. Sweeping at the start of
- * the next force run reclaims them at the only moment it is unambiguously safe
- * to: `forceReimportInProgress` guarantees at most one force run per process,
- * and no other code in the app knows these tables exist.
+ * precisely because the swap never ran) but not free. The next force run
+ * reclaims them; no other code in the app knows these tables exist.
+ *
+ * THIS SWEEP IS NOT SCOPED, and the flag does not make it safe. An earlier
+ * version of this comment claimed `forceReimportInProgress` guarantees at most
+ * one force run per process. It does not. A second Force Re-import is not
+ * refused — `importMessages` ABORTS the running import, waits 500 ms, clears
+ * `isImporting`, and proceeds. The aborted run only notices at its next
+ * cancellation check, so if that check is more than 500 ms away (a long text
+ * extraction, a large batch) it is still writing to ITS staging tables when the
+ * new run sweeps every `staging_msgimport_%` table in the database — including
+ * the one still in use.
+ *
+ * The user's DATA is safe in every interleaving, which is why this is documented
+ * rather than fixed here. The abandoned run writes only to staging and reads
+ * live, so its next INSERT fails with "no such table" and reaches the outer
+ * catch, which reports `rolledBack` — accurate, because it never swapped. Had
+ * it reached the swap instead, `insertFromStaging` would throw INSIDE the
+ * transaction and the DELETE would roll back with it. The cost is a confusing
+ * error card on a run the user had already superseded, not a lost message.
+ * Filed as BACKLOG-2797.
  *
  * BACKLOG-2768 (retention cleanup) is the durable reclaimer for a user who never
  * runs another force re-import.
@@ -461,9 +478,38 @@ export const forceSwapSteps = {
  * if the run succeeds and KEEPS it if the run is cancelled. Neither is
  * uniformly better for that row, and both are dominated by the fact that a force
  * re-import is a declaration that chat.db is the authority for exactly those
- * rows — so replacing them is the requested behaviour, not a casualty. Nothing
- * in the app writes there concurrently today: the only producer is this import,
- * and `forceReimportInProgress` blocks a second one.
+ * rows — so replacing them is the requested behaviour, not a casualty.
+ *
+ * WHO ELSE WRITES INSIDE THE FORCE SET. Two other services do, and neither is
+ * behind `forceReimportInProgress`:
+ *
+ *   - `localSyncService.storeMessages` (`localSyncService.ts`) — the Android
+ *     WiFi companion. It builds rows with `channel: "sms"` and a non-null
+ *     `externalId`, and it is reached from an INBOUND HTTP handler,
+ *     `POST /sync/messages` -> `handleSyncMessages`, so it fires at a moment
+ *     nothing in this process controls.
+ *   - `iPhoneSyncStorageService` — same shape, `externalId: msg.guid`.
+ *
+ * Both insert through `databaseService.batchInsertMessages` ->
+ * `syncDbService.batchInsertMessages`. `forceReimportInProgress` is read at
+ * exactly ONE site — `macOSMessagesImportService.ts`'s
+ * `if (this.forceReimportInProgress && !forceReimport)` — where it blocks a
+ * second macOS import. It knows nothing about an HTTP handler in another
+ * service.
+ *
+ * So a companion batch landing mid-rebuild IS deleted by the swap on the
+ * success path. AND IT DOES NOT COME BACK: the companion advances a monotonic
+ * cursor on the phone (`android-companion/services/backgroundSync.ts`, whose
+ * native query is `minDate >=`), so it never re-reads a message it has already
+ * sent. Do not write down that this self-heals — it was checked, and it does
+ * not.
+ *
+ * None of that is introduced here. The old `clearMacOSMessages` deleted the
+ * same set, because the set itself is the problem: it has no channel scope, so
+ * a macOS Force Re-import reaches Android SMS, iPhone-synced messages and
+ * `channel = 'email'` rows alike. **BACKLOG-2796** tracks scoping it. Read that
+ * item before widening this predicate — and note that narrowing it is the fix,
+ * not widening it.
  *
  * If any step throws — a full disk, a constraint the rebuild violated — the
  * transaction rolls back and the user's store is the one they started with.

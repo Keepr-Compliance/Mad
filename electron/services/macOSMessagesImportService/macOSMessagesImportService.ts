@@ -418,9 +418,11 @@ class MacOSMessagesImportService {
         }
 
         // Reclaim the staging tables of any run that died before its swap.
-        // Safe here and nowhere else: `forceReimportInProgress` means at most
-        // one force run exists in this process, and nothing else in the app
-        // knows these tables exist.
+        // The sweep is unscoped and a second Force Re-import aborts the first
+        // rather than being refused, so it can drop an abandoned run's tables
+        // while that run is still writing to them — data-safe in every
+        // interleaving, but see the note at `sweepStaleStaging` for why, and
+        // BACKLOG-2797 for the fix.
         const swept = sweepStaleStaging(appDb);
         if (swept.length > 0) {
           logService.info(
@@ -936,8 +938,10 @@ class MacOSMessagesImportService {
         // timers, event-driven `insertAuditLog`, and submissionSyncService's
         // realtime subscription — none of which touch this user's macOS message
         // rows. A write INSIDE the force set is deleted by the swap on the
-        // success path, which is what a force re-import means; see the boundary
-        // note at `swapStagingIntoLive` for the comparison with the old design.
+        // success path — including rows the Android companion or the iPhone sync
+        // wrote, which do NOT come back on their next sync. See the boundary
+        // note at `swapStagingIntoLive`, and BACKLOG-2796 for the missing
+        // channel scope behind it.
         if (staging && appDb) {
           const swapCounts = swapStagingIntoLive(appDb, staging);
           forceSwapCommitted = true;
