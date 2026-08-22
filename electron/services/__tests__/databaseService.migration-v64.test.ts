@@ -116,7 +116,7 @@ const CONTACT_PHONES: Array<{ id: string; e164: string; expected: string }> = [
   { id: "cp-us-1", e164: "+14155550109", expected: "14155550109" },
   { id: "cp-us-2", e164: "+12015550123", expected: "12015550123" },
   { id: "cp-uk", e164: "+442079460958", expected: "442079460958" },
-  { id: "cp-il", e164: "+97236025852", expected: "97236025852" },
+  { id: "cp-il", e164: "+97235550142", expected: "97235550142" },
   { id: "cp-leading-zero", e164: "+020794609", expected: "020794609" },
   { id: "cp-short", e164: "+12345", expected: "12345" },
   { id: "cp-alpha", e164: "VERIZON", expected: "VERIZON" },
@@ -141,7 +141,7 @@ const PHONE_LAST_MESSAGE: Array<{ key: string; at: string; expected: string; why
   { key: "262966", at: "2026-02-08T17:45:00.000Z", expected: "262966", why: "short code — BACKLOG-1493 requires it to survive" },
   { key: "VERIZON", at: "2026-02-09T06:00:00.000Z", expected: "VERIZON", why: "alphanumeric sender — left alone" },
   { key: "442079460958", at: "2026-02-10T22:10:00.000Z", expected: "442079460958", why: "12 digits — the replay landmine" },
-  { key: "97236025852", at: "2026-02-11T12:20:00.000Z", expected: "97236025852", why: "11 digits, non-leading-1 — the replay landmine" },
+  { key: "97235550142", at: "2026-02-11T12:20:00.000Z", expected: "97235550142", why: "11 digits, non-leading-1 — the replay landmine" },
   { key: "14155550199", at: "2026-02-12T15:05:00.000Z", expected: "14155550199", why: "11 digits leading 1 — the shape v64's own first pass writes" },
 ];
 
@@ -351,7 +351,7 @@ describe("migration v64 — re-key persisted phone lookup keys (BACKLOG-2630)", 
     const naive = (key: string): string => toLookupKey(key);
 
     expect(naive("442079460958")).toBe("2079460958"); // 12-digit key, amputated
-    expect(naive("97236025852")).toBe("7236025852"); // 11-digit key, amputated
+    expect(naive("97235550142")).toBe("7235550142"); // 11-digit key, amputated
 
     // The naive rule is a FIXED POINT for the US shape, which is precisely why
     // a 10-digit-only fixture cannot catch the bug: "14155550199" parses as a
@@ -362,7 +362,7 @@ describe("migration v64 — re-key persisted phone lookup keys (BACKLOG-2630)", 
 
     // The two landmine shapes are the ones that mangle, and they are in the
     // fixture above.
-    for (const key of ["442079460958", "97236025852"]) {
+    for (const key of ["442079460958", "97235550142"]) {
       expect({ key, naive: naive(key) }).not.toEqual({ key, naive: key });
     }
   });

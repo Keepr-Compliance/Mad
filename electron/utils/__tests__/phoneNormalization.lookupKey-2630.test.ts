@@ -80,12 +80,14 @@ describe("BACKLOG-2630 · toLookupKey — one key per number, from the library",
     // numbers.
     expect(toLookupKey("+44 20 7946 0958")).toBe("442079460958");
     expect(toLookupKey("+442079460958")).toBe("442079460958");
-    expect(toLookupKey("+972 3 602 5852")).toBe("97236025852");
+    expect(toLookupKey("+972 3 555 0142")).toBe("97235550142");
 
-    // The collision the old rule created is gone: the amputated form of the
-    // Israeli number is a plausible NANP number, and they must not share a key.
-    expect(toLookupKey("+972 3 602 5852")).not.toBe(toLookupKey("(723) 602-5852"));
-    expect(preLibraryRule("+972 3 602 5852")).toBe("7236025852"); // what it used to be
+    // The collision the old rule created is gone. Cutting an 11-digit number to
+    // its last ten leaves "7235550142", which reads as a NANP number in area
+    // code 723 — a key belonging to no real number, and one an unrelated US
+    // number could land on. The two must not share a key.
+    expect(preLibraryRule("+972 3 555 0142")).toBe("7235550142"); // what it used to be
+    expect(toLookupKey("+972 3 555 0142")).not.toBe(toLookupKey("(723) 555-0142"));
   });
 
   it("invents no country for a 9-digit leading-zero number — the overfit being replaced", () => {
@@ -115,7 +117,7 @@ describe("BACKLOG-2630 · toLookupKey — one key per number, from the library",
       "TXT-ALERT",
       "12345678901234", // a malformed long run
       "+12345678901234",
-      "chat123456789@icloud.com", // an Apple ID living in a phone column
+      "chat123456789@example.com", // an Apple-ID-shaped handle living in a phone column
       "1115550109", // length-valid, pattern-invalid US (area code 111)
       "9995550123",
       "+44 7700 900123", // Ofcom drama range — invalid in this metadata version
@@ -283,7 +285,7 @@ describe("BACKLOG-2630 / BACKLOG-2754 · toMatchingKey — the floor, over candi
       "(415) 555-0109",
       "+14155550109",
       "+44 20 7946 0958",
-      "+972 3 602 5852",
+      "+972 3 555 0142",
       "020794609",
       "12345678901234",
     ]) {
