@@ -7,6 +7,9 @@ import { Transaction, Communication } from "../types/models";
 import type { TransactionWithDetails } from "./transactionService/types";
 import { isEmailMessage, isTextMessage } from "../utils/channelHelpers";
 import { sanitizeFileSystemName } from "../utils/fileUtils";
+// BACKLOG-2771: this service no longer decides its own include set.
+import type { ExportPlan } from "./exportPlan";
+import { orderAttachmentComms } from "./exportPlan";
 
 /**
  * Enhanced Export Service
@@ -18,13 +21,18 @@ import { sanitizeFileSystemName } from "../utils/fileUtils";
  * - TXT + EML files in folders
  */
 
-interface ExportOptions {
-  contentType?: "text" | "email" | "both";
+/**
+ * What this service still decides: which FILE it produces. What it no longer
+ * decides: which communications go in it — that is `resolveExportPlan()`
+ * (BACKLOG-2771). The date and content filters that used to live here as
+ * `_filterCommunicationsByDate` / `_filterByContentType` were a hand-copy of the
+ * folder-export handler's inline pair; the BACKLOG-2343 timezone fix had to be
+ * applied to both, and they still disagreed afterwards.
+ */
+interface ExportRenderOptions {
   exportFormat?: "pdf" | "excel" | "csv" | "json" | "txt_eml";
-  startDate?: string;
-  endDate?: string;
-  summaryOnly?: boolean; // If true, only export summary + indexes (no full content)
-  attachmentType?: "all" | "email" | "text" | "none";
+  /** If true, only export summary + indexes (no full content, no attachments). */
+  summaryOnly?: boolean;
 }
 
 class EnhancedExportService {
@@ -33,71 +41,37 @@ class EnhancedExportService {
   /**
    * Export transaction with enhanced options
    * @param transaction - Transaction data
-   * @param communications - All communications for the transaction
-   * @param options - Export options
+   * @param plan - The resolved include set (see resolveExportPlan)
+   * @param options - Which artifact to produce
    * @returns Path to exported file/folder
    */
   async exportTransaction(
     transaction: TransactionWithDetails,
-    communications: Communication[],
-    options: ExportOptions = {},
+    plan: ExportPlan,
+    options: ExportRenderOptions = {},
   ): Promise<string> {
-    const {
-      contentType = "both",
-      exportFormat = "pdf",
-      startDate: optionStartDate,
-      endDate: optionEndDate,
-      summaryOnly = false,
-      attachmentType = "none",
-    } = options;
+    const { exportFormat = "pdf", summaryOnly = false } = options;
 
     try {
       logService.info("[Enhanced Export] Starting export:", "EnhancedExport", {
         format: exportFormat,
-        contentType,
         transactionId: transaction.id,
         propertyAddress: transaction.property_address,
-        startDate: optionStartDate || "not set",
-        endDate: optionEndDate || "not set",
+        included: plan.communications.length,
+        attachmentsSelected: plan.attachmentComms.length,
+        writesAttachmentsToDisk: plan.writesAttachmentsToDisk,
       });
 
-      // Filter communications by date range
-      // If dates aren't provided in options, use transaction dates
-      const startDate = optionStartDate || (transaction.started_at as string | undefined);
-      const endDate = optionEndDate || (transaction.closed_at as string | undefined);
-
-      const totalBefore = communications.length;
-      let filteredComms = this._filterCommunicationsByDate(
-        communications,
-        startDate,
-        endDate,
-      );
-      const afterDateFilter = filteredComms.length;
-
-      if (startDate || endDate) {
-        logService.info(
-          `[Enhanced Export] Date filtering: ${totalBefore} -> ${afterDateFilter} communications (filtered ${totalBefore - afterDateFilter} outside date range)`,
-          "EnhancedExport",
-          {
-            startDate: startDate || "none",
-            endDate: endDate || "none",
-            filtered: totalBefore - afterDateFilter,
-          },
-        );
-      }
-
-      // Filter by content type
-      filteredComms = this._filterByContentType(filteredComms, contentType);
-
-      // Sort descending (most recent first)
-      filteredComms.sort((a, b) => {
+      // Sort descending (most recent first). The plan decides the SET; this
+      // exporter decides the ORDER, and its artifacts encode that order.
+      const filteredComms = [...plan.communications].sort((a, b) => {
         const dateA = a.sent_at ? new Date(a.sent_at as string).getTime() : 0;
         const dateB = b.sent_at ? new Date(b.sent_at as string).getTime() : 0;
         return dateB - dateA;
       });
 
       logService.info(
-        `[Enhanced Export] Filtered to ${filteredComms.length} communications`,
+        `[Enhanced Export] Rendering ${filteredComms.length} communications`,
         "EnhancedExport",
       );
 
@@ -105,7 +79,7 @@ class EnhancedExportService {
       let exportPath: string;
       switch (exportFormat) {
         case "pdf":
-          exportPath = await this._exportPDF(transaction, filteredComms, summaryOnly, attachmentType);
+          exportPath = await this._exportPDF(transaction, plan, filteredComms, summaryOnly);
           break;
         case "excel":
         case "csv":
@@ -134,69 +108,6 @@ class EnhancedExportService {
   }
 
   /**
-   * Filter communications by date range
-   * @private
-   */
-  private _filterCommunicationsByDate(
-    communications: Communication[],
-    startDate?: string,
-    endDate?: string,
-  ): Communication[] {
-    if (!startDate && !endDate) {
-      return communications;
-    }
-
-    const start = startDate ? new Date(startDate) : null;
-    const end = endDate ? new Date(endDate) : null;
-
-    // BACKLOG-2343: The audit window end (e.g. the transaction's closed_at) is a
-    // DATE like "2026-07-29", which `new Date()` parses as UTC midnight
-    // (2026-07-29T00:00:00Z). A text sent late on the closing day in a timezone
-    // west of UTC (e.g. Jul 28 evening America/Chicago) is stored with a UTC
-    // sent_at that rolls into the next calendar day (2026-07-29T0X:00:00Z), so a
-    // naive `commDate > end` check DROPS it — the exported Audit Summary then
-    // reads "TOTAL TEXT MESSAGES: 0" even though the message is in-window.
-    // Make the end boundary inclusive of the entire closing day by advancing it
-    // one day, mirroring the folder-export handler
-    // (transactionExportHandlers.ts, "Add a day to end date to include messages
-    // on the closing day"). Errs toward INCLUDING borderline messages, which is
-    // the safe direction for an audit export.
-    if (end) end.setDate(end.getDate() + 1);
-
-    return communications.filter((comm) => {
-      // Prefer sent_at; fall back to received_at (parity with the folder-export
-      // handler) so a message missing sent_at is not silently dropped as 1970.
-      const commDate = new Date((comm.sent_at ?? comm.received_at) as string);
-      if (start && commDate < start) return false;
-      if (end && commDate > end) return false;
-      return true;
-    });
-  }
-
-  /**
-   * Filter by content type (text/email/both)
-   * @private
-   */
-  private _filterByContentType(
-    communications: Communication[],
-    contentType: "text" | "email" | "both",
-  ): Communication[] {
-    if (contentType === "both") {
-      return communications;
-    }
-
-    if (contentType === "email") {
-      return communications.filter((c) => isEmailMessage(c));
-    }
-
-    if (contentType === "text") {
-      return communications.filter((c) => isTextMessage(c));
-    }
-
-    return communications;
-  }
-
-  /**
    * Export as PDF using folder export service's combined PDF functionality
    * This generates individual PDFs (summary, emails, texts) and combines them
    * into a single document for a comprehensive audit report
@@ -204,14 +115,16 @@ class EnhancedExportService {
    */
   private async _exportPDF(
     transaction: TransactionWithDetails,
+    plan: ExportPlan,
     communications: Communication[],
     summaryOnly: boolean = false,
-    attachmentType: "all" | "email" | "text" | "none" = "none",
   ): Promise<string> {
     const downloadsPath = app.getPath("downloads");
-    const needsAttachments = !summaryOnly && attachmentType !== "none";
-
-    if (needsAttachments) {
+    // BACKLOG-2771: one flag, resolved once. It already folds in `summaryOnly`
+    // (a summary artifact never writes attachment files) and the "none"
+    // selection, which this method used to re-derive as
+    // `!summaryOnly && attachmentType !== "none"`.
+    if (plan.writesAttachmentsToDisk) {
       // Create a folder: PDF + attachments subfolder
       const folderName = sanitizeFileSystemName(
         `Transaction_${transaction.property_address}_${Date.now()}`,
@@ -232,13 +145,10 @@ class EnhancedExportService {
       const attachmentsPath = path.join(folderPath, "attachments");
       await fs.mkdir(attachmentsPath, { recursive: true });
 
-      // Filter communications by attachment type
-      let attachmentComms = communications;
-      if (attachmentType === "email") {
-        attachmentComms = communications.filter((c) => isEmailMessage(c));
-      } else if (attachmentType === "text") {
-        attachmentComms = communications.filter((c) => isTextMessage(c));
-      }
+      // The plan's attachment selection, in this exporter's descending order —
+      // manifest.json encodes array position as `sourceEmailIndex`, so the
+      // order is observable and preserved. Nothing re-derives the predicate.
+      const attachmentComms = orderAttachmentComms(plan, communications);
 
       // Use folderExportService's attachment export
       await folderExportService.exportAttachments(transaction, attachmentComms, attachmentsPath);

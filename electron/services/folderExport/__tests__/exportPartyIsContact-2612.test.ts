@@ -123,6 +123,8 @@ import { createExportFixture, type ExportFixture } from "./helpers/exportCapture
 import transactionService from "../../transactionService/transactionService";
 import folderExportService from "../folderExportService";
 import { deleteContact } from "../../db/contactDbService";
+// BACKLOG-2771: plans are built by the REAL resolver, never by hand.
+import { testExportPlan } from "../../__tests__/helpers/exportPlanFixture";
 
 // ---------------------------------------------------------------------------
 // Fixture identities — all invented (FICTIONAL_NAMES in
@@ -271,18 +273,17 @@ async function runFolderExport(fx: ExportFixture): Promise<void> {
   try {
     const details = await transactionService.getTransactionDetails(TX);
     if (!details) throw new Error("fixture transaction not found");
-    await folderExportService.exportTransactionToFolder(details, details.communications ?? [], {
+    await folderExportService.exportTransactionToFolder(details,
+        testExportPlan(details.communications ?? [], { contentType: "both", attachmentType: "all" }),
+        {
       // Required by FolderExportOptions (folderExportService.ts:115) though
       // nothing under electron/services/folderExport/ reads it — the writer
       // takes the transaction from `details`. Passed for type correctness; it
       // selects nothing, so it cannot alter what this suite measures.
       transactionId: TX,
-      includeEmails: true,
-      includeTexts: true,
-      includeAttachments: true,
-      attachmentType: "all",
       outputPath: fx.outputDir,
-    });
+        }
+      );
   } finally {
     fx.disarm();
   }
