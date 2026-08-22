@@ -230,11 +230,20 @@ function tableDdl(db: DatabaseType, table: string): string {
  * runs another force re-import.
  */
 export function sweepStaleStaging(db: DatabaseType): string[] {
+  // The escape character is escaped FIRST — or rather, in the same pass, which is
+  // the point. Escaping only `_` leaves a backslash in the input free to pair
+  // with the character after it and mean something else entirely, which is the
+  // incomplete-sanitization shape CodeQL flags (js/incomplete-sanitization). The
+  // input here is a module constant with neither a backslash nor a `%`, so
+  // nothing is exploitable today; the reason to write it correctly anyway is that
+  // "the input happens to be safe" is a property of a caller, not of this
+  // function, and the next caller does not inherit the comment.
+  const escapedPrefix = STAGING_TABLE_PREFIX.replace(/[\\%_]/g, "\\$&");
   const stale = db
     .prepare(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ? ESCAPE '\\'`
     )
-    .all(`${STAGING_TABLE_PREFIX.replace(/_/g, "\\_")}%`) as Array<{ name: string }>;
+    .all(`${escapedPrefix}%`) as Array<{ name: string }>;
 
   for (const { name } of stale) {
     db.exec(`DROP TABLE IF EXISTS "${name}"`);
@@ -434,6 +443,27 @@ export const forceSwapSteps = {
  * with it. The old force transaction stayed open across minutes of awaited
  * fetching, which is exactly why anything that wrote in that window was at risk
  * and why two writers had to be paused by hand.
+ *
+ * THE BOUNDARY OF THAT CLAIM, because it is not unconditional.
+ *
+ * "Nothing else can lose its write" is true of every write OUTSIDE the force set
+ * — which is every writer the quiesce existed for: `markAuditLogsSynced`,
+ * `updateTransactionSubmissionStatus`, event-driven `insertAuditLog`, and
+ * submissionSyncService's realtime subscription. None of them touch
+ * `messages WHERE user_id = <this user> AND external_id IS NOT NULL`, so the
+ * DELETE below cannot reach them and the exposure is genuinely gone rather than
+ * narrowed.
+ *
+ * A write INSIDE the force set, landing mid-rebuild, is a different case and the
+ * honest answer is that the swap deletes it. Compare the two designs on that
+ * one row: the old transaction KEPT it if the run succeeded (it committed along
+ * with everything else) and LOST it if the run was cancelled; this one LOSES it
+ * if the run succeeds and KEEPS it if the run is cancelled. Neither is
+ * uniformly better for that row, and both are dominated by the fact that a force
+ * re-import is a declaration that chat.db is the authority for exactly those
+ * rows — so replacing them is the requested behaviour, not a casualty. Nothing
+ * in the app writes there concurrently today: the only producer is this import,
+ * and `forceReimportInProgress` blocks a second one.
  *
  * If any step throws — a full disk, a constraint the rebuild violated — the
  * transaction rolls back and the user's store is the one they started with.

@@ -929,13 +929,15 @@ class MacOSMessagesImportService {
         // direction: BACKLOG-2775 destroyed first and restored on failure, this
         // builds first and destroys only on success.
         //
-        // What that reversal buys is stated at `swapStagingIntoLive`: the
-        // transaction is now one synchronous callback with no `await` inside it,
-        // so no other write in this process can join it and be lost. The two
-        // background sync timers no longer need pausing, and the residuals that
-        // pausing could not cover — event-driven `insertAuditLog` writes, and
-        // submissionSyncService's realtime subscription — have no window left to
-        // fall into.
+        // What that reversal buys is stated at `swapStagingIntoLive`, boundary
+        // included: the transaction is now one synchronous callback with no
+        // `await` inside it, so no write OUTSIDE the force set can join it and be
+        // lost. That covers every writer the quiesce existed for — both sync
+        // timers, event-driven `insertAuditLog`, and submissionSyncService's
+        // realtime subscription — none of which touch this user's macOS message
+        // rows. A write INSIDE the force set is deleted by the swap on the
+        // success path, which is what a force re-import means; see the boundary
+        // note at `swapStagingIntoLive` for the comparison with the old design.
         if (staging && appDb) {
           const swapCounts = swapStagingIntoLive(appDb, staging);
           forceSwapCommitted = true;
