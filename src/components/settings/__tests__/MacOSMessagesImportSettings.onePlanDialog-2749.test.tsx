@@ -256,6 +256,106 @@ describe("BACKLOG-2749 — the dialog states the plan's numbers, and derives non
     ).toHaveTextContent("Change the time range");
   });
 
+  it("CONTROL: the dialog opens COMPLETE — no async gap before the recommendation", async () => {
+    /*
+     * The founder's report: "the Change the time range button takes a sec to
+     * load". The mechanism was always right — each candidate range is ASKED for
+     * its own count — it was just happening after the click.
+     *
+     * So this asserts SYNCHRONOUSLY. No `findBy`, no `waitFor`: the very next
+     * statement after the click reads the DOM. If the recommendation is
+     * resolved over IPC after the dialog opens, this fails, which is precisely
+     * the state the founder saw and no amount of `waitFor` would ever catch.
+     */
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue({
+      ...FOUNDER_RESULT,
+      // Transcribed from the estimate payload main now returns; his data.
+      recommendedRange: { lookbackMonths: 9, windowCount: 41000 },
+    });
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    await waitFor(() => expect(importButton()).toBeEnabled());
+    fireEvent.click(importButton());
+
+    const dialog = screen.getByTestId("import-plan-dialog");
+    expect(
+      within(dialog).getByTestId("import-plan-change-range")
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/Your selected time range of/)).toHaveTextContent(
+      "recommended: Last 9 months"
+    );
+    // And no intermediate "working it out" state under a resolved estimate.
+    expect(
+      within(dialog).queryByTestId("import-plan-range-searching")
+    ).not.toBeInTheDocument();
+  });
+
+  it("a definitive NO recommendation also opens complete, with no spinner", async () => {
+    // `null` means asked and nothing shorter fits — an answer, not a pending
+    // state. Rendering a spinner for it would reintroduce the founder's defect
+    // in the one case where there is nothing to wait for.
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue({
+      ...FOUNDER_RESULT,
+      recommendedRange: null,
+    });
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    await waitFor(() => expect(importButton()).toBeEnabled());
+    fireEvent.click(importButton());
+
+    const dialog = screen.getByTestId("import-plan-dialog");
+    expect(
+      within(dialog).queryByTestId("import-plan-range-searching")
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).queryByTestId("import-plan-change-range")
+    ).not.toBeInTheDocument();
+    expect(
+      within(dialog).getByTestId("import-plan-import-all")
+    ).toBeInTheDocument();
+  });
+
+  it("FALLBACK: a response carrying no recommendation still asks, and says so", async () => {
+    // The cold open. `undefined` (key absent) is not `null` (asked, none fit),
+    // and conflating them would either strand the user with no recommendation
+    // or show a spinner forever.
+    //
+    // All time, so shorter candidates exist to ask about. On a 3-month
+    // selection there is nothing shorter than 3, the search has no iterations,
+    // and no "working it out" state is correct — my first fixture here used the
+    // 3-month default and asserted a spinner that could never appear.
+    mockGetPreferences.mockResolvedValue({
+      success: true,
+      data: {
+        messageImport: {
+          filters: { lookbackMonths: null, maxMessages: CAP, skipAttachments: false },
+        },
+      },
+    });
+    (window.api.messages.getImportCount as jest.Mock).mockImplementation(
+      (_userId: string, selection?: { lookbackMonths: number | null }) =>
+        Promise.resolve(
+          selection?.lookbackMonths == null
+            ? FOUNDER_RESULT
+            : { ...FOUNDER_RESULT, windowCount: 41000 }
+        )
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    await waitFor(() => expect(importButton()).toBeEnabled());
+    fireEvent.click(importButton());
+
+    const dialog = screen.getByTestId("import-plan-dialog");
+    expect(
+      within(dialog).getByTestId("import-plan-range-searching")
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(dialog).queryByTestId("import-plan-range-searching")
+      ).not.toBeInTheDocument()
+    );
+  });
+
   it("ANTI-VACUITY: no recommendation when nothing shorter fits the cap", async () => {
     // Every candidate is still over the cap, so there is nothing to recommend
     // and the blue button does not appear. Without this half, a button that

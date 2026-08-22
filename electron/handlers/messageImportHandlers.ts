@@ -32,7 +32,10 @@ import type {
 } from "../services/macOSMessagesImportService";
 import type { EffectiveImportWindow } from "../services/macOSMessagesImportService/importHelpers";
 // BACKLOG-2743: shared selection-time estimate shape (attachment bytes + disk verdict).
-import type { MessageImportCountResult } from "../types/ipc/window-api-messages";
+import type {
+  MessageImportCountResult,
+  RecommendedImportRange,
+} from "../types/ipc/window-api-messages";
 // BACKLOG-2748: ONE spelling of the cancel channel, shared with the preload bridge.
 import { MESSAGES_IMPORT_CANCEL_CHANNEL } from "../types/ipc/messageChannels";
 
@@ -57,6 +60,70 @@ let importStartTime: number | null = null;
 /**
  * Register message import IPC handlers
  */
+
+/**
+ * BACKLOG-2749: the dialog's recommendation, computed WITH the estimate.
+ *
+ * The founder saw the cost of computing it later: "the Change the time range
+ * button takes a sec to load". The mechanism was already right — each candidate
+ * range is ASKED for its own count, never scaled proportionally from another's,
+ * because messages are not spread evenly across months and a proportional guess
+ * names a range that does not fit. It was simply happening after the click.
+ *
+ * So the same work moves ahead of the click, and only where it is needed:
+ *
+ *   - Nothing runs unless the cap is actually exceeded. A selection that fits
+ *     pays nothing, which is every user who never sees this dialog.
+ *   - Largest-first with an early return, so the common case is one extra
+ *     count rather than six.
+ *   - A candidate that is not NARROWER than the current selection is skipped:
+ *     counts grow with range length, so a longer range cannot rescue a
+ *     selection that is already over the cap. This is what stops an over-cap
+ *     "Last 3 months" from querying all six presets to learn nothing.
+ *
+ * Each candidate goes through `resolveImportPlanForUser` exactly as the
+ * selection did, so a candidate's count is the count of the plan that would
+ * really run for it — audit spans, Cap' and all.
+ *
+ * @returns the largest narrower range that fits, or `null` when none does.
+ *   `null` is an ANSWER, not a failure: it is the founder's hiding rule (when
+ *   deal audit periods force the window open, nothing shorter helps).
+ */
+const RECOMMENDATION_PRESETS = [24, 18, 12, 9, 6, 3] as const;
+
+async function resolveRecommendedRange(
+  userId: string,
+  selection: StoredImportFilters | undefined,
+  cap: number | null,
+  windowCount: number | undefined
+): Promise<RecommendedImportRange | null> {
+  if (cap === null || windowCount === undefined || windowCount <= cap) {
+    return null;
+  }
+
+  for (const months of RECOMMENDATION_PRESETS) {
+    const candidatePlan = await resolveImportPlanForUser({
+      userId,
+      mode: "delta",
+      selectionOverride: { ...(selection ?? {}), lookbackMonths: months },
+    });
+    const counts =
+      await macOSMessagesImportService.getAvailableMessageCount(candidatePlan);
+    if (!counts.success) continue;
+
+    const candidateCount = counts.windowCount ?? counts.count;
+    if (candidateCount === undefined) continue;
+    // Not narrower than what the user already has — a longer range cannot
+    // rescue an over-cap selection, and offering it would be nonsense.
+    if (candidateCount >= windowCount) continue;
+    if (candidateCount <= cap) {
+      return { lookbackMonths: months, windowCount: candidateCount };
+    }
+  }
+
+  return null;
+}
+
 export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
   // Prevent double registration
   if (handlersRegistered) {
@@ -390,6 +457,15 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         // function's job is to COUNT what a plan admits, and it takes the plan
         // as an input. Having it echo its own input back would make the service
         // the wire's assembler, which is the shape BACKLOG-2772 removed.
+        // BACKLOG-2749: the recommendation travels WITH the counts, so the
+        // dialog renders complete the instant it opens.
+        const recommendedRange = await resolveRecommendedRange(
+          userId,
+          selection,
+          plan.effectiveCap,
+          counts.windowCount ?? counts.count
+        );
+
         return {
           ...counts,
           plan: {
@@ -397,6 +473,7 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
             fetchStartISO: plan.fetchStartISO,
             overrides: plan.overrides,
           },
+          recommendedRange,
         };
       } catch (error) {
         const errorMessage =

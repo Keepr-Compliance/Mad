@@ -90,9 +90,37 @@ export interface MessageImportPlanFacts {
   overrides: ImportPlanOverride[];
 }
 
+/**
+ * BACKLOG-2749: the largest preset range whose own resolved count fits under
+ * the cap — the founder's [R], the dialog's recommendation.
+ *
+ * `windowCount` is main's count for THAT range's own plan. Carried so the
+ * recommendation can be pinned against the resolver, and so the renderer never
+ * scales one range's figure into another's: messages are not spread evenly
+ * across months, and a proportional guess names a range that does not fit.
+ */
+export interface RecommendedImportRange {
+  lookbackMonths: number;
+  windowCount: number;
+}
+
 export interface MessageImportCountResult {
   success: boolean;
   count?: number;
+  /**
+   * BACKLOG-2749: the recommendation, PRECOMPUTED with the estimate.
+   *
+   * `null` = asked and nothing shorter fits (a definitive answer — the dialog
+   * shows no recommendation and no spinner). ABSENT = this response predates
+   * the precompute, and the renderer falls back to asking after the click.
+   *
+   * It is computed here rather than after the dialog opens because the founder
+   * saw the consequence: "the Change the time range button takes a sec to
+   * load". The per-candidate round trips are the right mechanism — asked, never
+   * proportional — they were simply happening a beat too late. Same work, moved
+   * ahead of the click, and only when the cap is actually exceeded.
+   */
+  recommendedRange?: RecommendedImportRange | null;
   /**
    * BACKLOG-2749: the plan these counts describe, as the resolver returned it.
    *

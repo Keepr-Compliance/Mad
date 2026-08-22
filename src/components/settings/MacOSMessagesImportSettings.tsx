@@ -257,6 +257,21 @@ export function MacOSMessagesImportSettings({
    */
   const [planFacts, setPlanFacts] = useState<MessageImportPlanFacts | null>(null);
 
+  /**
+   * BACKLOG-2749: the dialog's recommendation, as the estimate precomputed it.
+   *
+   * `undefined` = this response carried no recommendation (a main process that
+   * predates the precompute), so the dialog falls back to asking after the
+   * click. `null` = asked and nothing shorter fits, which is a definitive
+   * answer and must NOT produce a spinner.
+   *
+   * The founder's report was "the Change the time range button takes a sec to
+   * load". Holding it here is what lets the dialog render complete on open.
+   */
+  const [recommendedRange, setRecommendedRange] = useState<
+    CapFittingRange | null | undefined
+  >(undefined);
+
   // BACKLOG-2743: Selection-time size estimate. Before this, choosing "All time"
   // showed a message count and nothing about size, so an import whose
   // attachments exceeded the disk looked identical to one that fit.
@@ -402,6 +417,7 @@ export function MacOSMessagesImportSettings({
     setAvailableCount(null);
     setWindowCount(null);
     setPlanFacts(null);
+    setRecommendedRange(undefined);
 
     const fetchCount = async () => {
       try {
@@ -439,6 +455,10 @@ export function MacOSMessagesImportSettings({
         setWindowCount(result.windowCount ?? result.count ?? null);
         // BACKLOG-2749: carried, never reconstructed. See `planFacts`.
         setPlanFacts(result.plan ?? null);
+        // The recommendation rides the estimate. M19's dependency fix re-runs
+        // that estimate whenever the cap or the range changes, so R is
+        // re-resolved with them and can never describe a stale selection.
+        setRecommendedRange(result.recommendedRange);
         setSizeEstimate(
           result.attachmentBytes !== undefined
             ? {
@@ -990,6 +1010,8 @@ export function MacOSMessagesImportSettings({
   const [capFittingRange, setCapFittingRange] = useState<CapFittingRange | null>(
     null
   );
+  /** Only true on the cold-open fallback path — never when R was precomputed. */
+  const [capRangeSearching, setCapRangeSearching] = useState(false);
 
   /**
    * BACKLOG-2749 / founder decision `2259031c`: compute the way out.
@@ -1077,6 +1099,7 @@ export function MacOSMessagesImportSettings({
           const count = result.windowCount ?? result.count;
           if (result.success && count !== undefined && count <= cap) {
             setCapFittingRange({ lookbackMonths: months, windowCount: count });
+            setCapRangeSearching(false);
             return;
           }
         } catch (error) {
@@ -1087,6 +1110,8 @@ export function MacOSMessagesImportSettings({
           if (searchId !== fittingSearchIdRef.current) return;
         }
       }
+      if (searchId !== fittingSearchIdRef.current) return;
+      setCapRangeSearching(false);
     },
     [userId, lookbackMonths]
   );
@@ -1112,7 +1137,19 @@ export function MacOSMessagesImportSettings({
       }
       if (capExceeded) {
         const searchId = ++fittingSearchIdRef.current;
+        if (recommendedRange !== undefined) {
+          // Precomputed with the estimate: the dialog opens COMPLETE. No await,
+          // no spinner, no button that appears a beat later — which is exactly
+          // what the founder reported.
+          setCapFittingRange(recommendedRange);
+          setCapRangeSearching(false);
+          setDialog({ reason: "cap", isReimport: forceReimport });
+          return;
+        }
+        // Fallback for a genuinely cold open — a response that carried no
+        // recommendation at all. Same ask, just late, and it says so.
         setCapFittingRange(null);
+        setCapRangeSearching(true);
         setDialog({ reason: "cap", isReimport: forceReimport });
         if (planCap !== null) void findCapFittingRange(searchId, planCap);
         return;
@@ -1123,6 +1160,7 @@ export function MacOSMessagesImportSettings({
       spaceRefused,
       capExceeded,
       planCap,
+      recommendedRange,
       findFittingWindow,
       findCapFittingRange,
       handleImport,
@@ -1134,6 +1172,7 @@ export function MacOSMessagesImportSettings({
     fittingSearchIdRef.current += 1;
     setDialogActionError(null);
     setCapFittingRange(null);
+    setCapRangeSearching(false);
     setDialog(null);
   }, []);
   // `runDialogAction` is declared above `closeDialog` and needs to call it.
@@ -1646,6 +1685,7 @@ export function MacOSMessagesImportSettings({
                 : `Last ${lookbackMonths} months`
             }
             capFittingRange={capFittingRange}
+            capRangeSearching={capRangeSearching}
             actionError={dialogActionError}
             onChangeRange={(months) => {
               /*

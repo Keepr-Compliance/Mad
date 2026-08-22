@@ -139,6 +139,14 @@ export interface ImportPlanDialogProps {
    * answers. `null` while searching, or when no shorter range fits.
    */
   capFittingRange: CapFittingRange | null;
+  /**
+   * The recommendation is still being asked for.
+   *
+   * ONLY reachable on the cold-open fallback, where the estimate carried no
+   * precomputed range. When R rides the estimate — the normal path — this is
+   * false on the first render and the dialog is complete on open.
+   */
+  capRangeSearching: boolean;
 
   // ---- Space refusal facts (reason === "space") ----
   /** Attachment bytes the admitted set would copy. */
@@ -220,6 +228,7 @@ export function ImportPlanDialog({
   fittingWindowStatus,
   rangeLabel,
   capFittingRange,
+  capRangeSearching,
   actionError,
   onChangeRange,
   onImportEverything,
@@ -364,6 +373,14 @@ export function ImportPlanDialog({
                   </>
                 )}
                 .
+                {capRangeSearching && (
+                  <span
+                    data-testid="import-plan-range-searching"
+                    className="block mt-2 text-xs text-gray-500"
+                  >
+                    Working out which time range would fit&hellip;
+                  </span>
+                )}
               </p>
 
               <div className="flex flex-col gap-2">

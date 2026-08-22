@@ -560,3 +560,124 @@ describe("BACKLOG-2749 · the estimate response carries the resolved plan", () =
     expect(result.plan.effectiveCap).toBeNull();
   });
 });
+
+/**
+ * BACKLOG-2749 — the dialog's recommendation is computed WITH the estimate.
+ *
+ * The founder: "the Change the time range button takes a sec to load". The
+ * per-candidate round trips were the right mechanism in the wrong place, so
+ * they moved ahead of the click. These pin that it is still an ASK — each
+ * candidate range resolved through the real resolver and counted — and that it
+ * only runs when the cap is actually exceeded.
+ */
+describe("BACKLOG-2749 · the estimate precomputes the recommended range", () => {
+  /** Counts keyed by the candidate's resolved lookback, so a proportional
+   *  guess cannot land on the right answer by accident. */
+  const COUNTS: Record<string, number> = {
+    "null": 708400,
+    "24": 300000,
+    "18": 180000,
+    "12": 90000,
+    "9": 41000,
+    "6": 20000,
+    "3": 9000,
+  };
+
+  beforeEach(() => {
+    capturedPlan = undefined;
+    mockTransactionRows = [];
+    mockGetPreferences.mockReset();
+    // Cleared, not just re-implemented: two tests below COUNT the calls, and
+    // this mock accumulates across the whole file otherwise.
+    (macOSMessagesImportService.getAvailableMessageCount as jest.Mock).mockClear();
+    (
+      macOSMessagesImportService.getAvailableMessageCount as jest.Mock
+    ).mockImplementation(async (plan: ImportPlan) => {
+      // Recover which candidate this plan is for from its own cutoff: the
+      // handler resolves a REAL plan per candidate, so the fixture answers the
+      // plan rather than the request.
+      const months =
+        plan.fetchStartISO === null
+          ? "null"
+          : String(
+              Math.round(
+                (Date.now() - new Date(plan.fetchStartISO).getTime()) /
+                  (30.44 * 24 * 60 * 60 * 1000)
+              )
+            );
+      const count = COUNTS[months] ?? COUNTS["null"];
+      return { success: true, count, windowCount: count, filteredCount: count };
+    });
+  });
+
+  it("CONTROL: recommends the LARGEST narrower range that fits the cap", async () => {
+    // Cap 50,000. 24/18/12 months are all over it; 9 months is the first that
+    // fits, and 6 and 3 fit too but are smaller. His own data lands on 9.
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: null, maxMessages: 50000 } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.recommendedRange).toEqual({
+      lookbackMonths: 9,
+      windowCount: 41000,
+    });
+  });
+
+  it("ANTI-VACUITY: no recommendation when the selection already fits", async () => {
+    // The cap is not exceeded, so there is nothing to recommend AND nothing to
+    // compute. Without this, a handler that recommended unconditionally — and
+    // paid six extra counts on every estimate — would pass the test above.
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: null, maxMessages: 900000 } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.recommendedRange).toBeNull();
+    // One count for the estimate itself, and not one more.
+    expect(
+      (macOSMessagesImportService.getAvailableMessageCount as jest.Mock).mock
+        .calls.length
+    ).toBe(1);
+  });
+
+  it("recommends nothing when no narrower range fits", async () => {
+    // Everything is over the cap. `null` is the answer, and it is what makes
+    // the dialog hide the button rather than spin.
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: null, maxMessages: 100 } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.recommendedRange).toBeNull();
+  });
+
+  it("an explicit Unlimited recommends nothing and costs nothing", async () => {
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: null, maxMessages: null } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.recommendedRange).toBeNull();
+    expect(
+      (macOSMessagesImportService.getAvailableMessageCount as jest.Mock).mock
+        .calls.length
+    ).toBe(1);
+  });
+});
