@@ -113,6 +113,8 @@ jest.mock("sqlite3", () =>
 
 import { app } from "electron";
 import macOSMessagesImportService from "../macOSMessagesImportService";
+// BACKLOG-2772: plans are built by the REAL resolver, never hand-written.
+import { testImportPlan } from "./helpers/importPlanFixture";
 import type { MacOSImportResult } from "../macOSMessagesImportService/types";
 
 const USER = "user-real-driver-2775";
@@ -196,10 +198,16 @@ function storedRowIdentities(): Array<{ id: string; external_id: string }> {
 }
 
 function importToCompletion(force = false): Promise<MacOSImportResult> {
-  return macOSMessagesImportService.importMessages(USER, undefined, force, {
-    lookbackMonths: null,
-    maxMessages: null,
-  });
+  return macOSMessagesImportService.importMessages(
+    USER,
+    undefined,
+    // BACKLOG-2772: `force` is now the plan's MODE. Both modes cover the same
+    // window (D2'), which is why the same filters serve both here.
+    testImportPlan({
+      mode: force ? "reprocess" : "delta",
+      storedFilters: { lookbackMonths: null, maxMessages: null },
+    }),
+  );
 }
 
 beforeEach(async () => {
@@ -250,8 +258,10 @@ describe("BACKLOG-2775 — a cancelled force re-import against the real drivers"
           macOSMessagesImportService.requestCancellation();
         }
       },
-      true,
-      { lookbackMonths: null, maxMessages: null },
+      testImportPlan({
+        mode: "reprocess",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      }),
     );
 
     // What the founder saw instead: the cancel exit's own `close()` rejected
@@ -335,8 +345,10 @@ describe("BACKLOG-2775 — a cancelled force re-import against the real drivers"
           macOSMessagesImportService.requestCancellation();
         }
       },
-      false,
-      { lookbackMonths: null, maxMessages: null },
+      testImportPlan({
+        mode: "delta",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      }),
     );
 
     // No error at all: a delta cancel is a clean partial finish, and the close

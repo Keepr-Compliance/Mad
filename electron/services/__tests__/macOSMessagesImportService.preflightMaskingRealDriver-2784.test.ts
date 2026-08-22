@@ -90,6 +90,8 @@ jest.mock("sqlite3", () =>
 
 import { app } from "electron";
 import macOSMessagesImportService from "../macOSMessagesImportService";
+// BACKLOG-2772: plans are built by the REAL resolver, never hand-written.
+import { testImportPlan } from "./helpers/importPlanFixture";
 
 const MESSAGE_COUNT = 12;
 
@@ -220,10 +222,9 @@ describe("BACKLOG-2784 — the pre-flight surfaces its real error, not SQLITE_MI
       throw new Error("EIO: i/o error, statfs");
     });
 
-    const result = await macOSMessagesImportService.getAvailableMessageCount({
-      lookbackMonths: null,
-      maxMessages: null,
-    });
+    const result = await macOSMessagesImportService.getAvailableMessageCount(
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: null } }),
+    );
 
     expect(result.success).toBe(false);
     // The whole point: the cause the user and Sentry are given is the real one.
@@ -246,10 +247,9 @@ describe("BACKLOG-2784 — the pre-flight surfaces its real error, not SQLITE_MI
     // Distinguishing input. Without this, the test above would be equally green
     // for a pre-flight that could not open the real chat.db at all, never
     // reached its close, and failed for some unrelated reason.
-    const result = await macOSMessagesImportService.getAvailableMessageCount({
-      lookbackMonths: null,
-      maxMessages: null,
-    });
+    const result = await macOSMessagesImportService.getAvailableMessageCount(
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: null } }),
+    );
 
     expect(result.success).toBe(true);
     expect(result.count).toBe(MESSAGE_COUNT);
@@ -274,10 +274,9 @@ describe("BACKLOG-2784 — the pre-flight surfaces its real error, not SQLITE_MI
     // instead of a message: it failed, and it failed EARLY.
     await fs.rm(nodePath.join(homeDir, "Library", "Messages", "chat.db"), { force: true });
 
-    const result = await macOSMessagesImportService.getAvailableMessageCount({
-      lookbackMonths: null,
-      maxMessages: null,
-    });
+    const result = await macOSMessagesImportService.getAvailableMessageCount(
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: null } }),
+    );
 
     expect(result.success).toBe(false);
     // Never reached the post-close tail — every field the tail produces is

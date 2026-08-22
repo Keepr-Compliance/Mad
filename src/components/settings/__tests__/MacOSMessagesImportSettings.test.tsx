@@ -504,10 +504,19 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     expect(screen.getByRole("button", { name: /Import Messages/i })).toBeEnabled();
   });
 
-  it("asks for the estimate over the audit-widened window, not the raw lookback", async () => {
-    // The real import reaches back to the earliest transaction audit period, so
-    // an estimate scoped to the bare lookback preference would describe a
-    // narrower import than the one that runs.
+  it("asks for the estimate with the USER's selection and never an audit floor", async () => {
+    // BACKLOG-2743 required the estimate to cover the audit-widened window,
+    // because an estimate scoped to the bare lookback describes a narrower
+    // import than the one that runs. That requirement is unchanged — what
+    // changed in BACKLOG-2772 is WHO satisfies it.
+    //
+    // The panel used to compute the effective audit floor over a second IPC and
+    // send it back down, which made it one of four places deciding what an
+    // import covers. Main now derives the deal spans itself, from the same
+    // query the export gate reads, so the panel states only the user's
+    // selection. That the resulting window IS widened by the deals is asserted
+    // where it is now decided — `electron/__tests__/importIncludeSet-2772.test.ts`,
+    // against the real handler.
     (window.api.messages.getEffectiveImportWindow as jest.Mock).mockResolvedValue({
       success: true,
       effectiveCutoffISO: "2024-01-01T00:00:00.000Z",
@@ -527,9 +536,16 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
 
     await waitFor(() =>
       expect(window.api.messages.getImportCount).toHaveBeenCalledWith(
-        expect.objectContaining({ auditPeriodStart: "2024-01-01T00:00:00.000Z" }),
+        userId,
+        expect.objectContaining({ lookbackMonths: 3 }),
       ),
     );
+
+    // The removal is the point, so assert it: no call carries an audit floor.
+    for (const [, selection] of (window.api.messages.getImportCount as jest.Mock).mock
+      .calls) {
+      expect(selection).not.toHaveProperty("auditPeriodStart");
+    }
   });
 
   it("reports skipped attachments after an import rather than claiming plain success", async () => {

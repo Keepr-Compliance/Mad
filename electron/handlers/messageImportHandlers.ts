@@ -18,6 +18,9 @@ import {
   resolveLookbackMonths,
   DEFAULT_LOOKBACK_MONTHS,
 } from "../services/macOSMessagesImportService/importHelpers";
+// BACKLOG-2772: the ONE assembler + resolver every import entry point calls.
+import { resolveImportPlanForUser } from "../services/importPlanInputs";
+import type { StoredImportFilters } from "../services/importPlan";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
   MacOSImportResult,
@@ -106,90 +109,35 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         }
       }
 
-      // TASK-1952: Load message import filter preferences
-      // Defaults: 3 months lookback, 50K max messages (matches UI defaults)
+      // BACKLOG-2772: ONE resolver decides what this run fetches.
       //
-      // BACKLOG-2561: `lookbackMonths` is resolved through `resolveLookbackMonths`,
-      // NOT `??`. "All time" is stored as an explicit `null`, and `null ?? 3` is 3 —
-      // so the old operator silently rewrote every all-time import into a 3-month
-      // one while the count preview on the same screen showed the all-time total.
-      // The label handler below must resolve it the same way or the two disagree.
-      const DEFAULT_MAX_MESSAGES = 50000;
-      let importFilters: MessageImportFilters = {
-        lookbackMonths: DEFAULT_LOOKBACK_MONTHS,
-        maxMessages: DEFAULT_MAX_MESSAGES,
-      };
-      try {
-        const preferences = await supabaseService.getPreferences(validUserId);
-        const messageImportPrefs = preferences?.messageImport;
-        if (messageImportPrefs?.filters) {
-          importFilters = {
-            lookbackMonths: resolveLookbackMonths(messageImportPrefs.filters),
-            maxMessages: messageImportPrefs.filters.maxMessages ?? DEFAULT_MAX_MESSAGES,
-            // BACKLOG-2743: "import without attachments" — the escape hatch shown
-            // when the attachment estimate exceeds free disk space. Defaults to
-            // false, so an absent preference imports attachments as before.
-            skipAttachments: messageImportPrefs.filters.skipAttachments === true,
-          };
-        }
-      } catch (prefsError) {
-        // Use defaults if preferences unavailable
-        logService.warn(
-          "Failed to load import filter preferences, using defaults",
-          "MessageImportHandlers"
-        );
-        Sentry.captureException(prefsError, {
-          tags: { sync_type: "message_import" },
-          level: "warning",
-          extra: {
-            handler: "messages:import-macos",
-            operation: "load-preferences",
-            error_message: prefsError instanceof Error ? prefsError.message : String(prefsError),
-          },
-        });
-      }
-
-      // BACKLOG-2276: Drive the import lower bound from the transaction audit-period
-      // start (the SAME source of truth the email fetch uses). Without this, a wide
-      // audit period is silently truncated by lookbackMonths and older messages are
-      // never imported. computeImportCutoffNano takes the EARLIER of this and the
-      // lookback window, so this only ever WIDENS the window, never narrows it.
+      // Everything that used to happen here — loading the preference object,
+      // resolving `lookbackMonths`, collapsing `maxMessages` with `??`
+      // (BACKLOG-2733), running a non-rejected-transaction query and folding the
+      // earliest audit start into an `auditPeriodStart` field — is DELETED, not
+      // moved behind a flag. It lives in `resolveImportPlanForUser`, which the
+      // estimate channel and the transaction trigger call as well, so the three
+      // can no longer reach different answers from the same stored state.
       //
-      // BACKLOG-2308: the floor spans pending/active/closed (all carry an audit
-      // obligation) and EXCLUDES rejected (dead deals, no audit needed). The filter
-      // is `status != 'rejected'` — the prior `!= 'archived'` was a dead no-op
-      // ('archived' is not a valid status; the CHECK allows only
-      // pending/active/closed/rejected), so rejected deals were wrongly pinning it.
-      try {
-        const db = databaseService.getRawDatabase();
-        const txnRows = db
-          .prepare(
-            `SELECT started_at, created_at, closed_at
-             FROM transactions
-             WHERE user_id = ? AND status != 'rejected'`
-          )
-          .all(validUserId) as Array<{
-            started_at: string | null;
-            created_at: string | null;
-            closed_at: string | null;
-          }>;
-        const auditStart = computeEarliestAuditStart(txnRows);
-        if (auditStart) {
-          importFilters.auditPeriodStart = auditStart.toISOString();
-        }
-      } catch (auditError) {
-        // Non-fatal: fall back to lookback-only behavior.
-        logService.warn(
-          "Failed to compute audit-period start for message import, using lookback only",
-          "MessageImportHandlers",
-          { error: auditError instanceof Error ? auditError.message : String(auditError) }
-        );
-      }
-
+      // D2': the button chooses the processing MODE and nothing else. Both modes
+      // cover the same window — "force re-import will always cover the whole
+      // window... it's more about the processing of msgs" (founder, 2026-08-20).
+      const plan = await resolveImportPlanForUser({
+        userId: validUserId,
+        mode: forceReimport ? "reprocess" : "delta",
+      });
       logService.info(
         `Starting macOS Messages import for user`,
         "MessageImportHandlers",
-        { userId: validUserId, forceReimport, filters: importFilters }
+        {
+          userId: validUserId,
+          mode: plan.mode,
+          fetchStartISO: plan.fetchStartISO,
+          effectiveCap: plan.effectiveCap,
+          protectedSpans: plan.protectedSpans.length,
+          fetchAttachments: plan.fetchAttachments,
+          overrides: plan.overrides.map((o) => o.kind),
+        }
       );
 
       Sentry.addBreadcrumb({
@@ -200,9 +148,9 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
           syncType: 'messages',
           platform: 'macos',
           operation: 'messages-import',
-          forceReimport,
-          lookbackMonths: importFilters.lookbackMonths,
-          maxMessages: importFilters.maxMessages,
+          mode: plan.mode,
+          effectiveCap: plan.effectiveCap,
+          protectedSpanCount: plan.protectedSpans.length,
         },
       });
 
@@ -224,8 +172,7 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         const result = await macOSMessagesImportService.importMessages(
           validUserId,
           onProgress,
-          forceReimport,
-          importFilters
+          plan
         );
 
         if (result.success) {
@@ -398,16 +345,33 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
     "messages:get-import-count",
     async (
       _event: IpcMainInvokeEvent,
-      filters?: MessageImportFilters
+      userId: string,
+      selection?: StoredImportFilters
     ): Promise<MessageImportCountResult> => {
       logService.info(
         `Getting macOS Messages count`,
         "MessageImportHandlers",
-        { filters }
+        { selection }
       );
 
       try {
-        return await macOSMessagesImportService.getAvailableMessageCount(filters);
+        // BACKLOG-2772/2760: the estimate resolves the SAME plan the button
+        // will run, so the number on the screen and the number the import
+        // enforces are the same decision object rather than two assemblies
+        // racing each other.
+        //
+        // `selection` is the panel's current, not-yet-saved dropdown state,
+        // layered over the stored preference by the assembler. That is a
+        // legitimate per-entry-point difference and it lives in the REQUEST —
+        // it is not a second filter. Mode is "delta": an estimate describes
+        // what a fetch would cover, and under D2' both modes cover the same
+        // window, so the estimate is mode-independent by construction.
+        const plan = await resolveImportPlanForUser({
+          userId,
+          mode: "delta",
+          selectionOverride: selection ?? null,
+        });
+        return await macOSMessagesImportService.getAvailableMessageCount(plan);
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : "Unknown error";

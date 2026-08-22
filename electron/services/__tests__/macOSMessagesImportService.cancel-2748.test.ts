@@ -161,6 +161,8 @@ jest.mock("../db/readOnlySqlite", () => ({
 
 import { app } from "electron";
 import macOSMessagesImportService from "../macOSMessagesImportService";
+// BACKLOG-2772: plans are built by the REAL resolver, never hand-written.
+import { testImportPlan } from "./helpers/importPlanFixture";
 import { ATTACHMENTS_DIR, BATCH_SIZE } from "../macOSMessagesImportService/types";
 import type {
   RawMacMessage,
@@ -299,18 +301,20 @@ async function forceImportCancellingAt(
         macOSMessagesImportService.requestCancellation();
       }
     },
-    true,
-    { lookbackMonths: null, maxMessages: null },
-  );
+    testImportPlan({
+        mode: "reprocess",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      }),
+    );
 }
 
 function forceImportToCompletion(
   onProgress?: (progress: { phase: string; current: number }) => void,
 ): Promise<MacOSImportResult> {
-  return macOSMessagesImportService.importMessages(USER, onProgress, true, {
-    lookbackMonths: null,
-    maxMessages: null,
-  });
+  return macOSMessagesImportService.importMessages(USER, onProgress, testImportPlan({
+      mode: "reprocess",
+      storedFilters: { lookbackMonths: null, maxMessages: null },
+    }));
 }
 
 async function filesInAttachmentsDir(): Promise<string[]> {
@@ -342,16 +346,18 @@ async function importCancellingAt(
         macOSMessagesImportService.requestCancellation();
       }
     },
-    false,
-    { lookbackMonths: null, maxMessages: null },
-  );
+    testImportPlan({
+        mode: "delta",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      }),
+    );
 }
 
 function importToCompletion(): Promise<MacOSImportResult> {
-  return macOSMessagesImportService.importMessages(USER, undefined, false, {
-    lookbackMonths: null,
-    maxMessages: null,
-  });
+  return macOSMessagesImportService.importMessages(USER, undefined, testImportPlan({
+      mode: "delta",
+      storedFilters: { lookbackMonths: null, maxMessages: null },
+    }));
 }
 
 beforeEach(async () => {
@@ -690,8 +696,10 @@ describe("BACKLOG-2775 — a cancelled FORCE re-import changes nothing", () => {
           macOSMessagesImportService.requestCancellation();
         }
       },
-      true,
-      { lookbackMonths: null, maxMessages: null },
+      testImportPlan({
+        mode: "reprocess",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      }),
     );
 
     expect(result.cancelled).toBe(true);
@@ -717,10 +725,10 @@ describe("BACKLOG-2775 — a cancelled FORCE re-import changes nothing", () => {
     messageCount = 12;
     attachmentCount = 12;
     await writeAttachmentFixtures(12);
-    const reseed = await macOSMessagesImportService.importMessages(USER, undefined, true, {
-      lookbackMonths: null,
-      maxMessages: null,
-    });
+    const reseed = await macOSMessagesImportService.importMessages(USER, undefined, testImportPlan({
+      mode: "reprocess",
+      storedFilters: { lookbackMonths: null, maxMessages: null },
+    }));
     expect(reseed.attachmentsImported).toBe(12);
 
     const beforeMessages = storedRowIdentities();
@@ -818,8 +826,10 @@ describe("BACKLOG-2775 — the force transaction cannot swallow background write
           macOSMessagesImportService.requestCancellation();
         }
       },
-      true,
-      { lookbackMonths: null, maxMessages: null },
+      testImportPlan({
+        mode: "reprocess",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      }),
     );
 
     expect(result.rolledBack).toBe(true);
@@ -854,8 +864,10 @@ describe("BACKLOG-2775 — the force transaction cannot swallow background write
           macOSMessagesImportService.requestCancellation();
         }
       },
-      true,
-      { lookbackMonths: null, maxMessages: null },
+      testImportPlan({
+        mode: "reprocess",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      }),
     );
     trail.push(...writerEvents);
 

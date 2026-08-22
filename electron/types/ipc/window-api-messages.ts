@@ -18,8 +18,20 @@ export type { AttachmentsRefusedForSpace };
 export interface MessageImportCountFilters {
   lookbackMonths?: number | null;
   maxMessages?: number | null;
-  auditPeriodStart?: string | null;
+  skipAttachments?: boolean;
 }
+
+/*
+ * BACKLOG-2772: `auditPeriodStart` was REMOVED from this type, and its removal
+ * is the point rather than a tidy-up.
+ *
+ * The renderer used to compute the effective audit floor (over a second IPC)
+ * and send it back down with every estimate request, which made the Settings
+ * panel a participant in deciding what an import covers. It is not one. The
+ * resolver derives the deal spans itself, from the same query the export gate
+ * reads, so the panel now states only what the USER has selected and the
+ * compiler rejects the old field.
+ */
 
 /**
  * BACKLOG-2743: Selection-time import estimate.
@@ -94,7 +106,10 @@ export interface WindowApiMessages {
     rolledBack?: boolean;
   }>;
   /** Get count of messages available for import from macOS Messages */
-  getImportCount: (filters?: MessageImportCountFilters) => Promise<MessageImportCountResult>;
+  getImportCount: (
+    userId: string,
+    selection?: MessageImportCountFilters
+  ) => Promise<MessageImportCountResult>;
   /**
    * Cancel the running macOS Messages import (BACKLOG-2748).
    *

@@ -79,22 +79,22 @@ export const messageService = {
     }
   },
 
-  /**
-   * Get count of messages available for import from macOS Messages.
-   * Accepts optional filters for lookback period and max count.
+  /*
+   * BACKLOG-2772: `getImportCount` and `importMacOSMessages` were DELETED from
+   * this service, not updated for the new signatures.
+   *
+   * Both were renderer-side wrappers around the preload bridge with ZERO
+   * production callers — the estimate is requested by
+   * `MacOSMessagesImportSettings` straight from `window.api.messages`, and the
+   * import is started by `SyncOrchestratorService`'s registered sync function,
+   * which is the only path that produces a queue item. Keeping a second,
+   * queue-less way to start an import is how an uncancellable run gets
+   * reintroduced by someone reaching for the obvious-looking helper.
+   *
+   * Their absence is enforced by the compiler rather than by this comment: the
+   * bridge now requires a userId, so any resurrection has to be written against
+   * the current wire.
    */
-  async getImportCount(
-    filters?: MessageImportCountFilters
-  ): Promise<MessageImportCountResult> {
-    try {
-      if (!window.api.messages) {
-        return { success: false, error: "Messages API not available" };
-      }
-      return await window.api.messages.getImportCount(filters);
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
 
   /**
    * Get macOS messages import status (count and last import time).
@@ -111,36 +111,6 @@ export const messageService = {
     }
   },
 
-  /**
-   * Import macOS Messages for a user.
-   * Returns detailed import result with counts and duration.
-   */
-  async importMacOSMessages(userId: string): Promise<MacOSImportServiceResult> {
-    try {
-      if (!window.api.messages) {
-        return {
-          success: false,
-          messagesImported: 0,
-          messagesSkipped: 0,
-          attachmentsImported: 0,
-          attachmentsSkipped: 0,
-          duration: 0,
-          error: "Messages API not available",
-        };
-      }
-      return await window.api.messages.importMacOSMessages(userId);
-    } catch (error) {
-      return {
-        success: false,
-        messagesImported: 0,
-        messagesSkipped: 0,
-        attachmentsImported: 0,
-        attachmentsSkipped: 0,
-        duration: 0,
-        error: getErrorMessage(error),
-      };
-    }
-  },
 
   /**
    * Get attachments for multiple messages at once.

@@ -275,9 +275,12 @@ export function MacOSMessagesImportSettings({
 
     const fetchCount = async () => {
       try {
-        const result = await window.api.messages.getImportCount({
+        // BACKLOG-2772: state the SELECTION only. The audit floor used to be
+        // computed here and sent back down, which made this panel one of four
+        // places deciding what an import covers; main derives the deal spans
+        // itself now, from the same query the export gate reads.
+        const result = await window.api.messages.getImportCount(userId, {
           lookbackMonths,
-          auditPeriodStart: effectiveWindow?.effectiveCutoffISO ?? null,
         });
         // A newer window is being estimated; this answer describes a window the
         // user is no longer looking at. Dropping it is the whole fix.

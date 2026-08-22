@@ -57,6 +57,15 @@ const importMessages = macOSMessagesImportService.importMessages as jest.Mock;
 const expandMock = expandAttachedThreadsForUser as jest.Mock;
 const importerAvailableMock = isMessagesImporterAvailable as jest.Mock;
 
+/**
+ * The PLAN the trigger handed the import service on call `n` (BACKLOG-2772).
+ *
+ * The plan is the decision under test: whether this entry point asked the one
+ * resolver, or decided for itself. Reading it here is the same discipline the
+ * export boundary suite uses (`exportIncludeSet-2771.test.ts`).
+ */
+const planOf = (n: number) => importMessages.mock.calls[n][2];
+
 let db: DatabaseType;
 function makeDb(): DatabaseType {
   const d = new Database(":memory:") as DatabaseType;
@@ -102,11 +111,20 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     });
 
     expect(importMessages).toHaveBeenCalledTimes(1);
-    // (userId, onProgress, forceReimport=false, { auditPeriodStart })
+    // BACKLOG-2772: (userId, onProgress, plan). The trigger no longer builds a
+    // filter bag of its own — it states its required start and the ONE resolver
+    // turns that into the same kind of plan the Settings buttons run. Asserting
+    // the plan OBJECT is what makes this a routing test rather than a
+    // string-matching one.
     const args = importMessages.mock.calls[0];
     expect(args[0]).toBe(USER);
-    expect(args[2]).toBe(false);
-    expect(args[3]).toEqual({ auditPeriodStart: "2026-01-01T00:00:00.000Z" });
+    expect(planOf(0).mode).toBe("delta");
+    expect(planOf(0).fetchStartISO).toBe("2026-01-01T00:00:00.000Z");
+    // The defects this closes: the old call passed NO cap and NO attachment
+    // preference, so a deal being created started an uncapped, attachment-
+    // copying full-device scan regardless of what the user had chosen.
+    expect(planOf(0).effectiveCap).toBe(50000);
+    expect(planOf(0).fetchAttachments).toBe(true);
 
     expect(expandMock).toHaveBeenCalledTimes(1);
     expect(result.importRan).toBe(true);
@@ -167,7 +185,7 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     });
 
     expect(importMessages).toHaveBeenCalledTimes(1);
-    expect(importMessages.mock.calls[0][3]).toEqual({ auditPeriodStart: "2025-01-01T00:00:00.000Z" });
+    expect(planOf(0).fetchStartISO).toBe("2025-01-01T00:00:00.000Z");
     expect(result.importRan).toBe(true);
   });
 
@@ -275,8 +293,8 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     // TWO device scans — not one — and the deeper caller's scan reached 2015
     // (honored), never handed back the narrower 2023 scan.
     expect(importMessages).toHaveBeenCalledTimes(2);
-    expect(importMessages.mock.calls[0][3]).toEqual({ auditPeriodStart: "2023-01-01T00:00:00.000Z" });
-    expect(importMessages.mock.calls[1][3]).toEqual({ auditPeriodStart: "2015-01-01T00:00:00.000Z" });
+    expect(planOf(0).fetchStartISO).toBe("2023-01-01T00:00:00.000Z");
+    expect(planOf(1).fetchStartISO).toBe("2015-01-01T00:00:00.000Z");
   });
 
   it("SR D1: a SHALLOWER caller DOES coalesce onto a deeper in-flight scan (superset)", async () => {
@@ -315,7 +333,7 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
     expect(importMessages).toHaveBeenCalledTimes(1);
     // earliest NON-rejected start (t1) drives auditPeriodStart, not the rejected t2.
-    expect(importMessages.mock.calls[0][3]).toEqual({ auditPeriodStart: "2026-01-01T00:00:00.000Z" });
+    expect(planOf(0).fetchStartISO).toBe("2026-01-01T00:00:00.000Z");
   });
 });
 
@@ -342,9 +360,7 @@ describe("import floor status filter (BACKLOG-2308)", () => {
     await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
     expect(importMessages).toHaveBeenCalledTimes(1);
     // The rejected 2019 start is ignored; the active 2026-02 start drives the floor.
-    expect(importMessages.mock.calls[0][3]).toEqual({
-      auditPeriodStart: "2026-02-01T00:00:00.000Z",
-    });
+    expect(planOf(0).fetchStartISO).toBe("2026-02-01T00:00:00.000Z");
   });
 
   it.each(["pending", "active", "closed"])(
@@ -355,9 +371,7 @@ describe("import floor status filter (BACKLOG-2308)", () => {
 
       await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
       expect(importMessages).toHaveBeenCalledTimes(1);
-      expect(importMessages.mock.calls[0][3]).toEqual({
-        auditPeriodStart: "2021-03-01T00:00:00.000Z",
-      });
+      expect(planOf(0).fetchStartISO).toBe("2021-03-01T00:00:00.000Z");
     },
   );
 
@@ -371,8 +385,6 @@ describe("import floor status filter (BACKLOG-2308)", () => {
     await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
     expect(importMessages).toHaveBeenCalledTimes(1);
     // Earliest non-rejected start (active, 2022-06) wins; the 2018 rejected is excluded.
-    expect(importMessages.mock.calls[0][3]).toEqual({
-      auditPeriodStart: "2022-06-01T00:00:00.000Z",
-    });
+    expect(planOf(0).fetchStartISO).toBe("2022-06-01T00:00:00.000Z");
   });
 });
