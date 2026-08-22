@@ -39,7 +39,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
 
@@ -120,6 +120,30 @@ const importCountCalls = (): Array<{
 
 const importButton = () => screen.getByRole("button", { name: /Import Messages/i });
 
+/**
+ * BACKLOG-2749: what "refused" looks like now that the refusal is a DIALOG.
+ *
+ * The founder settled (`2259031c`) that a refusal computes the way out and
+ * offers it — "Import last 12 months — 8.2 GB" — which is a dialog's job, not a
+ * greyed-out button's. So the resolved-and-does-not-fit case no longer disables
+ * Import; pressing it opens the refusal.
+ *
+ * These assertions are the ones that moved, and they are STRONGER at their new
+ * home. `toBeDisabled()` pinned the appearance of a refusal; this pins the
+ * refusal itself — the fact is stated before any click, the click reaches the
+ * refusal, and NO RUN IS REQUESTED. A disabled button cannot tell you the third
+ * thing, and the third thing is the guarantee BACKLOG-2743 exists for.
+ *
+ * The fail-CLOSED cases are untouched and still assert `toBeDisabled()`: while
+ * the size is unknown there is nothing to offer, so the button stays dead.
+ */
+async function expectImportRefused(): Promise<void> {
+  expect(screen.getByTestId("import-space-notice")).toBeInTheDocument();
+  fireEvent.click(importButton());
+  expect(await screen.findByTestId("import-space-block")).toBeInTheDocument();
+  expect(mockRequestSync).not.toHaveBeenCalled();
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockRequestSync.mockReset();
@@ -185,11 +209,13 @@ describe("BACKLOG-2760 — first paint estimates the STORED window, not useState
     expect(screen.queryByText(/12,074/)).not.toBeInTheDocument();
     expect(screen.queryByText(/2\.6 GB/)).not.toBeInTheDocument();
 
-    // The whole point: the guard fires, and Import cannot be clicked.
-    expect(screen.getByTestId("import-space-block")).toHaveTextContent(
+    // The whole point: the guard fires. BACKLOG-2749 — the SENTENCE is
+    // unchanged and still inline (the user learns the fact before clicking);
+    // the DECISION moved into the dialog behind the Import button.
+    expect(screen.getByTestId("import-space-notice")).toHaveTextContent(
       "This import needs up to 61.3 GB for attachments but only 59.1 GB is available. It will not start."
     );
-    expect(importButton()).toBeDisabled();
+    await expectImportRefused();
   });
 
   it("never asks for a window the user did not choose", async () => {
@@ -387,8 +413,10 @@ describe("BACKLOG-2760 — the guard fails CLOSED while the estimate is unknown"
       pendingAllTime.resolve(ALL_TIME_RESULT);
     });
 
-    expect(screen.getByTestId("import-space-block")).toBeInTheDocument();
-    expect(importButton()).toBeDisabled();
+    // BACKLOG-2749: the new verdict refuses, via the dialog rather than a dead
+    // button. The property under test is unchanged — the OLD window's "fits"
+    // verdict did not survive the switch.
+    await expectImportRefused();
   });
 
   it("still allows a text-only import when the estimate is unknown", async () => {
@@ -444,7 +472,8 @@ describe("BACKLOG-2760 — the audit period is asserted as a variable, both ways
     for (const selection of importCountCalls()) {
       expect(selection).toEqual({ lookbackMonths: null });
     }
-    expect(importButton()).toBeDisabled();
+    // BACKLOG-2749: refused through the dialog, not a disabled button.
+    await expectImportRefused();
   });
 
   it("with a transaction present: All time still estimates unbounded", async () => {
@@ -465,7 +494,8 @@ describe("BACKLOG-2760 — the audit period is asserted as a variable, both ways
     await waitFor(() =>
       expect(screen.getByTestId("import-size-estimate")).toHaveTextContent("707,956 messages")
     );
-    expect(importButton()).toBeDisabled();
+    // BACKLOG-2749: refused through the dialog, not a disabled button.
+    await expectImportRefused();
   });
 
   it("with an audit period that WIDENS a 3-month preference: the panel still sends only the preference", async () => {

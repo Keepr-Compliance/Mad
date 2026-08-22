@@ -7,8 +7,14 @@ import type { ConversationSummary, MessageAttachmentInfo } from "./common";
 // BACKLOG-2743: ONE definition of the refusal shape. Re-exported here so the
 // renderer imports it from the IPC contract rather than re-spelling the literal.
 import type { AttachmentsRefusedForSpace } from "../../services/macOSMessagesImportService/types";
+// BACKLOG-2749: the override list is the resolver's own type, re-exported here
+// rather than re-spelled. The dialog renders `overrides[]` as DATA (the shape
+// BACKLOG-2772 emitted for exactly this consumer), so a new override kind added
+// in the resolver becomes a compile-time fact on the renderer side instead of a
+// silently-unhandled case.
+import type { ImportPlanOverride } from "../../services/importPlan";
 
-export type { AttachmentsRefusedForSpace };
+export type { AttachmentsRefusedForSpace, ImportPlanOverride };
 
 /**
  * BACKLOG-2743: Filters for the selection-time import estimate.
@@ -50,12 +56,61 @@ export interface MessageImportCountFilters {
  * `attachmentBytes` vs `availableDiskBytes` — two comparisons would drift, and
  * the headroom rule lives on the main side.
  */
+/**
+ * BACKLOG-2749: the resolved plan's own facts, carried alongside the counts.
+ *
+ * The ONE pre-import dialog renders these DIRECTLY. It exists because several
+ * surfaces had each worked out "is the cap biting, and by how much?" from
+ * whatever numbers were nearest to hand, and they disagreed — the header said
+ * "up to 50,000" while the selection line beneath it said 62,823 (founder,
+ * 2026-08-22, live).
+ *
+ * The temptation the dialog must not yield to is INFERRING the cap from the
+ * counts. `filteredCount > effectiveCap` is what "protected audit history rides
+ * along" looks like, but `min(windowCount, cap)` is NOT the admitted count and
+ * `filteredCount` is NOT the cap: under Cap' the admitted set is
+ * `protected ∪ (the newest `cap` unprotected messages)`, whose size no pair of
+ * counts can reconstruct. So the cap is stated by the resolver that enforces
+ * it, and the dialog reads it rather than deriving it.
+ */
+export interface MessageImportPlanFacts {
+  /**
+   * The "Maximum messages" cap the run will enforce; `null` = Unlimited.
+   * `ImportPlan.effectiveCap`, verbatim.
+   */
+  effectiveCap: number | null;
+  /** Lower bound of the fetch, ISO; `null` = unbounded. `ImportPlan.fetchStartISO`. */
+  fetchStartISO: string | null;
+  /**
+   * Everything the plan decided AGAINST the user's raw settings —
+   * `ImportPlan.overrides`, verbatim. Today the only kind is
+   * `window-extended-by-deals`. An empty array means the run does exactly what
+   * the user's own selection asked for, and the dialog says nothing about deals.
+   */
+  overrides: ImportPlanOverride[];
+}
+
 export interface MessageImportCountResult {
   success: boolean;
   count?: number;
   /**
+   * BACKLOG-2749: the plan these counts describe, as the resolver returned it.
+   *
+   * Absent on failure, and absent in a caller's own pre-2749 mocks — the dialog
+   * treats an absent `plan` as "not enough is known to offer this choice" and
+   * declines to render the choice, rather than guessing the missing fact.
+   */
+  plan?: MessageImportPlanFacts;
+  /**
    * What the run will IMPORT for this plan — Cap' applied (BACKLOG-2772).
    * Present only when it differs from `count`.
+   *
+   * BACKLOG-2749 names what this is in user terms: the COVERAGE the store will
+   * have when the run finishes, not the volume this run downloads. A delta
+   * import skips what is already present, so the two differ by exactly the
+   * messages already stored — and conflating them is what produced the wrong
+   * completion figure (708,400 − 48,781 = 659,619 instead of
+   * 708,400 − 62,824 = 645,576).
    */
   filteredCount?: number;
   /**
