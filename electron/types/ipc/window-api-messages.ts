@@ -15,11 +15,32 @@ export type { AttachmentsRefusedForSpace };
  * `auditPeriodStart` mirrors the value the import itself uses to widen the
  * window, so the estimate describes the import that would actually run.
  */
+/**
+ * Payload of the background-import announcements (BACKLOG-2772).
+ */
+export interface BackgroundImportSignal {
+  userId: string;
+  /** Which lifecycle event asked for the import (create / date-change / ...). */
+  reason: string;
+}
+
 export interface MessageImportCountFilters {
   lookbackMonths?: number | null;
   maxMessages?: number | null;
-  auditPeriodStart?: string | null;
+  skipAttachments?: boolean;
 }
+
+/*
+ * BACKLOG-2772: `auditPeriodStart` was REMOVED from this type, and its removal
+ * is the point rather than a tidy-up.
+ *
+ * The renderer used to compute the effective audit floor (over a second IPC)
+ * and send it back down with every estimate request, which made the Settings
+ * panel a participant in deciding what an import covers. It is not one. The
+ * resolver derives the deal spans itself, from the same query the export gate
+ * reads, so the panel now states only what the USER has selected and the
+ * compiler rejects the old field.
+ */
 
 /**
  * BACKLOG-2743: Selection-time import estimate.
@@ -32,7 +53,20 @@ export interface MessageImportCountFilters {
 export interface MessageImportCountResult {
   success: boolean;
   count?: number;
+  /**
+   * What the run will IMPORT for this plan — Cap' applied (BACKLOG-2772).
+   * Present only when it differs from `count`.
+   */
   filteredCount?: number;
+  /**
+   * What the SELECTION covers, before the cap (BACKLOG-2772).
+   *
+   * The cap warning needs both numbers. With only the admitted count, a cap
+   * truncating 707,842 messages to 50,000 is indistinguishable from a window
+   * that happens to hold 50,000, and the user stops being told anything is
+   * being left out.
+   */
+  windowCount?: number;
   error?: string;
   /** Bytes of attachments that would be copied for the selected window. */
   attachmentBytes?: number;
@@ -94,7 +128,18 @@ export interface WindowApiMessages {
     rolledBack?: boolean;
   }>;
   /** Get count of messages available for import from macOS Messages */
-  getImportCount: (filters?: MessageImportCountFilters) => Promise<MessageImportCountResult>;
+  getImportCount: (
+    userId: string,
+    selection?: MessageImportCountFilters
+  ) => Promise<MessageImportCountResult>;
+  /**
+   * Subscribe to macOS Messages imports the renderer did not start
+   * (BACKLOG-2772). See the preload bridge for why this exists.
+   */
+  onBackgroundImport: (callbacks: {
+    onStarted: (signal: BackgroundImportSignal) => void;
+    onFinished: (signal: BackgroundImportSignal) => void;
+  }) => () => void;
   /**
    * Cancel the running macOS Messages import (BACKLOG-2748).
    *

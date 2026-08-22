@@ -580,6 +580,9 @@ class SyncOrchestratorServiceClass {
       });
     }
 
+    // BACKLOG-2772: mirror main-initiated imports into the queue.
+    this.subscribeToBackgroundImports();
+
     // =========================================================================
     // TASK-2150: Maintenance / utility operations
     // These operations bypass the orchestrator today. Registering them here
@@ -747,9 +750,81 @@ class SyncOrchestratorServiceClass {
    * Idempotent: if an item for this type already exists with status 'running',
    * the call is a no-op (safe for hot-reload reconnect).
    */
+  /**
+   * Mirror a macOS Messages import that MAIN started into the queue
+   * (BACKLOG-2772).
+   *
+   * `messagesSyncTrigger` runs a global import when a deal is created or its
+   * start date moves earlier. That import cannot enqueue itself — this queue
+   * lives in the renderer and every sync function here dereferences
+   * `window.api` — so main announces and this mirrors, the same shape the
+   * iPhone sync has used since BACKLOG-2195.
+   *
+   * The queue item is the point: it is what renders the Cancel button. The
+   * cancel mechanism already reached these runs (`requestCancellation` is
+   * global to the import service), but nothing ever offered the user the
+   * button, so creating a deal on a large library started a scan that could
+   * only be escaped by force-quitting.
+   *
+   * `registerExternalSync` returns early when an item of this type is already
+   * running, so a user-initiated import in flight is never displaced by a
+   * mirrored one — and `completeExternalSync` no-ops when no EXTERNAL item
+   * exists, so the pair is safe in either order.
+   */
+  private subscribeToBackgroundImports(): void {
+    if (typeof window === 'undefined' || !window.api?.messages?.onBackgroundImport) return;
+
+    window.api.messages.onBackgroundImport({
+      onStarted: () => {
+        this.registerExternalSync('messages');
+      },
+      onFinished: () => {
+        this.completeExternalSync('messages', { status: 'complete' });
+      },
+    });
+  }
+
   registerExternalSync(type: SyncType): void {
     const existing = this.state.queue.find((item) => item.type === type);
-    if (existing && existing.status === 'running') {
+
+    /*
+     * OWNERSHIP, NOT LIVENESS (BACKLOG-2772).
+     *
+     * The invariant this and `startSync` jointly keep: **at most one queue row
+     * per type, and an INTERNAL item always owns it.**
+     *
+     * This guard used to read `existing.status === 'running'` alone, which was
+     * correct while `registerExternalSync` had exactly one caller — the iPhone
+     * sync, whose type is never also an internal one. Mirroring the macOS
+     * Messages import made `messages` the first type that is BOTH, and a
+     * pending internal item then had nothing defending it.
+     *
+     * What that cost, concretely. A full sync seeds every requested type as
+     * `pending` and runs them sequentially, so `messages` sits pending for the
+     * whole of the contacts and emails syncs ahead of it — minutes, routinely.
+     * Create a transaction with an early start date in that window and the
+     * trigger's STARTED announcement filtered the pending internal item out and
+     * replaced it with an external one. From there: `updateQueueItem` matches on
+     * type alone, so the user's own import drove the mirrored row; the trigger's
+     * FINISHED then marked that row complete at 100% and removed it three
+     * seconds later — while the user's import was still running. The row
+     * vanished, the Cancel button with it, and the UI reported a completion that
+     * had not happened.
+     *
+     * A `complete`/`error` internal item is stale and does NOT own anything —
+     * replacing it is the pre-existing behaviour and stays.
+     */
+    if (
+      existing &&
+      !existing.external &&
+      (existing.status === 'pending' || existing.status === 'running')
+    ) {
+      logger.debug(
+        `[SyncOrchestrator] '${type}' is already queued as an internal sync; not mirroring`
+      );
+      return;
+    }
+    if (existing && existing.external && existing.status === 'running') {
       logger.debug(`[SyncOrchestrator] External sync '${type}' already registered, skipping`);
       return;
     }
@@ -924,8 +999,38 @@ class SyncOrchestratorServiceClass {
       return;
     }
 
-    // Preserve any external sync items already in the queue
-    const externalItems = this.state.queue.filter((item) => item.external);
+    /*
+     * Preserve external sync items — EXCEPT for a type this run is about to
+     * seed itself (BACKLOG-2772, the other half of the ownership invariant).
+     *
+     * Without the exclusion the reverse interleaving produces TWO rows of the
+     * same type: the trigger's mirrored `messages` item survives here and a
+     * fresh internal one is appended beside it. `updateQueueItem` maps over
+     * every match, so both rows move together, and the trigger's FINISHED then
+     * completes and removes one of them out from under the user's run.
+     *
+     * WHAT DROPPING THE EXTERNAL ROW COSTS, stated accurately — an earlier
+     * version of this comment claimed it cost nothing, and that was wrong.
+     *
+     * The internal item that replaces it lands as `pending`, and the Settings
+     * panel gates its Cancel button on `status === 'running'`
+     * (`MacOSMessagesImportSettings.tsx`, `cancelAvailable`). So on a full sync
+     * — where `messages` waits behind contacts and emails — the trigger's run
+     * keeps going with no Cancel affordance until the queue reaches it, which
+     * is minutes rather than seconds.
+     *
+     * That is a UX gap, not a correctness one: the run is honestly represented
+     * (one row, the user's own, in the state it is actually in), and the
+     * service's cancel is global, so the button works the moment it appears.
+     * Deliberately NOT fixed here — offering Cancel on a pending item is a
+     * decision about what that button means while nothing is running, and it
+     * belongs with BACKLOG-2749's dialog wiring rather than in a queue-ownership
+     * fix.
+     */
+    const seededTypes = new Set<SyncType>(validTypes);
+    const externalItems = this.state.queue.filter(
+      (item) => item.external && !seededTypes.has(item.type)
+    );
 
     // Initialize queue with pending status for internal syncs + existing external items
     const queue: SyncItem[] = [

@@ -28,6 +28,14 @@ jest.mock("../macOSMessagesImportService", () => ({
   __esModule: true,
   default: { importMessages: jest.fn() },
 }));
+// BACKLOG-2772: the announcement that gives a main-initiated import a queue
+// item, and therefore a Cancel button. Mocked so the trigger's contract with it
+// is asserted directly rather than through a BrowserWindow broadcast.
+jest.mock("../messagesBackgroundImportSignal", () => ({
+  __esModule: true,
+  emitBackgroundImportStarted: jest.fn(),
+  emitBackgroundImportFinished: jest.fn(),
+}));
 jest.mock("../autoLinkService", () => ({
   __esModule: true,
   expandAttachedThreadsForUser: jest.fn().mockResolvedValue({ messagesLinked: 0, errors: 0 }),
@@ -45,6 +53,10 @@ jest.mock("../auditCoverageService", () => {
 import { setDb } from "../db/core/dbConnection";
 import macOSMessagesImportService from "../macOSMessagesImportService";
 import { expandAttachedThreadsForUser } from "../autoLinkService";
+import {
+  emitBackgroundImportStarted,
+  emitBackgroundImportFinished,
+} from "../messagesBackgroundImportSignal";
 import { isMessagesImporterAvailable } from "../auditCoverageService";
 import { getState } from "../db/messageImportStateService";
 import {
@@ -56,6 +68,17 @@ const USER = "user-trigger";
 const importMessages = macOSMessagesImportService.importMessages as jest.Mock;
 const expandMock = expandAttachedThreadsForUser as jest.Mock;
 const importerAvailableMock = isMessagesImporterAvailable as jest.Mock;
+const startedMock = emitBackgroundImportStarted as jest.Mock;
+const finishedMock = emitBackgroundImportFinished as jest.Mock;
+
+/**
+ * The PLAN the trigger handed the import service on call `n` (BACKLOG-2772).
+ *
+ * The plan is the decision under test: whether this entry point asked the one
+ * resolver, or decided for itself. Reading it here is the same discipline the
+ * export boundary suite uses (`exportIncludeSet-2771.test.ts`).
+ */
+const planOf = (n: number) => importMessages.mock.calls[n][2];
 
 let db: DatabaseType;
 function makeDb(): DatabaseType {
@@ -88,6 +111,8 @@ beforeEach(() => {
   importMessages.mockReset().mockResolvedValue({ success: true, messagesImported: 3 });
   expandMock.mockClear();
   importerAvailableMock.mockReset().mockResolvedValue(true);
+  startedMock.mockClear();
+  finishedMock.mockClear();
   __resetMessagesSyncStateForTests();
 });
 afterEach(() => db.close());
@@ -102,11 +127,20 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     });
 
     expect(importMessages).toHaveBeenCalledTimes(1);
-    // (userId, onProgress, forceReimport=false, { auditPeriodStart })
+    // BACKLOG-2772: (userId, onProgress, plan). The trigger no longer builds a
+    // filter bag of its own — it states its required start and the ONE resolver
+    // turns that into the same kind of plan the Settings buttons run. Asserting
+    // the plan OBJECT is what makes this a routing test rather than a
+    // string-matching one.
     const args = importMessages.mock.calls[0];
     expect(args[0]).toBe(USER);
-    expect(args[2]).toBe(false);
-    expect(args[3]).toEqual({ auditPeriodStart: "2026-01-01T00:00:00.000Z" });
+    expect(planOf(0).mode).toBe("delta");
+    expect(planOf(0).fetchStartISO).toBe("2026-01-01T00:00:00.000Z");
+    // The defects this closes: the old call passed NO cap and NO attachment
+    // preference, so a deal being created started an uncapped, attachment-
+    // copying full-device scan regardless of what the user had chosen.
+    expect(planOf(0).effectiveCap).toBe(50000);
+    expect(planOf(0).fetchAttachments).toBe(true);
 
     expect(expandMock).toHaveBeenCalledTimes(1);
     expect(result.importRan).toBe(true);
@@ -167,7 +201,7 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     });
 
     expect(importMessages).toHaveBeenCalledTimes(1);
-    expect(importMessages.mock.calls[0][3]).toEqual({ auditPeriodStart: "2025-01-01T00:00:00.000Z" });
+    expect(planOf(0).fetchStartISO).toBe("2025-01-01T00:00:00.000Z");
     expect(result.importRan).toBe(true);
   });
 
@@ -275,8 +309,8 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     // TWO device scans — not one — and the deeper caller's scan reached 2015
     // (honored), never handed back the narrower 2023 scan.
     expect(importMessages).toHaveBeenCalledTimes(2);
-    expect(importMessages.mock.calls[0][3]).toEqual({ auditPeriodStart: "2023-01-01T00:00:00.000Z" });
-    expect(importMessages.mock.calls[1][3]).toEqual({ auditPeriodStart: "2015-01-01T00:00:00.000Z" });
+    expect(planOf(0).fetchStartISO).toBe("2023-01-01T00:00:00.000Z");
+    expect(planOf(1).fetchStartISO).toBe("2015-01-01T00:00:00.000Z");
   });
 
   it("SR D1: a SHALLOWER caller DOES coalesce onto a deeper in-flight scan (superset)", async () => {
@@ -315,7 +349,7 @@ describe("ensureTransactionMessagesSynced (BACKLOG-2292)", () => {
     await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
     expect(importMessages).toHaveBeenCalledTimes(1);
     // earliest NON-rejected start (t1) drives auditPeriodStart, not the rejected t2.
-    expect(importMessages.mock.calls[0][3]).toEqual({ auditPeriodStart: "2026-01-01T00:00:00.000Z" });
+    expect(planOf(0).fetchStartISO).toBe("2026-01-01T00:00:00.000Z");
   });
 });
 
@@ -342,9 +376,7 @@ describe("import floor status filter (BACKLOG-2308)", () => {
     await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
     expect(importMessages).toHaveBeenCalledTimes(1);
     // The rejected 2019 start is ignored; the active 2026-02 start drives the floor.
-    expect(importMessages.mock.calls[0][3]).toEqual({
-      auditPeriodStart: "2026-02-01T00:00:00.000Z",
-    });
+    expect(planOf(0).fetchStartISO).toBe("2026-02-01T00:00:00.000Z");
   });
 
   it.each(["pending", "active", "closed"])(
@@ -355,9 +387,7 @@ describe("import floor status filter (BACKLOG-2308)", () => {
 
       await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
       expect(importMessages).toHaveBeenCalledTimes(1);
-      expect(importMessages.mock.calls[0][3]).toEqual({
-        auditPeriodStart: "2021-03-01T00:00:00.000Z",
-      });
+      expect(planOf(0).fetchStartISO).toBe("2021-03-01T00:00:00.000Z");
     },
   );
 
@@ -371,8 +401,74 @@ describe("import floor status filter (BACKLOG-2308)", () => {
     await ensureTransactionMessagesSynced({ userId: USER, reason: "date-change" });
     expect(importMessages).toHaveBeenCalledTimes(1);
     // Earliest non-rejected start (active, 2022-06) wins; the 2018 rejected is excluded.
-    expect(importMessages.mock.calls[0][3]).toEqual({
-      auditPeriodStart: "2022-06-01T00:00:00.000Z",
+    expect(planOf(0).fetchStartISO).toBe("2022-06-01T00:00:00.000Z");
+  });
+});
+
+/**
+ * BACKLOG-2772 — the trigger's run is announced, so the renderer can give it a
+ * queue item and therefore a Cancel button.
+ *
+ * This path called `importMessages()` directly: no queue item, no cancel
+ * surface of any kind. The cancel MECHANISM already reached it —
+ * `requestCancellation` is global to the import service — but nothing ever
+ * offered the user the button, so creating a deal on a large library started a
+ * full-device scan escapable only by force-quitting the app.
+ *
+ * The queue lives in the renderer and main cannot enqueue on it, so the routing
+ * is an announcement the orchestrator mirrors (the iPhone sync's shape). These
+ * tests pin main's half of that contract.
+ */
+describe("BACKLOG-2772: a main-initiated import announces itself", () => {
+  it("brackets the import with exactly one started and one finished", async () => {
+    insMsg("m1", "2026-05-01T00:00:00.000Z");
+
+    await ensureTransactionMessagesSynced({
+      userId: USER,
+      reason: "date-change",
+      proposedStartISO: "2026-01-01T00:00:00.000Z",
     });
+
+    expect(importMessages).toHaveBeenCalledTimes(1);
+    expect(startedMock).toHaveBeenCalledTimes(1);
+    expect(finishedMock).toHaveBeenCalledTimes(1);
+    expect(startedMock).toHaveBeenCalledWith(USER, "date-change");
+    expect(finishedMock).toHaveBeenCalledWith(USER, "date-change");
+  });
+
+  it("still announces the finish when the import THROWS", async () => {
+    // The `finally` is the load-bearing part. A start with no finish leaves a
+    // queue item spinning forever, with a Cancel button that stops nothing —
+    // strictly worse than the no-surface state this replaced.
+    insMsg("m1", "2026-05-01T00:00:00.000Z");
+    importMessages.mockRejectedValueOnce(new Error("chat.db unreadable"));
+
+    const result = await ensureTransactionMessagesSynced({
+      userId: USER,
+      reason: "date-change",
+      proposedStartISO: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(startedMock).toHaveBeenCalledTimes(1);
+    expect(finishedMock).toHaveBeenCalledTimes(1);
+    // And the trigger still degrades rather than throwing at its caller.
+    expect(result.importRan).toBe(false);
+  });
+
+  it("announces NOTHING when no import runs", async () => {
+    // Anti-vacuity: a queue item that appears when nothing is importing is a
+    // spinner the user cannot explain and cannot dismiss. Floor already covers
+    // the required start, so the trigger skips the import entirely.
+    insMsg("m1", "2020-01-01T00:00:00.000Z");
+
+    await ensureTransactionMessagesSynced({
+      userId: USER,
+      reason: "date-change",
+      proposedStartISO: "2026-01-01T00:00:00.000Z",
+    });
+
+    expect(importMessages).not.toHaveBeenCalled();
+    expect(startedMock).not.toHaveBeenCalled();
+    expect(finishedMock).not.toHaveBeenCalled();
   });
 });

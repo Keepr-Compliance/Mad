@@ -93,6 +93,8 @@ jest.mock("../db/readOnlySqlite", () => ({
 
 import { app } from "electron";
 import macOSMessagesImportService from "../macOSMessagesImportService";
+// BACKLOG-2772: plans are built by the REAL resolver, never hand-written.
+import { testImportPlan } from "./helpers/importPlanFixture";
 import { ATTACHMENTS_DIR } from "../macOSMessagesImportService/types";
 import type { RawMacMessage, RawMacAttachment } from "../macOSMessagesImportService/types";
 
@@ -191,8 +193,10 @@ describe("BACKLOG-2743 — import without attachments (service branch)", () => {
     const result = await macOSMessagesImportService.importMessages(
       USER,
       undefined,
-      false,
-      { lookbackMonths: null, maxMessages: null, skipAttachments: true },
+      testImportPlan({
+        mode: "delta",
+        storedFilters: { lookbackMonths: null, maxMessages: null, skipAttachments: true },
+      }),
     );
 
     expect(result.success).toBe(true);
@@ -225,8 +229,10 @@ describe("BACKLOG-2743 — import without attachments (service branch)", () => {
     const result = await macOSMessagesImportService.importMessages(
       USER,
       undefined,
-      false,
-      { lookbackMonths: null, maxMessages: null, skipAttachments: false },
+      testImportPlan({
+        mode: "delta",
+        storedFilters: { lookbackMonths: null, maxMessages: null, skipAttachments: false },
+      }),
     );
 
     expect(result.success).toBe(true);
@@ -243,8 +249,10 @@ describe("BACKLOG-2743 — import without attachments (service branch)", () => {
     const result = await macOSMessagesImportService.importMessages(
       USER,
       undefined,
-      false,
-      { lookbackMonths: null, maxMessages: null },
+      testImportPlan({
+        mode: "delta",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      }),
     );
 
     expect(issuedSql.some((sql) => sql.includes("FROM attachment"))).toBe(true);
