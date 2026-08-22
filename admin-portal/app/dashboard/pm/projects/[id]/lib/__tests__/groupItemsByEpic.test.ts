@@ -11,7 +11,8 @@
  * - a task whose parent is a non-epic item -> backlog
  * - a task whose parent is an epic from a DIFFERENT set (not present) -> backlog
  * - epic rows are excluded from cards (never appear in children or backlog)
- * - epics are sorted by item_number ascending
+ * - epics are ordered by execution order: sort_order asc, item_number as the
+ *   tiebreak (BACKLOG-2785)
  * - every epic gets a (possibly empty) children bucket
  * - input is not mutated
  */
@@ -130,7 +131,10 @@ describe('groupItemsByEpic - core filing rules', () => {
     expect(idSet(result.backlog).has('epic-b')).toBe(false);
   });
 
-  it('returns epics sorted by item_number ascending', () => {
+  it('falls back to item_number when sort_order ties (both default 0)', () => {
+    // Input order is scrambled (epic-b appears before epic-a), so a stable sort
+    // with no tiebreak would return ['epic-b', 'epic-a']. BACKLOG-2785.
+    expect(epicA.sort_order).toBe(epicB.sort_order);
     expect(ids(result.epics)).toEqual(['epic-a', 'epic-b']);
   });
 
@@ -168,5 +172,100 @@ describe('groupItemsByEpic - purity & edge cases', () => {
     ]);
     expect(result.epics).toEqual([]);
     expect(idSet(result.backlog)).toEqual(new Set(['t1', 't2']));
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2785 -- epic lists follow EXECUTION order (sort_order), not the
+// backlog number. Founder, 2026-08-21: "the epics are still sorted by their
+// original backlog number and not the order of execution on the project
+// module."
+// ---------------------------------------------------------------------------
+
+describe('groupItemsByEpic - execution order (BACKLOG-2785)', () => {
+  it('orders epics by sort_order when sort_order INVERTS item_number order', () => {
+    // Three epics whose execution order is the exact reverse of their backlog
+    // numbers, fed in yet a third order so neither input order nor item_number
+    // can produce a passing result by accident.
+    const first = makeItem({ id: 'runs-first', item_number: 300, type: 'epic', sort_order: 0 });
+    const second = makeItem({ id: 'runs-second', item_number: 200, type: 'epic', sort_order: 1 });
+    const third = makeItem({ id: 'runs-third', item_number: 100, type: 'epic', sort_order: 2 });
+
+    const result = groupItemsByEpic([second, third, first]);
+
+    expect(ids(result.epics)).toEqual(['runs-first', 'runs-second', 'runs-third']);
+  });
+
+  it('breaks a sort_order tie by item_number, not by input order', () => {
+    // Both epics sequenced into the same slot; the lower backlog number wins.
+    const later = makeItem({ id: 'num-40', item_number: 40, type: 'epic', sort_order: 5 });
+    const earlier = makeItem({ id: 'num-30', item_number: 30, type: 'epic', sort_order: 5 });
+
+    const result = groupItemsByEpic([later, earlier]);
+
+    expect(ids(result.epics)).toEqual(['num-30', 'num-40']);
+  });
+
+  it('leaves an unsequenced project (every sort_order at the 0 default) in item_number order', () => {
+    // pm_backlog_items.sort_order is NOT NULL DEFAULT 0, so a project that never
+    // sequenced its epics has every epic at 0 — it must keep today's order.
+    const e1 = makeItem({ id: 'e-1', item_number: 1, type: 'epic' });
+    const e2 = makeItem({ id: 'e-2', item_number: 2, type: 'epic' });
+    const e3 = makeItem({ id: 'e-3', item_number: 3, type: 'epic' });
+
+    const result = groupItemsByEpic([e3, e1, e2]);
+
+    expect(result.epics.every((e) => e.sort_order === 0)).toBe(true);
+    expect(ids(result.epics)).toEqual(['e-1', 'e-2', 'e-3']);
+  });
+
+  it('renders the Stable Ground epic set in execution order', () => {
+    // Transcribed from pm_backlog_items on 2026-08-21 (the project the founder
+    // was looking at): item_number + sort_order exactly as stored. Titles are
+    // omitted -- ordering is decided by the two numeric columns alone.
+    //
+    // Item numbers ordered by sort_order, then item_number:
+    //   2710 umbrella (0) · 2723 "0 gates" (0) · 2716 "1" (1) · 2738 "2" (2)
+    //   2713 "3" (3) · 2714 "4" (4) · 2715 "5" (5) · 2717 "6" (6)
+    //   2724 triage (99)
+    // The umbrella (2710) stays first exactly as it is today, via the tiebreak.
+    // Before this fix the list read 2710, 2713, 2714, 2715, 2716, 2717, 2723,
+    // 2724, 2738 -- the founder-visible sequence "3, 4, 5, 1, 6, 0, 2".
+    const stableGround = [
+      { n: 2713, s: 3 },
+      { n: 2717, s: 6 },
+      { n: 2710, s: 0 },
+      { n: 2738, s: 2 },
+      { n: 2715, s: 5 },
+      { n: 2723, s: 0 },
+      { n: 2714, s: 4 },
+      { n: 2724, s: 99 },
+      { n: 2716, s: 1 },
+    ].map(({ n, s: sortOrder }) =>
+      makeItem({ id: `epic-${n}`, item_number: n, type: 'epic', sort_order: sortOrder })
+    );
+
+    const result = groupItemsByEpic(stableGround);
+
+    expect(result.epics.map((e) => e.item_number)).toEqual([
+      2710, 2723, 2716, 2738, 2713, 2714, 2715, 2717, 2724,
+    ]);
+  });
+
+  it('orders epic sections only -- child/backlog order is left to the caller', () => {
+    // Children keep the order the server sent them in (pm_list_items already
+    // returns sort_order ASC); this helper must not re-sort them.
+    const epic = makeItem({ id: 'epic', item_number: 10, type: 'epic', sort_order: 1 });
+    const childHighNumber = makeItem({
+      id: 'child-hi', item_number: 99, parent_id: 'epic', sort_order: 0,
+    });
+    const childLowNumber = makeItem({
+      id: 'child-lo', item_number: 11, parent_id: 'epic', sort_order: 5,
+    });
+
+    const result = groupItemsByEpic([epic, childHighNumber, childLowNumber]);
+
+    expect(ids(result.childrenByEpicId['epic'])).toEqual(['child-hi', 'child-lo']);
   });
 });
