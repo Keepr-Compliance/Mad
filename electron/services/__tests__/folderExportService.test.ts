@@ -114,6 +114,8 @@ import {
   stripSubjectPrefixes,
 } from "../folderExport/emailExportHelpers";
 import { getThreadKey as getThreadKeyHelper } from "../folderExport/textExportHelpers";
+// BACKLOG-2771: plans are built by the REAL resolver, never by hand.
+import { testExportPlan } from "./helpers/exportPlanFixture";
 
 describe("FolderExportService", () => {
   let folderExportService: typeof import("../folderExportService").default;
@@ -212,13 +214,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -263,13 +262,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -288,13 +284,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -326,13 +319,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -349,13 +339,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -374,13 +361,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -406,13 +390,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -429,13 +410,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -453,13 +431,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -477,13 +452,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -530,13 +502,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -570,13 +539,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -622,13 +588,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false,
         }
       );
 
@@ -660,13 +623,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        texts,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: false,
-          includeTexts: true,
-          includeAttachments: false, // Don't include attachments to avoid DB call
         }
       );
 
@@ -1045,13 +1005,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        emails,
+        testExportPlan(emails, { contentType: "emails", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: true,
-          includeTexts: false,
-          includeAttachments: false,
         }
       );
 
@@ -1070,14 +1027,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        emails,
+        testExportPlan(emails, { contentType: "emails", attachmentType: "none", emailMode: "individual" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: true,
-          includeTexts: false,
-          includeAttachments: false,
-          emailExportMode: "individual",
         }
       );
 
@@ -1096,13 +1049,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        emails,
+        testExportPlan(emails, { contentType: "emails", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: true,
-          includeTexts: false,
-          includeAttachments: false,
         }
       );
 
@@ -1122,13 +1072,10 @@ describe("FolderExportService", () => {
 
       await folderExportService.exportTransactionToFolder(
         mockTransaction,
-        emails,
+        testExportPlan(emails, { contentType: "emails", attachmentType: "none" }),
         {
           transactionId: mockTransaction.id,
           outputPath: "/mock/output",
-          includeEmails: true,
-          includeTexts: false,
-          includeAttachments: false,
         }
       );
 
@@ -1204,14 +1151,13 @@ describe("FolderExportService", () => {
     };
 
     it("Thread View (default): header shows THREAD count and one row per thread", async () => {
-      await folderExportService.exportTransactionToFolder(mockTransaction, emails(), {
+      await folderExportService.exportTransactionToFolder(mockTransaction,
+        testExportPlan(emails(), { contentType: "emails", attachmentType: "none", emailMode: "thread" }),
+        {
         transactionId: mockTransaction.id,
         outputPath: "/mock/output",
-        includeEmails: true,
-        includeTexts: false,
-        includeAttachments: false,
-        emailExportMode: "thread",
-      });
+        }
+      );
 
       const html = capturedSummaryHtml();
       expect(html).not.toBe("");
@@ -1234,15 +1180,23 @@ describe("FolderExportService", () => {
       expect(html).toContain('<div class="email-item" data-multi="false">');
     });
 
-    it("defaults to Thread View when emailExportMode is omitted", async () => {
-      await folderExportService.exportTransactionToFolder(mockTransaction, emails(), {
+    // BACKLOG-2771: this case used to be named "defaults to Thread View when
+    // emailExportMode is omitted". It no longer tests that. Omitting `emailMode`
+    // here selects the FIXTURE HELPER's default, not the shipped
+    // `normalizeEmailMode()` default the wire actually goes through — so the old
+    // name claimed a guarantee this assertion could not make. The shipped
+    // default is pinned against the real handler in
+    // electron/__tests__/exportIncludeSet-2771.test.ts. What remains true here,
+    // and worth keeping, is the renderer half: given a thread-mode plan, the
+    // summary index groups by thread.
+    it("renders a thread-mode plan as one index row per thread", async () => {
+      await folderExportService.exportTransactionToFolder(mockTransaction,
+        testExportPlan(emails(), { contentType: "emails", attachmentType: "none", emailMode: "thread" }),
+        {
         transactionId: mockTransaction.id,
         outputPath: "/mock/output",
-        includeEmails: true,
-        includeTexts: false,
-        includeAttachments: false,
-        // emailExportMode intentionally omitted
-      });
+        }
+      );
 
       const html = capturedSummaryHtml();
       expect(html).toContain("Email Threads Index (2 conversations - 3 emails)");
@@ -1250,14 +1204,13 @@ describe("FolderExportService", () => {
     });
 
     it("Individual: header shows EMAIL count and one row per email (unchanged)", async () => {
-      await folderExportService.exportTransactionToFolder(mockTransaction, emails(), {
+      await folderExportService.exportTransactionToFolder(mockTransaction,
+        testExportPlan(emails(), { contentType: "emails", attachmentType: "none", emailMode: "individual" }),
+        {
         transactionId: mockTransaction.id,
         outputPath: "/mock/output",
-        includeEmails: true,
-        includeTexts: false,
-        includeAttachments: false,
-        emailExportMode: "individual",
-      });
+        }
+      );
 
       const html = capturedSummaryHtml();
       expect(html).not.toBe("");

@@ -243,6 +243,8 @@ jest.mock("../emailAttachmentService", () => ({
 
 import type { Communication } from "../../types/models";
 import type { TransactionWithDetails } from "../transactionService/types";
+// BACKLOG-2771: plans are built by the REAL resolver, never by hand.
+import { testExportPlan } from "./helpers/exportPlanFixture";
 
 // --- Fixtures ---------------------------------------------------------------
 
@@ -352,21 +354,26 @@ const seedMissingAttachments = (): void => {
 };
 
 interface ExportOptions {
-  includeAttachments: boolean;
   attachmentType: "all" | "email" | "text" | "none";
 }
 
+/**
+ * BACKLOG-2771: the attachment selection now reaches the exporter as a resolved
+ * plan rather than as a pair of loose flags, and the plan is produced by the
+ * real resolver. `includeAttachments` is gone from the wire — it was a second
+ * encoding of `attachmentType !== "none"`.
+ */
 const runExport = async (opts: ExportOptions): Promise<void> => {
   const module = await import("../folderExportService");
-  await module.default.exportTransactionToFolder(mockTransaction, emails(), {
-    transactionId: mockTransaction.id,
-    outputPath: OUTPUT_PATH,
-    includeEmails: true,
-    includeTexts: false,
-    includeAttachments: opts.includeAttachments,
-    attachmentType: opts.attachmentType,
-    emailExportMode: "thread",
-  });
+  await module.default.exportTransactionToFolder(
+    mockTransaction,
+    testExportPlan(emails(), {
+      contentType: "emails",
+      attachmentType: opts.attachmentType,
+      emailMode: "thread",
+    }),
+    { transactionId: mockTransaction.id, outputPath: OUTPUT_PATH },
+  );
 };
 
 // --- Tests ------------------------------------------------------------------
@@ -393,21 +400,21 @@ describe("BACKLOG-2769: email attachment export honors the attachment selector",
     beforeEach(seedLocalAttachments);
 
     it('"none" writes NO email attachment files and creates NO attachment directories', async () => {
-      await runExport({ includeAttachments: false, attachmentType: "none" });
+      await runExport({ attachmentType: "none" });
 
       expect(emailAttachmentCopies()).toEqual([]);
       expect(emailAttachmentDirs()).toEqual([]);
     });
 
     it('"text" (text attachments only) writes NO email attachment files', async () => {
-      await runExport({ includeAttachments: true, attachmentType: "text" });
+      await runExport({ attachmentType: "text" });
 
       expect(emailAttachmentCopies()).toEqual([]);
       expect(emailAttachmentDirs()).toEqual([]);
     });
 
     it('"all" still exports both email attachments', async () => {
-      await runExport({ includeAttachments: true, attachmentType: "all" });
+      await runExport({ attachmentType: "all" });
 
       expect(emailAttachmentCopies().sort()).toEqual(
         [
@@ -418,7 +425,7 @@ describe("BACKLOG-2769: email attachment export honors the attachment selector",
     });
 
     it('"email" (email attachments only) still exports both email attachments', async () => {
-      await runExport({ includeAttachments: true, attachmentType: "email" });
+      await runExport({ attachmentType: "email" });
 
       expect(emailAttachmentCopies().sort()).toEqual(
         [
@@ -433,7 +440,7 @@ describe("BACKLOG-2769: email attachment export honors the attachment selector",
     beforeEach(seedMissingAttachments);
 
     it('"none" makes NO Gmail/Outlook requests', async () => {
-      await runExport({ includeAttachments: false, attachmentType: "none" });
+      await runExport({ attachmentType: "none" });
 
       expect(mockGmailInitialize).not.toHaveBeenCalled();
       expect(mockGmailGetEmailById.mock.calls.map((c) => c[0])).toEqual([]);
@@ -441,7 +448,7 @@ describe("BACKLOG-2769: email attachment export honors the attachment selector",
     });
 
     it('"text" (text attachments only) makes NO Gmail/Outlook requests', async () => {
-      await runExport({ includeAttachments: true, attachmentType: "text" });
+      await runExport({ attachmentType: "text" });
 
       expect(mockGmailInitialize).not.toHaveBeenCalled();
       expect(mockGmailGetEmailById.mock.calls.map((c) => c[0])).toEqual([]);
@@ -449,7 +456,7 @@ describe("BACKLOG-2769: email attachment export honors the attachment selector",
     });
 
     it('"all" still fetches the missing attachments (fixture is live)', async () => {
-      await runExport({ includeAttachments: true, attachmentType: "all" });
+      await runExport({ attachmentType: "all" });
 
       expect(mockGmailInitialize).toHaveBeenCalledWith("user-123");
       expect(mockGmailGetEmailById.mock.calls.map((c) => c[0])).toEqual([
