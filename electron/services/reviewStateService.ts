@@ -86,6 +86,28 @@ const MODULE = "ReviewStateService";
 export type ReviewOrigin = "pending" | "legacy";
 export type ReviewKind = "email" | "text";
 
+/**
+ * What a surface needs to RENDER an item.
+ *
+ * It travels with the item rather than being fetched separately, because a
+ * pending item is deliberately NOT in `communications` — the tabs' existing
+ * loaders cannot see it, so a surface that tried to join display data itself
+ * would silently render nothing for exactly the rows this feature exists to
+ * show.
+ */
+export interface ReviewItemDisplay {
+  /** Email subject, or the text thread's counterparty handle. */
+  title: string;
+  /** Sender address (emails) or thread participants (texts). */
+  subtitle: string;
+  /** First line of the body, for recognisability. */
+  snippet: string;
+  /** ISO timestamp of the communication itself (NOT when it was queued). */
+  occurredAt: string | null;
+  /** Messages in the thread (texts) or emails in the thread (emails). */
+  itemCount: number;
+}
+
 export interface ReviewItem {
   /** `${origin}:${rowId}` — stable and unambiguous across every surface. */
   id: string;
@@ -95,6 +117,7 @@ export interface ReviewItem {
   email_id: string | null;
   thread_id: string | null;
   found_at: string;
+  display: ReviewItemDisplay;
 }
 
 export interface ReviewState {
@@ -163,11 +186,12 @@ export function getReviewState(transactionId: string): ReviewState {
     email_id: r.email_id,
     thread_id: r.thread_id,
     found_at: r.found_at,
+    display: r.email_id ? emailDisplay(r.email_id) : threadDisplay(r.thread_id),
   }));
 
   // Legacy BACKLOG-2319 population: linked but flagged address_missing. The
-  // founder ruled these count toward the same total, so they are unioned HERE
-  // and nowhere else — one include point, one line to reverse.
+  // founder ruled these count toward the same total and belong to the same set,
+  // so they are unioned HERE and nowhere else — one include point.
   const legacy = dbAll<{
     id: string;
     transaction_id: string;
@@ -189,12 +213,70 @@ export function getReviewState(transactionId: string): ReviewState {
     email_id: r.email_id,
     thread_id: r.thread_id,
     found_at: r.linked_at,
+    display: emailDisplay(r.email_id),
   }));
 
   const items = [...pending, ...legacy].sort((a, b) =>
-    b.found_at.localeCompare(a.found_at),
+    (b.display.occurredAt ?? b.found_at).localeCompare(a.display.occurredAt ?? a.found_at),
   );
   return { items, count: items.length };
+}
+
+const EMPTY_DISPLAY: ReviewItemDisplay = {
+  title: "(no subject)",
+  subtitle: "",
+  snippet: "",
+  occurredAt: null,
+  itemCount: 1,
+};
+
+function firstLine(text: string | null): string {
+  if (!text) return "";
+  return text.replace(/\s+/g, " ").trim().slice(0, 160);
+}
+
+function emailDisplay(emailId: string | null): ReviewItemDisplay {
+  if (!emailId) return EMPTY_DISPLAY;
+  const row = dbGet<{
+    subject: string | null;
+    sender: string | null;
+    body_plain: string | null;
+    sent_at: string | null;
+  }>("SELECT subject, sender, body_plain, sent_at FROM emails WHERE id = ?", [emailId]);
+  if (!row) return EMPTY_DISPLAY;
+  return {
+    title: row.subject?.trim() || "(no subject)",
+    subtitle: row.sender ?? "",
+    snippet: firstLine(row.body_plain),
+    occurredAt: row.sent_at,
+    itemCount: 1,
+  };
+}
+
+function threadDisplay(threadId: string | null): ReviewItemDisplay {
+  if (!threadId) return EMPTY_DISPLAY;
+  const row = dbGet<{
+    n: number;
+    participants: string | null;
+    body_text: string | null;
+    sent_at: string | null;
+  }>(
+    `SELECT COUNT(*) AS n,
+            MAX(m.participants_flat) AS participants,
+            MAX(m.body_text) AS body_text,
+            MAX(m.sent_at) AS sent_at
+       FROM messages m
+      WHERE m.thread_id = ?`,
+    [threadId],
+  );
+  if (!row) return EMPTY_DISPLAY;
+  return {
+    title: row.participants?.split(",")[0]?.trim() || "Text conversation",
+    subtitle: row.participants ?? "",
+    snippet: firstLine(row.body_text),
+    occurredAt: row.sent_at,
+    itemCount: row.n ?? 1,
+  };
 }
 
 /**
@@ -430,6 +512,7 @@ function loadItem(id: string): ReviewItem | undefined {
       email_id: r.email_id,
       thread_id: r.thread_id,
       found_at: r.found_at,
+      display: r.email_id ? emailDisplay(r.email_id) : threadDisplay(r.thread_id),
     };
   }
 
@@ -453,6 +536,7 @@ function loadItem(id: string): ReviewItem | undefined {
     email_id: r.email_id,
     thread_id: r.thread_id,
     found_at: r.linked_at,
+    display: emailDisplay(r.email_id),
   };
 }
 

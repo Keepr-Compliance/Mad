@@ -5,7 +5,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { TransactionHeader } from "../TransactionHeader";
 import type { Transaction } from "@/types";
 
@@ -121,73 +121,99 @@ describe("TransactionHeader", () => {
     jest.clearAllMocks();
   });
 
-  describe("BACKLOG-459: Team License Export After Submission", () => {
-    it("should show both Submit and Export buttons for team license users", () => {
-      mockUseLicense.mockReturnValue(createMockLicenseContext("team", false, false));
-      setFeatureGateForLicense("team");
-      const transaction = createMockTransaction({ submission_status: "not_submitted" });
-
-      render(<TransactionHeader {...defaultProps} transaction={transaction} />);
-
-      // Team should see Submit button (appears in both mobile and desktop layouts)
-      expect(screen.getAllByRole("button", { name: /submit for review/i })[0]).toBeInTheDocument();
-      // Team should also see Export button (BACKLOG-459)
-      expect(screen.getAllByRole("button", { name: /export/i })[0]).toBeInTheDocument();
-      // Note: Edit and Delete buttons are now in the Overview tab, not the header
-    });
-
-    it("should show only Export button for individual license users (no Submit)", () => {
-      mockUseLicense.mockReturnValue(createMockLicenseContext("individual", false, false));
+  /**
+   * BACKLOG-2792 — Export and Submit for Review are MERGED into one "Complete"
+   * button, so the old per-license button matrix no longer applies at the
+   * header: the header shows the SAME two buttons to everyone (Needs Review,
+   * Complete) and the license branch happens inside Complete's handler, after
+   * the completeness gate. The branch itself is covered by
+   * useCompleteTransaction.licenseBranch-2792.test.ts.
+   *
+   * Note both layouts render the action set (mobile `sm:hidden` + desktop), so
+   * every query here uses getAllBy*()[0] — asserting a single match would fail
+   * on the duplicate that has always been there.
+   */
+  describe("BACKLOG-2792: one Complete button replaces Export + Submit", () => {
+    it("shows Complete and Needs Review, and NEITHER a bare Export nor a Submit button, for an individual license", () => {
       setFeatureGateForLicense("individual");
-      const transaction = createMockTransaction();
+      render(<TransactionHeader {...defaultProps} transaction={createMockTransaction()} />);
 
-      render(<TransactionHeader {...defaultProps} transaction={transaction} />);
-
-      // Individual should NOT see Submit button
+      expect(screen.getAllByTestId("complete-button")[0]).toBeInTheDocument();
+      expect(screen.getAllByTestId("needs-review-button")[0]).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^export$/i })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /submit for review/i })).not.toBeInTheDocument();
-      // Individual should see Export button (appears in both mobile and desktop layouts)
-      expect(screen.getAllByRole("button", { name: /export/i })[0]).toBeInTheDocument();
-      // Note: Edit and Delete buttons are now in the Overview tab, not the header
     });
 
-    it("should show Export button for team users even after submission", () => {
-      mockUseLicense.mockReturnValue(createMockLicenseContext("team", false, false));
+    it("shows the SAME two buttons for a team license — the header no longer branches", () => {
       setFeatureGateForLicense("team");
-      const transaction = createMockTransaction({ submission_status: "submitted" });
+      render(<TransactionHeader {...defaultProps} transaction={createMockTransaction()} />);
 
-      render(<TransactionHeader {...defaultProps} transaction={transaction} />);
-
-      // Team should see Submitted badge instead of Submit button
+      expect(screen.getAllByTestId("complete-button")[0]).toBeInTheDocument();
+      expect(screen.getAllByTestId("needs-review-button")[0]).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^export$/i })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /submit for review/i })).not.toBeInTheDocument();
+    });
+
+    it("still shows Complete after submission, so an export remains reachable (BACKLOG-459's actual requirement)", () => {
+      setFeatureGateForLicense("team");
+      render(
+        <TransactionHeader
+          {...defaultProps}
+          transaction={createMockTransaction({ submission_status: "submitted" })}
+        />,
+      );
+
+      expect(screen.getAllByTestId("complete-button")[0]).toBeInTheDocument();
       expect(screen.getAllByText(/submitted/i)[0]).toBeInTheDocument();
-      // Team should still see Export button (BACKLOG-459: available after submission)
-      expect(screen.getAllByRole("button", { name: /export/i })[0]).toBeInTheDocument();
     });
 
-    it("should show Resubmit button for team users when needs_changes", () => {
-      mockUseLicense.mockReturnValue(createMockLicenseContext("team", false, false));
-      setFeatureGateForLicense("team");
-      const transaction = createMockTransaction({ submission_status: "needs_changes" });
+    it("clicking Complete calls onComplete, NOT onShowExportModal — the gate must run first", () => {
+      setFeatureGateForLicense("individual");
+      const onComplete = jest.fn();
+      const onShowExportModal = jest.fn();
+      render(
+        <TransactionHeader
+          {...defaultProps}
+          transaction={createMockTransaction()}
+          onComplete={onComplete}
+          onShowExportModal={onShowExportModal}
+        />,
+      );
 
-      render(<TransactionHeader {...defaultProps} transaction={transaction} />);
+      fireEvent.click(screen.getAllByTestId("complete-button")[0]);
 
-      // Team should see Resubmit button (appears in both mobile and desktop layouts)
-      expect(screen.getAllByRole("button", { name: /resubmit/i })[0]).toBeInTheDocument();
-      // Team should also see Export button
-      expect(screen.getAllByRole("button", { name: /export/i })[0]).toBeInTheDocument();
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(onShowExportModal).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("BACKLOG-2791: the Needs Review button and its live badge", () => {
+    it("hides the badge at zero and shows the exact count above zero", () => {
+      setFeatureGateForLicense("individual");
+      const { rerender } = render(
+        <TransactionHeader {...defaultProps} transaction={createMockTransaction()} reviewCount={0} />,
+      );
+      expect(screen.queryByTestId("needs-review-badge")).not.toBeInTheDocument();
+
+      rerender(
+        <TransactionHeader {...defaultProps} transaction={createMockTransaction()} reviewCount={7} />,
+      );
+      expect(screen.getAllByTestId("needs-review-badge")[0]).toHaveTextContent("7");
     });
 
-    it("should show both Submit and Export for enterprise license users", () => {
-      mockUseLicense.mockReturnValue(createMockLicenseContext("enterprise", false, false));
-      setFeatureGateForLicense("enterprise");
-      const transaction = createMockTransaction({ submission_status: "not_submitted" });
+    it("opens the review screen when clicked", () => {
+      setFeatureGateForLicense("individual");
+      const onShowNeedsReview = jest.fn();
+      render(
+        <TransactionHeader
+          {...defaultProps}
+          transaction={createMockTransaction()}
+          onShowNeedsReview={onShowNeedsReview}
+        />,
+      );
 
-      render(<TransactionHeader {...defaultProps} transaction={transaction} />);
-
-      // Enterprise should see Submit button (same as team, appears in both mobile and desktop layouts)
-      expect(screen.getAllByRole("button", { name: /submit for review/i })[0]).toBeInTheDocument();
-      // Enterprise should also see Export button
-      expect(screen.getAllByRole("button", { name: /export/i })[0]).toBeInTheDocument();
+      fireEvent.click(screen.getAllByTestId("needs-review-button")[0]);
+      expect(onShowNeedsReview).toHaveBeenCalledTimes(1);
     });
   });
 

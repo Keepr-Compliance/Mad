@@ -212,7 +212,7 @@ describe("databaseService migration v64 (BACKLOG-2791 — pending review queue)"
       .prepare(
         "SELECT id, email_id, thread_id FROM pending_review_communications WHERE transaction_id = ? ORDER BY id",
       )
-      .all() as Array<{ id: string; email_id: string | null; thread_id: string | null }>;
+      .all(TXN_A) as Array<{ id: string; email_id: string | null; thread_id: string | null }>;
 
     expect(rows).toEqual([
       { id: "p-email", email_id: EMAIL_ID, thread_id: null },

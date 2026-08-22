@@ -20,6 +20,20 @@ export type ReviewOrigin = "pending" | "legacy";
 export type ReviewKind = "email" | "text";
 export type ReviewSyncReason = "open" | "contact-change";
 
+/**
+ * What a surface needs to RENDER an item. It travels WITH the item because a
+ * pending item is deliberately not in `communications` — a surface that tried to
+ * join display data itself would render nothing for exactly the rows this
+ * feature exists to show.
+ */
+export interface ReviewItemDisplayDto {
+  title: string;
+  subtitle: string;
+  snippet: string;
+  occurredAt: string | null;
+  itemCount: number;
+}
+
 export interface ReviewItemDto {
   /** `${origin}:${rowId}` — stable and unambiguous across every surface. */
   id: string;
@@ -29,6 +43,7 @@ export interface ReviewItemDto {
   email_id: string | null;
   thread_id: string | null;
   found_at: string;
+  display: ReviewItemDisplayDto;
 }
 
 export interface ReviewStateResult {
