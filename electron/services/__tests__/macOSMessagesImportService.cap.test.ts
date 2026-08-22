@@ -188,7 +188,26 @@ function appleNanos(ms: number): number {
  * would come up short.
  */
 const BASE_MS = Date.UTC(2026, 0, 15, 12, 0, 0); // fixed instant, not "now"
-const NOW_MS = Date.now();
+/*
+ * Whole-SECOND aligned relative to MAC_EPOCH, deliberately (BACKLOG-2772).
+ *
+ * `message.date` is nanoseconds since 2001, so these values are ~8e17 — two
+ * orders of magnitude past `Number.MAX_SAFE_INTEGER`, where consecutive doubles
+ * are 128 apart. An arbitrary millisecond instant therefore has no exact double,
+ * and the fixture (which binds a JS number through better-sqlite3) and the
+ * generated SQL literal (which SQLite parses as an int64) can land on either
+ * side of a boundary comparison. That made the boundary sweep below pass or
+ * fail depending on the time of day it ran — observed 1 failure in 3 runs.
+ *
+ * A whole second is 1e9 nanoseconds and 1e9 = 128 x 7,812,500, so second-aligned
+ * instants ARE exactly representable and both paths agree. `DAY_MS` is a
+ * multiple of 1000, so every date derived below stays aligned.
+ *
+ * This is a fixture-precision fact, not a product one: real `message.date`
+ * values come from Apple as int64, and the ~128ns quantisation of a generated
+ * literal is immaterial against day-granular audit spans.
+ */
+const NOW_MS = MAC_EPOCH + Math.floor((Date.now() - MAC_EPOCH) / 1000) * 1000;
 
 interface FixtureRow {
   rowid: number;

@@ -1009,9 +1009,23 @@ class SyncOrchestratorServiceClass {
      * every match, so both rows move together, and the trigger's FINISHED then
      * completes and removes one of them out from under the user's run.
      *
-     * Dropping the external row does not take the Cancel button away: the
-     * internal item appears in the same `setState`, and Cancel reaches the
-     * import service globally rather than through whichever row is showing.
+     * WHAT DROPPING THE EXTERNAL ROW COSTS, stated accurately — an earlier
+     * version of this comment claimed it cost nothing, and that was wrong.
+     *
+     * The internal item that replaces it lands as `pending`, and the Settings
+     * panel gates its Cancel button on `status === 'running'`
+     * (`MacOSMessagesImportSettings.tsx`, `cancelAvailable`). So on a full sync
+     * — where `messages` waits behind contacts and emails — the trigger's run
+     * keeps going with no Cancel affordance until the queue reaches it, which
+     * is minutes rather than seconds.
+     *
+     * That is a UX gap, not a correctness one: the run is honestly represented
+     * (one row, the user's own, in the state it is actually in), and the
+     * service's cancel is global, so the button works the moment it appears.
+     * Deliberately NOT fixed here — offering Cancel on a pending item is a
+     * decision about what that button means while nothing is running, and it
+     * belongs with BACKLOG-2749's dialog wiring rather than in a queue-ownership
+     * fix.
      */
     const seededTypes = new Set<SyncType>(validTypes);
     const externalItems = this.state.queue.filter(

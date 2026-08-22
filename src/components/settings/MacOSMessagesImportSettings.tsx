@@ -806,9 +806,13 @@ export function MacOSMessagesImportSettings({
         )}
 
         {/* Pre-import cap info */}
+        {/* BACKLOG-2772: the WINDOW, not `availableCount`. `availableCount` is
+            now what the run will import — the cap already applied — so with a
+            50,000 cap and no deals it IS 50,000, and this sentence would have
+            read "contains 50,000 messages, which exceeds the 50,000 limit". */}
         {!isImporting && capExceeded && (
           <p className="text-xs text-amber-600 mt-2">
-            This time period contains {availableCount!.toLocaleString()} messages,
+            This time period contains {windowCount!.toLocaleString()} messages,
             which exceeds the {maxMessages!.toLocaleString()} limit.
           </p>
         )}
@@ -974,8 +978,9 @@ export function MacOSMessagesImportSettings({
       {/* Cap exceeded confirmation prompt */}
       {showCapPrompt && !isImporting && (
         <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded">
+          {/* BACKLOG-2772: the WINDOW — same self-contradiction as above. */}
           <p className="text-xs text-amber-800 font-medium mb-2">
-            This time period has {availableCount!.toLocaleString()} messages but your limit is {maxMessages!.toLocaleString()}.
+            This time period has {windowCount!.toLocaleString()} messages but your limit is {maxMessages!.toLocaleString()}.
           </p>
           <div className="flex flex-col gap-2">
             <button
@@ -988,7 +993,15 @@ export function MacOSMessagesImportSettings({
               onClick={() => { setCapPromptForce(null); handleImport(!!capPromptForce, true); }}
               className="w-full px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white text-xs font-medium rounded transition-all"
             >
-              {capPromptForce ? "Re-import" : "Import"} all {availableCount!.toLocaleString()} messages
+              {/* BACKLOG-2772: this button sets `maxMessages: null` and fetches
+                  the WHOLE window, so its label must be the window count. With
+                  `availableCount` it read "Import all 50,000 messages" for an
+                  action that fetches 707,842 — a false statement at the moment
+                  of consent, and the one thing the founder's honourable-buttons
+                  rule forbids: no rendered button may promise what its run does
+                  not do. Pinned by
+                  `MacOSMessagesImportSettings.capDialog-2772.test.tsx`. */}
+              {capPromptForce ? "Re-import" : "Import"} all {windowCount!.toLocaleString()} messages
             </button>
             <button
               onClick={() => setCapPromptForce(null)}

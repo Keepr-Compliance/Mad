@@ -90,10 +90,43 @@ jest.mock("sqlite3", () =>
 
 import { app } from "electron";
 import macOSMessagesImportService from "../macOSMessagesImportService";
+import { MAC_EPOCH } from "../../constants";
 // BACKLOG-2772: plans are built by the REAL resolver, never hand-written.
 import { testImportPlan } from "./helpers/importPlanFixture";
 
 const MESSAGE_COUNT = 12;
+const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * Fixed instant for the corpus; every message is a whole number of days back.
+ *
+ * Whole-SECOND aligned relative to MAC_EPOCH for the same reason the cap suite
+ * is: `message.date` nanoseconds are ~8e17, past `Number.MAX_SAFE_INTEGER`,
+ * where doubles are 128 apart. Second-aligned instants are exactly
+ * representable (1e9 = 128 x 7,812,500), so the fixture's bound value and the
+ * generated SQL literal cannot land on opposite sides of a span comparison.
+ */
+const NOW_MS = MAC_EPOCH + Math.floor((Date.now() - MAC_EPOCH) / 1000) * 1000;
+
+/** Epoch milliseconds -> Apple's nanoseconds-since-2001, as `message.date`. */
+function appleNanos(ms: number): number {
+  return (ms - MAC_EPOCH) * 1_000_000;
+}
+
+/**
+ * BACKLOG-2772: message n is (13 - n) days old, so ROWID order and recency
+ * agree — ROWID 12 is the newest.
+ *
+ * The dates used to be `700000000e9 + n`, one NANOSECOND apart. That was fine
+ * while nothing here tested date spans, and it silently made a span test
+ * impossible: `AuditSpan` bounds are ISO strings, so nanosecond separations
+ * collapse into the same millisecond and every message lands on the same side
+ * of any boundary. An estimate suite with no span exercises `protectedClause`
+ * as the constant "0", where `NOT (0)` is a tautology — so it cannot see Cap'
+ * at all.
+ */
+function messageDateMs(n: number): number {
+  return NOW_MS - (13 - n) * DAY_MS;
+}
 
 let homeDir: string;
 let scratchDir: string;
@@ -137,21 +170,34 @@ function createSourceDb(path: string): void {
   const joinChat = db.prepare("INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, ?)");
   const seed = db.transaction(() => {
     for (let n = 1; n <= MESSAGE_COUNT; n++) {
-      insertMessage.run(`msg-guid-${n}`, `hello ${n}`, 700000000 * 1e9 + n);
+      insertMessage.run(`msg-guid-${n}`, `hello ${n}`, appleNanos(messageDateMs(n)));
       joinChat.run(n);
     }
   });
   seed();
 
-  // One real attachment row, so the attachment-sizing query — the LAST source
-  // query, and therefore the one immediately before the close — returns rows
-  // rather than trivially short-circuiting.
+  // Two attachment rows, so the attachment-sizing query — the LAST source query,
+  // and therefore the one immediately before the close — returns rows rather
+  // than trivially short-circuiting.
+  //
+  // THEIR OWNERS ARE THE FIXTURE'S POINT (BACKLOG-2772). One belongs to the
+  // OLDEST message (ROWID 1), one to ROWID 7. Which of the two a plan admits is
+  // what lets the attachment total tell a correctly scoped estimate from a
+  // window-sized one — and, in the span case, a cap window computed over the
+  // unprotected rows from one computed over all of them.
   db.prepare(
     `INSERT INTO attachment (guid, filename, mime_type, transfer_name, total_bytes, is_outgoing)
      VALUES (?, ?, ?, ?, ?, 0)`,
   ).run("att-1", "/tmp/photo.jpg", "image/jpeg", "photo.jpg", 1024);
   db.prepare(
     "INSERT INTO message_attachment_join (attachment_id, message_id) VALUES (1, 1)",
+  ).run();
+  db.prepare(
+    `INSERT INTO attachment (guid, filename, mime_type, transfer_name, total_bytes, is_outgoing)
+     VALUES (?, ?, ?, ?, ?, 0)`,
+  ).run("att-2", "/tmp/scan.pdf", "application/pdf", "scan.pdf", 2048);
+  db.prepare(
+    "INSERT INTO message_attachment_join (attachment_id, message_id) VALUES (2, 7)",
   ).run();
 
   db.close();
@@ -255,8 +301,8 @@ describe("BACKLOG-2784 — the pre-flight surfaces its real error, not SQLITE_MI
     expect(result.count).toBe(MESSAGE_COUNT);
     // Proof the run reached the post-close tail — the region whose errors were
     // being masked — rather than stopping at the first query.
-    expect(result.attachmentCount).toBe(1);
-    expect(result.attachmentBytes).toBe(1024);
+    expect(result.attachmentCount).toBe(2);
+    expect(result.attachmentBytes).toBe(1024 + 2048);
     expect(result.availableDiskBytes).toBe(4096 * 5e7);
     expect(result.fitsOnDisk).toBe(true);
   });
@@ -344,9 +390,55 @@ describe("BACKLOG-2772 — the estimate applies Cap', not just the window", () =
     );
 
     expect(result.filteredCount).toBeUndefined(); // equals `count`, so omitted
+    // A null cap admits the WHOLE window. This is the main-side half of the
+    // "Import all N" label pin in
+    // `MacOSMessagesImportSettings.capDialog-2772.test.tsx`: that button writes
+    // `maxMessages: null` before its run, so the number on it must be
+    // `windowCount` — and this is what makes that true of the run.
     expect(result.windowCount).toBe(MESSAGE_COUNT);
+    expect(result.attachmentCount).toBe(2);
+    expect(result.attachmentBytes).toBe(1024 + 2048);
+  });
+
+  it("Cap' WITH a protected span: window > admitted > cap", async () => {
+    /*
+     * The case this suite was blind to, and the reason it could pass while the
+     * shared builder was mutated.
+     *
+     * Every other test here uses a cap and NO deals, so `protectedClause` is the
+     * constant "0" and `NOT (0)` is a tautology — the protection logic is never
+     * exercised, and mutating it changes nothing the estimate can see.
+     *
+     * Corpus: 12 messages, ROWID n is (13 - n) days old. A span opening 4.5 days
+     * back protects ROWIDs 9-12 (4 messages). The remaining 8 are the cap's
+     * business; a cap of 2 keeps the newest two of THOSE, ROWIDs 7 and 8. So the
+     * run admits 4 + 2 = 6, and the three numbers separate:
+     *
+     *     windowCount 12  >  filteredCount 6  >  cap 2
+     *
+     * The attachment assertion is the sharper half. Its owner is ROWID 7 — the
+     * OLDEST admitted message, and admitted only because the cap window start
+     * was computed over the UNPROTECTED rows. Computed over all 12 instead, the
+     * start lands at ROWID 11 and ROWID 7 falls out, while the count stays 6
+     * because the target is `protectedCount + cap` either way. Only the bytes
+     * can tell those apart.
+     */
+    const spanStartISO = new Date(NOW_MS - 4.5 * DAY_MS).toISOString();
+
+    const result = await macOSMessagesImportService.getAvailableMessageCount(
+      testImportPlan({
+        storedFilters: { lookbackMonths: null, maxMessages: 2 },
+        auditSpans: [{ startISO: spanStartISO, endISO: null }],
+      }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.windowCount).toBe(MESSAGE_COUNT);
+    // 4 protected, complete and uncounted, plus the newest 2 of the other 8.
+    expect(result.filteredCount).toBe(6);
+    // ROWID 7 is admitted; ROWID 1 is not.
     expect(result.attachmentCount).toBe(1);
-    expect(result.attachmentBytes).toBe(1024);
+    expect(result.attachmentBytes).toBe(2048);
   });
 
   it("a cap that cannot truncate changes nothing", async () => {
@@ -359,6 +451,6 @@ describe("BACKLOG-2772 — the estimate applies Cap', not just the window", () =
     );
 
     expect(result.filteredCount).toBeUndefined();
-    expect(result.attachmentBytes).toBe(1024);
+    expect(result.attachmentBytes).toBe(1024 + 2048);
   });
 });
