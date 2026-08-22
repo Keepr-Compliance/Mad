@@ -29,7 +29,7 @@
 import * as Sentry from "@sentry/electron/main";
 import transactionService from "./transactionService";
 import emailSyncService, { EMAIL_CACHE_FRESHNESS_MS } from "./emailSyncService";
-import { autoLinkCommunicationsForContact } from "./autoLinkService";
+import { syncReviewQueueForTransaction } from "./reviewStateService";
 import logService from "./logService";
 import { computeTransactionDateRange, DEFAULT_BUFFER_DAYS } from "../utils/emailDateRange";
 import { getEmailsByContactId } from "./db/contactDbService";
@@ -223,15 +223,24 @@ export async function ensureTransactionEmailsSynced(params: {
       // auto-link so a transaction whose window a PRIOR sync already swept still
       // links its (already-cached) emails. This is the design-R3 completeness
       // guarantee for cross-transaction coverage, and the export backstop.
-      for (const assignment of contactAssignments) {
-        try {
-          await autoLinkCommunicationsForContact({ contactId: assignment.contact_id, transactionId });
-        } catch (linkError) {
-          logService.warn("[BACKLOG-1802] auto-link (covered path) failed", "TxnSyncTrigger", {
-            contactId: assignment.contact_id,
-            error: linkError instanceof Error ? linkError.message : "Unknown",
-          });
-        }
+      // BACKLOG-2791: this used to auto-LINK on the covered path — a silent link
+      // the user never saw and never approved. The founder's standing rule is
+      // "nothing is ever silently linked (approval links)", so discovery on the
+      // deal surface now QUEUES instead: one delta-scoped sweep that adds
+      // whatever it finds to Needs Review as pending, not linked.
+      //
+      // It is also cheaper than what it replaces. The loop above ran a
+      // full-window re-scan PER ASSIGNED CONTACT on every open; the queue sync
+      // is one pass bounded by the deal's ingestion watermark
+      // (transactions.last_pending_scan_at), so records that already lost are
+      // never re-examined — the BACKLOG-2620 convergence requirement.
+      try {
+        await syncReviewQueueForTransaction({ transactionId, reason: "open" });
+      } catch (linkError) {
+        logService.warn("[BACKLOG-2791] review-queue sync (covered path) failed", "TxnSyncTrigger", {
+          transactionId,
+          error: linkError instanceof Error ? linkError.message : "Unknown",
+        });
       }
       lastSyncAt.set(transactionId, Date.now());
       return { ran: true, reason, skipped: "covered", windowsFetched: 0 };
@@ -246,6 +255,10 @@ export async function ensureTransactionEmailsSynced(params: {
         contactEmails,
         transactionDetails: details,
         window: { after: w.after, before: w.before },
+        // BACKLOG-2791: this is the on-OPEN path — discovery here queues for
+        // review, it does not link. The manual "Sync Emails" button and the
+        // global background sync keep auto-linking (founder scope decision).
+        queueForReviewInsteadOfLinking: true,
       });
     }
 

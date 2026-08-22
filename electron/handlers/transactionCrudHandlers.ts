@@ -11,7 +11,7 @@ import { getEarliestCommunicationDate } from "../services/transactionService";
 import type { AuditedTransactionData } from "../services/transactionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
-import { autoLinkCommunicationsForContact } from "../services/autoLinkService";
+import { syncReviewQueueForTransaction } from "../services/reviewStateService";
 import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
 // BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
@@ -975,31 +975,26 @@ export function registerTransactionCrudHandlers(
       // BACKLOG-820: Fire local auto-link in background (don't block the save response).
       // Previously awaited per-contact, causing 8+ second UI hangs on contact assignment.
       // TASK-2067: Also fire provider fetch in background after auto-link.
+      // BACKLOG-2791 (T2): a contact saved ON this deal changes exactly the
+      // inputs the matchers read, so discovery runs IMMEDIATELY — no ask-step,
+      // no navigation. It QUEUES for review rather than linking.
+      //
+      // AWAITED, unlike the auto-link it replaces. BACKLOG-820 removed that
+      // await because a per-contact PROVIDER FETCH hung the UI for 8+ seconds;
+      // this is a purely local, identity-scoped, indexed sweep, and awaiting it
+      // is what gives the save a real completion signal. The provider fetch
+      // below stays fire-and-forget, so the 820 regression cannot return.
+      let review: { added: number; outstanding: number } | undefined;
       if (addOperations.length > 0) {
-        // Local auto-link (fire-and-forget)
-        for (const op of addOperations) {
-          autoLinkCommunicationsForContact({
-            contactId: op.contactId,
+        try {
+          review = await syncReviewQueueForTransaction({
             transactionId: validatedTransactionId as string,
-          }).then((result) => {
-            logService.info(
-              "Background local auto-link complete",
-              "Transactions",
-              {
-                contactId: op.contactId,
-                emailsLinked: result.emailsLinked,
-                messagesLinked: result.messagesLinked,
-                alreadyLinked: result.alreadyLinked,
-              }
-            );
-          }).catch((error) => {
-            logService.warn(
-              `Auto-link failed for contact ${op.contactId}`,
-              "Transactions",
-              {
-                error: error instanceof Error ? error.message : "Unknown",
-              }
-            );
+            reason: "contact-change",
+            contactIds: addOperations.map((op) => op.contactId),
+          });
+        } catch (error) {
+          logService.warn("[BACKLOG-2791] review-queue sync failed after contact save", "Transactions", {
+            error: error instanceof Error ? error.message : "Unknown",
           });
         }
 
@@ -1017,6 +1012,8 @@ export function registerTransactionCrudHandlers(
                   created_at: transaction.created_at,
                   closed_at: transaction.closed_at,
                 },
+                // BACKLOG-2791: deal surface — queue, never link silently.
+                queueForReviewInsteadOfLinking: true,
               }).then((fetchResult) => {
                 logService.info(
                   "Background provider fetch + auto-link complete",
@@ -1049,8 +1046,15 @@ export function registerTransactionCrudHandlers(
           });
       }
 
+      // BACKLOG-2791: this used to return a bare { success: true }, so the
+      // renderer's `autoLinkResults` branch (EditContactsModal ->
+      // TransactionDetails toast) was unreachable dead code, and loadDetails()
+      // raced the fire-and-forget link. `review` is the real, AWAITED result of
+      // the save — what lets the caller show "N new communications found"
+      // without a second round trip, and without claiming links never made.
       return {
         success: true,
+        review,
       };
     }, { module: "Transactions" }),
   );

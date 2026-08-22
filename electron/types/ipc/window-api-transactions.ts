@@ -13,6 +13,35 @@ import type {
 // rather than a hand-copied mirror that drifts the first time a column moves.
 import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
 
+
+/** BACKLOG-2791: which store a review item came from. */
+export type ReviewOrigin = "pending" | "legacy";
+/** BACKLOG-2791: emails and texts are one queue. */
+export type ReviewKind = "email" | "text";
+export type ReviewSyncReason = "open" | "contact-change";
+
+export interface ReviewItemDto {
+  /** `${origin}:${rowId}` — stable and unambiguous across every surface. */
+  id: string;
+  origin: ReviewOrigin;
+  kind: ReviewKind;
+  transaction_id: string;
+  email_id: string | null;
+  thread_id: string | null;
+  found_at: string;
+}
+
+export interface ReviewStateResult {
+  items: ReviewItemDto[];
+  /** items.length — the ONE number for the badge, P2/P3 and the Complete gate. */
+  count: number;
+}
+
+export interface ReviewSyncResult {
+  added: number;
+  outstanding: number;
+}
+
 /**
  * A party tombstoned off a transaction — BACKLOG-2367.
  *
@@ -857,4 +886,36 @@ export interface WindowApiTransactions {
   onMessagesSyncComplete: (
     callback: (data: { transactionId: string | null; ran: boolean; imported: number }) => void,
   ) => () => void;
+
+  // ==========================================================================
+  // BACKLOG-2791 / BACKLOG-2792 — the Needs Review queue.
+  //
+  // ONE source of truth (founder ruling 2026-08-22): the combined S2 screen,
+  // both tabs' needs-review sections, the header badge, the P2/P3 popups and the
+  // Complete gate all read getReviewState. Nothing in the renderer may derive
+  // review state any other way.
+  // ==========================================================================
+
+  /** The combined queue: the pending items the sync found + the legacy
+   *  BACKLOG-2319 address_missing population, unioned into ONE set. */
+  getReviewState: (transactionId: string) => Promise<ReviewStateResult>;
+
+  /**
+   * Run discovery for a transaction.
+   *  - "open"           → only records INGESTED since the deal's watermark.
+   *  - "contact-change" → the full window, but only for `contactIds`.
+   * `added` is what THIS run newly queued and drives the popup (silent at 0);
+   * `outstanding` is the badge total.
+   */
+  syncReviewQueue: (
+    transactionId: string,
+    reason: ReviewSyncReason,
+    contactIds?: string[],
+  ) => Promise<ReviewSyncResult>;
+
+  /** Approve — THIS is what links a pending item, per the normal rules. */
+  approveReviewItems: (itemIds: string[]) => Promise<{ approved: number }>;
+
+  /** Reject — durable; the suppression row stops a later sync resurrecting it. */
+  rejectReviewItems: (itemIds: string[]) => Promise<{ rejected: number }>;
 }

@@ -140,6 +140,7 @@ import { registerTransactionSearchHandlers } from "./handlers/transactionSearchH
 import { registerEmailSyncHandlers } from "./handlers/emailSyncHandlers";
 import { registerEmailLinkingHandlers } from "./handlers/emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers";
+import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
 import { registerAttachmentHandlers } from "./handlers/attachmentHandlers";
 import { registerContactHandlers } from "./handlers/contactHandlers";
 import { registerAddressHandlers } from "./handlers/addressHandlers";
@@ -1720,6 +1721,7 @@ app.whenReady().then(async () => {
   registerEmailSyncHandlers(mainWindow!);
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
+  registerReviewQueueHandlers();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);
   registerAddressHandlers();

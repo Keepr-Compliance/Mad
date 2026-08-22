@@ -917,8 +917,15 @@ class EmailSyncService {
     window?: { after: Date; before?: Date | null };
     // BACKLOG-1802: 'manual' when the user clicked Sync Emails (ingest_source).
     ingestSourceOverride?: "manual";
+    // BACKLOG-2791: when true, freshly-fetched mail is QUEUED for review instead
+    // of being auto-linked. Only the on-transaction-open trigger passes this —
+    // the founder's rule is "nothing is ever silently linked (approval links)",
+    // and that rule is scoped to discovery on the deal surface. Every other
+    // caller (the manual "Sync Emails" button, the global background sync) keeps
+    // today's auto-link behavior, which is why this defaults to false.
+    queueForReviewInsteadOfLinking?: boolean;
   }): Promise<TransactionResponse> {
-    const { transactionId, userId, contactAssignments, contactEmails, transactionDetails, window, ingestSourceOverride } = params;
+    const { transactionId, userId, contactAssignments, contactEmails, transactionDetails, window, ingestSourceOverride, queueForReviewInsteadOfLinking } = params;
 
     // TASK-2273: Breadcrumb at sync orchestration start with full context
     Sentry.addBreadcrumb({
@@ -1083,6 +1090,22 @@ class EmailSyncService {
     let totalAlreadyLinked = 0;
     let totalErrors = 0;
 
+    // BACKLOG-2791: the on-open trigger queues instead of linking, so that mail
+    // the user has never seen reaches the Needs Review screen rather than
+    // joining the audit silently. One delta-scoped pass replaces the
+    // per-contact full-window re-scan below.
+    if (queueForReviewInsteadOfLinking) {
+      const { syncReviewQueueForTransaction } = await import("./reviewStateService");
+      try {
+        await syncReviewQueueForTransaction({ transactionId, reason: "open" });
+      } catch (error) {
+        totalErrors++;
+        logService.warn("[BACKLOG-2791] review-queue sync failed after fetch", "EmailSync", {
+          transactionId,
+          error: error instanceof Error ? error.message : "Unknown",
+        });
+      }
+    } else
     for (const assignment of contactAssignments) {
       try {
         const result = await autoLinkCommunicationsForContact({
@@ -1538,8 +1561,13 @@ class EmailSyncService {
       created_at?: Date | string | null;
       closed_at?: Date | string | null;
     };
+    // BACKLOG-2791: when true, whatever the fetch brings in is QUEUED for review
+    // instead of auto-linked. The transaction-details contact-save paths pass
+    // this (discovery on the deal surface never links silently); every other
+    // caller keeps today's behavior, hence the default.
+    queueForReviewInsteadOfLinking?: boolean;
   }): Promise<FetchAndAutoLinkResult> {
-    const { userId, transactionId, contactId, transactionDetails } = params;
+    const { userId, transactionId, contactId, transactionDetails, queueForReviewInsteadOfLinking } = params;
 
     // Get contact email addresses
     const contactEmails = getEmailsByContactId(contactId);
@@ -1641,11 +1669,35 @@ class EmailSyncService {
       });
     }
 
-    // Now auto-link from local DB (which includes newly fetched emails)
-    const autoLinkResult = await autoLinkCommunicationsForContact({
-      contactId,
-      transactionId,
-    });
+    // Now resolve from the local DB (which includes newly fetched emails).
+    // BACKLOG-2791: on the deal surface this QUEUES for review rather than
+    // linking — the founder's "nothing is ever silently linked" rule. The scan
+    // is scoped to THIS contact's identities across the full window, which is
+    // the direction the on-open watermark cannot cover (a newly added contact's
+    // matching mail is older than the watermark).
+    let autoLinkResult: AutoLinkResult;
+    if (queueForReviewInsteadOfLinking) {
+      const { syncReviewQueueForTransaction } = await import("./reviewStateService");
+      const queued = await syncReviewQueueForTransaction({
+        transactionId,
+        reason: "contact-change",
+        contactIds: [contactId],
+      });
+      // Reported as "queued", never as "linked" — a caller that renders these
+      // numbers must not claim links that were not made.
+      autoLinkResult = {
+        emailsLinked: 0,
+        messagesLinked: 0,
+        alreadyLinked: 0,
+        errors: 0,
+        queuedForReview: queued.added,
+      };
+    } else {
+      autoLinkResult = await autoLinkCommunicationsForContact({
+        contactId,
+        transactionId,
+      });
+    }
 
     return {
       emailsFetched,

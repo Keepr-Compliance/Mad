@@ -2688,6 +2688,39 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           contactId: validatedContactId,
         });
 
+        // BACKLOG-2791 (T2): editing a party's EMAIL or PHONE changes exactly
+        // the inputs the matchers read, and until now NOTHING re-scanned — the
+        // renderer merely refetched links that had never been recomputed. Every
+        // deal this contact is on gets a re-scan scoped to THIS contact's
+        // identities, so a corrected address surfaces its mail immediately
+        // rather than on some later open.
+        //
+        // Scoped, not global: one indexed sweep per affected deal, for one
+        // contact. Failures are logged and swallowed — a discovery miss must
+        // never fail the contact save the user actually asked for.
+        try {
+          const { syncReviewQueueForTransaction } = await import(
+            "../services/reviewStateService"
+          );
+          const affected = dbAll<{ transaction_id: string }>(
+            "SELECT DISTINCT transaction_id FROM transaction_contacts WHERE contact_id = ?",
+            [validatedContactId],
+          );
+          for (const row of affected) {
+            await syncReviewQueueForTransaction({
+              transactionId: row.transaction_id,
+              reason: "contact-change",
+              contactIds: [validatedContactId],
+            });
+          }
+        } catch (syncError) {
+          logService.warn(
+            "[BACKLOG-2791] review-queue sync after contact update failed",
+            "Contacts",
+            { error: syncError instanceof Error ? syncError.message : "Unknown" },
+          );
+        }
+
         return {
           success: true,
           contact: contact || undefined,

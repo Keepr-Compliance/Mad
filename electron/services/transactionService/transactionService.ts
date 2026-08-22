@@ -1296,6 +1296,11 @@ class TransactionService {
             created_at: transaction.created_at,
             closed_at: transaction.closed_at,
           },
+          // BACKLOG-2791 (T2): assigning a contact — including CONFIRMING a
+          // suggested match, which the item names as an explicit trigger — is a
+          // contact change on this deal. Discovery queues it for review; it does
+          // not link it silently.
+          queueForReviewInsteadOfLinking: true,
         });
 
         return {

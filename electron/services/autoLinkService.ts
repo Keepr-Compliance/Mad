@@ -71,6 +71,13 @@ export interface AutoLinkResult {
   errors: number;
   /** BACKLOG-1364: User-facing message when address filter is ON and 0 emails found */
   addressFilterMessage?: string;
+  /**
+   * BACKLOG-2791: how many communications were QUEUED for review instead of
+   * linked. Set only on the transaction-details discovery paths, where nothing
+   * is linked without approval. Deliberately a separate field: a caller that
+   * renders `emailsLinked` must never see a queued item counted as a link.
+   */
+  queuedForReview?: number;
 }
 
 /**
