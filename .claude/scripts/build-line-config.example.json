@@ -1,0 +1,32 @@
+{
+  "title": "Import Build Line",
+  "eyebrow": "Stable Ground · Epic BACKLOG-2716 — Property 4: nothing drops silently",
+  "sub": "Generated from the tracker (pm_backlog_items + pm_dependencies). An arrow means \"must land before.\" Solid arrows are recorded dependencies; dashed arrows are chosen sequencing. Nodes marked e2738 live in the sibling epic BACKLOG-2738.",
+  "nodes": {
+    "BACKLOG-2748": {"label": "2748 · Cancel button"},
+    "BACKLOG-2773": {"label": "2773 · Cancel residuals — absorbed into 2775 + 2776"},
+    "BACKLOG-2775": {"label": "2775 · Atomic Force Re-import"},
+    "BACKLOG-2776": {"label": "2776 · Instant cancel feedback"},
+    "BACKLOG-2772": {"label": "2772 · One import resolver — e2738"},
+    "BACKLOG-2749": {"label": "2749 · Cap-exceeded dialog"},
+    "BACKLOG-2733": {"label": "2733 · 'Unlimited' silently caps at 50K"},
+    "BACKLOG-2743": {"label": "2743 · Disk-space guard"},
+    "BACKLOG-2762": {"label": "2762 · Dev disk override"},
+    "BACKLOG-2761": {"label": "2761 · Attachments toggle UI", "cls": "park"},
+    "BACKLOG-2768": {"label": "2768 · Retention cleanup"},
+    "BACKLOG-2771": {"label": "2771 · One export resolver — e2738"},
+    "BACKLOG-2770": {"label": "2770 · One-PDF parity"},
+    "BACKLOG-2757": {"label": "2757 · Shared-number thread naming"},
+    "BACKLOG-2758": {"label": "2758 · Export handle scoping"}
+  },
+  "dashed_edges": [
+    ["BACKLOG-2748", "BACKLOG-2775", ""],
+    ["BACKLOG-2748", "BACKLOG-2776", ""],
+    ["BACKLOG-2773", "BACKLOG-2775", "absorbed"],
+    ["BACKLOG-2773", "BACKLOG-2776", "absorbed"],
+    ["BACKLOG-2771", "BACKLOG-2770", ""],
+    ["BACKLOG-2771", "BACKLOG-2757", ""],
+    ["BACKLOG-2771", "BACKLOG-2758", ""]
+  ],
+  "notes": []
+}
