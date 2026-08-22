@@ -73,6 +73,16 @@ const REALTIME_ENABLED = true; // Feature flag for realtime subscriptions
 
 class SubmissionSyncService {
   private syncInterval: NodeJS.Timeout | null = null;
+  /**
+   * BACKLOG-2775: true while a sync pass is mid-flight.
+   *
+   * Mirrors `auditService.syncInProgress`. Stopping the poll interval prevents
+   * NEW ticks; it cannot cancel one already awaiting `fetchCloudStatuses`
+   * before it writes via `updateTransactionSubmissionStatus`. A caller that
+   * needs this connection quiet has to be able to WAIT for that, not just stop
+   * the timer — see `isSyncInFlight()`.
+   */
+  private syncInProgress = false;
   private syncIntervalMs: number = DEFAULT_SYNC_INTERVAL_MS;
   private isOnline: boolean = true;
   private mainWindow: BrowserWindow | null = null;
@@ -358,6 +368,17 @@ class SubmissionSyncService {
   }
 
   /**
+   * BACKLOG-2775: true while a sync pass is mid-flight — see `syncInProgress`.
+   *
+   * The realtime subscription writes by the same path and is NOT covered by
+   * this flag; it is stopped by neither `suspendPeriodicSync` nor anything
+   * else, and remains a named residual of the force re-import quiesce.
+   */
+  isSyncInFlight(): boolean {
+    return this.syncInProgress;
+  }
+
+  /**
    * Stop all sync operations (both realtime and polling)
    */
   async stopAllSync(): Promise<void> {
@@ -400,6 +421,11 @@ class SubmissionSyncService {
       failed: 0,
       details: [],
     };
+
+    // BACKLOG-2775: mark the pass in flight. Cleared in the `finally` below, so
+    // an early return or a throw cannot leave it latched true — a latched flag
+    // would make every later force re-import wait out its full timeout.
+    this.syncInProgress = true;
 
     try {
       // 1. Get all local transactions with submission_id that are not in terminal states
@@ -487,6 +513,8 @@ class SubmissionSyncService {
         tags: { service: "submission-sync", operation: "syncAllSubmissions" },
       });
       throw error;
+    } finally {
+      this.syncInProgress = false;
     }
   }
 

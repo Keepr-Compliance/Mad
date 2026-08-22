@@ -138,6 +138,8 @@ class MacOSMessagesImportService {
    * a few seconds is generous; exceeding it is logged, not fatal.
    */
   private static readonly QUIESCE_TIMEOUT_MS = 5000;
+  /** BACKLOG-2775: how often to re-check for an in-flight sync while waiting. */
+  private static readonly QUIESCE_POLL_MS = 25;
 
   /**
    * Import messages from macOS Messages app
@@ -346,6 +348,20 @@ class MacOSMessagesImportService {
     // across the several return points is how one gets missed.
     const appDb = forceReimport ? databaseService.getRawDatabase() : null;
     let forceTxnOpen = false;
+    /**
+     * BACKLOG-2775: this run executed `BEGIN IMMEDIATE`, so any transaction open
+     * on the connection at `finally` time is OURS. Set once, never cleared —
+     * unlike `forceTxnOpen`, which is cleared after the COMMIT.
+     *
+     * It exists because the BEGIN site refuses to touch a transaction it did not
+     * start ("would discard their work") by throwing — and that throw lands in
+     * the outer catch and then the `finally`. Rolling back on `inTransaction`
+     * alone would discard exactly the foreign work the guard just refused to
+     * touch. Unreachable today (nothing else in `electron/` opens a raw
+     * transaction, and `db.transaction()` cannot span an await), which is
+     * precisely the kind of assumption that stops being true quietly.
+     */
+    let forceTxnBegun = false;
     // BACKLOG-2775: set once the background writers have been stopped for this
     // run, so the `finally` restarts exactly what was stopped and only then.
     let forceQuiesced = false;
@@ -422,6 +438,7 @@ class MacOSMessagesImportService {
         // through.
         appDb.exec("BEGIN IMMEDIATE");
         forceTxnOpen = true;
+        forceTxnBegun = true;
 
         logService.info(
           `Force reimport: clearing existing macOS messages (atomic — rolls back unless the re-import completes)`,
@@ -1010,14 +1027,19 @@ class MacOSMessagesImportService {
       // fail loudly rather than hand back that result.
       //
       // Both conditions below ask the CONNECTION whether a transaction is open,
-      // not the `forceTxnOpen` bookkeeping. The bookkeeping is cleared on the
-      // line after the COMMIT, so trusting it would skip the rollback for any
-      // state where the commit did not actually take — leaking the write lock
-      // for the life of the process. On the force path a transaction open here
-      // can only be ours: the BEGIN asserted none was open before it.
-      const undeclaredExit = !!appDb?.inTransaction && !forceRollbackDeclared;
+      // rather than trusting `forceTxnOpen` — which is cleared on the line after
+      // the COMMIT, so a commit that silently no-opped would skip the rollback
+      // entirely. (A real better-sqlite3 COMMIT either commits or throws, and a
+      // throw leaves `forceTxnOpen` true, so this is hardening against a future
+      // shape rather than a bug that shipped.)
+      //
+      // `forceTxnBegun` is the other half: it distinguishes "our transaction" —
+      // this run ran BEGIN — from a transaction someone else opened, which the
+      // BEGIN-site guard deliberately refuses to touch.
+      const ourTransactionIsOpen = forceTxnBegun && !!appDb?.inTransaction;
+      const undeclaredExit = ourTransactionIsOpen && !forceRollbackDeclared;
 
-      if (appDb?.inTransaction) {
+      if (ourTransactionIsOpen) {
         try {
           appDb.exec("ROLLBACK");
           logService.info(
@@ -1079,43 +1101,95 @@ class MacOSMessagesImportService {
    * that were running.
    *
    * Stopping the intervals prevents NEW ticks. It cannot cancel a tick already
-   * in flight — `auditService.syncToCloud` awaits a Supabase round trip before
-   * it reaches `markAuditLogsSynced` — so this also waits, briefly, for such a
-   * tick to finish.
+   * in flight — BOTH services await a network round trip before they write
+   * (`auditService.syncToCloud` before `markAuditLogsSynced`,
+   * `submissionSyncService.syncAllSubmissions` before
+   * `updateTransactionSubmissionStatus`) — so this also waits, briefly, for
+   * either to finish.
    *
-   * KNOWN RESIDUAL, deliberately not fixed here (PM to file the follow-up):
+   * KNOWN RESIDUALS, deliberately not fixed here (PM to file the follow-up).
+   * This list is load-bearing: the round-1 review of this feature rejected a
+   * comment that claimed a bound the code did not have, and a residual list
+   * missing a residual is the same mistake in miniature.
    *   - Event-driven `insertAuditLog` writes can still land inside the window.
    *     For an audited action that was itself a database write this is coherent
    *     (the action and its audit row roll back together); for auth or export
    *     events it is not — the event happened, and its local audit row does not
    *     survive the rollback.
    *   - `submissionSyncService`'s REALTIME subscription writes by the same path
-   *     as its poll tick. Only the poll is stopped here; unsubscribing and
-   *     resubscribing a realtime channel is a heavier lifecycle change than
-   *     this fix should make.
-   *   - If the in-flight wait below times out, the run proceeds anyway. The
-   *     alternative — refusing to re-import — would leave the user with the
-   *     non-atomic clear this whole item exists to remove, which is strictly
-   *     worse than a rare rolled-back sync mark.
+   *     as its poll tick, and neither the suspend nor the in-flight wait covers
+   *     it. Unsubscribing and resubscribing a realtime channel is a heavier
+   *     lifecycle change than this fix should make. Its write is a whole
+   *     statement, never a torn one — better-sqlite3 is synchronous — so it
+   *     joins the transaction and rolls back whole, then self-heals on the next
+   *     poll.
+   *   - If the in-flight wait times out, the run proceeds anyway. Refusing
+   *     would be safe rather than dangerous — no clear runs and the store is
+   *     untouched — so the trade is a single background sync mark that both
+   *     services re-apply on their next tick, against refusing an action the
+   *     user legitimately asked for.
    */
   private async quiesceBackgroundWriters(): Promise<() => void> {
-    const auditWasRunning = auditService.suspendPeriodicSync();
-    const submissionWasRunning = submissionSyncService.suspendPeriodicSync();
-
-    // Bounded wait for a tick that was already mid-flight when we stopped it.
-    const deadline = Date.now() + MacOSMessagesImportService.QUIESCE_TIMEOUT_MS;
-    while (auditService.isSyncInFlight() && Date.now() < deadline) {
-      await yieldToEventLoop();
+    // Each suspend is recorded the moment it happens, and the resume closure is
+    // built from that record. Suspending both first and building the closure
+    // afterwards would mean a throw from the SECOND suspend leaves the first
+    // timer stopped with nothing able to restart it — cloud sync silently off
+    // for the life of the process. Both suspends are `clearInterval` wrappers,
+    // so this is close to unreachable; the ordering costs nothing.
+    const suspended: Array<() => void> = [];
+    try {
+      if (auditService.suspendPeriodicSync()) {
+        suspended.push(() => auditService.resumePeriodicSync());
+      }
+      if (submissionSyncService.suspendPeriodicSync()) {
+        suspended.push(() => submissionSyncService.resumePeriodicSync());
+      }
+      return await this.waitForQuietConnection(suspended);
+    } catch (quiesceError) {
+      // Undo whatever was suspended before rethrowing. The caller only records
+      // `forceQuiesced` once this resolves, so anything thrown from here would
+      // otherwise leave the timers stopped with nothing able to restart them —
+      // cloud sync silently off for the life of the process. This covers the
+      // second suspend AND the wait below, which is where it actually bit
+      // during development.
+      for (const resume of suspended) resume();
+      throw quiesceError;
     }
-    if (auditService.isSyncInFlight()) {
+  }
+
+  /**
+   * BACKLOG-2775: wait (bounded) for an in-flight background sync to finish, and
+   * return the closure that restarts what was suspended.
+   */
+  private async waitForQuietConnection(
+    suspended: Array<() => void>
+  ): Promise<() => void> {
+    // Bounded wait for a tick that was already mid-flight when the interval was
+    // stopped: both services await a network round trip before they write, and
+    // `clearInterval` cannot cancel one that is already in the air.
+    const deadline = Date.now() + MacOSMessagesImportService.QUIESCE_TIMEOUT_MS;
+    const stillWriting = () =>
+      auditService.isSyncInFlight() || submissionSyncService.isSyncInFlight();
+    while (stillWriting() && Date.now() < deadline) {
+      // A sleep, not `yieldToEventLoop()` — that resolves on `setImmediate` and
+      // would spin the check phase for up to five seconds to learn something
+      // that changes at network speed.
+      await new Promise((resolve) => setTimeout(resolve, MacOSMessagesImportService.QUIESCE_POLL_MS));
+    }
+    if (stillWriting()) {
+      // Proceeding anyway is the deliberate choice. Refusing the re-import would
+      // be SAFE — no clear runs, the store is untouched — so the trade is not
+      // safety against danger: it is one background sync mark, which both
+      // services re-apply on their next tick, against refusing a legitimate
+      // action the user asked for. The self-healing side loses.
       logService.warn(
-        "Force reimport starting while an audit sync is still in flight — its synced_at marks may be rolled back if the run is cancelled",
+        "Force reimport starting while a background sync is still in flight — its write may be rolled back with the run, and re-applied on the next tick",
         MacOSMessagesImportService.SERVICE_NAME
       );
     }
 
     logService.info(
-      `Background writers quiesced for force reimport (audit: ${auditWasRunning}, submissions: ${submissionWasRunning})`,
+      `Background writers quiesced for force reimport (${suspended.length} of 2 were running)`,
       MacOSMessagesImportService.SERVICE_NAME
     );
 
@@ -1123,8 +1197,7 @@ class MacOSMessagesImportService {
       // Restart ONLY what was actually running: starting a timer the app had
       // deliberately stopped would be this feature turning something on behind
       // the user's back.
-      if (auditWasRunning) auditService.resumePeriodicSync();
-      if (submissionWasRunning) submissionSyncService.resumePeriodicSync();
+      for (const resume of suspended) resume();
       logService.info(
         "Background writers resumed after force reimport",
         MacOSMessagesImportService.SERVICE_NAME

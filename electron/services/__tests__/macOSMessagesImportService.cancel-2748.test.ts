@@ -83,6 +83,8 @@ let auditSyncRunning = true;
 let submissionSyncRunning = true;
 /** Flips to false when the fake in-flight audit sync finishes. */
 let auditSyncInFlight = false;
+/** The same, for the submission poll — it has its own in-flight guard now. */
+let submissionSyncInFlight = false;
 
 jest.mock("../auditService", () => ({
   __esModule: true,
@@ -114,6 +116,7 @@ jest.mock("../submissionSyncService", () => ({
       writerEvents.push("submissions:resume");
       submissionSyncRunning = true;
     }),
+    isSyncInFlight: jest.fn(() => submissionSyncInFlight),
   },
 }));
 jest.mock("../../utils/messageParser", () => ({
@@ -359,6 +362,7 @@ beforeEach(async () => {
   auditSyncRunning = true;
   submissionSyncRunning = true;
   auditSyncInFlight = false;
+  submissionSyncInFlight = false;
 
   mockDb = new Database(":memory:");
   createSchema(mockDb);
@@ -873,6 +877,27 @@ describe("BACKLOG-2775 — the force transaction cannot swallow background write
     expect(writerEvents).not.toContain("audit:resume");
   });
 
+  it("a force run cancelled BEFORE the clear neither suspends nor resumes anything", async () => {
+    // The last uncovered force exit, and the SR found it the only way it can be
+    // found: they hoisted the quiesce above the pre-clear cancel check and all
+    // 24 tests in this file stayed green. Every other test steers around this
+    // path deliberately, so nothing was watching it.
+    //
+    // The property is that the quiesce belongs INSIDE the branch that opens a
+    // transaction. A run that stops before the clear has nothing to protect, so
+    // suspending the app's cloud sync for it would be a cost with no purchase —
+    // and the regression is silent, because the `finally` still resumes.
+    writerEvents.length = 0;
+
+    macOSMessagesImportService.requestCancellation();
+    const result = await forceImportToCompletion();
+
+    expect(result.rolledBack).toBe(true);
+    expect(writerEvents).toEqual([]);
+    expect(auditSyncRunning).toBe(true);
+    expect(submissionSyncRunning).toBe(true);
+  });
+
   it("leaves the background writers alone for a DELTA import", async () => {
     // Only the force path takes the long transaction, so only it has any reason
     // to stop the app's cloud sync.
@@ -881,6 +906,31 @@ describe("BACKLOG-2775 — the force transaction cannot swallow background write
     await importToCompletion();
 
     expect(writerEvents).toEqual([]);
+  });
+
+  it("waits for a SUBMISSION sync that is already in flight", async () => {
+    // submissionSyncService awaits its cloud-status fetch before writing via
+    // updateTransactionSubmissionStatus, exactly as the audit sync does. Until
+    // BACKLOG-2775's re-review it had no in-flight guard at all, so stopping its
+    // interval was the only thing the quiesce could do for it — and a poll
+    // already in the air would still write inside the transaction. The audit
+    // shape is now mirrored, and the wait covers both.
+    submissionSyncInFlight = true;
+    let checks = 0;
+    (
+      jest.requireMock("../submissionSyncService") as {
+        default: { isSyncInFlight: jest.Mock };
+      }
+    ).default.isSyncInFlight.mockImplementation(() => {
+      checks += 1;
+      if (checks >= 3) submissionSyncInFlight = false;
+      return submissionSyncInFlight;
+    });
+
+    await forceImportToCompletion();
+
+    expect(checks).toBeGreaterThanOrEqual(3);
+    expect(submissionSyncInFlight).toBe(false);
   });
 
   it("waits for an audit sync that is already in flight", async () => {
@@ -992,5 +1042,57 @@ describe("BACKLOG-2775 — the structural guard on the force transaction", () =>
     expect(result.rolledBack).toBe(true);
 
     storeSpy.mockRestore();
+  });
+});
+
+describe("BACKLOG-2775 — a transaction this run did not open is never rolled back", () => {
+  // The BEGIN site refuses to start a force re-import when a transaction is
+  // already open, on the stated grounds that it "belongs to someone else and the
+  // ROLLBACK would discard their work". That refusal is a throw — which lands in
+  // the outer catch, and then in the `finally` that owns the rollback. Rolling
+  // back on `inTransaction` alone would discard exactly the work the guard just
+  // refused to touch, on the one path where its own assertion had failed.
+  //
+  // Unreachable in the app today: nothing else in electron/ opens a raw
+  // transaction, and better-sqlite3's `db.transaction()` is synchronous so it
+  // cannot span an await. It is reachable HERE, which is the point — the guard's
+  // own comment says to assert rather than assume, "because the failure would be
+  // silent".
+
+  beforeEach(async () => {
+    messageCount = 500;
+    attachmentCount = 0;
+    await importToCompletion();
+  });
+
+  it("refuses to start, and leaves the foreign transaction intact", async () => {
+    const before = storedRowIdentities();
+
+    // Someone else's uncommitted work, on the shared connection.
+    mockDb.exec("BEGIN IMMEDIATE");
+    mockDb
+      .prepare("INSERT INTO audit_logs (id, action, timestamp, synced_at) VALUES (?, ?, ?, NULL)")
+      .run("foreign-1", "someone.else", "2026-08-21T00:00:00.000Z");
+
+    const result = await forceImportToCompletion();
+
+    // Refused rather than attempted.
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/transaction is already open/i);
+
+    // The foreign transaction is STILL OPEN and STILL HOLDS its work — the
+    // refusal did not quietly discard what it declined to touch.
+    expect(mockDb.inTransaction).toBe(true);
+    expect(
+      mockDb.prepare("SELECT id FROM audit_logs WHERE id = ?").all("foreign-1"),
+    ).toHaveLength(1);
+
+    // ...and the messages were never touched either.
+    expect(storedRowIdentities()).toEqual(before);
+
+    // Nothing was suspended: the refusal happens before the quiesce.
+    expect(writerEvents).toEqual([]);
+
+    mockDb.exec("COMMIT");
   });
 });
