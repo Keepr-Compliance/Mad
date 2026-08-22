@@ -1,12 +1,37 @@
-'use strict';
 /**
  * Unit tests for the QA-H3 DB-side MEASUREMENT helpers (BACKLOG-1850).
  *
  * Pure logic only — no Electron, no native module, no keychain. Runs under the
  * local (non-CI) jest glob. Set-identity/diff logic is H1's (diff.ts /
  * canonicalList.ts); this file covers only the DB query/measurement helpers.
+ *
+ * BACKLOG-2782: was `.test.js`, which tsc LOADED (allowJs) and never CHECKED
+ * (checkJs:false) — a type error here was invisible to `npm run type-check:tests`
+ * locally and in CI. The rename is the fix; assertions are untouched.
+ *
+ * The subject module is CommonJS `.js`, so it is pulled in with `require(...) as
+ * {...}` (the count-linked-by-source.test.ts pattern). Shapes are transcribed
+ * from ../db-set-diff-core.js. Two params are DELIBERATELY wider than that file's
+ * JSDoc: `shiftedDateOf` is documented `{string|null|undefined}` and `rowToMember`
+ * takes `{subject?: string, sent_at?: string}` — but the implementation's own
+ * null guards (`if (sentAt == null) return ''` at :54, `row.subject == null` at
+ * :82) mean null/undefined are supported inputs, and these tests assert exactly
+ * that behavior. Typing them as non-null would have made the null cases
+ * uncompilable and quietly deleted the proof.
  */
-const core = require('../db-set-diff-core');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const core = require('../db-set-diff-core') as {
+  shiftedDateOf: (sentAt: string | null | undefined, timeZone?: string) => string;
+  rowToMember: (
+    row: { subject?: string | null; sent_at?: string | null },
+    timeZone?: string,
+  ) => { subject: string; shiftedDate: string };
+  buildDerivedQuery: (opts: {
+    contacts: string[];
+    tokens?: string[];
+    userId?: string | null;
+  }) => { sql: string; params: string[] };
+};
 
 const TZ = 'America/Los_Angeles';
 
@@ -75,3 +100,5 @@ describe('buildDerivedQuery (replays autoLinkService junction SQL)', () => {
     expect(() => core.buildDerivedQuery({ contacts: [] })).toThrow(/at least one contact/);
   });
 });
+
+export {};
