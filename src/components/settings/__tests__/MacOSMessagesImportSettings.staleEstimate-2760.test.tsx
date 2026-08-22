@@ -469,8 +469,15 @@ describe("BACKLOG-2760 — the audit period is asserted as a variable, both ways
     // BACKLOG-2772: the panel states the SELECTION only. `auditPeriodStart` is
     // gone from this wire — main derives the deal spans itself — so the shape
     // asserted here is the whole payload, and its narrowness is the point.
+    //
+    // BACKLOG-2749 added `maxMessages` to that payload, and it belongs: it is
+    // the user's OWN cap dropdown, exactly like `lookbackMonths`, not a value
+    // the panel derived about what an import covers. The dialog quotes
+    // `plan.effectiveCap`, so the cap has to reach the resolver or the estimate
+    // describes a plan the run will not use. `auditPeriodStart` stays out, and
+    // the exact-shape assertion is what keeps it out.
     for (const selection of importCountCalls()) {
-      expect(selection).toEqual({ lookbackMonths: null });
+      expect(selection).toEqual({ lookbackMonths: null, maxMessages: null });
     }
     // BACKLOG-2749: refused through the dialog, not a disabled button.
     await expectImportRefused();
@@ -532,7 +539,7 @@ describe("BACKLOG-2760 — the audit period is asserted as a variable, both ways
 
     expect(importCountCalls().length).toBeGreaterThan(0);
     for (const selection of importCountCalls()) {
-      expect(selection).toEqual({ lookbackMonths: 3 });
+      expect(selection).toEqual({ lookbackMonths: 3, maxMessages: null });
     }
   });
 });

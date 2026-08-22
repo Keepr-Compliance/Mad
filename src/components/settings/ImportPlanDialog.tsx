@@ -81,6 +81,18 @@ export interface FittingWindowCandidate {
   attachmentBytes: number;
 }
 
+/**
+ * A shorter preset range whose message count fits under the cap.
+ *
+ * `windowCount` is main's count for THAT range's resolved plan — carried so the
+ * recommendation can be pinned against the resolver rather than guessed from
+ * the current range's numbers.
+ */
+export interface CapFittingRange {
+  lookbackMonths: number;
+  windowCount: number;
+}
+
 /** How the search for a fitting window is going. */
 export type FittingWindowStatus = "searching" | "found" | "none";
 
@@ -112,6 +124,22 @@ export interface ImportPlanDialogProps {
   /** The plan's own overrides, verbatim. Empty = the run does what the user asked. */
   overrides: ImportPlanOverride[];
 
+  /**
+   * The user's selected time range, in the dropdown's own words
+   * ("All time", "Last 3 months"). The founder's copy names it back to him:
+   * "Your selected time range of [range] includes [M] messages…".
+   */
+  rangeLabel: string;
+  /**
+   * The largest preset range that fits UNDER THE CAP — the founder's [R].
+   *
+   * Same machinery as the space refusal's fitting window, fitting the CAP
+   * instead of the disk: each candidate's `windowCount` is main's, resolved
+   * through the same plan the run would use. The renderer only SELECTS among
+   * answers. `null` while searching, or when no shorter range fits.
+   */
+  capFittingRange: CapFittingRange | null;
+
   // ---- Space refusal facts (reason === "space") ----
   /** Attachment bytes the admitted set would copy. */
   attachmentBytes: number | null;
@@ -134,8 +162,15 @@ export interface ImportPlanDialogProps {
   actionError: string | null;
 
   // ---- Callbacks ----
-  /** Keep the limit: run with the cap the plan already resolved. */
-  onKeepLimit: () => void;
+  /**
+   * Apply the recommended range and continue the import — ONE click.
+   *
+   * Founder, live QA 2026-08-22: the dialog asks one question, and this is the
+   * answer it recommends. It persists the range and runs; a save that does not
+   * land stops the run and reports through `actionError`, exactly as the
+   * refusal dialog's fitting-window button does.
+   */
+  onChangeRange: (lookbackMonths: number) => void;
   /** Import everything in the window: clears the cap for this run. */
   onImportEverything: () => void;
   /**
@@ -183,8 +218,10 @@ export function ImportPlanDialog({
   availableDiskBytes,
   fittingWindow,
   fittingWindowStatus,
+  rangeLabel,
+  capFittingRange,
   actionError,
-  onKeepLimit,
+  onChangeRange,
   onImportEverything,
   onChooseWindow,
   onTextOnly,
@@ -193,30 +230,13 @@ export function ImportPlanDialog({
   const verb = isReimport ? "Re-import" : "Import";
 
   /**
-   * Does protected audit history ride along with the cap?
+   * The import-everything confirm (founder, live QA 2026-08-22).
    *
-   * This is a fact READ from two independent sources — the resolver's cap and
-   * the estimate's admitted count — not a number computed from one of them.
-   * Under Cap' they are equal exactly when nothing is protected, and the
-   * admitted count exceeds the cap by the size of the protected set otherwise.
+   * Dialog-local: it is a step WITHIN this one question, not a second dialog.
+   * Nothing outside needs to know the user is looking at it, and keeping it
+   * here means "Back" cannot lose the numbers behind it.
    */
-  const hasProtectedHistory =
-    effectiveCap !== null && admittedCount > effectiveCap;
-
-  /**
-   * Messages the limit leaves out.
-   *
-   * Window MINUS the coverage the run will end up with. NOT window minus what
-   * this run downloads: a delta import skips messages already stored, and
-   * counting those as "excluded" is the arithmetic that told the founder
-   * 659,619 messages were excluded when the real figure was 645,576
-   * (`a14b3a82`, 2026-08-22).
-   */
-  const excludedByLimit = windowCount - admittedCount;
-
-  const windowExtendedByDeals = overrides.some(
-    (o) => o.kind === "window-extended-by-deals"
-  );
+  const [interstitial, setInterstitial] = React.useState(false);
 
   return (
     <ResponsiveModal
@@ -250,127 +270,139 @@ export function ImportPlanDialog({
             ? "Not enough space for this import"
             : "More messages than your limit"}
         </h3>
+        {/* The founder's copy has no Cancel button on the cap dialog — "what
+            are we asking?" is a question with two answers, and a third button
+            competing with them is what made the old one long. The way out is
+            this unobtrusive close (and the backdrop), not a row item. */}
+        <button
+          onClick={onCancel}
+          data-testid="import-plan-close"
+          aria-label="Close"
+          className="ml-auto -mt-1 -mr-1 p-1 text-gray-400 hover:text-gray-600 rounded transition-all"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
       </div>
 
       {reason === "cap" ? (
         <div data-testid="import-plan-cap-body">
-          {/* Founder decision 2 (`1e8baa69`): NO "Importing up to N messages"
-              header. It contradicted the line beneath it whenever protected
-              audit history pushed the admitted count past the cap. The window
-              statement leads instead — it is the fact that makes the rest
-              necessary, and it cannot contradict anything because it names the
-              window and the limit as two different things. */}
-          <p className="text-sm text-gray-800 mb-2">
-            This time period contains{" "}
-            <strong>{windowCount.toLocaleString()}</strong> messages, which
-            exceeds the{" "}
-            {effectiveCap === null
-              ? "current"
-              : effectiveCap.toLocaleString()}{" "}
-            limit.
-          </p>
+          {/*
+            FOUNDER REWRITE, live QA 2026-08-22. His words on the version this
+            replaces: "very long, a user will get lost — what are we asking?"
 
-          {/* Founder decision 3 (`1e8baa69`): COVERAGE, not download volume. He
-              read 62,823 as "Keepr will re-download 62,823 messages"; it is
-              what the store will HOLD for this period once the run finishes,
-              and a delta import fetches only the part it does not already
-              have. Saying so is the whole of this sentence's job. */}
-          <p
-            data-testid="import-plan-coverage"
-            className="text-sm text-gray-600 mb-4"
-          >
-            If you keep your limit, your messages for this period will cover{" "}
-            <strong>{admittedCount.toLocaleString()}</strong> of{" "}
-            {windowCount.toLocaleString()} — the{" "}
-            {effectiveCap !== null && `${effectiveCap.toLocaleString()} `}
-            newest
-            {hasProtectedHistory && (
-              <>
-                , plus your deals&rsquo; protected history, which is always kept
-                complete
-              </>
-            )}
-            . That is the coverage you end up with, not a download size —
-            messages Keepr already has are not fetched again.{" "}
-            <span className="text-gray-500">
-              {excludedByLimit.toLocaleString()} older messages in this period
-              stay outside your limit.
-            </span>
-          </p>
+            Everything that explained the mechanism is GONE — the coverage
+            paragraph, the settings preamble, the fine print, and the
+            "Keep the 50,000 newest (+ protected history)" button. Each was
+            individually true and correct; together they buried the question.
 
-          {windowExtendedByDeals && (
-            <p
-              data-testid="import-plan-window-extended"
-              className="text-xs text-gray-500 mb-4"
-            >
-              This period already reaches further back than your
-              &ldquo;Import messages from&rdquo; setting, because one of your
-              deals&rsquo; audit periods needs it.
-            </p>
-          )}
+            His 08-20 ruling therefore RETURNS by his own live decision: the
+            dialog does not offer most-recent-N. PR #2345 had superseded that
+            ruling on the reasoning that Cap' made the offer honourable — which
+            it did. The offer was honest and it was still one choice too many.
+            Honest and answerable are different tests, and this dialog has to
+            pass the second one.
 
-          <div className="flex flex-col gap-2">
-            {actionError !== null && (
-              <p
-                data-testid="import-plan-action-error"
-                className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mb-1"
-              >
-                {actionError}
+            Cap' still governs every actual run: protected audit history is
+            always imported, whichever button is pressed. Only the OFFER
+            changed.
+          */}
+          {interstitial ? (
+            <div data-testid="import-plan-import-all-confirm">
+              <p className="text-sm text-gray-800 mb-6">
+                This will slow down Keepr&rsquo;s performance and is not
+                recommended.
               </p>
-            )}
-            {/* Founder decision 5 (`c2300351`), safe action PROMINENT.
-                Founder decision 4 (`3a4fc2b2`), the label:
+              <div className="flex flex-col gap-2">
+                {actionError !== null && (
+                  <p
+                    data-testid="import-plan-action-error"
+                    className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mb-1"
+                  >
+                    {actionError}
+                  </p>
+                )}
+                <button
+                  onClick={onImportEverything}
+                  data-testid="import-plan-import-all-anyway"
+                  className="w-full px-3 py-2.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium rounded transition-all"
+                >
+                  Import all anyway
+                </button>
+                <button
+                  onClick={() => setInterstitial(false)}
+                  data-testid="import-plan-import-all-back"
+                  className="w-full px-3 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all"
+                >
+                  Back
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* ONE passage. The numbers are the resolver's: M the window, N
+                  the cap it will enforce, R the largest shorter range whose own
+                  resolved count fits under N. */}
+              <p className="text-sm text-gray-800 mb-6">
+                Your selected time range of <strong>{rangeLabel}</strong>{" "}
+                includes <strong>{windowCount.toLocaleString()}</strong>{" "}
+                messages, which is over your selected cap of{" "}
+                <strong>
+                  {effectiveCap === null
+                    ? "no maximum"
+                    : effectiveCap.toLocaleString()}
+                </strong>{" "}
+                maximum messages to be imported. To continue, either increase
+                the number of messages or change your time range
+                {capFittingRange !== null && (
+                  <>
+                    {" "}
+                    (recommended:{" "}
+                    <strong>Last {capFittingRange.lookbackMonths} months</strong>
+                    )
+                  </>
+                )}
+                .
+              </p>
 
-                With no protected history the admitted set IS the cap, and
-                "Import most recent 50,000 only" is exactly true — kept
-                verbatim, because it is the sentence BACKLOG-2772 pinned and
-                nothing about it became false.
+              <div className="flex flex-col gap-2">
+                {actionError !== null && (
+                  <p
+                    data-testid="import-plan-action-error"
+                    className="text-xs text-red-700 bg-red-50 border border-red-200 rounded p-2 mb-1"
+                  >
+                    {actionError}
+                  </p>
+                )}
 
-                With protected history it understates in the user's favour:
-                clicking it delivered 62,823, not 50,000. He asked for the
-                total to be said. */}
-            <button
-              onClick={onKeepLimit}
-              data-testid="import-plan-keep-limit"
-              className="w-full px-3 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all"
-            >
-              {effectiveCap === null
-                ? `${verb} the newest ${admittedCount.toLocaleString()}`
-                : hasProtectedHistory
-                  ? `Keep the ${effectiveCap.toLocaleString()} newest — plus your deals' protected history (${admittedCount.toLocaleString()} total)`
-                  : `${verb} most recent ${effectiveCap.toLocaleString()} only`}
-            </button>
+                {/* The recommended answer: applies R and continues, one click. */}
+                {capFittingRange !== null && (
+                  <button
+                    onClick={() => onChangeRange(capFittingRange.lookbackMonths)}
+                    data-testid="import-plan-change-range"
+                    className="w-full px-3 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all"
+                  >
+                    Change the time range
+                  </button>
+                )}
 
-            {/* The expensive choice: RECESSIVE, and honestly labelled
-                (founder decision 5, with the builder note — red conventionally
-                flags the destructive control, so the de-emphasis is carried by
-                weight and colour while the label carries the cost).
-
-                The number is the WINDOW, because this button clears the cap for
-                the run and the run then fetches the whole window. BACKLOG-2772
-                fixed it reading the admitted count, where it offered to import
-                50,000 and imported 707,842. Pinned by
-                `MacOSMessagesImportSettings.capDialog-2772.test.tsx`. */}
-            <button
-              onClick={onImportEverything}
-              data-testid="import-plan-import-all"
-              className="w-full px-3 py-2.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium rounded transition-all"
-            >
-              {verb} all {windowCount.toLocaleString()} messages
-            </button>
-            <p className="text-xs text-gray-500 -mt-1 mb-1">
-              Removes your limit for this import. It will take much longer and
-              use considerably more disk space.
-            </p>
-
-            <button
-              onClick={onCancel}
-              data-testid="import-plan-cancel"
-              className="w-full px-3 py-2 text-gray-700 hover:bg-gray-100 rounded text-sm font-medium transition-all"
-            >
-              Cancel
-            </button>
-          </div>
+                {/* The expensive answer, honestly labelled with the WINDOW count
+                    — this clears the cap for the run, so it really does fetch
+                    all M. Gated behind the interstitial above: BACKLOG-2772's
+                    pin is that no rendered button promises what its run does
+                    not do, and this one now also cannot start that run without
+                    saying what it costs. */}
+                <button
+                  onClick={() => setInterstitial(true)}
+                  data-testid="import-plan-import-all"
+                  className="w-full px-3 py-2.5 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-sm font-medium rounded transition-all"
+                >
+                  {verb} all {windowCount.toLocaleString()} messages
+                </button>
+              </div>
+            </>
+          )}
         </div>
       ) : (
         <div data-testid="import-space-block">

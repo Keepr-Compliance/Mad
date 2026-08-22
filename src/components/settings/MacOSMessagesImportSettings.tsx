@@ -23,6 +23,7 @@ import {
   type ImportPlanDialogReason,
   type FittingWindowCandidate,
   type FittingWindowStatus,
+  type CapFittingRange,
 } from "./ImportPlanDialog";
 import type { MessageImportPlanFacts } from "@electron/types/ipc/window-api-messages";
 import { usePlatform } from "../../contexts/PlatformContext";
@@ -410,6 +411,17 @@ export function MacOSMessagesImportSettings({
         // itself now, from the same query the export gate reads.
         const result = await window.api.messages.getImportCount(userId, {
           lookbackMonths,
+          // BACKLOG-2749: the CAP is part of the selection too.
+          //
+          // It was omitted while the estimate's only consumers were the window
+          // count and the attachment size, neither of which the cap moves. The
+          // dialog changed that: it states `plan.effectiveCap`, and
+          // `filteredCount` is the admitted count under that cap. Leaving the
+          // cap out meant changing the "Maximum messages" dropdown re-rendered
+          // the panel but never re-resolved the plan, so the dialog would have
+          // quoted the PREVIOUS cap — a stale number in the one sentence this
+          // whole item exists to make true.
+          maxMessages,
         });
         // A newer window is being estimated; this answer describes a window the
         // user is no longer looking at. Dropping it is the whole fix.
@@ -451,6 +463,8 @@ export function MacOSMessagesImportSettings({
     isMacOS,
     estimateInputsReady,
     lookbackMonths,
+    // BACKLOG-2749: re-estimate when the cap changes — see the selection above.
+    maxMessages,
     effectiveWindow?.effectiveCutoffISO,
   ]);
 
@@ -787,6 +801,28 @@ export function MacOSMessagesImportSettings({
    * Separate from `lastResult` because it is a fact about the PLAN, not about
    * the outcome, and it must survive `lastResult` being rebuilt.
    */
+  /**
+   * BACKLOG-2749 (founder live QA): the completion strip has been dismissed.
+   *
+   * It used to linger with no way to close it. Dismissing hides THIS run's
+   * message and nothing else — no preference, no cap, no queue state — and it
+   * is reset whenever a new result arrives, so the next run reports normally.
+   */
+  const [resultDismissed, setResultDismissed] = useState(false);
+
+  /**
+   * BACKLOG-2749: the completed run's coverage, for the result strip.
+   *
+   * RETAINED BUT PARTLY UNRENDERED — read this before trusting `excluded`.
+   * The founder's second live-QA pass removed the exclusion sentence, so
+   * `excluded` (window − admitted coverage, the arithmetic that replaced the
+   * orchestrator's wrong `window − imported-this-run`) is now computed and
+   * displayed nowhere. It is kept by instruction, and it is honest arithmetic,
+   * but NO CONTROL CAN PIN IT: mutating the formula reds nothing, verified.
+   * What is still pinned is the condition it guards — the strip appears only
+   * when the window exceeds the admitted coverage — and `admittedCount`, which
+   * the strip shows. Treat `excluded` as inert until something renders it.
+   */
   const [lastCoverage, setLastCoverage] = useState<{
     windowCount: number;
     admittedCount: number;
@@ -843,6 +879,7 @@ export function MacOSMessagesImportSettings({
             }
           : null;
       setLastCoverage(null);
+      setResultDismissed(false);
 
       // Temporarily remove cap for this import if overriding
       if (overrideCap) {
@@ -950,6 +987,19 @@ export function MacOSMessagesImportSettings({
   const fittingSearchIdRef = useRef(0);
 
   /**
+   * The founder's [R]: the largest preset range that fits UNDER THE CAP.
+   *
+   * Same shape as the space refusal's fitting window and deliberately so —
+   * one machinery, two predicates. That one fits the DISK (`fitsOnDisk`, main's
+   * verdict) and this one fits the CAP (`windowCount <= cap`, main's count for
+   * that range's own resolved plan). Neither scales one range's figure into
+   * another's; both ASK.
+   */
+  const [capFittingRange, setCapFittingRange] = useState<CapFittingRange | null>(
+    null
+  );
+
+  /**
    * BACKLOG-2749 / founder decision `2259031c`: compute the way out.
    *
    * Asks main for a real estimate of each candidate window, LARGEST FIRST, and
@@ -1009,6 +1059,47 @@ export function MacOSMessagesImportSettings({
   );
 
   /**
+   * Find the largest preset range whose message count fits under the cap.
+   *
+   * Largest-first with an early return, so the common case costs one estimate.
+   * Each candidate's count is main's — resolved through the same plan the run
+   * would use — and the renderer only selects among the answers. Computing R
+   * here from the current range's count would be arithmetic on a distribution
+   * nobody measured: messages are not spread evenly across months, and the
+   * founder's recommendation has to be a range that actually fits.
+   *
+   * No candidate fitting is an ANSWER: the recommendation and its button both
+   * disappear, and "Import all M messages" remains.
+   */
+  const findCapFittingRange = useCallback(
+    async (searchId: number, cap: number) => {
+      const candidates = LOOKBACK_PRESETS.filter(
+        (months) => lookbackMonths === null || months < lookbackMonths
+      );
+      for (const months of candidates) {
+        try {
+          const result = await window.api.messages.getImportCount(userId, {
+            lookbackMonths: months,
+          });
+          if (searchId !== fittingSearchIdRef.current) return;
+          const count = result.windowCount ?? result.count;
+          if (result.success && count !== undefined && count <= cap) {
+            setCapFittingRange({ lookbackMonths: months, windowCount: count });
+            return;
+          }
+        } catch (error) {
+          logger.error(
+            "[MacOSMessagesImportSettings] Cap-fitting range estimate failed:",
+            error
+          );
+          if (searchId !== fittingSearchIdRef.current) return;
+        }
+      }
+    },
+    [userId, lookbackMonths]
+  );
+
+  /**
    * Decide which surface a click on Import / Force Re-import reaches.
    *
    * ORDER IS LOAD-BEARING. The space refusal outranks the cap choice: an import
@@ -1028,18 +1119,29 @@ export function MacOSMessagesImportSettings({
         return;
       }
       if (capExceeded) {
+        const searchId = ++fittingSearchIdRef.current;
+        setCapFittingRange(null);
         setDialog({ reason: "cap", isReimport: forceReimport });
+        if (planCap !== null) void findCapFittingRange(searchId, planCap);
         return;
       }
       handleImport(forceReimport);
     },
-    [spaceRefused, capExceeded, findFittingWindow, handleImport]
+    [
+      spaceRefused,
+      capExceeded,
+      planCap,
+      findFittingWindow,
+      findCapFittingRange,
+      handleImport,
+    ]
   );
 
   /** Close the dialog and abandon any fitting-window search still running. */
   const closeDialog = useCallback(() => {
     fittingSearchIdRef.current += 1;
     setDialogActionError(null);
+    setCapFittingRange(null);
     setDialog(null);
   }, []);
   // `runDialogAction` is declared above `closeDialog` and needs to call it.
@@ -1065,6 +1167,8 @@ export function MacOSMessagesImportSettings({
       // outside your limit" in those cases would be noise about a limit that
       // did not act.
       const coverage = runCoverageRef.current;
+      // A new run reports fresh; a previous dismissal must not swallow it.
+      setResultDismissed(false);
       setLastCoverage(
         coverage && !coverage.capOverridden &&
           coverage.windowCount > coverage.admittedCount
@@ -1101,6 +1205,7 @@ export function MacOSMessagesImportSettings({
         warning: stripStaleCapClause(messagesItem.warning),
       });
     } else if (messagesItem?.status === 'error') {
+      setResultDismissed(false);
       setLastResult({
         success: false,
         messagesImported: 0,
@@ -1414,10 +1519,10 @@ export function MacOSMessagesImportSettings({
       )}
 
       {/* Result display */}
-      {lastResult && !isImporting && (
+      {lastResult && !isImporting && !resultDismissed && (
         <div
           data-testid="import-result"
-          className={`mb-3 p-2 rounded text-xs ${
+          className={`relative mb-3 p-2 pr-7 rounded text-xs ${
             lastResult.cancelled
               ? "bg-yellow-50 text-yellow-700 border border-yellow-200"
               : lastResult.success
@@ -1478,18 +1583,34 @@ export function MacOSMessagesImportSettings({
               and only coverage belongs in a sentence about exclusion. The true
               figure was 645,576, and it is stated from the plan the run was
               consented to rather than reconstructed afterwards. */}
+          {/* BACKLOG-2749, founder live QA: the tail is GONE — no "of [window]",
+              no "[excluded] older messages stay outside your import limit", no
+              "Adjust in Settings". What is left is one short line.
+
+              The two numbers on it measure different things and sat unlabelled
+              side by side, which read as a contradiction: the first is what
+              THIS RUN imported, the second is what the store now HOLDS for the
+              period (a delta import does not re-fetch what it already had, so
+              the coverage is the larger of the two). Each is now named by the
+              clause it sits in. */}
           {lastResult.success && !lastResult.cancelled && lastCoverage && (
-            <span
-              data-testid="import-coverage"
-              className="block mt-1 text-gray-700"
-            >
-              Your messages for this period now cover{" "}
-              <strong>{lastCoverage.admittedCount.toLocaleString()}</strong> of{" "}
-              {lastCoverage.windowCount.toLocaleString()} —{" "}
-              {lastCoverage.excluded.toLocaleString()} older messages stay
-              outside your import limit. Adjust in Settings.
+            <span data-testid="import-coverage" className="text-gray-700">
+              {" "}
+              Your store now covers{" "}
+              <strong>{lastCoverage.admittedCount.toLocaleString()}</strong> for
+              this period.
             </span>
           )}
+          <button
+            onClick={() => setResultDismissed(true)}
+            data-testid="import-result-dismiss"
+            aria-label="Dismiss"
+            className="absolute top-1 right-1 p-0.5 text-gray-400 hover:text-gray-600 rounded transition-all"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
           {/* BACKLOG-2743: non-fatal notice alongside a successful import —
               e.g. the pre-flight refused the attachment copy for disk space.
               BACKLOG-2749: the orchestrator's cap clause has already been
@@ -1531,10 +1652,28 @@ export function MacOSMessagesImportSettings({
             availableDiskBytes={sizeEstimate?.availableDiskBytes ?? null}
             fittingWindow={fittingWindow}
             fittingWindowStatus={fittingWindowStatus}
+            // The dropdown's own words, so the copy names the setting back to
+            // the user in the language he selected it in.
+            rangeLabel={
+              lookbackMonths === null
+                ? "All time"
+                : `Last ${lookbackMonths} months`
+            }
+            capFittingRange={capFittingRange}
             actionError={dialogActionError}
-            onKeepLimit={() => {
-              closeDialog();
-              handleImport(dialog.isReimport);
+            onChangeRange={(months) => {
+              /*
+               * The founder's recommended answer: apply R and continue, one
+               * click. Identical rule to the refusal dialog's fitting-window
+               * button — the save must LAND before the run starts, or a
+               * rejected write leaves the import fetching the range the dialog
+               * just talked the user out of.
+               */
+              void runDialogAction(
+                () => handleLookbackChange(String(months)),
+                "Keepr could not save that time range, so the import was not started. Try again.",
+                () => handleImport(dialog.isReimport, false, true)
+              );
             }}
             onImportEverything={() => {
               closeDialog();

@@ -171,52 +171,136 @@ beforeEach(() => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("BACKLOG-2749 — the dialog states the plan's numbers, and derives none", () => {
-  it("CONTROL: cap, coverage and window are three DIFFERENT numbers, each in its own place", async () => {
+  it("CONTROL: cap and window are two DIFFERENT numbers, each in its own place", async () => {
     /*
      * The mutation this is built to catch: a dialog that reconstructs the cap
      * from the counts. Every plausible reconstruction is wrong here and lands
      * on a number this test names:
      *
-     *   - cap from `filteredCount`          -> "exceeds the 62,824 limit"
-     *   - admitted from `min(window, cap)`  -> "cover 50,000 of 708,400"
-     *   - cap from `min(window, admitted)`  -> "exceeds the 62,824 limit"
+     *   - cap from `filteredCount`          -> "cap of 62,824"
+     *   - cap from `min(window, admitted)`  -> "cap of 62,824"
      *
-     * With a no-deals fixture all three of those print 50,000 and nothing goes
-     * red, which is precisely how this defect survived a full SR review.
+     * With a no-deals fixture both of those print 50,000 and nothing goes red,
+     * which is how this defect survived a full SR review on #2343.
+     *
+     * BACKLOG-2749 round 3: the coverage line is gone (founder, live QA), so
+     * the admitted count no longer appears on this dialog at all. That is now
+     * itself an assertion — Cap' still admits 62,824 at RUN time, but the
+     * dialog stopped explaining it.
      */
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
     const dialog = await openDialog();
     const body = within(dialog);
 
-    // The lead: the WINDOW against the CAP. Founder decision `1e8baa69`.
-    const lead = body.getByText(/This time period contains/);
-    expect(lead).toHaveTextContent("708,400");
-    expect(lead).toHaveTextContent("exceeds the 50,000 limit");
-    expect(lead).not.toHaveTextContent("62,824");
-
-    // The coverage line: the ADMITTED count against the WINDOW.
-    const coverage = body.getByTestId("import-plan-coverage");
-    expect(coverage).toHaveTextContent("cover 62,824 of 708,400");
-    // Founder decision `1e8baa69`: coverage, NOT download volume. He read
-    // 62,823 as "Keepr will re-download 62,823 messages".
-    expect(coverage).toHaveTextContent(/not a download size/i);
-    expect(coverage).toHaveTextContent(/already has are not fetched again/i);
-    // And the exclusion arithmetic, stated here as it is at completion.
-    expect(coverage).toHaveTextContent("645,576");
-    expect(coverage).not.toHaveTextContent(String(WRONG_EXCLUDED));
+    const passage = body.getByText(/Your selected time range of/);
+    expect(passage).toHaveTextContent("708,400");
+    expect(passage).toHaveTextContent("cap of 50,000");
+    expect(passage).not.toHaveTextContent("62,824");
+    // The dropped explanation, pinned as dropped.
+    expect(body.queryByTestId("import-plan-coverage")).not.toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent("62,824");
   });
 
-  it("the keep-the-limit button states the protected-history TOTAL", async () => {
-    // Founder decision `3a4fc2b2`: "Import most recent 50,000 only" actually
-    // delivered 62,823. It understates in the user's favour, and he asked for
-    // the real total to be said.
+  it("names the user's own time range back to him", async () => {
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    const dialog = await openDialog();
+    expect(
+      within(dialog).getByText(/Your selected time range of/)
+    ).toHaveTextContent("Last 3 months");
+  });
+
+  it("CONTROL: the recommendation is the largest range whose OWN count fits the cap", async () => {
+    /*
+     * The founder's [R], and the mutation that matters: self-computing it.
+     *
+     * Messages are not spread evenly across months, so nothing about the
+     * current range's 708,400 tells you which shorter range holds fewer than
+     * 50,000. The renderer must ASK main for each candidate's own count and
+     * select among the answers. Here 24 and 18 months are still over the cap
+     * and 12 is under it, so R is 12 — a fixture no proportional guess from
+     * 708,400 would land on.
+     */
+    // All time, so shorter presets exist to recommend. (On a 3-month range
+    // there is nothing shorter than 3, and no recommendation is the correct
+    // answer — pinned by the ANTI-VACUITY case below.)
+    mockGetPreferences.mockResolvedValue({
+      success: true,
+      data: {
+        messageImport: {
+          filters: { lookbackMonths: null, maxMessages: CAP, skipAttachments: false },
+        },
+      },
+    });
+    (window.api.messages.getImportCount as jest.Mock).mockImplementation(
+      (_userId: string, selection?: { lookbackMonths: number | null }) => {
+        const months = selection?.lookbackMonths ?? null;
+        if (months === null) return Promise.resolve(FOUNDER_RESULT);
+        if (months >= 18)
+          return Promise.resolve({ ...FOUNDER_RESULT, windowCount: 300000 });
+        return Promise.resolve({ ...FOUNDER_RESULT, windowCount: 41000 });
+      }
+    );
+
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
     const dialog = await openDialog();
 
-    const keep = within(dialog).getByTestId("import-plan-keep-limit");
-    expect(keep).toHaveTextContent("Keep the 50,000 newest");
-    expect(keep).toHaveTextContent("protected history");
-    expect(keep).toHaveTextContent("62,824 total");
+    const passage = await within(dialog).findByText(
+      /Your selected time range of/
+    );
+    await waitFor(() =>
+      expect(passage).toHaveTextContent("recommended: Last 12 months")
+    );
+    expect(passage).not.toHaveTextContent("Last 9 months");
+    expect(
+      within(dialog).getByTestId("import-plan-change-range")
+    ).toHaveTextContent("Change the time range");
+  });
+
+  it("ANTI-VACUITY: no recommendation when nothing shorter fits the cap", async () => {
+    // Every candidate is still over the cap, so there is nothing to recommend
+    // and the blue button does not appear. Without this half, a button that
+    // always appeared would pass the test above.
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      FOUNDER_RESULT
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    const dialog = await openDialog();
+
+    await waitFor(() =>
+      expect(
+        within(dialog).getByTestId("import-plan-import-all")
+      ).toBeInTheDocument()
+    );
+    expect(
+      within(dialog).queryByTestId("import-plan-change-range")
+    ).not.toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent(/recommended:/i);
+  });
+
+  it("the founder's dropped offers are gone: no most-recent-N, no third button", async () => {
+    /*
+     * His 08-20 ruling RETURNED at live QA. PR #2345 had superseded it on the
+     * reasoning that Cap' made "most recent N" honourable — which it did. The
+     * offer was honest and still one choice too many: "very long, a user will
+     * get lost — what are we asking?"
+     *
+     * Cap' is untouched. Protected audit history is still always imported at
+     * RUN time, whichever button is pressed; only the dialog's offer changed.
+     */
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    const dialog = await openDialog();
+
+    expect(
+      within(dialog).queryByTestId("import-plan-keep-limit")
+    ).not.toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent(/most recent/i);
+    expect(dialog).not.toHaveTextContent(/protected history/i);
+    // The way out is the unobtrusive close, not a third row button.
+    expect(within(dialog).getByTestId("import-plan-close")).toBeInTheDocument();
+    expect(
+      within(dialog).queryByTestId("import-plan-cancel")
+    ).not.toBeInTheDocument();
   });
 
   it("the import-everything button carries the WINDOW count (BACKLOG-2772, unweakened)", async () => {
@@ -232,32 +316,46 @@ describe("BACKLOG-2749 — the dialog states the plan's numbers, and derives non
     expect(all).not.toHaveTextContent("62,824");
   });
 
-  it("renders the plan's overrides[] as the reason the window is wider than the setting", async () => {
-    // `overrides` is DATA the resolver emits for exactly this consumer
-    // (BACKLOG-2772). The dialog renders it; it never re-derives "did anything
-    // get overridden?" from the dates.
+  it("CONTROL: the import-everything button NEVER starts a run without the interstitial", async () => {
+    /*
+     * Founder, live QA: "This will slow down Keepr's performance and is not
+     * recommended." A single click on the expensive answer must not reach the
+     * orchestrator — it must reach that sentence first.
+     *
+     * Two-ended on purpose. The first click starts nothing; only the confirm
+     * does. Asserting the second half alone would pass for a dialog with no
+     * interstitial at all.
+     */
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
     const dialog = await openDialog();
 
-    expect(
-      within(dialog).getByTestId("import-plan-window-extended")
-    ).toHaveTextContent(/audit periods? needs? it/i);
+    fireEvent.click(within(dialog).getByTestId("import-plan-import-all"));
+
+    const confirm = await within(dialog).findByTestId(
+      "import-plan-import-all-confirm"
+    );
+    expect(confirm).toHaveTextContent(
+      /This will slow down Keepr.s performance and is not recommended\./
+    );
+    expect(mockRequestSync).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(dialog).getByTestId("import-plan-import-all-anyway")
+    );
+    await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
   });
 
-  it("ANTI-VACUITY: with an EMPTY overrides[], the deal explanation is absent", async () => {
-    // Without this, the assertion above would be equally green for a dialog
-    // that showed the sentence unconditionally.
-    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue({
-      ...FOUNDER_RESULT,
-      plan: { ...FOUNDER_RESULT.plan, overrides: [] },
-    });
-
+  it("Back returns to the question with its numbers intact", async () => {
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
     const dialog = await openDialog();
 
+    fireEvent.click(within(dialog).getByTestId("import-plan-import-all"));
+    fireEvent.click(await within(dialog).findByTestId("import-plan-import-all-back"));
+
     expect(
-      within(dialog).queryByTestId("import-plan-window-extended")
-    ).not.toBeInTheDocument();
+      within(dialog).getByText(/Your selected time range of/)
+    ).toHaveTextContent("708,400");
+    expect(mockRequestSync).not.toHaveBeenCalled();
   });
 
   it("ANTI-VACUITY: no dialog at all when the window fits under the cap", async () => {
@@ -325,12 +423,9 @@ describe("BACKLOG-2749 — an ABSENT maxMessages preference is a cap, not Unlimi
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
     const dialog = await openDialog();
 
-    expect(within(dialog).getByText(/This time period contains/)).toHaveTextContent(
-      "exceeds the 50,000 limit"
-    );
     expect(
-      within(dialog).getByTestId("import-plan-keep-limit")
-    ).toHaveTextContent("62,824 total");
+      within(dialog).getByText(/Your selected time range of/)
+    ).toHaveTextContent("cap of 50,000");
   });
 });
 
@@ -352,12 +447,16 @@ describe("BACKLOG-2749 — no surface says 'up to 50,000' while another says 62,
      * dialog assertion above stays green.
      */
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
-    const dialog = await openDialog();
+    await openDialog();
 
     const panel = screen.getByTestId("macos-messages-import");
     expect(panel).not.toHaveTextContent(/up to 50,000/i);
-    // …while the coverage the run really delivers IS on screen.
-    expect(dialog).toHaveTextContent("62,824");
+    // …while the coverage the run really delivers IS on screen. BACKLOG-2749
+    // round 3 moved this to the PANEL indicator: the founder removed the
+    // dialog's coverage line, so the panel is now the only place that states
+    // what Cap' will actually deliver. The contradiction this control exists
+    // for is therefore still exactly reachable.
+    expect(panel).toHaveTextContent("covering 62,824 messages");
   });
 
   it("the panel indicator states the coverage, not the cap, when history is protected", async () => {
@@ -390,7 +489,14 @@ describe("BACKLOG-2749 — no surface says 'up to 50,000' while another says 62,
     expect(indicator).not.toHaveTextContent(/covering/i);
   });
 
-  it("ANTI-VACUITY: with nothing protected the keep-limit button keeps its 2772 wording", async () => {
+  it("ANTI-VACUITY: with nothing protected the panel keeps the plain cap phrasing", async () => {
+    /*
+     * The other half, and the reason the panel's reword is conditional rather
+     * than a blanket rewrite: when admitted == cap, "up to 50,000 messages" is
+     * exactly true and three suites assert it. An unconditional coverage
+     * phrasing would read "covering 50,000 messages (your 50,000 newest plus
+     * your deals' protected history)" for a user with no deals.
+     */
     (window.api.messages.getImportCount as jest.Mock).mockResolvedValue({
       ...FOUNDER_RESULT,
       filteredCount: CAP,
@@ -398,11 +504,10 @@ describe("BACKLOG-2749 — no surface says 'up to 50,000' while another says 62,
     });
 
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
-    const dialog = await openDialog();
 
-    expect(
-      within(dialog).getByTestId("import-plan-keep-limit")
-    ).toHaveTextContent("Import most recent 50,000 only");
+    const indicator = await screen.findByText(/Auto-importing messages back to/);
+    expect(indicator).toHaveTextContent("up to 50,000 messages");
+    expect(indicator).not.toHaveTextContent(/covering/i);
   });
 });
 
@@ -411,6 +516,46 @@ describe("BACKLOG-2749 — no surface says 'up to 50,000' while another says 62,
 // ───────────────────────────────────────────────────────────────────────────
 
 describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () => {
+  /*
+   * WHICH RUN STILL HITS THE CAP — worth stating, because round 3 changed it.
+   *
+   * The founder's rewrite removed the keep-the-limit button, which is how
+   * these tests used to start a capped run. Walking the remaining paths: the
+   * blue recommendation moves to a range that FITS (so nothing is excluded),
+   * and "Import all anyway" clears the cap for its run (so nothing is
+   * excluded). Neither can produce this sentence.
+   *
+   * The path that still can is the SPACE refusal: a library too large for the
+   * disk AND over the cap shows the space dialog (it outranks the cap), and
+   * "Import message text only" starts a run on the unchanged range — capped,
+   * with the cap genuinely excluding messages. That is a real journey, not a
+   * contrivance: it is the founder's own machine, which is both.
+   *
+   * So the coverage sentence is reachable, and narrower than it was. Recorded
+   * rather than assumed — I walked the paths before repointing these tests.
+   */
+  const TOO_BIG_AND_CAPPED = {
+    ...FOUNDER_RESULT,
+    attachmentBytes: 61_300_000_000,
+    availableDiskBytes: 59_100_000_000,
+    fitsOnDisk: false,
+  };
+
+  beforeEach(() => {
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      TOO_BIG_AND_CAPPED
+    );
+  });
+
+  /** Start the capped run the way a user still can. */
+  async function startCappedRun(): Promise<void> {
+    const dialog = await openDialog();
+    await act(async () => {
+      fireEvent.click(within(dialog).getByTestId("import-without-attachments"));
+    });
+    await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
+  }
+
   /** Drive the orchestrator queue to a completed messages run. */
   async function completeRun(
     rerender: (ui: React.ReactElement) => void,
@@ -434,36 +579,90 @@ describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () =>
     });
   }
 
-  it("CONTROL: 645,576 excluded, never 659,619", async () => {
+  it("CONTROL: the coverage, and NEITHER exclusion figure", async () => {
     /*
-     * The founder's live restore. `window - imported-this-run` counts the
-     * 14,042 messages already in his store as excluded and produces 659,619;
-     * `window - admitted coverage` produces 645,576. Both are "a big number
-     * next to the word excluded", which is why the wrong one survived — this
-     * test names them BOTH so the two cannot be confused for one another.
+     * The founder's live restore reported "659,619 messages excluded by import
+     * limit" — 708,400 − 48,781, the window minus what that run downloaded,
+     * counting his 14,042 already-present messages as excluded. The correct
+     * arithmetic was 708,400 − 62,824 = 645,576.
+     *
+     * His second live-QA pass then removed the exclusion sentence ALTOGETHER:
+     * the strip now states only what the store covers. So this test's job
+     * changed shape — the wrong number must still never appear, and now the
+     * right one does not appear either. Both are named so a future edit that
+     * reintroduces the tail has to pick a side deliberately.
+     *
+     * HONEST LIMIT, recorded rather than papered over: with the tail gone,
+     * `lastCoverage.excluded` is computed and never rendered, so the
+     * SUBTRACTION itself is no longer pinned by anything (mutation M3 goes
+     * green). What is still pinned is the CONDITION it guards — the strip
+     * appears only when the window exceeds the admitted coverage — and the
+     * coverage figure the strip actually shows.
      */
     const { rerender } = renderStrict(
       <MacOSMessagesImportSettings userId={USER_ID} />
     );
-
-    const dialog = await openDialog();
-    fireEvent.click(within(dialog).getByTestId("import-plan-keep-limit"));
-    await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
-
+    await startCappedRun();
     await completeRun(
       rerender,
       `${WRONG_EXCLUDED.toLocaleString()} messages excluded by import limit. Adjust in Settings.`
     );
 
     const coverage = await screen.findByTestId("import-coverage");
-    expect(coverage).toHaveTextContent("cover 62,824 of 708,400");
-    expect(coverage).toHaveTextContent(`${CORRECT_EXCLUDED.toLocaleString()}`);
+    expect(coverage).toHaveTextContent("Your store now covers 62,824 for this period");
 
-    // And the wrong figure is nowhere on the panel — not in the result card,
-    // not in the orchestrator's warning, which is stripped for exactly this.
-    expect(screen.getByTestId("macos-messages-import")).not.toHaveTextContent(
-      WRONG_EXCLUDED.toLocaleString()
+    const panel = screen.getByTestId("macos-messages-import");
+    // The wrong figure is nowhere — not in the strip, and not in the
+    // orchestrator's warning, which is stripped for exactly this.
+    expect(panel).not.toHaveTextContent(WRONG_EXCLUDED.toLocaleString());
+    // Nor the right one: the founder removed that sentence.
+    expect(panel).not.toHaveTextContent(CORRECT_EXCLUDED.toLocaleString());
+    expect(panel).not.toHaveTextContent(/stay outside your import limit/i);
+    expect(panel).not.toHaveTextContent(/Adjust in Settings/i);
+  });
+
+  it("the two numbers are labelled so they cannot read as a contradiction", async () => {
+    // "Re-imported 48,781 messages" is what THIS RUN fetched; "your store now
+    // covers 62,824" is what the period HOLDS. A delta import does not
+    // re-fetch what it already had, so the second is legitimately larger —
+    // unlabelled and side by side, the founder read them as disagreeing.
+    const { rerender } = renderStrict(
+      <MacOSMessagesImportSettings userId={USER_ID} />
     );
+    await startCappedRun();
+    await completeRun(rerender);
+
+    const result = await screen.findByTestId("import-result");
+    expect(result).toHaveTextContent("48,781");
+    expect(result).toHaveTextContent("Your store now covers 62,824 for this period");
+  });
+
+  it("the completion strip can be dismissed, and a new run reports fresh", async () => {
+    // It used to linger with no way to close it. Dismissing hides THIS run's
+    // message and nothing else.
+    const { rerender } = renderStrict(
+      <MacOSMessagesImportSettings userId={USER_ID} />
+    );
+    await startCappedRun();
+    await completeRun(rerender);
+
+    await screen.findByTestId("import-result");
+    fireEvent.click(screen.getByTestId("import-result-dismiss"));
+    expect(screen.queryByTestId("import-result")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("import-coverage")).not.toBeInTheDocument();
+
+    // ANTI-VACUITY: the dismissal is for that run only. Without this, a
+    // dismissal that permanently silenced the panel would pass the above.
+    mockQueue = [];
+    await act(async () => {
+      rerender(
+        <React.StrictMode>
+          <MacOSMessagesImportSettings userId={USER_ID} />
+        </React.StrictMode>
+      );
+    });
+    await completeRun(rerender);
+    expect(await screen.findByTestId("import-result")).toBeInTheDocument();
   });
 
   it("keeps the disk-space clause when the orchestrator sends both", async () => {
@@ -473,11 +672,7 @@ describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () =>
     const { rerender } = renderStrict(
       <MacOSMessagesImportSettings userId={USER_ID} />
     );
-
-    const dialog = await openDialog();
-    fireEvent.click(within(dialog).getByTestId("import-plan-keep-limit"));
-    await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
-
+    await startCappedRun();
     await completeRun(
       rerender,
       `${WRONG_EXCLUDED.toLocaleString()} messages excluded by import limit. Adjust in Settings. ` +
@@ -495,12 +690,18 @@ describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () =>
   it("an import-everything run reports NO exclusion at all", async () => {
     // It cleared the cap for itself, so the limit excluded nothing. "0 outside
     // your limit" would be noise about a limit that did not act.
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      FOUNDER_RESULT
+    );
     const { rerender } = renderStrict(
       <MacOSMessagesImportSettings userId={USER_ID} />
     );
 
     const dialog = await openDialog();
     fireEvent.click(within(dialog).getByTestId("import-plan-import-all"));
+    fireEvent.click(
+      await within(dialog).findByTestId("import-plan-import-all-anyway")
+    );
     await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
 
     await completeRun(rerender);
@@ -853,6 +1054,92 @@ describe("BACKLOG-2749 — a failed preference write stops the run", () => {
     );
   });
 
+  it("CONTROL: the blue recommendation obeys the rule too (write REJECTS)", async () => {
+    // The founder's round-3 primary action saves the recommended range and
+    // runs in ONE click, so it carries exactly the hazard M13 was filed for.
+    // Driven separately from the space dialog's fitting-window button because
+    // it is a different callback on a different body — the rule is shared, the
+    // wiring is not, and only a click through each can say both are wired.
+    mockUpdatePreferences.mockRejectedValue(new Error("preferences unavailable"));
+    (window.api.messages.getImportCount as jest.Mock).mockImplementation(
+      (_userId: string, selection?: { lookbackMonths: number | null }) =>
+        Promise.resolve(
+          selection?.lookbackMonths === null
+            ? FOUNDER_RESULT
+            : { ...FOUNDER_RESULT, windowCount: 41000 }
+        )
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    const dialog = await openDialog();
+    await act(async () => {
+      fireEvent.click(
+        await within(dialog).findByTestId("import-plan-change-range")
+      );
+    });
+
+    expect(mockRequestSync).not.toHaveBeenCalled();
+    expect(
+      await screen.findByTestId("import-plan-action-error")
+    ).toHaveTextContent(/could not save that time range/i);
+    expect(screen.getByTestId("import-plan-dialog")).toBeInTheDocument();
+  });
+
+  it("CONTROL: the blue recommendation, write RETURNS {success:false}", async () => {
+    mockUpdatePreferences.mockResolvedValue({ success: false, error: "nope" });
+    (window.api.messages.getImportCount as jest.Mock).mockImplementation(
+      (_userId: string, selection?: { lookbackMonths: number | null }) =>
+        Promise.resolve(
+          selection?.lookbackMonths === null
+            ? FOUNDER_RESULT
+            : { ...FOUNDER_RESULT, windowCount: 41000 }
+        )
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    const dialog = await openDialog();
+    await act(async () => {
+      fireEvent.click(
+        await within(dialog).findByTestId("import-plan-change-range")
+      );
+    });
+
+    expect(mockRequestSync).not.toHaveBeenCalled();
+    expect(
+      await screen.findByTestId("import-plan-action-error")
+    ).toBeInTheDocument();
+    // M14 carried over: the range that failed to save is not displayed as if
+    // it had been.
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("All time")).toBeInTheDocument()
+    );
+  });
+
+  it("ANTI-VACUITY: the blue recommendation runs when the write LANDS", async () => {
+    mockUpdatePreferences.mockResolvedValue({ success: true });
+    (window.api.messages.getImportCount as jest.Mock).mockImplementation(
+      (_userId: string, selection?: { lookbackMonths: number | null }) =>
+        Promise.resolve(
+          selection?.lookbackMonths === null
+            ? FOUNDER_RESULT
+            : { ...FOUNDER_RESULT, windowCount: 41000 }
+        )
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    const dialog = await openDialog();
+    await act(async () => {
+      fireEvent.click(
+        await within(dialog).findByTestId("import-plan-change-range")
+      );
+    });
+
+    await waitFor(() => expect(mockRequestSync).toHaveBeenCalled());
+    expect(
+      screen.queryByTestId("import-plan-action-error")
+    ).not.toBeInTheDocument();
+  });
+
   it("the text-only escape obeys the same rule", async () => {
     mockUpdatePreferences.mockRejectedValue(new Error("preferences unavailable"));
 
@@ -951,9 +1238,9 @@ describe("BACKLOG-2749 — both entry points pass through one gate", () => {
       within(dialog).getByTestId("import-plan-import-all")
     ).toHaveTextContent("Re-import all 708,400 messages");
     // Same numbers, different verb — under D2' both modes cover one window.
-    expect(within(dialog).getByTestId("import-plan-keep-limit")).toHaveTextContent(
-      "62,824 total"
-    );
+    expect(
+      within(dialog).getByText(/Your selected time range of/)
+    ).toHaveTextContent("708,400");
     expect(mockRequestSync).not.toHaveBeenCalled();
   });
 

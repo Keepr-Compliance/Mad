@@ -158,13 +158,19 @@ describe("BACKLOG-2772 — the cap disclosure reads the window, not the admitted
 
     await openCapPrompt();
 
+    /*
+     * BACKLOG-2749 round 3 (founder live QA): the passage was rewritten again,
+     * to his dictation. The NUMBERS this suite exists for are unchanged — the
+     * window against the cap, never the admitted count — only the sentence
+     * carrying them.
+     */
     const prompt = within(
       await screen.findByTestId("import-plan-cap-body")
-    ).getByText(/This time period contains/);
+    ).getByText(/Your selected time range of/);
     expect(prompt).toHaveTextContent("707,842");
-    expect(prompt).toHaveTextContent("exceeds the 50,000 limit");
+    expect(prompt).toHaveTextContent("cap of 50,000");
     // The defect this suite exists for, stated directly.
-    expect(prompt).not.toHaveTextContent("contains 50,000 messages");
+    expect(prompt).not.toHaveTextContent("includes 50,000 messages");
   });
 
   it("PIN: 'Import all N' promises the number that run actually fetches", async () => {
@@ -189,12 +195,25 @@ describe("BACKLOG-2772 — the cap disclosure reads the window, not the admitted
 
     await openCapPrompt();
 
-    const importAll = await screen.findByRole("button", { name: /Import all/i });
+    const importAll = await screen.findByTestId("import-plan-import-all");
     expect(importAll).toHaveTextContent("Import all 707,842 messages");
     expect(importAll).not.toHaveTextContent("50,000");
 
-    const mostRecent = screen.getByRole("button", { name: /most recent/i });
-    expect(mostRecent).toHaveTextContent("Import most recent 50,000 only");
+    /*
+     * BACKLOG-2749 round 3: the sibling this used to pair against — "Import
+     * most recent 50,000 only" — was REMOVED by the founder at live QA. His
+     * 08-20 ruling (do not offer most-recent-N) returned; #2345 had superseded
+     * it, and he re-superseded the supersede.
+     *
+     * The pairing was how this test avoided passing on a lone number, so it
+     * needs a replacement rather than a deletion. The passage carries the cap,
+     * the button carries the window, and they must still be different numbers
+     * in different places — which is the property the pair was standing in for.
+     */
+    expect(screen.queryByRole("button", { name: /most recent/i })).toBeNull();
+    const passage = screen.getByText(/Your selected time range of/);
+    expect(passage).toHaveTextContent("cap of 50,000");
+    expect(passage).toHaveTextContent("707,842");
   });
 
   it("ANTI-VACUITY: no cap disclosure at all when the window fits under the cap", async () => {
