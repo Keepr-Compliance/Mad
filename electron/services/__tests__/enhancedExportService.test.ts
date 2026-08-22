@@ -1,14 +1,20 @@
 /**
- * Unit tests for enhancedExportService date filtering
- * TASK-1143: Verify PDF exports filter messages by transaction date range
- * BACKLOG-2343: The audit-window end must be INCLUSIVE of the whole closing day.
+ * enhancedExportService — the service RENDERS a plan; it does not decide one.
  *
- * These tests exercise the REAL `_filterCommunicationsByDate` on the singleton
- * (via a typed cast) rather than a hand-copied mirror, so the export bug that
- * dropped an in-window text (Audit Summary read "TOTAL TEXT MESSAGES: 0") is
- * guarded against for real.
+ * TASK-1143 / BACKLOG-2343 history: this suite used to reach through a typed
+ * cast into `_filterCommunicationsByDate`, a private hand-copy of the folder
+ * handler's inline date filter. BACKLOG-2771 deleted that copy — there is now
+ * one resolver, and every BACKLOG-2343 closing-day case this file used to own
+ * is ported verbatim into `exportPlan.test.ts`, with the per-entry-point
+ * routing pinned in `exportIncludeSet-2771.test.ts`.
+ *
+ * What remains this file's job is the claim that made the deletion safe: this
+ * service writes exactly `plan.communications` and applies NO include-set
+ * decision of its own. If a filter is ever re-introduced here, these tests red.
  */
+
 import type { Communication } from "../../types/models";
+import type { TransactionWithDetails } from "../transactionService/types";
 
 // enhancedExportService (→ folderExportService → databaseService) only needs
 // electron's `app` mocked at import time; the DB layer is auto-mocked via the
@@ -19,162 +25,125 @@ jest.mock("electron", () => ({
   },
 }));
 
+const writtenFiles: Array<{ path: string; content: string }> = [];
+
+jest.mock("fs/promises", () => ({
+  writeFile: jest.fn(async (p: string, content: string) => {
+    writtenFiles.push({ path: p, content });
+  }),
+  mkdir: jest.fn().mockResolvedValue(undefined),
+}));
+
 import enhancedExportService from "../enhancedExportService";
+// BACKLOG-2771: plans are built by the REAL resolver, never by hand.
+import { testExportPlan } from "./helpers/exportPlanFixture";
 
-// `_filterCommunicationsByDate` is private; access it through a typed cast so we
-// test the shipping implementation directly.
-type FilterByDate = (
-  communications: Communication[],
-  startDate?: string,
-  endDate?: string,
-) => Communication[];
+const comm = (
+  id: string,
+  sentAt: string,
+  type: "email" | "sms" = "email",
+): Communication =>
+  ({
+    id,
+    sent_at: sentAt,
+    subject: `Subject ${id}`,
+    sender: "test@example.com",
+    recipients: "recipient@example.com",
+    body_plain: `Body ${id}`,
+    communication_type: type,
+    channel: type,
+  }) as unknown as Communication;
 
-const filterByDate: FilterByDate = (
-  enhancedExportService as unknown as {
-    _filterCommunicationsByDate: FilterByDate;
-  }
-)._filterCommunicationsByDate.bind(enhancedExportService);
+const transaction = {
+  id: "txn-2771",
+  user_id: "user-1",
+  property_address: "27 Plan Street",
+  started_at: "2024-01-01",
+  closed_at: "2024-12-31",
+} as unknown as TransactionWithDetails;
 
-describe("EnhancedExportService Date Filtering", () => {
-  // Sample communications for testing (all at 10:00Z on their day)
-  const createCommunication = (id: string, date: string): Communication =>
-    ({
-      id,
-      sent_at: date,
-      subject: `Email ${id}`,
-      sender: "test@example.com",
-      recipients: "recipient@example.com",
-      communication_type: "email",
-    }) as Communication;
+/** IDs in the JSON artifact, in the order the service wrote them. */
+const exportedIds = (): string[] => {
+  const json = writtenFiles.find((f) => f.path.endsWith(".json"));
+  if (!json) throw new Error("no JSON artifact was written");
+  return (JSON.parse(json.content).communications as Array<{ id: string }>).map((c) => c.id);
+};
 
-  const sampleCommunications: Communication[] = [
-    createCommunication("1", "2024-01-01T10:00:00Z"), // Before range
-    createCommunication("2", "2024-01-15T10:00:00Z"), // Start of range
-    createCommunication("3", "2024-02-01T10:00:00Z"), // In range
-    createCommunication("4", "2024-02-15T10:00:00Z"), // In range
-    createCommunication("5", "2024-03-01T10:00:00Z"), // End of range
-    createCommunication("6", "2024-03-15T10:00:00Z"), // After range
+describe("enhancedExportService renders exactly the plan it is given", () => {
+  beforeEach(() => {
+    writtenFiles.length = 0;
+    jest.clearAllMocks();
+  });
+
+  const all = [
+    comm("jan", "2024-01-05T10:00:00Z"),
+    comm("feb", "2024-02-05T10:00:00Z", "sms"),
+    comm("mar", "2024-03-05T10:00:00Z"),
   ];
 
-  describe("_filterCommunicationsByDate", () => {
-    it("should return all communications when no dates are provided", () => {
-      const result = filterByDate(sampleCommunications, undefined, undefined);
-      expect(result).toHaveLength(6);
-      expect(result).toEqual(sampleCommunications);
+  it("writes every communication the plan includes", async () => {
+    const plan = testExportPlan(all, { format: "json" });
+
+    await enhancedExportService.exportTransaction(transaction, plan, {
+      exportFormat: "json",
     });
 
-    it("should filter communications before start date", () => {
-      const result = filterByDate(sampleCommunications, "2024-01-15", undefined);
-      // Should exclude communication #1 (2024-01-01)
-      expect(result).toHaveLength(5);
-      expect(result.map((c) => c.id)).toEqual(["2", "3", "4", "5", "6"]);
-    });
-
-    it("should INCLUDE messages sent on the end date (inclusive closing day)", () => {
-      // BACKLOG-2343: end date "2024-03-01" now covers ALL of March 1st, so the
-      // 2024-03-01T10:00Z message (#5) is kept. Callers pass the transaction's
-      // closed_at directly; they no longer need to pass "the day after".
-      const result = filterByDate(sampleCommunications, undefined, "2024-03-01");
-      expect(result.map((c) => c.id)).toEqual(["1", "2", "3", "4", "5"]);
-      expect(result.find((c) => c.id === "5")).toBeDefined();
-    });
-
-    it("should filter communications outside date range (both dates)", () => {
-      const result = filterByDate(sampleCommunications, "2024-01-15", "2024-03-01");
-      // Excludes #1 (before start) and #6 (after end). #5 (on the end day) stays.
-      expect(result.map((c) => c.id)).toEqual(["2", "3", "4", "5"]);
-    });
-
-    it("should include communications exactly on start date", () => {
-      const result = filterByDate(sampleCommunications, "2024-01-15", "2024-03-15");
-      // Communication #2 is on 2024-01-15 and should be included
-      expect(result.find((c) => c.id === "2")).toBeDefined();
-    });
-
-    it("should include a message on the end date even at a later time of day", () => {
-      // BACKLOG-2343 core regression: previously "2024-03-15" (midnight UTC)
-      // EXCLUDED the 2024-03-15T10:00Z message. It must now be INCLUDED.
-      const result = filterByDate(sampleCommunications, "2024-01-01", "2024-03-15");
-      expect(result.find((c) => c.id === "6")).toBeDefined();
-    });
-
-    it("should still exclude messages sent after the end date", () => {
-      // End "2024-03-14" -> inclusive through end of the 14th; #6 (03-15) excluded.
-      const result = filterByDate(sampleCommunications, "2024-01-01", "2024-03-14");
-      expect(result.find((c) => c.id === "6")).toBeUndefined();
-      expect(result.map((c) => c.id)).toEqual(["1", "2", "3", "4", "5"]);
-    });
-
-    it("BACKLOG-2343: keeps a text sent late on the closing day in a UTC-negative timezone", () => {
-      // Founder repro: text sent Jul 28 ~11:30pm America/Chicago (UTC-5) is
-      // stored as 2026-07-29T04:30Z. Audit window Jan 1 - Jul 29 2026. Before the
-      // fix this was dropped and the Audit Summary showed 0 texts.
-      const inWindowText = createCommunication("t", "2026-07-29T04:30:00Z");
-      const result = filterByDate([inWindowText], "2026-01-01", "2026-07-29");
-      expect(result).toHaveLength(1);
-      expect(result[0].id).toBe("t");
-    });
-
-    it("falls back to received_at when sent_at is missing", () => {
-      // Parity with the folder-export handler: a message missing sent_at must not
-      // be silently dropped (a naive new Date(null) => 1970 => excluded).
-      const noSentAt = {
-        id: "r",
-        sent_at: undefined,
-        received_at: "2024-02-10T10:00:00Z",
-        communication_type: "sms",
-      } as unknown as Communication;
-      const result = filterByDate([noSentAt], "2024-01-01", "2024-03-01");
-      expect(result).toHaveLength(1);
-      expect(result[0].id).toBe("r");
-    });
-
-    it("should handle empty communications array", () => {
-      const result = filterByDate([], "2024-01-15", "2024-03-01");
-      expect(result).toHaveLength(0);
-    });
-
-    it("should handle start date only with empty result", () => {
-      // Start date after all communications
-      const result = filterByDate(sampleCommunications, "2024-12-01", undefined);
-      expect(result).toHaveLength(0);
-    });
-
-    it("should handle end date only with empty result", () => {
-      // End date before all communications (even after the inclusive +1 day)
-      const result = filterByDate(sampleCommunications, undefined, "2023-01-01");
-      expect(result).toHaveLength(0);
-    });
-
-    it("should handle ISO date strings with time component", () => {
-      const result = filterByDate(
-        sampleCommunications,
-        "2024-01-15T00:00:00Z",
-        "2024-03-01T23:59:59Z",
-      );
-      // Excludes #1 (before) and #6 (2024-03-15, after). #2..#5 stay.
-      expect(result.map((c) => c.id)).toEqual(["2", "3", "4", "5"]);
-    });
+    // Descending — the service owns the ORDER, the plan owns the SET.
+    expect(exportedIds()).toEqual(["mar", "feb", "jan"]);
   });
-});
 
-describe("ExportOptions date parameters", () => {
-  it("should accept startDate and endDate in options interface", () => {
-    // This is a type test - verifying the interface accepts these fields
-    interface ExportOptions {
-      contentType?: "text" | "email" | "both";
-      exportFormat?: "pdf" | "excel" | "csv" | "json" | "txt_eml";
-      startDate?: string;
-      endDate?: string;
-    }
+  it("writes NOTHING the plan excluded — the audit window is honored via the plan", async () => {
+    const plan = testExportPlan(all, {
+      format: "json",
+      startDate: "2024-02-01",
+      endDate: "2024-02-28",
+    });
 
-    const options: ExportOptions = {
-      exportFormat: "pdf",
-      startDate: "2024-01-15",
-      endDate: "2024-03-01",
-    };
+    await enhancedExportService.exportTransaction(transaction, plan, {
+      exportFormat: "json",
+    });
 
-    expect(options.startDate).toBe("2024-01-15");
-    expect(options.endDate).toBe("2024-03-01");
+    expect(exportedIds()).toEqual(["feb"]);
+  });
+
+  it("does NOT re-apply a content filter of its own", async () => {
+    // The plan selected emails only. This service is never told the content
+    // type any more, so the artifact proves the plan alone determined the set.
+    const plan = testExportPlan(all, { format: "json", contentType: "emails" });
+
+    await enhancedExportService.exportTransaction(transaction, plan, {
+      exportFormat: "json",
+    });
+
+    expect(exportedIds()).toEqual(["mar", "jan"]);
+  });
+
+  it("does NOT re-apply a date filter of its own", async () => {
+    // A plan resolved with NO window must be rendered whole, even though the
+    // transaction carries started_at/closed_at that would exclude this row. A
+    // surviving second filter reading transaction.closed_at would drop it.
+    const outside = comm("2030", "2030-06-01T10:00:00Z");
+    const plan = testExportPlan([...all, outside], { format: "json" });
+
+    await enhancedExportService.exportTransaction(transaction, plan, {
+      exportFormat: "json",
+    });
+
+    expect(exportedIds()).toContain("2030");
+    expect(exportedIds()).toHaveLength(4);
+  });
+
+  it("renders an empty plan as an empty artifact rather than falling back to the transaction", async () => {
+    const plan = testExportPlan(all, {
+      format: "json",
+      startDate: "2025-01-01",
+      endDate: "2025-01-02",
+    });
+
+    await enhancedExportService.exportTransaction(transaction, plan, {
+      exportFormat: "json",
+    });
+
+    expect(exportedIds()).toEqual([]);
   });
 });
