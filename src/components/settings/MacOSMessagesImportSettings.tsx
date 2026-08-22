@@ -70,7 +70,7 @@ export function MacOSMessagesImportSettings({
   disabledReason,
 }: MacOSMessagesImportSettingsProps) {
   const { isMacOS } = usePlatform();
-  const { queue, requestSync } = useSyncOrchestrator();
+  const { queue, requestSync, markCancelRequested } = useSyncOrchestrator();
 
   // Derive importing state from orchestrator queue
   const messagesItem = queue.find(q => q.type === 'messages');
@@ -84,15 +84,18 @@ export function MacOSMessagesImportSettings({
   const controlsDisabled = !enabled || isImporting;
 
   // BACKLOG-2748: Cancel is offered ONLY while the import is actually running,
-  // never while the queue item is merely 'pending'. `requestCancellation()` is
-  // guarded by `if (this.isImporting)` in the main process and each run builds a
-  // fresh AbortController, so a cancel sent before the import is in flight
-  // reaches nothing and cannot be replayed — a button there would be exactly the
-  // placebo this item was filed about. The pending window is not hypothetical: a
-  // dashboard sync of ['contacts', 'emails', 'messages'] leaves the messages item
-  // pending for the whole contacts+emails run, and this panel shows "Preparing
-  // import..." throughout it. Dropped-cancel proof:
-  // `macOSMessagesImportService.cancel-2748.test.ts`.
+  // never while the queue item is merely 'pending'.
+  //
+  // BACKLOG-2776 UPDATED the reason. It used to be that a cancel arriving before
+  // the main process had set `isImporting` was dropped outright; the service now
+  // HOLDS such a cancel and the next run to start consumes it, so the button is
+  // no longer a placebo in the sub-second window between 'running' and the
+  // import taking hold. What it cannot do is span the 'pending' window: a
+  // dashboard sync of ['contacts', 'emails', 'messages'] leaves the messages
+  // item pending for the whole contacts+emails run — minutes — and a cancel held
+  // that long would fire at an import the user has since forgotten asking to
+  // stop, so the service expires it (PENDING_CANCEL_TTL_MS). The gate stays.
+  // Held-cancel proof: `macOSMessagesImportService.cancel-2748.test.ts`.
   const cancelAvailable = messagesItem?.status === 'running';
 
   // Derive progress from orchestrator queue item
@@ -107,6 +110,12 @@ export function MacOSMessagesImportSettings({
     messagesImported: number;
     error?: string;
     cancelled?: boolean;
+    /**
+     * BACKLOG-2775: the cancelled run was a force re-import and it rolled back,
+     * so nothing changed. Carried from the main process rather than inferred
+     * from `wasForceReimport`, which only records what this panel ASKED for.
+     */
+    rolledBack?: boolean;
     wasCapped?: boolean;
     totalAvailable?: number;
     // BACKLOG-2329: true when the completed import was a force re-import, so the
@@ -124,7 +133,14 @@ export function MacOSMessagesImportSettings({
   // The main process honours cancellation at the next batch/attachment
   // boundary, so there is a real gap between the click and the stop — the
   // button says so rather than looking dead.
-  const [cancelRequested, setCancelRequested] = useState(false);
+  //
+  // BACKLOG-2776: this lives on the orchestrator queue item, not in component
+  // state, because the dashboard's SyncStatusIndicator renders the same import
+  // from the same item. Component state left that indicator advancing its
+  // percentage while this panel said "Cancelling…" — two surfaces disagreeing
+  // about whether the user had been heard. It also survives this panel
+  // unmounting, e.g. closing Settings mid-cancel.
+  const cancelRequested = messagesItem?.cancelRequested === true;
 
   // TASK-1952: Import filter state
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(
@@ -584,6 +600,9 @@ export function MacOSMessagesImportSettings({
         // arrives here — and must be reported as a cancel with the partial
         // count it really kept, not as "Successfully imported N new messages".
         cancelled: messagesItem.cancelled || undefined,
+        // BACKLOG-2775: distinguishes "you stopped it and kept N" from "you
+        // stopped it and nothing changed".
+        rolledBack: messagesItem.rolledBack || undefined,
         wasForceReimport,
         wasCapped: messagesItem.warning ? true : undefined,
         // BACKLOG-2743: surface the warning text itself. The pre-flight
@@ -598,36 +617,40 @@ export function MacOSMessagesImportSettings({
         error: safeErrorMessage(messagesItem.error, 'Import failed'),
       });
     }
-  }, [messagesItem?.status, messagesItem?.error, messagesItem?.warning, messagesItem?.importedCount, messagesItem?.cancelled]);
+  }, [messagesItem?.status, messagesItem?.error, messagesItem?.warning, messagesItem?.importedCount, messagesItem?.cancelled, messagesItem?.rolledBack]);
 
-  // BACKLOG-2748: clear the "Cancelling..." state once the import is no longer
-  // running. Without this the NEXT import would render its Cancel button
-  // already disabled and mid-cancel.
-  useEffect(() => {
-    if (!isImporting && cancelRequested) {
-      setCancelRequested(false);
-    }
-  }, [isImporting, cancelRequested]);
+  // BACKLOG-2748: the "Cancelling..." state is cleared when the run leaves
+  // 'running' — otherwise the NEXT import would render its Cancel button
+  // already disabled and mid-cancel. BACKLOG-2776 moved that clearing to the
+  // orchestrator, which owns the flag and drops it on the same transition that
+  // marks the item complete or errored.
 
   /**
    * BACKLOG-2748: stop the running import.
    *
    * Sends the main-process cancel (which aborts the import between message
-   * batches and between attachment copies) and does NOT touch the orchestrator
-   * queue: `syncOrchestrator.cancel()` would empty the queue and abandon the
-   * in-flight import, so the main process would keep importing while the UI
-   * claimed to be idle. Letting the import return normally is what produces the
-   * honest "Import cancelled — N messages were imported" result.
+   * batches and between attachment copies) and does NOT call
+   * `syncOrchestrator.cancel()`, which would empty the queue and abandon the
+   * in-flight import, leaving the main process importing while the UI claimed to
+   * be idle. Letting the import return normally is what produces the honest
+   * result — a partial count for a delta import, "nothing changed" for a rolled
+   * back force re-import (BACKLOG-2775).
+   *
+   * BACKLOG-2776: the IPC goes first and the acknowledgement second, both in
+   * this tick. `cancelImport()` is a fire-and-forget `send` that returns
+   * immediately — there is no round trip to wait for — so ordering it first
+   * costs nothing and means the UI can never show "Cancelling…" for a cancel
+   * that was never dispatched.
    */
   const handleCancelImport = useCallback(() => {
-    setCancelRequested(true);
     try {
       window.api.messages.cancelImport();
     } catch (err) {
       logger.error("[MacOSMessagesImportSettings] Cancel import failed:", err);
-      setCancelRequested(false);
+      return;
     }
-  }, []);
+    markCancelRequested('messages');
+  }, [markCancelRequested]);
 
 
   // Only render on macOS
@@ -880,17 +903,30 @@ export function MacOSMessagesImportSettings({
           }`}
         >
           {lastResult.cancelled ? (
-            <>
-              Import cancelled.{" "}
-              {lastResult.messagesImported > 0 && (
-                <>
-                  <strong>
-                    {lastResult.messagesImported.toLocaleString()}
-                  </strong>{" "}
-                  messages were imported before cancellation.
-                </>
-              )}
-            </>
+            // BACKLOG-2775: a cancelled FORCE re-import kept nothing and lost
+            // nothing — its clear and its re-import shared one transaction that
+            // rolled back. Reusing the delta wording here would read as
+            // "0 messages were imported", which is the sentence the founder saw
+            // after the run that emptied his store, and it would tell him
+            // nothing about whether his messages had survived.
+            lastResult.rolledBack ? (
+              <>
+                Re-import cancelled. <strong>Nothing changed</strong> — your
+                existing messages are untouched.
+              </>
+            ) : (
+              <>
+                Import cancelled.{" "}
+                {lastResult.messagesImported > 0 && (
+                  <>
+                    <strong>
+                      {lastResult.messagesImported.toLocaleString()}
+                    </strong>{" "}
+                    messages were imported before cancellation.
+                  </>
+                )}
+              </>
+            )
           ) : lastResult.success ? (
             lastResult.wasForceReimport ? (
               <>
@@ -1091,27 +1127,39 @@ export function MacOSMessagesImportSettings({
               gated on `cancelAvailable` so it is never offered in the window
               where the cancel would reach nothing (see that derivation).
 
-              It stays CLICKABLE after the first press on purpose. There is a
-              sub-second gap between the queue item turning 'running' and the
-              service setting its own `isImporting` (the sync fn reads the import
-              source, the handler validates the user and loads preferences), and
-              a cancel that lands in that gap is dropped. Disabling the button
-              would strand the user in "Cancelling..." for the rest of a run that
-              was never cancelled; pressing again re-sends, and an extra abort on
-              an already-aborted import is a no-op. */}
+              BACKLOG-2776: it is now DISABLED after the first press, reversing
+              2748's deliberate choice to leave it clickable. That choice existed
+              to let the user re-send a cancel that had been dropped in the gap
+              before the main process was importing — the founder pressed twice
+              for exactly that reason. The service now holds a cancel across that
+              gap, so a second press can add nothing, and a button that still
+              invites one implies the first press might not have counted. */}
           {cancelAvailable && (
             <>
               <button
                 type="button"
                 onClick={handleCancelImport}
+                disabled={cancelRequested}
                 data-testid="cancel-import"
-                className="mt-2 px-3 py-1.5 text-xs font-medium rounded border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 transition-all"
+                className={`mt-2 px-3 py-1.5 text-xs font-medium rounded border transition-all ${
+                  cancelRequested
+                    ? "border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed"
+                    : "border-gray-300 text-gray-700 bg-white hover:bg-gray-50"
+                }`}
               >
-                {cancelRequested ? "Cancelling..." : "Cancel import"}
+                {cancelRequested
+                  ? "Cancelling — finishing current step…"
+                  : "Cancel import"}
               </button>
               {cancelRequested && (
                 <p className="text-xs text-gray-500 mt-1">
-                  Finishing the current batch — messages already imported are kept.
+                  {/* BACKLOG-2775: what survives a cancel depends on which kind
+                      of run this is, and the difference is the whole point of
+                      that item — a force re-import keeps nothing because it
+                      rolls back, a delta import keeps everything it stored. */}
+                  {lastForceReimportRef.current
+                    ? "Your existing messages are untouched — a cancelled re-import changes nothing."
+                    : "Finishing the current batch — messages already imported are kept."}
                 </p>
               )}
             </>

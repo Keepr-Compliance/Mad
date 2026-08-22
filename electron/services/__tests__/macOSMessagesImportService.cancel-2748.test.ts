@@ -200,6 +200,65 @@ function storedAttachmentGuids(): string[] {
     .sort((a, b) => Number(a.replace("msg-guid-", "")) - Number(b.replace("msg-guid-", "")));
 }
 
+/**
+ * BACKLOG-2775: every stored message by IDENTITY — the internal row id AND the
+ * macOS guid it came from.
+ *
+ * The guid alone cannot tell a rolled back force re-import from a completed
+ * one: both end with msg-guid-1..N present. The internal id is a fresh
+ * `crypto.randomUUID()` per INSERT, so it changes if and only if the row was
+ * actually re-created. Comparing the pairs is therefore the difference between
+ * "the store is untouched" and "the store was rebuilt and happens to look the
+ * same".
+ */
+function storedRowIdentities(): Array<{ id: string; external_id: string }> {
+  return (
+    mockDb
+      .prepare("SELECT id, external_id FROM messages")
+      .all() as Array<{ id: string; external_id: string }>
+  ).sort((a, b) => a.external_id.localeCompare(b.external_id));
+}
+
+/** Every attachment row by identity, for the same reason. */
+function storedAttachmentIdentities(): Array<{ id: string; external_message_id: string }> {
+  return (
+    mockDb
+      .prepare("SELECT id, external_message_id FROM attachments")
+      .all() as Array<{ id: string; external_message_id: string }>
+  ).sort((a, b) => a.external_message_id.localeCompare(b.external_message_id));
+}
+
+/**
+ * Run a real FORCE re-import (clear + re-import), requesting cancellation from
+ * inside the progress callback the first time `phase` reports `current >= at`.
+ */
+async function forceImportCancellingAt(
+  phase: "deleting" | "importing" | "attachments",
+  at: number,
+): Promise<MacOSImportResult> {
+  let cancelSent = false;
+  return macOSMessagesImportService.importMessages(
+    USER,
+    (progress) => {
+      if (!cancelSent && progress.phase === phase && progress.current >= at) {
+        cancelSent = true;
+        macOSMessagesImportService.requestCancellation();
+      }
+    },
+    true,
+    { lookbackMonths: null, maxMessages: null },
+  );
+}
+
+function forceImportToCompletion(
+  onProgress?: (progress: { phase: string; current: number }) => void,
+): Promise<MacOSImportResult> {
+  return macOSMessagesImportService.importMessages(USER, onProgress, true, {
+    lookbackMonths: null,
+    maxMessages: null,
+  });
+}
+
 async function filesInAttachmentsDir(): Promise<string[]> {
   try {
     return await fs.readdir(nodePath.join(scratchDir, ATTACHMENTS_DIR));
@@ -327,24 +386,72 @@ describe("BACKLOG-2748 — cancelling a running import (message phase)", () => {
   });
 });
 
-describe("BACKLOG-2748 — a cancel sent before the import starts is DROPPED", () => {
+describe("BACKLOG-2776 — a cancel sent before the import starts is HELD, not dropped", () => {
   beforeEach(() => {
     messageCount = 500;
     attachmentCount = 0;
   });
 
-  it("does not carry over: requestCancellation with nothing running leaves the next import untouched", async () => {
-    // `requestCancellation()` is guarded by `if (this.isImporting)`, and each
-    // run builds a FRESH AbortController — so a cancel that arrives before the
-    // import is in flight reaches nothing and cannot be replayed.
-    //
-    // This is not a defect being enshrined; it is the fact the UI has to
-    // respect. The renderer therefore offers the Cancel button ONLY while the
-    // orchestrator item is 'running' (never while it is merely queued as
-    // 'pending'), because a button that sends into this gap is precisely the
-    // placebo BACKLOG-2748 was filed about — pinned renderer-side by
-    // `MacOSMessagesImportSettings.cancel-2748.test.tsx`.
+  // This describe asserted the OPPOSITE under BACKLOG-2748: `requestCancellation()`
+  // was guarded by `if (this.isImporting)` and each run built a fresh
+  // AbortController, so a cancel arriving before the run was in flight reached
+  // nothing. That was documented as a fact the UI had to respect — the Cancel
+  // button was withheld during 'pending' and left clickable so a user could
+  // re-send a dropped one.
+  //
+  // It was still a gap the founder fell into: he pressed Cancel, the UI said
+  // "Cancelling...", and the import carried on, so he pressed again. A cancel is
+  // now held and consumed by the run that starts next.
+
+  it("carries over: a cancel with nothing running aborts the run that starts next", async () => {
     macOSMessagesImportService.requestCancellation();
+
+    const result = await importToCompletion();
+
+    expect(result.cancelled).toBe(true);
+    // Aborted before the first fetch, so nothing was read and nothing stored.
+    expect(result.messagesImported).toBe(0);
+    expect(storedGuids()).toEqual([]);
+  });
+
+  it("CONTROL: without the preceding cancel the same fixture imports all 500", async () => {
+    // The distinguishing input. If the held cancel were instead a service that
+    // had simply stopped importing, the test above would be equally green.
+    const result = await importToCompletion();
+
+    expect(result.cancelled).toBeUndefined();
+    expect(result.messagesImported).toBe(500);
+    expect(storedGuids()).toEqual(guidRange(1, 500));
+  });
+
+  it("is consumed once: the run after the held cancel is unaffected", async () => {
+    macOSMessagesImportService.requestCancellation();
+    const cancelled = await importToCompletion();
+    expect(cancelled.cancelled).toBe(true);
+    expect(storedGuids()).toEqual([]);
+
+    // A held cancel that stayed armed would make the import button dead for the
+    // rest of the session.
+    const rerun = await importToCompletion();
+
+    expect(rerun.cancelled).toBeUndefined();
+    expect(rerun.messagesImported).toBe(500);
+    expect(storedGuids()).toEqual(guidRange(1, 500));
+  });
+
+  it("expires: a cancel older than the hold window does not reach a later import", async () => {
+    // The bound that keeps "held" from becoming "armed forever". The window it
+    // covers is the sub-second gap between the UI offering Cancel and the
+    // service setting `isImporting`; an import the user starts long afterwards
+    // is a different intention and must run.
+    const realNow = Date.now;
+    const armedAt = realNow.call(Date);
+    jest.spyOn(Date, "now").mockReturnValue(armedAt);
+
+    macOSMessagesImportService.requestCancellation();
+
+    // ...a minute passes, then the user asks for an import.
+    jest.spyOn(Date, "now").mockReturnValue(armedAt + 60_000);
 
     const result = await importToCompletion();
 
@@ -408,5 +515,181 @@ describe("BACKLOG-2748 — cancelling during the attachment phase", () => {
     // ...but the nine attachments the cancel skipped are picked up.
     expect(await filesInAttachmentsDir()).toHaveLength(12);
     expect(storedAttachmentGuids()).toEqual(guidRange(1, 12));
+  });
+});
+
+describe("BACKLOG-2775 — a cancelled FORCE re-import changes nothing", () => {
+  // The incident, in full: the founder pressed Force Re-import, changed his mind
+  // about a second later and pressed Cancel. The service was inside its up-front
+  // clear phase, which held no transaction and checked no cancellation flag, so
+  // it deleted all 162,961 of his messages over ~35 seconds and committed that.
+  // The first cancellation check after the clear then fired — "Import cancelled
+  // during query phase at 0/12777" — and the run ended having imported nothing.
+  // His entire local message store was gone, recoverable only by a manual full
+  // re-import.
+  //
+  // The clear and the re-import now share one transaction, so the pre-run rows
+  // are what survives any interruption. Every test here asserts that by IDENTITY
+  // (`storedRowIdentities`), which is the only way to tell a store that was left
+  // alone from one that was emptied and rebuilt.
+
+  beforeEach(async () => {
+    messageCount = 500;
+    attachmentCount = 0;
+    // Seed the store the way the founder's was seeded: a completed import.
+    const seed = await importToCompletion();
+    expect(seed.messagesImported).toBe(500);
+  });
+
+  it("rolls back a cancel mid re-import: the exact pre-run rows are still there", async () => {
+    const before = storedRowIdentities();
+    expect(before).toHaveLength(500);
+
+    // Cancel after the first batch of the re-import has been stored — i.e. well
+    // past the clear, with the store mid-rebuild. This is the shape of run that
+    // used to leave 100 messages where 500 had been.
+    const result = await forceImportCancellingAt("importing", 1);
+
+    expect(result.cancelled).toBe(true);
+    expect(result.rolledBack).toBe(true);
+    // Nothing was written, so nothing was imported. Reporting the partial count
+    // here would be the report that told the founder his run had "imported 0".
+    expect(result.messagesImported).toBe(0);
+
+    // The property: same rows, same internal ids, same guids.
+    expect(storedRowIdentities()).toEqual(before);
+  });
+
+  it("CONTROL: the same force fixture uncancelled REPLACES every row and commits", async () => {
+    // The distinguishing input. A force re-import that silently did nothing —
+    // no clear, no re-import — would leave the test above green on identical
+    // rows. This proves the force path really does delete and re-create: same
+    // guids, and NOT ONE surviving internal id.
+    const before = storedRowIdentities();
+
+    const result = await forceImportToCompletion();
+
+    expect(result.cancelled).toBeUndefined();
+    expect(result.rolledBack).toBeUndefined();
+    expect(result.messagesImported).toBe(500);
+
+    const after = storedRowIdentities();
+    expect(after.map((row) => row.external_id)).toEqual(
+      before.map((row) => row.external_id),
+    );
+    const survivingIds = after
+      .map((row) => row.id)
+      .filter((id) => before.some((row) => row.id === id));
+    expect(survivingIds).toEqual([]);
+  });
+
+  it("never starts the clear at all when the cancel arrives first", async () => {
+    // Scope 3 of the item, and the cheapest half of the fix: the founder's
+    // cancel was already in when the 35-second delete began, and the flag was
+    // next read after it had finished. A cancel held from before the run
+    // (BACKLOG-2776) is now checked BEFORE the destructive step.
+    const before = storedRowIdentities();
+    const phases: string[] = [];
+
+    macOSMessagesImportService.requestCancellation();
+    const result = await forceImportToCompletion((progress) => {
+      phases.push(progress.phase);
+    });
+
+    expect(result.cancelled).toBe(true);
+    expect(result.rolledBack).toBe(true);
+    expect(storedRowIdentities()).toEqual(before);
+    // Not merely "the rows came back" — the delete never ran. No progress was
+    // ever reported for the deleting phase.
+    expect(phases).not.toContain("deleting");
+  });
+
+  it("STOPS the clear when the cancel lands during it, and rolls back", async () => {
+    // The founder's own timing: the cancel lands while the clear is underway.
+    // The first `deleting` progress event is emitted before any message row is
+    // deleted, so cancelling on it exercises the abort check inside the delete
+    // loop. (With 500 seeded messages the whole clear is one batch of
+    // DELETE_BATCH_SIZE=5000, so this proves the loop stops before its first
+    // delete rather than between two of them — the founder's 162,961 would take
+    // 33 batches, each now interruptible.)
+    //
+    // The identity assertion alone would NOT prove the in-loop check: with the
+    // transaction in place, a clear that ran to completion and was cancelled at
+    // the query phase afterwards also rolls back to the same rows. The
+    // distinguishing assertion is the progress trail — deleting must never
+    // report having deleted anything, because the delete never happened.
+    const before = storedRowIdentities();
+    const deletingProgress: number[] = [];
+
+    let cancelSent = false;
+    const result = await macOSMessagesImportService.importMessages(
+      USER,
+      (progress) => {
+        if (progress.phase === "deleting") deletingProgress.push(progress.current);
+        if (!cancelSent && progress.phase === "deleting") {
+          cancelSent = true;
+          macOSMessagesImportService.requestCancellation();
+        }
+      },
+      true,
+      { lookbackMonths: null, maxMessages: null },
+    );
+
+    expect(result.cancelled).toBe(true);
+    expect(result.rolledBack).toBe(true);
+    expect(storedRowIdentities()).toEqual(before);
+
+    // The 35 seconds the founder waited out: not one delete batch ran after his
+    // cancel was in.
+    expect(deletingProgress).toEqual([0]);
+  });
+
+  it("restores the attachment rows the clear deleted, too", async () => {
+    // The clear deletes attachment ROWS as well as messages, and those are
+    // deleted in one statement before the message loop — so they are gone from
+    // the transaction's view the instant the clear starts. They must come back
+    // with everything else.
+    //
+    // Attachment FILES on disk are a separate matter and deliberately NOT
+    // restored: the clear never deletes files (it is DB-rows-only), and the
+    // re-import's copies are left behind on rollback as orphans for the
+    // retention sweep (BACKLOG-2768) to reclaim. Nothing irreversible happens
+    // on disk before the commit, which is what makes that acceptable.
+    messageCount = 12;
+    attachmentCount = 12;
+    await writeAttachmentFixtures(12);
+    const reseed = await macOSMessagesImportService.importMessages(USER, undefined, true, {
+      lookbackMonths: null,
+      maxMessages: null,
+    });
+    expect(reseed.attachmentsImported).toBe(12);
+
+    const beforeMessages = storedRowIdentities();
+    const beforeAttachments = storedAttachmentIdentities();
+    expect(beforeAttachments).toHaveLength(12);
+
+    const result = await forceImportCancellingAt("attachments", 3);
+
+    expect(result.cancelled).toBe(true);
+    expect(result.rolledBack).toBe(true);
+    expect(result.attachmentsImported).toBe(0);
+    expect(storedRowIdentities()).toEqual(beforeMessages);
+    expect(storedAttachmentIdentities()).toEqual(beforeAttachments);
+  });
+
+  it("leaves a cancelled DELTA import's partial progress alone", async () => {
+    // The scope line. Atomicity belongs to the force path only: a delta import
+    // commits per batch, so cancelling one keeps what it had imported — which is
+    // what makes cancelling a long delta import worth doing at all. If the
+    // transaction wrap ever leaked onto this path, this test reds and the
+    // "N messages were imported before cancellation" copy becomes a lie.
+    mockDb.prepare("DELETE FROM messages").run();
+
+    const result = await importCancellingAt("importing", 1);
+
+    expect(result.cancelled).toBe(true);
+    expect(result.rolledBack).toBeUndefined();
+    expect(result.messagesImported).toBe(BATCH_SIZE);
+    expect(storedGuids()).toEqual(guidRange(1, BATCH_SIZE));
   });
 });

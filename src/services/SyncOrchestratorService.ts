@@ -66,6 +66,24 @@ export interface SyncItem {
    * report it as a cancel with a PARTIAL `importedCount`, not as a clean finish.
    */
   cancelled?: boolean;
+  /**
+   * BACKLOG-2775: the cancelled run was a force re-import that rolled back.
+   * `importedCount` is 0 and the store is byte-identical to before the run.
+   */
+  rolledBack?: boolean;
+  /**
+   * BACKLOG-2776: the user has pressed Cancel and the run has not stopped yet.
+   *
+   * Set the moment the button is clicked, with no round trip to the main
+   * process, and it lives on the QUEUE ITEM rather than in a component so every
+   * surface reading this item agrees. The settings panel and the dashboard's
+   * SyncStatusIndicator both render a percentage from `progress`; while this
+   * flag is set the orchestrator stops applying progress updates, so the number
+   * freezes where it was when the user clicked. Before that, the percentage
+   * kept climbing through a cancel the founder had already pressed twice —
+   * the UI carrying on exactly as if nothing had been asked of it.
+   */
+  cancelRequested?: boolean;
   /** True for externally-managed syncs (e.g., iPhone) that the orchestrator does not drive */
   external?: boolean;
   /**
@@ -114,6 +132,11 @@ export interface SyncResult {
    * is then the real partial count of what was kept.
    */
   cancelled?: boolean;
+  /**
+   * BACKLOG-2775: the cancelled sync was a force re-import and it rolled back,
+   * so `importedCount` is 0 and nothing in the store changed.
+   */
+  rolledBack?: boolean;
 }
 
 /**
@@ -504,6 +527,11 @@ class SyncOrchestratorServiceClass {
             attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
             /** BACKLOG-2748: the user cancelled; counts are partial, not failed. */
             cancelled?: boolean;
+            /**
+             * BACKLOG-2775: a force re-import was rolled back — counts are 0
+             * and the message store is untouched, not partially rebuilt.
+             */
+            rolledBack?: boolean;
           }>;
           const result = await importFn(userId, options?.forceReimport);
           // BACKLOG-2748: the cancel check comes BEFORE the success check on
@@ -518,7 +546,16 @@ class SyncOrchestratorServiceClass {
               '[SyncOrchestrator] Messages sync cancelled by user, imported:',
               result.messagesImported
             );
-            return { cancelled: true, importedCount: result.messagesImported };
+            // BACKLOG-2775: `rolledBack` travels with the cancel because the two
+            // outcomes read differently to the user — "N were imported before
+            // you stopped it" versus "nothing changed" — and the panel must not
+            // have to infer which one happened from its own memory of having
+            // asked for a force re-import.
+            return {
+              cancelled: true,
+              importedCount: result.messagesImported,
+              rolledBack: result.rolledBack,
+            };
           }
           if (!result.success) {
             throw new Error(result.error || 'Message import failed');
@@ -813,6 +850,28 @@ class SyncOrchestratorServiceClass {
   }
 
   /**
+   * BACKLOG-2776: record that the user has asked this sync to stop.
+   *
+   * Renderer-side and synchronous, on purpose. The main process decides WHEN an
+   * import can stop — between batches, or after a clear phase that can run for
+   * half a minute — but the UI must not wait on that to show it heard the
+   * click. Marking the queue item freezes the percentage every surface renders
+   * from it (see `SyncItem.cancelRequested`) and lets each one relabel
+   * immediately, in the same tick as the press.
+   *
+   * This does NOT stop the sync: it is the acknowledgement, not the mechanism.
+   * The actual cancel goes to the main process by IPC, and the run ends by
+   * returning a cancelled result of its own.
+   */
+  markCancelRequested(type: SyncType): void {
+    const item = this.state.queue.find((queued) => queued.type === type);
+    if (!item || item.status !== 'running' || item.cancelRequested) return;
+
+    logger.info(`[SyncOrchestrator] Cancel requested for '${type}' — freezing reported progress`);
+    this.updateQueueItem(type, { cancelRequested: true });
+  }
+
+  /**
    * Cancel current sync (internal syncs only).
    * External syncs are NOT cancelled by this method -- they manage their own lifecycle.
    */
@@ -928,6 +987,13 @@ class SyncOrchestratorServiceClass {
         try {
           // Run the sync with progress callback and abort signal
           const rawResult = await syncFn(userId, (percent, phase) => {
+            // BACKLOG-2776: once the user has pressed Cancel the displayed
+            // progress is frozen. The run keeps going until it reaches a point
+            // where it can stop, and reporting that continuing work as a rising
+            // percentage is what made the founder press Cancel a second time.
+            if (this.state.queue.find((item) => item.type === type)?.cancelRequested) {
+              return;
+            }
             this.updateQueueItem(type, { progress: percent, phase });
             this.updateOverallProgress();
           }, request.options, this.abortController?.signal);
@@ -943,6 +1009,9 @@ class SyncOrchestratorServiceClass {
           // item or the settings panel reports a stopped import as a clean one.
           const cancelled =
             rawResult && typeof rawResult === 'object' ? rawResult.cancelled : undefined;
+          // BACKLOG-2775: whether the cancelled run left the store unchanged.
+          const rolledBack =
+            rawResult && typeof rawResult === 'object' ? rawResult.rolledBack : undefined;
 
           Sentry.addBreadcrumb({
             category: 'sync',
@@ -955,7 +1024,9 @@ class SyncOrchestratorServiceClass {
           });
 
           // Mark complete (clear phase), attach warning + imported count if returned
-          this.updateQueueItem(type, { status: 'complete', progress: 100, phase: undefined, warning: warning || undefined, importedCount, cancelled });
+          // BACKLOG-2776: `cancelRequested` is cleared here — the request has been
+          // served, and leaving it set would freeze the NEXT run's progress at 0.
+          this.updateQueueItem(type, { status: 'complete', progress: 100, phase: undefined, warning: warning || undefined, importedCount, cancelled, rolledBack, cancelRequested: undefined });
         } catch (error) {
           // Check if it was cancelled
           if (this.abortController?.signal.aborted) {
@@ -967,7 +1038,7 @@ class SyncOrchestratorServiceClass {
           // BACKLOG-2127: preserve the typed reconnect provider so the UI can
           // render a "Reconnect" CTA without parsing the message text.
           const reconnectProvider = error instanceof EmailReconnectError ? error.provider : undefined;
-          this.updateQueueItem(type, { status: 'error', error: errorMsg, reconnectProvider });
+          this.updateQueueItem(type, { status: 'error', error: errorMsg, reconnectProvider, cancelRequested: undefined });
         }
 
         this.updateOverallProgress();

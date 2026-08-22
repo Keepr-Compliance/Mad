@@ -83,6 +83,7 @@ const orchestratorState = (queue: SyncItem[], isRunning: boolean, externalCancel
   acceptPending: jest.fn(),
   rejectPending: jest.fn(),
   cancel: jest.fn(),
+  markCancelRequested: jest.fn(),
 });
 
 /**
@@ -265,5 +266,43 @@ describe("BACKLOG-2748 — a cancelled import gets no completion card", () => {
 
     expect(screen.getByTestId("sync-status-complete")).toBeInTheDocument();
     expect(screen.getByText("Sync Complete")).toBeInTheDocument();
+  });
+});
+
+describe("BACKLOG-2776 — the dashboard stops reporting progress once Cancel is pressed", () => {
+  it("labels the pill 'Cancelling' instead of the phase it is still working through", () => {
+    // Settings is a modal over a live Dashboard, so this indicator is on screen
+    // the whole time the user is pressing Cancel in the panel behind it. The
+    // percentage beside this pill freezes because the orchestrator stops
+    // applying progress to a cancel-requested item; a pill still announcing
+    // "Messages - Clearing" next to that frozen number would be this surface
+    // contradicting the panel about whether the cancel had registered.
+    mockUseSyncOrchestrator.mockReturnValue(
+      orchestratorState(
+        [syncItem("messages", "running", { phase: "deleting", cancelRequested: true, progress: 34 })],
+        true,
+      ),
+    );
+
+    render(<SyncStatusIndicator />);
+
+    expect(screen.getByTestId("sync-pill-messages")).toHaveTextContent("Messages - Cancelling");
+    expect(screen.getByText("34%")).toBeInTheDocument();
+  });
+
+  it("CONTROL: the same running item WITHOUT the cancel shows its phase", () => {
+    // The distinguishing input: if the pill had simply stopped rendering phases,
+    // the test above would be green for a reason unrelated to cancelling.
+    mockUseSyncOrchestrator.mockReturnValue(
+      orchestratorState(
+        [syncItem("messages", "running", { phase: "deleting", progress: 34 })],
+        true,
+      ),
+    );
+
+    render(<SyncStatusIndicator />);
+
+    expect(screen.getByTestId("sync-pill-messages")).toHaveTextContent("Messages - deleting");
+    expect(screen.getByTestId("sync-pill-messages")).not.toHaveTextContent("Cancelling");
   });
 });
