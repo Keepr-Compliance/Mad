@@ -41,7 +41,14 @@ module.exports = [
       'node_modules/**',
       'dist/**',
       'build/**',
+      // BACKLOG-2787 finding 3 (folded into this PR because eslint.config.js is
+      // already in its diff): the `.js`-only pattern stopped matching the moment
+      // the base block started covering `.mjs`/`.cjs`, so a minified ES-module
+      // or CJS bundle would be fully linted — thousands of findings from a file
+      // no one wrote. No such file exists today; the pattern is the guard.
       '**/*.min.js',
+      '**/*.min.mjs',
+      '**/*.min.cjs',
     ],
   },
 
