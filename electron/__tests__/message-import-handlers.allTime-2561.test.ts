@@ -31,7 +31,7 @@ import {
   type RegisteredIpcHandler,
 } from "../../tests/support/ipcHandlerRegistry";
 import type { IpcMainInvokeEvent } from "electron";
-import type { MessageImportFilters } from "../services/macOSMessagesImportService";
+import type { ImportPlan } from "../services/importPlan";
 
 const mockIpcHandle = jest.fn();
 jest.mock("electron", () => ({
@@ -55,6 +55,21 @@ let mockTransactionRows: Array<{
   created_at: string | null;
   closed_at: string | null;
 }> = [];
+
+/*
+ * BACKLOG-2772: the audit-period rows now reach the plan through `dbAll`, the
+ * shared accessor, rather than through `getRawDatabase().prepare` in the
+ * handler. The handler no longer runs a transactions query at all — the ONE
+ * assembler does (`importPlanInputs.readNonRejectedTransactions`), and the
+ * trigger reads the same function, so the two can no longer disagree about
+ * which deals carry an audit obligation.
+ */
+jest.mock("../services/db/core/dbConnection", () => ({
+  __esModule: true,
+  dbAll: (sql: string) =>
+    sql.includes("FROM transactions") ? mockTransactionRows : [],
+  setDb: jest.fn(),
+}));
 
 /** The single user row the handler falls back to when validating the user id. */
 const mockPrepare = jest.fn((sql: string) => {
@@ -81,16 +96,11 @@ jest.mock("../services/supabaseService", () => ({
   default: { getPreferences: (...args: unknown[]) => mockGetPreferences(...args) },
 }));
 
-/** Captures the filters the import handler hands the service. */
-let capturedImportFilters: MessageImportFilters | undefined;
+/** Captures the PLAN the import handler hands the service (BACKLOG-2772). */
+let capturedPlan: ImportPlan | undefined;
 const mockImportMessages = jest.fn(
-  async (
-    _userId: string,
-    _onProgress: unknown,
-    _force: boolean,
-    filters: MessageImportFilters
-  ) => {
-    capturedImportFilters = filters;
+  async (_userId: string, _onProgress: unknown, plan: ImportPlan) => {
+    capturedPlan = plan;
     return {
       success: true,
       messagesImported: 0,
@@ -169,8 +179,17 @@ const ALL_CORPUS_IDS = OLD_ONLY_CORPUS.map((m) => m.id);
  * cutoff meaning "no filter at all" both come from the service source, which the
  * guard test below re-reads on every run.
  */
-function importedIdsFor(filters: MessageImportFilters | undefined): string[] {
-  const cutoff = computeImportCutoffNano(filters);
+/**
+ * The corpus this plan would import.
+ *
+ * BACKLOG-2772: reads `plan.cutoffNano` instead of re-running
+ * `computeImportCutoffNano` over the captured filters. The test used to
+ * re-derive the very rule it was testing, so a resolver that computed the
+ * cutoff differently from the test's copy would still have looked correct here.
+ * The plan carries the one answer; this reads it.
+ */
+function importedIdsFor(plan: ImportPlan | undefined): string[] {
+  const cutoff = plan?.cutoffNano ?? null;
   return OLD_ONLY_CORPUS.filter((m) => cutoff === null || m.date > cutoff).map((m) => m.id);
 }
 
@@ -195,7 +214,7 @@ beforeAll(() => {
 
 describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", () => {
   beforeEach(() => {
-    capturedImportFilters = undefined;
+    capturedPlan = undefined;
     mockTransactionRows = [];
     mockGetPreferences.mockReset();
   });
@@ -207,9 +226,11 @@ describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", (
 
     await handlers.get("messages:import-macos")(mockEvent, TEST_USER_ID, false);
 
-    expect(capturedImportFilters?.lookbackMonths).toBeNull();
+    // An explicit All time is unbounded: no cutoff at all.
+    expect(capturedPlan?.cutoffNano).toBeNull();
+    expect(capturedPlan?.fetchStartISO).toBeNull();
     // Identity, not count: the exact set, in order.
-    expect(importedIdsFor(capturedImportFilters)).toEqual(ALL_CORPUS_IDS);
+    expect(importedIdsFor(capturedPlan)).toEqual(ALL_CORPUS_IDS);
   });
 
   it("still imports the whole corpus for All time when transactions pin an audit floor", async () => {
@@ -224,8 +245,12 @@ describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", (
 
     await handlers.get("messages:import-macos")(mockEvent, TEST_USER_ID, false);
 
-    expect(capturedImportFilters?.auditPeriodStart).toBeTruthy();
-    expect(importedIdsFor(capturedImportFilters)).toEqual(ALL_CORPUS_IDS);
+    // The deal IS seen — it produces a protected span — and still cannot bound
+    // an explicit All time. That is the BACKLOG-2561 short-circuit, asserted
+    // through the plan rather than through an intermediate field.
+    expect(capturedPlan?.protectedSpans).toHaveLength(1);
+    expect(capturedPlan?.cutoffNano).toBeNull();
+    expect(importedIdsFor(capturedPlan)).toEqual(ALL_CORPUS_IDS);
   });
 
   it("imports NOTHING from this corpus when no preference is stored (3-month default)", async () => {
@@ -233,8 +258,8 @@ describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", (
 
     await handlers.get("messages:import-macos")(mockEvent, TEST_USER_ID, false);
 
-    expect(capturedImportFilters?.lookbackMonths).toBe(DEFAULT_LOOKBACK_MONTHS);
-    expect(importedIdsFor(capturedImportFilters)).toEqual([]);
+    expect(capturedPlan?.cutoffNano).not.toBeNull();
+    expect(importedIdsFor(capturedPlan)).toEqual([]);
   });
 
   it("defaults to 3 months when filters exist but the lookbackMonths KEY is absent", async () => {
@@ -245,8 +270,8 @@ describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", (
 
     await handlers.get("messages:import-macos")(mockEvent, TEST_USER_ID, false);
 
-    expect(capturedImportFilters?.lookbackMonths).toBe(DEFAULT_LOOKBACK_MONTHS);
-    expect(importedIdsFor(capturedImportFilters)).toEqual([]);
+    expect(capturedPlan?.cutoffNano).not.toBeNull();
+    expect(importedIdsFor(capturedPlan)).toEqual([]);
   });
 
   it("passes an explicit number straight through", async () => {
@@ -256,9 +281,9 @@ describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", (
 
     await handlers.get("messages:import-macos")(mockEvent, TEST_USER_ID, false);
 
-    expect(capturedImportFilters?.lookbackMonths).toBe(24);
+    expect(capturedPlan?.cutoffNano).not.toBeNull();
     // A 24-month window reaches the 20- and 5-month messages, not the older two.
-    expect(importedIdsFor(capturedImportFilters)).toEqual([
+    expect(importedIdsFor(capturedPlan)).toEqual([
       "msg-20-months-ago",
       "msg-5-months-ago",
     ]);
@@ -274,11 +299,12 @@ describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", (
 
     await handlers.get("messages:import-macos")(mockEvent, TEST_USER_ID, false);
 
-    expect(capturedImportFilters?.lookbackMonths).toBe(3);
+    // The 3-month preference is the FLOOR the audit period widens past.
+    expect(capturedPlan?.cutoffNano).not.toBeNull();
     // The floor reaches 60 months back, past the 3-month preference, and rescues
     // everything newer than it — but NOT the 90-month message, which is outside
     // the audit period. That asymmetry is what makes this a floor and not a reset.
-    expect(importedIdsFor(capturedImportFilters)).toEqual([
+    expect(importedIdsFor(capturedPlan)).toEqual([
       "msg-47-months-ago",
       "msg-20-months-ago",
       "msg-5-months-ago",
@@ -293,7 +319,7 @@ describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", (
  */
 describe("BACKLOG-2561 · the label handler and the import handler agree", () => {
   beforeEach(() => {
-    capturedImportFilters = undefined;
+    capturedPlan = undefined;
     mockTransactionRows = [];
     mockGetPreferences.mockReset();
   });
@@ -323,11 +349,10 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
         mockTransactionRows = rows;
 
         await handlers.get("messages:import-macos")(mockEvent, TEST_USER_ID, false);
-        const importCutoff = computeImportCutoffNano(capturedImportFilters);
-        const importBoundISO =
-          importCutoff === null
-            ? null
-            : new Date(MAC_EPOCH + importCutoff / NANOS_PER_MS).toISOString();
+        // BACKLOG-2772: the bound is READ off the plan the handler produced,
+        // not recomputed here. Recomputing it made this comparison a test of
+        // two copies of the same expression agreeing with each other.
+        const importBoundISO = capturedPlan?.fetchStartISO ?? null;
 
         const label = await handlers.get("messages:get-effective-import-window")(
           mockEvent,
