@@ -493,7 +493,7 @@ async function findMessagesByContactPhones(
  * @param linkConfidence - Confidence score
  * @returns true if linked, false if already linked to this transaction
  */
-async function linkEmailToTransaction(
+export async function linkEmailToTransaction(
   emailId: string,
   transactionId: string,
   linkSource: "auto" | "manual" | "scan" = "auto",
