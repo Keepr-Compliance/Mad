@@ -381,20 +381,44 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
 describe("BACKLOG-2561 · the production date filter has not changed shape", () => {
   const servicePath = path.join(
     __dirname,
-    "../services/macOSMessagesImportService/macOSMessagesImportService.ts"
+    "../services/macOSMessagesImportService/importHelpers.ts"
   );
   const source = fs.readFileSync(servicePath, "utf8");
 
+  /*
+   * BACKLOG-2772 moved what this guard reads, and the move is why the guard is
+   * now stronger.
+   *
+   * The clause used to be built inline in `doImport`, with the estimate
+   * spelling its own near-copy (`AND date > ...`, no table prefix). Two
+   * spellings meant this guard had to check two places and could only ever
+   * confirm they both still existed — not that they agreed. `buildMessageWindowSql`
+   * is now the single producer for BOTH, so one assertion covers the run and
+   * the preview, and a drift between them has become impossible rather than
+   * watched for.
+   */
   it("still filters with a strict `>` against message.date", () => {
-    expect(source).toContain("`AND message.date > ${appleDateCutoffNano}`");
+    expect(source).toContain("`AND message.date > ${plan.cutoffNano}`");
   });
 
   it("still emits NO clause when the cutoff is null", () => {
-    expect(source).toContain("appleDateCutoffNano !== null");
-    expect(source).toContain('        : "";');
+    expect(source).toContain("plan.cutoffNano !== null");
+    expect(source).toContain(': ""');
   });
 
-  it("still uses the same strict `>` for the available-count preview", () => {
-    expect(source).toContain("AND date > ${appleDateCutoffNano}");
+  it("the preview shares that one clause rather than spelling its own", () => {
+    // The old third assertion checked the estimate's separate `AND date > ...`
+    // literal. There is no separate literal now; what replaces it is the
+    // absence of one — the estimate destructures the same compiled object.
+    const serviceSource = fs.readFileSync(
+      path.join(
+        __dirname,
+        "../services/macOSMessagesImportService/macOSMessagesImportService.ts"
+      ),
+      "utf8"
+    );
+    expect(serviceSource).not.toContain("AND date > ${");
+    // Both consumers take their clause from the shared builder.
+    expect(serviceSource.match(/buildMessageWindowSql\(plan\)/g)).toHaveLength(2);
   });
 });

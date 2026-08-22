@@ -53,7 +53,20 @@ export interface MessageImportCountFilters {
 export interface MessageImportCountResult {
   success: boolean;
   count?: number;
+  /**
+   * What the run will IMPORT for this plan — Cap' applied (BACKLOG-2772).
+   * Present only when it differs from `count`.
+   */
   filteredCount?: number;
+  /**
+   * What the SELECTION covers, before the cap (BACKLOG-2772).
+   *
+   * The cap warning needs both numbers. With only the admitted count, a cap
+   * truncating 707,842 messages to 50,000 is indistinguishable from a window
+   * that happens to hold 50,000, and the user stops being told anything is
+   * being left out.
+   */
+  windowCount?: number;
   error?: string;
   /** Bytes of attachments that would be copied for the selected window. */
   attachmentBytes?: number;

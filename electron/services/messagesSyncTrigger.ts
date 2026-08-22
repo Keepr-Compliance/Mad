@@ -45,7 +45,10 @@
 
 import * as Sentry from "@sentry/electron/main";
 import macOSMessagesImportService from "./macOSMessagesImportService";
-import type { ImportProgressCallback } from "./macOSMessagesImportService";
+import type {
+  ImportProgressCallback,
+  MacOSImportResult,
+} from "./macOSMessagesImportService";
 import {
   expandAttachedThreadsForUser,
   autoLinkNewMessagesForUser,
@@ -332,7 +335,7 @@ async function runEnsure(params: {
       // and would have stopped it, but nothing ever offered the button. A deal
       // created on a large library started an unstoppable full-device scan.
       emitBackgroundImportStarted(userId, reason);
-      let result;
+      let result: MacOSImportResult | undefined;
       try {
         result = await macOSMessagesImportService.importMessages(
           userId,

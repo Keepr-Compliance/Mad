@@ -53,10 +53,13 @@ export interface TransactionDateRow {
  * fixed. Rejected deals are dead and protect nothing.
  *
  * The prior spelling `!= 'archived'` was a dead no-op ('archived' is not a
- * valid status), so rejected deals wrongly pinned the import floor. This is now
- * the ONLY copy of the predicate on the import side, and it matches the export
- * gate's (`auditCoverageService.checkExportCompleteness`) so the two cannot
- * disagree about which deals matter.
+ * valid status), so rejected deals wrongly pinned the import floor.
+ *
+ * Every reader on the import side now goes through this function — the plan,
+ * the transaction trigger's required-start, and the effective-window label —
+ * and it matches the export gate's predicate
+ * (`auditCoverageService.checkExportCompleteness`), so the two sides cannot
+ * disagree about which deals carry an audit obligation.
  */
 export function readNonRejectedTransactions(userId: string): TransactionDateRow[] {
   return dbAll<TransactionDateRow>(

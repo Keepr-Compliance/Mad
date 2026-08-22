@@ -35,12 +35,16 @@ import {
 
 const SERVICE_NAME = "MessagesBackgroundImportSignal";
 
-/** Payload both events carry. */
-export interface BackgroundImportSignal {
-  userId: string;
-  /** Which lifecycle event asked for this import (create / date-change / …). */
-  reason: string;
-}
+/*
+ * Payload both events carry.
+ *
+ * Imported rather than re-declared: this is a wire shape crossing the
+ * main/preload boundary, and a hand-maintained copy on each side is a rule kept
+ * by hand. Both files live in `electron/`, so a field added on one side is now
+ * a compile error on the other instead of a silent disagreement.
+ */
+export type { BackgroundImportSignal } from "../types/ipc/window-api-messages";
+import type { BackgroundImportSignal } from "../types/ipc/window-api-messages";
 
 /**
  * Broadcast to every window, matching `initializationBroadcaster`'s pattern.

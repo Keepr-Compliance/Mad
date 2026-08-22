@@ -160,6 +160,15 @@ export function MacOSMessagesImportSettings({
 
   // Available message count for pre-import cap warning
   const [availableCount, setAvailableCount] = useState<number | null>(null);
+  /**
+   * Messages the SELECTION covers, before the cap (BACKLOG-2772).
+   *
+   * `availableCount` became what the run will actually import once the
+   * estimate started applying Cap\u2032. Comparing THAT against the cap can
+   * never exceed it, so the cap warning would have gone silent exactly when
+   * it matters most.
+   */
+  const [windowCount, setWindowCount] = useState<number | null>(null);
 
   // BACKLOG-2743: Selection-time size estimate. Before this, choosing "All time"
   // showed a message count and nothing about size, so an import whose
@@ -220,7 +229,10 @@ export function MacOSMessagesImportSettings({
   // Stores whether the pending import is a force re-import, or null if no prompt
   const [capPromptForce, setCapPromptForce] = useState<boolean | null>(null);
   const showCapPrompt = capPromptForce !== null;
-  const capExceeded = availableCount !== null && maxMessages !== null && availableCount > maxMessages;
+  // BACKLOG-2772: compare the WINDOW against the cap, not the already-capped
+  // admitted count.
+  const capExceeded =
+    windowCount !== null && maxMessages !== null && windowCount > maxMessages;
 
   // Force re-import warning confirmation
   const [showForceWarning, setShowForceWarning] = useState(false);
@@ -272,6 +284,7 @@ export function MacOSMessagesImportSettings({
     setEstimateStatus("pending");
     setSizeEstimate(null);
     setAvailableCount(null);
+    setWindowCount(null);
 
     const fetchCount = async () => {
       try {
@@ -295,6 +308,7 @@ export function MacOSMessagesImportSettings({
         }
 
         setAvailableCount(result.filteredCount ?? result.count ?? null);
+        setWindowCount(result.windowCount ?? result.count ?? null);
         setSizeEstimate(
           result.attachmentBytes !== undefined
             ? {

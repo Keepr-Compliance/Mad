@@ -32,7 +32,6 @@ import { openSqliteReadOnly } from "../db/readOnlySqlite";
 import { getMessageText } from "../../utils/messageParser";
 import { macTimestampToDate } from "../../utils/dateUtils";
 import { detectMessageType } from "../../utils/messageTypeDetector";
-import { MAC_EPOCH } from "../../constants";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the message-import scope.
 import { supportTrace } from "../supportAccess/trace";
@@ -43,7 +42,6 @@ import auditService from "../auditService";
 import submissionSyncService from "../submissionSyncService";
 
 import type {
-  MessageImportFilters,
   MacOSImportResult,
   ImportProgressCallback,
   MessageAttachment,
@@ -75,6 +73,8 @@ import {
   isSupportedMediaType,
   getMimeTypeFromFilename,
   generateContentHash,
+  buildMessageWindowSql,
+  resolveAdmittedMessageSet,
   shouldRetainMessageContent,
   isReactionAssociationType,
   summarizeAttachmentEstimate,
@@ -533,10 +533,11 @@ class MacOSMessagesImportService {
           );
         }
 
-        // Build date filter clause for SQL queries
-        const dateFilterClause = appleDateCutoffNano !== null
-          ? `AND message.date > ${appleDateCutoffNano}`
-          : "";
+        // BACKLOG-2772: the window's SQL is compiled ONCE, by the same builder
+        // the estimate uses, so the five queries that share these strings
+        // cannot drift.
+        const windowSql = buildMessageWindowSql(plan);
+        const { dateFilterClause } = windowSql;
 
         // BACKLOG-2280: Reactions ARE imported now (stored + attached at render).
         // The counts and the SELECT must therefore cover the SAME scope, INCLUDING
@@ -560,78 +561,38 @@ class MacOSMessagesImportService {
         const filteredMessageCount = filteredCountResult[0]?.count || 0;
 
         // ------------------------------------------------------------------
-        // BACKLOG-2772 — Cap', the founder's final rule (2026-08-20).
+        // BACKLOG-2772 — Cap', resolved by the SAME function the estimate uses.
         // ------------------------------------------------------------------
-        // "Maximum messages" applies ONLY OUTSIDE the audit periods of
-        // non-rejected deals. Inside such a period history is always complete
-        // and never counts against the cap.
+        // The founder's final rule, 2026-08-20: "Maximum messages" applies only
+        // OUTSIDE the audit periods of non-rejected deals; inside such a period
+        // history is always complete and never counts against the cap.
         //
-        // WHAT THIS REPLACES. The old rule was all-or-nothing:
+        // What it replaces was all-or-nothing —
+        // `capApplies = !auditPeriodActive && ...` with `auditPeriodActive` true
+        // whenever ANY non-rejected transaction existed — so a single pending
+        // deal disabled the cap for the ENTIRE library. That is how clicking
+        // "Re-import most recent 50,000 only" produced a run targeting 707,842
+        // (BACKLOG-2749). The audit guarantee behind the exemption was right;
+        // spending it on every unrelated message the user ever sent was not.
         //
-        //     capApplies = !auditPeriodActive && maxMessages !== null && ...
-        //
-        // and `auditPeriodActive` was true whenever ANY non-rejected transaction
-        // existed. A single pending deal therefore disabled the cap for the
-        // ENTIRE library: the founder clicked "Re-import most recent 50,000
-        // only" and the service targeted 707,842 messages (BACKLOG-2749). The
-        // audit guarantee behind that exemption was right — an audit window must
-        // never be truncated — but spending it on every unrelated message the
-        // user had ever sent was not.
-        //
-        // Cap' keeps the guarantee and SCOPES it: deal periods are fetched
-        // whole, and the cap governs the remainder. Closed deals protect exactly
-        // as live ones do ("treat closed as live" is the standing definition,
-        // not a stopgap); rejected deals protect nothing, which is why the spans
-        // arrive already filtered — see `deriveAuditSpans`.
+        // The arithmetic lives in `resolveAdmittedMessageSet` so this run and
+        // the selection-time estimate cannot describe different imports.
         const maxMessages = plan.effectiveCap;
-
-        // ONE spelling of "inside a protected period", shared by the counts, the
-        // cap-window query and the fetch — exactly as `dateFilterClause` is, and
-        // for the same reason. Two spellings of one predicate is how a count and
-        // its fetch drift apart, and here that does not merely miscount: the
-        // fetch loop runs `while (fetchedCount < totalMessageCount)`, so a drift
-        // terminates the walk early and silently drops the NEWEST rows.
-        //
-        // Written to be TOTAL — a NULL `message.date` yields FALSE, never NULL —
-        // so this clause and its negation partition the filtered set exactly.
-        // Without the explicit NULL test, `NOT (date > A)` would be NULL for a
-        // null-dated row and it would fall out of BOTH buckets, leaving
-        // `protectedCount + unprotectedCount` short of `filteredMessageCount`
-        // and the target count wrong by exactly those rows.
-        const protectedClause =
-          plan.protectedSpans.length === 0
-            ? "0"
-            : plan.protectedSpans
-                .map((span) =>
-                  span.endNano === null
-                    ? `(message.date IS NOT NULL AND message.date > ${span.startNano})`
-                    : `(message.date IS NOT NULL AND message.date > ${span.startNano} AND message.date <= ${span.endNano})`
-                )
-                .join(" OR ");
-
-        // The cap acts on the UNPROTECTED remainder, so that is the number to
-        // MEASURE. `protectedCount` is then derived from it rather than queried
-        // separately — the two are guaranteed to sum by the totality of the
-        // clause above, and deriving the subordinate number keeps them from ever
-        // reporting a partition that does not add up.
-        //
-        // The `length === 0` branch is a PERFORMANCE skip, not a correctness
-        // one: with no spans the clause is "0", so the query would return
-        // exactly `filteredMessageCount`. Do not read the branch as the thing
-        // that makes the no-deals case right.
-        let unprotectedCount = filteredMessageCount;
-        if (plan.protectedSpans.length > 0) {
-          const unprotectedResult = await dbAll<{ count: number }>(`
-            SELECT COUNT(*) as count FROM message
-            WHERE guid IS NOT NULL ${dateFilterClause} AND NOT (${protectedClause})
-          `);
-          unprotectedCount = unprotectedResult[0]?.count || 0;
-        }
-        const protectedCount = filteredMessageCount - unprotectedCount;
-
-        const capApplies = maxMessages !== null && maxMessages > 0;
-        const capWouldTruncate =
-          capApplies && unprotectedCount > (maxMessages as number);
+        const admitted = await resolveAdmittedMessageSet(
+          dbAll,
+          plan,
+          windowSql,
+          filteredMessageCount
+        );
+        const {
+          protectedCount,
+          unprotectedCount,
+          capWindowStartRowId,
+          capWindowUnresolved,
+          importWasCapped,
+          targetMessageCount,
+          capFetchClause,
+        } = admitted;
 
         if (protectedCount > 0) {
           logService.info(
@@ -641,93 +602,6 @@ class MacOSMessagesImportService {
             MacOSMessagesImportService.SERVICE_NAME
           );
         }
-
-        // BACKLOG-2744: when the cap bites, keep the NEWEST N — not the oldest.
-        //
-        // The fetch is keyset pagination cursored on ROWID ASC, so simply
-        // stopping once `targetMessageCount` rows have been read walks ROWID
-        // upward from 0 and keeps the OLDEST N: the archive, where the Settings
-        // copy promises "most recent". Do NOT fix that by flipping the ORDER BY
-        // — the ascending ROWID order IS the pagination cursor. Instead, find
-        // the ROWID of the Nth-newest eligible row.
-        //
-        // BACKLOG-2772 adds `AND NOT (${protectedClause})` here, and it is
-        // load-bearing. The offset is taken against the set the cap governs, so
-        // a protected row must not occupy an offset slot: with protected rows
-        // counted, the Nth-newest lands too far back and the run keeps FEWER
-        // than `maxMessages` unprotected messages while believing it kept
-        // exactly that many. This is the same defect class the existing note
-        // below records about joining `chat_message_join` — one row occupying
-        // two slots — and it is why the count above excludes them too.
-        //
-        // Two things keep this query's row set identical to the count it is
-        // offset against: it reuses the same `dateFilterClause` and
-        // `protectedClause` strings, so the two cannot drift; and it repeats
-        // `guid IS NOT NULL` and takes NO join. The count is join-free, and
-        // joining `chat_message_join` here would let a message belonging to two
-        // chats occupy two offset slots and land the window start on the wrong
-        // row.
-        //
-        // ROWID is a unique integer primary key, so there are no ties, and gaps
-        // are harmless.
-        //
-        // THIS RUNS BEFORE THE TARGET COUNT IS DECIDED, AND THAT ORDER IS
-        // LOAD-BEARING. The first version of BACKLOG-2744 resolved the window
-        // start AFTER `targetMessageCount` had been pinned to `maxMessages`, so
-        // the unresolved branch fell back to walking from the beginning and
-        // still stopped at `maxMessages` rows — reproducing the exact defect it
-        // existed to fix, behind a comment asserting the opposite.
-        let capWindowStartRowId: number | null = null;
-        // Guarded on `capWouldTruncate` as a PERFORMANCE skip: when the cap
-        // cannot truncate, this query's OFFSET is out of range and its null
-        // result would inform nothing (`capWindowUnresolved` is gated on
-        // `capWouldTruncate` too).
-        if (capWouldTruncate) {
-          const startRowResult = await dbAll<{ start_rowid: number }>(`
-            SELECT message.ROWID as start_rowid
-            FROM message
-            WHERE message.guid IS NOT NULL
-              ${dateFilterClause}
-              AND NOT (${protectedClause})
-            ORDER BY message.ROWID DESC
-            LIMIT 1 OFFSET ?
-          `, [(maxMessages as number) - 1]);
-
-          capWindowStartRowId = startRowResult[0]?.start_rowid ?? null;
-        }
-
-        // The cap is honoured only when we know where its window starts. If the
-        // window start cannot be resolved we import the FULL filtered window —
-        // more recent history than the user asked for, which they never notice —
-        // rather than silently handing them the archive.
-        //
-        // Reachable without a throw: each read runs against a live WAL-mode
-        // chat.db that Messages is writing to, so a bulk prune between the count
-        // and this query sends the OFFSET out of range; and the
-        // `dbAll<{ start_rowid: number }>` cast is unchecked, so a renamed alias
-        // would yield `undefined` rather than raise.
-        const capWindowUnresolved = capWouldTruncate && capWindowStartRowId === null;
-        const importWasCapped = capWouldTruncate && !capWindowUnresolved;
-
-        // Cap': the target is every protected message PLUS the newest N of the
-        // remainder. The protected ones were never the cap's business.
-        const targetMessageCount = importWasCapped
-          ? protectedCount + (maxMessages as number)
-          : filteredMessageCount;
-
-        // BACKLOG-2772: the cap as a FETCH PREDICATE rather than a cursor seed.
-        //
-        // Before Cap' the cap could be expressed by starting the walk at
-        // `capWindowStartRowId`, because everything kept was newer than it.
-        // Protected messages break that: they are kept regardless of age, and
-        // an audit period from two years ago sits far BELOW the cap window
-        // start. So the walk starts at 0 again and this term decides
-        // membership — admit a row if it is protected, or if it is at or after
-        // the cap window start. Keyset pagination is untouched; this is a WHERE
-        // term, not an ordering change.
-        const capFetchClause = importWasCapped
-          ? `AND (message.ROWID >= ${capWindowStartRowId} OR (${protectedClause}))`
-          : "";
 
         if (capWindowUnresolved) {
           // ERROR, not warn: this is the silent-wrong-data class. The import
@@ -2317,7 +2191,20 @@ class MacOSMessagesImportService {
   async getAvailableMessageCount(plan: ImportPlan): Promise<{
     success: boolean;
     count?: number;
+    /**
+     * What the run will IMPORT for this plan — Cap' applied (BACKLOG-2772).
+     * Present only when it differs from `count`.
+     */
     filteredCount?: number;
+    /**
+     * What the SELECTION covers, before the cap (BACKLOG-2772).
+     *
+     * Kept alongside `filteredCount` because the cap warning needs both: with
+     * only the admitted number, a cap that truncates 707,842 messages to 50,000
+     * looks exactly like a window that happens to hold 50,000, and the user
+     * stops being told anything is being left out.
+     */
+    windowCount?: number;
     error?: string;
     /** BACKLOG-2743: Bytes of attachments that would be copied for this window. */
     attachmentBytes?: number;
@@ -2407,25 +2294,50 @@ class MacOSMessagesImportService {
 
         // TASK-1952 / BACKLOG-2276: Calculate filtered count when a date filter is
         // active. Uses the same audit-period-aware cutoff as the import itself.
-        let filteredCount = totalCount;
         // BACKLOG-2772/2760: READ from the plan, never recomputed. The estimate
-        // and the run that follows it are now the same decision object, so they
+        // and the run that follows it are the same decision object, so they
         // cannot describe different windows — which is what they did when each
         // assembled its own filters from whatever the renderer had sent.
-        const appleDateCutoffNano = plan.cutoffNano;
-        if (appleDateCutoffNano !== null) {
+        const windowSql = buildMessageWindowSql(plan);
+        const { dateFilterClause } = windowSql;
+
+        let windowCount = totalCount;
+        if (plan.cutoffNano !== null) {
           const filteredResult = await dbGet(`
             SELECT COUNT(*) as count FROM message
-            WHERE guid IS NOT NULL AND date > ${appleDateCutoffNano}
+            WHERE message.guid IS NOT NULL ${dateFilterClause}
           `);
-          filteredCount = filteredResult?.count || 0;
+          windowCount = filteredResult?.count || 0;
         }
+
+        // BACKLOG-2772: apply Cap' HERE TOO, through the same function the run
+        // uses. The window count is not what the run imports.
+        //
+        // Before Cap' the two agreed for free: any non-rejected deal switched
+        // the cap off entirely, so the run covered the whole window. Cap' makes
+        // the common case — deals AND a cap — precisely where they diverge, and
+        // an estimate reading only the window would have shown Daniel 707,842
+        // messages in Settings for a run that stores ~50,000 plus his deal
+        // periods.
+        const admitted = await resolveAdmittedMessageSet(
+          db.all,
+          plan,
+          windowSql,
+          windowCount
+        );
+        const filteredCount = admitted.targetMessageCount;
 
         // BACKLOG-2743: Size the attachment copy for the SAME window, before any
         // byte is copied. Every figure needed is queryable from chat.db up front;
         // previously nothing on this path looked at attachment size at all, so a
         // library whose attachments exceeded the disk was discovered only by
         // running out of space partway through the copy.
+        //
+        // BACKLOG-2772: scoped to the ADMITTED set, not the window. These bytes
+        // feed `evaluateAttachmentSpace` and therefore `fitsOnDisk`, so a
+        // window-sized sum lets the space guard refuse an import — or push the
+        // user to "Text only" — over files the cap will never fetch. Over-
+        // refusal is the safe direction, but it is user-visible and wrong.
         //
         // Scoped by the same date cutoff as the count: storeAttachments only
         // copies an attachment whose message resolves to a stored message ID, so
@@ -2440,9 +2352,8 @@ class MacOSMessagesImportService {
         // joined to several messages. Same ROWID = same source path = same
         // content hash = a single copy on disk.
         const attachmentWhere =
-          appleDateCutoffNano !== null
-            ? `WHERE message.guid IS NOT NULL AND attachment.filename IS NOT NULL AND message.date > ${appleDateCutoffNano}`
-            : `WHERE message.guid IS NOT NULL AND attachment.filename IS NOT NULL`;
+          `WHERE message.guid IS NOT NULL AND attachment.filename IS NOT NULL ` +
+          `${dateFilterClause} ${admitted.capFetchClause}`;
         const attachmentRows = await dbAllSizes(`
           SELECT
             attachment.filename as filename,
@@ -2492,6 +2403,10 @@ class MacOSMessagesImportService {
           success: true,
           count: totalCount,
           filteredCount: filteredCount !== totalCount ? filteredCount : undefined,
+          // BACKLOG-2772: the window BEFORE the cap. `filteredCount` is what the
+          // run imports; this is what the selection covers, and the cap warning
+          // needs both to say "of N in this window, M will be imported".
+          windowCount,
           attachmentBytes: estimate.eligibleBytes,
           attachmentCount: estimate.eligibleCount,
           availableDiskBytes,

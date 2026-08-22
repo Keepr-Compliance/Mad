@@ -19,13 +19,15 @@ import {
   DEFAULT_LOOKBACK_MONTHS,
 } from "../services/macOSMessagesImportService/importHelpers";
 // BACKLOG-2772: the ONE assembler + resolver every import entry point calls.
-import { resolveImportPlanForUser } from "../services/importPlanInputs";
+import {
+  resolveImportPlanForUser,
+  readNonRejectedTransactions,
+} from "../services/importPlanInputs";
 import type { StoredImportFilters } from "../services/importPlan";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
   MacOSImportResult,
   ImportProgressCallback,
-  MessageImportFilters,
 } from "../services/macOSMessagesImportService";
 import type { EffectiveImportWindow } from "../services/macOSMessagesImportService/importHelpers";
 // BACKLOG-2743: shared selection-time estimate shape (attachment bytes + disk verdict).
@@ -634,19 +636,15 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
       let auditStartISO: string | null = null;
       try {
         if (databaseService.isInitialized()) {
-          const db = databaseService.getRawDatabase();
-          const txnRows = db
-            .prepare(
-              `SELECT started_at, created_at, closed_at
-                 FROM transactions
-                WHERE user_id = ? AND status != 'rejected'`
-            )
-            .all(userId) as Array<{
-              started_at: string | null;
-              created_at: string | null;
-              closed_at: string | null;
-            }>;
-          const auditStart = computeEarliestAuditStart(txnRows);
+          // BACKLOG-2772: the FOURTH copy of `status != 'rejected'` is gone.
+          // This label handler ran its own inline query; it now reads the same
+          // function the plan's assembler does, so the label, the plan and the
+          // export gate cannot disagree about which deals carry an audit
+          // obligation. (Display-only either way — the values already agreed —
+          // but a predicate with four homes only stays agreed by luck.)
+          const auditStart = computeEarliestAuditStart(
+            readNonRejectedTransactions(userId)
+          );
           auditStartISO = auditStart ? auditStart.toISOString() : null;
         }
       } catch (auditError) {

@@ -120,6 +120,88 @@ describe("BACKLOG-2772: main's import announcement becomes a queue item", () => 
     expect(messagesItem()).toBeUndefined();
   });
 
+  it("BLOCKER: a PENDING internal messages item is not evicted by a mirrored run", async () => {
+    /*
+     * The interleaving SR found, and the reason the `running`-only guard below
+     * was not enough.
+     *
+     * `startSync` seeds EVERY requested type as `pending` and runs them
+     * sequentially, so on a full sync `messages` sits pending for the whole of
+     * the contacts and emails syncs ahead of it — minutes, routinely. Daniel
+     * creates a transaction with an early start date inside that window; the
+     * trigger announces STARTED.
+     *
+     * Pre-fix, that announcement filtered the pending internal item out and
+     * replaced it with an external one. Then `updateQueueItem` (which matches
+     * on type alone) drove the mirrored row from the user's own import, and the
+     * trigger's FINISHED marked it complete at 100% and removed it three
+     * seconds later — while the user's import was still running. Row gone,
+     * Cancel gone, and a completion reported that never happened.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (syncOrchestrator as any).setState({
+      isRunning: true,
+      queue: [
+        { type: 'emails', status: 'running', progress: 30 },
+        { type: 'messages', status: 'pending', progress: 0 },
+      ],
+      currentSync: 'emails',
+    });
+
+    captured!.onStarted({ userId: 'u1', reason: 'date-change' });
+
+    const item = messagesItem();
+    // Still the USER's row: internal, still pending, still waiting its turn.
+    expect(item?.external).toBeUndefined();
+    expect(item?.status).toBe('pending');
+    expect(syncOrchestrator.getState().queue).toHaveLength(2);
+  });
+
+  it("BLOCKER: a finish cannot complete a run the mirror never owned", () => {
+    // The second half of the same defect. Even having correctly declined to
+    // mirror, a FINISHED announcement must not reach across and complete the
+    // user's item — `completeExternalSync` matches `type && external`, and the
+    // pending row is neither finished nor external.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (syncOrchestrator as any).setState({
+      isRunning: true,
+      queue: [
+        { type: 'emails', status: 'running', progress: 30 },
+        { type: 'messages', status: 'pending', progress: 0 },
+      ],
+      currentSync: 'emails',
+    });
+
+    captured!.onStarted({ userId: 'u1', reason: 'date-change' });
+    captured!.onFinished({ userId: 'u1', reason: 'date-change' });
+
+    const item = messagesItem();
+    expect(item?.status).toBe('pending');
+    expect(item?.status).not.toBe('complete');
+    expect(item?.progress).toBe(0);
+  });
+
+  it("BLOCKER (reverse order): a user's sync starting takes the row back, leaving exactly one", () => {
+    // The mirror image. A mirrored run is in flight when Daniel starts a full
+    // sync. `startSync` used to preserve every external item and then append a
+    // fresh internal one of the same type, so the queue held TWO rows typed
+    // 'messages' — and `updateQueueItem` maps over every match, so both moved
+    // together while the trigger's FINISHED completed one of them.
+    captured!.onStarted({ userId: 'u1', reason: 'create' });
+    expect(messagesItem()?.external).toBe(true);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (syncOrchestrator as any).syncFunctions = new Map([
+      ['messages', jest.fn(async () => new Promise(() => {}))],
+    ]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    void (syncOrchestrator as any).startSync({ types: ['messages'], userId: 'u1' });
+
+    const rows = syncOrchestrator.getState().queue.filter((i) => i.type === 'messages');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].external).toBeUndefined();
+  });
+
   it('ANTI-VACUITY: a USER-initiated messages import is never displaced by a mirrored one', () => {
     // The collision this design rests on. `updateQueueItem` matches on type
     // alone, so an internal 'messages' item and a mirrored one would fight over

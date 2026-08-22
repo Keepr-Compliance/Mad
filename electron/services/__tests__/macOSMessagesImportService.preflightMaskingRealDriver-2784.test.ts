@@ -288,3 +288,77 @@ describe("BACKLOG-2784 — the pre-flight surfaces its real error, not SQLITE_MI
     expect(result.fitsOnDisk).toBeUndefined();
   });
 });
+
+/**
+ * BACKLOG-2772 — the estimate describes the RUN, not the window.
+ *
+ * `getAvailableMessageCount` is the number Settings shows next to the Import
+ * button, and its attachment bytes feed `evaluateAttachmentSpace` and therefore
+ * the space guard. Before Cap' the estimate could read the window alone and
+ * still be right: any non-rejected deal switched the cap off entirely, so the
+ * run covered the whole window. Cap' makes the common case — deals AND a cap —
+ * exactly where a window count and an admitted count diverge.
+ *
+ * Same real-driver harness as above: a real chat.db through the real
+ * `openSqliteReadOnly`, because the arithmetic under test is SQL.
+ *
+ * The corpus is 12 messages at ROWID 1..12 and ONE attachment, owned by the
+ * OLDEST message (ROWID 1). That ownership is the load-bearing fixture detail:
+ * a cap that keeps the newest N must exclude that attachment's bytes.
+ */
+describe("BACKLOG-2772 — the estimate applies Cap', not just the window", () => {
+  it("reports what the run will IMPORT, and the window separately", async () => {
+    const result = await macOSMessagesImportService.getAvailableMessageCount(
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: 5 } }),
+    );
+
+    expect(result.success).toBe(true);
+    // The library, unchanged.
+    expect(result.count).toBe(MESSAGE_COUNT);
+    // What the run imports: the cap, applied. Pre-fix this was `undefined` —
+    // the estimate reported the whole 12-message window and the panel showed it.
+    expect(result.filteredCount).toBe(5);
+    // And the selection's own size, kept so the cap warning can still say what
+    // is being left out.
+    expect(result.windowCount).toBe(MESSAGE_COUNT);
+  });
+
+  it("sizes the attachment copy to the admitted set — the space guard depends on it", async () => {
+    // The one attachment belongs to the OLDEST message, which a cap of 5 does
+    // not admit. Its bytes must not be counted: they feed `fitsOnDisk`, so a
+    // window-sized sum lets the guard refuse an import — or push the user to
+    // "Text only" — over a file the run will never fetch.
+    const result = await macOSMessagesImportService.getAvailableMessageCount(
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: 5 } }),
+    );
+
+    expect(result.attachmentCount).toBe(0);
+    expect(result.attachmentBytes).toBe(0);
+  });
+
+  it("ANTI-VACUITY: with no cap, the whole window and its attachment are counted", async () => {
+    // Without this, both assertions above would be equally green for an
+    // estimate that had stopped seeing attachments at all.
+    const result = await macOSMessagesImportService.getAvailableMessageCount(
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: null } }),
+    );
+
+    expect(result.filteredCount).toBeUndefined(); // equals `count`, so omitted
+    expect(result.windowCount).toBe(MESSAGE_COUNT);
+    expect(result.attachmentCount).toBe(1);
+    expect(result.attachmentBytes).toBe(1024);
+  });
+
+  it("a cap that cannot truncate changes nothing", async () => {
+    // Boundary: cap exactly equal to the corpus. `capWouldTruncate` is a strict
+    // `>`, so nothing is excluded and the attachment is still counted.
+    const result = await macOSMessagesImportService.getAvailableMessageCount(
+      testImportPlan({
+        storedFilters: { lookbackMonths: null, maxMessages: MESSAGE_COUNT },
+      }),
+    );
+
+    expect(result.filteredCount).toBeUndefined();
+    expect(result.attachmentBytes).toBe(1024);
+  });
+});
