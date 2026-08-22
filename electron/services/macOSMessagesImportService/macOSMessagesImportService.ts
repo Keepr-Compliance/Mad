@@ -2267,7 +2267,37 @@ class MacOSMessagesImportService {
       const db = await openSqliteReadOnly(messagesDbPath, MacOSMessagesImportService.SERVICE_NAME);
       const dbGet = (sql: string) => db.get<{ count: number }>(sql);
       const dbAllSizes = (sql: string) => db.all<AttachmentSizeRow>(sql);
-      const dbClose = db.close;
+      /**
+       * BACKLOG-2784: closing the macOS Messages handle, at most once.
+       *
+       * The same double-close shape BACKLOG-2775 fixed on the import path was
+       * still live here, and this is the PRE-FLIGHT the Settings panel runs
+       * before every import — so it is the first place a genuine failure gets
+       * reported to the user and to Sentry.
+       *
+       * `ReadOnlySqliteHandle.close` is `promisify(db.close.bind(db))` from
+       * node-sqlite3, and a SECOND close REJECTS with
+       * `SQLITE_MISUSE: Database is closed`. There are two close sites below and
+       * they are NOT mutually exclusive: the success path closes as soon as the
+       * last source query is done, and a good deal of work still follows it
+       * (`app.getPath`, the stored-attachment read, the estimate, the disk
+       * verdict). Anything thrown in that tail reached the inner `catch`, which
+       * closed AGAIN — and that rejection REPLACED the real error, so a locked
+       * source database or a disk fault surfaced to the user as
+       * "Database is closed".
+       *
+       * Making the close idempotent lets the original error through unchanged.
+       * No mocked suite can catch this — a `jest.fn()` close is idempotent by
+       * construction — which is why the reproduction lives in
+       * `macOSMessagesImportService.preflightMaskingRealDriver-2784.test.ts`
+       * against the real driver, exactly as BACKLOG-2775's does.
+       */
+      let sourceDbClosed = false;
+      const dbClose = async (): Promise<void> => {
+        if (sourceDbClosed) return;
+        sourceDbClosed = true;
+        await db.close();
+      };
 
       // BACKLOG-2280: Reactions are imported now, so the available-count scope must
       // match the import SELECT scope (which also includes reactions). Keeping this
