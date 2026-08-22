@@ -126,8 +126,8 @@ describe("promoteToMainContacts — the dedup probe uses the shared key (BACKLOG
   const findSpy = databaseService.findContactByNormalizedPhone as jest.Mock;
 
   const PROMOTABLE: SyncContact[] = [
-    { id: "301", displayName: "Ada Lovelace", phones: [{ number: "+14155550188" }], emails: [] },
-    { id: "302", displayName: "Grace Hopper", phones: [{ number: "(415) 555-0177" }], emails: [] },
+    { id: "301", displayName: "Pat Riverton", phones: [{ number: "+14155550188" }], emails: [] },
+    { id: "302", displayName: "Robin Marsh", phones: [{ number: "(415) 555-0177" }], emails: [] },
   ];
 
   it("probes with the key the re-keyed column holds, not a hand-rolled last-ten", () => {
@@ -160,7 +160,7 @@ describe("promoteToMainContacts — the dedup probe uses the shared key (BACKLOG
     // keeps that behaviour in the shared helper instead of a second hand-rolled
     // copy of it — a below-floor value emits no key and is never probed.
     storeContacts(USER, DEVICE, [
-      { id: "303", displayName: "Short Code", phones: [{ number: "40219" }], emails: [] },
+      { id: "303", displayName: "Test Contact", phones: [{ number: "40219" }], emails: [] },
     ], true);
 
     expect(toMatchingKey("40219")).toBe("");
