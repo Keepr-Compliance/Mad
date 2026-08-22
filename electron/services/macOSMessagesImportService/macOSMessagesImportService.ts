@@ -35,11 +35,21 @@ import { detectMessageType } from "../../utils/messageTypeDetector";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the message-import scope.
 import { supportTrace } from "../supportAccess/trace";
-// BACKLOG-2775: the two main-process timers that write on the SHARED database
-// connection. The force re-import stops them for the length of its transaction
-// so a rollback cannot discard their work — see quiesceBackgroundWriters().
-import auditService from "../auditService";
-import submissionSyncService from "../submissionSyncService";
+// BACKLOG-2790: the force re-import's staging tables and the one short
+// transaction that swaps them into place. This replaced the BACKLOG-2775 design,
+// where the force path held a single BEGIN IMMEDIATE transaction open for the
+// whole run and had to PAUSE the two main-process sync timers so their writes
+// could not be caught in its rollback. Nothing is paused any more — see
+// `swapStagingIntoLive`.
+import {
+  forceStagingLifecycle,
+  forceReadView,
+  swapStagingIntoLive,
+  sweepStaleStaging,
+  SURVIVING_ATTACHMENTS,
+  SURVIVING_MESSAGES,
+  type ForceStaging,
+} from "./forceStaging";
 
 import type {
   MacOSImportResult,
@@ -56,7 +66,6 @@ import {
   MAX_MESSAGE_TEXT_LENGTH,
   MAX_HANDLE_LENGTH,
   BATCH_SIZE,
-  DELETE_BATCH_SIZE,
   YIELD_INTERVAL,
   MAX_ATTACHMENT_SIZE,
   ATTACHMENTS_DIR,
@@ -133,15 +142,6 @@ class MacOSMessagesImportService {
    * only while the item is 'running'.
    */
   private static readonly PENDING_CANCEL_TTL_MS = 10 * 1000;
-  /**
-   * BACKLOG-2775: how long to wait for an already-in-flight background sync to
-   * finish before opening the force transaction. It is a network round trip, so
-   * a few seconds is generous; exceeding it is logged, not fatal.
-   */
-  private static readonly QUIESCE_TIMEOUT_MS = 5000;
-  /** BACKLOG-2775: how often to re-check for an in-flight sync while waiting. */
-  private static readonly QUIESCE_POLL_MS = 25;
-
   /**
    * Import messages from the macOS Messages app.
    *
@@ -351,120 +351,91 @@ class MacOSMessagesImportService {
       };
     }
 
-    // BACKLOG-2775: the force path's clear + re-import run as ONE transaction.
-    // `forceTxnOpen` is the single piece of state the `finally` needs: true means
-    // this run opened a transaction and has not committed it, so the exit — any
-    // exit, including the cancel returns below and a thrown error — must roll it
-    // back. There is deliberately no rollback anywhere else; scattering them
-    // across the several return points is how one gets missed.
+    /**
+     * BACKLOG-2790: the force path's rebuild is written HERE, not into the live
+     * tables, and takes their place in one short transaction at the end.
+     *
+     * `staging` being non-null is the single piece of state everything else
+     * keys on: it means this run is rebuilding, so writes go to the staging
+     * tables, dedup reads see "what survived the clear ∪ what has been staged",
+     * and the exit — any exit — drops it. There is no transaction to roll back
+     * and nothing to restore, because nothing was destroyed: until the swap
+     * runs, the user's message store is untouched by construction.
+     */
     const appDb = forceReimport ? databaseService.getRawDatabase() : null;
-    let forceTxnOpen = false;
+    let staging: ForceStaging | null = null;
     /**
-     * BACKLOG-2775: this run executed `BEGIN IMMEDIATE`, so any transaction open
-     * on the connection at `finally` time is OURS. Set once, never cleared —
-     * unlike `forceTxnOpen`, which is cleared after the COMMIT.
-     *
-     * It exists because the BEGIN site refuses to touch a transaction it did not
-     * start ("would discard their work") by throwing — and that throw lands in
-     * the outer catch and then the `finally`. Rolling back on `inTransaction`
-     * alone would discard exactly the foreign work the guard just refused to
-     * touch. Unreachable today (nothing else in `electron/` opens a raw
-     * transaction, and `db.transaction()` cannot span an await), which is
-     * precisely the kind of assumption that stops being true quietly.
+     * BACKLOG-2790: true once the swap has committed. It is the exact
+     * replacement for BACKLOG-2775's `forceTxnOpen` in the results the UI reads:
+     * `rolledBack` means "this force run changed nothing", which before the swap
+     * is true of every exit and after it is true of none.
      */
-    let forceTxnBegun = false;
-    // BACKLOG-2775: set once the background writers have been stopped for this
-    // run, so the `finally` restarts exactly what was stopped and only then.
-    let forceQuiesced = false;
-    let resumeBackgroundWriters: () => void = () => {};
-    /**
-     * BACKLOG-2775 structural guard: set by every exit that INTENDS to leave the
-     * transaction open for the `finally` to roll back.
-     *
-     * The hazard it closes is a future edit, not a present bug. This try block
-     * is ~600 lines with several exits; a `return { success: true, ... }` added
-     * anywhere inside it would be rolled back by the `finally` while reporting
-     * success to the user — a silently emptied message store, with tsc, lint and
-     * every existing test still green. Making the intent explicit means the
-     * DEFAULT for a newly added return is to trip the guard rather than to lose
-     * data quietly.
-     */
-    let forceRollbackDeclared = false;
-    /** Declare a deliberate rollback exit and produce its result. */
-    const rollbackAndReturn = (): MacOSImportResult => {
-      forceRollbackDeclared = true;
-      return this.cancelledUnchangedResult(startTime);
-    };
+    let forceSwapCommitted = false;
+    const nothingChangedYet = (): true | undefined =>
+      forceReimport && !forceSwapCommitted ? true : undefined;
 
     try {
-      // If force reimport, delete existing macOS messages first
+      // BACKLOG-2790: set up the rebuild's scratch space. NOTHING is deleted
+      // here — that is the entire change. The old force path opened
+      // `BEGIN IMMEDIATE` and deleted the user's whole message cache as its
+      // first act, which is why an interruption had to be survived by a
+      // rollback and why every writer in the process had to be held still for
+      // the length of the run.
       if (forceReimport && appDb) {
-        // BACKLOG-2775: check BEFORE the destructive clear. The founder cancelled
-        // ~1s in and still waited out a 35-second delete of 162,961 messages: the
-        // flag was only read between phases, so the entire clear ran after the
-        // cancel had been requested. The cheapest fix for that run is to not
-        // start it.
+        // Check BEFORE doing any work. The founder cancelled ~1s in and still
+        // waited out a 35-second delete of 162,961 messages, because the flag
+        // was only read between phases. There is no delete to skip any more,
+        // but the early exit is still the cheapest possible answer to a cancel.
         if (this.abortController?.signal.aborted) {
           logService.warn(
-            "Force reimport cancelled before the clear phase — nothing was deleted",
+            "Force reimport cancelled before it started — nothing was touched",
             MacOSMessagesImportService.SERVICE_NAME
           );
-          return rollbackAndReturn();
+          return this.cancelledUnchangedResult(startTime);
         }
 
-        // A transaction already in progress on this connection would mean the
-        // COMMIT below belongs to someone else and the ROLLBACK would discard
-        // their work. Nothing in the app holds one across an await today; assert
-        // it rather than assume it, because the failure would be silent.
+        /**
+         * A transaction already open on this connection still stops the run —
+         * for a new reason, and a subtler one than BACKLOG-2775's.
+         *
+         * The old force path refused because it was about to run a raw
+         * `COMMIT`/`ROLLBACK` that would have resolved someone else's
+         * transaction. This one refuses because `db.transaction()` NESTS: inside
+         * a foreign transaction the swap becomes a SAVEPOINT, which keeps the
+         * three steps atomic with respect to each other but makes the whole
+         * re-import visible only if that outer transaction commits — and
+         * discarded, silently, under a result reporting success, if it rolls
+         * back. Creating and dropping staging tables inside a stranger's
+         * transaction is the same bargain.
+         *
+         * Nothing in the app holds a transaction across an await today. Assert
+         * it rather than assume it, because the failure would be silent.
+         */
         if (appDb.inTransaction) {
           throw new Error(
             "Cannot start force re-import: a database transaction is already open on this connection"
           );
         }
 
-        // BACKLOG-2775: quiesce the background writers BEFORE taking the write
-        // lock. Everything below rides on one fact — every write in this process
-        // goes through the SAME better-sqlite3 handle (`databaseService` shares
-        // it with `db/core/dbConnection` via `setDb`), so a write from anywhere
-        // during this window silently JOINS this transaction and is rolled back
-        // with it. Rollback is the normal path here, not an exceptional one.
-        //
-        // Two main-process timers write on that handle every 60 seconds:
-        //   - auditService's cloud sync -> markAuditLogsSynced (DROP TRIGGER +
-        //     UPDATE audit_logs SET synced_at + CREATE TRIGGER). A rollback
-        //     erases the synced_at marks of rows already uploaded, so they
-        //     re-upload; any audit_logs row written in the window vanishes
-        //     locally while its cloud copy survives.
-        //   - submissionSyncService's poll -> updateTransactionSubmissionStatus.
-        //
-        // An earlier version of this comment claimed the exposure was bounded
-        // because "the orchestrator serializes syncs and the worker pool is
-        // read-only". Both are true and both describe only the RENDERER queue;
-        // neither says anything about these two main-process timers.
-        resumeBackgroundWriters = await this.quiesceBackgroundWriters();
-        forceQuiesced = true;
-
-        // IMMEDIATE takes the write lock now rather than on first write, so a
-        // conflicting writer fails here — before the clear — instead of halfway
-        // through.
-        appDb.exec("BEGIN IMMEDIATE");
-        forceTxnOpen = true;
-        forceTxnBegun = true;
-
-        logService.info(
-          `Force reimport: clearing existing macOS messages (atomic — rolls back unless the re-import completes)`,
-          MacOSMessagesImportService.SERVICE_NAME
-        );
-        const cleared = await this.clearMacOSMessages(userId, onProgress);
-        if (!cleared) {
-          // Cancelled mid-clear. Safe now, and it was not before: the delete is
-          // uncommitted, so the `finally` rolls it back.
-          logService.warn(
-            "Force reimport cancelled during the clear phase — rolling back",
+        // Reclaim the staging tables of any run that died before its swap.
+        // The sweep is unscoped and a second Force Re-import aborts the first
+        // rather than being refused, so it can drop an abandoned run's tables
+        // while that run is still writing to them — data-safe in every
+        // interleaving, but see the note at `sweepStaleStaging` for why, and
+        // BACKLOG-2797 for the fix.
+        const swept = sweepStaleStaging(appDb);
+        if (swept.length > 0) {
+          logService.info(
+            `Reclaimed ${swept.length} staging table(s) left by an interrupted force re-import`,
             MacOSMessagesImportService.SERVICE_NAME
           );
-          return rollbackAndReturn();
         }
+
+        staging = forceStagingLifecycle.create(appDb, userId);
+        logService.info(
+          `Force reimport: rebuilding into ${staging.messagesTable} — the existing message store stays in place until the rebuild is complete`,
+          MacOSMessagesImportService.SERVICE_NAME
+        );
       }
 
       // Open macOS Messages database
@@ -740,9 +711,12 @@ class MacOSMessagesImportService {
               error: "Import cancelled",
               // BACKLOG-2775: this is the exact return the founder's run took —
               // cancel honoured at the first check after the clear, 0 imported.
-              // The clear is uncommitted now, so the `finally` restores every
-              // message it deleted and the flag says so.
-              rolledBack: forceTxnOpen || undefined,
+              // BACKLOG-2790: and it still reports `rolledBack`, because that is
+              // what the flag has always MEANT to the UI — "this force run
+              // changed nothing" — even though there is no longer a rollback
+              // behind it. Nothing was deleted to restore; the store was never
+              // altered in the first place.
+              rolledBack: nothingChangedYet(),
               // BACKLOG-2748: the discriminator, not the message text. Consumers
               // must not have to string-match "Import cancelled" to tell a user
               // cancel apart from a real failure — the orchestrator checks this
@@ -844,10 +818,10 @@ class MacOSMessagesImportService {
         );
 
         // Store messages to app database
-        const messageResult = await this.storeMessages(userId, allMessages, chatMembersMap, chatAccountMap, onProgress);
+        const messageResult = await this.storeMessages(userId, allMessages, chatMembersMap, chatAccountMap, onProgress, staging);
 
         // Store attachments (TASK-1012)
-        const attachmentResult = await this.storeAttachments(userId, attachments, messageResult.messageIdMap, onProgress);
+        const attachmentResult = await this.storeAttachments(userId, attachments, messageResult.messageIdMap, onProgress, staging);
 
         const duration = Date.now() - startTime;
 
@@ -923,20 +897,20 @@ class MacOSMessagesImportService {
           );
         }
 
-        // BACKLOG-2775: the force path's decision point. A cancel that landed
-        // after the query phase leaves the message and attachment loops via
-        // `break`, arriving here with partial counts — which a DELTA import
-        // keeps, and a FORCE re-import must not: its transaction still holds the
-        // deletion of everything the user had, so committing partial counts is
-        // precisely the data loss this item exists to prevent. Fall through to
-        // the `finally` with the transaction open and it rolls back instead.
-        if (forceTxnOpen && this.abortController?.signal.aborted) {
+        // BACKLOG-2775 / BACKLOG-2790: the force path's decision point, at the
+        // same place it has always been. A cancel that landed after the query
+        // phase leaves the message and attachment loops via `break`, arriving
+        // here with partial counts — which a DELTA import keeps and a FORCE
+        // re-import must not, because a partial rebuild is not a re-import of
+        // anything. Returning here means the swap below never runs, so the store
+        // the user already had simply stays where it is.
+        if (staging && this.abortController?.signal.aborted) {
           logService.warn(
-            `Force reimport cancelled after ${messageResult.stored} messages — rolling back to the pre-import state`,
+            `Force reimport cancelled after staging ${messageResult.stored} messages — the message store was never touched`,
             MacOSMessagesImportService.SERVICE_NAME
           );
           await dbClose();
-          return rollbackAndReturn();
+          return this.cancelledUnchangedResult(startTime);
         }
 
         // Send final 100% progress to update UI
@@ -947,13 +921,36 @@ class MacOSMessagesImportService {
           percent: 100,
         });
 
-        // BACKLOG-2775: the re-import finished, so the clear it was paired with
-        // is finally allowed to become real. Committing here — and nowhere
-        // earlier — is the whole property: until this line runs, every exit
-        // path restores the messages the user already had.
-        if (forceTxnOpen && appDb) {
-          appDb.exec("COMMIT");
-          forceTxnOpen = false;
+        // BACKLOG-2790: THE SWAP. The rebuild is complete, so it is finally
+        // allowed to become the user's message store — in one short transaction
+        // that deletes the force set and inserts the staged rows in its place.
+        //
+        // Until this line runs, every exit path leaves the store exactly as the
+        // user had it, because nothing has been deleted. That is the same
+        // guarantee the old COMMIT provided, arrived at from the other
+        // direction: BACKLOG-2775 destroyed first and restored on failure, this
+        // builds first and destroys only on success.
+        //
+        // What that reversal buys is stated at `swapStagingIntoLive`, boundary
+        // included: the transaction is now one synchronous callback with no
+        // `await` inside it, so no write OUTSIDE the force set can join it and be
+        // lost. That covers every writer the quiesce existed for — both sync
+        // timers, event-driven `insertAuditLog`, and submissionSyncService's
+        // realtime subscription — none of which touch this user's macOS message
+        // rows. A write INSIDE the force set is deleted by the swap on the
+        // success path — including rows the Android companion or the iPhone sync
+        // wrote, which do NOT come back on their next sync. See the boundary
+        // note at `swapStagingIntoLive`, and BACKLOG-2796 for the missing
+        // channel scope behind it.
+        if (staging && appDb) {
+          const swapCounts = swapStagingIntoLive(appDb, staging);
+          forceSwapCommitted = true;
+          logService.info(
+            `Force reimport swap complete: replaced ${swapCounts.messagesDeleted} messages ` +
+              `and ${swapCounts.attachmentsDeleted} attachments with ${swapCounts.messagesInserted} ` +
+              `and ${swapCounts.attachmentsInserted}`,
+            MacOSMessagesImportService.SERVICE_NAME
+          );
         }
 
         return {
@@ -996,9 +993,6 @@ class MacOSMessagesImportService {
         { duration }
       );
 
-      // A thrown error is a declared rollback exit: the `finally` is about to
-      // discard the clear, and this result already says so via `rolledBack`.
-      forceRollbackDeclared = true;
       return {
         success: false,
         messagesImported: 0,
@@ -1008,208 +1002,63 @@ class MacOSMessagesImportService {
         attachmentsSkipped: 0,
         duration,
         error: errorMessage,
-        // BACKLOG-2775: a force run that threw discarded its clear too — the
-        // `finally` below is about to roll it back — so the failure card must
-        // not leave the user believing their messages are gone.
-        rolledBack: forceTxnOpen || undefined,
+        // BACKLOG-2775 / BACKLOG-2790: a force run that threw before its swap
+        // changed nothing, so the failure card must not leave the user believing
+        // their messages are gone. A throw from INSIDE the swap lands here too,
+        // and the answer is the same: that transaction rolled back whole, so the
+        // store is the one they started with.
+        rolledBack: nothingChangedYet(),
       };
     } finally {
-      // BACKLOG-2775: the sole rollback. Reached by every exit that did not
-      // COMMIT — cancel before the clear, cancel during it, cancel after the
-      // query phase, a thrown error, a crash of this function. `inTransaction`
-      // is re-read rather than trusted from `forceTxnOpen` alone because
-      // ROLLBACK with no active transaction throws, and a throw in a `finally`
-      // would replace the real result with a rollback error.
-      // BACKLOG-2775 structural guard. Reaching the `finally` with the
-      // transaction still open and NO exit having declared a rollback means new
-      // code returned from inside the try without knowing a transaction was
-      // open — so the store is about to be rolled back under a result that
-      // probably claims success. Roll back anyway (the data comes first), then
-      // fail loudly rather than hand back that result.
-      //
-      // Both conditions below ask the CONNECTION whether a transaction is open,
-      // rather than trusting `forceTxnOpen` — which is cleared on the line after
-      // the COMMIT, so a commit that silently no-opped would skip the rollback
-      // entirely. (A real better-sqlite3 COMMIT either commits or throws, and a
-      // throw leaves `forceTxnOpen` true, so this is hardening against a future
-      // shape rather than a bug that shipped.)
-      //
-      // `forceTxnBegun` is the other half: it distinguishes "our transaction" —
-      // this run ran BEGIN — from a transaction someone else opened, which the
-      // BEGIN-site guard deliberately refuses to touch.
-      const ourTransactionIsOpen = forceTxnBegun && !!appDb?.inTransaction;
-      const undeclaredExit = ourTransactionIsOpen && !forceRollbackDeclared;
-
-      if (ourTransactionIsOpen) {
+      /**
+       * BACKLOG-2790: the sole cleanup, and it cleans up scratch space rather
+       * than repairing the user's data.
+       *
+       * This is where the old design did its real work — one ROLLBACK, reached
+       * by every exit that had not committed, undoing a deletion that had
+       * already happened. Three variables existed to get that right
+       * (`forceTxnOpen`, `forceTxnBegun`, `forceRollbackDeclared`), and a
+       * structural guard threw if a future `return` slipped past them, because a
+       * result claiming success over a rolled-back store would have been a
+       * silently emptied message cache.
+       *
+       * None of it is needed now. A force run that does not reach its swap has
+       * not touched `messages` or `attachments` at all, so there is nothing to
+       * undo and nothing a new `return` could get wrong: the worst a future edit
+       * can do on this path is leak a staging table, which the next run sweeps.
+       * Dropping is best-effort for that reason — a failure here costs disk
+       * space, never data.
+       */
+      if (staging) {
         try {
-          appDb.exec("ROLLBACK");
-          logService.info(
-            "Force reimport rolled back — the message store is unchanged",
-            MacOSMessagesImportService.SERVICE_NAME
-          );
-        } catch (rollbackError) {
-          // Nothing here can be repaired in-process, but it must be visible:
-          // this is the one path where the store could be left cleared.
-          logService.error(
-            `Force reimport ROLLBACK failed: ${
-              rollbackError instanceof Error ? rollbackError.message : "Unknown error"
+          staging.drop();
+        } catch (dropError) {
+          // Not fatal, and deliberately not escalated: the tables are inert, the
+          // next force run reclaims them, and BACKLOG-2768 reclaims them for a
+          // user who never runs one. Throwing from a `finally` would replace a
+          // real result with a housekeeping error.
+          logService.warn(
+            `Could not drop the force re-import staging tables (they will be reclaimed by the next run): ${
+              dropError instanceof Error ? dropError.message : "Unknown error"
             }`,
             MacOSMessagesImportService.SERVICE_NAME
           );
         }
       }
-
-      // BACKLOG-2775: restart the background writers, after the transaction has
-      // been resolved either way. Ordered after the rollback deliberately — a
-      // timer that fired between the ROLLBACK and here would write outside the
-      // transaction, which is correct, but one that fired BEFORE the rollback
-      // would be discarded by it.
-      if (forceQuiesced) {
-        forceQuiesced = false;
-        try {
-          resumeBackgroundWriters();
-        } catch (resumeError) {
-          // A failure here leaves cloud sync stopped until the next app start.
-          // It must be loud: the app looks fine and silently stops syncing.
-          logService.error(
-            `Failed to resume background sync after force reimport: ${
-              resumeError instanceof Error ? resumeError.message : "Unknown error"
-            }`,
-            MacOSMessagesImportService.SERVICE_NAME
-          );
-        }
-      }
-
-      // Thrown last, after the rollback and the resume, so the guard cannot
-      // leave the transaction open or the timers stopped. Throwing from a
-      // `finally` discards whatever the try was returning — which is the point:
-      // that result described a store this rollback has just undone.
-      if (undeclaredExit) {
-        logService.error(
-          "Force reimport returned with its transaction still open and no rollback declared — the run was rolled back and the result discarded",
-          MacOSMessagesImportService.SERVICE_NAME
-        );
-        throw new Error(
-          "Force re-import exited with an open transaction and no declared rollback: its result would have described data that was rolled back"
-        );
-      }
     }
   }
 
   /**
-   * BACKLOG-2775: stop the main-process timers that write on the shared
-   * database connection, and return the function that restarts exactly the ones
-   * that were running.
+   * BACKLOG-2775 / BACKLOG-2790: the outcome of a force re-import that was
+   * stopped before its swap — every count 0, because the store IS exactly what
+   * it was before the run.
    *
-   * Stopping the intervals prevents NEW ticks. It cannot cancel a tick already
-   * in flight — BOTH services await a network round trip before they write
-   * (`auditService.syncToCloud` before `markAuditLogsSynced`,
-   * `submissionSyncService.syncAllSubmissions` before
-   * `updateTransactionSubmissionStatus`) — so this also waits, briefly, for
-   * either to finish.
-   *
-   * KNOWN RESIDUALS, deliberately not fixed here (PM to file the follow-up).
-   * This list is load-bearing: the round-1 review of this feature rejected a
-   * comment that claimed a bound the code did not have, and a residual list
-   * missing a residual is the same mistake in miniature.
-   *   - Event-driven `insertAuditLog` writes can still land inside the window.
-   *     For an audited action that was itself a database write this is coherent
-   *     (the action and its audit row roll back together); for auth or export
-   *     events it is not — the event happened, and its local audit row does not
-   *     survive the rollback.
-   *   - `submissionSyncService`'s REALTIME subscription writes by the same path
-   *     as its poll tick, and neither the suspend nor the in-flight wait covers
-   *     it. Unsubscribing and resubscribing a realtime channel is a heavier
-   *     lifecycle change than this fix should make. Its write is a whole
-   *     statement, never a torn one — better-sqlite3 is synchronous — so it
-   *     joins the transaction and rolls back whole, then self-heals on the next
-   *     poll.
-   *   - If the in-flight wait times out, the run proceeds anyway. Refusing
-   *     would be safe rather than dangerous — no clear runs and the store is
-   *     untouched — so the trade is a single background sync mark that both
-   *     services re-apply on their next tick, against refusing an action the
-   *     user legitimately asked for.
-   */
-  private async quiesceBackgroundWriters(): Promise<() => void> {
-    // Each suspend is recorded the moment it happens, and the resume closure is
-    // built from that record. Suspending both first and building the closure
-    // afterwards would mean a throw from the SECOND suspend leaves the first
-    // timer stopped with nothing able to restart it — cloud sync silently off
-    // for the life of the process. Both suspends are `clearInterval` wrappers,
-    // so this is close to unreachable; the ordering costs nothing.
-    const suspended: Array<() => void> = [];
-    try {
-      if (auditService.suspendPeriodicSync()) {
-        suspended.push(() => auditService.resumePeriodicSync());
-      }
-      if (submissionSyncService.suspendPeriodicSync()) {
-        suspended.push(() => submissionSyncService.resumePeriodicSync());
-      }
-      return await this.waitForQuietConnection(suspended);
-    } catch (quiesceError) {
-      // Undo whatever was suspended before rethrowing. The caller only records
-      // `forceQuiesced` once this resolves, so anything thrown from here would
-      // otherwise leave the timers stopped with nothing able to restart them —
-      // cloud sync silently off for the life of the process. This covers the
-      // second suspend AND the wait below, which is where it actually bit
-      // during development.
-      for (const resume of suspended) resume();
-      throw quiesceError;
-    }
-  }
-
-  /**
-   * BACKLOG-2775: wait (bounded) for an in-flight background sync to finish, and
-   * return the closure that restarts what was suspended.
-   */
-  private async waitForQuietConnection(
-    suspended: Array<() => void>
-  ): Promise<() => void> {
-    // Bounded wait for a tick that was already mid-flight when the interval was
-    // stopped: both services await a network round trip before they write, and
-    // `clearInterval` cannot cancel one that is already in the air.
-    const deadline = Date.now() + MacOSMessagesImportService.QUIESCE_TIMEOUT_MS;
-    const stillWriting = () =>
-      auditService.isSyncInFlight() || submissionSyncService.isSyncInFlight();
-    while (stillWriting() && Date.now() < deadline) {
-      // A sleep, not `yieldToEventLoop()` — that resolves on `setImmediate` and
-      // would spin the check phase for up to five seconds to learn something
-      // that changes at network speed.
-      await new Promise((resolve) => setTimeout(resolve, MacOSMessagesImportService.QUIESCE_POLL_MS));
-    }
-    if (stillWriting()) {
-      // Proceeding anyway is the deliberate choice. Refusing the re-import would
-      // be SAFE — no clear runs, the store is untouched — so the trade is not
-      // safety against danger: it is one background sync mark, which both
-      // services re-apply on their next tick, against refusing a legitimate
-      // action the user asked for. The self-healing side loses.
-      logService.warn(
-        "Force reimport starting while a background sync is still in flight — its write may be rolled back with the run, and re-applied on the next tick",
-        MacOSMessagesImportService.SERVICE_NAME
-      );
-    }
-
-    logService.info(
-      `Background writers quiesced for force reimport (${suspended.length} of 2 were running)`,
-      MacOSMessagesImportService.SERVICE_NAME
-    );
-
-    return () => {
-      // Restart ONLY what was actually running: starting a timer the app had
-      // deliberately stopped would be this feature turning something on behind
-      // the user's back.
-      for (const resume of suspended) resume();
-      logService.info(
-        "Background writers resumed after force reimport",
-        MacOSMessagesImportService.SERVICE_NAME
-      );
-    };
-  }
-
-  /**
-   * BACKLOG-2775: the outcome of a force re-import that was stopped before it
-   * committed — every count 0, because the transaction is about to be rolled
-   * back and the store will be exactly what it was before the run.
+   * `rolledBack: true` is kept verbatim, and it is the right word for what the
+   * user is told: "Re-import cancelled. Nothing changed — your existing messages
+   * are untouched." Under BACKLOG-2775 that sentence was true because a
+   * transaction had just undone a deletion; under stage-and-swap it is true
+   * because no deletion ever happened. The user-visible claim is identical, and
+   * it is now the cheaper of the two to keep honest.
    */
   private cancelledUnchangedResult(startTime: number): MacOSImportResult {
     return {
@@ -1235,7 +1084,12 @@ class MacOSMessagesImportService {
     messages: RawMacMessage[],
     chatMembersMap: Map<number, string[]>,
     chatAccountMap: Map<number, string>,
-    onProgress?: ImportProgressCallback
+    onProgress?: ImportProgressCallback,
+    /**
+     * BACKLOG-2790: non-null on a force re-import — writes go to the staging
+     * table instead of to `messages`, and the dedup read is scoped to it.
+     */
+    staging?: ForceStaging | null
   ): Promise<{ stored: number; skipped: number; retagged: number; nullThreadIdCount: number; messageIdMap: Map<string, string> }> {
     // Map of macOS message GUID -> internal message ID (TASK-1012)
     const messageIdMap = new Map<string, string>();
@@ -1260,11 +1114,19 @@ class MacOSMessagesImportService {
       MacOSMessagesImportService.SERVICE_NAME
     );
 
+    // BACKLOG-2790: on a force re-import this reads the STAGING table, and
+    // reading only staging is exact rather than approximate. The rows this
+    // query looks for — `user_id = ? AND external_id IS NOT NULL` — are
+    // precisely the rows the swap will delete, so under the old design the same
+    // query ran against a live table those rows had just been cleared from and
+    // returned only what the run itself had written. Staging starts empty and
+    // fills the same way, so the answer is identical at every point in the run.
+    const messagesTable = staging ? `"${staging.messagesTable}"` : "messages";
     const existingIds = new Set<string>();
     const existingRows = db
       .prepare(
         `
-      SELECT external_id FROM messages
+      SELECT external_id FROM ${messagesTable}
       WHERE user_id = ? AND external_id IS NOT NULL
     `
       )
@@ -1284,7 +1146,7 @@ class MacOSMessagesImportService {
     // messages that are linked to transactions. The UI now queries messages directly.
     // TASK-1799: Added message_type for UI differentiation of voice messages, location, etc.
     const insertMessageStmt = db.prepare(`
-      INSERT OR IGNORE INTO messages (
+      INSERT OR IGNORE INTO ${messagesTable} (
         id, user_id, channel, external_id, direction,
         body_text, participants, participants_flat, thread_id, sent_at,
         has_attachments, message_type, metadata,
@@ -1306,7 +1168,7 @@ class MacOSMessagesImportService {
     // `associated_message_type IS NULL` guard makes this idempotent: once a row is
     // tagged, subsequent imports re-tag nothing and never touch fresh reactions.
     const retagReactionStmt = db.prepare(`
-      UPDATE messages
+      UPDATE ${messagesTable}
       SET associated_message_type = ?,
           associated_message_guid = ?,
           message_type = NULL,
@@ -1547,7 +1409,7 @@ class MacOSMessagesImportService {
             const messageId = crypto.randomUUID();
 
             // Insert into messages table only
-            insertMessageStmt.run(
+            const insertResult = insertMessageStmt.run(
               messageId, // id
               userId, // user_id
               channel, // channel
@@ -1570,7 +1432,22 @@ class MacOSMessagesImportService {
             existingIds.add(msg.guid);
 
             // Track GUID -> internal ID mapping for attachment linking (TASK-1012)
-            messageIdMap.set(msg.guid, messageId);
+            //
+            // BACKLOG-2790: only when the row was actually written. The
+            // statement is `INSERT OR IGNORE`, so a row that loses to the unique
+            // index is skipped WITHOUT throwing, and mapping the guid to an id
+            // that exists nowhere used to be harmless only because the
+            // attachment loop then hit a foreign-key error and counted the
+            // attachment as skipped. Under stage-and-swap the staging table has
+            // no foreign keys — they are enforced against the real final state
+            // when the swap inserts into live — so that phantom id would survive
+            // the rebuild and fail the SWAP instead, turning a skipped
+            // attachment into a failed re-import. Leaving the guid unmapped
+            // reaches the same outcome by the same route the code already has:
+            // the attachment finds no message id and is skipped.
+            if (insertResult.changes > 0) {
+              messageIdMap.set(msg.guid, messageId);
+            }
           } catch (insertError) {
             const errMsg =
               insertError instanceof Error
@@ -1626,7 +1503,9 @@ class MacOSMessagesImportService {
     userId: string,
     attachments: RawMacAttachment[],
     messageIdMap: Map<string, string>,
-    onProgress?: ImportProgressCallback
+    onProgress?: ImportProgressCallback,
+    /** BACKLOG-2790: non-null on a force re-import — see `forceStaging.ts`. */
+    staging?: ForceStaging | null
   ): Promise<{
     stored: number;
     skipped: number;
@@ -1643,6 +1522,32 @@ class MacOSMessagesImportService {
 
     // Get database instance
     const db = databaseService.getRawDatabase();
+
+    /**
+     * BACKLOG-2790: where this method reads and writes on a force re-import.
+     *
+     * Writes go to staging. Reads must see what the LIVE table would have shown
+     * at this same point under the old design — which cleared live first, so
+     * every read returned "the rows the clear did not touch, plus the rows this
+     * run has written". `forceReadView` is that union, and the survivor half is
+     * not optional: email attachments survive the clear, and dropping them out
+     * of the content-hash set would make a force re-import re-copy files it
+     * already has.
+     *
+     * `@userId` is the only bound parameter these views need, and it is the run's
+     * own user — so a read is bound with it in force mode and with nothing in
+     * delta mode, where the query is the original unscoped one.
+     */
+    const attachmentsTable = staging ? `"${staging.attachmentsTable}"` : "attachments";
+    const attachmentsRead = staging
+      ? (columns: string) =>
+          forceReadView("attachments", staging.attachmentsTable, SURVIVING_ATTACHMENTS, columns)
+      : () => "attachments";
+    const messagesRead = staging
+      ? (columns: string) =>
+          forceReadView("messages", staging.messagesTable, SURVIVING_MESSAGES, columns)
+      : () => "messages";
+    const readParams = staging ? [{ userId }] : [];
 
     // BACKLOG-2743: PRE-FLIGHT FREE-SPACE CHECK.
     //
@@ -1680,9 +1585,11 @@ class MacOSMessagesImportService {
     const alreadyStoredKeys = new Set<string>();
     for (const row of db
       .prepare(
-        `SELECT external_message_id, filename FROM attachments WHERE external_message_id IS NOT NULL`
+        `SELECT external_message_id, filename FROM ${attachmentsRead(
+          "external_message_id, filename"
+        )} WHERE external_message_id IS NOT NULL`
       )
-      .all() as { external_message_id: string; filename: string }[]) {
+      .all(...readParams) as { external_message_id: string; filename: string }[]) {
       const key = attachmentStoredKey(row.external_message_id, row.filename);
       if (key) alreadyStoredKeys.add(key);
     }
@@ -1692,8 +1599,12 @@ class MacOSMessagesImportService {
     // is skipped by the copy loop without writing a byte.
     const existingMessageIdMap = new Map<string, string>();
     const existingMsgRows = db
-      .prepare(`SELECT id, external_id FROM messages WHERE external_id IS NOT NULL`)
-      .all() as { id: string; external_id: string }[];
+      .prepare(
+        `SELECT id, external_id FROM ${messagesRead(
+          "id, external_id"
+        )} WHERE external_id IS NOT NULL`
+      )
+      .all(...readParams) as { id: string; external_id: string }[];
     for (const row of existingMsgRows) {
       existingMessageIdMap.set(row.external_id, row.id);
     }
@@ -1740,8 +1651,12 @@ class MacOSMessagesImportService {
     // Load existing attachment hashes for deduplication (file content)
     const existingHashes = new Set<string>();
     const existingHashRows = db
-      .prepare(`SELECT storage_path FROM attachments WHERE storage_path IS NOT NULL`)
-      .all() as { storage_path: string }[];
+      .prepare(
+        `SELECT storage_path FROM ${attachmentsRead(
+          "storage_path"
+        )} WHERE storage_path IS NOT NULL`
+      )
+      .all(...readParams) as { storage_path: string }[];
 
     // Extract hash from storage path (filename is the hash)
     for (const row of existingHashRows) {
@@ -1752,8 +1667,12 @@ class MacOSMessagesImportService {
     // Load existing attachment records for deduplication (message_id + filename)
     const existingAttachmentRecords = new Set<string>();
     const existingAttachRows = db
-      .prepare(`SELECT message_id, filename FROM attachments WHERE message_id IS NOT NULL`)
-      .all() as { message_id: string; filename: string }[];
+      .prepare(
+        `SELECT message_id, filename FROM ${attachmentsRead(
+          "message_id, filename"
+        )} WHERE message_id IS NOT NULL`
+      )
+      .all(...readParams) as { message_id: string; filename: string }[];
 
     for (const row of existingAttachRows) {
       existingAttachmentRecords.add(`${row.message_id}:${row.filename}`);
@@ -1761,10 +1680,37 @@ class MacOSMessagesImportService {
 
     // TASK-1122: Load existing attachments by external_message_id for stable deduplication
     // This allows us to find and UPDATE attachments with stale message_ids after re-sync
-    const existingByExternalId = new Map<string, { id: string; message_id: string }>();
+    // BACKLOG-2790: this read carries `in_staging`, and it is the only one that
+    // needs to, because it is the only one whose result is later WRITTEN to. A
+    // stale `message_id` on a row this run staged is fixed in staging; the same
+    // repair aimed at a row that survived in the LIVE table is held back for the
+    // swap (see `ForceStaging.messageIdRepairs`), so the live table stays
+    // untouched for the length of the rebuild while the repair still becomes
+    // visible at exactly the moment it did before — when the transaction that
+    // carries the whole re-import commits.
+    const existingByExternalId = new Map<
+      string,
+      { id: string; message_id: string; inStaging: boolean }
+    >();
+    const externalIdRowsSql = staging
+      ? `SELECT id, message_id, external_message_id, filename, in_staging FROM (
+           SELECT id, message_id, external_message_id, filename, 0 AS in_staging
+             FROM attachments WHERE ${SURVIVING_ATTACHMENTS}
+           UNION ALL
+           SELECT id, message_id, external_message_id, filename, 1 AS in_staging
+             FROM "${staging.attachmentsTable}"
+         ) WHERE external_message_id IS NOT NULL`
+      : `SELECT id, message_id, external_message_id, filename, 0 AS in_staging
+           FROM attachments WHERE external_message_id IS NOT NULL`;
     const existingExternalRows = db
-      .prepare(`SELECT id, message_id, external_message_id, filename FROM attachments WHERE external_message_id IS NOT NULL`)
-      .all() as { id: string; message_id: string; external_message_id: string; filename: string }[];
+      .prepare(externalIdRowsSql)
+      .all(...readParams) as {
+      id: string;
+      message_id: string;
+      external_message_id: string;
+      filename: string;
+      in_staging: number;
+    }[];
 
     for (const row of existingExternalRows) {
       // Key: external_message_id:filename for unique identification.
@@ -1775,6 +1721,7 @@ class MacOSMessagesImportService {
       existingByExternalId.set(externalIdKey, {
         id: row.id,
         message_id: row.message_id,
+        inStaging: row.in_staging === 1,
       });
     }
 
@@ -1789,14 +1736,14 @@ class MacOSMessagesImportService {
 
     // Prepare insert statement (TASK-1110: include external_message_id for stable linking)
     const insertAttachmentStmt = db.prepare(`
-      INSERT OR IGNORE INTO attachments (
+      INSERT OR IGNORE INTO ${attachmentsTable} (
         id, message_id, external_message_id, filename, mime_type, file_size_bytes, storage_path, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `);
 
     // TASK-1122: Prepare update statement for fixing stale message_ids
     const updateMessageIdStmt = db.prepare(`
-      UPDATE attachments SET message_id = ? WHERE id = ?
+      UPDATE ${attachmentsTable} SET message_id = ? WHERE id = ?
     `);
 
     // BACKLOG-2743: existingMessageIdMap (messages imported by previous runs) is
@@ -1912,7 +1859,19 @@ class MacOSMessagesImportService {
           // Attachment exists but may have stale message_id
           if (existingByExternal.message_id !== internalMessageId) {
             // Update the stale message_id to the new internal ID
-            updateMessageIdStmt.run(internalMessageId, existingByExternal.id);
+            if (staging && !existingByExternal.inStaging) {
+              // BACKLOG-2790: the row lives in the real `attachments` table, so
+              // the repair waits for the swap rather than reaching into live
+              // mid-rebuild. Same visibility as before — one transaction, at the
+              // end — without a rebuild that can be cancelled having written
+              // anything the user could see.
+              staging.messageIdRepairs.push({
+                attachmentId: existingByExternal.id,
+                messageId: internalMessageId,
+              });
+            } else {
+              updateMessageIdStmt.run(internalMessageId, existingByExternal.id);
+            }
             updated++;
             logService.debug(
               `Updated stale attachment message_id: ${existingByExternal.id}`,
@@ -2027,154 +1986,6 @@ class MacOSMessagesImportService {
     );
 
     return { stored, skipped, updated };
-  }
-
-  /**
-   * Clear all macOS messages for a user (for force reimport)
-   * Uses batched deletes with progress reporting to keep UI responsive
-   *
-   * DB ROWS ONLY — this deletes `messages` and `attachments` rows and never
-   * touches attachment FILES on disk (BACKLOG-2775 verified: the only
-   * filesystem calls on the import path are `mkdir`, `access`, `copyFile` and
-   * reads; there is no `unlink` anywhere in the service). That is what makes
-   * the transaction wrap sufficient: everything this destroys is inside the
-   * database and comes back on ROLLBACK.
-   *
-   * @returns true when the clear completed, false when it stopped early because
-   *   the user cancelled. Callers MUST treat false as "the deletion is partial
-   *   and uncommitted" and roll back.
-   */
-  private async clearMacOSMessages(
-    userId: string,
-    onProgress?: ImportProgressCallback
-  ): Promise<boolean> {
-    const db = databaseService.getRawDatabase();
-
-    // Count messages to delete
-    const countResult = db
-      .prepare(
-        `SELECT COUNT(*) as count FROM messages WHERE user_id = ? AND external_id IS NOT NULL`
-      )
-      .get(userId) as { count: number };
-
-    const messageCount = countResult?.count || 0;
-
-    if (messageCount === 0) {
-      logService.info(
-        `No existing macOS messages to clear`,
-        MacOSMessagesImportService.SERVICE_NAME
-      );
-      return true;
-    }
-
-    logService.info(
-      `Clearing ${messageCount} existing macOS messages and attachments`,
-      MacOSMessagesImportService.SERVICE_NAME
-    );
-
-    // Report initial progress
-    onProgress?.({
-      phase: "deleting",
-      current: 0,
-      total: messageCount,
-      percent: 0,
-    });
-
-    // Delete attachments first (in one go - usually much fewer than messages)
-    // Delete by message_id for currently-linked attachments
-    const attachResult1 = db
-      .prepare(
-        `
-      DELETE FROM attachments
-      WHERE message_id IN (
-        SELECT id FROM messages WHERE user_id = ? AND external_id IS NOT NULL
-      )
-    `
-      )
-      .run(userId);
-
-    // Also delete orphaned attachments by external_message_id
-    // This catches attachments from previous imports where message_id is now stale
-    const attachResult2 = db
-      .prepare(
-        `
-      DELETE FROM attachments
-      WHERE external_message_id IN (
-        SELECT external_id FROM messages WHERE user_id = ? AND external_id IS NOT NULL
-      )
-    `
-      )
-      .run(userId);
-
-    const attachmentsDeleted = attachResult1.changes + attachResult2.changes;
-    logService.info(
-      `Deleted ${attachmentsDeleted} attachments (${attachResult1.changes} by message_id, ${attachResult2.changes} by external_id)`,
-      MacOSMessagesImportService.SERVICE_NAME
-    );
-
-    await yieldToEventLoop();
-
-    // Create progress bar for delete
-    const deleteProgressBar = createProgressBar("Deleting");
-    deleteProgressBar.start(messageCount, 0);
-
-    // Delete messages in batches to keep UI responsive
-    let totalDeleted = 0;
-    const deleteStmt = db.prepare(`
-      DELETE FROM messages
-      WHERE id IN (
-        SELECT id FROM messages
-        WHERE user_id = ? AND external_id IS NOT NULL
-        LIMIT ?
-      )
-    `);
-
-    while (totalDeleted < messageCount) {
-      // BACKLOG-2775: honour the cancel DURING the clear, not merely between
-      // phases. The founder's 162,961-message clear took ~35 seconds and his
-      // cancel was already in when it started; the flag was next read after the
-      // delete had finished. Stopping here is only safe because the deletion is
-      // uncommitted — the caller rolls it back.
-      if (this.abortController?.signal.aborted) {
-        deleteProgressBar.stop();
-        logService.warn(
-          `Clear phase cancelled at ${totalDeleted}/${messageCount} — rolling back`,
-          MacOSMessagesImportService.SERVICE_NAME
-        );
-        return false;
-      }
-
-      const result = deleteStmt.run(userId, DELETE_BATCH_SIZE);
-      totalDeleted += result.changes;
-
-      // Update progress bar
-      deleteProgressBar.update(totalDeleted);
-
-      // Report progress to UI
-      const percent = Math.round((totalDeleted / messageCount) * 100);
-      onProgress?.({
-        phase: "deleting",
-        current: totalDeleted,
-        total: messageCount,
-        percent,
-      });
-
-      // Yield to event loop
-      await yieldToEventLoop();
-
-      // If no rows were deleted, we're done
-      if (result.changes === 0) break;
-    }
-
-    // Stop progress bar
-    deleteProgressBar.stop();
-
-    logService.info(
-      `Cleared ${totalDeleted} messages`,
-      MacOSMessagesImportService.SERVICE_NAME
-    );
-
-    return true;
   }
 
   /**
