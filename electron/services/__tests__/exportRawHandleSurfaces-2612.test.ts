@@ -115,6 +115,8 @@ import transactionService from "../transactionService/transactionService";
 import enhancedExportService from "../enhancedExportService";
 import { exportUserData } from "../ccpaExportService";
 import { deleteContact } from "../db/contactDbService";
+// BACKLOG-2771: plans are built by the REAL resolver, never by hand.
+import { testExportPlan } from "./helpers/exportPlanFixture";
 
 const USER_ID = "user-2612-raw";
 const TX = "tx-2612-raw";
@@ -200,11 +202,15 @@ async function runEnhancedExport(format: "pdf" | "csv" | "json" | "txt_eml"): Pr
   const details = await transactionService.getTransactionDetails(TX);
   if (!details) throw new Error("fixture transaction not found");
   communicationsCount = details.communications?.length ?? 0;
-  return enhancedExportService.exportTransaction(details, details.communications ?? [], {
-    exportFormat: format,
-    contentType: "both",
-    summaryOnly: format === "pdf",
-  });
+  return enhancedExportService.exportTransaction(
+    details,
+    testExportPlan(details.communications ?? [], {
+      format,
+      contentType: "both",
+      summaryOnly: format === "pdf",
+    }),
+    { exportFormat: format, summaryOnly: format === "pdf" },
+  );
 }
 
 describe("BACKLOG-2612 — combined PDF (channels export-pdf / export-enhanced→pdf)", () => {

@@ -2,7 +2,7 @@
  * WindowApi Transactions sub-interface
  * Transaction CRUD, linking, export, and submission methods
  */
-import type { Transaction, Communication } from "../models";
+import type { Transaction, Communication, ExportFormat } from "../models";
 import type {
   AuditCoverageResult,
   ExportCompletenessResult,
@@ -22,6 +22,37 @@ import type { TransactionContactResult } from "../../services/db/transactionCont
  * distinguishing fact about these rows is that `removed_at` is non-null.
  */
 export type RemovedTransactionContact = TransactionContactResult;
+
+// ============================================
+// BACKLOG-2771: the ONE export vocabulary
+// ============================================
+
+/**
+ * What a transaction export includes.
+ *
+ * There used to be two spellings of this on the wire — `"both" | "emails" |
+ * "texts"` for folder export and `"both" | "email" | "text"` for the enhanced
+ * export — with the ExportModal translating between them at the call site. One
+ * type now serves both channels, so the compiler rejects the retired spelling.
+ * Untrusted runtime values are mapped by `normalizeContentType()` in
+ * `electron/services/exportPlan.ts`.
+ */
+export type ExportContentType = "both" | "emails" | "texts";
+
+/** Which communications' attachments an export writes to disk. */
+export type ExportAttachmentType = "all" | "email" | "text" | "none";
+
+/** How emails are grouped in the exported artifact. */
+export type ExportEmailMode = "thread" | "individual";
+
+/**
+ * The artifact an export produces.
+ *
+ * Built from the existing `ExportFormat` union in ../models (the single-file
+ * formats) rather than restating it — "folder" is the one the enhanced export
+ * service cannot produce.
+ */
+export type ExportPlanFormat = ExportFormat | "folder";
 
 // ============================================
 // BACKLOG-1866: Overview linked-content search result shapes
@@ -279,11 +310,12 @@ export interface WindowApiTransactions {
     transactionId: string,
     options?: {
       exportFormat?: string;
-      contentType?: "text" | "email" | "both";
+      contentType?: ExportContentType;
       startDate?: string;
       endDate?: string;
       summaryOnly?: boolean;
-      attachmentType?: "all" | "email" | "text" | "none";
+      attachmentType?: ExportAttachmentType;
+      emailExportMode?: ExportEmailMode;
     },
   ) => Promise<{ success: boolean; path?: string; error?: string }>;
   assignContact: (
@@ -571,12 +603,9 @@ export interface WindowApiTransactions {
   }>;
   /** Export transaction to organized folder structure */
   exportFolder: (transactionId: string, options?: {
-    includeEmails?: boolean;
-    includeTexts?: boolean;
-    includeAttachments?: boolean;
-    contentType?: "both" | "emails" | "texts";
-    attachmentType?: "all" | "email" | "text" | "none";
-    emailExportMode?: "thread" | "individual";
+    contentType?: ExportContentType;
+    attachmentType?: ExportAttachmentType;
+    emailExportMode?: ExportEmailMode;
   }) => Promise<{
     success: boolean;
     path?: string;
