@@ -39,6 +39,21 @@ export interface MacOSImportServiceResult {
   error?: string;
   totalAvailable?: number;
   wasCapped?: boolean;
+  /**
+   * BACKLOG-2748: the user cancelled the run; counts are partial, not failed.
+   * Branch on this rather than on the `error` text.
+   */
+  cancelled?: boolean;
+  /**
+   * BACKLOG-2775: the cancelled run was a FORCE re-import and it rolled back —
+   * counts are 0 and the store is untouched.
+   *
+   * This interface is a hand-maintained copy of the IPC result shape, so a flag
+   * absent here is invisible to every caller that goes through this service
+   * even though the main process sent it. Both cancel discriminators are
+   * carried so a future caller cannot mistake a cancelled run for a clean one.
+   */
+  rolledBack?: boolean;
 }
 
 /**
