@@ -111,6 +111,13 @@ export interface ReviewItemDisplay {
 export interface ReviewItem {
   /** `${origin}:${rowId}` — stable and unambiguous across every surface. */
   id: string;
+  /**
+   * The underlying row's primary key, already decoded. Carried so the
+   * approve/reject paths never re-decode `id` (which forced a non-null
+   * assertion at four sites, and with it the chance of asserting on a row that
+   * had been deleted between the read and the write).
+   */
+  rowId: string;
   origin: ReviewOrigin;
   kind: ReviewKind;
   transaction_id: string;
@@ -196,6 +203,7 @@ export function getReviewState(transactionId: string): ReviewState {
     [transactionId],
   ).map<ReviewItem>((r) => ({
     id: encodeId("pending", r.id),
+    rowId: r.id,
     origin: "pending",
     kind: r.email_id ? "email" : "text",
     transaction_id: r.transaction_id,
@@ -223,6 +231,7 @@ export function getReviewState(transactionId: string): ReviewState {
     [transactionId],
   ).map<ReviewItem>((r) => ({
     id: encodeId("legacy", r.id),
+    rowId: r.id,
     origin: "legacy",
     kind: "email",
     transaction_id: r.transaction_id,
@@ -319,11 +328,12 @@ function getIdentities(
   transactionId: string,
   contactIds?: string[],
 ): { emails: string[]; phones: string[] } {
-  const scoped = !!contactIds && contactIds.length > 0;
-  const idFilter = scoped
-    ? `IN (${contactIds!.map(() => "?").join(", ")})`
+  // Narrowed into a local so the scoped branch needs no non-null assertion.
+  const scopedIds = contactIds && contactIds.length > 0 ? contactIds : null;
+  const idFilter = scopedIds
+    ? `IN (${scopedIds.map(() => "?").join(", ")})`
     : `IN (SELECT contact_id FROM transaction_contacts WHERE transaction_id = ?)`;
-  const params: string[] = scoped ? contactIds! : [transactionId];
+  const params: string[] = scopedIds ?? [transactionId];
 
   const emails = dbAll<{ email: string }>(
     `SELECT DISTINCT LOWER(TRIM(email)) AS email FROM contact_emails
@@ -546,6 +556,7 @@ function loadItem(id: string): ReviewItem | undefined {
     if (!r) return undefined;
     return {
       id,
+      rowId: decoded.rowId,
       origin: "pending",
       kind: r.email_id ? "email" : "text",
       transaction_id: r.transaction_id,
@@ -570,6 +581,7 @@ function loadItem(id: string): ReviewItem | undefined {
   if (!r) return undefined;
   return {
     id,
+    rowId: decoded.rowId,
     origin: "legacy",
     kind: "email",
     transaction_id: r.transaction_id,
@@ -618,9 +630,7 @@ export async function approveReviewItems(itemIds: string[]): Promise<{ approved:
         0.95,
       );
     }
-    dbRun("DELETE FROM pending_review_communications WHERE id = ?", [
-      decodeId(itemId)!.rowId,
-    ]);
+    dbRun("DELETE FROM pending_review_communications WHERE id = ?", [item.rowId]);
     approved++;
   }
   return { approved };
@@ -647,17 +657,15 @@ export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: 
       transaction_id: item.transaction_id,
       email_id: item.email_id ?? undefined,
       thread_id: item.thread_id ?? undefined,
-      original_communication_id: item.origin === "legacy" ? decodeId(itemId)!.rowId : undefined,
+      original_communication_id: item.origin === "legacy" ? item.rowId : undefined,
       reason: "rejected_in_review",
       match_reason: item.origin === "legacy" ? "address_missing" : null,
     });
 
     if (item.origin === "legacy") {
-      dbRun("DELETE FROM communications WHERE id = ?", [decodeId(itemId)!.rowId]);
+      dbRun("DELETE FROM communications WHERE id = ?", [item.rowId]);
     } else {
-      dbRun("DELETE FROM pending_review_communications WHERE id = ?", [
-        decodeId(itemId)!.rowId,
-      ]);
+      dbRun("DELETE FROM pending_review_communications WHERE id = ?", [item.rowId]);
     }
     rejected++;
   }

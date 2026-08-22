@@ -37,6 +37,8 @@ export interface ReviewItemDisplayDto {
 export interface ReviewItemDto {
   /** `${origin}:${rowId}` — stable and unambiguous across every surface. */
   id: string;
+  /** The underlying row's primary key, already decoded. */
+  rowId: string;
   origin: ReviewOrigin;
   kind: ReviewKind;
   transaction_id: string;
