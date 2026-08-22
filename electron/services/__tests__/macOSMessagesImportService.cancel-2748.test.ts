@@ -648,11 +648,17 @@ describe("BACKLOG-2775 — a cancelled FORCE re-import changes nothing", () => {
     expect(survivingIds).toEqual([]);
   });
 
-  it("never starts the clear at all when the cancel arrives first", async () => {
+  it("does no work at all when the cancel arrives first", async () => {
     // Scope 3 of the item, and the cheapest half of the fix: the founder's
     // cancel was already in when the 35-second delete began, and the flag was
     // next read after it had finished. A cancel held from before the run
-    // (BACKLOG-2776) is now checked BEFORE the destructive step.
+    // (BACKLOG-2776) is checked before anything happens.
+    //
+    // BACKLOG-2790: it is now the check before STAGING rather than before
+    // deleting, and the assertion below is correspondingly weaker on its own —
+    // no force run reports a `deleting` phase any more, so its absence no longer
+    // distinguishes this exit from any other. What distinguishes it is that no
+    // staging table is created: this run allocates nothing, not even scratch.
     const before = storedRowIdentities();
     const phases: string[] = [];
 
@@ -664,9 +670,14 @@ describe("BACKLOG-2775 — a cancelled FORCE re-import changes nothing", () => {
     expect(result.cancelled).toBe(true);
     expect(result.rolledBack).toBe(true);
     expect(storedRowIdentities()).toEqual(before);
-    // Not merely "the rows came back" — the delete never ran. No progress was
-    // ever reported for the deleting phase.
-    expect(phases).not.toContain("deleting");
+    expect(phases).toEqual([]);
+    expect(
+      mockDb
+        .prepare(
+          `SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name LIKE 'staging_msgimport_%'`
+        )
+        .get() as { count: number }
+    ).toEqual({ count: 0 });
   });
 
   it("BACKLOG-2790: the store never shrinks at ANY point during the run", async () => {
@@ -725,17 +736,20 @@ describe("BACKLOG-2775 — a cancelled FORCE re-import changes nothing", () => {
     expect(phasesSeen.has("deleting")).toBe(false);
   });
 
-  it("restores the attachment rows the clear deleted, too", async () => {
-    // The clear deletes attachment ROWS as well as messages, and those are
-    // deleted in one statement before the message loop — so they are gone from
-    // the transaction's view the instant the clear starts. They must come back
-    // with everything else.
+  it("leaves the attachment ROWS alone too, not just the messages", async () => {
+    // BACKLOG-2790: this used to read "restores the attachment rows the clear
+    // deleted". The clear deleted attachment rows in one statement before the
+    // message loop, so they vanished from the transaction's view the instant it
+    // started and had to come back with everything else. Now they are never
+    // deleted: the rebuild's attachment rows go to a staging table, and the live
+    // ones are replaced only by the swap. Same assertion, one fewer thing that
+    // has to go right.
     //
-    // Attachment FILES on disk are a separate matter and deliberately NOT
-    // restored: the clear never deletes files (it is DB-rows-only), and the
-    // re-import's copies are left behind on rollback as orphans for the
-    // retention sweep (BACKLOG-2768) to reclaim. Nothing irreversible happens
-    // on disk before the commit, which is what makes that acceptable.
+    // Attachment FILES on disk are a separate matter and still deliberately not
+    // reverted: the force path never deletes files, and the copies a cancelled
+    // rebuild made are left behind as orphans for the retention sweep
+    // (BACKLOG-2768) to reclaim. Nothing irreversible happens on disk before the
+    // swap, which is what makes that acceptable.
     messageCount = 12;
     attachmentCount = 12;
     await writeAttachmentFixtures(12);
