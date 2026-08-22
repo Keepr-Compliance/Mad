@@ -102,6 +102,8 @@ import path from "path";
 import type { Communication, Transaction } from "../../../types/models";
 import type { TransactionWithDetails } from "../../transactionService/types";
 import folderExportService from "../folderExportService";
+// BACKLOG-2771: plans are built by the REAL resolver, never by hand.
+import { testExportPlan } from "../../__tests__/helpers/exportPlanFixture";
 
 function text(over: Partial<Communication>): Communication {
   return {
@@ -172,13 +174,13 @@ function exportedTextFileNames(): string[] {
 
 describe("exported text-thread file names (BACKLOG-2463)", () => {
   beforeAll(async () => {
-    await folderExportService.exportTransactionToFolder(transaction, texts, {
+    await folderExportService.exportTransactionToFolder(transaction,
+        testExportPlan(texts, { contentType: "texts", attachmentType: "none" }),
+        {
       transactionId: transaction.id,
       outputPath: path.join("/mock", "output"),
-      includeEmails: false,
-      includeTexts: true,
-      includeAttachments: false,
-    });
+        }
+      );
   });
 
   it("names every thread file after the party — exact set", () => {

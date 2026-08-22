@@ -36,7 +36,16 @@ import {
   validateFilePath,
   sanitizeObject,
 } from "../utils/validation";
-import { isEmailMessage, isTextMessage } from "../utils/channelHelpers";
+// BACKLOG-2771: ONE resolver decides what every format includes. The date and
+// content filters that used to be written out inline in this file (once here,
+// once again inside enhancedExportService) now live in exportPlan.ts.
+import {
+  resolveExportPlan,
+  normalizeAttachmentType,
+  normalizeContentType,
+  normalizeEmailMode,
+  type ExportPlanRequest,
+} from "../services/exportPlan";
 
 interface ExportOptions {
   exportFormat?: string;
@@ -158,6 +167,22 @@ export function registerTransactionExportHandlers(
         communications: details.communications || [],
       });
 
+      // BACKLOG-2771: this channel goes through the SAME resolver as the other
+      // two. It has no renderer caller (`window.api.transactions.exportPDF` is
+      // referenced nowhere in src/) and takes no options, so it requests no
+      // audit window and no attachments — the resolver returns the full record,
+      // which is exactly what this channel produced when it had no filtering of
+      // its own. Its include set is now stated rather than merely absent.
+      const pdfPlan = resolveExportPlan(
+        {
+          format: "pdf",
+          contentType: "both",
+          attachmentType: "none",
+          emailMode: "thread",
+        },
+        pdfGate.communications,
+      );
+
       // Use provided output path or generate default one
       const pdfPath =
         validatedPath || folderExportService.getDefaultExportPath(details).replace(/\/$/, "") + ".pdf";
@@ -165,7 +190,7 @@ export function registerTransactionExportHandlers(
       // Generate combined PDF using folder export service
       const generatedPath = await folderExportService.exportTransactionToCombinedPDF(
         details,
-        pdfGate.communications,
+        pdfPlan.communications,
         pdfPath,
       );
 
@@ -267,11 +292,48 @@ export function registerTransactionExportHandlers(
         communications: details.communications || [],
       });
 
+      // BACKLOG-2771: the SAME resolver the folder handler uses. The audit
+      // window prefers the explicit option dates and falls back to the
+      // transaction's — that per-entry-point difference lives in the REQUEST,
+      // not in a second copy of the filter.
+      const enhancedFormat = sanitizedOptions.exportFormat;
+      const enhancedPlan = resolveExportPlan(
+        {
+          format:
+            enhancedFormat === "csv" ||
+            enhancedFormat === "excel" ||
+            enhancedFormat === "json" ||
+            enhancedFormat === "txt_eml"
+              ? enhancedFormat
+              : "pdf",
+          contentType: normalizeContentType(sanitizedOptions.contentType),
+          attachmentType: normalizeAttachmentType(sanitizedOptions.attachmentType, "none"),
+          emailMode: normalizeEmailMode(sanitizedOptions.emailExportMode),
+          startDate:
+            (sanitizedOptions.startDate as string | undefined) ||
+            (details.started_at as string | undefined),
+          endDate:
+            (sanitizedOptions.endDate as string | undefined) ||
+            (details.closed_at as string | undefined),
+          summaryOnly: sanitizedOptions.summaryOnly === true,
+        },
+        enhancedGate.communications,
+      );
+
       // Export with options (full record — no sample reduction under Option A)
       const exportPath = await enhancedExportService.exportTransaction(
         details,
-        enhancedGate.communications,
-        sanitizedOptions as any,
+        enhancedPlan,
+        {
+          exportFormat: enhancedFormat as
+            | "pdf"
+            | "excel"
+            | "csv"
+            | "json"
+            | "txt_eml"
+            | undefined,
+          summaryOnly: sanitizedOptions.summaryOnly === true,
+        },
       );
 
       // Update export tracking in database
@@ -340,14 +402,7 @@ export function registerTransactionExportHandlers(
           "transactionId",
         );
       }
-      const sanitizedOptions = sanitizeObject(options || {}) as {
-        includeEmails?: boolean;
-        includeTexts?: boolean;
-        includeAttachments?: boolean;
-        emailExportMode?: "thread" | "individual";
-        contentType?: "both" | "emails" | "texts";
-        attachmentType?: "all" | "email" | "text" | "none";
-      };
+      const sanitizedOptions = sanitizeObject(options || {}) as Record<string, unknown>;
 
       // Get transaction details with communications
       let details = await transactionService.getTransactionDetails(
@@ -380,55 +435,40 @@ export function registerTransactionExportHandlers(
       });
       details = (await transactionService.getTransactionDetails(validatedTransactionId)) ?? details;
 
-      // Filter communications by date range if transaction has dates set
-      let communications = details.communications || [];
-      const startDate = details.started_at;
-      const endDate = details.closed_at;
+      // BACKLOG-2771: ONE resolver decides the include set. The audit window is
+      // the transaction's own dates (the ExportModal saves them immediately
+      // before invoking this channel); the folder wire carries no explicit
+      // window.
+      const folderContentType = normalizeContentType(sanitizedOptions.contentType);
+      const folderRequest: ExportPlanRequest = {
+        format: "folder",
+        contentType: folderContentType,
+        attachmentType: normalizeAttachmentType(sanitizedOptions.attachmentType, "all"),
+        emailMode: normalizeEmailMode(sanitizedOptions.emailExportMode),
+        startDate: details.started_at as string | null | undefined,
+        endDate: details.closed_at as string | null | undefined,
+      };
+      let folderPlan = resolveExportPlan(folderRequest, details.communications || []);
+      const communications = folderPlan.communications;
 
-      if (startDate || endDate) {
-        const start = startDate ? new Date(startDate as string) : null;
-        const end = endDate ? new Date(endDate as string) : null;
-        // Add a day to end date to include messages on the closing day
-        if (end) end.setDate(end.getDate() + 1);
+      logService.info("Resolved folder export include set", "Transactions", {
+        original: (details.communications || []).length,
+        included: communications.length,
+        contentType: folderContentType,
+        startDate: details.started_at,
+        endDate: details.closed_at,
+        writesAttachmentsToDisk: folderPlan.writesAttachmentsToDisk,
+      });
 
-        communications = communications.filter((comm: any) => {
-          const commDate = new Date(comm.sent_at || comm.received_at);
-          if (start && commDate < start) return false;
-          if (end && commDate > end) return false;
-          return true;
-        });
-
-        logService.info("Filtered communications by date range", "Transactions", {
-          original: (details.communications || []).length,
-          filtered: communications.length,
-          startDate: startDate,
-          endDate: endDate,
-        });
-      }
-
-      // Filter communications by content type (emails only / texts only)
-      const contentTypeFilter = sanitizedOptions.contentType || "both";
-      if (contentTypeFilter !== "both") {
-        const beforeFilter = communications.length;
-        if (contentTypeFilter === "emails") {
-          communications = communications.filter((comm: any) => isEmailMessage(comm));
-        } else if (contentTypeFilter === "texts") {
-          communications = communications.filter((comm: any) => isTextMessage(comm));
-        }
-        logService.info("Filtered communications by content type", "Transactions", {
-          contentType: contentTypeFilter,
-          before: beforeFilter,
-          after: communications.length,
-        });
-
-        // Return early with a helpful message if no communications match the filter
-        if (communications.length === 0) {
-          const typeLabel = contentTypeFilter === "emails" ? "email" : "text";
-          return {
-            success: false,
-            error: `No ${typeLabel} communications found for this transaction in the selected date range.`,
-          };
-        }
+      // Return early with a helpful message if a narrowed content selection
+      // matched nothing. Unchanged: fires only for a narrowed selection, and
+      // only after the date window has been applied.
+      if (folderContentType !== "both" && communications.length === 0) {
+        const typeLabel = folderContentType === "emails" ? "email" : "text";
+        return {
+          success: false,
+          error: `No ${typeLabel} communications found for this transaction in the selected date range.`,
+        };
       }
 
       // BACKLOG-2006a / 2075 — AUTHORITATIVE PAYWALL GATE (fail-closed, Option A).
@@ -439,19 +479,18 @@ export function registerTransactionExportHandlers(
         userId: details.user_id,
         communications,
       });
-      communications = folderGate.communications as typeof communications;
+      // Re-resolve over whatever the gate permitted, so `attachmentComms` can
+      // never reference a communication the gate removed. Filtering is
+      // idempotent — over an already-resolved set this is a no-op today (Option
+      // A returns the input unchanged) and stays correct if that ever changes.
+      folderPlan = resolveExportPlan(folderRequest, folderGate.communications);
 
       // Export to folder structure
       const exportPath = await folderExportService.exportTransactionToFolder(
         details,
-        communications,
+        folderPlan,
         {
           transactionId: validatedTransactionId,
-          includeEmails: sanitizedOptions.includeEmails ?? true,
-          includeTexts: sanitizedOptions.includeTexts ?? true,
-          includeAttachments: sanitizedOptions.includeAttachments ?? true,
-          attachmentType: sanitizedOptions.attachmentType ?? "all",
-          emailExportMode: sanitizedOptions.emailExportMode,
           onProgress: (progress: FolderExportProgress) => {
             // Send progress updates to renderer
             if (mainWindow && !mainWindow.isDestroyed()) {
