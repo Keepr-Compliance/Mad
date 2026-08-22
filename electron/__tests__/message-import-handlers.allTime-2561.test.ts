@@ -134,6 +134,7 @@ jest.mock("../services/autoLinkService", () => ({
 
 // Imported after the mocks so the handler module binds to them.
 import { registerMessageImportHandlers } from "../handlers/messageImportHandlers";
+import macOSMessagesImportService from "../services/macOSMessagesImportService";
 import {
   computeImportCutoffNano,
   DEFAULT_LOOKBACK_MONTHS,
@@ -324,26 +325,33 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
     mockGetPreferences.mockReset();
   });
 
-  const STORED: Array<[string, Record<string, unknown>]> = [
-    ["key absent", { messageImport: { filters: { maxMessages: 50000 } } }],
-    ["explicit null (All time)", { messageImport: { filters: { lookbackMonths: null } } }],
-    ["explicit number", { messageImport: { filters: { lookbackMonths: 6 } } }],
+  /**
+   * The stored preference, and how many months back it reaches on its own.
+   * `null` = unbounded ("All time").
+   */
+  const STORED: Array<[string, Record<string, unknown>, number | null]> = [
+    ["key absent", { messageImport: { filters: { maxMessages: 50000 } } }, DEFAULT_LOOKBACK_MONTHS],
+    ["explicit null (All time)", { messageImport: { filters: { lookbackMonths: null } } }, null],
+    ["explicit number", { messageImport: { filters: { lookbackMonths: 6 } } }, 6],
   ];
 
-  const AUDIT: Array<[string, typeof mockTransactionRows]> = [
-    ["no transactions", []],
+  /** The deal rows, and how many months back the audit floor reaches. */
+  const AUDIT: Array<[string, typeof mockTransactionRows, number | null]> = [
+    ["no transactions", [], null],
     [
       "an old transaction pinning the audit floor",
       [{ started_at: monthsAgoISO(40), created_at: null, closed_at: null }],
+      40,
     ],
     [
       "a recent transaction",
       [{ started_at: monthsAgoISO(1), created_at: null, closed_at: null }],
+      1,
     ],
   ];
 
-  for (const [prefLabel, prefs] of STORED) {
-    for (const [auditLabel, rows] of AUDIT) {
+  for (const [prefLabel, prefs, prefMonths] of STORED) {
+    for (const [auditLabel, rows, auditMonths] of AUDIT) {
       it(`${prefLabel} × ${auditLabel}`, async () => {
         mockGetPreferences.mockResolvedValue(prefs);
         mockTransactionRows = rows;
@@ -366,6 +374,29 @@ describe("BACKLOG-2561 · the label handler and the import handler agree", () =>
         } else {
           expect(label.effectiveCutoffISO.slice(0, 19)).toBe(importBoundISO.slice(0, 19));
         }
+
+        /*
+         * BACKLOG-2749: `source` too, and this half is NEW.
+         *
+         * The bound above no longer proves what it used to. The label handler
+         * used to compute its window with `computeEffectiveImportWindow` — a
+         * second assembly that happened to agree — and this comparison was
+         * what watched for the drift. The handler now reads `plan.fetchStartISO`
+         * directly, so both sides of that comparison are one producer and it
+         * cannot drift by construction. Good, but it also means the assertion
+         * has stopped being able to fail.
+         *
+         * `source` is the part that is still a DERIVATION: it maps
+         * `plan.overrides` onto the two-valued label the panel branches on, and
+         * a wrong mapping is invisible in the cutoff. Expected from the fixture
+         * parameters, not from the code: the audit period governs exactly when
+         * the preference is bounded AND a deal reaches further back than it.
+         */
+        const auditShouldGovern =
+          prefMonths !== null && auditMonths !== null && auditMonths > prefMonths;
+        expect(label.source).toBe(
+          auditShouldGovern ? "audit-period" : "lookback-pref"
+        );
       });
     }
   }
@@ -420,5 +451,233 @@ describe("BACKLOG-2561 · the production date filter has not changed shape", () 
     expect(serviceSource).not.toContain("AND date > ${");
     // Both consumers take their clause from the shared builder.
     expect(serviceSource.match(/buildMessageWindowSql\(plan\)/g)).toHaveLength(2);
+  });
+});
+
+/**
+ * BACKLOG-2749 — the estimate carries the PLAN, not just its counts.
+ *
+ * The one pre-import dialog states the cap and explains why the window reaches
+ * further back than the user's own setting. Neither is recoverable from the
+ * counts: under Cap' the admitted set is `protected ∪ (newest `cap`
+ * unprotected)`, so `filteredCount` is legitimately LARGER than the cap and no
+ * pair of counts can separate "the cap is 50,000 and 12,824 messages are
+ * protected" from "the cap is 62,824". A dialog that guesses gets the founder's
+ * live case wrong, which is what it did.
+ *
+ * These assert the handler's own merge — that the plan it resolved is the plan
+ * it sends — against the same mocked count result, so a change to the counts
+ * cannot make them pass or fail.
+ */
+describe("BACKLOG-2749 · the estimate response carries the resolved plan", () => {
+  const counts = {
+    success: true,
+    count: 708400,
+    filteredCount: 62824,
+    windowCount: 708400,
+  };
+
+  beforeEach(() => {
+    capturedPlan = undefined;
+    mockTransactionRows = [];
+    mockGetPreferences.mockReset();
+    (
+      macOSMessagesImportService.getAvailableMessageCount as jest.Mock
+    ).mockResolvedValue(counts);
+  });
+
+  it("sends effectiveCap off the plan, for a preference the panel cannot resolve itself", async () => {
+    // The `maxMessages` key is ABSENT — the shape written by changing only the
+    // lookback. `resolveMaxMessages` reads that as "no preference" and applies
+    // the 50,000 default (BACKLOG-2733); the raw stored object says nothing at
+    // all. This is the case where the plan is the only source of the truth.
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: 6 } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.plan.effectiveCap).toBe(50000);
+    expect(result.plan.fetchStartISO).not.toBeNull();
+    // The counts pass through untouched — the merge adds, it does not rewrite.
+    expect(result.filteredCount).toBe(62824);
+    expect(result.windowCount).toBe(708400);
+  });
+
+  it("sends overrides[] when a deal stretches the window past the setting", async () => {
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: 3, maxMessages: 50000 } },
+    });
+    mockTransactionRows = [
+      { started_at: monthsAgoISO(40), created_at: null, closed_at: null },
+    ];
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.plan.overrides).toHaveLength(1);
+    expect(result.plan.overrides[0].kind).toBe("window-extended-by-deals");
+  });
+
+  it("ANTI-VACUITY: overrides[] is EMPTY when the setting already reaches back further", async () => {
+    // Without this, the assertion above would be equally green for a handler
+    // that emitted the override unconditionally — and the dialog would tell
+    // every user a deal was widening their window.
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: 60, maxMessages: 50000 } },
+    });
+    mockTransactionRows = [
+      { started_at: monthsAgoISO(1), created_at: null, closed_at: null },
+    ];
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.plan.overrides).toEqual([]);
+  });
+
+  it("an explicit Unlimited reaches the dialog as null, not as the default", async () => {
+    // BACKLOG-2733's distinction, carried all the way to the surface that
+    // renders it: `null` means the user chose Unlimited and there is no cap to
+    // disclose. Collapsed to 50,000 it would open a dialog about a limit the
+    // user had switched off.
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: 6, maxMessages: null } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.plan.effectiveCap).toBeNull();
+  });
+});
+
+/**
+ * BACKLOG-2749 — the dialog's recommendation is computed WITH the estimate.
+ *
+ * The founder: "the Change the time range button takes a sec to load". The
+ * per-candidate round trips were the right mechanism in the wrong place, so
+ * they moved ahead of the click. These pin that it is still an ASK — each
+ * candidate range resolved through the real resolver and counted — and that it
+ * only runs when the cap is actually exceeded.
+ */
+describe("BACKLOG-2749 · the estimate precomputes the recommended range", () => {
+  /** Counts keyed by the candidate's resolved lookback, so a proportional
+   *  guess cannot land on the right answer by accident. */
+  const COUNTS: Record<string, number> = {
+    "null": 708400,
+    "24": 300000,
+    "18": 180000,
+    "12": 90000,
+    "9": 41000,
+    "6": 20000,
+    "3": 9000,
+  };
+
+  beforeEach(() => {
+    capturedPlan = undefined;
+    mockTransactionRows = [];
+    mockGetPreferences.mockReset();
+    // Cleared, not just re-implemented: two tests below COUNT the calls, and
+    // this mock accumulates across the whole file otherwise.
+    (macOSMessagesImportService.getAvailableMessageCount as jest.Mock).mockClear();
+    (
+      macOSMessagesImportService.getAvailableMessageCount as jest.Mock
+    ).mockImplementation(async (plan: ImportPlan) => {
+      // Recover which candidate this plan is for from its own cutoff: the
+      // handler resolves a REAL plan per candidate, so the fixture answers the
+      // plan rather than the request.
+      const months =
+        plan.fetchStartISO === null
+          ? "null"
+          : String(
+              Math.round(
+                (Date.now() - new Date(plan.fetchStartISO).getTime()) /
+                  (30.44 * 24 * 60 * 60 * 1000)
+              )
+            );
+      const count = COUNTS[months] ?? COUNTS["null"];
+      return { success: true, count, windowCount: count, filteredCount: count };
+    });
+  });
+
+  it("CONTROL: recommends the LARGEST narrower range that fits the cap", async () => {
+    // Cap 50,000. 24/18/12 months are all over it; 9 months is the first that
+    // fits, and 6 and 3 fit too but are smaller. His own data lands on 9.
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: null, maxMessages: 50000 } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.recommendedRange).toEqual({
+      lookbackMonths: 9,
+      windowCount: 41000,
+    });
+  });
+
+  it("ANTI-VACUITY: no recommendation when the selection already fits", async () => {
+    // The cap is not exceeded, so there is nothing to recommend AND nothing to
+    // compute. Without this, a handler that recommended unconditionally — and
+    // paid six extra counts on every estimate — would pass the test above.
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: null, maxMessages: 900000 } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.recommendedRange).toBeNull();
+    // One count for the estimate itself, and not one more.
+    expect(
+      (macOSMessagesImportService.getAvailableMessageCount as jest.Mock).mock
+        .calls.length
+    ).toBe(1);
+  });
+
+  it("recommends nothing when no narrower range fits", async () => {
+    // Everything is over the cap. `null` is the answer, and it is what makes
+    // the dialog hide the button rather than spin.
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: null, maxMessages: 100 } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.recommendedRange).toBeNull();
+  });
+
+  it("an explicit Unlimited recommends nothing and costs nothing", async () => {
+    mockGetPreferences.mockResolvedValue({
+      messageImport: { filters: { lookbackMonths: null, maxMessages: null } },
+    });
+
+    const result = await handlers.get("messages:get-import-count")(
+      mockEvent,
+      TEST_USER_ID
+    );
+
+    expect(result.recommendedRange).toBeNull();
+    expect(
+      (macOSMessagesImportService.getAvailableMessageCount as jest.Mock).mock
+        .calls.length
+    ).toBe(1);
   });
 });
