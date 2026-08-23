@@ -381,7 +381,10 @@ describe("transactionRoleUtils", () => {
 
   describe("formatRoleLabel", () => {
     it("should return display name for known roles", () => {
-      expect(formatRoleLabel(SPECIFIC_ROLES.SELLER_AGENT)).toBe("Seller Agent");
+      // BACKLOG-2804: the seller's agent is named by the industry term.
+      // The stored enum is still `seller_agent`; only the label moved.
+      expect(formatRoleLabel(SPECIFIC_ROLES.SELLER_AGENT)).toBe("Listing Agent");
+      expect(formatRoleLabel(SPECIFIC_ROLES.LISTING_AGENT)).toBe("Listing Agent");
       expect(formatRoleLabel(SPECIFIC_ROLES.BUYER_AGENT)).toBe("Buyer Agent");
       expect(formatRoleLabel(SPECIFIC_ROLES.INSPECTOR)).toBe("Inspector");
       expect(formatRoleLabel(SPECIFIC_ROLES.APPRAISER)).toBe("Appraiser");
