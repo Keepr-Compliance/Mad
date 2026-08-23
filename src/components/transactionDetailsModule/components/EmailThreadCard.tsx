@@ -212,14 +212,16 @@ export function EmailThreadCard({
               {formatDateRange(thread.startDate, thread.endDate)}
             </span>
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                if (isMultipleEmails) {
-                  setShowModal(true);
-                } else if (onViewEmail && firstEmail) {
-                  // Single email - open directly in original viewer
-                  onViewEmail(firstEmail);
-                }
+                // BACKLOG-2826, founder 2026-08-23: "a lone email should open in
+                // conversation view." EVERY thread opens EmailThreadViewModal,
+                // whatever its length — a lone email is a conversation of one.
+                // The plain reader (EmailViewModal) is still reachable from
+                // inside it: expanding the bubble offers "Open Full Email →",
+                // which calls onViewEmail.
+                setShowModal(true);
               }}
               className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
               data-testid="view-thread-button"

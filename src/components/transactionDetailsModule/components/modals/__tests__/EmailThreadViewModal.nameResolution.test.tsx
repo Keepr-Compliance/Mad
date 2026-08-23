@@ -3,6 +3,10 @@
  * Verifies chat-bubble sender names resolve from Contacts when the email header
  * carries no name, fall back to the bare address when no contact matches, and
  * that a genuine header name wins over the contact name.
+ *
+ * BACKLOG-2826: these threads are all single-email, and a conversation of one
+ * now starts EXPANDED, so each bubble also renders a "From:" line. That is why
+ * the bare-address case scopes its query to the sender-name element.
  */
 import React from "react";
 import { render, screen } from "@testing-library/react";
@@ -76,7 +80,13 @@ describe("EmailThreadViewModal contact name resolution (BACKLOG-1762)", () => {
       />
     );
 
-    expect(screen.getByText("nobody@nowhere.com")).toBeInTheDocument();
+    // BACKLOG-2826: a conversation of ONE now starts expanded, so the bare
+    // address renders twice — as the bubble's sender name AND in the expanded
+    // "From:" line. The claim under test is the SENDER-name fallback, so assert
+    // that occurrence specifically rather than loosening to "appears somewhere".
+    const matches = screen.getAllByText("nobody@nowhere.com");
+    const senderName = matches.find((el) => el.className.includes("font-semibold"));
+    expect(senderName).toBeInTheDocument();
   });
 
   it("keeps a genuine header name over the contact name (header truth first)", () => {
