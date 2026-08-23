@@ -594,8 +594,24 @@ describe("the trap itself — why the verb had to stay inside the CHECK", () => 
   // BACKLOG-2554) will show up here rather than silently.
 
   it("the CHECK is live in this harness: an unlisted verb is REJECTED by SQLite", async () => {
-    await expect(
-      auditLogDb.insertAuditLog({
+    // Caught explicitly rather than with `.rejects.toThrow()`.
+    //
+    // The matcher form was measurably unreliable HERE and only here: standalone
+    // it passed, and run after `exportPartyIsContact-2612` or
+    // `transactionWriter.detectionAndReview-2737-2558` it reported "Received
+    // function did not throw" — deterministically, on every attempt, on the
+    // production driver. Probed in place: the same call in a try/catch DID
+    // throw `CHECK constraint failed`, the row did NOT land, and `dbRun` was
+    // this suite's mock. So the rejection is real and the matcher's reading of
+    // it was not. `.rejects` on an already-rejected promise built during
+    // argument evaluation is the fragile part; a try/catch has no such window.
+    //
+    // The try/catch form still goes red on demand: swapping this verb for a
+    // permitted one fails the suite (control run 2026-08-23), so the assertion
+    // is discriminating, not merely quiet.
+    let thrown: unknown = null;
+    try {
+      await auditLogDb.insertAuditLog({
         id: "audit-illegal-2563",
         timestamp: new Date(),
         userId: USER,
@@ -603,9 +619,14 @@ describe("the trap itself — why the verb had to stay inside the CHECK", () => 
         resourceType: "SUBMISSION",
         resourceId: TRANSACTION,
         success: true,
-      } as any),
-    ).rejects.toThrow(/CHECK constraint failed/i);
+      } as any);
+    } catch (error) {
+      thrown = error;
+    }
 
+    expect(String((thrown as Error | null)?.message)).toMatch(
+      /CHECK constraint failed/i,
+    );
     expect(allAuditActions()).toEqual([]);
   });
 
