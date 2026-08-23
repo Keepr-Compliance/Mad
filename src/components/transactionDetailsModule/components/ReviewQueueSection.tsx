@@ -64,6 +64,13 @@ export function reviewItemToEmailThread(item: ReviewItemDto): EmailThread {
     sender: d.sender ?? "",
     recipients: d.recipients ?? "",
     cc: d.cc ?? "",
+    // BOTH, and body_text is the load-bearing one: EmailThreadCard's third row
+    // (the body preview) reads `body_text`, not `body_plain`. The projection set
+    // only `body_plain` — the name of the underlying `emails` COLUMN — so
+    // `bodyPreview` computed to null and the card silently rendered two rows
+    // instead of three. The row was never missing from the card; it was never
+    // being given anything to show.
+    body_text: d.snippet,
     body_plain: d.snippet,
     sent_at: d.occurredAt ?? undefined,
     has_attachments: d.hasAttachments,
@@ -90,7 +97,7 @@ export function reviewItemToEmailThread(item: ReviewItemDto): EmailThread {
   };
 }
 
-function ReviewCards({
+export function ReviewCards({
   items,
   kind,
   busyId,
@@ -134,36 +141,38 @@ function ReviewCards({
             />
           );
         }
-        const phone = item.display.threadParticipants[0] ?? item.display.title;
+        // Resolved EXACTLY as the Texts tab resolves its own rows
+        // (TransactionMessagesTab: `contactNames[phoneNumber] || contactNames[normalized]`).
+        // The first cut looked up a single raw key, so a handle stored under its
+        // normalized 10-digit form never matched and every sender rendered as a
+        // bare number — the defect the founder saw as "# 13609181693".
+        const phoneNumber = item.display.threadParticipants[0] ?? item.display.title;
+        const normalized = phoneNumber.replace(/\D/g, "").slice(-10);
+        const contactName = contactNames?.[phoneNumber] || contactNames?.[normalized];
         return (
+          // The SAME card the rest of the tab uses, with the confirm affordance
+          // inside it — no bespoke row, no button hung beside it.
           <div key={item.id} data-testid="review-item" data-item-id={item.id} data-kind="text">
             <MessageThreadCard
               threadId={item.thread_id ?? item.id}
               messages={item.display.threadMessages as unknown as MessageLike[]}
-              phoneNumber={phone}
+              /* BACKLOG-2295: the tab passes fullMessages so the conversation
+                 modal's own before/after toggle is independent of the tab's
+                 audit crop. The review surface passes it for the same reason —
+                 and here the two are genuinely the same set, because the queue
+                 hydrates the whole thread rather than a cropped window. Omitting
+                 it fell back to `messages`, which worked by accident rather than
+                 by matching the tab. */
+              fullMessages={item.display.threadMessages as unknown as MessageLike[]}
+              phoneNumber={phoneNumber}
+              contactName={contactName}
               contactNames={contactNames}
-              contactName={contactNames?.[phone]}
               auditStartDate={auditStartDate}
               auditEndDate={auditEndDate}
+              onConfirm={() => onApproveItem(item.id)}
+              isConfirming={busyId === item.id}
               onUnlink={() => onRejectItem(item.id)}
             />
-            {/* MessageThreadCard has no confirm affordance on develop — texts
-                never had a needs-review state — so the Keep action is rendered
-                beside it rather than invented inside a shared card. */}
-            <div className="mt-1 flex justify-end">
-              <button
-                type="button"
-                onClick={() => onApproveItem(item.id)}
-                disabled={busyId === item.id}
-                className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
-                title="Keep — confirm this conversation belongs to the transaction"
-                data-testid="confirm-thread-button"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-              </button>
-            </div>
           </div>
         );
       })}

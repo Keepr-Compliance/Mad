@@ -15,19 +15,28 @@
  * review:get-state → reviewStateService.getReviewState), so it is the same set,
  * by id, that the header badge counts and the Complete gate blocks on.
  *
- * DEVIATION FROM THE FLOW CHART, recorded deliberately: the founder asked to
- * "reuse the components... just put them together". EmailThreadCard and
- * MessageThreadCard both require fully-hydrated `Communication[]` / message
- * rows, which a PENDING item does not have — it is not in `communications` at
- * all, which is the entire point of the design. Rendering those cards would
- * therefore have shown nothing for exactly the items this screen exists to show.
- * ReviewItemCard below matches their visual language (same card chrome, same
- * amber needs-review treatment, same check/trash affordances) against the
- * display payload that travels with each item.
+ * CARDS ARE THE TABS' OWN, NOT A BESPOKE ONE.
+ * The first cut rendered a purpose-built ReviewItemCard here, on the reasoning
+ * that a PENDING item is absent from `communications` and so cannot hydrate the
+ * real cards. That reasoning was right about the data and wrong about the fix:
+ * the answer was to hydrate the item (the queue now carries the raw email and
+ * message fields), not to build a second card. The bespoke card also had no
+ * name resolution at all, which is why senders rendered as raw addresses and
+ * phone numbers.
+ *
+ * So: EmailThreadCard and MessageThreadCard, with the SAME props the tabs pass —
+ * including click-to-preview — plus the review surfaces' approve/reject
+ * affordances. One component per medium, three surfaces (the tab, the tab's
+ * needs-review section, and this screen).
+ *
+ * Two lists behind an Emails | Texts switcher rather than one combined list
+ * (founder, 2026-08-22). The switcher supplies the medium, which is why the
+ * cards carry no type label.
  */
 import React, { useState } from "react";
 import type { ReviewItemDto } from "../../../../electron/types/ipc/window-api-transactions";
-import { ReviewItemCard } from "./ReviewItemCard";
+import { ReviewCards } from "./ReviewQueueSection";
+import type { Communication } from "../types";
 
 export interface NeedsReviewScreenProps {
   items: ReviewItemDto[];
@@ -35,6 +44,16 @@ export interface NeedsReviewScreenProps {
   onApprove: (itemIds: string[]) => Promise<void>;
   onReject: (itemIds: string[]) => Promise<void>;
   onClose: () => void;
+  /** Open an email for reading — the tabs' own click-to-preview behaviour. */
+  onViewEmail?: (comm: Communication) => void;
+  /** User's own address, filtered from participant display (as on the tab). */
+  userEmail?: string;
+  /** lowercase email -> contact name (emails). */
+  nameMap?: ReadonlyMap<string, string>;
+  /** handle -> contact name (texts). */
+  contactNames?: Record<string, string>;
+  auditStartDate?: Date | string | null;
+  auditEndDate?: Date | string | null;
 }
 
 export function NeedsReviewScreen({
@@ -43,9 +62,33 @@ export function NeedsReviewScreen({
   onApprove,
   onReject,
   onClose,
+  onViewEmail,
+  userEmail,
+  nameMap,
+  contactNames,
+  auditStartDate,
+  auditEndDate,
 }: NeedsReviewScreenProps): React.ReactElement {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Founder, 2026-08-22: two lists behind an Emails | Texts switcher, not one
+  // combined list. The tab supplies the medium, so the cards carry no type
+  // label — that context used to live on every row.
+  const emails = items.filter((i) => i.kind === "email");
+  const texts = items.filter((i) => i.kind === "text");
+  const [medium, setMedium] = useState<"email" | "text">("email");
+
+  // Open on the side that actually has something, so the screen never lands on
+  // an empty list while the other one is full.
+  const [pinned, setPinned] = useState(false);
+  const active: "email" | "text" =
+    pinned || (medium === "email" ? emails.length > 0 : texts.length > 0)
+      ? medium
+      : emails.length > 0
+        ? "email"
+        : "text";
+  const shown = active === "email" ? emails : texts;
 
 
   const act = async (id: string, fn: (ids: string[]) => Promise<void>) => {
@@ -142,6 +185,45 @@ export function NeedsReviewScreen({
         </div>
       </div>
 
+      {/* Emails | Texts switcher. Two lists, not one combined one — the tab
+          supplies the medium, which is why the cards carry no type label. */}
+      {items.length > 0 && (
+        <div
+          className="flex-shrink-0 border-b border-gray-200 bg-white px-3 sm:px-6"
+          data-testid="needs-review-medium-tabs"
+          role="tablist"
+        >
+          {(
+            [
+              ["email", "Emails", emails.length],
+              ["text", "Texts", texts.length],
+            ] as Array<["email" | "text", string, number]>
+          ).map(([value, label, count]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={active === value}
+              data-testid={`needs-review-tab-${value}`}
+              onClick={() => {
+                setMedium(value);
+                setPinned(true);
+              }}
+              className={`relative px-4 py-3 text-sm font-medium transition-colors ${
+                active === value
+                  ? "text-amber-700 border-b-2 border-amber-600"
+                  : "text-gray-500 hover:text-gray-700 border-b-2 border-transparent"
+              }`}
+            >
+              {label}
+              {count > 0 && (
+                <span className="ml-1.5 text-xs font-semibold">({count})</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-6">
         {isLoading && items.length === 0 ? (
           <p className="text-sm text-gray-500">Loading…</p>
@@ -152,18 +234,34 @@ export function NeedsReviewScreen({
               New communications will appear here when they are found.
             </p>
           </div>
+        ) : shown.length === 0 ? (
+          <div className="mx-auto mt-16 max-w-sm text-center">
+            <p className="font-medium text-gray-900">
+              No {active === "email" ? "emails" : "texts"} need review
+            </p>
+            <p className="mt-1 text-sm text-gray-600">
+              Switch to {active === "email" ? "Texts" : "Emails"} to review the rest.
+            </p>
+          </div>
         ) : (
-          <ul className="mx-auto flex max-w-3xl flex-col gap-3">
-            {items.map((item) => (
-              <ReviewItemCard
-                key={item.id}
-                item={item}
-                busy={busyId === item.id || bulkBusy}
-                onApprove={() => act(item.id, onApprove)}
-                onReject={() => act(item.id, onReject)}
-              />
-            ))}
-          </ul>
+          /* THE SAME card renderer the tabs' needs-review sections use, with the
+             same props — including click-to-preview. One component per medium,
+             three surfaces (tab, tab section, this screen). */
+          <div className="mx-auto max-w-3xl">
+            <ReviewCards
+              items={shown}
+              kind={active}
+              busyId={bulkBusy ? shown[0]?.id ?? busyId : busyId}
+              onApproveItem={(id) => act(id, onApprove)}
+              onRejectItem={(id) => act(id, onReject)}
+              onViewEmail={onViewEmail}
+              userEmail={userEmail}
+              nameMap={nameMap}
+              contactNames={contactNames}
+              auditStartDate={auditStartDate}
+              auditEndDate={auditEndDate}
+            />
+          </div>
         )}
       </div>
     </div>

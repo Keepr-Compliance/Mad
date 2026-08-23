@@ -52,6 +52,7 @@ import { ReviewNotesPanel } from "./transactionDetailsModule/components/ReviewNo
 import { SubmitForReviewModal } from "./transactionDetailsModule/components/modals/SubmitForReviewModal";
 // BACKLOG-2791 / BACKLOG-2792: the Needs Review queue and the merged Complete flow.
 import { useReviewQueue } from "./transactionDetailsModule/hooks/useReviewQueue";
+import { useResolvedContactNames } from "./transactionDetailsModule/hooks/useResolvedContactNames";
 import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
 import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
 import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
@@ -331,6 +332,21 @@ function TransactionDetails({
   useEffect(() => {
     void runSyncRef.current("open");
   }, [transaction.id]);
+
+  // Handles across every TEXT item in the queue, resolved independently of the
+  // Texts tab — the review screen can be opened from any tab.
+  const reviewTextHandles = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          reviewQueue.items
+            .filter((i) => i.kind === "text")
+            .flatMap((i) => i.display.threadParticipants),
+        ),
+      ),
+    [reviewQueue.items],
+  );
+  const reviewContactNames = useResolvedContactNames(reviewTextHandles, userId);
 
   const complete = useCompleteTransaction({
     refreshReviewState: reviewQueue.refresh,
@@ -1272,6 +1288,14 @@ function TransactionDetails({
           onApprove={reviewQueue.approve}
           onReject={reviewQueue.reject}
           onClose={() => setShowNeedsReview(false)}
+          /* Same props the tabs pass their cards, so the screen behaves
+             identically — including click-to-preview. Text names resolve here
+             rather than depending on the Texts tab being mounted. */
+          onViewEmail={setViewingEmail}
+          nameMap={emailNameMap}
+          contactNames={reviewContactNames}
+          auditStartDate={transaction.started_at}
+          auditEndDate={transaction.closed_at}
         />
       )}
 

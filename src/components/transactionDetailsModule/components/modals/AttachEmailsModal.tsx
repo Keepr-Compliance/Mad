@@ -639,7 +639,8 @@ export function AttachEmailsModal({
                           className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
                           data-testid="view-thread-button"
                         >
-                          {isMultipleEmails ? "View Thread \u2192" : "View"}
+                          {/* BACKLOG-2791: every view button reads "View". */}
+                          View
                         </button>
                       </div>
                     </div>

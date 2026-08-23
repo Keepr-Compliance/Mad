@@ -19,7 +19,7 @@
  * onto the shared set.
  */
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ReviewQueueSection } from "../ReviewQueueSection";
 import { NeedsReviewScreen } from "../NeedsReviewScreen";
 import { TransactionEmailsTab } from "../TransactionEmailsTab";
@@ -110,6 +110,9 @@ describe("BACKLOG-2791 — the three renderings show the same set", () => {
     const textIds = renderedIds();
     unmountTexts();
 
+    // BACKLOG-2791 point 12: the screen now shows TWO lists behind an
+    // Emails | Texts switcher, so its full set is collected by visiting both
+    // rather than read off one combined list.
     render(
       <NeedsReviewScreen
         items={SET}
@@ -119,7 +122,10 @@ describe("BACKLOG-2791 — the three renderings show the same set", () => {
         onClose={noop}
       />,
     );
-    const combinedIds = renderedIds();
+    const screenEmailIds = renderedIds();
+    fireEvent.click(screen.getByTestId("needs-review-tab-text"));
+    const screenTextIds = renderedIds();
+    const combinedIds = [...screenEmailIds, ...screenTextIds].sort();
 
     const sourceIds = SET.map((i) => i.id).sort();
     const unionIds = [...emailIds, ...textIds].sort();

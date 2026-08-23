@@ -432,7 +432,8 @@ export function RemovedEmailsSection({
                 className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
                 data-testid="view-removed-email-button"
               >
-                {isThread ? "View Thread →" : "View"}
+                {/* BACKLOG-2791: every view button reads "View". */}
+                View
               </button>
               {/* Restore button — icon button, green hover (mirrors delete button style) */}
               <button

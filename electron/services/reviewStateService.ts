@@ -312,7 +312,10 @@ const EMPTY_DISPLAY: ReviewItemDisplay = {
 
 function firstLine(text: string | null): string {
   if (!text) return "";
-  return text.replace(/\s+/g, " ").trim().slice(0, 160);
+  // 200 to match EmailThreadCard's own `body_text.substring(0, 200)`, so the
+  // preview row on a review card is fed exactly what a linked card gets before
+  // the card applies its own 120-character display truncation.
+  return text.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 function emailDisplay(emailId: string | null): ReviewItemDisplay {
