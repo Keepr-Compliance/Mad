@@ -59,7 +59,23 @@ export async function createCommunication(
     communicationData.message_id || null,
     communicationData.email_id || null,
     communicationData.thread_id || null,
-    communicationData.link_source || null,
+    // BACKLOG-2565: 'auto', not null. The three other INSERT sites into this
+    // column already default to 'auto' (`createCommunicationReference` below,
+    // `messageMatchingService.createCommunicationReference`,
+    // `autoLinkService.linkEmailToTransaction`); this one wrote NULL, giving one
+    // column two defaults. 'auto' is the honest value — the only live caller
+    // that omits `link_source` is the extraction path
+    // (`transactionService.ts:683`), which creates the link without a user
+    // asking — and unlike NULL it is inside the column's declared domain
+    // (`'auto' | 'manual' | 'scan'`), which a NULL satisfies the CHECK for only
+    // because SQLite treats a NULL CHECK result as passing.
+    //
+    // FORWARD-ONLY, deliberately: no reader filters on `link_source` today
+    // (`getCommunications` exposes `user_id`/`transaction_id` filters only), so
+    // the pre-existing mix of NULL and 'auto' rows harms nothing yet. Back-
+    // filling them is a real schema-chain entry and belongs to its own item,
+    // not smuggled into a tidy-up.
+    communicationData.link_source || "auto",
     communicationData.link_confidence || null,
     communicationData.match_reason || null,
     communicationData.linked_at || null,
@@ -75,7 +91,12 @@ export async function createCommunication(
     message_id: communicationData.message_id || null,
     email_id: communicationData.email_id || null,
     thread_id: communicationData.thread_id || null,
-    link_source: communicationData.link_source || null,
+    // BACKLOG-2565: must stay identical to the bound param above. This object is
+    // returned INSTEAD of re-SELECTing the row (BACKLOG-1107), so a default
+    // applied on only one of the two lines hands the caller an object that
+    // disagrees with the row it describes — the shape BACKLOG-2632 pinned for
+    // `ignored_at`.
+    link_source: communicationData.link_source || "auto",
     link_confidence: communicationData.link_confidence || null,
     match_reason: communicationData.match_reason || null,
     linked_at: communicationData.linked_at || null,
