@@ -21,9 +21,11 @@
  *
  * MEASURED CONTROLS (each mutation applied to source, suite re-run):
  *   1. `body_html: d.body, body: d.body` removed from reviewItemToCommunication
- *      → RED, 1 test ("renders the html body ... rather than 'No content'").
+ *      → RED, 1 of 4 ("renders the html body ... rather than 'No content'"). The
+ *      genuinely-body-less test stays GREEN, which is what makes it a real
+ *      negative and not a restatement of the positive.
  *   2. `id: item.email_id ?? item.id` → `id: item.id` in the projection
- *      → RED, 1 test (the duplicate-key characterisation) — which is the point:
+ *      → RED, 1 of 4 (the duplicate-key characterisation) — which is the point:
  *      that test states the constraint the service-side dedup exists to satisfy,
  *      so if someone ever makes the ids unique here instead, this tells them the
  *      dedup's justification moved.

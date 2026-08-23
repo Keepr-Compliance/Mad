@@ -25,20 +25,30 @@
  *    after the read-side dedup and remains the standing proof of reachability.
  *
  *  DEDUP — the union contains the twinned email ONCE, by exact ID set.
- *    Mutation: restore `const items = [...pending, ...legacy]` → RED (measured).
+ *    Mutation: restore `const items = [...pending, ...legacy]` → RED, 2 of 14
+ *    ("returns the twinned email ONCE" and "approving one twinned email does not
+ *    touch another email's twin"). Only two tests can see it, because the
+ *    approve/reject controls assert the STORES, which the dedup does not touch.
  *
  *  NO OVER-COLLAPSE — two genuinely different emails that merely share a
  *    `thread_id` stay two items; a pure-pending and a pure-legacy set are
- *    unchanged. Mutation: dedup on `thread_id` instead of `email_id` → RED
- *    (measured).
+ *    unchanged. Mutation: dedup on `thread_id` instead of `email_id` → RED, 3
+ *    of 14 — the two above PLUS the over-collapse test, which is the one that
+ *    exists solely to catch this wrong key.
  *
  *  TWIN SURVIVAL — approve/reject act on the surviving item and must resolve
  *    BOTH stores. Before the fix, approve on the pending twin called
  *    `linkEmailToTransaction`, which returns "already_linked" and deliberately
  *    leaves the existing `match_reason` alone (2319), so the legacy row stayed
  *    `address_missing` and the "reviewed" email remained in `getReviewState` —
- *    a ghost that keeps the Complete gate shut. Mutation: drop the
- *    resolve-the-other-store calls → RED (measured).
+ *    a ghost that keeps the Complete gate shut. Mutation: drop both
+ *    resolveLegacyTwins calls → RED, 4 of 14 (every test in the block).
+ *
+ *  NO CONTENT — the display projection carries the email's HTML, so a message
+ *    whose only body is HTML is readable. Mutation: `body: row.body_html` →
+ *    `body: null` in emailDisplay → RED, 1 of 14 (the html-only test). The
+ *    genuinely-body-less case stays GREEN under that mutation, which is what
+ *    makes it a real negative rather than a restatement of the positive.
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
