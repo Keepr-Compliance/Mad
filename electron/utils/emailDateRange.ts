@@ -41,13 +41,21 @@ const FALLBACK_YEARS = 2;
  * protects the whole buffered final day from the import cap.
  *
  * @param params - Transaction date fields (all optional)
+ * @param now - The clock for the two "today" fallbacks. Defaults to the real
+ *   one; pass an explicit value when TWO ranges are being compared, so an
+ *   open-ended deal does not appear to grow by a millisecond between the calls
+ *   (BACKLOG-2791 — that is exactly what made every save look like an audit
+ *   window extension).
  * @returns Object with start and end Date
  */
-export function computeTransactionDateRange(params: {
-  started_at?: Date | string | null;
-  created_at?: Date | string | null;
-  closed_at?: Date | string | null;
-}): { start: Date; end: Date } {
+export function computeTransactionDateRange(
+  params: {
+    started_at?: Date | string | null;
+    created_at?: Date | string | null;
+    closed_at?: Date | string | null;
+  },
+  now: Date = new Date(),
+): { start: Date; end: Date } {
   // --- Start date ---
   let start: Date | null = null;
 
@@ -65,12 +73,12 @@ export function computeTransactionDateRange(params: {
 
   // Last resort: 2 years ago
   if (!start) {
-    start = new Date();
+    start = new Date(now.getTime());
     start.setFullYear(start.getFullYear() - FALLBACK_YEARS);
   }
 
   // --- End date ---
-  let end: Date = new Date(); // default: today
+  let end: Date = new Date(now.getTime()); // default: today
 
   if (params.closed_at) {
     // BACKLOG-2788: the buffer runs from the end of the closing DAY as the user
@@ -87,6 +95,50 @@ export function computeTransactionDateRange(params: {
   }
 
   return { start, end };
+}
+
+/** The stored audit dates `computeTransactionDateRange` reads. */
+export interface AuditWindowDates {
+  started_at?: Date | string | null;
+  created_at?: Date | string | null;
+  closed_at?: Date | string | null;
+}
+
+/**
+ * BACKLOG-2791: did this date edit EXTEND the deal's audit window?
+ *
+ * Founder, 2026-08-23: the review sync and its popup must also run when the
+ * user changes the audit dates so the window covers more — "extending the
+ * window brings new communications into scope; today nothing happens until the
+ * next open".
+ *
+ * TRUE SUPERSET, deliberately. The new window must CONTAIN the old one on both
+ * ends and be strictly wider on at least one. A mixed edit — one end reaching
+ * out while the other pulls in — is not an extension here, because it contains a
+ * NARROWING, and the Communication Lifecycle Contract parks narrowing as an open
+ * founder decision ("what leaves the deal, and how it's shown — undecided,
+ * deliberately not built"). Discovering over the half that grew while the half
+ * that shrank has no agreed semantics would ship the decision by accident.
+ *
+ * Both windows are measured against ONE clock: `computeTransactionDateRange`
+ * falls back to "today" when there is no close date, so two back-to-back calls
+ * differ by the time between them and every save on an open-ended deal would
+ * report an extension.
+ */
+export function isAuditWindowExtended(
+  before: AuditWindowDates,
+  after: AuditWindowDates,
+  now: Date = new Date(),
+): boolean {
+  const a = computeTransactionDateRange(before, now);
+  const b = computeTransactionDateRange(after, now);
+
+  const contains =
+    b.start.getTime() <= a.start.getTime() && b.end.getTime() >= a.end.getTime();
+  const strictlyWider =
+    b.start.getTime() < a.start.getTime() || b.end.getTime() > a.end.getTime();
+
+  return contains && strictlyWider;
 }
 
 /**

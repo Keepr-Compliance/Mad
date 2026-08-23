@@ -64,6 +64,9 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
 
+// BACKLOG-2791: assert the DERIVED chain head, never a literal — a hardcoded
+// head turned 7 suites / 33 tests red the moment a 64th migration was added.
+import { chainHeadVersion } from "./helpers/chainHead";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const RealDatabase = require(
   path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
@@ -268,7 +271,7 @@ describe("databaseService migration v47 (BACKLOG-1861 — legacy email dedup)", 
     // crosswalk, v56 tombstone columns (contacts / transaction_contacts
     // removed_at + removed_reason), v55 match_reason, v54 sync_session_id
     // indexes, and v53 message_import_state.
-    expect(row.version).toBe(64);
+    expect(row.version).toBe(chainHeadVersion());
   });
 
   it("collapses a legacy+new pair: legacy deleted, comms link moved to new", async () => {

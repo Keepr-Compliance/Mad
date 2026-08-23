@@ -11,11 +11,11 @@ import { getEarliestCommunicationDate } from "../services/transactionService";
 import type { AuditedTransactionData } from "../services/transactionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
-import { autoLinkCommunicationsForContact } from "../services/autoLinkService";
 import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
 // BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
 import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../services/transactionSyncTrigger";
+import { isAuditWindowExtended } from "../utils/emailDateRange";
 // BACKLOG-2292: automatic audit-window MESSAGES sync (the messages twin) + the
 // coverage-detection reads that drive the date-selection popup and export gate.
 import {
@@ -420,6 +420,60 @@ export function registerTransactionCrudHandlers(
           onProgress: messagesProgress,
           onComplete: (result) => emitMessagesSyncComplete(validatedTransactionId, result),
         });
+
+        // BACKLOG-2791 (founder, 2026-08-23): an EXTENDED audit window brings
+        // communications that were previously out of scope into scope, and
+        // "today nothing happens until the next open". So run the SAME review
+        // discovery the other triggers run — not a fork of it — and let it
+        // announce its own delta through the N/L/R popup.
+        //
+        // Extension only. Narrowing is deliberately not a trigger: what leaves a
+        // deal when its window shrinks is an open founder decision, so this path
+        // must not act on one. `isAuditWindowExtended` is a true superset test
+        // (see its own docblock for why the mixed cases are excluded).
+        //
+        // NOT AWAITED, matching the contact-save trigger: the sweep broadcasts
+        // `review:queue-changed` when it lands, so the badge and the popup
+        // update as results arrive instead of the save blocking on them. A
+        // discovery miss must never fail the update the user actually asked for.
+        const windowExtended = isAuditWindowExtended(
+          {
+            started_at: existingTransaction?.started_at,
+            created_at: existingTransaction?.created_at,
+            closed_at: existingTransaction?.closed_at,
+          },
+          {
+            started_at:
+              "started_at" in updatesRecord
+                ? (updatesRecord.started_at as string | null)
+                : existingTransaction?.started_at,
+            created_at: existingTransaction?.created_at,
+            closed_at:
+              "closed_at" in updatesRecord
+                ? (updatesRecord.closed_at as string | null)
+                : existingTransaction?.closed_at,
+          },
+        );
+
+        if (windowExtended) {
+          void (async () => {
+            try {
+              const { syncReviewQueueForTransaction } = await import(
+                "../services/reviewStateService"
+              );
+              await syncReviewQueueForTransaction({
+                transactionId: validatedTransactionId,
+                reason: "date-extended",
+              });
+            } catch (syncError) {
+              logService.warn(
+                "[BACKLOG-2791] review-queue sync after audit-range extension failed",
+                "Transactions",
+                { error: syncError instanceof Error ? syncError.message : "Unknown" },
+              );
+            }
+          })();
+        }
       }
 
       return {
@@ -1001,31 +1055,51 @@ export function registerTransactionCrudHandlers(
       // BACKLOG-820: Fire local auto-link in background (don't block the save response).
       // Previously awaited per-contact, causing 8+ second UI hangs on contact assignment.
       // TASK-2067: Also fire provider fetch in background after auto-link.
+      // BACKLOG-2791 (T2): a contact saved ON this deal changes exactly the
+      // inputs the matchers read, so discovery runs IMMEDIATELY — no ask-step,
+      // no navigation. It QUEUES for review rather than linking.
+      //
+      // AWAITED, unlike the auto-link it replaces — for ONE deal, the one the
+      // user is looking at. BACKLOG-820 removed that await because a per-contact
+      // PROVIDER FETCH hung the UI for 8+ seconds; this is local only.
+      //
+      // MEASURED, because the first version of this comment claimed "indexed"
+      // without checking and was half wrong: the email axis is now two indexed
+      // searches (it was a FULL `emails` scan until BACKLOG-2791 restructured
+      // the query), and the text axis is `SEARCH m USING INDEX
+      // idx_messages_user_sent` — the deal's own date window, with the phone
+      // LIKE as a residual filter, NOT a full `messages` scan. One deal, one
+      // window: bounded enough to await. The multi-deal loop in contacts:update
+      // is NOT awaited for exactly this reason. The provider fetch below stays
+      // fire-and-forget, so the 820 regression cannot return.
+      let review: { added: number; linked: number; outstanding: number } | undefined;
       if (addOperations.length > 0) {
-        // Local auto-link (fire-and-forget)
-        for (const op of addOperations) {
-          autoLinkCommunicationsForContact({
-            contactId: op.contactId,
-            transactionId: validatedTransactionId as string,
-          }).then((result) => {
-            logService.info(
-              "Background local auto-link complete",
-              "Transactions",
-              {
-                contactId: op.contactId,
-                emailsLinked: result.emailsLinked,
-                messagesLinked: result.messagesLinked,
-                alreadyLinked: result.alreadyLinked,
-              }
-            );
-          }).catch((error) => {
-            logService.warn(
-              `Auto-link failed for contact ${op.contactId}`,
-              "Transactions",
-              {
-                error: error instanceof Error ? error.message : "Unknown",
-              }
-            );
+        try {
+          const { autoLinkCommunicationsForContact } = await import(
+            "../services/autoLinkService"
+          );
+          const { countReviewItems } = await import("../services/reviewStateService");
+          let linked = 0;
+          let added = 0;
+          for (const op of addOperations) {
+            const r = await autoLinkCommunicationsForContact({
+              contactId: op.contactId,
+              transactionId: validatedTransactionId as string,
+              // BACKLOG-2791: develop's split — confident emails and every text
+              // link; the address-missing half waits for approval.
+              queueAmbiguousInsteadOfLinking: true,
+            });
+            linked += r.emailsLinked + r.messagesLinked;
+            added += r.queuedForReview ?? 0;
+          }
+          review = {
+            added,
+            linked,
+            outstanding: countReviewItems(validatedTransactionId as string),
+          };
+        } catch (error) {
+          logService.warn("[BACKLOG-2791] discovery failed after contact save", "Transactions", {
+            error: error instanceof Error ? error.message : "Unknown",
           });
         }
 
@@ -1043,6 +1117,8 @@ export function registerTransactionCrudHandlers(
                   created_at: transaction.created_at,
                   closed_at: transaction.closed_at,
                 },
+                // BACKLOG-2791: deal surface — queue, never link silently.
+                queueForReviewInsteadOfLinking: true,
               }).then((fetchResult) => {
                 logService.info(
                   "Background provider fetch + auto-link complete",
@@ -1075,8 +1151,15 @@ export function registerTransactionCrudHandlers(
           });
       }
 
+      // BACKLOG-2791: this used to return a bare { success: true }, so the
+      // renderer's `autoLinkResults` branch (EditContactsModal ->
+      // TransactionDetails toast) was unreachable dead code, and loadDetails()
+      // raced the fire-and-forget link. `review` is the real, AWAITED result of
+      // the save — what lets the caller show "N new communications found"
+      // without a second round trip, and without claiming links never made.
       return {
         success: true,
+        review,
       };
     }, { module: "Transactions" }),
   );

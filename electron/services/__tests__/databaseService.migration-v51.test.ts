@@ -56,6 +56,9 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
 
+// BACKLOG-2791: assert the DERIVED chain head, never a literal — a hardcoded
+// head turned 7 suites / 33 tests red the moment a 64th migration was added.
+import { chainHeadVersion } from "./helpers/chainHead";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const RealDatabase = require(
   path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
@@ -180,7 +183,7 @@ describe("databaseService migration v51 (BACKLOG-2013 — export freeze marker)"
     // here for the same reason; v59 is BACKLOG-2410's review queue; v60 is
     // BACKLOG-2427's provenance recovery, which no-ops when the contact tables
     // are absent).
-    expect(row.version).toBe(64);
+    expect(row.version).toBe(chainHeadVersion());
   });
 
   it("leaves a never-exported transaction NULL (still editable)", async () => {

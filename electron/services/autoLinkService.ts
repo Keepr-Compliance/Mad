@@ -56,6 +56,26 @@ export interface AutoLinkOptions {
     start: Date;
     end: Date;
   };
+  /**
+   * BACKLOG-2791 (founder ruling, 2026-08-22): keep the SHIPPED split, and only
+   * change where the ambiguous half lands.
+   *
+   *   false (default, every pre-existing caller) — develop's behaviour exactly:
+   *     confident emails link as address_found, ambiguous ones link as
+   *     address_missing and surface in the Needs-review section as a LINKED row.
+   *
+   *   true (the transaction-details discovery paths) — confident emails still
+   *     link, but the ambiguous ones are QUEUED instead of linked. Nothing else
+   *     about the classification moves: the same predicate decides, the same
+   *     disambiguation still routes an email that names another candidate deal
+   *     away, and texts are untouched.
+   *
+   * Why the ambiguous half must not link on those paths: the founder-dictated
+   * popup promises "Communications that require review will only be linked after
+   * you approve them." Linking them first and flagging them would make that
+   * sentence false.
+   */
+  queueAmbiguousInsteadOfLinking?: boolean;
 }
 
 /**
@@ -75,6 +95,13 @@ export interface AutoLinkResult {
   errors: number;
   /** BACKLOG-1364: User-facing message when address filter is ON and 0 emails found */
   addressFilterMessage?: string;
+  /**
+   * BACKLOG-2791: how many communications were QUEUED for review instead of
+   * linked. Set only on the transaction-details discovery paths, where nothing
+   * is linked without approval. Deliberately a separate field: a caller that
+   * renders `emailsLinked` must never see a queued item counted as a link.
+   */
+  queuedForReview?: number;
 }
 
 /**
@@ -505,7 +532,7 @@ async function findMessagesByContactPhones(
  * @param linkConfidence - Confidence score
  * @returns true if linked, false if already linked to this transaction
  */
-async function linkEmailToTransaction(
+export async function linkEmailToTransaction(
   emailId: string,
   transactionId: string,
   linkSource: "auto" | "manual" | "scan" = "auto",
@@ -886,6 +913,27 @@ export async function autoLinkCommunicationsForContact(
 
       const matchReason: MatchReason = isConfident ? "address_found" : "address_missing";
       const linkConfidence = matchReason === "address_missing" ? 0.5 : 0.85;
+
+      // The ONE divergence from develop, and only on the details-discovery
+      // paths: the ambiguous half is queued rather than linked.
+      if (!isConfident && options.queueAmbiguousInsteadOfLinking) {
+        try {
+          const { queueEmailForReview } = await import("./reviewStateService");
+          if (await queueEmailForReview(transactionId, candidate.id, userId)) {
+            result.queuedForReview = (result.queuedForReview ?? 0) + 1;
+          } else {
+            result.alreadyLinked++;
+          }
+        } catch (error) {
+          result.errors++;
+          await logService.warn(
+            `Failed to queue email ${candidate.id} for review: ${error instanceof Error ? error.message : "Unknown"}`,
+            "AutoLinkService",
+          );
+        }
+        continue;
+      }
+
       try {
         const linkResult = await linkEmailToTransaction(
           candidate.id,

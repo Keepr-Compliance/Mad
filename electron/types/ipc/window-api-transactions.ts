@@ -13,6 +13,104 @@ import type {
 // rather than a hand-copied mirror that drifts the first time a column moves.
 import type { TransactionContactResult } from "../../services/db/transactionContactDbService";
 
+
+/** BACKLOG-2791: which store a review item came from. */
+export type ReviewOrigin = "pending" | "legacy";
+/** BACKLOG-2791: emails and texts are one queue. */
+export type ReviewKind = "email" | "text";
+export type ReviewSyncReason =
+  | "open"
+  | "background"
+  | "contact-change"
+  /** The audit dates were edited so the window covers MORE (BACKLOG-2791). */
+  | "date-extended";
+
+/**
+ * What a surface needs to RENDER an item. It travels WITH the item because a
+ * pending item is deliberately not in `communications` — a surface that tried to
+ * join display data itself would render nothing for exactly the rows this
+ * feature exists to show.
+ */
+export interface ReviewItemDisplayDto {
+  title: string;
+  subtitle: string;
+  snippet: string;
+  occurredAt: string | null;
+  itemCount: number;
+  /**
+   * THE GROUPING KEY — the provider's conversation id for this communication
+   * (BACKLOG-2791, Communication Lifecycle Contract, "the unit rule").
+   *
+   * For an EMAIL this is `emails.thread_id`, which is NOT the same as the item's
+   * own `thread_id`: the queue keys emails by `email_id`, so an email item's
+   * `thread_id` column is NULL by design. It is carried here, on the display
+   * payload, rather than on `ReviewItemDto.thread_id`, because reject writes
+   * THAT field into the `ignored_communications` suppression row and the
+   * removed-TEXTS section selects on it — an email filed with a thread_id would
+   * surface as a removed text conversation.
+   *
+   * NULL when the provider never threaded the record; the renderer then falls
+   * back to the item id, i.e. a thread of one.
+   */
+  threadId: string | null;
+  /** Raw fields so the renderer can rebuild a REAL thread for the app's own
+   *  EmailThreadCard / MessageThreadCard — a pending item is absent from
+   *  `communications`, so the tabs' loaders cannot hydrate it. */
+  recipients: string | null;
+  cc: string | null;
+  sender: string | null;
+  hasAttachments: boolean;
+  threadParticipants: string[];
+  threadMessages: Array<{
+    id: string;
+    thread_id: string | null;
+    body_text: string | null;
+    sent_at: string | null;
+    direction: string | null;
+    participants_flat: string | null;
+    channel: string | null;
+  }>;
+}
+
+export interface ReviewItemDto {
+  /** `${origin}:${rowId}` — stable and unambiguous across every surface. */
+  id: string;
+  /** The underlying row's primary key, already decoded. */
+  rowId: string;
+  origin: ReviewOrigin;
+  kind: ReviewKind;
+  transaction_id: string;
+  email_id: string | null;
+  thread_id: string | null;
+  found_at: string;
+  display: ReviewItemDisplayDto;
+}
+
+export interface ReviewStateResult {
+  items: ReviewItemDto[];
+  /** items.length — the ONE number for the badge, P2/P3 and the Complete gate. */
+  count: number;
+}
+
+export interface ReviewSyncResult {
+  /** Queued by THIS run — the popup's "require review" number. */
+  added: number;
+  /** Linked outright by THIS run — the popup's "linked successfully" number. */
+  linked: number;
+  outstanding: number;
+}
+
+export interface ReviewQueueChangedDto {
+  transactionId: string;
+  /** What THAT run newly queued — the popup's "require review". Silent at 0. */
+  added: number;
+  /** What THAT run linked outright — the popup's "linked successfully". */
+  linked: number;
+  /** Outstanding total — drives the badge. */
+  outstanding: number;
+  reason: ReviewSyncReason;
+}
+
 /**
  * A party tombstoned off a transaction — BACKLOG-2367.
  *
@@ -856,5 +954,46 @@ export interface WindowApiTransactions {
    */
   onMessagesSyncComplete: (
     callback: (data: { transactionId: string | null; ran: boolean; imported: number }) => void,
+  ) => () => void;
+
+  // ==========================================================================
+  // BACKLOG-2791 / BACKLOG-2792 — the Needs Review queue.
+  //
+  // ONE source of truth (founder ruling 2026-08-22): the combined S2 screen,
+  // both tabs' needs-review sections, the header badge, the P2/P3 popups and the
+  // Complete gate all read getReviewState. Nothing in the renderer may derive
+  // review state any other way.
+  // ==========================================================================
+
+  /** The combined queue: the pending items the sync found + the legacy
+   *  BACKLOG-2319 address_missing population, unioned into ONE set. */
+  getReviewState: (transactionId: string) => Promise<ReviewStateResult>;
+
+  /**
+   * Run discovery for a transaction.
+   *  - "open"           → only records INGESTED since the deal's watermark.
+   *  - "contact-change" → the full window, but only for `contactIds`.
+   * `added` is what THIS run newly queued and drives the popup (silent at 0);
+   * `outstanding` is the badge total.
+   */
+  syncReviewQueue: (
+    transactionId: string,
+    reason: ReviewSyncReason,
+    contactIds?: string[],
+  ) => Promise<ReviewSyncResult>;
+
+  /** Approve — THIS is what links a pending item, per the normal rules. */
+  approveReviewItems: (itemIds: string[]) => Promise<{ approved: number }>;
+
+  /** Reject — durable; the suppression row stops a later sync resurrecting it. */
+  rejectReviewItems: (itemIds: string[]) => Promise<{ rejected: number }>;
+
+  /**
+   * BACKLOG-2791: fires whenever any trigger changes the queue, so a
+   * MAIN-PROCESS sync (contact save, contact edit elsewhere, deal creation)
+   * reaches the screen instead of waiting for the next open.
+   */
+  onReviewQueueChanged: (
+    callback: (data: ReviewQueueChangedDto) => void,
   ) => () => void;
 }

@@ -61,6 +61,9 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
 
+// BACKLOG-2791: assert the DERIVED chain head, never a literal — a hardcoded
+// head turned 7 suites / 33 tests red the moment a 64th migration was added.
+import { chainHeadVersion } from "./helpers/chainHead";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const RealDatabase = require(
   path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
@@ -163,7 +166,7 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
     // source_identity_json), whose `external_contacts` guard does likewise,
     // v59 (BACKLOG-2410 review queue) and v60 (BACKLOG-2427 provenance
     // recovery, which no-ops when the contact tables are absent).
-    expect(schemaVersion(harness.db)).toBe(64);
+    expect(schemaVersion(harness.db)).toBe(chainHeadVersion());
   });
 
   it("appends match_reason as the LAST column (order invariant vs schema.sql — BACKLOG-2298)", async () => {
@@ -243,7 +246,7 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
     // re-selected, and even a direct re-invoke of the guarded ADD COLUMN must not throw.
     await expect(harness.service._runVersionedMigrations()).resolves.toBeUndefined();
     expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(64);
+    expect(schemaVersion(harness.db)).toBe(chainHeadVersion());
 
     const migrations = harness.service.constructor.MIGRATIONS as Array<{
       version: number;
@@ -261,6 +264,6 @@ describe("databaseService migration v55 (BACKLOG-2319 — match_reason)", () => 
     await expect(runV55()).resolves.toBeUndefined();
     // communications still gains the column; the missing table is skipped, not fatal.
     expect(columnExists(harness.db, "communications", "match_reason")).toBe(true);
-    expect(schemaVersion(harness.db)).toBe(64);
+    expect(schemaVersion(harness.db)).toBe(chainHeadVersion());
   });
 });

@@ -165,6 +165,7 @@ import {
   USER_ID,
 } from "./fixtures/rehearsalCorpus";
 
+import { chainHeadVersion } from "./helpers/chainHead";
 // Bypass the Jest moduleNameMapper that rewrites better-sqlite3-multiple-ciphers
 // to the auto-mock — the whole point of this file is a real file-backed DB.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -180,7 +181,9 @@ const RealDatabase = require(
 const FIXTURE_SQL_PATH = path.join(__dirname, "fixtures", "v2.27.0-populated.sql");
 
 /** The version the chain must land on — the LAST entry in MIGRATIONS. */
-const HEAD_VERSION = 64;
+// BACKLOG-2791: derived from MIGRATIONS, so adding a migration does not
+// silence the only real-file rehearsal in the suite.
+const HEAD_VERSION = chainHeadVersion();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyService = any;

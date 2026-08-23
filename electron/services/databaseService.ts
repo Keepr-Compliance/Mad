@@ -3852,6 +3852,106 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 65,
+      // BACKLOG-2791. Renumbered 64 -> 65 at merge time, exactly as planned:
+      // PR #2346 (BACKLOG-2630 phone re-key) merged first holding v64, this
+      // branch then merged develop and took 65. It could not have been written
+      // as 65 earlier — validateNoVersionGaps throws
+      // `Migration sequence error: Missing migration version 64` on EVERY
+      // database init when the chain skips a number, so a branch holding 65
+      // without 64 present will not boot and cannot run its own migration tests.
+      //
+      // The two are independent: 64 re-keys phone lookup keys, 65 adds a new
+      // table plus transactions.last_pending_scan_at. Disjoint objects, so the
+      // execution order between them does not matter.
+      //
+      // The head-version assertions that used to make a renumber expensive
+      // (nine files, 33 tests red on a single new migration — including the only
+      // two suites that upgrade a REAL shipped database file) now DERIVE the
+      // head via __tests__/helpers/chainHead.ts. Both branches hit that wall
+      // independently; develop re-typed the literal to 64, this branch derives
+      // it, and the derived form is what survived the merge because it is
+      // correct for either value. Mutating the helper to head-1 turns 31 tests
+      // red, so it is load-bearing rather than decorative.
+      description:
+        "Add pending_review_communications (the persistent Needs-Review queue) + transactions.last_pending_scan_at (the delta watermark) (BACKLOG-2791)",
+      migrate: (d) => {
+        // BACKLOG-2791. The queue holds communications the sync FOUND for a deal
+        // but that are NOT linked until the user approves them. It is a separate
+        // table BY DESIGN: every row in `communications` IS a link, and 41 read
+        // sites across 10 files treat it that way with no choke point, so a
+        // "pending" match_reason would have leaked unapproved mail into
+        // transaction search and into per-row Quick Export (which bypasses the
+        // details-screen Complete gate entirely).
+        //
+        // NO STANDALONE `CREATE INDEX` FOR ANY OF THIS IN schema.sql
+        // (BACKLOG-2298 / 2300): schema.sql is exec'd BEFORE the chain runs, so
+        // an index naming a not-yet-added column throws "no such column" on
+        // every real upgrade. Both indexes are created HERE, after their table
+        // exists, and are reached on the fresh-install path too (a fresh DB
+        // seeds schema_version at BASELINE_VERSION, so this migration still
+        // runs) — which is what keeps fresh and upgraded installs at parity.
+        //
+        // `communications` and `ignored_communications` are deliberately NOT
+        // touched: their `match_reason` must remain the LAST column (v55 parity
+        // guard), and adding to either would risk that ordering.
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS pending_review_communications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            transaction_id TEXT NOT NULL,
+            email_id TEXT,
+            thread_id TEXT,
+            found_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+            FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+            FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+            CHECK (
+              (email_id IS NOT NULL AND thread_id IS NULL)
+              OR (thread_id IS NOT NULL AND email_id IS NULL)
+            )
+          );
+        `);
+
+        // The DB backstop for the sync's dedup predicate: even a racing second
+        // sync cannot queue the same item twice. MEASURED — drop both indexes
+        // and a repeated sync leaves 4 rows where 2 belong.
+        //
+        // PARTIAL (`WHERE <col> IS NOT NULL`) keeps each index to the rows that
+        // carry that column and states the intent. That is a size/readability
+        // choice, NOT a correctness one: SQLite treats every NULL as distinct,
+        // so the non-partial form enforces the same thing — a mutation to the
+        // non-partial form did NOT go red.
+        d.exec(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_email
+             ON pending_review_communications(transaction_id, email_id)
+           WHERE email_id IS NOT NULL`,
+        );
+        d.exec(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_thread
+             ON pending_review_communications(transaction_id, thread_id)
+           WHERE thread_id IS NOT NULL`,
+        );
+
+        // The delta watermark. Add-if-absent (not skip-if-absent): nothing else
+        // in the chain adds it, so skipping would leave it missing forever.
+        const hasTxn = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'transactions'")
+          .get();
+        if (hasTxn) {
+          const cols = (
+            d.prepare("PRAGMA table_info(transactions)").all() as Array<{ name: string }>
+          ).map((c) => c.name);
+          if (!cols.includes("last_pending_scan_at")) {
+            d.exec("ALTER TABLE transactions ADD COLUMN last_pending_scan_at DATETIME");
+            console.log(
+              "[migration v65] added transactions.last_pending_scan_at (BACKLOG-2791)",
+            );
+          }
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

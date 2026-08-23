@@ -38,6 +38,16 @@ export interface MessageThreadCardProps {
   phoneNumber: string;
   /** Callback when unlink button is clicked */
   onUnlink?: (threadId: string) => void;
+  /**
+   * BACKLOG-2791: Keep/confirm a needs-review conversation, mirroring
+   * EmailThreadCard's needsReview variant. Rendered INSIDE the card so a review
+   * row is the same component with the same affordances — the first cut hung a
+   * bespoke button beside the card, which is what made the Texts section look
+   * unlike the rest of the tab.
+   */
+  onConfirm?: (threadId: string) => void;
+  /** Whether the confirm action is in flight. */
+  isConfirming?: boolean;
   /** Map of phone number -> contact name for resolving senders */
   contactNames?: Record<string, string>;
   /** Audit period start date for filtering (TASK-1157) */
@@ -207,7 +217,7 @@ function formatParticipantNames(
 /**
  * MessageThreadCard component for displaying a conversation thread.
  * Compact single-line layout.
- * Format: "ContactName (+1234567890)    View Full ->"
+ * Format: "ContactName (+1234567890)    View"
  *
  * BACKLOG-2278: the per-conversation date range was removed — it became
  * disconnected from the data after the audit dates changed and added noise.
@@ -220,6 +230,8 @@ export function MessageThreadCard({
   contactName,
   phoneNumber,
   onUnlink,
+  onConfirm,
+  isConfirming,
   contactNames = {},
   auditStartDate,
   auditEndDate,
@@ -348,8 +360,25 @@ export function MessageThreadCard({
               className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
               data-testid="toggle-thread-button"
             >
-              View Full &rarr;
+              {/* BACKLOG-2791, founder-dictated: every view button reads "View".
+                  This card previously read "View Full →". */}
+              View
             </button>
+            {/* BACKLOG-2791: Keep (check) — needs-review rows only, to the LEFT
+                of remove, matching EmailThreadCard's ordering. */}
+            {!showSelection && onConfirm && (
+              <button
+                onClick={(e) => { e.stopPropagation(); onConfirm(threadId); }}
+                disabled={isConfirming}
+                className="text-gray-400 hover:text-green-600 hover:bg-green-50 rounded p-1 transition-all disabled:opacity-50"
+                data-testid="confirm-thread-button"
+                title="Keep this conversation on the transaction"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </button>
+            )}
             {/* BACKLOG-1719: hide the single-remove button in selection mode. */}
             {showSelection ? null : isRemoved && onRestore ? (
               <button

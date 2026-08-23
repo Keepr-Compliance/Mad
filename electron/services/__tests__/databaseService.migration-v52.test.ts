@@ -48,6 +48,9 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
 
+// BACKLOG-2791: assert the DERIVED chain head, never a literal — a hardcoded
+// head turned 7 suites / 33 tests red the moment a 64th migration was added.
+import { chainHeadVersion } from "./helpers/chainHead";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const RealDatabase = require(
   path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
@@ -133,7 +136,7 @@ describe("databaseService migration v52 (BACKLOG-2280 — reactions/tapbacks)", 
     // (external_contacts.source_identity_json), BACKLOG-2410 v59 (the contact
     // link review queue) and BACKLOG-2427 v60 (hand-typed contact value
     // provenance recovery, data-only), so the chain terminates at 60.
-    expect(row.version).toBe(64);
+    expect(row.version).toBe(chainHeadVersion());
   });
 
   it("lets a reaction row be written after the migration", async () => {

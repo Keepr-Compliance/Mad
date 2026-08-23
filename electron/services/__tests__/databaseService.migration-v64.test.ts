@@ -419,7 +419,17 @@ describe("migration v64 — re-key persisted phone lookup keys (BACKLOG-2630)", 
         MIGRATIONS: Array<{ version: number }>;
       };
       expect(klass.MIGRATIONS.filter((m) => m.version === 64)).toHaveLength(1);
-      expect(Math.max(...klass.MIGRATIONS.map((m) => m.version))).toBe(64);
+
+      // BACKLOG-2791: this used to assert `Math.max(versions) === 64`, i.e. that
+      // v64 is the chain HEAD. That was true only until the next migration
+      // landed, and it is not a claim about v64 at all — the property this test
+      // is named for is "registered EXACTLY ONCE", asserted above.
+      //
+      // What is still worth pinning is that v64 is genuinely IN the chain and
+      // nothing above it displaced it, so the head is at least 64. Written as a
+      // literal, this assertion is one of the class that turned nine files and
+      // 33 tests red on a single new migration — see helpers/chainHead.ts.
+      expect(Math.max(...klass.MIGRATIONS.map((m) => m.version))).toBeGreaterThanOrEqual(64);
     });
   });
 });

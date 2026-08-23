@@ -811,4 +811,61 @@ export const transactionBridge = {
       ipcRenderer.removeListener("transactions:messages-sync-complete", handler);
     };
   },
+
+  // ==========================================================================
+  // BACKLOG-2791 / BACKLOG-2792 — the Needs Review queue.
+  //
+  // These four are the ONLY way the renderer learns review state. Every surface
+  // (the combined Needs Review screen, both tabs' needs-review sections, the
+  // header badge, the P2/P3 popups and the Complete gate) goes through
+  // getReviewState — one source of truth, founder ruling 2026-08-22.
+  // ==========================================================================
+
+  /** The combined queue for a transaction: pending + legacy, as one set. */
+  getReviewState: (transactionId: string) =>
+    ipcRenderer.invoke("review:get-state", transactionId),
+
+  /**
+   * Run discovery. "open" scans only records ingested since the watermark;
+   * "contact-change" sweeps the full window for the changed identities only.
+   * Returns { added, outstanding } — `added` drives the popup (silent at 0).
+   */
+  syncReviewQueue: (
+    transactionId: string,
+    reason: "open" | "contact-change",
+    contactIds?: string[],
+  ) => ipcRenderer.invoke("review:sync", transactionId, reason, contactIds),
+
+  /** Approve items — THIS is what links them, per the normal rules. */
+  approveReviewItems: (itemIds: string[]) =>
+    ipcRenderer.invoke("review:approve", itemIds),
+
+  /** Reject items — durable; a later sync cannot resurrect them. */
+  rejectReviewItems: (itemIds: string[]) =>
+    ipcRenderer.invoke("review:reject", itemIds),
+
+  /**
+   * BACKLOG-2791: fires whenever ANY trigger changes the queue — the on-open
+   * sweep, the provider fetch, a contact saved on the deal, a contact edited in
+   * Clients & Contacts, or deal creation.
+   *
+   * This is what lets a main-process sync reach the screen. Without it a
+   * contact-save queued items in the database and the UI showed nothing until
+   * the next open.
+   */
+  onReviewQueueChanged: (
+    callback: (data: {
+      transactionId: string;
+      added: number;
+      linked: number;
+      outstanding: number;
+      reason: "open" | "background" | "contact-change";
+    }) => void,
+  ) => {
+    const handler = (_event: unknown, data: Parameters<typeof callback>[0]) => callback(data);
+    ipcRenderer.on("review:queue-changed", handler);
+    return () => {
+      ipcRenderer.removeListener("review:queue-changed", handler);
+    };
+  },
 };

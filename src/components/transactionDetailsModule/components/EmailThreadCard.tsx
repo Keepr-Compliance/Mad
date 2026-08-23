@@ -224,7 +224,10 @@ export function EmailThreadCard({
               className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
               data-testid="view-thread-button"
             >
-              {isMultipleEmails ? "View Thread →" : "View"}
+              {/* BACKLOG-2791, founder-dictated 2026-08-22: every view button
+                  reads "View" at every size and for every thread length. The
+                  multi-email variant used to read "View Thread →". */}
+              View
             </button>
             {/* BACKLOG-2319: Confirm (check) — Needs-review cards only. Sits to
                 the LEFT of the remove (trash) button. Promotes the thread to
