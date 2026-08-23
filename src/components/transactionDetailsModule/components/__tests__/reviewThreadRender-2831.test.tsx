@@ -74,7 +74,6 @@ function renderThread(items: ReviewItemDto[]) {
   render(
     <EmailThreadViewModal
       thread={thread}
-      isOpen
       onClose={() => undefined}
       userEmail="me@example.com"
     />,
