@@ -93,6 +93,7 @@ import { openTestDb, type TestDb } from "../services/__tests__/helpers/syncSqlit
 // and would make this suite red for the wrong reason.
 const USER = "2563a11d-0000-4000-8000-00000000c0de";
 const TRANSACTION = "2563b22e-0000-4000-8000-00000000dead";
+const OTHER_USER = "2563c33f-0000-4000-8000-00000000beef";
 const PROPERTY = "1420 Marlin Court, Astoria OR";
 
 let mockDb: TestDb | null = null;
@@ -375,26 +376,44 @@ describe("transactions:create-audited writes the creation event to audit_logs", 
 
 // ===========================================================================
 describe("transactions:resubmit writes the resubmission to audit_logs", () => {
-  // Both broker calls return NO submissionId, so both rows fall back to the
-  // transaction id and land under one `resource_id` — which is what makes
-  // "the trail for THIS deal" a single readable set rather than two lookups.
-  const brokerOk = {
+  /**
+   * TRANSCRIBED from `submissionService`, not invented.
+   *
+   * `SubmissionResult` (`submissionService.ts:47-54`) declares `submissionId:
+   * string | null`, `attachmentsFailed: number`, `messagesCount: number` and
+   * `attachmentsCount: number` — none optional. The ONE `success: true` return
+   * in that service (`:568-575`) always carries a real `submissionId` string.
+   * `submissionId: null` is emitted only on the failure path (`:619`).
+   *
+   * That matters here for a reason beyond tidiness. A first draft of this suite
+   * used `{success: true, messagesCount, attachmentsCount}` with no
+   * submissionId, so both rows fell back to `validatedTransactionId` and landed
+   * under ONE `resource_id`. That is a state the service CANNOT PRODUCE, and it
+   * made the two-row assertion easy in a way production is not: **each
+   * submission gets its own id, so submit and resubmit write rows under
+   * DIFFERENT `resource_id`s.** The assertions below reflect the real shape.
+   */
+  const SUBMISSION_1 = "sub-2563-0000-4000-8000-000000000001";
+  const SUBMISSION_2 = "sub-2563-0000-4000-8000-000000000002";
+  const brokerOk = (submissionId: string) => ({
     success: true,
+    submissionId,
     messagesCount: 12,
     attachmentsCount: 3,
-  };
+    attachmentsFailed: 0,
+  });
 
   it("writes a TRANSACTION_SUBMIT row marked as a resubmit", async () => {
-    mockResubmitTransaction.mockResolvedValue(brokerOk);
+    mockResubmitTransaction.mockResolvedValue(brokerOk(SUBMISSION_2));
 
     const result = await invoke("transactions:resubmit", TRANSACTION);
     expect(result.success).toBe(true);
 
-    expect(auditRows(TRANSACTION)).toEqual([
+    expect(auditRows(SUBMISSION_2)).toEqual([
       {
         action: "TRANSACTION_SUBMIT",
         resource_type: "SUBMISSION",
-        resource_id: TRANSACTION,
+        resource_id: SUBMISSION_2,
         user_id: USER,
         success: 1,
         reason: "resubmit",
@@ -406,20 +425,46 @@ describe("transactions:resubmit writes the resubmission to audit_logs", () => {
     // This is what "records the first submission but silently drops every
     // resubmit" cashes out to: the export must show two distinct events, not
     // one, and must be able to say which was which.
-    mockSubmitTransaction.mockResolvedValue(brokerOk);
-    mockResubmitTransaction.mockResolvedValue(brokerOk);
+    //
+    // Asserted as an exact SET across both submission ids, because the rows do
+    // NOT share a resource_id — see the fixture note above.
+    mockSubmitTransaction.mockResolvedValue(brokerOk(SUBMISSION_1));
+    mockResubmitTransaction.mockResolvedValue(brokerOk(SUBMISSION_2));
 
     await invoke("transactions:submit", TRANSACTION);
     await invoke("transactions:resubmit", TRANSACTION);
 
-    expect(auditRows(TRANSACTION).map((r) => [r.action, r.reason])).toEqual([
-      ["TRANSACTION_SUBMIT", null],
-      ["TRANSACTION_SUBMIT", "resubmit"],
+    const trail = mockDb!
+      .prepare(
+        `SELECT action, resource_id, json_extract(metadata, '$.reason') AS reason
+           FROM audit_logs ORDER BY timestamp, rowid`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    expect(trail).toEqual([
+      { action: "TRANSACTION_SUBMIT", resource_id: SUBMISSION_1, reason: null },
+      { action: "TRANSACTION_SUBMIT", resource_id: SUBMISSION_2, reason: "resubmit" },
     ]);
   });
 
+  it("ties the row back to the transaction the resubmission was about", async () => {
+    // `resource_id` is the SUBMISSION id, so without this the audit row cannot
+    // be joined to the deal it concerns — a compliance trail that records "a
+    // package was resubmitted" and not "which deal". `propertyAddress` is a
+    // display string, not a key. See the deviation note on BACKLOG-2563.
+    mockResubmitTransaction.mockResolvedValue(brokerOk(SUBMISSION_2));
+
+    await invoke("transactions:resubmit", TRANSACTION);
+
+    const row = mockDb!
+      .prepare(
+        "SELECT json_extract(metadata, '$.transactionId') AS txn FROM audit_logs WHERE resource_id = ?",
+      )
+      .get(SUBMISSION_2) as { txn: string };
+    expect(row.txn).toBe(TRANSACTION);
+  });
+
   it("carries the package size the broker actually received", async () => {
-    mockResubmitTransaction.mockResolvedValue(brokerOk);
+    mockResubmitTransaction.mockResolvedValue(brokerOk(SUBMISSION_2));
 
     await invoke("transactions:resubmit", TRANSACTION);
 
@@ -430,7 +475,7 @@ describe("transactions:resubmit writes the resubmission to audit_logs", () => {
                 json_extract(metadata, '$.propertyAddress')  AS addr
            FROM audit_logs WHERE resource_id = ?`,
       )
-      .get(TRANSACTION) as Record<string, unknown>;
+      .get(SUBMISSION_2) as Record<string, unknown>;
     expect(row).toEqual({ messages: 12, attachments: 3, addr: PROPERTY });
   });
 
@@ -438,11 +483,106 @@ describe("transactions:resubmit writes the resubmission to audit_logs", () => {
     // Matches `transactions:submit`, which also logs only inside `if (success)`.
     // Whether FAILED broker submissions should be audited is an open question on
     // BACKLOG-2563; this pins the shipped behaviour so a change to it is visible.
-    mockResubmitTransaction.mockResolvedValue({ success: false, error: "portal 503" });
+    mockResubmitTransaction.mockResolvedValue({
+      success: false,
+      submissionId: null,
+      error: "portal 503",
+      messagesCount: 0,
+      attachmentsCount: 0,
+      attachmentsFailed: 0,
+    });
 
     await invoke("transactions:resubmit", TRANSACTION);
 
     expect(allAuditActions()).toEqual([]);
+  });
+
+  it("writes NOTHING when the transaction lookup comes back empty", async () => {
+    // A FINDING, pinned rather than fixed — `transactions:submit` has had the
+    // same shape since BACKLOG-391. The handler falls back to `userId: "unknown"`,
+    // but `audit_logs.user_id` is a FK to `users_local` and there is no such row,
+    // so the INSERT is rejected, `auditService.log` swallows the rejection, and
+    // the resubmission goes unrecorded while the user is told it succeeded.
+    // Reported on BACKLOG-2563 as a separate gap in the same class.
+    mockResubmitTransaction.mockResolvedValue(brokerOk(SUBMISSION_2));
+    mockGetTransactionDetails.mockResolvedValue(null);
+
+    const result = await invoke("transactions:resubmit", TRANSACTION);
+
+    expect(result.success).toBe(true);
+    expect(allAuditActions()).toEqual([]);
+  });
+});
+
+// ===========================================================================
+describe("the new rows reach the CCPA/SOC2 export, not just the table", () => {
+  // Proving the write lands in `audit_logs` is not the same as proving the
+  // export can SEE it. `ccpaExportService.ts:193` builds the audit_trail section
+  // from `getAuditLogs({ userId, limit: 50000 })`, and that query filters on
+  // `user_id`, so a row written under the wrong user — or one the mapper drops
+  // a field from — is written and still invisible where it matters.
+  //
+  // The REAL export query is used here, not a re-typed copy of it.
+
+  it("both new events come back through the export's own query, distinguishable", async () => {
+    mockSubmitTransaction.mockResolvedValue({
+      success: true,
+      submissionId: "sub-2563-0000-4000-8000-000000000001",
+      messagesCount: 12,
+      attachmentsCount: 3,
+      attachmentsFailed: 0,
+    });
+    mockResubmitTransaction.mockResolvedValue({
+      success: true,
+      submissionId: "sub-2563-0000-4000-8000-000000000002",
+      messagesCount: 12,
+      attachmentsCount: 3,
+      attachmentsFailed: 0,
+    });
+
+    await invoke("transactions:create-audited", USER, { property_address: PROPERTY });
+    await invoke("transactions:submit", TRANSACTION);
+    await invoke("transactions:resubmit", TRANSACTION);
+
+    // `limit` matches the export's own call.
+    const exported = await auditLogDb.getAuditLogs({ userId: USER, limit: 50000 });
+
+    expect(
+      exported
+        .map((e) => [e.action, (e.metadata as any)?.reason ?? null])
+        .sort(),
+    ).toEqual(
+      [
+        ["TRANSACTION_CREATE", "audited_create"],
+        ["TRANSACTION_SUBMIT", null],
+        ["TRANSACTION_SUBMIT", "resubmit"],
+      ].sort(),
+    );
+  });
+
+  it("a row written under a different user does NOT reach that user's export", async () => {
+    // The control for the assertion above: it filters on user_id, so it can
+    // tell "the export sees my rows" from "the export sees any rows".
+    mockDb!
+      .prepare(
+        "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', ?)",
+      )
+      .run(OTHER_USER, "other@example.com", "oauth-2563-other");
+    await auditService.log({
+      userId: OTHER_USER,
+      action: "TRANSACTION_CREATE",
+      resourceType: "TRANSACTION",
+      resourceId: TRANSACTION,
+      metadata: { reason: "audited_create" },
+      success: true,
+    });
+
+    expect(await auditLogDb.getAuditLogs({ userId: USER, limit: 50000 })).toEqual([]);
+    expect(
+      (await auditLogDb.getAuditLogs({ userId: OTHER_USER, limit: 50000 })).map(
+        (e) => e.action,
+      ),
+    ).toEqual(["TRANSACTION_CREATE"]);
   });
 });
 

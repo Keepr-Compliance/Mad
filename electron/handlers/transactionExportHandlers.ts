@@ -681,6 +681,10 @@ export function registerTransactionExportHandlers(
           resourceId: result.submissionId || validatedTransactionId,
           metadata: {
             reason: "resubmit",
+            // `resourceId` above is the SUBMISSION id, and a resubmission gets a
+            // NEW one — so without this the row cannot be joined back to the
+            // deal it concerns. `propertyAddress` is a display string, not a key.
+            transactionId: validatedTransactionId,
             propertyAddress: transaction?.property_address,
             messagesCount: result.messagesCount,
             attachmentsCount: result.attachmentsCount,
