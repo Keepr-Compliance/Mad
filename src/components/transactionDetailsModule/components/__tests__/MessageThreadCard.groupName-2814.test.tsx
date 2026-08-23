@@ -101,15 +101,15 @@ describe("BACKLOG-2814 — a NAMED group renders its name", () => {
         messages={[groupMessage({ thread_display_name: GROUP_NAME })]}
         phoneNumber="+14155550100"
         contactNames={{
-          "+14155550101": "Dana Brooks",
-          "+14155550102": "Sam Ortiz",
+          "+14155550101": "Pat Riverton",
+          "+14155550102": "Robin Marsh",
         }}
       />,
     );
 
     expect(headerText()).toContain(GROUP_NAME);
-    expect(headerText()).toContain("Dana Brooks");
-    expect(headerText()).toContain("Sam Ortiz");
+    expect(headerText()).toContain("Pat Riverton");
+    expect(headerText()).toContain("Robin Marsh");
   });
 
   it("reads the name off a later message when the first row lacks it", () => {
@@ -152,12 +152,12 @@ describe("BACKLOG-2814 — an UNNAMED group falls back to participants", () => {
         threadId="macos-chat-3"
         messages={[groupMessage()]}
         phoneNumber="+14155550100"
-        contactNames={{ "+14155550101": "Dana Brooks" }}
+        contactNames={{ "+14155550101": "Pat Riverton" }}
       />,
     );
 
     expect(headerText()).toContain("Group Chat");
-    expect(headerText()).toContain("Dana Brooks");
+    expect(headerText()).toContain("Pat Riverton");
   });
 
   it("falls back when the field is null — Apple's NULL flavour of unnamed", () => {
@@ -215,11 +215,11 @@ describe("BACKLOG-2814 — a 1:1 thread is unchanged", () => {
         threadId="macos-chat-4"
         messages={[oneToOneMessage({ thread_display_name: "Mum" })]}
         phoneNumber="+14155550103"
-        contactName="Dana Brooks"
+        contactName="Pat Riverton"
       />,
     );
 
-    expect(headerText()).toContain("Dana Brooks");
+    expect(headerText()).toContain("Pat Riverton");
     expect(headerText()).not.toContain("Mum");
     expect(headerText()).not.toContain("Group Chat");
   });
