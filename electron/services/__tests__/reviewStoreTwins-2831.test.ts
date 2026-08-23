@@ -329,11 +329,11 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
       // dedup keyed on a shared NULL email_id would fold every text into one.
       db.prepare(
         `INSERT INTO messages (id, user_id, thread_id, body_text, sent_at, direction, participants_flat, channel)
-         VALUES (?, ?, ?, ?, '2026-06-02T00:00:00.000Z', 'inbound', '+15551230000', 'sms')`,
+         VALUES (?, ?, ?, ?, '2026-06-02T00:00:00.000Z', 'inbound', '+15550100', 'sms')`,
       ).run("m-1", USER, "th-a", "hi there");
       db.prepare(
         `INSERT INTO messages (id, user_id, thread_id, body_text, sent_at, direction, participants_flat, channel)
-         VALUES (?, ?, ?, ?, '2026-06-03T00:00:00.000Z', 'inbound', '+15559990000', 'sms')`,
+         VALUES (?, ?, ?, ?, '2026-06-03T00:00:00.000Z', 'inbound', '+15550199', 'sms')`,
       ).run("m-2", USER, "th-b", "and hello");
       db.prepare(
         `INSERT INTO pending_review_communications (id, user_id, transaction_id, email_id, thread_id, found_at)
