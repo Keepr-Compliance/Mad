@@ -320,21 +320,21 @@ describe("BACKLOG-2757 — the exported filename set does not depend on insertio
   /**
    * The exact set, written out. Every entry is load-bearing:
    *
-   *  - `text_001_1_503_555-0152.pdf` — TWO contacts share this line, so the
-   *    file names the NUMBER and carries no date. Pre-fix this read
-   *    `text_001_Dana_Alvarez_2026-02-01.pdf` under one insertion order and
+   *  - `text_001_2026-02-01.pdf` — TWO contacts share this line, so the file
+   *    carries the sequence id and the date and NOTHING ELSE: no name, and (per
+   *    the founder ruling of 2026-08-23) no phone number either. Pre-fix this
+   *    read `text_001_Dana_Alvarez_2026-02-01.pdf` under one insertion order and
    *    `text_001_Chris_Alvarez_2026-02-01.pdf` under the other.
-   *  - `text_002_1_503_555-0153.pdf` — THREE contacts. Same rule; the boundary
-   *    is swept, not sampled.
+   *  - `text_002_2026-02-02.pdf` — THREE contacts. Same rule; the boundary is
+   *    swept, not sampled.
    *  - `text_003_Chris_Alvarez_2026-02-03.pdf` — ONE contact. Unchanged,
    *    including the date suffix. This is the collateral-damage control.
    *  - `text_004_1_503_555-0154_2026-02-04.pdf` — NO contact. BACKLOG-2463's
-   *    number naming, and it KEEPS ITS DATE. Worth stating because it is the
-   *    one place the two number-named cases differ: an unresolved thread is
-   *    unchanged from what shipped, while an AMBIGUOUS thread follows the
-   *    founder decision's literal `text_NNN_<number>.pdf`. Same segment, and
-   *    deliberately not the same filename — one of these is old behaviour left
-   *    alone, the other is a new rule.
+   *    number naming, untouched: an unresolved thread still carries the handle.
+   *    The asymmetry with the ambiguous case above is deliberate and was ruled
+   *    on. A number we could not attach to anybody names a conversation; a
+   *    number two KNOWN people share, written to disk beside neither name, is
+   *    an identity claim waiting to be misread — so only that case drops it.
    *  - `text_005_Chris_Alvarez_2026-02-05.pdf` — TWO contacts hold this handle,
    *    but only Chris is a party to this deal. Scoping resolves the ambiguity,
    *    so this thread is NOT ambiguous and keeps a name. (BACKLOG-2758.)
@@ -343,13 +343,16 @@ describe("BACKLOG-2757 — the exported filename set does not depend on insertio
    *    (BACKLOG-2758.)
    */
   const EXPECTED_FILENAMES = [
-    "text_001_1_503_555-0152.pdf",
-    "text_002_1_503_555-0153.pdf",
+    "text_001_2026-02-01.pdf",
+    "text_002_2026-02-02.pdf",
     "text_003_Chris_Alvarez_2026-02-03.pdf",
     "text_004_1_503_555-0154_2026-02-04.pdf",
     "text_005_Chris_Alvarez_2026-02-05.pdf",
     "text_006_1_503_555-0156_2026-02-06.pdf",
   ];
+
+  /** The two ambiguous threads, by their exact names. */
+  const AMBIGUOUS_FILENAMES = ["text_001_2026-02-01.pdf", "text_002_2026-02-02.pdf"];
 
   const runs: Record<string, { files: string[]; html: string[] }> = {};
 
@@ -373,18 +376,40 @@ describe("BACKLOG-2757 — the exported filename set does not depend on insertio
         expect(runs[order].files).toEqual(EXPECTED_FILENAMES);
       });
 
-      test("no person's surname appears in an ambiguous thread's filename", () => {
-        // Belt to the exact-set brace: a future renaming that kept the set the
-        // same length but reintroduced a name would already have failed above;
-        // this states the PROPERTY the founder decision is about, so the
-        // intent survives an edit to the expected list.
-        const ambiguous = runs[order].files.filter(
-          (f) => f.startsWith("text_001_") || f.startsWith("text_002_")
+      test("an ambiguous filename carries the DATE, no name, and no phone digits", () => {
+        // Belt to the exact-set brace. The exact strings are asserted above; this
+        // states the three PROPERTIES the founder ruling is about, so the intent
+        // survives an edit to the expected list.
+        const ambiguous = runs[order].files.filter((f) =>
+          AMBIGUOUS_FILENAMES.includes(f)
         );
-        expect(ambiguous).toHaveLength(2);
+        expect(ambiguous).toEqual(AMBIGUOUS_FILENAMES);
+
         for (const f of ambiguous) {
+          // 1. NEITHER contact name. Asserted per-person, not as "no Alvarez":
+          //    two people who did not share a surname would slip through that.
+          expect(f).not.toContain("Chris");
+          expect(f).not.toContain("Dana");
+          expect(f).not.toContain("Elliot");
           expect(f).not.toContain("Alvarez");
+
+          // 2. NO phone digits. The handles are 503-555-015x; a filename holding
+          //    any run of them is the number back on disk. Checked as the actual
+          //    digit runs AND as the sanitised segment the old rule produced.
+          expect(f).not.toContain("503");
+          expect(f).not.toContain("555");
+          expect(f).not.toContain("1_503_555");
+
+          // 3. The DATE is present — this is the half that makes the name
+          //    consistent with every other file in the folder, and dropping it
+          //    was the real inconsistency. `text_001.pdf` would satisfy 1 and 2
+          //    and still be wrong.
+          expect(f).toMatch(/_20\d\d-\d\d-\d\d\.pdf$/);
         }
+
+        // And the exact strings again, so this leg cannot pass on a partial:
+        // every ambiguous file is `text_<NNN>_<YYYY-MM-DD>.pdf` and nothing else.
+        expect(ambiguous).toEqual(["text_001_2026-02-01.pdf", "text_002_2026-02-02.pdf"]);
       });
     });
   }

@@ -163,8 +163,28 @@ export function fileSafeContactLabel(label: string): string {
  *
  * WHY THE FILENAME DROPS THE NAME RATHER THAN CARRYING BOTH: the filename is the
  * part that survives. Putting "Chris_or_Dana" on disk still asserts a person, in
- * the one place we cannot correct later. The number is the thing we actually
- * know, so the file is named after it.
+ * the one place we cannot correct later.
+ *
+ * WHY IT DROPS THE NUMBER TOO (founder ruling, 2026-08-23):
+ *
+ *   > "you can drop the name and even the phone number if you want, just keep
+ *   > the id is also fine, this isn't critical"
+ *
+ * So an ambiguous thread's file is `text_<NNN>_<YYYY-MM-DD>.pdf` — sequence id
+ * and date, nothing else. Two reasons, and the second is the one that actually
+ * settled it:
+ *
+ *  1. A phone number in a filename is personal data written to a filesystem and
+ *     handed to a broker. The number belongs INSIDE the document, where it
+ *     already is (it leads the label), not in the path.
+ *  2. The date is what made the naming CONSISTENT. Every other exported thread
+ *     file ends in `_<YYYY-MM-DD>.pdf`, so a number-named file with no date
+ *     sorted away from its neighbours. Keeping the date puts the ambiguous file
+ *     back in line with the rest of the folder — which was the real
+ *     inconsistency, not the missing name.
+ *
+ * The label is unchanged and still carries both the number and both names: the
+ * export does not become vaguer, it stops writing identity into a path.
  *
  * ---------------------------------------------------------------------------
  * WHERE BACKLOG-2816 PLUGS IN
@@ -189,7 +209,14 @@ export function fileSafeContactLabel(label: string): string {
 export interface ThreadNaming {
   /** The human label: PDF header, summary index row, combined-PDF section. */
   label: string;
-  /** The filename component, already filesystem-safe. */
+  /**
+   * The filename component, already filesystem-safe.
+   *
+   * **Empty string when the thread is ambiguous** — that is not a missing value,
+   * it is the decision: an ambiguous thread contributes NO identity segment to
+   * its filename. Callers must branch on `ambiguous` rather than interpolating
+   * this blindly, or they will write `text_001__2026-02-01.pdf`.
+   */
   fileSegment: string;
   /** True when the handle matched more than one contact. */
   ambiguous: boolean;
@@ -222,11 +249,18 @@ export function joinAmbiguousNames(names: readonly string[]): string {
  * THE naming decision for a text thread. Precedence, top to bottom:
  *
  *   1. (BACKLOG-2816 seam — group chat name, not implemented, see above)
- *   2. AMBIGUOUS: >1 contact on this handle -> label `<handle> — A or B`,
- *      filename = the handle, no name.
+ *   2. AMBIGUOUS: >1 contact on this handle -> label `<handle> — A or B`, and
+ *      NO filename segment at all (the caller writes `text_<NNN>_<date>.pdf`).
  *   3. GROUP CHAT with no resolvable party -> "Group Chat".
  *   4. Exactly one name -> that name. Unchanged from BACKLOG-2463.
  *   5. No name -> the formatted handle. Unchanged from BACKLOG-2463.
+ *
+ * Note the asymmetry between 2 and 5, which is deliberate and was ruled on: an
+ * UNRESOLVED thread still carries the formatted handle in its filename (that is
+ * BACKLOG-2463 behaviour, untouched), while an AMBIGUOUS one carries nothing.
+ * The difference is what each case would be asserting. A number we could not
+ * attach to anybody names a conversation; a number two known people share, put
+ * on disk beside neither name, is an identity claim waiting to be misread.
  *
  * Rules 3-5 are byte-for-byte what shipped before; only rule 2 is new, and it
  * fires only when the resolver found more than one contact.
@@ -240,11 +274,12 @@ export function threadNaming({
 
   if (names.length > 1) {
     // The handle, formatted for a human, with no name attached — the same chain
-    // an unresolved thread already uses, called rather than restated.
+    // an unresolved thread already uses, called rather than restated. It goes in
+    // the LABEL only; see the docblock for why it stays out of the filename.
     const handleLabel = contactDisplayLabel({ name: null, phone: contact.phone });
     return {
       label: `${handleLabel} — ${joinAmbiguousNames(names)}`,
-      fileSegment: fileSafeContactLabel(handleLabel),
+      fileSegment: "",
       ambiguous: true,
     };
   }

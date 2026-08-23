@@ -487,9 +487,12 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
       // filename on disk, inside an audit package handed to a broker, naming
       // whichever of two people happened to be inserted second.
       //
-      // Founder decision (2026-08-20): the ambiguous thread's filename carries
-      // NO name — index and number only. Both names go in the LABEL instead,
-      // joined by "or", asserted in the label leg below.
+      // Founder decision (2026-08-20), refined by his ruling of 2026-08-23:
+      // the ambiguous thread's filename carries NO name and NO number — the
+      // sequence id and the date, nothing else. The number is personal data on
+      // a filesystem and already leads the label inside the document; the date
+      // stays so the file still sorts with its neighbours. Both names go in the
+      // LABEL, joined by "or", asserted in the label leg below.
       // ---------------------------------------------------------------------
 
       // Chris's own phone: ONE holder, so nothing changes — same name, same
@@ -498,20 +501,21 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
       // would red right here.
       expect(textFiles).toContain("text_002_Chris_Alvarez_2026-01-13.pdf");
 
-      // The shared-phone thread: named for the NUMBER (+1 (503) 555-0142 put
-      // through the export's one filename sanitiser), and with no date, exactly
-      // as the decision specifies. Exact string — a "does not contain a name"
-      // check would pass on a file named after nothing at all.
-      expect(textFiles).toContain("text_001_1_503_555-0142.pdf");
+      // The shared-phone thread: sequence id and date, nothing else. Exact
+      // string — a "does not contain a name" check would pass on a file named
+      // after nothing at all, and a "no digits" check would fail the date.
+      expect(textFiles).toContain("text_001_2026-01-12.pdf");
 
-      // Neither person's name appears anywhere in texts/ for the shared thread.
+      // Neither name AND no phone digits for the shared thread.
       const sharedThreadFile = textFiles.filter((f) => f.startsWith("text_001_"));
-      expect(sharedThreadFile).toEqual(["text_001_1_503_555-0142.pdf"]);
+      expect(sharedThreadFile).toEqual(["text_001_2026-01-12.pdf"]);
       expect(sharedThreadFile[0]).not.toContain("Alvarez");
+      expect(sharedThreadFile[0]).not.toContain("503");
+      expect(sharedThreadFile[0]).not.toContain("555");
 
       // Exact set: nothing else was written to texts/.
       expect(textFiles).toEqual([
-        "text_001_1_503_555-0142.pdf",
+        "text_001_2026-01-12.pdf",
         "text_002_Chris_Alvarez_2026-01-13.pdf",
       ]);
     });
@@ -577,7 +581,7 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
       // that the file does not carry a person's name.
       const textFiles = fs.readdirSync(path.join(fx.outputDir, "texts"));
       const sharedThreadFiles = textFiles.filter((f) => f.startsWith("text_001_"));
-      expect(sharedThreadFiles).toEqual(["text_001_1_503_555-0142.pdf"]);
+      expect(sharedThreadFiles).toEqual(["text_001_2026-01-12.pdf"]);
     });
   });
 
@@ -635,9 +639,9 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
       // is unchanged.
       expect(textFiles).toContain("text_002_Chris_Alvarez_2026-01-13.pdf");
 
-      // BACKLOG-2757: the shared-handle thread is now named for the number, so
-      // "does her name still resolve?" has to be asked where the names actually
-      // live — the label. It does, and so does his: a tombstone changes
+      // BACKLOG-2757: the shared-handle thread carries no identity in its name
+      // at all now, so "does her name still resolve?" has to be asked where the
+      // names actually live — the label. It does, and so does his: a tombstone changes
       // visibility in Clients & Contacts, it does not redact who was on a
       // message already captured. If the tombstone filter were ever added to
       // the resolver, this label would lose a name and this leg reds.

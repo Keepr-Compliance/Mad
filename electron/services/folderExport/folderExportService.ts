@@ -597,11 +597,14 @@ class FolderExportService {
       // after the word "Unknown" to dodge the punctuation in a phone number.
       // This string lands on disk in the audit package and outlives any later fix.
       //
-      // BACKLOG-2757: and when the handle is not ONE person, name it after the
-      // NUMBER and drop the date — `text_001_1_415_555-0120.pdf`. A shared line
-      // used to put whichever contact was inserted second onto disk. There is no
-      // correct name to write here, so no name is written; the index and the
-      // number identify the thread without asserting a person.
+      // BACKLOG-2757: and when the handle is not ONE person, write NEITHER a
+      // name nor a number — `text_001_2026-02-01.pdf`, sequence id and date.
+      // A shared line used to put whichever contact was inserted second onto
+      // disk. There is no correct name to write, so none is; and the number is
+      // personal data that belongs inside the document (it leads the label),
+      // not in a path. The date stays because every other thread file ends in
+      // one — dropping it sorted the ambiguous file away from its neighbours,
+      // which was the actual inconsistency. (Founder ruling 2026-08-23.)
       const paddedIndex = String(threadIndex + 1).padStart(3, "0");
       const naming = threadNaming({
         contact,
@@ -609,7 +612,7 @@ class FolderExportService {
         matchedNames: threadMatchedNames,
       });
       const fileName = naming.ambiguous
-        ? `text_${paddedIndex}_${naming.fileSegment}.pdf`
+        ? `text_${paddedIndex}_${firstDate}.pdf`
         : `text_${paddedIndex}_${naming.fileSegment}_${firstDate}.pdf`;
 
       await fs.writeFile(path.join(outputPath, fileName), pdfBuffer);
