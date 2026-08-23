@@ -91,9 +91,13 @@ import {
   assertNeverLifecycleState,
   blocksComplete,
   lifecycleTransitionKey,
+  isPublishedTransition,
   transitionsFor,
+  classifyRemoval,
+  LEGACY_NEEDS_REVIEW_CLASSIFICATION,
   type CommunicationLifecycleState,
   type LifecycleFrom,
+  type RemovalFlavor,
 } from "../../types/ipc/communicationLifecycle";
 
 const U = "u-lc", T = "t-lc", C = "c-lc", PROPERTY = "3414 Sapp Rd SW";
@@ -157,6 +161,20 @@ function membersOf(state: CommunicationLifecycleState): string[] {
     default:
       return assertNeverLifecycleState(state);
   }
+}
+
+/**
+ * The flavour of the suppression row this email currently occupies, classified
+ * from the row's OWN stored values — never from what the test believes it wrote.
+ * `undefined` when the email is not in REMOVED.
+ */
+function removalFlavorOf(emailId: string): RemovalFlavor | undefined {
+  const row = db
+    .prepare(
+      "SELECT reason, match_reason FROM ignored_communications WHERE transaction_id=? AND email_id=?",
+    )
+    .get(T, emailId) as { reason: string | null; match_reason: string | null } | undefined;
+  return row ? classifyRemoval(row.reason, row.match_reason) : undefined;
 }
 
 type Snapshot = Record<CommunicationLifecycleState, string[]>;
@@ -250,6 +268,31 @@ describe("REVIEW_REJECTION_REASON is a persisted-data contract", () => {
  * ------------------------------------------------------------------ */
 
 describe("the published states", () => {
+  it("the flavour keeps T6 and T7b apart — they share a from->to pair", () => {
+    // The founder's T7b ruling put a THIRD row on the REMOVED source, and two of
+    // the three (T6, T7b) land on SUGGESTED. On a bare from->to pair they would
+    // be the same key, and either row could be deleted from the table without a
+    // test noticing. The flavour is what separates them.
+    expect(transitionsFor("removed", "suggested", "review-rejection").map((t) => t.id)).toEqual(["T6"]);
+    expect(transitionsFor("removed", "suggested", "ordinary-address-missing").map((t) => t.id)).toEqual(["T7b"]);
+    expect(transitionsFor("removed", "linked", "ordinary").map((t) => t.id)).toEqual(["T7"]);
+
+    // ...and an ordinary removal restoring to SUGGESTED is NOT published — that
+    // combination is T7b's alone, which is the ruling's whole point.
+    expect(isPublishedTransition("removed", "suggested", "ordinary")).toBe(false);
+    expect(isPublishedTransition("removed", "suggested", "review-rejection")).toBe(true);
+  });
+
+  it("classifyRemoval reads the reason before the classification", () => {
+    // A review rejection ALSO carries the legacy classification; testing the
+    // classification first would misread every rejection as T7b and send
+    // never-approved mail back as an ordinary restore.
+    expect(classifyRemoval(REVIEW_REJECTION_REASON, LEGACY_NEEDS_REVIEW_CLASSIFICATION)).toBe("review-rejection");
+    expect(classifyRemoval("Manually unlinked by user", LEGACY_NEEDS_REVIEW_CLASSIFICATION)).toBe("ordinary-address-missing");
+    expect(classifyRemoval("Manually unlinked by user", "address_found")).toBe("ordinary");
+    expect(classifyRemoval(null, null)).toBe("ordinary");
+  });
+
   it("blocksComplete matches what the Complete gate actually counts", async () => {
     // The gate reads countReviewItems(). Pin the published predicate against it
     // rather than against a second copy of the rule.
@@ -297,6 +340,12 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
       op: () => Promise<unknown>,
     ): Promise<void> {
       const before = snapshot();
+      // The flavour has to be read BEFORE the operation: a restore deletes the
+      // suppression row it acted on, so afterwards there is nothing left to
+      // classify. This is the only moment the source flavour is observable.
+      const flavorBefore = new Map<string, RemovalFlavor | undefined>(
+        emailIds.map((id) => [id, removalFlavorOf(id)]),
+      );
       await op();
       const after = snapshot();
       for (const id of emailIds) {
@@ -306,7 +355,14 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
         // Leaving every home is not a lifecycle move; it is a disappearance,
         // and no contract row can describe it.
         expect(to).not.toBe("new");
-        const key = lifecycleTransitionKey(from, to as CommunicationLifecycleState);
+        // Flavour qualifies the SOURCE only, exactly as the contract writes it.
+        const flavor = from === "removed" ? flavorBefore.get(id) : undefined;
+        if (from === "removed") {
+          // A removed item with no classifiable suppression row would make the
+          // key silently flavourless and collapse T6/T7/T7b back together.
+          expect(flavor).toBeDefined();
+        }
+        const key = lifecycleTransitionKey(from, to as CommunicationLifecycleState, flavor);
         observed.set(key, [...(observed.get(key) ?? []), `${label} (${id})`]);
       }
     }
@@ -378,6 +434,46 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     );
     expect(snapshot().linked).toContain("e-trash");
 
+    // -- T7b: the founder's 2026-08-23 ruling --------------------------------
+    // An ordinary removal that CARRIED the legacy needs-review classification
+    // restores to SUGGESTED, not LINKED: the shipped restore preserves the
+    // classification, so the recreated link lands back in the population
+    // getReviewState counts.
+    //
+    // Every leg is driven by its real producer. The legacy link is created with
+    // the exact call autoLinkService makes for the ambiguous half when it is not
+    // queueing ("auto", 0.5, the legacy classification) — transcribed from
+    // autoLinkService, not invented — and it is then trashed and restored
+    // through transactionService, the same two functions the tab's buttons call.
+    addEmail("e-legacy", "Sunday brunch?");
+    await drive("T7b setup: legacy 2319 link", ["e-legacy"], () =>
+      linkEmailToTransaction("e-legacy", T, "auto", 0.5, LEGACY_NEEDS_REVIEW_CLASSIFICATION),
+    );
+    // Linked by table, SUGGESTED by contract — the case a store-membership
+    // derivation gets wrong.
+    expect(snapshot().suggested).toContain("e-legacy");
+
+    const legacyLink = db
+      .prepare("SELECT id FROM communications WHERE transaction_id=? AND email_id='e-legacy'")
+      .get(T) as { id: string };
+    await drive("T7b setup: tab trash of a legacy item", ["e-legacy"], () =>
+      transactionService.unlinkCommunication(legacyLink.id),
+    );
+
+    const legacyRemoved = db
+      .prepare("SELECT id FROM ignored_communications WHERE transaction_id=? AND email_id='e-legacy'")
+      .get(T) as { id: string };
+    // The flavour the real producers actually left behind, classified from the
+    // row itself. If this were "ordinary" the next step would be T7, not T7b.
+    expect(removalFlavorOf("e-legacy")).toBe("ordinary-address-missing");
+
+    await drive("T7b restore of an ordinary address-missing removal", ["e-legacy"], () =>
+      transactionService.restoreRemovedEmailThread(legacyRemoved.id, "e-legacy", T, U),
+    );
+    // Back in needs-review — NOT linked. This is the whole of the ruling.
+    expect(snapshot().suggested).toContain("e-legacy");
+    expect(snapshot().linked).not.toContain("e-legacy");
+
     /* ---------------- the two directions ---------------- */
 
     const observedKeys = [...observed.keys()].sort();
@@ -395,8 +491,11 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     const unexercised = publishedKeys
       .filter((k) => !observed.has(k))
       .map((k) => {
-        const [from, to] = k.split("->") as [LifecycleFrom, CommunicationLifecycleState];
-        const rows = transitionsFor(from, to).map((t) => t.id).join("/");
+        const rows = LIFECYCLE_TRANSITIONS.filter(
+          (t) => lifecycleTransitionKey(t.from, t.to, t.removalFlavor) === k,
+        )
+          .map((t) => t.id)
+          .join("/");
         return `${k} (${rows || "no row"}) is published but no operation performed it`;
       });
     expect(unexercised).toEqual([]);
@@ -407,7 +506,7 @@ describe("EXHAUSTIVENESS — LIFECYCLE_TRANSITIONS vs the real operations", () =
     // Sanity: every contract row id is distinct and all seven are present, so a
     // silently truncated table cannot make the comparison above vacuous.
     expect(LIFECYCLE_TRANSITIONS.map((t) => t.id)).toEqual([
-      "T1", "T2", "T3", "T4", "T5", "T6", "T7",
+      "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T7b",
     ]);
   });
 });

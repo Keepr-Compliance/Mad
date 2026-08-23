@@ -155,17 +155,66 @@ export function blocksComplete(state: CommunicationLifecycleState): boolean {
  */
 export const REVIEW_REJECTION_REASON = "rejected_in_review";
 
-/** The two flavours of REMOVED, which T6 and T7 are keyed on. */
-export type RemovalFlavor = "review-rejection" | "ordinary";
+/**
+ * The legacy needs-review classification, carried on a link row and preserved
+ * across a removal so a restore returns the email to the right section.
+ *
+ * SCOPE NOTE: published because the lifecycle needs it to tell T7 from T7b, and
+ * for no wider purpose. BACKLOG-2818 deliberately does NOT sweep this value's
+ * other call sites — autoLinkService writes it, the tab components classify on
+ * it to render the existing needs-review sections, and singleReadPath-2791
+ * governs which files may SELECT on it. That sweep is a separate task with a
+ * different blast radius.
+ */
+export const LEGACY_NEEDS_REVIEW_CLASSIFICATION = "address_missing";
+
+/**
+ * The flavours of REMOVED.
+ *
+ * A removal's flavour decides where Restore sends it, so the flavour is part of
+ * a transition's IDENTITY when REMOVED is the source — which is exactly how the
+ * contract writes it, qualifying only its From column ("REMOVED (review flavor)",
+ * "REMOVED (ordinary flavor)"), never its To column.
+ *
+ *  "review-rejection"          rejected on a review card. Restore -> SUGGESTED,
+ *                              because it was never approved (T6).
+ *  "ordinary"                  an everyday removal of a confidently-linked
+ *                              communication. Restore -> LINKED (T7).
+ *  "ordinary-address-missing"  an everyday removal that CARRIED the legacy
+ *                              needs-review classification — a legacy item
+ *                              trashed from the tab. Restore returns it to the
+ *                              needs-review population, i.e. SUGGESTED (T7b).
+ *                              Founder ruling, 2026-08-23.
+ */
+export type RemovalFlavor = "review-rejection" | "ordinary" | "ordinary-address-missing";
+
+/**
+ * Which flavour a suppression row carries.
+ *
+ * Reason wins over classification, matching `restoreRejectedToQueue`, which
+ * checks the reason first: a review rejection ALSO carries the legacy
+ * classification (deliberately — it is what keeps a restored rejection out of
+ * the linked set), so testing the classification first would misread every
+ * rejection as T7b.
+ */
+export function classifyRemoval(
+  reason: string | null,
+  matchReason: string | null,
+): RemovalFlavor {
+  if (reason === REVIEW_REJECTION_REASON) return "review-rejection";
+  if (matchReason === LEGACY_NEEDS_REVIEW_CLASSIFICATION) return "ordinary-address-missing";
+  return "ordinary";
+}
 
 /* ------------------------------------------------------------------ *
- * The transition table — T1..T7 of the Communication Lifecycle Contract
+ * The transition table — T1..T7b of the Communication Lifecycle Contract
  * ------------------------------------------------------------------ */
 
 /** A transition's origin. `"new"` is the contract's "(new)" — discovery. */
 export type LifecycleFrom = CommunicationLifecycleState | "new";
 
-export type LifecycleTransitionId = "T1" | "T2" | "T3" | "T4" | "T5" | "T6" | "T7";
+export type LifecycleTransitionId =
+  | "T1" | "T2" | "T3" | "T4" | "T5" | "T6" | "T7" | "T7b";
 
 export interface LifecycleTransition {
   /** The contract's row number, so a failure names the row a reader can look up. */
@@ -175,9 +224,17 @@ export interface LifecycleTransition {
   /** What the user (or the sync) does to cause it — the contract's Trigger column. */
   readonly actions: readonly string[];
   /**
-   * Only for the two REMOVED exits: which flavour of removal this row applies
-   * to. The contract distinguishes them in its From column and the flavour is
-   * carried in `ignored_communications.reason`.
+   * The removal flavour this row concerns.
+   *
+   * When `from` is "removed" it is part of the row's IDENTITY — the flavour is
+   * the INPUT that selects the destination, which is why three rows (T6, T7,
+   * T7b) share a source state and differ only here, and why
+   * `lifecycleTransitionKey` folds it in for exactly those rows.
+   *
+   * When `to` is "removed" it is DOCUMENTATION of the flavour the transition
+   * writes. It is deliberately NOT part of the key there: the contract qualifies
+   * only its From column, and a legacy item trashed from the tab is the same
+   * SUGGESTED -> REMOVED move as T4 while writing a different flavour.
    */
   readonly removalFlavor?: RemovalFlavor;
 }
@@ -240,38 +297,67 @@ export const LIFECYCLE_TRANSITIONS: readonly LifecycleTransition[] = [
     actions: ["removed-card-restore"],
     removalFlavor: "ordinary",
   },
+  {
+    // FOUNDER RULING, 2026-08-23. Raised from this task's own finding: an
+    // ordinary removal that carried the legacy needs-review classification does
+    // NOT restore to LINKED. The shipped restore preserves the classification,
+    // so the recreated link lands back in the needs-review population, which
+    // getReviewState counts — SUGGESTED, not LINKED. The contract page carries
+    // it as T7b and so does this table; without it the behaviour was real,
+    // published nowhere, and enforced by nothing.
+    id: "T7b",
+    from: "removed",
+    to: "suggested",
+    actions: ["removed-card-restore"],
+    removalFlavor: "ordinary-address-missing",
+  },
 ];
 
 /**
- * `from->to`, the key both directions of the exhaustiveness comparison are made
- * on. Flavour is documentation on the row, not part of the key: T6 and T7 share
- * a trigger and differ only by the stored discriminator, so keying on flavour
- * would demand the test infer a guard it cannot observe from the move alone.
+ * The key both directions of the exhaustiveness comparison are made on.
+ *
+ * `from->to`, with the removal flavour folded into the SOURCE when the source is
+ * REMOVED: `removed(ordinary)->linked`. That is where the contract itself puts
+ * it, qualifying only its From column — and it is the only place a test can
+ * honestly observe it, by classifying the suppression row the item occupied
+ * before the operation ran.
+ *
+ * Folding it in matters: T6, T7 and T7b all leave REMOVED, so on a bare
+ * `from->to` pair T7b would collide with T6 and could be deleted from the table
+ * without a single test noticing.
  */
 export function lifecycleTransitionKey(
   from: LifecycleFrom,
   to: CommunicationLifecycleState,
+  removalFlavor?: RemovalFlavor,
 ): string {
-  return `${from}->${to}`;
+  const source = from === "removed" && removalFlavor ? `${from}(${removalFlavor})` : from;
+  return `${source}->${to}`;
 }
 
-/** Every published from->to pair. Derived, so deleting a row shrinks this set. */
+/** Every published key. Derived, so deleting a row shrinks this set. */
 export const PUBLISHED_TRANSITION_KEYS: ReadonlySet<string> = new Set(
-  LIFECYCLE_TRANSITIONS.map((t) => lifecycleTransitionKey(t.from, t.to)),
+  LIFECYCLE_TRANSITIONS.map((t) => lifecycleTransitionKey(t.from, t.to, t.removalFlavor)),
 );
 
 /** Is this move one the contract allows? */
 export function isPublishedTransition(
   from: LifecycleFrom,
   to: CommunicationLifecycleState,
+  removalFlavor?: RemovalFlavor,
 ): boolean {
-  return PUBLISHED_TRANSITION_KEYS.has(lifecycleTransitionKey(from, to));
+  return PUBLISHED_TRANSITION_KEYS.has(lifecycleTransitionKey(from, to, removalFlavor));
 }
 
 /** The contract rows that describe a given move, for naming a failure. */
 export function transitionsFor(
   from: LifecycleFrom,
   to: CommunicationLifecycleState,
+  removalFlavor?: RemovalFlavor,
 ): readonly LifecycleTransition[] {
-  return LIFECYCLE_TRANSITIONS.filter((t) => t.from === from && t.to === to);
+  return LIFECYCLE_TRANSITIONS.filter(
+    (t) =>
+      lifecycleTransitionKey(t.from, t.to, t.removalFlavor) ===
+      lifecycleTransitionKey(from, to, removalFlavor),
+  );
 }
