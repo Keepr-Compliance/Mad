@@ -21,6 +21,7 @@ import {
   getIgnoredCommunicationIdsForTransaction,
 } from "./db/communicationDbService";
 import { toE164 } from "../utils/phoneNormalization";
+import { auditWindowEnd } from "./exportPlan";
 
 /**
  * Result of matching a message to a contact
@@ -158,9 +159,20 @@ export async function findTextMessagesByPhones(
     params.push(options.startDate);
   }
   if (options?.endDate) {
-    dateFilter += " AND m.sent_at <= ?";
-    // Add time component to include the full end date
-    params.push(options.endDate + "T23:59:59.999Z");
+    // BACKLOG-2788: the end date is a calendar DAY, and the day ends at the
+    // user's LOCAL midnight — `auditWindowEnd()` in exportPlan.ts is the one
+    // place that decides where. This used to concatenate a literal
+    // "T23:59:59.999Z", i.e. the end of the UTC day, which cut the closing
+    // EVENING out of the auto-link candidate window in every US timezone (the
+    // same hours BACKLOG-2788 restores to the export and the submission) and
+    // which produced a malformed comparison string for any time-bearing end
+    // date — the `<=` below is lexicographic on ISO text, so that mis-filters
+    // silently rather than failing.
+    const end = auditWindowEnd(options.endDate);
+    if (end) {
+      dateFilter += " AND m.sent_at <= ?";
+      params.push(end.toISOString());
+    }
   }
 
   // Query all text messages for this user that aren't already linked to this transaction

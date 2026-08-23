@@ -9,6 +9,9 @@ import { escapeHtml, formatCurrency, formatDate, formatDateTime, getContactNames
 import logService from "./logService";
 import { normalizePhone as sharedNormalizePhone, extractParticipantHandles } from "./contactResolutionService";
 import { getThreadKey as sharedGetThreadKey } from "./folderExport/textExportHelpers";
+// BACKLOG-2805: mirrors src/constants/transactionTypes.ts (electron cannot
+// import from src/). Keep the two in step.
+import { TRANSACTION_TYPE_LABELS } from "../constants/transactionTypeLabels";
 
 // Create a DOMPurify instance using JSDOM for Node.js / Electron main process
 const domPurifyWindow = new JSDOM("").window;
@@ -431,7 +434,7 @@ class PDFExportService {
     <div class="detail-card">
       <div class="label">Transaction Type</div>
       <div class="value">
-        ${transaction.transaction_type ? `<span class="badge badge-${transaction.transaction_type}">${transaction.transaction_type === "purchase" ? "Purchase" : "Sale"}</span>` : "N/A"}
+        ${transaction.transaction_type ? `<span class="badge badge-${transaction.transaction_type}">${transaction.transaction_type === "purchase" ? TRANSACTION_TYPE_LABELS.purchase : TRANSACTION_TYPE_LABELS.sale}</span>` : "N/A"}
       </div>
     </div>
 

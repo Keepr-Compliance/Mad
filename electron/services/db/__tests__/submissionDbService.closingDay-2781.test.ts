@@ -12,25 +12,42 @@
  *     TZ=America/Chicago   2026-07-29T04:59:59.999Z   (nearly the whole day cut)
  *     TZ=UTC               2026-07-29T23:59:59.999Z   (still short of the export bound)
  *
- * All four now consume the canonical `auditWindowEnd()` the export surfaces use,
- * which yields 2026-07-30T00:00:00.000Z in every zone.
+ * All four now consume the canonical `auditWindowEnd()` the export surfaces use.
  *
- * ## Why these are SWEEPS and not the founder's single data point
+ * ## BACKLOG-2788 moved that bound, and this suite with it
  *
- * The founder-relevant case is a text at 2026-07-29T05:30Z — 12:30am local ON
- * the closing day in Chicago. Asserting only that row would be VACUOUS in CI:
- * under TZ=UTC the OLD bound (23:59:59.999Z) already admits it, so reverting the
- * fix would leave the test green. The row at exactly 2026-07-30T00:00:00.000Z is
- * what makes the mutation red in UTC too, because the old bound excludes it in
- * every zone. Both edges of the boundary are swept, so a revert reds this suite
- * under ambient TZ and under TZ=America/Chicago alike.
+ * BACKLOG-2781 pointed all four sites at one helper whose answer was UTC
+ * midnight of the next day. The founder then settled what that answer should be
+ * (2026-08-22): "they work in their local time, so we need to show the
+ * transaction from their eyes" — the closing day ends at the user's LOCAL
+ * midnight. Every expectation below that named an absolute UTC instant moved
+ * for that reason, and for no other.
+ *
+ * ## Why these are SWEEPS, and why the fixtures are LOCAL-relative
+ *
+ * The instants are built from the closing day's LOCAL wall clock
+ * (`new Date(2026, 6, 29, h, m, s, ms)`), not from hardcoded UTC strings,
+ * because the bound they sweep is a local-day boundary: a fixed UTC string is a
+ * different time of day in every zone, so it can only assert something true in
+ * one. Local-relative instants make one expectation table correct in EVERY zone
+ * AND keep the mutation detectable in every zone:
+ *
+ *   - reverting `auditWindowEnd` to the UTC-midnight rule reds `firstout` in UTC
+ *     and east of it (the old bound admitted that instant), and reds `evening` +
+ *     `lastin` west of it (the old bound cut the closing evening) — the hours
+ *     BACKLOG-2788 exists to restore;
+ *   - a naive "+24 hours" bound reds `firstout` in every zone, because local
+ *     midnight of the next day is the first EXCLUDED instant, not the last
+ *     included one.
  *
  * Uses a REAL in-memory better-sqlite3 database injected through a mocked
  * `ensureDb` (the pattern established by `attachmentDbService.transactionAll.test.ts`),
  * so the actual SQL bound comparison runs. `sent_at` is stored exactly as the real
  * producer writes it — `sentAt.toISOString()` at
- * `macOSMessagesImportService.ts:1132`, i.e. ISO-8601 with `Z` and milliseconds —
- * because the `<= ?` comparison is lexicographic on that string.
+ * `electron/services/macOSMessagesImportService/macOSMessagesImportService.ts:1592`,
+ * i.e. ISO-8601 with `Z` and milliseconds — because the `<= ?` comparison is
+ * lexicographic on that string. (Path corrected per the BACKLOG-2781 SR
+ * addendum; the pre-refactor citation no longer resolved.)
  */
 
 import path from "path";
@@ -66,32 +83,47 @@ const STARTED_AT = "2026-01-01";
 const auditStart = new Date(STARTED_AT);
 const auditEnd = new Date(CLOSED_AT);
 
+/** The closing day, as LOCAL wall-clock parts (2026-07-29). */
+const CLOSING_DAY: readonly [number, number, number] = [2026, 6, 29];
+
 /**
- * The boundary sweep. Four instants around the end bound plus two far from it.
- *
- *   OLD bound, TZ=UTC     2026-07-29T23:59:59.999Z  -> admits S1,S2  rejects S3,S4
- *   OLD bound, TZ=Chicago 2026-07-29T04:59:59.999Z  -> admits none of S1..S4
- *   NEW bound, any zone   2026-07-30T00:00:00.000Z  -> admits S1,S2,S3  rejects S4
+ * An instant at a given LOCAL wall clock on the closing day (or `dayOffset`
+ * days after it), written the way the real producer writes `sent_at`.
+ */
+function localInstant(
+  hours: number,
+  minutes: number,
+  seconds: number,
+  ms: number,
+  dayOffset = 0,
+): string {
+  const [y, m, d] = CLOSING_DAY;
+  return new Date(y, m, d + dayOffset, hours, minutes, seconds, ms).toISOString();
+}
+
+/**
+ * The boundary sweep: four instants around the end bound plus two far from it.
+ * These expectations hold in EVERY timezone (see the header).
  */
 const EARLY_OUT = "2025-12-31T23:59:59.999Z"; // before the audit start -> OUT
 const MID_IN = "2026-06-15T12:00:00.000Z"; // comfortably inside -> IN
-const S1 = "2026-07-29T05:30:00.000Z"; // 12:30am local on the closing day (Chicago) -> IN
-const S2 = "2026-07-29T23:59:59.999Z"; // last instant of the closing day in UTC -> IN
-const S3 = "2026-07-30T00:00:00.000Z"; // EXACTLY the bound, inclusive -> IN
-const S4 = "2026-07-30T00:00:00.001Z"; // one millisecond past the bound -> OUT
+const DAWN = localInstant(0, 30, 0, 0); // 12:30am local ON the closing day (BACKLOG-2781's case) -> IN
+const EVENING = localInstant(21, 0, 0, 0); // 9pm local on the closing day (BACKLOG-2788's case) -> IN
+const LAST_IN = localInstant(23, 59, 59, 999); // the last instant of the local closing day -> IN
+const FIRST_OUT = localInstant(0, 0, 0, 0, 1); // local midnight: already the next day -> OUT
 
 /** Suffixes shared by the message, email and attachment fixtures. */
 const SWEEP: ReadonlyArray<readonly [string, string]> = [
   ["early", EARLY_OUT],
   ["mid", MID_IN],
-  ["s1", S1],
-  ["s2", S2],
-  ["s3", S3],
-  ["s4", S4],
+  ["dawn", DAWN],
+  ["evening", EVENING],
+  ["lastin", LAST_IN],
+  ["firstout", FIRST_OUT],
 ];
 
 /** The instants the fixed bound must admit, by fixture suffix. */
-const IN_WINDOW = ["mid", "s1", "s2", "s3"];
+const IN_WINDOW = ["mid", "dawn", "evening", "lastin"];
 
 function createSchema(db: DatabaseType): void {
   db.exec(`
@@ -156,7 +188,7 @@ function seed(db: DatabaseType): void {
   }
 
   // A different transaction that must never leak into T1's window.
-  message.run("M_other", "TH_other", S1, "inbound", "+15555550199");
+  message.run("M_other", "TH_other", DAWN, "inbound", "+15555550199");
   comm.run("cm_other", "T2", "M_other", null, "TH_other");
 }
 
@@ -185,9 +217,10 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
     expect(ids).toEqual(new Set(IN_WINDOW.map((k) => `M_${k}`)));
 
     // Named, so a failure says WHICH edge moved.
-    expect(ids.has("M_s1")).toBe(true); // 12:30am local on the closing day
-    expect(ids.has("M_s3")).toBe(true); // exactly the bound (inclusive)
-    expect(ids.has("M_s4")).toBe(false); // 1ms past the bound
+    expect(ids.has("M_dawn")).toBe(true); // 12:30am local on the closing day
+    expect(ids.has("M_evening")).toBe(true); // 9pm local on the closing day
+    expect(ids.has("M_lastin")).toBe(true); // its last local instant
+    expect(ids.has("M_firstout")).toBe(false); // local midnight -> the next day
     expect(ids.has("M_early")).toBe(false); // before the audit start
     expect(ids.has("M_other")).toBe(false); // different transaction
   });
@@ -200,9 +233,10 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
     const ids = new Set(rows.map((r) => r.id as string));
 
     expect(ids).toEqual(new Set(IN_WINDOW.map((k) => `E_${k}`)));
-    expect(ids.has("E_s1")).toBe(true);
-    expect(ids.has("E_s3")).toBe(true);
-    expect(ids.has("E_s4")).toBe(false);
+    expect(ids.has("E_dawn")).toBe(true);
+    expect(ids.has("E_evening")).toBe(true);
+    expect(ids.has("E_lastin")).toBe(true);
+    expect(ids.has("E_firstout")).toBe(false);
     expect(ids.has("E_early")).toBe(false);
   });
 
@@ -219,9 +253,10 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
     );
 
     expect(textIds).toEqual(new Set(IN_WINDOW.map((k) => `AT_${k}`)));
-    expect(textIds.has("AT_s1")).toBe(true);
-    expect(textIds.has("AT_s3")).toBe(true);
-    expect(textIds.has("AT_s4")).toBe(false);
+    expect(textIds.has("AT_dawn")).toBe(true);
+    expect(textIds.has("AT_evening")).toBe(true);
+    expect(textIds.has("AT_lastin")).toBe(true);
+    expect(textIds.has("AT_firstout")).toBe(false);
   });
 
   // -------------------------------------------------------------------------
@@ -234,9 +269,10 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
     );
 
     expect(emailIds).toEqual(new Set(IN_WINDOW.map((k) => `AE_${k}`)));
-    expect(emailIds.has("AE_s1")).toBe(true);
-    expect(emailIds.has("AE_s3")).toBe(true);
-    expect(emailIds.has("AE_s4")).toBe(false);
+    expect(emailIds.has("AE_dawn")).toBe(true);
+    expect(emailIds.has("AE_evening")).toBe(true);
+    expect(emailIds.has("AE_lastin")).toBe(true);
+    expect(emailIds.has("AE_firstout")).toBe(false);
   });
 
   // -------------------------------------------------------------------------
@@ -284,11 +320,31 @@ describe("submissionDbService — closing-day audit window (BACKLOG-2781)", () =
     expect(exported).toEqual(new Set(IN_WINDOW));
   });
 
-  it("uses the canonical boundary instant, not a local end-of-day", () => {
-    // Documents the concrete instant the fix pins. The OLD code produced
-    // 2026-07-29T23:59:59.999Z under TZ=UTC and 2026-07-29T04:59:59.999Z under
-    // TZ=America/Chicago — neither equals this, so this reds in either zone.
-    expect(auditWindowEnd(CLOSED_AT)?.toISOString()).toBe("2026-07-30T00:00:00.000Z");
+  it("pins the bound to the last instant before LOCAL midnight (BACKLOG-2788)", () => {
+    const bound = auditWindowEnd(CLOSED_AT)!;
+
+    // The property is asserted on the local clock rather than on a UTC literal:
+    // true in every zone, and false for both the pre-2788 UTC-midnight rule and
+    // a naive +24h rule. Founder decision, 2026-08-22 (BACKLOG-2788).
+    expect([bound.getFullYear(), bound.getMonth(), bound.getDate()]).toEqual([2026, 6, 29]);
+    expect([
+      bound.getHours(),
+      bound.getMinutes(),
+      bound.getSeconds(),
+      bound.getMilliseconds(),
+    ]).toEqual([23, 59, 59, 999]);
+
+    // ...and one millisecond later is local midnight of the NEXT day, which is
+    // where the closing day stops.
+    const nextInstant = new Date(bound.getTime() + 1);
+    expect([
+      nextInstant.getHours(),
+      nextInstant.getMinutes(),
+      nextInstant.getSeconds(),
+      nextInstant.getMilliseconds(),
+    ]).toEqual([0, 0, 0, 0]);
+    expect(nextInstant.getDate()).toBe(30);
+
     // The widened signature: a Date and its source string agree.
     expect(auditWindowEnd(auditEnd)?.getTime()).toBe(auditWindowEnd(CLOSED_AT)?.getTime());
   });

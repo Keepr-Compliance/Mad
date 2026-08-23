@@ -9,6 +9,11 @@ import { useFeatureGate } from "../hooks/useFeatureGate";
 import { useNetwork } from "../contexts/NetworkContext";
 import { OfflineNotice } from "./common/OfflineNotice";
 import { formatDate as formatDateShared, formatCurrency as formatCurrencyShared } from "../utils/formatUtils";
+// BACKLOG-2805: this row printed the RAW ENUM and leaned on CSS `capitalize`
+// to make it look like a label, so it read "Purchase" while every other
+// surface said "Listing/Purchase". No "Purchase" token on the line, which is
+// why a text sweep never found it.
+import { TRANSACTION_TYPE_LABELS } from "../constants/transactionTypes";
 
 interface StartNewAuditModalProps {
   /** Callback when user wants to view pending transaction details */
@@ -193,8 +198,15 @@ function StartNewAuditModal({
                           </h4>
                           <div className="flex items-center gap-3 mt-1 text-sm text-gray-600">
                             {transaction.transaction_type && (
+                              // `capitalize` is kept for the FALLBACK path: a
+                              // type with no label still renders the raw enum
+                              // and should still look like a word. Mapped
+                              // labels are already correctly cased, so the
+                              // class is a no-op for them.
                               <span className="capitalize">
-                                {transaction.transaction_type}
+                                {TRANSACTION_TYPE_LABELS[
+                                  transaction.transaction_type as keyof typeof TRANSACTION_TYPE_LABELS
+                                ] ?? transaction.transaction_type}
                               </span>
                             )}
                             {transaction.listing_price && (
