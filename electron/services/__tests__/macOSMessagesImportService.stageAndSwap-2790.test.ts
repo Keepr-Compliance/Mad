@@ -129,7 +129,7 @@ function createSourceDb(path: string): void {
       associated_message_guid TEXT
     );
     CREATE TABLE handle (id TEXT);
-    -- BACKLOG-2814: display_name is ALWAYS a column of Apple's real `chat`
+    -- BACKLOG-2814: display_name is ALWAYS a column of Apple's real chat
     -- table. A fixture without it described a chat.db that cannot exist.
     CREATE TABLE chat (account_login TEXT, display_name TEXT);
     CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
