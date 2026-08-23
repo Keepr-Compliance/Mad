@@ -255,7 +255,7 @@ describe("DatabaseService - Contact Deletion Prevention", () => {
           closed_at: "2024-01-15",
           transaction_type: "purchase",
           status: "active",
-          role: "Seller Agent",
+          role: "Listing Agent",
         },
       ];
 
@@ -265,7 +265,7 @@ describe("DatabaseService - Contact Deletion Prevention", () => {
 
       expect(result).toHaveLength(1);
       // BACKLOG-1930: roles is a deduped string[] at the data boundary (no join).
-      expect(result[0].roles).toEqual(["Buyer Agent", "Seller Agent"]);
+      expect(result[0].roles).toEqual(["Buyer Agent", "Listing Agent"]);
     });
 
     it("should handle multiple transactions across different sources", async () => {
@@ -361,7 +361,7 @@ describe("DatabaseService - Contact Deletion Prevention", () => {
           closed_at: "2024-02-20",
           transaction_type: "sale",
           status: "closed",
-          role: "Seller Agent",
+          role: "Listing Agent",
         },
       ];
 
