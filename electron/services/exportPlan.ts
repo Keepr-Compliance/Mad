@@ -140,75 +140,150 @@ function communicationDate(comm: Communication): Date {
 }
 
 /**
- * BACKLOG-2343: the audit window end (a transaction's `closed_at`) is a DATE
- * like "2026-07-29", which `new Date()` parses as UTC midnight. A text sent late
- * on the closing day in a timezone west of UTC is stored with a `sent_at` that
- * rolls into the next calendar day, so a naive `commDate > end` DROPS it and the
- * exported Audit Summary reads "TOTAL TEXT MESSAGES: 0". Advancing the end
- * boundary one day makes the whole closing day inclusive. Errs toward INCLUDING
- * borderline messages, which is the safe direction for an audit export.
+ * The inclusive END of a transaction's audit window: the LAST INSTANT of the
+ * audit-end calendar day (`closed_at`), in the user's LOCAL timezone.
  *
- * This is now the only copy consumed by the app's EXPORT surfaces — folder,
- * enhanced (pdf/csv/excel/json/txt_eml) and the orphan export-pdf channel all
- * read it. Mutating the `+ 1` reds the tests of every export format that has an
- * audit window, together.
+ * ## The contract (BACKLOG-2788, founder decision 2026-08-22)
  *
- * BACKLOG-2781 — this is now the closing-day boundary for the export surfaces
- * AND for the broker submission and attachment-count surfaces. It is NOT every
- * `closed_at`-derived boundary in `electron/`: `messageMatchingService.ts`
- * appends a literal `"T23:59:59.999Z"` to its end date and `utils/emailDateRange.ts`
- * advances `closed_at` by a 30-day buffer. Those serve different questions
- * (candidate matching, sync range) and their unification is separate filed work.
+ * > "think about it from the agent's perspective, they work in their local
+ * > time, so we need to show the transaction from their eyes."
  *
- * Six sites used to compute the audit-window end themselves as
- * `new Date(closed_at).setHours(23,59,59,999)`: four in `submissionDbService`
- * (the broker submission package), one in `attachmentHandlers`
- * (`transactions:get-attachment-counts`) and one in `attachmentDbService`
- * (the transaction Attachments tab). `setHours` applies LOCAL hours to the
- * UTC-midnight instant `new Date("2026-07-29")` produces, so their bound landed
- * EARLY on the closing day itself and the divergence was timezone-dependent:
+ * The closing day ends at the AGENT'S LOCAL midnight — the same instant the
+ * Texts tab already treats as the end of the audit period. This is the ONE
+ * place that decides it; every other closing-day bound derives from here.
  *
- *     this function      2026-07-30T00:00:00.000Z   (every timezone)
- *     the six old sites  2026-07-29T23:59:59.999Z   under TZ=UTC
- *                        2026-07-29T04:59:59.999Z   under TZ=America/Chicago
+ * Returned value: local `23:59:59.999` on the audit-end day, i.e. the last
+ * millisecond before local midnight. Callers use it INCLUSIVELY — the export
+ * excludes on `commDate > end`, the SQL sites bind `<= end.toISOString()` —
+ * so a communication stamped exactly at local midnight belongs to the NEXT
+ * day and is out, which is what "the day ends at midnight" means and what
+ * `isTimestampInAuditPeriod` (the Texts tab) has always done.
  *
- * A text at 2026-07-29T05:30Z — 12:30am local ON the closing day — was in the
- * agent's exported audit package but silently absent from the broker's
- * submission. All six now call this function, so a submission and an export of
- * the same transaction cover the same days.
+ * ## What this CHANGED (deliberate, shipped behavior moves)
  *
- * Of the six, only the four `submissionDbService` sites are reached with a real
- * window by the shipping app. Both attachment sites are LATENT: their renderer
- * callers (`TransactionDetails.tsx`) pass no audit window today. They are fixed
- * because their stated contract is parity with the submission path.
+ * Before BACKLOG-2788 this function returned the same wall-clock instant one
+ * day later, which for the UTC-midnight instant `new Date("2026-07-29")`
+ * produces means UTC midnight of the next day — a bound that has nothing to do
+ * with the user's day. Measured, `closed_at` = "2026-07-29":
  *
- * Accepts a `Date` as well as a date string because those callers receive one
- * already parsed (`submissionService.ts` does `new Date(transaction.closed_at)`).
- * Both forms yield the same instant.
+ *     TZ=America/Chicago   old 2026-07-30T00:00:00.000Z  = 7:00pm local
+ *                          new 2026-07-30T04:59:59.999Z  = 11:59:59.999pm local
+ *     TZ=UTC               old 2026-07-30T00:00:00.000Z  = 00:00:00 next day
+ *                          new 2026-07-29T23:59:59.999Z  = 11:59:59.999pm local
+ *     TZ=Europe/Berlin     old 2026-07-30T00:00:00.000Z  = 2:00am NEXT day
+ *                          new 2026-07-29T21:59:59.999Z  = 11:59:59.999pm local
  *
- * `setDate` advances the LOCAL day number and preserves the local time-of-day.
- * For a UTC-midnight value that is a 24-hour advance in UTC on an ordinary day,
- * but 23 or 25 hours across a DST transition — measured in America/Chicago:
+ * So the bound moves LATER west of UTC (the closing evening — up to 5 hours in
+ * US zones — is now in the export and the broker submission, where the Texts
+ * tab was already showing it), moves EARLIER east of UTC (early-morning
+ * next-day communications the old bound wrongly swept in are now out), and
+ * moves back by exactly 1ms in UTC (the instant at 00:00:00.000 of the next
+ * day is the next day). BACKLOG-2781 closed ~19 of the 24 hours this class of
+ * bug cost; this closes the rest.
  *
- *     closed_at "2026-03-08"  ->  2026-03-08T23:00:00.000Z   (+23h, spring forward)
- *     closed_at "2026-11-01"  ->  2026-11-02T01:00:00.000Z   (+25h, fall back)
+ * ## DST
  *
- * So the bound is NOT timezone-independent on those two days a year. It is left
- * as-is deliberately: the skew is inherited from this single function, so the
- * export and the submission skew together and still agree with each other, which
- * is the property BACKLOG-2781 exists to restore. A DST-exact bound would be a
- * change to the shipped export behavior and belongs in its own item.
+ * The bound is the real local midnight-minus-1ms on both transition days,
+ * because the local wall-clock time is resolved with the offset in effect at
+ * that wall time. Measured in America/Chicago (a naive +24h would land an hour
+ * late in spring and an hour early in fall — both are covered by controls):
  *
- * Mutating the `+ 1` reds every export format's audit-window test AND the
- * closing-day sweeps in `submissionDbService.closingDay-2781.test.ts`,
- * `attachmentDbService.closingDay-2781.test.ts` and
- * `attachmentHandlers.closingDay-2781.test.ts`, together.
+ *     closed_at "2026-03-08"  ->  2026-03-09T04:59:59.999Z  (23h local day)
+ *     closed_at "2026-11-01"  ->  2026-11-02T05:59:59.999Z  (25h local day)
+ *
+ * ## Which day, and whose timezone
+ *
+ * The calendar day is read from the leading `YYYY-MM-DD` of a string value, or
+ * from the UTC components of a `Date` — because every writer of `closed_at` in
+ * this app produces a DATE-ONLY value (`useAuditAddressForm.ts` `getTodayDate()`,
+ * the AddressVerificationStep date input, `ExportModal.tsx` `.split("T")[0]`),
+ * and the `Date` callers get theirs from `new Date(<that date string>)`, which
+ * is UTC midnight. Reading LOCAL components off such a Date would name the
+ * PREVIOUS day for every user west of UTC. A time-bearing `closed_at` is
+ * therefore normalized to its calendar day rather than carried forward a whole
+ * day (BACKLOG-2781 SR follow-up C: carrying it forward over-includes into a
+ * broker submission); no live writer produces one.
+ *
+ * The timezone is the SYSTEM timezone of the machine at the moment of
+ * computation. There is no per-user timezone setting in this app and this PR
+ * does not invent one, so the honest limitation is: an agent who computes an
+ * export from a laptop in a different zone than the one they worked the deal
+ * in gets that machine's day boundary. Every surface on that machine still
+ * agrees with every other, which is the property BACKLOG-2788 is about.
+ *
+ * An unparseable value still yields an Invalid Date (not `null`) exactly as
+ * before, so a corrupt `closed_at` keeps failing loudly in the SQL callers
+ * instead of silently reading as "no upper bound" — the confusion
+ * `importPlan.ts` (BACKLOG-2749) exists to prevent.
+ *
+ * ## Who derives from this (census, BACKLOG-2788)
+ *
+ * - export surfaces: `filterByDateWindow` below (folder, enhanced pdf/csv/
+ *   excel/json/txt_eml, and the orphan export-pdf channel)
+ * - broker submission: the four `submissionDbService` query bounds
+ * - attachment counts / attachments tab: `attachmentHandlers`,
+ *   `attachmentDbService` (both LATENT — their renderer callers pass no window)
+ * - auto-link candidate matching: `messageMatchingService` (was a literal
+ *   `"T23:59:59.999Z"` string concat — UTC-midnight semantics)
+ * - email fetch / import-cap protection window: `utils/emailDateRange.ts`
+ *   `computeTransactionDateRange`, whose 30-day buffer now advances from this
+ *   bound (was start-of-day+30)
+ * - the Texts tab and ConversationViewModal use `isTimestampInAuditPeriod` in
+ *   `src/utils/dateRangeUtils.ts`. The renderer CANNOT value-import from
+ *   `electron/`, so that is a MIRROR of this rule, not a derivation of it, and
+ *   it is pinned to this function by the parity corpus in
+ *   `electron/__tests__/localMidnightBoundary-2788.test.ts`.
+ *
+ * Audit-window START bounds (`filterByDateWindow`'s start,
+ * `messageMatchingService`'s `>= ?`, `computeTransactionDateRange`'s start) are
+ * NOT touched by BACKLOG-2788 and are still UTC-parsed: moving them would
+ * REMOVE communications from existing windows, which is a separate decision.
+ *
+ * Mutating this function reds the export include-set tests, the submission
+ * closing-day sweeps, the attachment sweeps, the auto-link bound test, the
+ * email-range test and the tab-parity corpus TOGETHER.
  */
 export function auditWindowEnd(endDate: Date | string | null | undefined): Date | null {
   if (!endDate) return null;
-  const end = new Date(endDate);
-  end.setDate(end.getDate() + 1);
-  return end;
+
+  const day = auditWindowEndCalendarDay(endDate);
+  if (!day) return new Date(NaN); // unparseable in, Invalid Date out (see above)
+
+  const [year, monthIndex, dayOfMonth] = day;
+  // LOCAL 23:59:59.999 — resolved with the UTC offset in effect at that wall
+  // clock, which is what makes the two DST days above come out exact.
+  return new Date(year, monthIndex, dayOfMonth, 23, 59, 59, 999);
+}
+
+/** Leading calendar day of an ISO-ish string: "2026-07-29", "2026-07-29T..." or "2026-07-29 12:00:00". */
+const CALENDAR_DAY_PREFIX = /^(\d{4})-(\d{2})-(\d{2})/;
+
+/**
+ * The [year, monthIndex, day] of an audit-window boundary value, or null when
+ * it cannot be read. See `auditWindowEnd` for why a `Date` is read in UTC.
+ */
+function auditWindowEndCalendarDay(
+  value: Date | string,
+): [number, number, number] | null {
+  if (typeof value === "string") {
+    const match = CALENDAR_DAY_PREFIX.exec(value.trim());
+    if (match) {
+      const year = Number(match[1]);
+      const monthIndex = Number(match[2]) - 1;
+      const day = Number(match[3]);
+      // Guard impossible components ("2026-13-40") so they fall through to the
+      // Date parser and end as an Invalid Date, as they did before.
+      if (monthIndex >= 0 && monthIndex <= 11 && day >= 1 && day <= 31) {
+        return [year, monthIndex, day];
+      }
+    }
+    const parsed = new Date(value);
+    if (isNaN(parsed.getTime())) return null;
+    return [parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()];
+  }
+
+  if (isNaN(value.getTime())) return null;
+  return [value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()];
 }
 
 function filterByDateWindow(

@@ -19,10 +19,17 @@
  * the submission path; the next caller that passes a window would otherwise
  * inherit the same wrong day. These tests exercise the branch directly.
  *
- * The sweep, not the founder's single 05:30Z row, is the control — under TZ=UTC
- * the old bound already admitted that row, so a founder-point-only assertion
- * would stay green in CI on a revert. See
+ * The sweep, not a single row, is the control — see
  * `submissionDbService.closingDay-2781.test.ts` for the full derivation.
+ *
+ * BACKLOG-2788 moved the bound this suite sweeps: the founder settled
+ * (2026-08-22) that the closing day ends at the user's LOCAL midnight — "they
+ * work in their local time, so we need to show the transaction from their
+ * eyes". The fixtures are therefore built from the closing day's LOCAL wall
+ * clock, which makes one expectation table correct in every zone and keeps a
+ * revert to the old UTC-midnight rule (or a naive +24h rule) detectable in
+ * every zone. Every expectation that named an absolute UTC instant moved for
+ * that reason, and for no other.
  */
 
 import path from "path";
@@ -119,12 +126,27 @@ import { registerAttachmentHandlers } from "../handlers/attachmentHandlers";
 const CLOSED_AT = "2026-07-29";
 const STARTED_AT = "2026-01-01";
 
-const EARLY_OUT = "2025-12-31T23:59:59.999Z";
-const MID_IN = "2026-06-15T12:00:00.000Z";
-const S1 = "2026-07-29T05:30:00.000Z"; // 12:30am local on the closing day (Chicago)
-const S2 = "2026-07-29T23:59:59.999Z";
-const S3 = "2026-07-30T00:00:00.000Z"; // exactly the bound (inclusive)
-const S4 = "2026-07-30T00:00:00.001Z"; // 1ms past the bound
+/** The closing day, as LOCAL wall-clock parts (2026-07-29). */
+const CLOSING_DAY: readonly [number, number, number] = [2026, 6, 29];
+
+/** An instant at a given LOCAL wall clock on the closing day (+ `dayOffset` days). */
+function localInstant(
+  hours: number,
+  minutes: number,
+  seconds: number,
+  ms: number,
+  dayOffset = 0,
+): string {
+  const [y, m, d] = CLOSING_DAY;
+  return new Date(y, m, d + dayOffset, hours, minutes, seconds, ms).toISOString();
+}
+
+const EARLY_OUT = "2025-12-31T23:59:59.999Z"; // before the audit start -> OUT
+const MID_IN = "2026-06-15T12:00:00.000Z"; // comfortably inside -> IN
+const DAWN = localInstant(0, 30, 0, 0); // 12:30am local ON the closing day (BACKLOG-2781) -> IN
+const EVENING = localInstant(21, 0, 0, 0); // 9pm local on the closing day (BACKLOG-2788) -> IN
+const LAST_IN = localInstant(23, 59, 59, 999); // its last local instant -> IN
+const FIRST_OUT = localInstant(0, 0, 0, 0, 1); // local midnight: already the next day -> OUT
 
 /**
  * The handler runs the REAL `validateTransactionId`, which requires a UUID — so
@@ -137,13 +159,13 @@ const TXN_ID = "11111111-1111-4111-8111-111111111111";
 const SWEEP: ReadonlyArray<readonly [string, string]> = [
   ["early", EARLY_OUT],
   ["mid", MID_IN],
-  ["s1", S1],
-  ["s2", S2],
-  ["s3", S3],
-  ["s4", S4],
+  ["dawn", DAWN],
+  ["evening", EVENING],
+  ["lastin", LAST_IN],
+  ["firstout", FIRST_OUT],
 ];
 
-/** mid + s1 + s2 + s3 — what the fixed bound admits. */
+/** mid + dawn + evening + lastin — what the local-midnight bound admits. */
 const EXPECTED_IN_WINDOW = 4;
 
 function createSchema(db: DatabaseType): void {
@@ -235,7 +257,7 @@ describe("transactions:get-attachment-counts — closing-day window (BACKLOG-278
   });
 
   it("counts TEXT attachments across both edges of the closing-day bound", async () => {
-    // mid, s1, s2, s3 — and NOT early or s4.
+    // mid, dawn, evening, lastin — and NOT early or firstout.
     expect((await invoke(STARTED_AT, CLOSED_AT)).textAttachments).toBe(EXPECTED_IN_WINDOW);
   });
 
@@ -244,9 +266,11 @@ describe("transactions:get-attachment-counts — closing-day window (BACKLOG-278
   });
 
   it("admits the row at exactly the bound and rejects the one 1ms past it", async () => {
-    // The discriminating pair. Under the OLD local-time bound the row at
-    // 2026-07-30T00:00:00.000Z was excluded in EVERY timezone, so this is the
-    // assertion that reds a revert under TZ=UTC as well as TZ=America/Chicago.
+    // The discriminating pair, post-BACKLOG-2788: `lastin` (the last local
+    // instant of the closing day) is in and `firstout` (local midnight, already
+    // the next day) is out. A revert to the UTC-midnight bound admits `firstout`
+    // in UTC and drops `evening`/`lastin` west of it, so the count reds in
+    // either zone.
     const windowed = await invoke(STARTED_AT, CLOSED_AT);
     const unwindowed = await invoke(undefined, undefined);
 

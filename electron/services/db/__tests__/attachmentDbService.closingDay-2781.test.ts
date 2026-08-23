@@ -22,14 +22,21 @@
  * together by construction. All three are asserted anyway: the closure is shared
  * today, and an assertion per branch is what keeps a future un-sharing honest.
  *
- * The sweep, not the founder's single data point, is the control — see the
- * header of `submissionDbService.closingDay-2781.test.ts` for why (under TZ=UTC
- * the old bound already admitted the 05:30Z row, so asserting only that row
- * would stay green in CI when the fix is reverted).
+ * The sweep, not a single data point, is the control — see the header of
+ * `submissionDbService.closingDay-2781.test.ts` for why. *
+ * BACKLOG-2788 moved the bound this suite sweeps: the founder settled
+ * (2026-08-22) that the closing day ends at the user's LOCAL midnight — "they
+ * work in their local time, so we need to show the transaction from their
+ * eyes". The fixtures are therefore built from the closing day's LOCAL wall
+ * clock, which makes one expectation table correct in every zone and keeps a
+ * revert to the old UTC-midnight rule (or a naive +24h rule) detectable in
+ * every zone. Every expectation that named an absolute UTC instant moved for
+ * that reason, and for no other.
  *
  * Real in-memory better-sqlite3 through a mocked `ensureDb`, following
  * `attachmentDbService.transactionAll.test.ts`. `sent_at` is stored as the real
- * producer writes it (`sentAt.toISOString()`, macOSMessagesImportService.ts:1132).
+ * producer writes it (`sentAt.toISOString()`,
+ * electron/services/macOSMessagesImportService/macOSMessagesImportService.ts:1592).
  */
 
 import path from "path";
@@ -52,23 +59,38 @@ const STARTED_AT = "2026-01-01";
 const auditStart = new Date(STARTED_AT);
 const auditEnd = new Date(CLOSED_AT);
 
-const EARLY_OUT = "2025-12-31T23:59:59.999Z";
-const MID_IN = "2026-06-15T12:00:00.000Z";
-const S1 = "2026-07-29T05:30:00.000Z"; // 12:30am local on the closing day (Chicago)
-const S2 = "2026-07-29T23:59:59.999Z";
-const S3 = "2026-07-30T00:00:00.000Z"; // exactly the bound (inclusive)
-const S4 = "2026-07-30T00:00:00.001Z"; // 1ms past the bound
+/** The closing day, as LOCAL wall-clock parts (2026-07-29). */
+const CLOSING_DAY: readonly [number, number, number] = [2026, 6, 29];
+
+/** An instant at a given LOCAL wall clock on the closing day (+ `dayOffset` days). */
+function localInstant(
+  hours: number,
+  minutes: number,
+  seconds: number,
+  ms: number,
+  dayOffset = 0,
+): string {
+  const [y, m, d] = CLOSING_DAY;
+  return new Date(y, m, d + dayOffset, hours, minutes, seconds, ms).toISOString();
+}
+
+const EARLY_OUT = "2025-12-31T23:59:59.999Z"; // before the audit start -> OUT
+const MID_IN = "2026-06-15T12:00:00.000Z"; // comfortably inside -> IN
+const DAWN = localInstant(0, 30, 0, 0); // 12:30am local ON the closing day (BACKLOG-2781) -> IN
+const EVENING = localInstant(21, 0, 0, 0); // 9pm local on the closing day (BACKLOG-2788) -> IN
+const LAST_IN = localInstant(23, 59, 59, 999); // its last local instant -> IN
+const FIRST_OUT = localInstant(0, 0, 0, 0, 1); // local midnight: already the next day -> OUT
 
 const SWEEP: ReadonlyArray<readonly [string, string]> = [
   ["early", EARLY_OUT],
   ["mid", MID_IN],
-  ["s1", S1],
-  ["s2", S2],
-  ["s3", S3],
-  ["s4", S4],
+  ["dawn", DAWN],
+  ["evening", EVENING],
+  ["lastin", LAST_IN],
+  ["firstout", FIRST_OUT],
 ];
 
-const IN_WINDOW = ["mid", "s1", "s2", "s3"];
+const IN_WINDOW = ["mid", "dawn", "evening", "lastin"];
 
 function createSchema(db: DatabaseType): void {
   db.exec(`
@@ -165,26 +187,29 @@ describe("getTransactionAllAttachments — closing-day audit window (BACKLOG-278
   it("sweeps the bound on the EMAIL attachment branch", () => {
     const ids = idsWithPrefix("AE_");
     expect(ids).toEqual(new Set(IN_WINDOW.map((k) => `AE_${k}`)));
-    expect(ids.has("AE_s1")).toBe(true); // 12:30am local on the closing day
-    expect(ids.has("AE_s3")).toBe(true); // exactly the bound
-    expect(ids.has("AE_s4")).toBe(false); // 1ms past
+    expect(ids.has("AE_dawn")).toBe(true); // 12:30am local on the closing day
+    expect(ids.has("AE_evening")).toBe(true); // 9pm local on the closing day
+    expect(ids.has("AE_lastin")).toBe(true); // its last local instant
+    expect(ids.has("AE_firstout")).toBe(false); // local midnight -> next day
     expect(ids.has("AE_early")).toBe(false);
   });
 
   it("sweeps the bound on the TEXT attachment branch", () => {
     const ids = idsWithPrefix("AT_");
     expect(ids).toEqual(new Set(IN_WINDOW.map((k) => `AT_${k}`)));
-    expect(ids.has("AT_s1")).toBe(true);
-    expect(ids.has("AT_s3")).toBe(true);
-    expect(ids.has("AT_s4")).toBe(false);
+    expect(ids.has("AT_dawn")).toBe(true);
+    expect(ids.has("AT_evening")).toBe(true);
+    expect(ids.has("AT_lastin")).toBe(true);
+    expect(ids.has("AT_firstout")).toBe(false);
   });
 
   it("sweeps the bound on the external_message_id FALLBACK branch", () => {
     const ids = idsWithPrefix("AF_");
     expect(ids).toEqual(new Set(IN_WINDOW.map((k) => `AF_${k}`)));
-    expect(ids.has("AF_s1")).toBe(true);
-    expect(ids.has("AF_s3")).toBe(true);
-    expect(ids.has("AF_s4")).toBe(false);
+    expect(ids.has("AF_dawn")).toBe(true);
+    expect(ids.has("AF_evening")).toBe(true);
+    expect(ids.has("AF_lastin")).toBe(true);
+    expect(ids.has("AF_firstout")).toBe(false);
   });
 
   it("still returns metadata-only rows (storage_path NULL) inside the window", () => {
@@ -192,7 +217,7 @@ describe("getTransactionAllAttachments — closing-day audit window (BACKLOG-278
     // does NOT filter on storage_path (unlike the submission/export path), so the
     // window fix must not quietly start dropping undownloaded rows.
     const rows = getTransactionAllAttachments("T1", auditStart, auditEnd);
-    const meta = rows.find((r) => r.id === "AF_s3");
+    const meta = rows.find((r) => r.id === "AF_lastin");
     expect(meta).toBeDefined();
     expect(meta?.storage_path).toBeNull();
   });

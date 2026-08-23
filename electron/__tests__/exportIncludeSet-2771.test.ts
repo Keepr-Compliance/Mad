@@ -12,8 +12,16 @@
  *
  * Before this refactor the BACKLOG-2343 audit-window boundary was written out
  * twice and absent a third time, so a mutation to one copy left the other
- * formats green. Mutating the `+ 1` in `auditWindowEnd()` must now red the
- * closing-day assertions of EVERY format that has an audit window, together.
+ * formats green. Mutating `auditWindowEnd()` must now red the closing-day
+ * assertions of EVERY format that has an audit window, together.
+ *
+ * BACKLOG-2788 moved that boundary to the user's LOCAL midnight (founder
+ * decision, 2026-08-22), which changed what makes that mutation visible. The
+ * fixtures below are therefore built from the closing day's LOCAL wall clock
+ * and come in a discriminating PAIR — an evening text that is inside the day
+ * and a midnight text that is the next day. Measured: with a single
+ * late-evening text, reverting the boundary to the old UTC-midnight rule left
+ * this suite entirely green under TZ=UTC.
  * (`transactions:export-pdf` requests no window at all — by design, since it
  * takes no options — so it is asserted for full-record pass-through instead of
  * a boundary it does not have.)
@@ -121,13 +129,36 @@ const TX_ID = "550e8400-e29b-41d4-a716-446655440001";
 const USER_ID = "550e8400-e29b-41d4-a716-446655440000";
 
 /**
- * The founder repro from BACKLOG-2343, transcribed: a text sent Jul 28 late
- * evening America/Chicago (UTC-5) is stored with a UTC sent_at that has already
- * rolled into Jul 29 — the audit window's closing day.
+ * An instant at a given LOCAL wall clock on the closing day (2026-07-29), or
+ * `dayOffset` days after it. Local-relative so that one expectation table is
+ * correct in every timezone — see the header.
+ */
+function closingDayInstant(hours: number, minutes: number, dayOffset = 0): string {
+  return new Date(2026, 6, 29 + dayOffset, hours, minutes, 0, 0).toISOString();
+}
+
+/**
+ * The founder repro from BACKLOG-2343, kept in the shape BACKLOG-2788 settled:
+ * a text sent late in the EVENING of the closing day, as the agent experienced
+ * it. West of UTC its stored `sent_at` has already rolled into the next UTC day
+ * — which is what used to drop it from the export.
  */
 const CLOSING_DAY_TEXT: Communication = {
   id: "closing-day-text",
-  sent_at: "2026-07-29T04:30:00Z",
+  sent_at: closingDayInstant(21, 0),
+  communication_type: "sms",
+  channel: "sms",
+} as unknown as Communication;
+
+/**
+ * The other half of the discriminating pair: local midnight, which is already
+ * the day AFTER closing and so is outside every windowed export. The pre-2788
+ * bound admitted this instant in UTC and east of it, so it is what reds a
+ * revert where the evening text alone cannot.
+ */
+const NEXT_DAY_TEXT: Communication = {
+  id: "next-day-text",
+  sent_at: closingDayInstant(0, 0, 1),
   communication_type: "sms",
   channel: "sms",
 } as unknown as Communication;
@@ -148,7 +179,7 @@ const OUT_OF_WINDOW_EMAIL: Communication = {
   subject: "Long after closing",
 } as unknown as Communication;
 
-const ALL_COMMS = [IN_WINDOW_EMAIL, CLOSING_DAY_TEXT, OUT_OF_WINDOW_EMAIL];
+const ALL_COMMS = [IN_WINDOW_EMAIL, CLOSING_DAY_TEXT, NEXT_DAY_TEXT, OUT_OF_WINDOW_EMAIL];
 
 const details = (): TransactionWithDetails =>
   ({
@@ -219,10 +250,19 @@ describe("BACKLOG-2771: every export entry point resolves its include set once",
         exportFormat: "json",
         contentType: "both",
         startDate: "2026-01-01",
-        endDate: "2026-07-28",
+        endDate: "2026-07-27",
       });
 
-      // One day earlier: the closing-day text now falls outside.
+      // An earlier window: the closing-day text now falls outside it.
+      //
+      // BACKLOG-2788 changed which date does that. The fixture text is stamped
+      // 2026-07-29T04:30Z, which is 11:30pm LOCAL on July 28 west of UTC — so
+      // now that a day ends at the user's local midnight, an `endDate` of
+      // "2026-07-28" legitimately KEEPS it (it was sent on that day, as its
+      // sender experienced it) and only reads as "outside" in UTC and east of
+      // it. "2026-07-27" is outside the text's local day in every zone, which is
+      // what this test needs in order to be about window PRECEDENCE rather than
+      // about the boundary. Founder decision, 2026-08-22 (BACKLOG-2788).
       expect(ids(enhancedPlan().communications)).toEqual([IN_WINDOW_EMAIL.id as string]);
     });
 
