@@ -443,6 +443,30 @@ function broadcastReviewQueueChanged(payload: ReviewQueueChangedEvent): void {
 }
 
 /**
+ * Announce that review state changed, without claiming anything was found.
+ *
+ * EVERY review mutation calls this — approve, reject, restore — not just the
+ * discovery sweep. The founder's one-source rule has to hold at the VIEW layer
+ * too, and it did not: the sweep broadcast, the mutations did not, so a reject
+ * followed by a restore rewrote the database and left all three surfaces
+ * rendering whatever they had at mount. Reopening the transaction "fixed" it,
+ * which is the signature of state that is only ever read once.
+ *
+ * added/linked are 0 because a mutation discovers nothing; it only moves an item
+ * that was already counted. That keeps the popup silent (it fires on added > 0)
+ * while the badge, the tab sections and the review screen all refresh.
+ */
+export function notifyReviewStateChanged(transactionId: string): void {
+  broadcastReviewQueueChanged({
+    transactionId,
+    added: 0,
+    linked: 0,
+    outstanding: countReviewItems(transactionId),
+    reason: "background",
+  });
+}
+
+/**
  * Queue ONE email for review, without linking it.
  *
  * The single write-point for the ambiguous half of develop's classification
@@ -647,6 +671,7 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<boo
     transactionId: row.transaction_id,
     kind: row.email_id ? "email" : "text",
   });
+  notifyReviewStateChanged(row.transaction_id);
   return true;
 }
 
@@ -717,9 +742,11 @@ function loadItem(id: string): ReviewItem | undefined {
  */
 export async function approveReviewItems(itemIds: string[]): Promise<{ approved: number }> {
   let approved = 0;
+  let touched: string | null = null;
   for (const itemId of itemIds) {
     const item = loadItem(itemId);
     if (!item) continue;
+    touched = item.transaction_id;
 
     if (item.origin === "legacy") {
       if (!item.email_id) continue;
@@ -750,6 +777,7 @@ export async function approveReviewItems(itemIds: string[]): Promise<{ approved:
     dbRun("DELETE FROM pending_review_communications WHERE id = ?", [item.rowId]);
     approved++;
   }
+  if (approved > 0 && touched) notifyReviewStateChanged(touched);
   return { approved };
 }
 
@@ -762,9 +790,11 @@ export async function approveReviewItems(itemIds: string[]): Promise<{ approved:
  */
 export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: number }> {
   let rejected = 0;
+  let touched: string | null = null;
   for (const itemId of itemIds) {
     const item = loadItem(itemId);
     if (!item) continue;
+    touched = item.transaction_id;
 
     const txn = getTransactionRow(item.transaction_id);
     if (!txn) continue;
@@ -796,5 +826,6 @@ export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: 
     }
     rejected++;
   }
+  if (rejected > 0 && touched) notifyReviewStateChanged(touched);
   return { rejected };
 }

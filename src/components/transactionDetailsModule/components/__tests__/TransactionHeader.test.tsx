@@ -136,7 +136,16 @@ describe("TransactionHeader", () => {
   describe("BACKLOG-2792: one Complete button replaces Export + Submit", () => {
     it("shows Complete and Needs Review, and NEITHER a bare Export nor a Submit button, for an individual license", () => {
       setFeatureGateForLicense("individual");
-      render(<TransactionHeader {...defaultProps} transaction={createMockTransaction()} />);
+      // reviewCount > 0 so Needs Review is on screen at all — it is hidden when
+      // the queue is empty (founder ruling). What this test is about is that
+      // Export and Submit are GONE, replaced by Complete.
+      render(
+        <TransactionHeader
+          {...defaultProps}
+          transaction={createMockTransaction()}
+          reviewCount={2}
+        />,
+      );
 
       expect(screen.getAllByTestId("complete-button")[0]).toBeInTheDocument();
       expect(screen.getAllByTestId("needs-review-button")[0]).toBeInTheDocument();
@@ -146,7 +155,16 @@ describe("TransactionHeader", () => {
 
     it("shows the SAME two buttons for a team license — the header no longer branches", () => {
       setFeatureGateForLicense("team");
-      render(<TransactionHeader {...defaultProps} transaction={createMockTransaction()} />);
+      // reviewCount > 0 so Needs Review is on screen at all — it is hidden when
+      // the queue is empty (founder ruling). What this test is about is that
+      // Export and Submit are GONE, replaced by Complete.
+      render(
+        <TransactionHeader
+          {...defaultProps}
+          transaction={createMockTransaction()}
+          reviewCount={2}
+        />,
+      );
 
       expect(screen.getAllByTestId("complete-button")[0]).toBeInTheDocument();
       expect(screen.getAllByTestId("needs-review-button")[0]).toBeInTheDocument();
@@ -188,16 +206,22 @@ describe("TransactionHeader", () => {
   });
 
   describe("BACKLOG-2791: the Needs Review button and its live badge", () => {
-    it("hides the badge at zero and shows the exact count above zero", () => {
+    it("hides the whole BUTTON at zero and shows it with the exact count above zero", () => {
+      // Founder ruling 2026-08-22, superseding "always visible": a button that
+      // opens an empty screen is a dead control. Complete stays visible either
+      // way — asserted below so the two are not confused.
       setFeatureGateForLicense("individual");
       const { rerender } = render(
         <TransactionHeader {...defaultProps} transaction={createMockTransaction()} reviewCount={0} />,
       );
+      expect(screen.queryByTestId("needs-review-button")).not.toBeInTheDocument();
       expect(screen.queryByTestId("needs-review-badge")).not.toBeInTheDocument();
+      expect(screen.getAllByTestId("complete-button")[0]).toBeInTheDocument();
 
       rerender(
         <TransactionHeader {...defaultProps} transaction={createMockTransaction()} reviewCount={7} />,
       );
+      expect(screen.getAllByTestId("needs-review-button")[0]).toBeInTheDocument();
       expect(screen.getAllByTestId("needs-review-badge")[0]).toHaveTextContent("7");
     });
 
@@ -208,6 +232,7 @@ describe("TransactionHeader", () => {
         <TransactionHeader
           {...defaultProps}
           transaction={createMockTransaction()}
+          reviewCount={3}
           onShowNeedsReview={onShowNeedsReview}
         />,
       );

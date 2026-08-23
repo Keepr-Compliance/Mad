@@ -106,13 +106,21 @@ export function ReviewPromptDialog({
             {body !== null ? (
               <p className="mt-1 text-sm text-gray-600">{body}</p>
             ) : (
+              /* Founder ruling, 2026-08-22: a zero line is noise, not information.
+                 Symmetric — drop "0 linked successfully" when nothing linked,
+                 drop "0 require review" (and the approval sentence with it) when
+                 nothing needs review. The total line always shows. */
               <div className="mt-1 text-sm text-gray-600" data-testid="review-prompt-breakdown">
-                <p>{linkedCount} linked successfully</p>
-                <p>{requiresReview} require review</p>
-                <p className="mt-2">
-                  Communications that require review will only be linked after you approve
-                  them.
-                </p>
+                {linkedCount > 0 && <p>{linkedCount} linked successfully</p>}
+                {requiresReview > 0 && (
+                  <>
+                    <p>{requiresReview} require review</p>
+                    <p className="mt-2">
+                      Communications that require review will only be linked after you
+                      approve them.
+                    </p>
+                  </>
+                )}
               </div>
             )}
           </div>

@@ -335,7 +335,14 @@ function ActiveActions({
 
   return (
     <>
-      {/* B1 · Needs Review (BACKLOG-2791) — always visible, live count badge.
+      {/* B1 · Needs Review (BACKLOG-2791). Hidden entirely when the queue is
+          empty (founder ruling 2026-08-22, superseding "always visible") — a
+          button that opens an empty screen is a dead control. It reappears the
+          moment the count goes above zero, which rides on the same live-refresh
+          wiring as every other review surface. Complete stays always visible. */}
+      {reviewCount > 0 && (
+      <>
+      {/* live count badge.
           Opens the combined review screen at any time. The count is the single
           getReviewState total, so it can never disagree with the gate. */}
       <button
@@ -348,15 +355,15 @@ function ActiveActions({
         </svg>
         <span className="hidden sm:inline">Needs Review</span>
         <span className="sm:hidden">Review</span>
-        {reviewCount > 0 && (
-          <span
-            data-testid="needs-review-badge"
-            className="ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-white px-1.5 py-0.5 text-xs font-bold text-amber-700"
-          >
-            {reviewCount}
-          </span>
-        )}
+        <span
+          data-testid="needs-review-badge"
+          className="ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-white px-1.5 py-0.5 text-xs font-bold text-amber-700"
+        >
+          {reviewCount}
+        </span>
       </button>
+      </>
+      )}
 
       {/* B2 · Complete (BACKLOG-2792) — always visible beside B1. Export and
           Submit for Review are GONE, merged here; the branch by license happens

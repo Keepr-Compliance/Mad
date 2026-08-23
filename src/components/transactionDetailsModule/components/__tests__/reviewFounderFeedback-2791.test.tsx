@@ -42,16 +42,35 @@ describe("the discovery popup copy (founder-dictated)", () => {
     expect(screen.getByRole("button", { name: "Later" })).toBeInTheDocument();
   });
 
-  it("reports L honestly when nothing was linked — 0, not a hidden line", () => {
-    // Today every deal-scoped discovery path QUEUES rather than links, so L is
-    // structurally 0. The line still renders: the founder asked for the split,
-    // and hiding the zero would misreport it.
+  it("L=0: drops the linked line, keeps the total and the review line", () => {
+    // Founder ruling 2026-08-22: a zero line is noise. The total always shows.
     render(
       <ReviewPromptDialog variant="found" count={4} linkedCount={0} onReview={noop} onDismiss={noop} />,
     );
     expect(screen.getByText("4 total communications found")).toBeInTheDocument();
-    expect(screen.getByText("0 linked successfully")).toBeInTheDocument();
+    expect(screen.queryByText("0 linked successfully")).not.toBeInTheDocument();
     expect(screen.getByText("4 require review")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Communications that require review will only be linked after you approve them.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("R=0: drops the review line AND the approval sentence with it", () => {
+    // Symmetric with L=0 — and the approval sentence is meaningless when
+    // nothing is waiting for approval.
+    render(
+      <ReviewPromptDialog variant="found" count={0} linkedCount={6} onReview={noop} onDismiss={noop} />,
+    );
+    expect(screen.getByText("6 total communications found")).toBeInTheDocument();
+    expect(screen.getByText("6 linked successfully")).toBeInTheDocument();
+    expect(screen.queryByText("0 require review")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Communications that require review will only be linked after you approve them.",
+      ),
+    ).not.toBeInTheDocument();
   });
 });
 
