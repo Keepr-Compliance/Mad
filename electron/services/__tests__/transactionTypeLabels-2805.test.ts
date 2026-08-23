@@ -4,9 +4,10 @@
  * BACKLOG-2805 (support ticket 112) — the exported documents use the same
  * words as the app.
  *
- * Founder ruling: "Purchase" -> **"Listing/Purchase"** (exact, with the
- * slash); **"Sale" unchanged**. The enum values `purchase` / `sale` do not
- * move — they are a DB column and a Zod enum.
+ * Founder ruling, now at its third value: "Purchase" -> "Listing/Purchase"
+ * (BACKLOG-2805, shipped v2.29.0) -> **"Listing"** (BACKLOG-2850), exact;
+ * **"Sale" unchanged**. The enum values `purchase` / `sale` do not move —
+ * they are a DB column and a Zod enum.
  *
  * There are THREE export producers and none of them can read the renderer's
  * map, because `electron/` cannot import from `src/` (rootDir). They share
@@ -26,7 +27,7 @@ describe("BACKLOG-2805 — electron-side transaction type labels", () => {
   it("maps the enum values to the founder-approved strings", () => {
     // The exact strings, asserted as literals. This is the anchor the
     // renderer mirror is checked against.
-    expect(TRANSACTION_TYPE_LABELS.purchase).toBe("Listing/Purchase");
+    expect(TRANSACTION_TYPE_LABELS.purchase).toBe("Listing");
     expect(TRANSACTION_TYPE_LABELS.sale).toBe("Sale");
   });
 
@@ -40,9 +41,10 @@ describe("BACKLOG-2805 — electron-side transaction type labels", () => {
   });
 
   it("does not lowercase, uppercase or otherwise reshape a known label", () => {
-    // The slash is the whole point of the ruling and is the character most
-    // likely to be lost to a slugify/escape helper on the way into HTML.
-    expect(getTransactionTypeLabel("purchase")).toBe("Listing/Purchase");
+    // Capitalisation is load-bearing: the enum value is lowercase
+    // `purchase` and the label is title-case, so a helper that lowercases on
+    // the way into HTML would print the raw value back.
+    expect(getTransactionTypeLabel("purchase")).toBe("Listing");
     expect(getTransactionTypeLabel("sale")).toBe("Sale");
   });
 });

@@ -400,10 +400,10 @@ describe("Transactions", () => {
       });
 
       // Mobile card shows transaction type. BACKLOG-2805: the buy-side label
-      // is now "Listing/Purchase" — exact-text, so this goes red if the card
+      // is now "Listing" (BACKLOG-2850) — exact-text, so this goes red if the card
       // is ever reverted to the bare word.
       expect(
-        screen.getAllByText("Listing/Purchase").length,
+        screen.getAllByText("Listing").length,
       ).toBeGreaterThan(0);
     });
 

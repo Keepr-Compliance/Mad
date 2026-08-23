@@ -9,7 +9,8 @@
  * leaned on CSS `text-transform: capitalize` to make `purchase` LOOK like a
  * label. So a grep for the display string found the other six renderer sites
  * and was blind to this one, and the modal would have gone on reading
- * "Purchase" after everything else had moved to "Listing/Purchase".
+ * "Purchase" after everything else had moved to "Listing/Purchase"
+ * (BACKLOG-2805); the label is now "Listing" (BACKLOG-2850).
  *
  * It is the same defect shape as the .txt export, which printed
  * "Transaction Type: purchase" for the same reason. Found in SR review of
@@ -117,11 +118,14 @@ beforeEach(() => {
 });
 
 describe("BACKLOG-2805: pending-audit row transaction type", () => {
-  it('renders "Listing/Purchase" for a purchase row', async () => {
+  it('renders "Listing" for a purchase row', async () => {
     renderModal([pendingTransaction("txn-a", "purchase")]);
 
     const row = await screen.findByTestId("pending-transaction-txn-a");
-    expect(row).toHaveTextContent("Listing/Purchase");
+    // Substring match, so it must be paired with the absence of the retired
+    // label — "Listing" alone is satisfied by "Listing/Purchase".
+    expect(row).toHaveTextContent("Listing");
+    expect(row.textContent).not.toContain("Listing/Purchase");
   });
 
   it("never renders the raw enum for a purchase row", async () => {
@@ -139,7 +143,7 @@ describe("BACKLOG-2805: pending-audit row transaction type", () => {
     const row = await screen.findByTestId("pending-transaction-txn-b");
     expect(row).toHaveTextContent("Sale");
     expect(row.textContent).not.toContain("sale");
-    expect(row.textContent).not.toContain("Listing/Purchase");
+    expect(row.textContent).not.toContain("Listing");
   });
 
   it("names each row correctly in a mixed list — identity, not count", async () => {
@@ -153,7 +157,7 @@ describe("BACKLOG-2805: pending-audit row transaction type", () => {
     );
 
     expect(screen.getByTestId("pending-transaction-txn-a")).toHaveTextContent(
-      "Listing/Purchase",
+      "Listing",
     );
     expect(screen.getByTestId("pending-transaction-txn-b")).toHaveTextContent(
       "Sale",

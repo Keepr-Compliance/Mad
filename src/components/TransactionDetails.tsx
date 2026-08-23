@@ -1467,11 +1467,16 @@ function TransactionDetails({
             resetSubmit();
           }}
           onSubmit={handleSubmitForReview}
-          // BACKLOG-2792: S4's Export option. The prop already existed and had
-          // ZERO call sites; this is the founder's "the confirmation window
-          // includes an Export option that triggers the same S3 export flow an
-          // individual gets" — literally the same modal, not a parallel path.
-          onExportFirst={() => {
+          // BACKLOG-2792: S4's Export option — the founder's "the confirmation
+          // window includes an Export option that triggers the same S3 export
+          // flow an individual gets", literally the same modal, not a parallel
+          // path.
+          //
+          // BACKLOG-2849 renamed the prop from `onExportFirst`. The callback is
+          // unchanged and now backs BOTH offers in that modal: the button
+          // beside Submit, and the post-submit "Want to keep a local copy?"
+          // ask. Same action either way, which is why it is one prop.
+          onExport={() => {
             setShowSubmitModal(false);
             setShowExportModal(true);
           }}
