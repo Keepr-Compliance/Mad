@@ -222,26 +222,6 @@ describe("BACKLOG-2748 — the Cancel control's lifecycle", () => {
     expect(result).not.toHaveTextContent("messages were imported before cancellation");
   });
 
-  it("renders during a force re-import's delete phase — the other entry button's run", async () => {
-    // "Import Messages" and "Force Re-import" are two buttons but ONE queue
-    // item, so the control is shared by construction. The force path is still
-    // worth its own row because it has a phase the plain import never shows,
-    // and the phase drives the progress block the button lives in.
-    //
-    // BACKLOG-2775 removed this row's honest limit: the delete loop had no abort
-    // check, so a cancel pressed here took effect only at the query-phase check
-    // AFTER the whole delete had run and committed — 35 seconds and 162,961
-    // deleted messages, in the founder's case. The loop now checks between
-    // batches and the clear shares a transaction with the re-import, so a cancel
-    // pressed in this phase stops it and restores everything.
-    mockQueue = messagesQueue({ status: "running", progress: 15, phase: "deleting" });
-
-    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
-
-    await waitFor(() => expect(cancelButton()).toBeInTheDocument());
-    expect(screen.getByText(/Clearing existing messages/i)).toBeInTheDocument();
-  });
-
   it("renders during the attachment phase — the expensive one", async () => {
     // The phase the founder was stuck in, and the one where cancelling actually
     // saves disk: the service honours the abort between individual file copies
@@ -335,7 +315,7 @@ describe("BACKLOG-2748 — pressing Cancel", () => {
     // climbing while this panel said "Cancelling…" — two surfaces disagreeing
     // about whether the user had been heard.
     const user = userEvent.setup();
-    mockQueue = messagesQueue({ status: "running", progress: 34, phase: "deleting" });
+    mockQueue = messagesQueue({ status: "running", progress: 34, phase: "importing" });
 
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
     await waitFor(() => expect(cancelButton()).toBeInTheDocument());
@@ -512,7 +492,7 @@ describe("BACKLOG-2776 — the percentage the user is shown while cancelling", (
     mockQueue = messagesQueue({
       status: "running",
       progress: 34,
-      phase: "deleting",
+      phase: "importing",
       cancelRequested: true,
     });
 

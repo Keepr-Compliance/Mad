@@ -68,22 +68,6 @@ jest.mock("cli-progress", () => ({
     Presets: { shades_classic: {} },
   },
 }));
-jest.mock("../auditService", () => ({
-  __esModule: true,
-  default: {
-    suspendPeriodicSync: jest.fn(() => false),
-    resumePeriodicSync: jest.fn(),
-    isSyncInFlight: jest.fn(() => false),
-  },
-}));
-jest.mock("../submissionSyncService", () => ({
-  __esModule: true,
-  default: {
-    suspendPeriodicSync: jest.fn(() => false),
-    resumePeriodicSync: jest.fn(),
-    isSyncInFlight: jest.fn(() => false),
-  },
-}));
 
 // DELIBERATELY NOT MOCKED: ../db/readOnlySqlite, and `sqlite3` is resolved to the
 // REAL driver by absolute path. `jest.config.js` maps `^sqlite3$` to a stub whose

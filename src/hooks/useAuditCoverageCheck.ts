@@ -108,7 +108,11 @@ export const IMPORT_HARD_CAP_MS = 10 * 60_000; // 10 min absolute ceiling
  * truly resolves — honest completion, never faked.
  */
 const PHASE_BANDS: Record<string, { start: number; end: number }> = {
-  deleting: { start: 0, end: 5 },
+  // BACKLOG-2793: a `deleting: {0, 5}` band sat here for the force path's old
+  // clear phase. Stage-and-swap removed that phase, so the row is gone. The
+  // remaining bands are deliberately NOT renumbered — `querying` still starts
+  // at 5, so the bar's visible starting point is unchanged. An unmapped phase
+  // falls through to the indeterminate bar below rather than being guessed at.
   querying: { start: 5, end: 30 },
   importing: { start: 30, end: 75 },
   attachments: { start: 75, end: 92 },

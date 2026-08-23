@@ -275,11 +275,16 @@ describe("BACKLOG-2776 — the dashboard stops reporting progress once Cancel is
     // the whole time the user is pressing Cancel in the panel behind it. The
     // percentage beside this pill freezes because the orchestrator stops
     // applying progress to a cancel-requested item; a pill still announcing
-    // "Messages - Clearing" next to that frozen number would be this surface
+    // "Messages - querying" next to that frozen number would be this surface
     // contradicting the panel about whether the cancel had registered.
+    //
+    // BACKLOG-2793: driven with `deleting` until that phase was removed. The
+    // pill takes any unmapped phase through the same raw-string fallback, so
+    // the subject is unchanged — but the fixture now names a phase the importer
+    // can actually emit.
     mockUseSyncOrchestrator.mockReturnValue(
       orchestratorState(
-        [syncItem("messages", "running", { phase: "deleting", cancelRequested: true, progress: 34 })],
+        [syncItem("messages", "running", { phase: "querying", cancelRequested: true, progress: 34 })],
         true,
       ),
     );
@@ -295,14 +300,14 @@ describe("BACKLOG-2776 — the dashboard stops reporting progress once Cancel is
     // the test above would be green for a reason unrelated to cancelling.
     mockUseSyncOrchestrator.mockReturnValue(
       orchestratorState(
-        [syncItem("messages", "running", { phase: "deleting", progress: 34 })],
+        [syncItem("messages", "running", { phase: "querying", progress: 34 })],
         true,
       ),
     );
 
     render(<SyncStatusIndicator />);
 
-    expect(screen.getByTestId("sync-pill-messages")).toHaveTextContent("Messages - deleting");
+    expect(screen.getByTestId("sync-pill-messages")).toHaveTextContent("Messages - querying");
     expect(screen.getByTestId("sync-pill-messages")).not.toHaveTextContent("Cancelling");
   });
 });

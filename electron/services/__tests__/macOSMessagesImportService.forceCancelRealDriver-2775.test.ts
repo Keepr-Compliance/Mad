@@ -76,22 +76,6 @@ jest.mock("cli-progress", () => ({
     Presets: { shades_classic: {} },
   },
 }));
-jest.mock("../auditService", () => ({
-  __esModule: true,
-  default: {
-    suspendPeriodicSync: jest.fn(() => false),
-    resumePeriodicSync: jest.fn(),
-    isSyncInFlight: jest.fn(() => false),
-  },
-}));
-jest.mock("../submissionSyncService", () => ({
-  __esModule: true,
-  default: {
-    suspendPeriodicSync: jest.fn(() => false),
-    resumePeriodicSync: jest.fn(),
-    isSyncInFlight: jest.fn(() => false),
-  },
-}));
 
 // DELIBERATELY NOT MOCKED: ../db/readOnlySqlite. It is the producer under test.
 //

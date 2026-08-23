@@ -77,7 +77,7 @@ jest.mock("../transactionDetailsModule/components/TransactionMessagesTab", () =>
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 interface ImportProgress {
-  phase: "deleting" | "importing" | "attachments";
+  phase: "importing" | "attachments";
   current: number;
   total: number;
   percent: number;

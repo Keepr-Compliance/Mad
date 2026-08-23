@@ -135,7 +135,7 @@ export const messageService = {
    */
   onImportProgress(
     callback: (progress: {
-      phase: "deleting" | "importing" | "attachments";
+      phase: "importing" | "attachments";
       current: number;
       total: number;
       percent: number;
