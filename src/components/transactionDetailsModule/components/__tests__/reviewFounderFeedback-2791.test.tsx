@@ -88,7 +88,9 @@ describe("the discovery popup copy (founder-dictated)", () => {
  *
  * CONTROLS RUN (MEASURED):
  *  1. Always render both buttons (revert the R=0 branch) -> RED, 2 of 4 tests.
- *  2. Render only "Confirm" for every "found" shape      -> RED, 3 of 4 tests.
+ *  2. Render only "Confirm" for every "found" shape      -> RED, 2 of 4 tests
+ *     (the two R>0 shapes; the R=0 pair still passes, which is why control 1 is
+ *     needed as well — neither mutation alone can fail all four).
  *  3. Wire Confirm to onReview instead of onDismiss      -> RED, 1 of 4 tests.
  */
 describe("the popup's BUTTON SET is part of each shape", () => {

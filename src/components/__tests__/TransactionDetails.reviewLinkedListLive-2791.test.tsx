@@ -25,9 +25,12 @@
  * see one data source failing to hear another's notification.
  *
  * CONTROLS RUN (mutation applied, suite re-run, MEASURED):
- *  1. Delete the review-state subscription effect entirely -> RED, 3 of 3 tests.
- *  2. Keep the effect but drop `refreshAttachments`/second channel, i.e. refresh
- *     only "email"                                         -> RED, 1 of 3 tests
+ *  1. Delete the review-state subscription effect entirely -> RED, 3 of 4 tests.
+ *     The survivor is the T7 restore test, and that is the correct result, not
+ *     a hole: the ordinary-restore path has had its OWN silent refresh since
+ *     BACKLOG-1780 and never depended on the review notification. The control
+ *     therefore also proves the two paths are genuinely independent.
+ *  2. Refresh only the "email" channel                     -> RED, 1 of 4 tests
  *     (the Texts-tab test — the gap the founder had not reached yet).
  */
 import React from "react";
