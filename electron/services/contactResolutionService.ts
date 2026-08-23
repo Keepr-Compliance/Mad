@@ -22,6 +22,8 @@ import type { Communication } from "../types/models";
 // BACKLOG-2393: scoped support-access tracing. Both calls are no-ops unless a
 // user has granted a support window covering the scope.
 import { supportTrace } from "./supportAccess/trace";
+// BACKLOG-2757: the "A or B" join lives with the naming rule it belongs to.
+import { joinAmbiguousNames } from "./folderExport/threadContactLabel";
 
 /**
  * Resolved participant entry with handle, resolved name, and type classification.
@@ -106,6 +108,176 @@ function classifyHandle(handle: string): "phone" | "email" | "appleid" {
 }
 
 /**
+ * ===========================================================================
+ * BACKLOG-2757 / BACKLOG-2758 — ONE HANDLE IS NOT ALWAYS ONE PERSON
+ * ===========================================================================
+ *
+ * `resolvePhoneNames` used to return `Record<handle, name>` and build it with a
+ * bare `result[norm] = row.display_name` inside the imported-contacts loop —
+ * **no `if (!result[norm])` guard**, unlike the external-contacts loop below it.
+ * `getContactNamesByPhoneDigits` returns every matching row, so when two saved
+ * contacts shared a phone number, **the last row won**. SQLite yields rows in
+ * rowid order, so "the last row" meant "whichever contact was inserted second",
+ * and that name went onto the audit PDF and into a file name on disk.
+ *
+ * (Worth stating plainly because the ticket said otherwise: the phone collapse
+ * was never a `LIMIT 1`. The only `LIMIT 1` in this path is the Apple-ID prefix
+ * statement, which is a separate finding with a separate fix.)
+ *
+ * So resolution now returns TWO views of the same fact, built in one pass:
+ *
+ *   - `names`  — every alias key -> the decided label. For one match that is the
+ *                name, exactly as before. For several it is "A or B".
+ *   - `matches`— the same alias keys -> the distinct contact names behind that
+ *                label, so a caller that must NOT print a name (the FILENAME)
+ *                can tell an ambiguous handle from an unambiguous one.
+ *
+ * They share alias keys by construction because one loop writes both. Read
+ * `matches` through `matchedNamesFor()`, never by direct indexing — that is the
+ * one place that knows how a raw handle becomes a key.
+ */
+export interface HandleNameResolution {
+  names: Record<string, string>;
+  matches: Record<string, readonly string[]>;
+}
+
+/** Scope for an export-time lookup. See attachmentDbService for the semantics. */
+export interface ResolutionScope {
+  /** Hard filter: another user's contacts never resolve. */
+  userId?: string | null;
+  /** Preference, not a filter: in-transaction matches win over out-of. */
+  transactionId?: string | null;
+}
+
+/**
+ * The distinct contact names behind a handle's label, using the same key
+ * fallback chain every consumer of `names` already uses.
+ */
+export function matchedNamesFor(
+  resolution: HandleNameResolution | undefined,
+  handle: string | null | undefined
+): readonly string[] {
+  if (!resolution || !handle) return [];
+  const normalized = normalizePhone(handle);
+  return (
+    resolution.matches[normalized] ||
+    resolution.matches[handle] ||
+    resolution.matches[handle.toLowerCase()] ||
+    []
+  );
+}
+
+/**
+ * The name a handle is called — the ONE function both surfaces that name a party
+ * must call.
+ *
+ * BACKLOG-2758 finding 3: the broker-portal upload named parties from the macOS
+ * AddressBook (`contactsService.getContactNames`) while the desktop PDF named
+ * them from the `contacts` table. **The same transaction could be submitted to
+ * the broker under one name and archived locally under another**, with nothing
+ * that would ever notice. The AddressBook is still consulted — it is tier 3
+ * inside `resolvePhoneNames` — but it is no longer a SEPARATE answer.
+ *
+ * The key chain here is the same one `getThreadContact` uses (normalized, then
+ * raw, then lower-cased), so both sides read the same map the same way. Pinned
+ * by `exportPartyNaming.parity.test.ts`.
+ */
+export function nameForHandle(
+  resolution: HandleNameResolution | undefined,
+  handle: string | null | undefined
+): string | undefined {
+  if (!resolution || !handle) return undefined;
+  const normalized = normalizePhone(handle);
+  return (
+    resolution.names[normalized] ||
+    resolution.names[handle] ||
+    resolution.names[handle.toLowerCase()] ||
+    undefined
+  );
+}
+
+/** A single contact matching a handle, before the naming rule is applied. */
+interface HandleMatch {
+  contactId: string;
+  name: string;
+  linked: boolean;
+}
+
+/**
+ * Turn every contact matching one handle into the names that handle is called.
+ *
+ * 1. **Transaction preference** — if ANY match is linked to the transaction
+ *    being exported, the unlinked ones are dropped. They are not deleted from
+ *    the world; they simply cannot out-name a party to this deal. A handle whose
+ *    only match is unlinked still resolves, which is why this is a preference
+ *    and not the hard filter BACKLOG-2758 first proposed: a hard filter would
+ *    strip the name off every message participant who is not a formal
+ *    `transaction_contacts` party, which is most of them.
+ * 2. **Distinct by name** — two contact rows reading "Dana Alvarez" are one name
+ *    and therefore NOT ambiguous. Ambiguity is about what we would print.
+ * 3. **Declared order** — by name, then contact id. Never rowid, never insertion
+ *    order. This is the property whose absence was the defect.
+ */
+function namesForHandle(matches: HandleMatch[]): string[] {
+  const linked = matches.filter((m) => m.linked);
+  const scoped = linked.length > 0 ? linked : matches;
+
+  const byName = new Map<string, HandleMatch>();
+  for (const match of scoped) {
+    const name = match.name.trim();
+    if (!name) continue;
+    const existing = byName.get(name);
+    // Keep the lowest contact id for a repeated name so the tie-break is stable.
+    if (!existing || match.contactId < existing.contactId) byName.set(name, match);
+  }
+
+  return Array.from(byName.values())
+    .sort((a, b) => {
+      const byLabel = a.name.localeCompare(b.name, "en");
+      return byLabel !== 0 ? byLabel : a.contactId.localeCompare(b.contactId);
+    })
+    .map((m) => m.name);
+}
+
+/** Accumulates matches and the alias keys they should be readable under. */
+class HandleAccumulator {
+  private readonly entries = new Map<
+    string,
+    { aliases: Set<string>; matches: HandleMatch[]; seen: Set<string> }
+  >();
+
+  add(canonicalKey: string, aliases: string[], match: HandleMatch): void {
+    let entry = this.entries.get(canonicalKey);
+    if (!entry) {
+      entry = { aliases: new Set(), matches: [], seen: new Set() };
+      this.entries.set(canonicalKey, entry);
+    }
+    for (const alias of aliases) if (alias) entry.aliases.add(alias);
+    // One contact reached through two stored formats of the same number is ONE
+    // match, not two — otherwise every contact with both an E.164 and a display
+    // form would look like a shared line.
+    if (entry.seen.has(match.contactId)) return;
+    entry.seen.add(match.contactId);
+    entry.matches.push(match);
+  }
+
+  /** Write labels and match lists into the resolution, without overwriting a
+   *  higher-priority source that already answered for a key. */
+  drainInto(resolution: HandleNameResolution): void {
+    for (const [, entry] of this.entries) {
+      const names = namesForHandle(entry.matches);
+      if (names.length === 0) continue;
+      const label = joinAmbiguousNames(names);
+      for (const alias of entry.aliases) {
+        if (resolution.names[alias]) continue;
+        resolution.names[alias] = label;
+        resolution.matches[alias] = names;
+      }
+    }
+  }
+}
+
+/**
  * Resolve phone numbers to contact names.
  * Two-source lookup: imported contacts DB + macOS Contacts fallback.
  *
@@ -113,11 +285,13 @@ function classifyHandle(handle: string): "phone" | "email" | "appleid" {
  */
 export async function resolvePhoneNames(
   phones: string[],
-  userId?: string
-): Promise<Record<string, string>> {
-  if (phones.length === 0) return {};
+  userId?: string,
+  scope?: ResolutionScope
+): Promise<HandleNameResolution> {
+  const resolution: HandleNameResolution = { names: {}, matches: {} };
+  if (phones.length === 0) return resolution;
 
-  const result: Record<string, string> = {};
+  const result = resolution.names;
 
   // BACKLOG-2393: the "phone numbers not resolved to names" tickets could not be
   // answered because nothing recorded which source resolved what. Counting how
@@ -133,24 +307,29 @@ export async function resolvePhoneNames(
   try {
     const normalizedPhones = phones.map((p) => normalizePhone(p));
 
-    const rows = databaseService.getContactNamesByPhoneDigits(normalizedPhones);
+    const rows = databaseService.getContactNamesByPhoneDigits(normalizedPhones, {
+      userId: scope?.userId ?? userId ?? null,
+      transactionId: scope?.transactionId ?? null,
+    });
 
+    const acc = new HandleAccumulator();
     for (const row of rows) {
-      if (row.display_name) {
-        // Store under multiple key formats to handle E.164 vs raw digit mismatches
-        // (BACKLOG-1083): Some paths store +1234567890, others 1234567890
-        if (row.phone_e164) {
-          const norm = normalizePhone(row.phone_e164);
-          result[norm] = row.display_name;
-          result[row.phone_e164] = row.display_name;
-        }
-        if (row.phone_display) {
-          const norm = normalizePhone(row.phone_display);
-          result[norm] = row.display_name;
-          result[row.phone_display] = row.display_name;
-        }
+      if (!row.display_name) continue;
+      const match = {
+        contactId: row.contact_id,
+        name: row.display_name,
+        linked: Boolean(row.is_transaction_linked),
+      };
+      // Store under multiple key formats to handle E.164 vs raw digit mismatches
+      // (BACKLOG-1083): Some paths store +1234567890, others 1234567890
+      for (const stored of [row.phone_e164, row.phone_display]) {
+        if (!stored) continue;
+        const norm = normalizePhone(stored);
+        if (!norm) continue;
+        acc.add(norm, [norm, stored], match);
       }
     }
+    acc.drainInto(resolution);
   } catch (error) {
     logService.warn(
       "[ContactResolution] Failed to look up phone names from imported contacts",
@@ -167,18 +346,22 @@ export async function resolvePhoneNames(
       const normalizedPhones = phones.map((p) => normalizePhone(p));
       const rows = externalContactDb.getNamesByPhoneDigits(userId, normalizedPhones);
 
+      // External contacts are already user-scoped by the query and carry no
+      // transaction link, so every match here is peers with every other; the
+      // "or" rule applies within this tier the same way. `drainInto` will not
+      // overwrite a key the imported-contacts tier already answered.
+      const acc = new HandleAccumulator();
       for (const row of rows) {
-        if (row.name && row.phone) {
-          const norm = normalizePhone(row.phone);
-          // Only set if not already resolved by a higher-priority source
-          if (!result[norm]) {
-            result[norm] = row.name;
-          }
-          if (!result[row.phone]) {
-            result[row.phone] = row.name;
-          }
-        }
+        if (!row.name || !row.phone) continue;
+        const norm = normalizePhone(row.phone);
+        if (!norm) continue;
+        acc.add(norm, [norm, row.phone], {
+          contactId: row.contact_id,
+          name: row.name,
+          linked: false,
+        });
       }
+      acc.drainInto(resolution);
     } catch (error) {
       logService.warn(
         "[ContactResolution] Failed to look up phone names from external contacts",
@@ -217,12 +400,18 @@ export async function resolvePhoneNames(
 
       for (const key of possibleKeys) {
         if (key && contactMap[key]) {
-          result[normalized] = contactMap[key];
-          result[phone] = contactMap[key];
+          // One AddressBook entry per key — never ambiguous, but `matches` is
+          // written alongside `names` so no key exists in one and not the other.
+          const name = contactMap[key];
+          result[normalized] = name;
+          result[phone] = name;
+          resolution.matches[normalized] = [name];
+          resolution.matches[phone] = [name];
           // Also store under E.164 format for callers that look up with + prefix
           if (!phone.includes("@")) {
             const e164 = `+${digitsOnly.length === 10 ? "1" + digitsOnly : digitsOnly}`;
-            result[e164] = contactMap[key];
+            result[e164] = name;
+            resolution.matches[e164] = [name];
           }
           break;
         }
@@ -259,7 +448,7 @@ export async function resolvePhoneNames(
   //
   // The counts above stay. They are the useful half, and they name nobody.
 
-  return result;
+  return resolution;
 }
 
 /**
@@ -270,29 +459,34 @@ export async function resolvePhoneNames(
  */
 export async function resolveEmailNames(
   emails: string[],
-  userId?: string
-): Promise<Record<string, string>> {
-  if (emails.length === 0) return {};
+  userId?: string,
+  scope?: ResolutionScope
+): Promise<HandleNameResolution> {
+  const resolution: HandleNameResolution = { names: {}, matches: {} };
+  if (emails.length === 0) return resolution;
 
-  const result: Record<string, string> = {};
+  const result = resolution.names;
 
   try {
     const lowerEmails = emails.map((e) => e.toLowerCase());
 
-    const rows = databaseService.getContactNamesByEmails(lowerEmails);
+    const rows = databaseService.getContactNamesByEmails(lowerEmails, {
+      userId: scope?.userId ?? userId ?? null,
+      transactionId: scope?.transactionId ?? null,
+    });
 
+    const acc = new HandleAccumulator();
     for (const row of rows) {
-      if (row.display_name && row.email) {
-        result[row.email] = row.display_name;
-        // Also store original-case version for direct lookup
-        const original = emails.find(
-          (e) => e.toLowerCase() === row.email
-        );
-        if (original && original !== row.email) {
-          result[original] = row.display_name;
-        }
-      }
+      if (!row.display_name || !row.email) continue;
+      // Also store original-case version for direct lookup
+      const original = emails.find((e) => e.toLowerCase() === row.email);
+      acc.add(row.email, original ? [row.email, original] : [row.email], {
+        contactId: row.contact_id,
+        name: row.display_name,
+        linked: Boolean(row.is_transaction_linked),
+      });
     }
+    acc.drainInto(resolution);
   } catch (error) {
     logService.warn(
       "[ContactResolution] Failed to look up email names from contacts",
@@ -307,18 +501,18 @@ export async function resolveEmailNames(
       const lowerEmails = emails.map((e) => e.toLowerCase());
       const rows = externalContactDb.getNamesByEmails(userId, lowerEmails);
 
+      const acc = new HandleAccumulator();
       for (const row of rows) {
-        if (row.name && row.email) {
-          const lower = row.email.toLowerCase();
-          if (!result[lower]) {
-            result[lower] = row.name;
-          }
-          const original = emails.find((e) => e.toLowerCase() === lower);
-          if (original && !result[original]) {
-            result[original] = row.name;
-          }
-        }
+        if (!row.name || !row.email) continue;
+        const lower = row.email.toLowerCase();
+        const original = emails.find((e) => e.toLowerCase() === lower);
+        acc.add(lower, original ? [lower, original] : [lower], {
+          contactId: row.contact_id,
+          name: row.name,
+          linked: false,
+        });
       }
+      acc.drainInto(resolution);
     } catch (error) {
       logService.warn(
         "[ContactResolution] Failed to look up email names from external contacts",
@@ -328,7 +522,7 @@ export async function resolveEmailNames(
     }
   }
 
-  return result;
+  return resolution;
 }
 
 /**
@@ -339,9 +533,10 @@ export async function resolveEmailNames(
  */
 export async function resolveHandles(
   handles: string[],
-  userId?: string
-): Promise<Record<string, string>> {
-  if (handles.length === 0) return {};
+  userId?: string,
+  scope?: ResolutionScope
+): Promise<HandleNameResolution> {
+  if (handles.length === 0) return { names: {}, matches: {} };
 
   // Partition by type
   const phones: string[] = [];
@@ -358,14 +553,15 @@ export async function resolveHandles(
 
   // Resolve in parallel
   const [phoneResults, emailResults] = await Promise.all([
-    resolvePhoneNames(phones, userId),
-    resolveEmailNames(emails, userId),
+    resolvePhoneNames(phones, userId, scope),
+    resolveEmailNames(emails, userId, scope),
   ]);
 
-  const result: Record<string, string> = {
-    ...phoneResults,
-    ...emailResults,
+  const resolution: HandleNameResolution = {
+    names: { ...phoneResults.names, ...emailResults.names },
+    matches: { ...phoneResults.matches, ...emailResults.matches },
   };
+  const result = resolution.names;
 
   // For Apple IDs (no @ and not a phone), try email prefix match
   // e.g., "janesmith" might match "janesmith@icloud.com" in contacts
@@ -375,11 +571,18 @@ export async function resolveHandles(
         // Skip if empty
         if (!appleId || appleId.trim() === "") continue;
 
-        // Try as email prefix: search contact_emails for emails starting with this prefix
-        const row = databaseService.getContactNameByAppleIdPrefix(appleId.toLowerCase());
+        // Try as email prefix: search contact_emails for emails starting with
+        // this prefix. BACKLOG-2758 finding 2: the query now declares its winner
+        // (lowest email, then lowest contact id) instead of taking whatever row
+        // SQLite offered first, and is scoped to this user.
+        const row = databaseService.getContactNameByAppleIdPrefix(
+          appleId.toLowerCase(),
+          { userId: scope?.userId ?? userId ?? null }
+        );
 
         if (row?.display_name) {
           result[appleId] = row.display_name;
+          resolution.matches[appleId] = [row.display_name];
         }
       }
     } catch (error) {
@@ -391,7 +594,7 @@ export async function resolveHandles(
     }
   }
 
-  return result;
+  return resolution;
 }
 
 /**

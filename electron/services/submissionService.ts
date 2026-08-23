@@ -28,7 +28,17 @@ import logService from "./logService";
 import emailAttachmentService from "./emailAttachmentService";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
-import { getContactNames } from "./contactsService";
+// BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
+// PDF uses, not from a second read of the macOS AddressBook. The AddressBook is
+// still consulted — as tier 3 inside that resolver — so no name previously
+// resolved is lost; it simply stops being an independent answer that could
+// disagree with the archived artifact.
+import {
+  resolveHandles,
+  extractParticipantHandles,
+  nameForHandle,
+  type HandleNameResolution,
+} from "./contactResolutionService";
 import type {
   Transaction,
   Message,
@@ -37,7 +47,6 @@ import type {
 } from "../types/models";
 
 /** Contact name map from phone/email to display name */
-type ContactMap = Record<string, string>;
 
 // ============================================
 // TYPES & INTERFACES
@@ -292,20 +301,25 @@ class SubmissionService {
       const orgId = await this.getUserOrganizationId();
       const currentUserId = await this.getCurrentUserId();
 
-      // Load contact names for phone number resolution
-      let contactMap: ContactMap = {};
+      // Load contact names for phone number resolution.
+      // BACKLOG-2757/2758: one resolver, scoped to this user and this
+      // transaction, returning the same honest label the PDF prints — including
+      // "A or B" when a handle names more than one contact. The portal and the
+      // archived PDF now cannot name the same party differently.
+      let partyNames: HandleNameResolution = { names: {}, matches: {} };
       try {
-        const contactResult = await getContactNames();
-        if (contactResult.status.success) {
-          contactMap = contactResult.contactMap;
-          logService.info(
-            `[Submission] Loaded ${Object.keys(contactMap).length} contacts for name resolution`,
-            "SubmissionService"
-          );
-        }
+        partyNames = await resolveHandles(
+          extractParticipantHandles(messages),
+          currentUserId,
+          { userId: currentUserId, transactionId }
+        );
+        logService.info(
+          `[Submission] Resolved ${Object.keys(partyNames.names).length} handle keys for name resolution`,
+          "SubmissionService"
+        );
       } catch (err) {
         logService.warn(
-          `[Submission] Could not load contacts: ${err instanceof Error ? err.message : "Unknown error"}`,
+          `[Submission] Could not resolve party names: ${err instanceof Error ? err.message : "Unknown error"}`,
           "SubmissionService"
         );
       }
@@ -474,7 +488,7 @@ class SubmissionService {
 
         // Map text messages
         const textRecords = messages.map((m) =>
-          this.mapToSubmissionMessage(m, submissionId, contactMap)
+          this.mapToSubmissionMessage(m, submissionId, partyNames)
         );
         // Map emails
         const emailRecords = emails.map((e) =>
@@ -928,7 +942,7 @@ class SubmissionService {
   private mapToSubmissionMessage(
     message: Message,
     submissionId: string,
-    contactMap: ContactMap = {}
+    partyNames: HandleNameResolution = { names: {}, matches: {} }
   ): SubmissionMessageRecord {
     // Parse participants JSON
     let participants: Record<string, unknown> = {};
@@ -943,21 +957,13 @@ class SubmissionService {
       }
     }
 
-    // Resolve contact names and add to participants
+    // Resolve contact names and add to participants.
+    // BACKLOG-2758: `nameForHandle` is the SAME accessor, over the SAME map,
+    // that the export reads — the hand-rolled last-10-digit scan that used to
+    // live here was a third key derivation and a third chance to disagree.
     const resolvePhone = (phone: string): string | undefined => {
       if (!phone || phone === "me" || phone === "unknown") return undefined;
-      // Try direct lookup
-      if (contactMap[phone]) return contactMap[phone];
-      // Try normalized (last 10 digits)
-      const normalized = phone.replace(/\D/g, "").slice(-10);
-      if (normalized.length >= 7) {
-        for (const [p, name] of Object.entries(contactMap)) {
-          if (p.replace(/\D/g, "").slice(-10) === normalized) {
-            return name;
-          }
-        }
-      }
-      return undefined;
+      return nameForHandle(partyNames, phone);
     };
 
     // Add resolved names to participants

@@ -4737,16 +4737,25 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
   // CONTACT RESOLUTION QUERIES (Delegate to attachmentDbService)
   // ============================================
 
-  getContactNamesByPhoneDigits(normalizedPhones: string[]) {
-    return attachmentDb.getContactNamesByPhoneDigits(normalizedPhones);
+  getContactNamesByPhoneDigits(
+    normalizedPhones: string[],
+    scope?: attachmentDb.ContactResolutionScope
+  ) {
+    return attachmentDb.getContactNamesByPhoneDigits(normalizedPhones, scope);
   }
 
-  getContactNamesByEmails(lowerEmails: string[]) {
-    return attachmentDb.getContactNamesByEmails(lowerEmails);
+  getContactNamesByEmails(
+    lowerEmails: string[],
+    scope?: attachmentDb.ContactResolutionScope
+  ) {
+    return attachmentDb.getContactNamesByEmails(lowerEmails, scope);
   }
 
-  getContactNameByAppleIdPrefix(appleIdLower: string) {
-    return attachmentDb.getContactNameByAppleIdPrefix(appleIdLower);
+  getContactNameByAppleIdPrefix(
+    appleIdLower: string,
+    scope?: attachmentDb.ContactResolutionScope
+  ) {
+    return attachmentDb.getContactNameByAppleIdPrefix(appleIdLower, scope);
   }
 
   // ============================================

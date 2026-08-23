@@ -3217,8 +3217,11 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
 
         // Pass userId to enable external_contacts lookup (iPhone, macOS, Outlook, Google)
         const validatedUserId = userId ? await getValidUserId(userId, "Contacts") : undefined;
-        const names = await resolveHandles(handles, validatedUserId ?? undefined);
-        return { success: true, names };
+        // BACKLOG-2757: the IPC contract stays `Record<handle, label>`; the
+        // label is now the honest one ("A or B" for a shared line) rather than
+        // whichever contact was inserted last.
+        const resolution = await resolveHandles(handles, validatedUserId ?? undefined);
+        return { success: true, names: resolution.names };
       } catch (error) {
         logService.error("Resolve handles failed", "Contacts", {
           error: error instanceof Error ? error.message : "Unknown error",

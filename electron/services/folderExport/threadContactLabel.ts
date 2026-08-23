@@ -137,6 +137,126 @@ export function fileSafeContactLabel(label: string): string {
   return trimmed;
 }
 
+/**
+ * ===========================================================================
+ * BACKLOG-2757 — WHAT A THREAD IS CALLED WHEN THE HANDLE IS NOT ONE PERSON
+ * ===========================================================================
+ *
+ * Two saved contacts sharing one phone number is ordinary: a household line, an
+ * office line, a couple. BACKLOG-2619/2556 exist because two people share an
+ * office line, and the product's rule is that **a shared identifier is not
+ * evidence of one person**. The export used to assume the opposite — it resolved
+ * the handle to whichever contact SQLite happened to return last, put that name
+ * on the PDF, and wrote it into a FILE NAME inside the audit package. The wrong
+ * person's name, durable on a filesystem, in an audit artifact.
+ *
+ * Founder decision (2026-08-20, settled):
+ *
+ *   - one contact matches -> unchanged, name in the label and the filename;
+ *   - more than one matches -> the LABEL says so with an "or", and the FILENAME
+ *     carries NO name at all, only the index and the number.
+ *
+ * The thread is never split (that would duplicate one real conversation into two
+ * pretend-attributed ones — the grouping is faithful to Messages and correct)
+ * and never blocks the export (a shared office line is routine and often
+ * unresolvable).
+ *
+ * WHY THE FILENAME DROPS THE NAME RATHER THAN CARRYING BOTH: the filename is the
+ * part that survives. Putting "Chris_or_Dana" on disk still asserts a person, in
+ * the one place we cannot correct later. The number is the thing we actually
+ * know, so the file is named after it.
+ *
+ * ---------------------------------------------------------------------------
+ * WHERE BACKLOG-2816 PLUGS IN
+ * ---------------------------------------------------------------------------
+ * 2816 (group chat names in the export, the submission, and the file name)
+ * hard-depends on 2814 importing `chat.display_name` and is NOT implemented
+ * here. When it is: it becomes ONE new branch at the top of `threadNaming`'s
+ * precedence, above the ambiguity branch, setting both `label` and
+ * `fileSegment` from the chat name in the same step —
+ *
+ *     if (chatName) return { label: chatName,
+ *                            fileSegment: fileSafeContactLabel(chatName) };
+ *
+ * — plus one field on `ThreadNamingInput`. It must land here and nowhere else:
+ * every surface that names a thread already routes through this function, so
+ * one branch reaches the PDF header, the summary index, the combined one-PDF
+ * section and the filename together. The sanitisation 2816 asks for ("the name
+ * is user-typed text") is already what `fileSafeContactLabel` does.
+ */
+
+/** What a thread is called, in both places it is called something. */
+export interface ThreadNaming {
+  /** The human label: PDF header, summary index row, combined-PDF section. */
+  label: string;
+  /** The filename component, already filesystem-safe. */
+  fileSegment: string;
+  /** True when the handle matched more than one contact. */
+  ambiguous: boolean;
+}
+
+export interface ThreadNamingInput {
+  contact: ThreadContact;
+  isGroupChat: boolean;
+  /**
+   * Every distinct contact name this thread's handle resolves to, in the
+   * resolver's declared order, AFTER scoping. Length <= 1 is the ordinary case
+   * and behaves exactly as it did before BACKLOG-2757.
+   */
+  matchedNames?: readonly string[];
+}
+
+/**
+ * Join names the way a person would read them: "A or B", "A, B or C".
+ *
+ * Not "A/B" and not "A & B" — both read as one compound party. "or" is the only
+ * join that says *we do not know which of these it is*, which is the true state.
+ */
+export function joinAmbiguousNames(names: readonly string[]): string {
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+}
+
+/**
+ * THE naming decision for a text thread. Precedence, top to bottom:
+ *
+ *   1. (BACKLOG-2816 seam — group chat name, not implemented, see above)
+ *   2. AMBIGUOUS: >1 contact on this handle -> label `<handle> — A or B`,
+ *      filename = the handle, no name.
+ *   3. GROUP CHAT with no resolvable party -> "Group Chat".
+ *   4. Exactly one name -> that name. Unchanged from BACKLOG-2463.
+ *   5. No name -> the formatted handle. Unchanged from BACKLOG-2463.
+ *
+ * Rules 3-5 are byte-for-byte what shipped before; only rule 2 is new, and it
+ * fires only when the resolver found more than one contact.
+ */
+export function threadNaming({
+  contact,
+  isGroupChat,
+  matchedNames,
+}: ThreadNamingInput): ThreadNaming {
+  const names = matchedNames ?? [];
+
+  if (names.length > 1) {
+    // The handle, formatted for a human, with no name attached — the same chain
+    // an unresolved thread already uses, called rather than restated.
+    const handleLabel = contactDisplayLabel({ name: null, phone: contact.phone });
+    return {
+      label: `${handleLabel} — ${joinAmbiguousNames(names)}`,
+      fileSegment: fileSafeContactLabel(handleLabel),
+      ambiguous: true,
+    };
+  }
+
+  const label =
+    isGroupChat && threadContactIsUnresolved(contact)
+      ? GROUP_CHAT_LABEL
+      : threadContactLabel(contact);
+
+  return { label, fileSegment: fileSafeContactLabel(label), ambiguous: false };
+}
+
 /** Drop the separator characters `sanitizeFileName` may leave at either end. */
 function trimSeparators(value: string): string {
   return value.replace(/^[_\-. ]+/, "").replace(/[_\-. ]+$/, "");

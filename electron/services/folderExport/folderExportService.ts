@@ -41,7 +41,9 @@ import {
   resolveHandles as resolveAllHandles,
   resolveGroupChatParticipants as sharedResolveGroupChatParticipants,
   extractParticipantHandles,
+  matchedNamesFor,
 } from "../contactResolutionService";
+import type { HandleNameResolution } from "../contactResolutionService";
 
 // Import extracted helpers
 import { generateSummaryHTML } from "./summaryHelpers";
@@ -58,12 +60,7 @@ import {
   isGroupChat,
   generateTextThreadHTML,
 } from "./textExportHelpers";
-import {
-  threadContactLabel,
-  threadContactIsUnresolved,
-  fileSafeContactLabel,
-  GROUP_CHAT_LABEL,
-} from "./threadContactLabel";
+import { threadNaming } from "./threadContactLabel";
 // BACKLOG-2161: emails group by the SAME key the app uses on-screen so the
 // exported thread count/grouping matches the app's "N conversations". Texts keep
 // getThreadKey (participants-based). This is the single canonical email key.
@@ -235,7 +232,13 @@ class FolderExportService {
 
       // TASK-2026: Pre-load contact names for all handles (phones + emails + Apple IDs)
       const allHandles = extractParticipantHandles(texts);
-      const phoneNameMap = await resolveAllHandles(allHandles, transaction.user_id);
+      // BACKLOG-2758: scoped to this user (hard) and this transaction (a
+      // preference — an out-of-deal contact can no longer out-name a party).
+      const resolution = await resolveAllHandles(allHandles, transaction.user_id, {
+        userId: transaction.user_id,
+        transactionId: transaction.id,
+      });
+      const phoneNameMap = resolution.names;
 
       // Get user's name and email for "me" display in group chats
       let userName: string | undefined;
@@ -265,7 +268,8 @@ class FolderExportService {
         communications,
         basePath,
         phoneNameMap,
-        emailRenderMode
+        emailRenderMode,
+        (handle) => matchedNamesFor(resolution, handle)
       );
 
       onProgress?.({
@@ -374,7 +378,14 @@ class FolderExportService {
           message: "Exporting text conversations...",
         });
 
-        await this.exportTextConversations(texts, textsPath, phoneNameMap, userName, userEmail);
+        await this.exportTextConversations(
+          texts,
+          textsPath,
+          phoneNameMap,
+          userName,
+          userEmail,
+          resolution
+        );
 
         onProgress?.({
           stage: "texts",
@@ -434,9 +445,16 @@ class FolderExportService {
     communications: Communication[],
     basePath: string,
     phoneNameMap?: Record<string, string>,
-    emailExportMode: "thread" | "individual" = "thread"
+    emailExportMode: "thread" | "individual" = "thread",
+    matchedNames?: (handle: string | null | undefined) => readonly string[]
   ): Promise<void> {
-    const html = generateSummaryHTML(transaction, communications, phoneNameMap, emailExportMode);
+    const html = generateSummaryHTML(
+      transaction,
+      communications,
+      phoneNameMap,
+      emailExportMode,
+      matchedNames
+    );
     const pdfBuffer = await this.htmlToPdf(html);
     await fs.writeFile(path.join(basePath, "Summary_Report.pdf"), pdfBuffer);
   }
@@ -517,7 +535,8 @@ class FolderExportService {
     outputPath: string,
     phoneNameMap?: Record<string, string>,
     userName?: string,
-    userEmail?: string
+    userEmail?: string,
+    resolution?: HandleNameResolution
   ): Promise<void> {
     const nameMap = phoneNameMap || {};
 
@@ -555,6 +574,7 @@ class FolderExportService {
         ? (await sharedResolveGroupChatParticipants(msgs, nameMap, userName, userEmail))
             .map(p => ({ phone: p.handle, name: p.name }))
         : undefined;
+      const threadMatchedNames = matchedNamesFor(resolution, contact.phone);
       const html = generateTextThreadHTML(
         msgs,
         contact,
@@ -562,7 +582,8 @@ class FolderExportService {
         groupChat,
         threadIndex,
         participants,
-        getAttachmentsForMessage
+        getAttachmentsForMessage,
+        threadMatchedNames
       );
       const pdfBuffer = await this.htmlToPdf(html);
 
@@ -575,12 +596,21 @@ class FolderExportService {
       // page uses, then make THAT safe for a filesystem — rather than naming it
       // after the word "Unknown" to dodge the punctuation in a phone number.
       // This string lands on disk in the audit package and outlives any later fix.
-      const displayName =
-        groupChat && threadContactIsUnresolved(contact)
-          ? GROUP_CHAT_LABEL
-          : threadContactLabel(contact);
-      const contactName = fileSafeContactLabel(displayName);
-      const fileName = `text_${String(threadIndex + 1).padStart(3, "0")}_${contactName}_${firstDate}.pdf`;
+      //
+      // BACKLOG-2757: and when the handle is not ONE person, name it after the
+      // NUMBER and drop the date — `text_001_1_415_555-0120.pdf`. A shared line
+      // used to put whichever contact was inserted second onto disk. There is no
+      // correct name to write here, so no name is written; the index and the
+      // number identify the thread without asserting a person.
+      const paddedIndex = String(threadIndex + 1).padStart(3, "0");
+      const naming = threadNaming({
+        contact,
+        isGroupChat: groupChat,
+        matchedNames: threadMatchedNames,
+      });
+      const fileName = naming.ambiguous
+        ? `text_${paddedIndex}_${naming.fileSegment}.pdf`
+        : `text_${paddedIndex}_${naming.fileSegment}_${firstDate}.pdf`;
 
       await fs.writeFile(path.join(outputPath, fileName), pdfBuffer);
       threadIndex++;
@@ -1019,7 +1049,13 @@ class FolderExportService {
     const texts = communications.filter((c) => isTextMessage(c));
 
     const allHandles = extractParticipantHandles(texts);
-    const phoneNameMap = await resolveAllHandles(allHandles, transaction.user_id);
+    // BACKLOG-2758: same scope as the folder export — the two formats must not
+    // name the same party differently.
+    const resolution = await resolveAllHandles(allHandles, transaction.user_id, {
+      userId: transaction.user_id,
+      transactionId: transaction.id,
+    });
+    const phoneNameMap = resolution.names;
 
     let userName: string | undefined;
     let userEmail: string | undefined;
@@ -1039,7 +1075,13 @@ class FolderExportService {
     // thread-grouped too. Force "thread" regardless of the caller's Email Mode —
     // the summary email index then renders one row per thread, matching the
     // per-thread sections and emailRowTargets 1:1.
-    const summaryHtml = generateSummaryHTML(transaction, communications, phoneNameMap, "thread");
+    const summaryHtml = generateSummaryHTML(
+      transaction,
+      communications,
+      phoneNameMap,
+      "thread",
+      (handle) => matchedNamesFor(resolution, handle)
+    );
 
     const sections: CombinedSection[] = [];
     // Per-INDEX-ROW section targets. The summary renders the EMAIL index per
@@ -1130,7 +1172,8 @@ class FolderExportService {
               groupChat,
               textIdx,
               participants,
-              getAttachmentsForMessage
+              getAttachmentsForMessage,
+              matchedNamesFor(resolution, contact.phone)
             ),
             // Text back-link → that thread's EXACT index row.
             backHref: `#${textIndexRowId(textIdx)}`,

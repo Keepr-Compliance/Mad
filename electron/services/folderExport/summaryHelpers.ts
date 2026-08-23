@@ -12,6 +12,7 @@ import { escapeHtml, formatDate, formatLocalDate } from "../../utils/exportUtils
 import { labelForTransactionContact } from "../../utils/contactDisplayLabel";
 import { formatPhoneNumber } from "../../utils/phoneNormalization";
 import { countTextThreads, generateTextIndex, getMessageTypeCounts } from "./textExportHelpers";
+import type { MatchedNamesLookup } from "./textExportHelpers";
 import { groupEmailsForIndex, type EmailIndexThread } from "./emailIndexHelpers";
 import { extractParticipantHandles } from "../contactResolutionService";
 import { getContactNamesByHandles } from "../../utils/exportUtils";
@@ -32,7 +33,10 @@ export function generateSummaryHTML(
   transaction: TransactionWithDetails,
   communications: Communication[],
   phoneNameMap?: Record<string, string>,
-  emailExportMode: "thread" | "individual" = "thread"
+  emailExportMode: "thread" | "individual" = "thread",
+  // BACKLOG-2757: lets the text index reach the same naming decision the
+  // per-thread PDFs and the filenames reach. Absent -> pre-2757 behaviour.
+  matchedNames?: MatchedNamesLookup
 ): string {
   const emails = communications.filter((c) => isEmailMessage(c));
   const texts = communications.filter((c) => isTextMessage(c));
@@ -283,7 +287,7 @@ export function generateSummaryHTML(
   <div class="section">
     <h3>Text Threads Index (${countTextThreads(texts)})</h3>
     <div class="email-list">
-      ${generateTextIndex(texts, phoneNameMap, getContactNamesByHandles, extractParticipantHandles)}
+      ${generateTextIndex(texts, phoneNameMap, getContactNamesByHandles, extractParticipantHandles, matchedNames)}
     </div>
     <div class="note">
       Full text conversations are available in the /texts folder as individual PDF files.
