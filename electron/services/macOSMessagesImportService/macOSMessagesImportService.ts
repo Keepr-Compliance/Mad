@@ -938,10 +938,10 @@ class MacOSMessagesImportService {
         // timers, event-driven `insertAuditLog`, and submissionSyncService's
         // realtime subscription — none of which touch this user's macOS message
         // rows. A write INSIDE the force set is deleted by the swap on the
-        // success path — including rows the Android companion or the iPhone sync
-        // wrote, which do NOT come back on their next sync. See the boundary
-        // note at `swapStagingIntoLive`, and BACKLOG-2796 for the missing
-        // channel scope behind it.
+        // success path, but BACKLOG-2796 scoped that set to the rows chat.db can
+        // rebuild, so the Android companion's SMS, the iPhone sync's messages
+        // and `channel = 'email'` rows are no longer in it and are no longer
+        // deleted. See the boundary note at `swapStagingIntoLive`.
         if (staging && appDb) {
           const swapCounts = swapStagingIntoLive(appDb, staging);
           forceSwapCommitted = true;
@@ -951,6 +951,19 @@ class MacOSMessagesImportService {
               `and ${swapCounts.attachmentsInserted}`,
             MacOSMessagesImportService.SERVICE_NAME
           );
+          // BACKLOG-2796: normally zero. Non-zero means a foreign write (only
+          // iPhone sync shares chat.db's GUID space) landed between this run's
+          // dedup read and the swap, and the staged copy stood down for the row
+          // already in the store. Logged because a skip nobody can see is
+          // indistinguishable from a bug.
+          if (swapCounts.messagesYieldedToSurvivors > 0) {
+            logService.warn(
+              `Force reimport yielded ${swapCounts.messagesYieldedToSurvivors} staged message(s) ` +
+                `and ${swapCounts.attachmentsYieldedToSurvivors} staged attachment(s) to rows that ` +
+                `arrived from another source mid-run`,
+              MacOSMessagesImportService.SERVICE_NAME
+            );
+          }
         }
 
         return {
@@ -1114,23 +1127,70 @@ class MacOSMessagesImportService {
       MacOSMessagesImportService.SERVICE_NAME
     );
 
-    // BACKLOG-2790: on a force re-import this reads the STAGING table, and
-    // reading only staging is exact rather than approximate. The rows this
-    // query looks for — `user_id = ? AND external_id IS NOT NULL` — are
-    // precisely the rows the swap will delete, so under the old design the same
-    // query ran against a live table those rows had just been cleared from and
-    // returned only what the run itself had written. Staging starts empty and
-    // fills the same way, so the answer is identical at every point in the run.
+    // On a force re-import this must see what the live table WILL look like once
+    // the swap has run: the rows that survive it, plus whatever this run has
+    // staged so far. `forceReadView` is that union — the same one
+    // `storeAttachments` reads through.
+    //
+    // BACKLOG-2790 read STAGING ALONE here, and justified it: the rows this
+    // query looks for "are precisely the rows the swap will delete", so a live
+    // read would have returned nothing but this run's own writes anyway. That
+    // was true of an UNSCOPED force set. BACKLOG-2796 scoped it, and the
+    // justification died with the scope — survivors now exist inside the space
+    // this query searches.
+    //
+    // It is not a cosmetic difference. iPhone-synced rows carry Apple GUIDs in
+    // `external_id`, the SAME id space chat.db draws from
+    // (`iPhoneSyncStorageService` stores `externalId: msg.guid`). Read staging
+    // alone and the rebuild happily stages a GUID a surviving row still holds.
+    //
+    // WHAT THAT COSTS, at the strength it was measured — two steps, because the
+    // damage depends on what else is in place. With `insertFromStaging`'s yield
+    // filter present (it is), the swap stands the duplicate down and the store
+    // still ends up correct: the cost is a rebuild that extracts text and copies
+    // attachments for messages it will discard, and a log line reporting them as
+    // having "arrived from another source mid-run" when they had been in the
+    // store all along. Take the yield filter away too — the shape of this code
+    // before BACKLOG-2796 — and the swap's plain INSERT hits
+    // `idx_messages_user_external_id` (UNIQUE on `(user_id, external_id)`), rolls
+    // back, and the whole force re-import fails for exactly the users who have
+    // both an iPhone sync and a Mac.
+    //
+    // Both steps are pinned by `macOSMessagesImportService.forceSetScope-2796`,
+    // which asserts the yield COUNT and not only the resulting rows — the two
+    // designs leave an identical table behind, so rows alone cannot tell them
+    // apart.
+    //
+    // `user_id` is carried through the union and filtered OUTSIDE it, not left
+    // to `SURVIVING_MESSAGES`: that predicate is "not in the force set", which
+    // is true of every other user's rows as well. Deduplicating against a
+    // stranger's GUID would make the rebuild skip a message THIS user has, so
+    // the user filter has to survive the rewrite. Naming both columns in the
+    // view is what lets the outer WHERE keep applying it.
+    //
+    // Named binding on both paths, not positional: the survivor half of the
+    // union is built from `SURVIVING_MESSAGES`, which spells the user as
+    // `@userId`, and better-sqlite3 will not mix `?` with `@name` in one
+    // statement. The delta path's answer is unchanged — same predicate, same
+    // rows, one spelling of the query instead of two.
     const messagesTable = staging ? `"${staging.messagesTable}"` : "messages";
+    const existingIdsSource = staging
+      ? forceReadView(
+          "messages",
+          staging.messagesTable,
+          SURVIVING_MESSAGES,
+          "external_id, user_id"
+        )
+      : "messages";
     const existingIds = new Set<string>();
     const existingRows = db
       .prepare(
         `
-      SELECT external_id FROM ${messagesTable}
-      WHERE user_id = ? AND external_id IS NOT NULL
+      SELECT external_id FROM ${existingIdsSource}
+      WHERE user_id = @userId AND external_id IS NOT NULL
     `
       )
-      .all(userId) as { external_id: string }[];
+      .all({ userId }) as { external_id: string }[];
 
     for (const row of existingRows) {
       existingIds.add(row.external_id);
