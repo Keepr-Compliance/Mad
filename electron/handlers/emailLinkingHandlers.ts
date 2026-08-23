@@ -24,6 +24,24 @@ import {
 } from "../utils/validation";
 
 /**
+ * The shape `transactions:get-removed-emails` selects (BACKLOG-2831).
+ *
+ * Declared rather than inferred because the collapse below keys on three of
+ * these columns, and an untyped `dbAll` would have let a renamed column silently
+ * become `undefined` in the key — which reads as "every row is distinct" and
+ * quietly restores the duplication this exists to remove.
+ */
+interface RemovedEmailQueryRow {
+  ignored_id: string;
+  ic_email_id: string | null;
+  reason: string | null;
+  match_reason: string | null;
+  ignored_at: string | null;
+  email_id: string;
+  [column: string]: unknown;
+}
+
+/**
  * Register email linking/unlinking IPC handlers
  */
 export function registerEmailLinkingHandlers(): void {
@@ -669,6 +687,9 @@ export function registerEmailLinkingHandlers(): void {
           ic.id as ignored_id,
           ic.email_id as ic_email_id,
           ic.reason,
+          -- BACKLOG-2831: part of the identity a duplicate is collapsed on, and
+          -- half of what classifyRemoval reads to decide where a Restore goes.
+          ic.match_reason,
           ic.ignored_at,
           e.id as email_id,
           e.subject,
@@ -693,16 +714,61 @@ export function registerEmailLinkingHandlers(): void {
         ORDER BY ic.ignored_at DESC
       `;
 
-      const rows = dbAll(sql, [validatedTransactionId]);
+      const rows = dbAll<RemovedEmailQueryRow>(sql, [validatedTransactionId]);
+
+      // BACKLOG-2831: one email, one entry.
+      //
+      // `ignored_communications` has no uniqueness constraint (every index on it
+      // is a plain CREATE INDEX) and `addIgnoredCommunication` is a bare INSERT
+      // with a fresh uuid, so nothing ever stopped one email acquiring two
+      // removal rows. It happened through the review surface: a twinned email —
+      // present in BOTH review stores — rendered as two items in one thread
+      // group, the card's Reject passes EVERY id in the group, and rejecting
+      // wrote one suppression row per item. Measured on the real driver: two
+      // rows, identical but for the uuid.
+      //
+      // `SELECT DISTINCT` above cannot collapse them, because `ic.id` differs.
+      // So Show removed rendered ONE card reading "(2 emails)" with the same
+      // message twice — the founder's report, and the same shape as the review
+      // card that produced it.
+      //
+      // The read-side fix matters more than the write-side one here: the
+      // duplicate rows are ALREADY in every database that hit that route, and no
+      // amount of write-path correctness un-writes them. Collapsing on read makes
+      // those databases render correctly with no migration.
+      //
+      // COLLAPSED ON (email, reason, match_reason) — NOT on the email alone.
+      // Those two columns are exactly what `classifyRemoval` reads to route a
+      // Restore (Communication Lifecycle Contract T6/T7/T7b): a review rejection
+      // goes back to the review queue, an ordinary removal recreates a link. Two
+      // rows for one email that DISAGREE on the flavour are a real distinction,
+      // and merging them would send a restore to the wrong place. Only rows that
+      // are identical in the discriminator — which is what this defect produces,
+      // both `rejected_in_review`/`address_missing` — are merged.
+      //
+      // The EARLIEST row wins, so the entry keeps the removal's original
+      // timestamp rather than a later duplicate's.
+      const byIdentity = new Map<string, RemovedEmailQueryRow>();
+      for (const row of rows) {
+        const key = [row.email_id, row.reason ?? "", row.match_reason ?? ""].join("\u0000");
+        const seen = byIdentity.get(key);
+        if (!seen || (row.ignored_at ?? "") < (seen.ignored_at ?? "")) {
+          byIdentity.set(key, row);
+        }
+      }
+      // Insertion order follows the query's `ignored_at DESC`, so newest-first
+      // survives the collapse.
+      const removedEmails = Array.from(byIdentity.values());
 
       logService.info("Retrieved removed emails", "Transactions", {
         transactionId: validatedTransactionId,
-        count: rows.length,
+        count: removedEmails.length,
+        duplicatesCollapsed: rows.length - removedEmails.length,
       });
 
       return {
         success: true,
-        removedEmails: rows,
+        removedEmails,
       };
     }, { module: "Transactions" }),
   );
