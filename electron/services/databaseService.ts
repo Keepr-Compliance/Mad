@@ -4665,7 +4665,7 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return messageDb.getUnlinkedEmails(userId, limit);
   }
 
-  async getMessageContacts(userId: string): Promise<{ contact: string; messageCount: number; lastMessageAt: string }[]> {
+  async getMessageContacts(userId: string): Promise<messageDb.MessageContactRow[]> {
     return messageDb.getMessageContacts(userId);
   }
 

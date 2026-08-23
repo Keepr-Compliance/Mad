@@ -41,6 +41,12 @@ interface ContactInfo {
   contactName: string | null;
   messageCount: number;
   lastMessageAt: string;
+  /**
+   * BACKLOG-2816: names of the GROUP conversations this handle appears in, as
+   * the user typed them in Messages. Supplied by `getMessageContacts`; absent
+   * from older API shims, hence optional.
+   */
+  threadNames?: string[];
 }
 
 /**
@@ -58,6 +64,11 @@ interface MergedContact {
   primaryContact: string;
   /** Every raw handle that maps to this identity. */
   handles: string[];
+  /**
+   * BACKLOG-2816: the group chat names reachable through ANY of this identity's
+   * handles, de-duplicated — every member of one group carries the same name.
+   */
+  threadNames: string[];
   messageCount: number;
   lastMessageAt: string;
 }
@@ -432,6 +443,7 @@ export function AttachMessagesModal({
       displayName: resolveDisplayName(c.contact),
       primaryContact: c.contact,
       handles: [c.contact],
+      threadNames: c.threadNames ?? [],
       messageCount: c.messageCount,
       lastMessageAt: c.lastMessageAt,
     }));
@@ -441,6 +453,10 @@ export function AttachMessagesModal({
       (existing, incoming) => ({
         ...existing,
         handles: [...existing.handles, ...incoming.handles],
+        // BACKLOG-2816: one identity's handles usually sit in the SAME group, so
+        // union rather than concatenate — otherwise a name would be tested once
+        // per handle for no gain.
+        threadNames: [...new Set([...existing.threadNames, ...incoming.threadNames])],
         messageCount: existing.messageCount + incoming.messageCount,
         lastMessageAt:
           existing.lastMessageAt >= incoming.lastMessageAt
@@ -451,13 +467,25 @@ export function AttachMessagesModal({
     // Depends on contacts + contactNamesRecord (resolveDisplayName closes over both).
   }, [contacts, contactNamesRecord]);
 
-  // Filter merged contacts by search (name or any handle)
+  // Filter merged contacts by search (name, any handle, or a group chat name)
+  //
+  // BACKLOG-2816: a group the founder NAMED in Messages ("Kingfisher Lane
+  // Closing") is shown on its thread card but was unreachable from this box —
+  // the roster is people, and a group's name is not any person's name. Typing it
+  // now surfaces the group's members, which is how this contact-first picker
+  // reaches a conversation.
+  //
+  // Same rule as the displayName clause beside it: lowercase substring. Not
+  // fuzzy, not tokenized — nothing here scores matches, and inventing a second
+  // rule for one field would make the box behave differently depending on which
+  // thing you were looking for.
   const filteredContacts = useMemo(() => {
     if (!searchQuery.trim()) return mergedContacts;
     const query = searchQuery.toLowerCase();
     return mergedContacts.filter(
       (c) =>
         c.displayName.toLowerCase().includes(query) ||
+        c.threadNames.some((n) => n.toLowerCase().includes(query)) ||
         c.handles.some(
           (h) =>
             h.toLowerCase().includes(query) ||
@@ -655,7 +683,7 @@ export function AttachMessagesModal({
             <div className="relative">
               <input
                 type="text"
-                placeholder="Search by name or phone number..."
+                placeholder="Search by name, phone number, or group chat name..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 text-gray-900 bg-white min-h-[44px]"
