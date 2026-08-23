@@ -16,6 +16,12 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { settingsService } from '../../services';
 import logger from '../../utils/logger';
+import {
+  DEFAULT_LOOKBACK_MONTHS,
+  DEFAULT_MAX_MESSAGES,
+  androidFilterPatch,
+  resolveAndroidImportFilters,
+} from './messageImportPreferences';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,17 +42,6 @@ interface AndroidMessagesSettingsProps {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Lookback window shown when the user has stored NO `lookbackMonths` preference.
- *
- * BACKLOG-2561: this panel writes and reads the SAME `messageImport.filters` key
- * as the macOS panel, so it must resolve an absent key the same way the main
- * process does (`DEFAULT_LOOKBACK_MONTHS` in
- * `electron/services/macOSMessagesImportService/importHelpers.ts`). Only an
- * explicit `null` — what this dropdown writes for "All time" — means unbounded.
- */
-const DEFAULT_LOOKBACK_MONTHS = 3;
 
 function formatRelativeTime(timestamp: number): string {
   const now = Date.now();
@@ -84,7 +79,9 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(
     DEFAULT_LOOKBACK_MONTHS
   );
-  const [maxMessages, setMaxMessages] = useState<number | null>(50000);
+  const [maxMessages, setMaxMessages] = useState<number | null>(
+    DEFAULT_MAX_MESSAGES
+  );
 
   // Load sync status and filter preferences
   const refreshStatus = useCallback(async () => {
@@ -105,27 +102,43 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
   }, [refreshStatus]);
 
   // Load filter preferences
+  //
+  // BACKLOG-2734: this panel reads `messageImport.android.filters` — its OWN
+  // key. It used to read `messageImport.filters`, the key the macOS panel and
+  // the main process share, so a window chosen here silently narrowed the
+  // iMessage import and the macOS panel displayed it as though the user had
+  // chosen it there.
+  //
+  // BACKLOG-2795 / 2749: both values are resolved absent-vs-explicit-null by
+  // the shared resolvers. `maxMessages ?? null` used to render an ABSENT cap as
+  // "Unlimited" while the main process capped the run at 50,000 — the macOS
+  // panel's defect, ported here verbatim.
   useEffect(() => {
     if (!userId) return;
     const loadFilters = async () => {
       try {
         const result = await settingsService.getPreferences(userId);
-        if (result?.success && result.data) {
-          const prefs = result.data as Record<string, unknown>;
-          const messageImport = prefs.messageImport as
-            | { filters?: { lookbackMonths?: number | null; maxMessages?: number | null } }
-            | undefined;
-          if (messageImport?.filters) {
-            // BACKLOG-2561: absent key = "no preference" (default), explicit
-            // `null` = the user chose "All time". `?? null` conflated them and
-            // showed "All time" for a preference the import treated as 3 months.
-            setLookbackMonths(
-              messageImport.filters.lookbackMonths === undefined
-                ? DEFAULT_LOOKBACK_MONTHS
-                : messageImport.filters.lookbackMonths
-            );
-            setMaxMessages(messageImport.filters.maxMessages ?? null);
-          }
+        if (!result?.success || !result.data) return;
+
+        const resolved = resolveAndroidImportFilters(result.data);
+        setLookbackMonths(resolved.lookbackMonths);
+        setMaxMessages(resolved.maxMessages);
+
+        if (resolved.needsSeed) {
+          // The one-time migration: adopt the value the two panels shared, so
+          // this panel starts where the user last left it rather than jumping
+          // to the defaults. Written back under `android`, which makes the
+          // seed idempotent — the next load finds the namespace and takes the
+          // branch above instead. A failed write leaves it absent and the next
+          // mount retries, which is why the displayed state is set from the
+          // READ above regardless of whether this write lands.
+          await settingsService.updatePreferences(
+            userId,
+            androidFilterPatch({
+              lookbackMonths: resolved.lookbackMonths,
+              maxMessages: resolved.maxMessages,
+            })
+          );
         }
       } catch {
         // Use defaults
@@ -138,11 +151,10 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
     const months = value === "all" ? null : Number(value);
     setLookbackMonths(months);
     try {
-      await settingsService.updatePreferences(userId, {
-        messageImport: {
-          filters: { lookbackMonths: months },
-        },
-      });
+      await settingsService.updatePreferences(
+        userId,
+        androidFilterPatch({ lookbackMonths: months })
+      );
     } catch {
       // Silently handle
     }
@@ -152,11 +164,10 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
     const cap = value === "unlimited" ? null : Number(value);
     setMaxMessages(cap);
     try {
-      await settingsService.updatePreferences(userId, {
-        messageImport: {
-          filters: { maxMessages: cap },
-        },
-      });
+      await settingsService.updatePreferences(
+        userId,
+        androidFilterPatch({ maxMessages: cap })
+      );
     } catch {
       // Silently handle
     }
@@ -271,13 +282,26 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
         </div>
 
         {/* Active filter indicator */}
-        {(lookbackMonths !== null || maxMessages !== null) && (
+        {/* BACKLOG-2795: the "up to N messages" clause is GONE, both the
+            standalone sentence and the tail of the combined one.
+
+            Founder ruling on BACKLOG-2749 (`1e8baa69`): drop the phrase that
+            named the cap ("...up to 50,000 messages"), because it contradicts
+            what the run actually covers. The words are deliberately not
+            reproduced here — a repo sweep for the phrase must come back empty
+            for this file. On the macOS panel the phrase survives in exactly
+            one branch — where no audit-protected history pushes the admitted
+            count past the cap, i.e. where it is TRUE.
+
+            On THIS panel there is no such branch, because there is nothing for
+            the sentence to be true about: no code on the Android companion
+            path reads `maxMessages` at all (`localSyncService.ts` and
+            `localSyncHandlers.ts` contain zero reads of it, and a repo-wide
+            sweep finds no other consumer). A cap-only selection therefore
+            states nothing, rather than stating a limit no run enforces. */}
+        {lookbackMonths !== null && (
           <p className="text-xs text-blue-600 mt-2">
-            {lookbackMonths !== null && maxMessages !== null
-              ? `Importing last ${lookbackMonths} months, up to ${maxMessages.toLocaleString()} messages`
-              : lookbackMonths !== null
-                ? `Importing messages from the last ${lookbackMonths} months`
-                : `Importing up to ${maxMessages!.toLocaleString()} messages`}
+            {`Importing messages from the last ${lookbackMonths} months`}
           </p>
         )}
       </div>

@@ -32,42 +32,18 @@ import { settingsService } from '../../services';
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { parseLocalCalendarDay } from '../../utils/dateRangeUtils';
-
-/**
- * Lookback window shown when the user has stored NO `lookbackMonths` preference.
- *
- * BACKLOG-2561: must equal `DEFAULT_LOOKBACK_MONTHS` in
- * `electron/services/macOSMessagesImportService/importHelpers.ts`, which is what
- * the main process actually imports with. The renderer cannot import from
- * `electron/` (the Vite renderer build parses it as JavaScript and `rootDir`
- * forbids the reverse), so the value is duplicated here on purpose and pinned by
- * `__tests__/MacOSMessagesImportSettings.allTime-2561.test.tsx`, which asserts the
- * dropdown reads "Last 3 months" for the exact preference shape the app writes
- * when only the message cap has ever been changed.
- */
-const DEFAULT_LOOKBACK_MONTHS = 3;
-
-/**
- * Cap shown when the user has stored NO `maxMessages` preference.
- *
- * BACKLOG-2749: must equal `DEFAULT_MAX_MESSAGES` in
- * `electron/services/importPlan.ts`, which is what the resolver actually
- * enforces. Duplicated here for the same reason `DEFAULT_LOOKBACK_MONTHS` is —
- * the renderer cannot value-import from `electron/` — and pinned by
- * `__tests__/MacOSMessagesImportSettings.onePlanDialog-2749.test.tsx`.
- *
- * It exists because the absent key was being read as "Unlimited". The panel did
- * `maxMessages ?? null`, and `null` is what this dropdown writes for an explicit
- * Unlimited, so a user who had only ever changed the LOOKBACK — which leaves
- * `maxMessages` absent through the preferences deep-merge, the exact shape
- * BACKLOG-2561 documented — saw "Unlimited" while their run was capped at
- * 50,000 by `resolveMaxMessages`. That is this item's own invariant broken in
- * the quietest possible way: the setting said one thing and the run did another,
- * with no dialog in between because the panel believed there was no cap to
- * disclose. It is the renderer half of BACKLOG-2733, which was fixed in the
- * resolver alone.
- */
-const DEFAULT_MAX_MESSAGES = 50000;
+// BACKLOG-2734: the defaults and the absent-vs-null resolution now have ONE
+// renderer-side definition, shared with `AndroidMessagesSettings`. Both panels
+// mirrored the same two constants and the same two ternaries, which is how the
+// Android panel came to carry this panel's fixed defects (BACKLOG-2795).
+// This panel's preference KEY is unchanged: `messageImport.filters`, which is
+// what the main process imports with.
+import {
+  DEFAULT_LOOKBACK_MONTHS,
+  DEFAULT_MAX_MESSAGES,
+  resolveStoredLookbackMonths,
+  resolveStoredMaxMessages,
+} from './messageImportPreferences';
 
 /**
  * BACKLOG-2749: drop the orchestrator's cap sentence from a completion warning.
@@ -217,7 +193,9 @@ export function MacOSMessagesImportSettings({
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(
     DEFAULT_LOOKBACK_MONTHS
   );
-  const [maxMessages, setMaxMessages] = useState<number | null>(50000);
+  const [maxMessages, setMaxMessages] = useState<number | null>(
+    DEFAULT_MAX_MESSAGES
+  );
 
   // BACKLOG-2286: Effective (audit-aware) import window for a truthful label.
   // Post-BACKLOG-2276 the real import lower bound is the EARLIER of the lookback
@@ -546,21 +524,13 @@ export function MacOSMessagesImportSettings({
           // the message cap writes `{ maxMessages: N }` and the preferences
           // deep-merge leaves `lookbackMonths` absent. Only an explicit `null`
           // (what this dropdown writes for "All time") means unbounded.
-          setLookbackMonths(
-            messageImport.filters.lookbackMonths === undefined
-              ? DEFAULT_LOOKBACK_MONTHS
-              : messageImport.filters.lookbackMonths
-          );
+          setLookbackMonths(resolveStoredLookbackMonths(messageImport.filters));
           // BACKLOG-2749: an ABSENT key is "no preference", not "Unlimited" —
           // the same distinction BACKLOG-2561 drew for the lookback and
           // BACKLOG-2733 drew inside the resolver. `?? null` showed
           // "Unlimited" in this dropdown while the resolver capped the run at
           // 50,000. Only an explicit `null` means Unlimited.
-          setMaxMessages(
-            messageImport.filters.maxMessages === undefined
-              ? DEFAULT_MAX_MESSAGES
-              : messageImport.filters.maxMessages
-          );
+          setMaxMessages(resolveStoredMaxMessages(messageImport.filters));
           // BACKLOG-2743: absent preference means "import attachments" (prior behavior).
           setSkipAttachments(messageImport.filters.skipAttachments === true);
         }
