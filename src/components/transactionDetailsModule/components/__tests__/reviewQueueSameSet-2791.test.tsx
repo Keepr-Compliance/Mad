@@ -76,6 +76,9 @@ function item(over: Partial<ReviewItemDto> & { id: string }): ReviewItemDto {
           body_text: "hello",
           sent_at: "2026-06-01T00:00:00.000Z",
           direction: "inbound",
+          // BACKLOG-2814: both are part of the projection now.
+          participants: null,
+          thread_display_name: null,
           participants_flat: "+15550142",
           channel: "sms",
         },
