@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS contact_phones (
 
   phone_e164 TEXT NOT NULL,              -- Normalized: +14155550102
   phone_display TEXT,                    -- Display format: (415) 555-0102
-  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key (last 10 digits)
+  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key. BACKLOG-2630: E.164 digits via libphonenumber (was last 10 digits); migration v64 re-keys existing rows
   is_primary INTEGER DEFAULT 0,
   label TEXT,                            -- mobile, home, work, etc.
   source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
@@ -722,7 +722,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   -- it the scan re-examines every record that already lost, on every open, which
   -- is the BACKLOG-2620 non-convergence shape.
   --
-  -- Kept in sync with migration v64 (ALTER TABLE ... ADD COLUMN), which is the
+  -- Kept in sync with migration v65 (ALTER TABLE ... ADD COLUMN), which is the
   -- ONLY source of this column on an existing install. NEVER add a standalone
   -- CREATE INDEX on it here: schema.sql is exec'd BEFORE the migration chain, so
   -- an index on a not-yet-added column throws on every real upgrade
@@ -1359,7 +1359,7 @@ CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction
   ON ignored_communications(transaction_id);
 
 -- ============================================
--- PENDING REVIEW COMMUNICATIONS (BACKLOG-2791, Migration 64)
+-- PENDING REVIEW COMMUNICATIONS (BACKLOG-2791, Migration 65)
 -- ============================================
 -- The persistent "Needs Review" queue: communications the sync FOUND for a deal
 -- but that are NOT linked until the user approves them.
@@ -1389,7 +1389,7 @@ CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction
 -- mutation, which did NOT go red. Do not repeat the folklore that a non-partial
 -- UNIQUE would fail to constrain these rows; it would not.
 --
--- They are created by migration 64, NOT here — schema.sql runs before the chain
+-- They are created by migration 65, NOT here — schema.sql runs before the chain
 -- (BACKLOG-2298/2300).
 CREATE TABLE IF NOT EXISTS pending_review_communications (
   id TEXT PRIMARY KEY,

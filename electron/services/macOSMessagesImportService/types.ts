@@ -235,7 +235,6 @@ export const MAX_MESSAGE_TEXT_LENGTH = 100000; // 100KB - truncate extremely lon
 export const MAX_HANDLE_LENGTH = 500; // Phone numbers, emails, etc.
 export const MAX_GUID_LENGTH = 100; // Message GUID format
 export const BATCH_SIZE = 100; // Messages per batch - small batches yield frequently for UI responsiveness
-export const DELETE_BATCH_SIZE = 5000; // Messages per delete batch (larger for efficiency)
 export const YIELD_INTERVAL = 1; // Yield every batch for UI responsiveness
 export const MIN_QUERY_BATCH_SIZE = 10000; // Minimum query batch size
 

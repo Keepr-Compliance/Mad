@@ -573,6 +573,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
           },
           {
             version: 64,
+            description: expect.stringContaining("BACKLOG-2630"),
+          },
+          {
+            version: 65,
             description: expect.stringContaining("BACKLOG-2791"),
           },
         ],

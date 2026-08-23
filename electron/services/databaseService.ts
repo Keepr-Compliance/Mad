@@ -3643,59 +3643,237 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     },
     {
       version: 64,
-      // VERSION NUMBER — THIS IS TEMPORARILY 64 AND MUST BECOME 65 BEFORE MERGE.
-      //
-      // WHY IT IS 64 NOW. validateNoVersionGaps (below) throws
+      description:
+        "Re-key every persisted phone lookup key to the libphonenumber rule (BACKLOG-2630 slice 1)",
+      migrate: (d) => {
+        // BACKLOG-2630 slice 1. `toLookupKey` stopped being `digits.slice(-10)`
+        // and became the libphonenumber-parsed E.164 digits with a US default
+        // region. Every persisted key was written by the OLD rule, so without
+        // this migration the app computes "14155550109" and the database holds
+        // "4155550109" — and the two never meet again.
+        //
+        // WHAT ACTUALLY BREAKS WITHOUT IT, so the cost is concrete rather than
+        // theoretical: `contactDbService`'s recency JOIN is
+        // `plm.phone_normalized = cp.phone_normalized`, contact search is
+        // `cp.phone_normalized LIKE ?` against a needle built by the new rule,
+        // and `contactMatchIndex` probes `cp.phone_normalized IN (…)`. All three
+        // compare a freshly-computed key against a stored one. Leave the stores
+        // on the old rule and a contact becomes unfindable by his own phone
+        // number — a regression on a database that works today, which is the
+        // exact failure BACKLOG-2753 was filed to prevent.
+        //
+        // Like migration v40, this `require`s the LIVE helper rather than
+        // transcribing the rule, so it cannot drift from the function it exists
+        // to agree with. Same consequence as v40, stated rather than implied:
+        // this migration FLOATS. It is self-healing under BACKLOG-2752's chain
+        // replay, and it is NOT a substitute for a fresh re-key item if the rule
+        // ever changes again.
+        //
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { toLookupKey } = require("../utils/phoneNormalization") as {
+          toLookupKey: (raw: string | null | undefined) => string;
+        };
+
+        const hasTable = (name: string): boolean =>
+          !!d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .get(name);
+        const hasColumn = (table: string, column: string): boolean =>
+          (d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
+            (c) => c.name === column,
+          );
+
+        // ------------------------------------------------------------------
+        // 1. contact_phones.phone_normalized — recompute from phone_e164
+        // ------------------------------------------------------------------
+        // Recomputed from the SOURCE column, never from the old key. The old key
+        // is lossy: `slice(-10)` threw country codes away, so feeding a stored
+        // key back through any rule cannot recover what it dropped. `phone_e164`
+        // still holds the whole number.
+        //
+        // Recomputing from a stable source is also what makes this step
+        // idempotent for free — run it twice and the second run writes the same
+        // bytes, because its input never changed.
+        if (hasTable("contact_phones") && hasColumn("contact_phones", "phone_normalized")) {
+          const rows = d
+            .prepare("SELECT id, phone_e164 FROM contact_phones")
+            .all() as Array<{ id: string; phone_e164: string | null }>;
+          const update = d.prepare(
+            "UPDATE contact_phones SET phone_normalized = ? WHERE id = ?",
+          );
+          for (const row of rows) {
+            update.run(toLookupKey(row.phone_e164), row.id);
+          }
+          console.log(
+            `[migration v64] re-keyed ${rows.length} contact_phones rows (BACKLOG-2630)`,
+          );
+        }
+
+        // ------------------------------------------------------------------
+        // 2. external_contacts.phones_normalized_json — recompute from phones_json
+        // ------------------------------------------------------------------
+        // Keeps v40's conventions exactly, because `externalContactDbService`
+        // still writes them: map every phone, drop empty keys, and treat
+        // unparseable JSON as an empty array rather than throwing mid-migration.
+        if (
+          hasTable("external_contacts") &&
+          hasColumn("external_contacts", "phones_normalized_json")
+        ) {
+          const rows = d
+            .prepare("SELECT id, phones_json FROM external_contacts")
+            .all() as Array<{ id: string; phones_json: string | null }>;
+          const update = d.prepare(
+            "UPDATE external_contacts SET phones_normalized_json = ? WHERE id = ?",
+          );
+          for (const row of rows) {
+            let phones: unknown = [];
+            try {
+              phones = row.phones_json ? JSON.parse(row.phones_json) : [];
+            } catch {
+              phones = [];
+            }
+            if (!Array.isArray(phones)) phones = [];
+            const keys = (phones as unknown[])
+              .map((ph) => (typeof ph === "string" ? toLookupKey(ph) : ""))
+              .filter((k: string) => k.length > 0);
+            update.run(JSON.stringify(keys), row.id);
+          }
+          console.log(
+            `[migration v64] re-keyed ${rows.length} external_contacts rows (BACKLOG-2630)`,
+          );
+        }
+
+        // ------------------------------------------------------------------
+        // 3. phone_last_message.phone_normalized — the key IS (half of) the PK
+        // ------------------------------------------------------------------
+        // This table keeps NO raw phone, so there is no source column to
+        // recompute from. The key itself is the only input available, and that
+        // makes the rule below load-bearing in a way the two above are not.
+        //
+        // THE RULE: re-key a row only when its stored key is exactly ten digits
+        // AND parses as a VALID US number — then prepend the country code.
+        // Everything else is left untouched.
+        //
+        // WHY SO NARROW, when BACKLOG-2753 rebuilt this table from `messages`.
+        // That attempt had to: its hand-rolled rule re-mapped Israeli numbers,
+        // so a row keyed from an E.164 participant had been sliced beyond
+        // recovery and could only be rebuilt from raw `participants_flat`. The
+        // library rule re-maps only US numbers, and a US row's stored key is
+        // already the correct ten digits — prepending "1" IS the whole change.
+        // No rebuild, no re-derivation of another service's message predicate.
+        //
+        // WHY IT IS IDEMPOTENT, AND WHY THE OBVIOUS VERSION IS NOT. The obvious
+        // implementation — `toLookupKey(oldKey)` — is NOT idempotent under this
+        // rule, and the trap is easy to walk into: `toLookupKey("972525550123")`
+        // with a US default region does not parse, falls back, and slices to
+        // "2525550123". A second pass would therefore mangle every 11+-digit
+        // key the first pass wrote. That matters because BACKLOG-2752's baseline
+        // clamp REPLAYS the chain on below-baseline databases, so a second run
+        // is a real event and not a hypothetical. The ten-digits-and-valid-US
+        // gate makes f(f(x)) = f(x) by construction: an eleven-digit output
+        // fails the length gate on re-run, and a ten-digit key that failed the
+        // validity gate fails it identically every time.
+        //
+        // WHY NO COLLISION POLICY IS NEEDED, and why the fold is here anyway.
+        // Every key the old rule could produce is at most ten digits
+        // (`slice(-10)`), prepending "1" is injective, and no old key is eleven
+        // digits — so a re-keyed row cannot land on an existing one. That is a
+        // proof, not an expectation, but a hand-edited or third-party-written
+        // database is not bound by it, and a PK conflict here would abort the
+        // whole migration. So the write folds by MAX(last_message_at) — the same
+        // rule `messageDbService.backfillPhoneLastMessageTable` already applies
+        // when two raw phones share a key — and no row is ever dropped: the
+        // surviving row's value IS the larger of the two.
+        if (hasTable("phone_last_message")) {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { parsePhoneNumberFromString } = require("libphonenumber-js") as {
+            parsePhoneNumberFromString: (
+              text: string,
+              region: string,
+            ) => { isValid: () => boolean } | undefined;
+          };
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { DEFAULT_PHONE_REGION } = require("../utils/phoneNormalization") as {
+            DEFAULT_PHONE_REGION: string;
+          };
+
+          const rekey = (key: string): string => {
+            if (!/^\d{10}$/.test(key)) return key;
+            const parsed = parsePhoneNumberFromString(key, DEFAULT_PHONE_REGION);
+            if (!parsed || !parsed.isValid()) return key;
+            return toLookupKey(key);
+          };
+
+          const rows = d
+            .prepare(
+              "SELECT phone_normalized, user_id, last_message_at FROM phone_last_message",
+            )
+            .all() as Array<{
+            phone_normalized: string;
+            user_id: string;
+            last_message_at: string;
+          }>;
+
+          // Fold to the winning row per (new key, user), keeping the later date.
+          const folded = new Map<
+            string,
+            { key: string; userId: string; at: string }
+          >();
+          let changed = 0;
+          for (const row of rows) {
+            const newKey = rekey(row.phone_normalized);
+            if (newKey !== row.phone_normalized) changed += 1;
+            const mapKey = `${newKey}\u0000${row.user_id}`;
+            const seen = folded.get(mapKey);
+            if (seen === undefined || row.last_message_at > seen.at) {
+              folded.set(mapKey, {
+                key: newKey,
+                userId: row.user_id,
+                at: row.last_message_at,
+              });
+            }
+          }
+
+          if (changed > 0) {
+            // Delete-then-insert rather than UPDATE: the key is half the primary
+            // key, and an in-place UPDATE would collide with a not-yet-rewritten
+            // row mid-pass.
+            d.prepare("DELETE FROM phone_last_message").run();
+            const insert = d.prepare(
+              "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)",
+            );
+            for (const row of folded.values()) {
+              insert.run(row.key, row.userId, row.at);
+            }
+            console.log(
+              `[migration v64] re-keyed ${changed} of ${rows.length} phone_last_message rows into ${folded.size} (BACKLOG-2630)`,
+            );
+          }
+        }
+      },
+    },
+    {
+      version: 65,
+      // BACKLOG-2791. Renumbered 64 -> 65 at merge time, exactly as planned:
+      // PR #2346 (BACKLOG-2630 phone re-key) merged first holding v64, this
+      // branch then merged develop and took 65. It could not have been written
+      // as 65 earlier — validateNoVersionGaps throws
       // `Migration sequence error: Missing migration version 64` on EVERY
-      // database init when the chain runs 63 -> 65, so a branch holding 65
-      // without 64 present will not boot and cannot run its own migration
-      // tests. Measured, not assumed. PR #2346 (BACKLOG-2630 phone re-key)
-      // holds 64 for exactly the same reason.
+      // database init when the chain skips a number, so a branch holding 65
+      // without 64 present will not boot and cannot run its own migration tests.
       //
-      // AGREED SEQUENCING (PM, 2026-08-22): #2346 merges FIRST with v64. Then,
-      // as part of this branch's merge-time update — AFTER #2346 is on develop,
-      // never before, or this branch stops booting — renumber to 65 and re-run
-      // the migration suites against the then-valid 63 -> 64 -> 65 chain.
+      // The two are independent: 64 re-keys phone lookup keys, 65 adds a new
+      // table plus transactions.last_pending_scan_at. Disjoint objects, so the
+      // execution order between them does not matter.
       //
-      // RENUMBER CHECKLIST — now SHORT, because the large half of it was
-      // deleted rather than written down.
-      //
-      //   The SR found that the first checklist omitted head-version assertions
-      //   in NINE other test files. Adding a 64th migration turned 7 suites and
-      //   33 tests red, including onDiskUpgrade and migrationChainRehearsal —
-      //   the only two that upgrade a REAL shipped database file, i.e. exactly
-      //   the checks that would prove this migration is safe. A checklist that
-      //   long gets followed under merge pressure and half-applied, so those
-      //   assertions now DERIVE the head via
-      //   `__tests__/helpers/chainHead.ts#chainHeadVersion()` and need no edit
-      //   at all. Mutating that helper to head-1 turns 31 tests red, so the
-      //   derivation is load-bearing, not decorative.
-      //
-      //   What genuinely remains:
-      //     FUNCTIONAL
-      //       1. `version: 64` immediately below                       -> 65
-      //       2. migration-v64.test.ts: `m.version <= 64` clip          -> 65
-      //       3. migration-v64.test.ts: both `VALUES (1, 63)` seeds     -> 64
-      //       4. migration-v64.test.ts: both `toBe(64)` version checks  -> 65
-      //       5. databaseService.migration.test.ts:571 — the ENUMERATED
-      //          plan entry `{ version: 63, ... }` gains a sibling for the
-      //          renumbered version (the counts beside it are derived).
-      //     COSMETIC (keep consistent so the next reader is not misled)
-      //       6. the `[migration v64]` log string below
-      //       7. schema.sql's "migration v64" / "Migration 64" comments
-      //       8. rename databaseService.migration-v64.test.ts -> -v65
-      //
-      // The two migrations touch DISJOINT objects (this one: a new table +
-      // transactions.last_pending_scan_at; #2346: phone lookup keys), so once
-      // both are present either execution order is safe.
-      //
-      // CORRECTION, recorded because it was asserted wrongly first: an earlier
-      // revision of this comment claimed "no branch anywhere claims 64+". That
-      // was false. The scan behind it ran `git show $b:electron/...` unquoted
-      // under zsh, where `$b:e` is the extension MODIFIER — so it resolved a
-      // garbage revision, printed nothing, and read as "no hits". Four branches
-      // claim 64 (#2306 and #2333, both CLOSED; #2346, OPEN; and this one).
-      // An empty grep is a claim about the grep until proven otherwise.
+      // The head-version assertions that used to make a renumber expensive
+      // (nine files, 33 tests red on a single new migration — including the only
+      // two suites that upgrade a REAL shipped database file) now DERIVE the
+      // head via __tests__/helpers/chainHead.ts. Both branches hit that wall
+      // independently; develop re-typed the literal to 64, this branch derives
+      // it, and the derived form is what survived the merge because it is
+      // correct for either value. Mutating the helper to head-1 turns 31 tests
+      // red, so it is load-bearing rather than decorative.
       description:
         "Add pending_review_communications (the persistent Needs-Review queue) + transactions.last_pending_scan_at (the delta watermark) (BACKLOG-2791)",
       migrate: (d) => {
@@ -3768,7 +3946,7 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
           if (!cols.includes("last_pending_scan_at")) {
             d.exec("ALTER TABLE transactions ADD COLUMN last_pending_scan_at DATETIME");
             console.log(
-              "[migration v64] added transactions.last_pending_scan_at (BACKLOG-2791)",
+              "[migration v65] added transactions.last_pending_scan_at (BACKLOG-2791)",
             );
           }
         }

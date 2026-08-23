@@ -26,7 +26,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
 
@@ -66,6 +66,18 @@ const CAPPED_RESULT = {
   count: WINDOW_COUNT,
   filteredCount: CAP,
   windowCount: WINDOW_COUNT,
+  /*
+   * BACKLOG-2749 added the plan's own facts to this wire, so the fixture gains
+   * them — transcribed from what `messages:get-import-count` now returns, not
+   * invented. `effectiveCap` is `ImportPlan.effectiveCap`; `overrides` is empty
+   * because this corpus has no deals, which is also why `filteredCount` here
+   * equals the cap exactly.
+   */
+  plan: {
+    effectiveCap: CAP,
+    fetchStartISO: null,
+    overrides: [] as [],
+  },
   attachmentBytes: 2_600_000_000,
   attachmentCount: 2_913,
   availableDiskBytes: 59_100_000_000,
@@ -130,12 +142,35 @@ describe("BACKLOG-2772 — the cap disclosure reads the window, not the admitted
   });
 
   it("the cap prompt states the window", async () => {
+    /*
+     * BACKLOG-2749 replaced the prompt's lead sentence by founder decision
+     * (`1e8baa69`, 2026-08-22): the dialog leads with the WINDOW statement,
+     * in the same words the inline notice uses, instead of "This time period
+     * has N messages but your limit is M".
+     *
+     * The NUMERIC assertion is unchanged and is what this test is for — the
+     * window count, never the admitted count. Only the text query moved, and
+     * it is scoped to the dialog because the inline notice on the panel behind
+     * it now carries the identical sentence (that identity is the point: one
+     * fact, one wording).
+     */
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
 
     await openCapPrompt();
 
-    const prompt = await screen.findByText(/This time period has/);
-    expect(prompt).toHaveTextContent("707,842 messages but your limit is 50,000");
+    /*
+     * BACKLOG-2749 round 3 (founder live QA): the passage was rewritten again,
+     * to his dictation. The NUMBERS this suite exists for are unchanged — the
+     * window against the cap, never the admitted count — only the sentence
+     * carrying them.
+     */
+    const prompt = within(
+      await screen.findByTestId("import-plan-cap-body")
+    ).getByText(/Your selected time range of/);
+    expect(prompt).toHaveTextContent("707,842");
+    expect(prompt).toHaveTextContent("cap of 50,000");
+    // The defect this suite exists for, stated directly.
+    expect(prompt).not.toHaveTextContent("includes 50,000 messages");
   });
 
   it("PIN: 'Import all N' promises the number that run actually fetches", async () => {
@@ -160,12 +195,25 @@ describe("BACKLOG-2772 — the cap disclosure reads the window, not the admitted
 
     await openCapPrompt();
 
-    const importAll = await screen.findByRole("button", { name: /Import all/i });
+    const importAll = await screen.findByTestId("import-plan-import-all");
     expect(importAll).toHaveTextContent("Import all 707,842 messages");
     expect(importAll).not.toHaveTextContent("50,000");
 
-    const mostRecent = screen.getByRole("button", { name: /most recent/i });
-    expect(mostRecent).toHaveTextContent("Import most recent 50,000 only");
+    /*
+     * BACKLOG-2749 round 3: the sibling this used to pair against — "Import
+     * most recent 50,000 only" — was REMOVED by the founder at live QA. His
+     * 08-20 ruling (do not offer most-recent-N) returned; #2345 had superseded
+     * it, and he re-superseded the supersede.
+     *
+     * The pairing was how this test avoided passing on a lone number, so it
+     * needs a replacement rather than a deletion. The passage carries the cap,
+     * the button carries the window, and they must still be different numbers
+     * in different places — which is the property the pair was standing in for.
+     */
+    expect(screen.queryByRole("button", { name: /most recent/i })).toBeNull();
+    const passage = screen.getByText(/Your selected time range of/);
+    expect(passage).toHaveTextContent("cap of 50,000");
+    expect(passage).toHaveTextContent("707,842");
   });
 
   it("ANTI-VACUITY: no cap disclosure at all when the window fits under the cap", async () => {

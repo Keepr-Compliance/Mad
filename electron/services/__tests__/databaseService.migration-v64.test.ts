@@ -1,177 +1,223 @@
 /**
  * @jest-environment node
  *
- * Integration test for migration v64 (BACKLOG-2791 — the persistent Needs-Review
- * queue + the delta watermark).
+ * MIGRATION v64 IN ISOLATION — BACKLOG-2630 slice 1, the phone re-key.
  *
- * v64 adds:
- *   - `pending_review_communications`, holding communications the sync FOUND for
- *     a deal but that are NOT linked until the user approves them;
- *   - two PARTIAL unique indexes that are the DB backstop for the sync's dedup
- *     predicate;
- *   - `transactions.last_pending_scan_at`, the ingestion watermark that keeps a
- *     scan running on EVERY transaction open from re-examining records that
- *     already lost (the BACKLOG-2620 non-convergence shape).
+ * ===========================================================================
+ * WHY A FRESH DATABASE CANNOT TEST THIS
+ * ===========================================================================
+ * v64 exists to rewrite keys that were written by the OLD rule. A fresh install
+ * has no old-rule keys, so it exercises the migration and proves nothing —
+ * exactly the blind spot BACKLOG-2750 and BACKLOG-2751 were filed for, and the
+ * documented trap that a migration passing CI can still break a real old→new
+ * upgrade. So the fixture below is an UPGRADE: a post-v63 database whose three
+ * key stores are populated the way `digits.slice(-10)` populated them, driven
+ * through the real migration runner.
  *
- * Properties locked in here:
+ * SEEDING AND CLIPPING follow the v62/v63 idiom: seed at 63 and clip MIGRATIONS
+ * to <= 64 so ONLY v64 runs, keeping every assertion here a statement about v64
+ * when v65 lands.
  *
- *  1. THE TABLE EXISTS AND ACCEPTS BOTH ROW SHAPES — proved by inserting an
- *     email row and a thread row and reading them back, not by reading DDL text
- *     (which would prove only that the statement was written down).
- *  2. THE XOR CHECK REJECTS BOTH DEGENERATE SHAPES — both-set and neither-set
- *     are asserted to throw. A CHECK nobody has seen reject anything is not a
- *     constraint, it is a comment.
- *  3. THE UNIQUE INDEXES ACTUALLY CONSTRAIN. A second row for the same
- *     (transaction, email) throws; the same for (transaction, thread); and a
- *     DIFFERENT transaction is still allowed, so the index is shown to be scoped
- *     rather than global. MEASURED by mutation: drop both indexes and a repeated
- *     sync leaves 4 rows where 2 belong.
- *
- *     NOTE, because the first draft of this file claimed otherwise and the
- *     mutation refused to go red: writing them PARTIAL is a size/intent choice,
- *     NOT a correctness one. SQLite treats every NULL as distinct, so a
- *     non-partial UNIQUE enforces exactly the same thing. The uniqueness is
- *     load-bearing; the WHERE clause is not.
- *  4. THE WATERMARK COLUMN EXISTS AND IS NULL ON EVERY PRE-EXISTING ROW — a
- *     migration that back-dated it would silently suppress the first scan on
- *     every existing deal.
- *  5. NOTHING ELSE ON `transactions` MOVES — the pre-existing column set is
- *     asserted unchanged with the new column appended.
- *  6. RE-RUNNING IS SAFE (idempotent), including the index creation.
- *  7. IT NO-OPS WITHOUT `transactions`, mirroring v48/v52..v63, so a minimal
- *     partial-schema fixture does not throw.
- *
- * Follows the v47..v63 convention: real better-sqlite3 driver, in-memory DB via
- * createMigrationHarness, seeded at 63 AND clipped to 64 so ONLY v64 runs.
+ * The repository is public. Every number is from a reserved fictional range
+ * (NANP 555-01xx, Ofcom 020 7946 0xxx) or is synthetic.
  */
 
-import type { Database as DatabaseType } from "better-sqlite3";
+import path from "path";
 
-jest.mock("electron", () => ({ app: { getPath: jest.fn(() => "/mock/user/data") } }));
+jest.mock("electron", () => ({
+  app: { getPath: jest.fn(() => "/mock/user/data") },
+}));
+
 jest.mock("@sentry/electron/main", () => ({
   captureException: jest.fn(),
   setUser: jest.fn(),
   addBreadcrumb: jest.fn(),
 }));
+
 jest.mock("../logService", () => {
-  const m = {
+  const mockFns = {
     info: jest.fn().mockResolvedValue(undefined),
     debug: jest.fn().mockResolvedValue(undefined),
     warn: jest.fn().mockResolvedValue(undefined),
     error: jest.fn().mockResolvedValue(undefined),
   };
-  return { __esModule: true, default: m, logService: m };
+  return { __esModule: true, default: mockFns, logService: mockFns };
 });
+
 jest.mock("../databaseEncryptionService", () => {
-  const m = {
+  const svc = {
     initialize: jest.fn().mockResolvedValue(undefined),
     getEncryptionKey: jest.fn().mockResolvedValue("test-encryption-key-hex"),
     isDatabaseEncrypted: jest.fn().mockResolvedValue(false),
     getCachedKey: jest.fn(() => "test-encryption-key-hex"),
     getKeyMetadata: jest.fn().mockResolvedValue({}),
   };
-  return { __esModule: true, default: m, databaseEncryptionService: m };
+  return { databaseEncryptionService: svc, default: svc };
 });
-jest.mock("../contactsService", () => ({ getContactNames: jest.fn(() => Promise.resolve([])) }));
-jest.mock("../../workers/contactWorkerPool", () => ({
-  queryContacts: jest.fn(),
-  isPoolReady: jest.fn(() => false),
+
+jest.mock("../contactsService", () => ({
+  getContactNames: jest.fn(() => Promise.resolve([])),
 }));
 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
+import { toLookupKey } from "../../utils/phoneNormalization";
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const realDatabase = require(
+  path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
+);
 
 const USER_ID = "user-v64-test";
-const TXN_A = "txn-v64-a";
-const TXN_B = "txn-v64-b";
-const EMAIL_ID = "email-v64-alpha";
+const CONTACT_ID = "contact-v64-test";
 
-/** Post-v63 / pre-v64 shape. */
-const PRE_V64_FIXTURE = `
-  CREATE TABLE users_local (id TEXT PRIMARY KEY);
-
-  CREATE TABLE emails (
-    id TEXT PRIMARY KEY,
+/**
+ * `phone_last_message`, transcribed verbatim from `electron/database/schema.sql`
+ * (the BACKLOG-567 / migration-24 block). The harness's v29 subset does not
+ * carry this table, and hand-simplifying it would change the very thing v64
+ * has to work around: `phone_normalized` is half of the PRIMARY KEY.
+ */
+const PHONE_LAST_MESSAGE_DDL = `
+  CREATE TABLE IF NOT EXISTS phone_last_message (
+    phone_normalized TEXT NOT NULL,
     user_id TEXT NOT NULL,
-    subject TEXT,
-    sent_at DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    last_message_at DATETIME NOT NULL,
+    PRIMARY KEY (phone_normalized, user_id),
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
   );
-
-  CREATE TABLE transactions (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    property_address TEXT,
-    status TEXT,
-    started_at DATETIME,
-    closed_at DATETIME,
-    metadata TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE INDEX idx_transactions_user_id ON transactions(user_id);
-
-  CREATE TABLE schema_version (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    version INTEGER NOT NULL DEFAULT 1,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    migrated_at TEXT DEFAULT (datetime('now'))
-  );
+  CREATE INDEX IF NOT EXISTS idx_phone_last_msg_user ON phone_last_message(user_id);
 `;
 
-/** The column set `transactions` carries BEFORE v64, in order. */
-const PRE_V64_TXN_COLUMNS = [
-  "id",
-  "user_id",
-  "property_address",
-  "status",
-  "started_at",
-  "closed_at",
-  "metadata",
-  "created_at",
-  "updated_at",
+/**
+ * The v40 columns, transcribed from migration v40's own ALTER statements.
+ * The harness seeds the v29 shape, which predates them; a real database at v63
+ * has had them since v40, and v64's whole job is to rewrite what they hold.
+ */
+const V40_COLUMNS_DDL = `
+  ALTER TABLE contact_phones ADD COLUMN phone_normalized TEXT;
+  CREATE INDEX IF NOT EXISTS idx_contact_phones_normalized ON contact_phones(phone_normalized);
+  ALTER TABLE external_contacts ADD COLUMN phones_normalized_json TEXT;
+`;
+
+/**
+ * THE OLD RULE, transcribed. The fixture is seeded with what
+ * `digits.slice(-10)` would have written — not with what looks plausible.
+ */
+function oldRuleKey(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return "";
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length === 0) return trimmed;
+  if (digits.length >= 10) return digits.slice(-10);
+  return digits;
+}
+
+/** Contact phones: the raw stored `phone_e164`, and what v64 must produce. */
+const CONTACT_PHONES: Array<{ id: string; e164: string; expected: string }> = [
+  { id: "cp-us-1", e164: "+14155550109", expected: "14155550109" },
+  { id: "cp-us-2", e164: "+12015550123", expected: "12015550123" },
+  { id: "cp-uk", e164: "+442079460958", expected: "442079460958" },
+  { id: "cp-il", e164: "+97235550142", expected: "97235550142" },
+  { id: "cp-leading-zero", e164: "+020794609", expected: "020794609" },
+  { id: "cp-short", e164: "+12345", expected: "12345" },
+  { id: "cp-alpha", e164: "VERIZON", expected: "VERIZON" },
 ];
 
-function columns(db: DatabaseType, table: string): string[] {
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
-    (c) => c.name,
-  );
-}
+/**
+ * `phone_last_message` fixture.
+ *
+ * THE LAST THREE ROWS ARE THE POINT. A naive re-key — `toLookupKey(oldKey)` —
+ * is NOT idempotent under the library rule, because an 11-or-12-digit non-US
+ * key does not parse with a US default region, falls back, and gets sliced to
+ * its last ten digits. Those shapes arise in the wild two ways: v64's own first
+ * pass writes 11-digit keys, and BACKLOG-2752's baseline clamp REPLAYS the
+ * chain on below-baseline databases. Without these rows the replay assertion
+ * below would pass while the property was broken — the fixture-cannot-fail trap.
+ */
+const PHONE_LAST_MESSAGE: Array<{ key: string; at: string; expected: string; why: string }> = [
+  { key: "4155550109", at: "2026-02-04T13:00:00.000Z", expected: "14155550109", why: "valid US 10-digit — re-keyed" },
+  { key: "2015550123", at: "2026-02-05T09:30:00.000Z", expected: "12015550123", why: "valid US 10-digit — re-keyed" },
+  { key: "1115550109", at: "2026-02-06T11:00:00.000Z", expected: "1115550109", why: "10 digits, invalid NANP area code — left alone" },
+  { key: "0525550123", at: "2026-02-07T08:15:00.000Z", expected: "0525550123", why: "10 digits, leading zero: isPossible but not isValid — left alone" },
+  { key: "262966", at: "2026-02-08T17:45:00.000Z", expected: "262966", why: "short code — BACKLOG-1493 requires it to survive" },
+  { key: "VERIZON", at: "2026-02-09T06:00:00.000Z", expected: "VERIZON", why: "alphanumeric sender — left alone" },
+  { key: "442079460958", at: "2026-02-10T22:10:00.000Z", expected: "442079460958", why: "12 digits — the replay landmine" },
+  { key: "97235550142", at: "2026-02-11T12:20:00.000Z", expected: "97235550142", why: "11 digits, non-leading-1 — the replay landmine" },
+  { key: "14155550199", at: "2026-02-12T15:05:00.000Z", expected: "14155550199", why: "11 digits leading 1 — the shape v64's own first pass writes" },
+];
 
-function schemaVersion(db: DatabaseType): number {
-  return (
-    db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }
-  ).version;
-}
+const EXTERNAL_PHONES = ["+1 (415) 555-0109", "555-0109", "VERIZON"];
 
-function insertPending(
-  db: DatabaseType,
-  id: string,
-  txnId: string,
-  emailId: string | null,
-  threadId: string | null,
-): void {
-  db.prepare(
-    `INSERT INTO pending_review_communications (id, user_id, transaction_id, email_id, thread_id)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(id, USER_ID, txnId, emailId, threadId);
-}
-
-describe("databaseService migration v64 (BACKLOG-2791 — pending review queue)", () => {
+describe("migration v64 — re-key persisted phone lookup keys (BACKLOG-2630)", () => {
   let harness: MigrationHarness;
 
-  beforeEach(() => {
-    harness = createMigrationHarness({ seedV29Schema: false });
-    harness.db.exec(PRE_V64_FIXTURE);
-    harness.db.prepare("INSERT INTO users_local (id) VALUES (?)").run(USER_ID);
-    for (const t of [TXN_A, TXN_B]) {
-      harness.db
-        .prepare("INSERT INTO transactions (id, user_id, property_address) VALUES (?, ?, ?)")
-        .run(t, USER_ID, "1 Test St");
-    }
+  function dump(table: string): string {
+    const rows = harness.db
+      .prepare(`SELECT * FROM ${table} ORDER BY rowid`)
+      .all() as unknown[];
+    return JSON.stringify(rows);
+  }
+
+  /** Seed at v63 AND clip the chain at v64 so ONLY v64 runs. */
+  async function runV64(): Promise<void> {
     harness.db
-      .prepare("INSERT INTO emails (id, user_id, subject) VALUES (?, ?, ?)")
-      .run(EMAIL_ID, USER_ID, "hello");
+      .prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 63)")
+      .run();
+    const klass = harness.service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const all = klass.MIGRATIONS;
+    klass.MIGRATIONS = all.filter((m) => m.version <= 64);
+    try {
+      await harness.service._runVersionedMigrations();
+    } finally {
+      klass.MIGRATIONS = all;
+    }
+  }
+
+  beforeEach(() => {
+    harness = createMigrationHarness();
+    harness.db.exec(V40_COLUMNS_DDL);
+    harness.db.exec(PHONE_LAST_MESSAGE_DDL);
+
+    // The harness's v29 `users_local` is `(id)` only — seeded to satisfy the FK
+    // on `phone_last_message` and `contacts`, nothing more.
+    harness.db.prepare("INSERT INTO users_local (id) VALUES (?)").run(USER_ID);
+    harness.db
+      .prepare("INSERT INTO contacts (id, user_id, display_name) VALUES (?, ?, ?)")
+      .run(CONTACT_ID, USER_ID, "V64 Fixture");
+
+    const insertPhone = harness.db.prepare(
+      `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source)
+       VALUES (?, ?, ?, ?, ?, 0, 'import')`,
+    );
+    for (const row of CONTACT_PHONES) {
+      insertPhone.run(row.id, CONTACT_ID, row.e164, row.e164, oldRuleKey(row.e164));
+    }
+
+    harness.db
+      .prepare(
+        `INSERT INTO external_contacts (id, user_id, source, external_record_id, name, phones_json, phones_normalized_json)
+         VALUES (?, ?, 'macos', ?, ?, ?, ?)`,
+      )
+      .run(
+        "ec-v64-1",
+        USER_ID,
+        "rec-1",
+        "V64 External",
+        JSON.stringify(EXTERNAL_PHONES),
+        JSON.stringify(EXTERNAL_PHONES.map(oldRuleKey).filter((k) => k.length > 0)),
+      );
+    harness.db
+      .prepare(
+        `INSERT INTO external_contacts (id, user_id, source, external_record_id, name, phones_json, phones_normalized_json)
+         VALUES (?, ?, 'macos', ?, ?, ?, ?)`,
+      )
+      .run("ec-v64-2", USER_ID, "rec-2", "V64 Malformed", "{not json", null);
+
+    const insertPlm = harness.db.prepare(
+      "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)",
+    );
+    for (const row of PHONE_LAST_MESSAGE) {
+      insertPlm.run(row.key, USER_ID, row.at);
+    }
   });
 
   afterEach(async () => {
@@ -184,130 +230,206 @@ describe("databaseService migration v64 (BACKLOG-2791 — pending review queue)"
     }
   });
 
-  /** Seed at v63 AND clip the chain at v64 so ONLY v64 runs. */
-  async function runV64(): Promise<void> {
-    harness.db.prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 63)").run();
-    const klass = harness.service.constructor as { MIGRATIONS: Array<{ version: number }> };
-    const all = klass.MIGRATIONS;
-    klass.MIGRATIONS = all.filter((m) => m.version <= 64);
-    try {
-      await harness.service._runVersionedMigrations();
-    } finally {
-      klass.MIGRATIONS = all;
+  it("SANITY: the harness wired the real driver, not the Jest auto-mock", () => {
+    expect(harness.db.constructor).toBe(realDatabase);
+    expect(typeof harness.db.prepare).toBe("function");
+  });
+
+  it("PRECONDITION: every seeded key is an OLD-rule key, and they disagree with the new rule", () => {
+    // A migration test whose fixture already holds the right answer proves
+    // nothing. This asserts the "before" is genuinely before.
+    const stored = harness.db
+      .prepare("SELECT id, phone_e164, phone_normalized FROM contact_phones ORDER BY id")
+      .all() as Array<{ id: string; phone_e164: string; phone_normalized: string }>;
+
+    const disagreeing = stored.filter((r) => r.phone_normalized !== toLookupKey(r.phone_e164));
+    expect(disagreeing.map((r) => r.id).sort()).toEqual(
+      ["cp-il", "cp-uk", "cp-us-1", "cp-us-2"], // the four the new rule moves
+    );
+    expect(stored.find((r) => r.id === "cp-us-1")?.phone_normalized).toBe("4155550109");
+  });
+
+  it("re-keys contact_phones to the EXACT expected key set", () => {
+    return runV64().then(() => {
+      const rows = harness.db
+        .prepare("SELECT id, phone_normalized FROM contact_phones ORDER BY id")
+        .all() as Array<{ id: string; phone_normalized: string }>;
+
+      // Identity, not counts: the whole set, by id.
+      expect(rows).toEqual(
+        [...CONTACT_PHONES]
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .map((r) => ({ id: r.id, phone_normalized: r.expected })),
+      );
+
+      // ...and every one of them agrees with the LIVE function, which is the
+      // property that actually matters: the app computes what the DB holds.
+      for (const row of CONTACT_PHONES) {
+        expect({ id: row.id, key: row.expected }).toEqual({
+          id: row.id,
+          key: toLookupKey(row.e164),
+        });
+      }
+    });
+  });
+
+  it("re-keys external_contacts.phones_normalized_json, keeping v40's conventions", () => {
+    return runV64().then(() => {
+      const rows = harness.db
+        .prepare("SELECT id, phones_normalized_json FROM external_contacts ORDER BY id")
+        .all() as Array<{ id: string; phones_normalized_json: string }>;
+
+      expect(rows).toEqual([
+        {
+          id: "ec-v64-1",
+          phones_normalized_json: JSON.stringify(["14155550109", "5550109", "VERIZON"]),
+        },
+        // Unparseable JSON becomes `[]` rather than aborting the migration —
+        // v40's convention, and `externalContactDbService`'s too.
+        { id: "ec-v64-2", phones_normalized_json: "[]" },
+      ]);
+    });
+  });
+
+  it("re-keys phone_last_message to the EXACT expected key set, losing no row", () => {
+    return runV64().then(() => {
+      const rows = harness.db
+        .prepare(
+          "SELECT phone_normalized, last_message_at FROM phone_last_message ORDER BY phone_normalized",
+        )
+        .all() as Array<{ phone_normalized: string; last_message_at: string }>;
+
+      const expected = PHONE_LAST_MESSAGE.map((r) => ({
+        phone_normalized: r.expected,
+        last_message_at: r.at,
+      })).sort((a, b) => a.phone_normalized.localeCompare(b.phone_normalized));
+
+      expect(rows).toEqual(expected);
+      // No row is lost: the fold cannot drop one, and nothing here collides.
+      expect(rows).toHaveLength(PHONE_LAST_MESSAGE.length);
+    });
+  });
+
+  it("leaves short codes and alphanumeric senders alone — BACKLOG-1493 unbroken", () => {
+    return runV64().then(() => {
+      const keys = (
+        harness.db
+          .prepare("SELECT phone_normalized FROM phone_last_message")
+          .all() as Array<{ phone_normalized: string }>
+      ).map((r) => r.phone_normalized);
+
+      expect(keys).toContain("262966");
+      expect(keys).toContain("VERIZON");
+    });
+  });
+
+  it("IS IDEMPOTENT: a replayed chain rewrites the same bytes", () => {
+    return runV64()
+      .then(() => {
+        const after1 = {
+          contact_phones: dump("contact_phones"),
+          external_contacts: dump("external_contacts"),
+          phone_last_message: dump("phone_last_message"),
+        };
+        // BACKLOG-2752's baseline clamp replays the chain on below-baseline
+        // databases, so a second run is a real event, not a hypothetical.
+        return runV64().then(() => after1);
+      })
+      .then((after1) => {
+        expect(dump("contact_phones")).toBe(after1.contact_phones);
+        expect(dump("external_contacts")).toBe(after1.external_contacts);
+        expect(dump("phone_last_message")).toBe(after1.phone_last_message);
+      });
+  });
+
+  it("THE IDEMPOTENCE FIXTURE CAN FAIL: the naive re-key mangles it", () => {
+    // Without this, the replay assertion above is unfalsifiable — a fixture
+    // holding only 10-digit keys would replay cleanly under a rule that is not
+    // idempotent at all. Here the naive implementation
+    // (`toLookupKey(existingKey)`) is run over the SAME fixture rows and shown
+    // to destroy them, which is what makes the green above mean something.
+    const naive = (key: string): string => toLookupKey(key);
+
+    expect(naive("442079460958")).toBe("2079460958"); // 12-digit key, amputated
+    expect(naive("97235550142")).toBe("7235550142"); // 11-digit key, amputated
+
+    // The naive rule is a FIXED POINT for the US shape, which is precisely why
+    // a 10-digit-only fixture cannot catch the bug: "14155550199" parses as a
+    // valid US number and comes back unchanged. A replay test seeded only with
+    // US numbers would be green under an implementation that destroys every
+    // international key.
+    expect(naive("14155550199")).toBe("14155550199");
+
+    // The two landmine shapes are the ones that mangle, and they are in the
+    // fixture above.
+    for (const key of ["442079460958", "97235550142"]) {
+      expect({ key, naive: naive(key) }).not.toEqual({ key, naive: key });
     }
-  }
-
-  it("advances schema_version to 64", async () => {
-    await runV64();
-    expect(schemaVersion(harness.db)).toBe(64);
   });
 
-  it("creates pending_review_communications and accepts BOTH row shapes", async () => {
-    await runV64();
+  it("keeps a below-floor value SEARCHABLE after the migration — the 2754 half that would break", () => {
+    // BACKLOG-2754: had the digit floor been built into the lookup key, this
+    // row's key would be empty, the search needle would be '%%', and a 3-to-6
+    // digit query would match every contact on file. Asserted through real SQL
+    // against the real column, after the real migration.
+    return runV64().then(() => {
+      // A 6-digit value chosen NOT to be a substring of any other fixture key,
+      // so the assertion below is about the floor and not about substring luck.
+      const belowFloor = "409215";
+      harness.db
+        .prepare(
+          `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source)
+           VALUES (?, ?, ?, ?, ?, 0, 'manual')`,
+        )
+        .run("cp-below-floor", CONTACT_ID, belowFloor, belowFloor, toLookupKey(belowFloor));
 
-    insertPending(harness.db, "p-email", TXN_A, EMAIL_ID, null);
-    insertPending(harness.db, "p-thread", TXN_A, null, "thread-1");
+      // It is STORED, with a real key.
+      expect(toLookupKey(belowFloor)).toBe("409215");
 
-    const rows = harness.db
-      .prepare(
-        "SELECT id, email_id, thread_id FROM pending_review_communications WHERE transaction_id = ? ORDER BY id",
-      )
-      .all(TXN_A) as Array<{ id: string; email_id: string | null; thread_id: string | null }>;
+      const needle = `%${toLookupKey(belowFloor)}%`;
+      expect(needle).not.toBe("%%");
 
-    expect(rows).toEqual([
-      { id: "p-email", email_id: EMAIL_ID, thread_id: null },
-      { id: "p-thread", email_id: null, thread_id: "thread-1" },
-    ]);
+      // It is SEARCHABLE, and it is the only thing that query finds.
+      const hits = harness.db
+        .prepare("SELECT id FROM contact_phones WHERE phone_normalized LIKE ? ORDER BY id")
+        .all(needle) as Array<{ id: string }>;
+      expect(hits.map((h) => h.id)).toEqual(["cp-below-floor"]);
+
+      // THE COUNTERFACTUAL, run rather than described: with the floor at the key
+      // layer the needle collapses to '%%' and the same query returns EVERY row.
+      // This is the total false positive BACKLOG-2754 refused to ship.
+      const collapsed = harness.db
+        .prepare("SELECT id FROM contact_phones WHERE phone_normalized LIKE ?")
+        .all("%%") as Array<{ id: string }>;
+      expect(collapsed.length).toBe(CONTACT_PHONES.length + 1);
+      expect(collapsed.length).toBeGreaterThan(hits.length);
+    });
   });
 
-  it("the XOR CHECK rejects both-set and neither-set", async () => {
-    await runV64();
+  it("records itself in the chain exactly once, at version 64", () => {
+    return runV64().then(() => {
+      const version = (
+        harness.db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as {
+          version: number;
+        }
+      ).version;
+      expect(version).toBe(64);
 
-    expect(() => insertPending(harness.db, "p-both", TXN_A, EMAIL_ID, "thread-1")).toThrow(
-      /CHECK constraint failed/i,
-    );
-    expect(() => insertPending(harness.db, "p-neither", TXN_A, null, null)).toThrow(
-      /CHECK constraint failed/i,
-    );
-  });
+      const klass = harness.service.constructor as {
+        MIGRATIONS: Array<{ version: number }>;
+      };
+      expect(klass.MIGRATIONS.filter((m) => m.version === 64)).toHaveLength(1);
 
-  it("the unique index blocks a duplicate (transaction, email) but not the same email on another deal", async () => {
-    await runV64();
-
-    insertPending(harness.db, "p-1", TXN_A, EMAIL_ID, null);
-
-    // Same deal, same email → the dedup backstop fires.
-    expect(() => insertPending(harness.db, "p-2", TXN_A, EMAIL_ID, null)).toThrow(
-      /UNIQUE constraint failed/i,
-    );
-
-    // A DIFFERENT deal may legitimately queue the same email — proves the index
-    // is scoped to the transaction rather than global.
-    expect(() => insertPending(harness.db, "p-3", TXN_B, EMAIL_ID, null)).not.toThrow();
-  });
-
-  it("the unique index blocks a duplicate (transaction, thread) and scopes to the deal", async () => {
-    await runV64();
-
-    insertPending(harness.db, "t-1", TXN_A, null, "thread-x");
-    expect(() => insertPending(harness.db, "t-2", TXN_A, null, "thread-x")).toThrow(
-      /UNIQUE constraint failed/i,
-    );
-    expect(() => insertPending(harness.db, "t-3", TXN_B, null, "thread-x")).not.toThrow();
-  });
-
-  it("many text rows coexist despite email_id being NULL on all of them", async () => {
-    await runV64();
-    // Pins that the email index does not collapse the text rows (all of which
-    // carry email_id NULL). This case passes under BOTH the partial and the
-    // non-partial index — SQLite's distinct-NULL rule — so it is a regression
-    // guard, not a discriminator between the two forms.
-    for (let i = 0; i < 5; i++) {
-      expect(() => insertPending(harness.db, `n-${i}`, TXN_A, null, `thread-${i}`)).not.toThrow();
-    }
-    const n = harness.db
-      .prepare("SELECT COUNT(*) AS n FROM pending_review_communications")
-      .get() as { n: number };
-    expect(n.n).toBe(5);
-  });
-
-  it("adds transactions.last_pending_scan_at, NULL on every pre-existing row, with nothing else moved", async () => {
-    await runV64();
-
-    expect(columns(harness.db, "transactions")).toEqual([
-      ...PRE_V64_TXN_COLUMNS,
-      "last_pending_scan_at",
-    ]);
-
-    // A back-dated watermark would silently suppress the first scan on every
-    // existing deal, so NULL is asserted rather than assumed.
-    const rows = harness.db
-      .prepare("SELECT id, last_pending_scan_at FROM transactions ORDER BY id")
-      .all() as Array<{ id: string; last_pending_scan_at: string | null }>;
-    expect(rows).toEqual([
-      { id: TXN_A, last_pending_scan_at: null },
-      { id: TXN_B, last_pending_scan_at: null },
-    ]);
-  });
-
-  it("is idempotent — re-running changes nothing and does not throw", async () => {
-    await runV64();
-    insertPending(harness.db, "p-keep", TXN_A, EMAIL_ID, null);
-
-    const before = columns(harness.db, "transactions");
-    harness.db.prepare("INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 63)").run();
-    await expect(runV64()).resolves.not.toThrow();
-
-    expect(columns(harness.db, "transactions")).toEqual(before);
-    const kept = harness.db
-      .prepare("SELECT COUNT(*) AS n FROM pending_review_communications")
-      .get() as { n: number };
-    expect(kept.n).toBe(1);
-  });
-
-  it("no-ops when `transactions` is absent (minimal partial-schema fixture)", async () => {
-    harness.db.exec("DROP TABLE transactions;");
-    await expect(runV64()).resolves.not.toThrow();
-    expect(schemaVersion(harness.db)).toBe(64);
+      // BACKLOG-2791: this used to assert `Math.max(versions) === 64`, i.e. that
+      // v64 is the chain HEAD. That was true only until the next migration
+      // landed, and it is not a claim about v64 at all — the property this test
+      // is named for is "registered EXACTLY ONCE", asserted above.
+      //
+      // What is still worth pinning is that v64 is genuinely IN the chain and
+      // nothing above it displaced it, so the head is at least 64. Written as a
+      // literal, this assertion is one of the class that turned nine files and
+      // 33 tests red on a single new migration — see helpers/chainHead.ts.
+      expect(Math.max(...klass.MIGRATIONS.map((m) => m.version))).toBeGreaterThanOrEqual(64);
+    });
   });
 });

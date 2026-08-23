@@ -68,6 +68,7 @@ import {
   getLatestVerdict,
 } from "../db/contactLinkReviewDbService";
 import { getLinksForContact, createLink } from "../db/contactSourceLinkDbService";
+import { toLookupKey } from "../../utils/phoneNormalization";
 
 const USER = "user-2410";
 const OTHER_USER = "user-other-2410";
@@ -77,8 +78,12 @@ const CURRENT_SYNC = "2026-08-02T00:00:00.000Z";
 // SEED HELPERS
 // ---------------------------------------------------------------------------
 
+// BACKLOG-2630: seeds through the SHARED helper rather than a local
+// transcription of the old last-ten rule. After migration v64 no database
+// holds an old-rule key, so a fixture written that way describes a state the
+// code can no longer emit — and the probe side would never meet it.
 function lookupKey(phone: string): string {
-  return phone.replace(/\D/g, "").slice(-10);
+  return toLookupKey(phone);
 }
 
 function addContact(
