@@ -67,8 +67,16 @@ export interface ReviewItemDisplayDto {
     body_text: string | null;
     sent_at: string | null;
     direction: string | null;
+    /**
+     * BACKLOG-2814: the participants JSON. MessageThreadCard derives group-ness
+     * from THIS field, not from participants_flat, so its absence used to make
+     * every review card render as a 1:1.
+     */
+    participants: string | null;
     participants_flat: string | null;
     channel: string | null;
+    /** BACKLOG-2814: Apple's group name; null for 1:1s and unnamed groups. */
+    thread_display_name: string | null;
   }>;
 }
 

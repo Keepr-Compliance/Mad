@@ -3952,6 +3952,50 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 66,
+      // BACKLOG-2814. Apple's group-chat name (`chat.display_name`) was read by
+      // nothing: the importer joined `chat_handle_join` for the participant list
+      // and queried `chat` only for `account_login`, so "Closing Team" was
+      // dropped at the door and every group text thread was identified by its
+      // participants.
+      //
+      // NO BACKFILL RUNS HERE, deliberately. The migration cannot invent names —
+      // they live in the user's chat.db, not in ours. The backfill IS the next
+      // import: `message_thread_names` is upserted from the `chat` table on every
+      // run, independent of message dedup, so an existing user's already-imported
+      // threads gain their names after ONE ordinary re-import. That is the whole
+      // reason this is a thread-keyed table rather than a `messages` column —
+      // `INSERT OR IGNORE` on the Apple GUID skips every row a re-import already
+      // has, so a column would have needed a force reimport to ever populate.
+      //
+      // Objects here are identical to the ones in schema.sql. A fresh install
+      // takes them from schema.sql and never runs this block; an upgrade runs
+      // this block and never reads schema.sql. Drift between the two passes all
+      // of CI and breaks only real upgrades.
+      description:
+        "Add message_thread_names (Apple group-chat display names, thread-keyed) (BACKLOG-2814)",
+      migrate: (d) => {
+        d.exec(
+          `CREATE TABLE IF NOT EXISTS message_thread_names (
+             user_id TEXT NOT NULL,
+             thread_id TEXT NOT NULL,
+             display_name TEXT NOT NULL,
+             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+             PRIMARY KEY (user_id, thread_id),
+             FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+           )`,
+        );
+        d.exec(
+          `CREATE INDEX IF NOT EXISTS idx_message_thread_names_thread
+             ON message_thread_names(thread_id)`,
+        );
+        console.log(
+          "[migration v66] added message_thread_names (BACKLOG-2814)",
+        );
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

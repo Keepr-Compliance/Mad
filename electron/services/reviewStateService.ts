@@ -159,8 +159,16 @@ export interface ReviewItemDisplay {
     body_text: string | null;
     sent_at: string | null;
     direction: string | null;
+    /**
+     * BACKLOG-2814: the participants JSON. MessageThreadCard derives group-ness
+     * from THIS field, not from participants_flat, so its absence used to make
+     * every review card render as a 1:1.
+     */
+    participants: string | null;
     participants_flat: string | null;
     channel: string | null;
+    /** BACKLOG-2814: Apple's group name; null for 1:1s and unnamed groups. */
+    thread_display_name: string | null;
   }>;
 }
 
@@ -388,19 +396,36 @@ function threadDisplay(threadId: string | null): ReviewItemDisplay {
   );
   if (!row) return EMPTY_DISPLAY;
   // The real messages, so the card renders a real conversation.
+  // BACKLOG-2814: `participants` (the JSON) joins this projection, and it is a
+  // FIX, not an addition. MessageThreadCard derives group-ness from
+  // `msg.participants` alone — `participants_flat` is a search string it never
+  // reads — so review cards saw zero participants and could never render as a
+  // group no matter what the data said. Without this column a group name would
+  // be joined in below and then never displayed on either review surface.
+  //
+  // Consequence, intended: review cards for genuine group threads now render as
+  // groups (avatar + participant line), which they always should have.
   const threadMessages = dbAll<{
     id: string;
     thread_id: string | null;
     body_text: string | null;
     sent_at: string | null;
     direction: string | null;
+    participants: string | null;
     participants_flat: string | null;
     channel: string | null;
+    thread_display_name: string | null;
   }>(
-    `SELECT id, thread_id, body_text, sent_at, direction, participants_flat, channel
-       FROM messages
-      WHERE thread_id = ? AND duplicate_of IS NULL
-      ORDER BY sent_at ASC`,
+    `SELECT m.id, m.thread_id, m.body_text, m.sent_at, m.direction,
+            m.participants, m.participants_flat, m.channel,
+            tn.display_name AS thread_display_name
+       FROM messages m
+       -- (user_id, thread_id) is the PK; thread_id alone would cross users.
+       LEFT JOIN message_thread_names tn ON (
+         tn.thread_id = m.thread_id AND tn.user_id = m.user_id
+       )
+      WHERE m.thread_id = ? AND m.duplicate_of IS NULL
+      ORDER BY m.sent_at ASC`,
     [threadId],
   );
   const handles = (row.participants ?? "")

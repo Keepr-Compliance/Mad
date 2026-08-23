@@ -313,6 +313,37 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 -- ============================================
+-- MESSAGE THREAD NAMES (Migration 66, BACKLOG-2814)
+-- ============================================
+-- The user-visible name of a GROUP conversation -- Apple's `chat.display_name`
+-- ("Closing Team"). It is a property of the THREAD, not of any one message, so
+-- it lives here rather than as a column on `messages`.
+--
+-- Why a thread-keyed table and not a `messages` column: the importer writes
+-- messages with `INSERT OR IGNORE` keyed on the Apple GUID, so an ordinary
+-- re-import skips every row it already has. A per-message column would
+-- therefore never reach an EXISTING user's already-imported threads without a
+-- destructive force reimport. This table is upserted from the `chat` table on
+-- every import regardless of message dedup, so one ordinary re-import names
+-- the user's existing threads.
+--
+-- `display_name` is NOT NULL here: absence is represented by the ABSENCE of a
+-- row, so a group that had its name cleared in Messages loses the row on the
+-- next import rather than keeping a stale name.
+CREATE TABLE IF NOT EXISTS message_thread_names (
+  user_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")
+  display_name TEXT NOT NULL,            -- Trimmed, non-empty; absence = no row
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (user_id, thread_id),
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_thread_names_thread
+  ON message_thread_names(thread_id);
+
+-- ============================================
 -- ATTACHMENTS TABLE (Files attached to messages and emails)
 -- ============================================
 -- Separate table enables document classification and OCR
