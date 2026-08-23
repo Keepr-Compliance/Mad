@@ -834,6 +834,48 @@ function TransactionDetails({
     refreshAttachments();
   }, [refreshCommunicationsSilently, refreshAttachments]);
 
+  // BACKLOG-2791 — THE LINKED LIST HEARS THE REVIEW NOTIFICATION TOO.
+  //
+  // Founder walk, 2026-08-23: approving a suggested thread made it DISAPPEAR.
+  // It left Needs Review correctly and never arrived in the Emails tab's linked
+  // list until the transaction was closed and reopened.
+  //
+  // The cause was a missing SUBSCRIBER, not a missing write. Every review
+  // mutation broadcasts through notifyReviewStateChanged, and useReviewQueue
+  // re-reads on it — which is why the queue surfaces and the badge all moved.
+  // But the tab's linked list is a different data source (useTransactionDetails,
+  // fed by `transactions:getCommunications`), and nothing had told it that the
+  // set of LINKED communications had just changed. The item was correctly gone
+  // from one list and correctly absent from a list that had not looked again.
+  //
+  // So this is one more subscriber to the existing notification, not a patch on
+  // each action: approve, reject, restore and the discovery sweep all bump
+  // changeToken, and all of them can add to or remove from the linked list.
+  // Wiring it per-action would leave the next action to rediscover the bug.
+  //
+  // Both channels are refreshed, not just the active one. The tabs stay mounted
+  // (that is deliberate — they keep scroll and selection), so the inactive one
+  // would otherwise hold a stale list ready to show the moment it is opened —
+  // the same defect, merely deferred. Only channels actually LOADED are
+  // refreshed, so this never fetches a channel the user has not opened.
+  //
+  // Value comparison, not a mount guard: the token's previous value is compared
+  // so StrictMode's double invocation cannot double-fetch, and so the initial
+  // read (which the tab loader already performed) is not immediately repeated.
+  const lastReviewTokenRef = React.useRef(reviewQueue.changeToken);
+  useEffect(() => {
+    if (lastReviewTokenRef.current === reviewQueue.changeToken) return;
+    lastReviewTokenRef.current = reviewQueue.changeToken;
+    void (async () => {
+      for (const channel of ["email", "text"] as const) {
+        if (!loadedChannelsRef.current.has(channel)) continue;
+        await refreshCommunicationsSilently(channel);
+      }
+      // A newly linked communication brings its attachments with it.
+      refreshAttachments();
+    })();
+  }, [reviewQueue.changeToken, refreshCommunicationsSilently, refreshAttachments]);
+
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
     onUpdateResolvedSuggestions: setResolvedSuggestions,

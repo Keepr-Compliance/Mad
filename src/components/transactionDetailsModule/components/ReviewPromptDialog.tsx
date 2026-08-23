@@ -5,10 +5,13 @@
  * visual style as P2". Two renderings of one dialog cannot drift apart the way
  * two components would.
  *
- *   P2 "found"   — over the transaction details after a sync added something:
- *                  "N new communications found" [Review] [Later]
- *                  Shown ONLY when N > 0. Dismissing costs nothing: the items
- *                  are already persisted in the queue, so Later just closes.
+ *   P2 "found"   — over the transaction details after a sync found something:
+ *                  "N total communications found" [Later] [Review now]
+ *                  Shown ONLY when N > 0 (N = L + R). Dismissing costs nothing:
+ *                  the items are already persisted, so Later just closes.
+ *                  When R = 0 the buttons collapse to a single [Confirm]
+ *                  (founder walk, 2026-08-23) — with nothing queued there is
+ *                  nothing to review now and nothing to defer.
  *
  *   P3 "blocked" — the Complete gate:
  *                  "You have N communications that need to be reviewed before
@@ -66,6 +69,13 @@ export function ReviewPromptDialog({
   // disagree with each other.
   const requiresReview = count;
   const totalFound = linkedCount + requiresReview;
+
+  // FOUNDER WALK, 2026-08-23. He was shown "18 total communications found / 18
+  // linked successfully" over [Later] [Review now]. Both offers are nonsense
+  // when R is 0: there is nothing to review now, and nothing left to do later —
+  // the linking already happened. That shape gets ONE button, "Confirm", which
+  // simply closes. R > 0 keeps both, because there the choice is real.
+  const acknowledgeOnly = !isBlocked && requiresReview === 0;
 
   const title = unreadable
     ? "Couldn't check Needs Review"
@@ -127,20 +137,35 @@ export function ReviewPromptDialog({
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="rounded-lg px-4 py-2 font-medium text-gray-700 transition-all hover:bg-gray-100"
-          >
-            {isBlocked ? "Cancel" : "Later"}
-          </button>
-          <button
-            type="button"
-            onClick={onReview}
-            className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white shadow-md transition-all hover:bg-blue-700"
-          >
-            {isBlocked ? "Review" : "Review now"}
-          </button>
+          {acknowledgeOnly ? (
+            /* Nothing to review: one affirmative button that closes. It is wired
+               to onDismiss, NOT onReview — opening an empty review screen is the
+               same dead end as the [Review now] it replaces. */
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white shadow-md transition-all hover:bg-blue-700"
+            >
+              Confirm
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={onDismiss}
+                className="rounded-lg px-4 py-2 font-medium text-gray-700 transition-all hover:bg-gray-100"
+              >
+                {isBlocked ? "Cancel" : "Later"}
+              </button>
+              <button
+                type="button"
+                onClick={onReview}
+                className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white shadow-md transition-all hover:bg-blue-700"
+              >
+                {isBlocked ? "Review" : "Review now"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

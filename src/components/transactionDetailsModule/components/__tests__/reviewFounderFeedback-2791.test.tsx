@@ -6,7 +6,7 @@
  * moved.
  */
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { ReviewPromptDialog } from "../ReviewPromptDialog";
 import { TransactionEmailsTab } from "../TransactionEmailsTab";
 import { TransactionMessagesTab } from "../TransactionMessagesTab";
@@ -71,6 +71,65 @@ describe("the discovery popup copy (founder-dictated)", () => {
         "Communications that require review will only be linked after you approve them.",
       ),
     ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * THE BUTTONS ARE PART OF THE SHAPE (founder walk, 2026-08-23).
+ *
+ * He hit the R=0 popup for real — "18 total communications found / 18 linked
+ * successfully" — and it offered [Later] [Review now]. Both are nonsense there:
+ * there is nothing to review now, and nothing to do later. That shape gets ONE
+ * button, "Confirm", which just closes.
+ *
+ * So the three "found" shapes differ in their BUTTON SET, not only in their
+ * lines, and each set is pinned here. Asserting the affirmative label alone
+ * cannot see a stray dismiss button, which is exactly what he was shown.
+ *
+ * CONTROLS RUN (MEASURED):
+ *  1. Always render both buttons (revert the R=0 branch) -> RED, 2 of 4 tests.
+ *  2. Render only "Confirm" for every "found" shape      -> RED, 3 of 4 tests.
+ *  3. Wire Confirm to onReview instead of onDismiss      -> RED, 1 of 4 tests.
+ */
+describe("the popup's BUTTON SET is part of each shape", () => {
+  /** Every button the dialog is currently offering, in DOM order. */
+  const buttonNames = () =>
+    screen.getAllByRole("button").map((b) => b.textContent?.trim());
+
+  it("L>0 and R>0 — both buttons, unchanged", () => {
+    render(
+      <ReviewPromptDialog variant="found" count={3} linkedCount={5} onReview={noop} onDismiss={noop} />,
+    );
+    expect(buttonNames()).toEqual(["Later", "Review now"]);
+  });
+
+  it("L=0 and R>0 — both buttons, unchanged", () => {
+    render(
+      <ReviewPromptDialog variant="found" count={4} linkedCount={0} onReview={noop} onDismiss={noop} />,
+    );
+    expect(buttonNames()).toEqual(["Later", "Review now"]);
+  });
+
+  it("R=0 — ONE button, 'Confirm', and no 'Later' beside it", () => {
+    // The founder's exact shape: 18 found, 18 linked, nothing to review.
+    render(
+      <ReviewPromptDialog variant="found" count={0} linkedCount={18} onReview={noop} onDismiss={noop} />,
+    );
+    expect(screen.getByText("18 total communications found")).toBeInTheDocument();
+    // The whole set, not just the presence of Confirm — a leftover "Later"
+    // is the defect, and `getByRole("button", { name: "Confirm" })` cannot see it.
+    expect(buttonNames()).toEqual(["Confirm"]);
+  });
+
+  it("Confirm CLOSES — it must not open the review screen there is nothing to review in", () => {
+    const onReview = jest.fn();
+    const onDismiss = jest.fn();
+    render(
+      <ReviewPromptDialog variant="found" count={0} linkedCount={18} onReview={onReview} onDismiss={onDismiss} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onReview).not.toHaveBeenCalled();
   });
 });
 
