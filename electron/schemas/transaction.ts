@@ -46,18 +46,26 @@ export const ExportFormatSchema = z.enum([
  *    watermark — BACKLOG-2791).
  *
  * 2. NO DECLARATION MAY BE STRICTER THAN ITS COLUMN.
- *    If a column is nullable in the DDL and required here, `safeParse` FAILS,
+ *    If a column accepts a value that this schema rejects, `safeParse` FAILS,
  *    and `validateResponse` then returns the row unvalidated. Nothing is
  *    stripped and nothing looks wrong — validation has just been switched off
- *    for that row, and only a log line says so. Read nullability off the DDL,
+ *    for that row, and only a log line says so. Read the domain off the DDL,
  *    never off what the writers happen to send.
  *
- * ENFORCEMENT: `electron/schemas/__tests__/transactionSchemaParity.test.ts`
- * runs the app's own `runMigrations()` against a real file-backed database and
- * asserts, as exact SETS, that the declared keys equal
- * `PRAGMA table_info(transactions)` in both directions, plus a NULL sweep over
- * every nullable column. Add a column to `transactions` without adding it here
- * and that test goes red.
+ * ENFORCEMENT — and it is PARTIAL, so read what it does and does not cover.
+ * `electron/schemas/__tests__/transactionSchemaParity.test.ts` runs the app's
+ * own `runMigrations()` against a real file-backed database and asserts:
+ *   - declared keys == `PRAGMA table_info(transactions)`, as exact SETS, in
+ *     both directions (rule 1);
+ *   - NULL is accepted for every column the database lets be NULL;
+ *   - every value a column's CHECK admits is accepted here, and a closed value
+ *     domain is declared ONLY where the column actually has a CHECK, with the
+ *     enum members equal to the CHECK list as sets;
+ *   - a fractional value is accepted for every REAL column.
+ *
+ * NOT covered: string and numeric REFINEMENTS beyond those probes — a `.min()`,
+ * a `.max()`, a length or format constraint would be stricter than its column
+ * and nothing here would go red. Do not add one without adding a probe for it.
  *
  * NOTE: this schema is currently wired to NO boundary. `getTransactionByIdSync`
  * returns raw `SELECT t.*` with no validation. That is deliberate — wiring it
@@ -100,7 +108,16 @@ export const TransactionSchema = z.object({
   confidence_score: z.number().nullable().optional(),
 
   // Stage
-  stage: TransactionStageSchema.nullable().optional(),
+  // `stage TEXT` — NO CHECK in the DDL, so the database can hand back any
+  // string. Declared as a plain string rather than TransactionStageSchema
+  // (BACKLOG-2559, SR review of PR #2364): this is a READ boundary describing
+  // what the database can PRODUCE, not a policy on what writers may store. A
+  // 7-value enum here would turn one unexpected stage into a whole-row
+  // validation bypass across all 59 fields — strictly worse than accepting the
+  // unexpected string. TransactionStageSchema stays exported and is still the
+  // right shape for INPUT validation; giving `stage` a real closed domain means
+  // adding a CHECK, which is a migration and out of scope here.
+  stage: z.string().nullable().optional(),
   stage_source: z.string().nullable().optional(),
   stage_confidence: z.number().nullable().optional(),
   stage_updated_at: OptionalTimestamp,

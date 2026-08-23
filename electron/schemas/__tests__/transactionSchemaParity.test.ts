@@ -143,7 +143,7 @@ const COLUMN_VALUE_OVERRIDES: Record<string, unknown> = {
   user_id: "user-2559-parity",
   transaction_type: "purchase", // CHECK (purchase, sale, other)
   status: "active", // CHECK (pending, active, closed, rejected)
-  stage: "escrow", // schema enum: intro..post_closing
+  stage: "escrow", // no CHECK; a documented-intent value from the DDL comment
   stage_source: "user", // CHECK (pattern, llm, user, import)
   export_status: "exported", // CHECK (not_exported, exported, re_export_needed)
   export_format: "pdf", // CHECK (pdf, csv, json, txt_eml, excel, folder)
@@ -153,6 +153,13 @@ const COLUMN_VALUE_OVERRIDES: Record<string, unknown> = {
 };
 
 const TIMESTAMP_VALUE = "2026-08-23T04:05:06.000Z";
+
+/**
+ * A value no CHECK list contains and no enum declares. Used to ask the DATABASE
+ * and the SCHEMA the same question — "is this domain closed?" — so the two
+ * answers can be compared instead of assumed.
+ */
+const DOMAIN_SENTINEL = "__not_a_legal_value__";
 
 type ColumnInfo = { name: string; type: string; notnull: number; pk: number };
 
@@ -282,6 +289,118 @@ describe("TransactionSchema — declared keys vs the real transactions table (BA
        VALUES (${names.map(() => "?").join(", ")})`,
     ).run(...names.map((n) => row[n]));
     return row;
+  }
+
+  // -------------------------------------------------------------------------
+  // VALUE-DOMAIN HELPERS (BACKLOG-2559, SR review of PR #2364)
+  //
+  // The NULL sweep below probes exactly one value: null. COLUMN_VALUE_OVERRIDES
+  // samples exactly one legal value per CHECK column. Between them, a
+  // declaration that is too strict INSIDE an enum's domain is invisible: drop
+  // 'rejected' from TransactionStatusSchema and the database still accepts the
+  // row, safeParse still fails, validation is still silently disabled — and
+  // every assertion above still passes. These helpers close that hole.
+  // -------------------------------------------------------------------------
+
+  /**
+   * The CHECK domains, parsed off the MIGRATED database's own stored DDL rather
+   * than off schema.sql — a column whose CHECK arrives in a migration is only
+   * visible here.
+   *
+   * A regex over SQL is exactly the kind of derivation that quietly matches
+   * nothing, so the parse is never trusted on its own: `verifies the parsed
+   * CHECK domains against the database` below re-derives every list by asking
+   * the database to accept and reject values.
+   */
+  function parseCheckDomains(): Map<string, string[]> {
+    const row = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transactions'`)
+      .get() as { sql: string } | undefined;
+    if (!row?.sql) {
+      throw new Error("transactions has no stored DDL in sqlite_master");
+    }
+
+    const domains = new Map<string, string[]>();
+    const re = /CHECK\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s+IN\s*\(([^)]*)\)\s*\)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(row.sql)) !== null) {
+      const values = m[2]
+        .split(",")
+        .map((v) => v.trim().replace(/^'(.*)'$/, "$1"))
+        .filter((v) => v.length > 0)
+        .sort();
+      domains.set(m[1], values);
+    }
+    return domains;
+  }
+
+  /**
+   * Does the DATABASE accept this value in this column? Asked inside a
+   * SAVEPOINT that is always rolled back, so the probe leaves no row behind.
+   */
+  function dbAccepts(column: string, value: unknown): boolean {
+    const row = buildFullRow();
+    row.id = `txn-2559-probe-${column}`;
+    row[column] = value;
+    const names = Object.keys(row);
+
+    db.exec("SAVEPOINT domain_probe");
+    let accepted: boolean;
+    try {
+      db.prepare(
+        `INSERT INTO transactions (${names.map((n) => `"${n}"`).join(", ")})
+         VALUES (${names.map(() => "?").join(", ")})`,
+      ).run(...names.map((n) => row[n]));
+      accepted = true;
+    } catch {
+      accepted = false;
+    }
+    db.exec("ROLLBACK TO domain_probe");
+    db.exec("RELEASE domain_probe");
+    return accepted;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function schemaShape(): Record<string, any> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return TransactionSchema.shape as Record<string, any>;
+  }
+
+  /**
+   * Columns whose DECLARATION refuses an arbitrary string — i.e. the schema
+   * claims a closed value domain for them. Determined by probing, not by
+   * inspecting zod internals, so it stays true across zod versions.
+   *
+   * Restricted to TEXT-affinity columns on purpose. A numeric declaration also
+   * rejects the string sentinel, but that is type-correctness, not a narrowed
+   * domain — counting it would flag every `z.number()` in the table and bury
+   * the one finding that matters.
+   */
+  function closedDomainColumns(): string[] {
+    const shape = schemaShape();
+    const textColumns = new Set(
+      columnInfo.filter((c) => c.type.toUpperCase() === "TEXT").map((c) => c.name),
+    );
+    return realColumns()
+      .filter((c) => textColumns.has(c) && c in shape)
+      .filter((c) => !shape[c].safeParse(DOMAIN_SENTINEL).success)
+      .sort();
+  }
+
+  /** The declared enum members, unwrapping .nullable()/.optional(). */
+  function enumOptions(column: string): string[] | null {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let cur: any = schemaShape()[column];
+    for (let i = 0; i < 10 && cur && typeof cur.unwrap === "function"; i++) {
+      cur = cur.unwrap();
+    }
+    const opts = cur?.options;
+    // `.options` is not unique to z.enum — a z.union exposes its MEMBER SCHEMAS
+    // under the same name, and String()-ing those yields garbage that looks
+    // like an enum. Require string members, which is what a CHECK list is.
+    if (!Array.isArray(opts) || opts.length === 0) return null;
+    if (!opts.every((o: unknown) => typeof o === "string")) return null;
+    return [...(opts as string[])].sort();
   }
 
   // -------------------------------------------------------------------------
@@ -423,6 +542,107 @@ describe("TransactionSchema — declared keys vs the real transactions table (BA
   // this item added — the pre-existing declarations are where the offenders
   // actually were.
   // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // VALUE DOMAINS — strictness INSIDE an enum, the gap the NULL sweep cannot see.
+  //
+  // Same consequence as a too-strict nullability declaration and the same
+  // absence of symptoms: safeParse fails, validateResponse returns the row
+  // unvalidated, and only a log line records that the trust boundary stopped
+  // existing for that row.
+  // -------------------------------------------------------------------------
+
+  describe("value domains", () => {
+    it("verifies the parsed CHECK domains against the database", () => {
+      const domains = parseCheckDomains();
+
+      // A regex that matched nothing would make every assertion below vacuous.
+      expect(domains.size).toBeGreaterThan(0);
+
+      for (const [column, values] of domains) {
+        expect(values.length).toBeGreaterThan(0);
+
+        // Every value the parse claims is legal must actually be legal...
+        const rejectedByDb = values.filter((v) => !dbAccepts(column, v));
+        expect({ column, rejectedByDb }).toEqual({ column, rejectedByDb: [] });
+
+        // ...and the domain must actually be closed, or "CHECK list" is a
+        // fiction the parser invented.
+        expect({ column, acceptsSentinel: dbAccepts(column, DOMAIN_SENTINEL) })
+          .toEqual({ column, acceptsSentinel: false });
+      }
+    });
+
+    it("accepts every value the column's CHECK admits", () => {
+      const domains = parseCheckDomains();
+      const shape = schemaShape();
+
+      let probed = 0;
+      const rejected: string[] = [];
+      for (const [column, values] of domains) {
+        // A column missing from the shape is the parity test's failure.
+        if (!(column in shape)) continue;
+        for (const value of values) {
+          probed += 1;
+          if (!shape[column].safeParse(value).success) {
+            rejected.push(`${column}=${value}`);
+          }
+        }
+      }
+
+      expect(probed).toBeGreaterThan(0); // guards an empty sweep
+      expect(rejected.sort()).toEqual([]);
+    });
+
+    it("claims a closed value domain ONLY where the column has a CHECK", () => {
+      // The other direction, and the one with no CHECK to compare against: an
+      // enum declared over a plain TEXT column is stricter than the column by
+      // construction, so any value outside the enum disables validation for the
+      // whole row. There is no exemption list here on purpose — a hatch is
+      // where the next genuine violation gets parked.
+      const domains = parseCheckDomains();
+      const closedWithoutCheck = closedDomainColumns().filter((c) => !domains.has(c));
+      expect(closedWithoutCheck).toEqual([]);
+    });
+
+    it("declares enum members that equal the column's CHECK list, as SETS", () => {
+      const domains = parseCheckDomains();
+      const closed = closedDomainColumns();
+      const withOptions = realColumns()
+        .filter((c) => enumOptions(c) !== null)
+        .sort();
+
+      // Every enum declaration in this schema sits on a TEXT column, so the two
+      // derivations cover the same ground and can be compared directly.
+
+      // ANTI-VACUITY: the reflection must agree with the behavioural probe. If
+      // an unwrap breaks and enumOptions() starts returning null everywhere,
+      // this diverges instead of silently comparing nothing.
+      expect(withOptions).toEqual(closed);
+      expect(withOptions.length).toBeGreaterThan(0);
+
+      for (const column of withOptions) {
+        expect({ column, options: enumOptions(column) })
+          .toEqual({ column, options: domains.get(column) ?? null });
+      }
+    });
+
+    it("accepts a fractional value for every REAL column", () => {
+      // The numeric analogue of the enum gap: `.int()` on a REAL column would
+      // fail safeParse on a legal value and disable validation for the row.
+      const shape = schemaShape();
+      const realTyped = columnInfo.filter(
+        (c) => c.type.toUpperCase() === "REAL" && c.name in shape,
+      );
+
+      expect(realTyped.length).toBeGreaterThan(0); // guards an empty sweep
+      const tooStrict = realTyped
+        .filter((c) => !shape[c.name].safeParse(0.5).success)
+        .map((c) => c.name)
+        .sort();
+      expect(tooStrict).toEqual([]);
+    });
+  });
 
   describe("nullability", () => {
     /**
