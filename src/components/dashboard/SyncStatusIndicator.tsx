@@ -77,6 +77,10 @@ const statusColors: Record<SyncItemStatus, string> = {
   running: 'bg-blue-100 text-blue-700',
   complete: 'bg-green-100 text-green-700',
   error: 'bg-red-100 text-red-700',
+  // BACKLOG-2794: a leg the user cancelled before it ran. Gray, like pending —
+  // it is the same "nothing happened here" the user is looking at, and it must
+  // not read as the green tick of a sync that did.
+  skipped: 'bg-gray-100 text-gray-500',
 };
 
 /**
@@ -210,7 +214,13 @@ export function SyncStatusIndicator({
         autoDismissTimerRef.current = null;
       }
       setShowCompletion(false);
-    } else if (wasSyncingRef.current && !isAnySyncing && (queue.length === 0 || queue.some(item => item.status === 'complete' || item.status === 'error'))) {
+    } else if (wasSyncingRef.current && !isAnySyncing && (queue.length === 0 || queue.some(item => item.status === 'complete' || item.status === 'error' || item.status === 'skipped'))) {
+      // BACKLOG-2794: 'skipped' joins the terminal set here so a run whose ONLY
+      // leg the user cancelled while pending still resolves. It reaches the
+      // cancel gate below carrying `cancelled`, which dismisses it silently —
+      // the established answer for a user cancel. Without it the run never
+      // resolves at all and the indicator holds a stale "Sync:" row until the
+      // orchestrator's clean-up timer fires.
       // BACKLOG-2330: if an external sync was cancelled during this run, the
       // queue emptied because the user cancelled (removeExternalSync) — NOT
       // because the sync completed. Do not surface a user-initiated cancel as a
@@ -546,8 +556,11 @@ export function SyncStatusIndicator({
   // after sync already completed and auto-dismissed). If we never saw a sync in this
   // mount cycle (wasSyncingRef is false) and all items are done, this is stale state
   // from a previous sync cycle — hide it until the orchestrator cleans up the queue.
+  // BACKLOG-2794: 'skipped' is terminal, so a queue holding one is just as
+  // stale as one holding completes and errors. Omitted, a remount after a
+  // skipped run would re-show the row this guard exists to hide.
   if (!isAnySyncing && !showCompletion && !wasSyncingRef.current &&
-      queue.length > 0 && queue.every(item => item.status === 'complete' || item.status === 'error')) {
+      queue.length > 0 && queue.every(item => item.status === 'complete' || item.status === 'error' || item.status === 'skipped')) {
     return null;
   }
 
@@ -556,7 +569,7 @@ export function SyncStatusIndicator({
   const activeProgress = runningInternalItem?.progress ?? null;
 
   // Render a status pill for each sync item in queue order
-  const renderPill = (type: SyncType, status: SyncItemStatus, progress: number, error?: string, phase?: string, isExternal?: boolean, cancelRequested?: boolean) => {
+  const renderPill = (type: SyncType, status: SyncItemStatus, progress: number, error?: string, phase?: string, isExternal?: boolean, cancelRequested?: boolean, coalesced?: boolean) => {
     const baseLabel = getLabelForType(type);
     // Show phase for running syncs (e.g., "Messages - querying", "iPhone - Exporting")
     const friendlyPhase = phase ? ({
@@ -576,6 +589,36 @@ export function SyncStatusIndicator({
       ? `${baseLabel} - Cancelling`
       : status === 'running' && friendlyPhase ? `${baseLabel} - ${friendlyPhase}` : baseLabel;
     const colorClass = statusColors[status];
+
+    // BACKLOG-2794: this leg joined an import that was already running. It is
+    // 'complete' — no error, and the run's completion card still reports the
+    // legs that did work — but a green tick would claim this leg imported
+    // something, and the import it joined may still be going. Blue and named,
+    // the way a running leg is.
+    if (status === 'complete' && coalesced) {
+      return (
+        <span
+          key={type}
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${statusColors.running}`}
+          data-testid={`sync-pill-${type}`}
+        >
+          {baseLabel} - Already importing
+        </span>
+      );
+    }
+
+    // BACKLOG-2794: cancelled while it was still queued, so it never ran.
+    if (status === 'skipped') {
+      return (
+        <span
+          key={type}
+          className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${colorClass}`}
+          data-testid={`sync-pill-${type}`}
+        >
+          {baseLabel} - Skipped
+        </span>
+      );
+    }
 
     // Error state - red with tooltip
     if (status === 'error') {
@@ -674,7 +717,7 @@ export function SyncStatusIndicator({
           {isAnySyncing ? 'Syncing:' : hasError ? 'Sync Error:' : 'Sync:'}
         </span>
         {/* Render all pills in queue order (contacts, emails, messages, iphone) */}
-        {queue.map((item) => renderPill(item.type, item.status, item.progress, item.error, item.phase, item.external, item.cancelRequested))}
+        {queue.map((item) => renderPill(item.type, item.status, item.progress, item.error, item.phase, item.external, item.cancelRequested, item.coalesced))}
         {/* Show progress percentage for internal syncs only */}
         {activeProgress !== null && (
           <span className="text-xs text-blue-600 ml-auto">{Math.round(activeProgress)}%</span>

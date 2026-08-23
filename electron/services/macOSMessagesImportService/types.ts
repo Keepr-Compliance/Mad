@@ -62,6 +62,41 @@ export interface MacOSImportResult {
   /** True when maxMessages cap truncated results */
   wasCapped?: boolean;
   /**
+   * BACKLOG-2794: what this run's plan ADMITS — every protected message plus
+   * the newest N of the remainder (`AdmittedMessageSet.targetMessageCount`).
+   *
+   * This is the number a sentence about exclusion has to subtract, and it is
+   * NOT `messagesImported`. A delta import does not re-download what the store
+   * already holds, so what a run FETCHES and what the window COVERS are
+   * different quantities: the founder's restore fetched 48,781 of the 62,824 it
+   * admitted, and the orchestrator's `totalAvailable - messagesImported` told
+   * him 659,619 messages had been excluded when the true figure was 645,576
+   * (`a14b3a82`). The 14,042 messages he already had were counted as left out.
+   *
+   * Carried on the result rather than re-derived by the consumer because it is
+   * a fact about THIS run: re-resolving it from the resolver afterwards reads a
+   * window that may have moved since the run began. It is the same value the
+   * selection-time estimate returns as `filteredCount`
+   * (`getAvailableMessageCount`), so the dashboard and the Settings panel
+   * cannot quote different admitted counts.
+   */
+  coveredCount?: number;
+  /**
+   * BACKLOG-2794: this request was refused because another import owns the
+   * service — nothing was attempted, and nothing failed.
+   *
+   * A structured flag, not a message to match on. The orchestrator turns any
+   * `success: false` into a throw, which painted a red "Import failed" pill and
+   * escalated the whole run to "Sync Completed with Errors" with a support-
+   * ticket link: one collision defaming a sync in which everything else worked.
+   * More reachable since PR #2343 promoted the transaction trigger, whose runs
+   * collide with a user's own by construction.
+   *
+   * Consumers coalesce on this flag — the messages work is already in flight,
+   * so this leg is neither an error nor a result to report.
+   */
+  alreadyInProgress?: boolean;
+  /**
    * BACKLOG-2743: Set when the pre-flight free-space check refused the
    * attachment copy. The messages themselves ARE imported (this is why the
    * result still reports success) — only the attachment files were skipped.

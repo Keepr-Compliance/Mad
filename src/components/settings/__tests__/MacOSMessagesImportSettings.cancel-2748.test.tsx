@@ -50,14 +50,36 @@ let mockQueue: SyncItem[] = [];
 const queueListeners = new Set<() => void>();
 const notifyQueueListeners = () => queueListeners.forEach((listener) => listener());
 
-const mockMarkCancelRequested = jest.fn((type: string) => {
+/**
+ * BACKLOG-2794 kept this fake honest against the real method, which now has TWO
+ * branches and a return value the panel routes on: a press on a RUNNING item is
+ * an acknowledgement the caller must follow with the cancel IPC, and a press on
+ * a PENDING one registers a skip and must NOT send it (there is nothing
+ * importing, and `requestCancellation()` would arm a cancel for the next run to
+ * start — BACKLOG-2776). A fake that returned nothing would make the panel's
+ * branch untestable here. Pinned against the real implementation in
+ * `SyncOrchestratorService.pendingCancel-2794.test.ts`.
+ */
+const mockMarkCancelRequested = jest.fn((type: string): 'running' | 'skipped' | 'none' => {
   const item = mockQueue.find((queued) => queued.type === type);
-  if (!item || item.status !== "running" || item.cancelRequested) return;
+  if (!item || item.cancelRequested) return 'none';
+  if (item.status !== "running" && item.status !== "pending") return 'none';
   mockQueue = mockQueue.map((queued) =>
     queued.type === type ? { ...queued, cancelRequested: true } : queued
   );
   notifyQueueListeners();
+  return item.status === "pending" ? 'skipped' : 'running';
 });
+
+/**
+ * BACKLOG-2794: the panel reads the item from LIVE orchestrator state to decide
+ * whether the press meets a running import, because its own `queue` copy is one
+ * render behind at the pending→running boundary. `mockQueue` IS the live store
+ * in this fake, so reading it here is the same read.
+ */
+const mockGetQueueItem = jest.fn((type: string) =>
+  mockQueue.find((queued) => queued.type === type)
+);
 
 jest.mock("../../../hooks/useSyncOrchestrator", () => ({
   useSyncOrchestrator: jest.fn(() => {
@@ -74,6 +96,7 @@ jest.mock("../../../hooks/useSyncOrchestrator", () => ({
       queue: mockQueue,
       requestSync: mockRequestSync,
       markCancelRequested: mockMarkCancelRequested,
+      getQueueItem: mockGetQueueItem,
     };
   }),
 }));
@@ -121,19 +144,25 @@ describe("BACKLOG-2748 — the Cancel control's lifecycle", () => {
     expect(cancelButton()).toHaveTextContent("Cancel import");
   });
 
-  it("does NOT render while the import is only PENDING in the queue", async () => {
-    // BACKLOG-2776 held cancels across the sub-second gap before a run takes
-    // hold, but deliberately did NOT extend that to 'pending'. A held cancel
-    // expires (PENDING_CANCEL_TTL_MS); this window runs for minutes, so a button
-    // here would send a cancel that has lapsed by the time the messages import
-    // begins — the same lie the item was filed about, a control the user presses
-    // that changes nothing (expiry proved main-side in
-    // macOSMessagesImportService.cancel-2748.test.ts).
+  it("renders while the import is only PENDING in the queue (BACKLOG-2794)", async () => {
+    // THIS ROW ASSERTED THE OPPOSITE, and the reason it did is worth keeping.
     //
-    // The window is real: a
-    // dashboard sync of ['contacts','emails','messages'] leaves the messages
-    // item pending for the whole contacts+emails run, and this panel shows
-    // "Preparing import..." the entire time.
+    // BACKLOG-2776 held cancels across the sub-second gap before a run takes
+    // hold and deliberately did NOT extend that to 'pending', because a held
+    // cancel expires (PENDING_CANCEL_TTL_MS) and this window runs for MINUTES:
+    // the button would have sent a cancel that had lapsed by the time the
+    // import began — a control the user presses that changes nothing.
+    //
+    // Both of those reasons are about the held-cancel MECHANISM, and
+    // BACKLOG-2794 stops using it here. A pending press never reaches main: it
+    // registers a skip on the orchestrator, which drops the leg when the queue
+    // reaches it, so nothing can expire and nothing can fire late (the leg is
+    // proved never to run in `SyncOrchestratorService.pendingCancel-2794.test.ts`).
+    //
+    // The window this closes is the founder's: a dashboard sync of
+    // ['contacts','emails','messages'] leaves the messages item pending for the
+    // whole contacts+emails run, with this panel showing "Preparing import..."
+    // and, until now, no way out of it.
     mockQueue = messagesQueue({ status: "pending", progress: 0 });
 
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
@@ -141,7 +170,56 @@ describe("BACKLOG-2748 — the Cancel control's lifecycle", () => {
     await waitFor(() =>
       expect(screen.getByText(/Preparing import/i)).toBeInTheDocument()
     );
-    expect(cancelButton()).not.toBeInTheDocument();
+    expect(cancelButton()).toBeInTheDocument();
+  });
+
+  it("presses through to a skip WITHOUT sending the cancel IPC (BACKLOG-2794)", async () => {
+    // The half that makes the button honest. `requestCancellation()` ARMS a
+    // cancel when nothing is importing, and the next run to start consumes it —
+    // so sending the IPC from a pending press would leave a live cancel lying in
+    // wait for an import the user never asked to stop.
+    const user = userEvent.setup();
+    mockQueue = messagesQueue({ status: "pending", progress: 0 });
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    await waitFor(() => expect(cancelButton()).toBeInTheDocument());
+
+    await user.click(cancelButton()!);
+
+    expect(mockMarkCancelRequested).toHaveBeenCalledWith("messages");
+    expect(window.api.messages.cancelImport).not.toHaveBeenCalled();
+    // And the queue must not be emptied — that would abandon the whole sync,
+    // contacts and emails included, over one leg the user declined.
+    expect(mockRequestSync).not.toHaveBeenCalled();
+  });
+
+  it("CONTROL: the same press on a RUNNING item DOES send the IPC", async () => {
+    // The distinguishing input for the row above: without it, "no IPC" would be
+    // just as true of a panel that had stopped dispatching cancels at all.
+    const user = userEvent.setup();
+    mockQueue = messagesQueue({ status: "running", progress: 40, phase: "importing" });
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+    await waitFor(() => expect(cancelButton()).toBeInTheDocument());
+
+    await user.click(cancelButton()!);
+
+    expect(window.api.messages.cancelImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a skipped leg as the cancel it was (BACKLOG-2794)", async () => {
+    // The leg never ran, so there is no count to report and nothing failed. It
+    // reuses the 2748 cancelled copy, which already reads correctly at zero.
+    mockQueue = messagesQueue({ status: "skipped", progress: 100, cancelled: true });
+
+    renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
+
+    const result = await screen.findByTestId("import-result");
+    expect(result).toHaveTextContent("Import cancelled");
+    expect(result).not.toHaveTextContent("Successfully imported");
+    expect(result).not.toHaveTextContent("Import failed");
+    // Nothing was imported, so no count clause may appear.
+    expect(result).not.toHaveTextContent("messages were imported before cancellation");
   });
 
   it("renders during a force re-import's delete phase — the other entry button's run", async () => {
