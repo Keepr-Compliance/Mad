@@ -262,7 +262,10 @@ function TransactionDetails({
   const refreshMessages = useCallback(async () => {
     await loadCommunications("text");
     refreshAttachments();
-  }, [loadCommunications, refreshAttachments]);
+    // BACKLOG-2838: the text counter on the card behind this modal counts the
+    // linked set that just moved. See notifyCardCounters below.
+    onTransactionUpdated?.();
+  }, [loadCommunications, refreshAttachments, onTransactionUpdated]);
 
   // Accurate attachment counts from database (TASK-1781)
   // PERF: Lazy-loaded — only fetched when Submit modal opens (takes ~1.3s)
@@ -714,6 +717,10 @@ function TransactionDetails({
           setShowUnlinkThread(null);
           // BACKLOG-1780: signal RemovedEmailsSection to refresh its count.
           setRemovedRefreshKey((k) => k + 1);
+          // BACKLOG-2838: the emails just left the deal, so the card's counter
+          // behind this modal is now one revision old. This path writes through
+          // plain IPC and broadcasts nothing, so nothing else would tell it.
+          onTransactionUpdated?.();
 
           // BACKLOG-1778: in-place list update — drop exactly the unlinked rows.
           if (allUnlinkedIds.length > 0) {
@@ -726,7 +733,7 @@ function TransactionDetails({
         showError
       );
     },
-    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError, undoRestoreEmails]
+    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError, undoRestoreEmails, onTransactionUpdated]
   );
 
   // BACKLOG-1781: handler for thread-aware unlink confirmation. Stores the full
@@ -753,13 +760,37 @@ function TransactionDetails({
     }
   }, [loading]);
 
+  /**
+   * BACKLOG-2838 — TELL THE LIST BEHIND THIS MODAL.
+   *
+   * Half A of 2838 subscribed the transaction list to the two broadcasts that
+   * already exist (review:queue-changed, transactions:auto-sync-complete), which
+   * covers approve, reject, restore, the on-open sweep and background syncs.
+   * Manual ATTACH and UNLINK broadcast nothing at all — they are plain IPC
+   * writes — so Half A alone left exactly those two stale, and they are the
+   * actions a user takes while staring at the card.
+   *
+   * `onTransactionUpdated` is the EXISTING wire for this: it already refetches
+   * the list (TransactionList.tsx:262-265) and is already called by eight other
+   * actions in this file (save, delete, export, deal approve/reject/restore,
+   * contact restore). Adding a main-process broadcast channel for attach/unlink
+   * would be a second mechanism for a job this one already does, and it would
+   * touch handler files sitting under two live branches.
+   *
+   * Renderer-side is sufficient here BECAUSE attach and unlink are reachable
+   * only FROM this modal — there is no background path that links or unlinks
+   * behind a closed details screen (those go through the sweep, which
+   * broadcasts). If that ever changes, the broadcast becomes the right answer.
+   */
   const handleEmailsChangedPreserveScroll = useCallback(async () => {
     pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
     await loadDetails();
     // BACKLOG-322: refetch the unified attachments so the Attachments tab
     // reflects a just-attached (or unlinked) email without a manual reload.
     refreshAttachments();
-  }, [loadDetails, refreshAttachments]);
+    // BACKLOG-2838: an attached or unlinked email changes email_count.
+    onTransactionUpdated?.();
+  }, [loadDetails, refreshAttachments, onTransactionUpdated]);
 
   /**
    * Undo an Edit Contacts save that took parties off this deal (BACKLOG-2501).
@@ -823,7 +854,10 @@ function TransactionDetails({
     await refreshCommunicationsSilently("email");
     // BACKLOG-322: a restored email brings its attachments back — refetch them.
     refreshAttachments();
-  }, [refreshCommunicationsSilently, refreshAttachments]);
+    // BACKLOG-2838: a restore puts an email back on the deal; a Needs-review
+    // Confirm moves one into the linked set. Both change email_count.
+    onTransactionUpdated?.();
+  }, [refreshCommunicationsSilently, refreshAttachments, onTransactionUpdated]);
 
   // BACKLOG-1793: silent text-communications refresh for the restore-removed
   // path on the Messages tab — mirrors handleRefreshEmailsSilently so a restored
@@ -832,7 +866,9 @@ function TransactionDetails({
     await refreshCommunicationsSilently("text");
     // BACKLOG-322: a restored conversation brings its attachments back — refetch.
     refreshAttachments();
-  }, [refreshCommunicationsSilently, refreshAttachments]);
+    // BACKLOG-2838: a restored conversation is back in the text thread count.
+    onTransactionUpdated?.();
+  }, [refreshCommunicationsSilently, refreshAttachments, onTransactionUpdated]);
 
   // BACKLOG-2791 — THE LINKED LIST HEARS THE REVIEW NOTIFICATION TOO.
   //
