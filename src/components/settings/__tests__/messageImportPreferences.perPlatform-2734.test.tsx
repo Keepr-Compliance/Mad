@@ -256,9 +256,19 @@ describe("BACKLOG-2734 · the seed cannot race the user", () => {
    * SETTLED, not succeeded — BACKLOG-2760's rule, applied here. A failed read
    * means the component's defaults ARE the effective preference, so the user
    * must still be able to change them; dead dropdowns would be the worse answer.
+   *
+   * BOTH StrictMode invocations must reject. With a single `mockRejectedValueOnce`
+   * the effect's second run — StrictMode double-invokes it — read successfully,
+   * so the component reached its success path and this test observed a
+   * SUCCEEDED load while claiming to describe a failed one. Measured by the SR:
+   * moving `setPrefsSettled(true)` out of `finally` onto the success path, which
+   * leaves both dropdowns dead forever after a failed read, kept the suite fully
+   * green. A control that cannot see the state it names is not a control.
    */
   it("enables the dropdowns even when the preference read fails", async () => {
-    mockGetPreferences.mockRejectedValueOnce(new Error("offline"));
+    mockGetPreferences
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockRejectedValueOnce(new Error("offline"));
 
     renderStrict(<AndroidMessagesSettings userId="u-2734" />);
 
