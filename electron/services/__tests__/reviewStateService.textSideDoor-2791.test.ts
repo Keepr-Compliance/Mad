@@ -127,7 +127,8 @@ describe("SR CONTROL — text rejection side door", () => {
     //    removeIgnoredCommunication + linkMessages (whose text INSERT has no
     //    match_reason column — the original hole).
     const routed = await restoreRejectedToQueue(ign.id);
-    expect(routed).toBe(true);
+    // Returns a COUNT now (BACKLOG-2791 thread-aware restore); 1 = this row.
+    expect(routed).toBe(1);
 
     // 5. The verdict, inverted from the SR's control because the door is closed.
     const link = db.prepare("SELECT match_reason FROM communications WHERE transaction_id=?")
@@ -156,6 +157,7 @@ describe("SR CONTROL — text rejection side door", () => {
        VALUES ('ig-ordinary', ?, ?, 'th-other', 'user_removed', 'address_missing')`,
     ).run(USER, TXN);
 
-    return expect(restoreRejectedToQueue("ig-ordinary")).resolves.toBe(false);
+    // 0 = not a review rejection, so the old restore path keeps it.
+    return expect(restoreRejectedToQueue("ig-ordinary")).resolves.toBe(0);
   });
 });

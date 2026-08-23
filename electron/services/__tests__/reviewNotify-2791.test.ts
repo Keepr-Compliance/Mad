@@ -107,7 +107,7 @@ describe("every review mutation announces itself", () => {
     const ignored = db
       .prepare("SELECT id FROM ignored_communications WHERE transaction_id = ?")
       .get(TXN) as { id: string };
-    expect(await restoreRejectedToQueue(ignored.id)).toBe(true);
+    expect(await restoreRejectedToQueue(ignored.id)).toBe(1);
 
     const c = changes();
     expect(c).toHaveLength(1);

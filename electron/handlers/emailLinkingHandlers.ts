@@ -749,12 +749,16 @@ export function registerEmailLinkingHandlers(): void {
       const { restoreRejectedToQueue, notifyReviewStateChanged } = await import(
         "../services/reviewStateService"
       );
-      if (await restoreRejectedToQueue(ignoredCommId)) {
-        logService.info("Restored a rejected email to the review queue", "Transactions", {
+      const requeued = await restoreRejectedToQueue(ignoredCommId);
+      if (requeued > 0) {
+        logService.info("Restored rejected email(s) to the review queue", "Transactions", {
           ignoredCommId,
           transactionId: validatedTransactionId,
+          restoredCount: requeued,
         });
-        return { success: true, restoredCount: 1 };
+        // The real count, so the toast reads "2 emails restored" rather than
+        // claiming one while two moved.
+        return { success: true, restoredCount: requeued };
       }
 
       // BACKLOG-1718 (R4): Thread-aware restore — symmetric with R3 unlink expansion.
@@ -821,7 +825,7 @@ export function registerEmailLinkingHandlers(): void {
       const { restoreRejectedToQueue, notifyReviewStateChanged: notifyText } = await import(
         "../services/reviewStateService"
       );
-      if (await restoreRejectedToQueue(ignoredCommId)) {
+      if ((await restoreRejectedToQueue(ignoredCommId)) > 0) {
         logService.info("Restored a rejected item to the review queue", "Transactions", {
           ignoredCommId,
           transactionId: validatedTransactionId,

@@ -637,7 +637,7 @@ export async function syncReviewQueueForTransaction(opts: {
  * closed. Routing a review rejection back to PENDING is the text-side equivalent
  * of "returns to needs-review", and it makes both halves behave identically.
  */
-export async function restoreRejectedToQueue(ignoredCommId: string): Promise<boolean> {
+export async function restoreRejectedToQueue(ignoredCommId: string): Promise<number> {
   const row = dbGet<{
     id: string;
     user_id: string;
@@ -651,20 +651,50 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<boo
        FROM ignored_communications WHERE id = ?`,
     [ignoredCommId],
   );
-  if (!row) return false;
+  if (!row) return 0;
 
   // `reason` is the discriminator: only this service writes 'rejected_in_review'.
   // match_reason alone would also match a legacy 2319 removal, whose restore
   // must keep its existing link-recreating behaviour.
-  if (row.reason !== "rejected_in_review") return false;
+  if (row.reason !== "rejected_in_review") return 0;
 
-  dbRun(
-    `INSERT OR IGNORE INTO pending_review_communications
-       (id, user_id, transaction_id, email_id, thread_id, found_at)
-     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-    [crypto.randomUUID(), row.user_id, row.transaction_id, row.email_id, row.thread_id],
-  );
-  dbRun("DELETE FROM ignored_communications WHERE id = ?", [ignoredCommId]);
+  // THREAD-AWARE, matching restoreRemovedEmailThread.
+  //
+  // BACKLOG-2791: this used to restore exactly ONE row. Show removed groups by
+  // thread_id (BACKLOG-1766) and hands the restore a single representative,
+  // because the ordinary restore path expands to siblings itself. This
+  // short-circuit did not, so a "(2 emails)" card restored one email and left
+  // the other to reappear on its own — the founder's case was two recurring
+  // calendar invites, which the provider threads into one conversation.
+  //
+  // Siblings are found through the EMAIL's thread, not the ignored row's
+  // thread_id, which is NULL for a queued email (the queue keys emails by id).
+  const siblings = row.email_id
+    ? dbAll<{ id: string; email_id: string | null; thread_id: string | null }>(
+        `SELECT ic.id, ic.email_id, ic.thread_id
+           FROM ignored_communications ic
+           JOIN emails e ON e.id = ic.email_id
+          WHERE ic.transaction_id = ?
+            AND ic.reason = 'rejected_in_review'
+            AND e.thread_id IS NOT NULL
+            AND e.thread_id = (SELECT thread_id FROM emails WHERE id = ?)`,
+        [row.transaction_id, row.email_id],
+      )
+    : [];
+
+  const toRestore = siblings.length > 0
+    ? siblings
+    : [{ id: row.id, email_id: row.email_id, thread_id: row.thread_id }];
+
+  for (const item of toRestore) {
+    dbRun(
+      `INSERT OR IGNORE INTO pending_review_communications
+         (id, user_id, transaction_id, email_id, thread_id, found_at)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+      [crypto.randomUUID(), row.user_id, row.transaction_id, item.email_id, item.thread_id],
+    );
+    dbRun("DELETE FROM ignored_communications WHERE id = ?", [item.id]);
+  }
 
   await logService.debug("Restored a rejected item to the review queue", MODULE, {
     ignoredCommId,
@@ -672,7 +702,7 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<boo
     kind: row.email_id ? "email" : "text",
   });
   notifyReviewStateChanged(row.transaction_id);
-  return true;
+  return toRestore.length;
 }
 
 /* ------------------------------------------------------------------ *
