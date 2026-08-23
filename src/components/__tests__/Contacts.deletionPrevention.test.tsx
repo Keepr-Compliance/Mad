@@ -288,7 +288,7 @@ describe("Contacts - Deletion Prevention", () => {
           closed_at: "2024-02-20",
           transaction_type: "sale",
           status: "closed",
-          roles: ["Seller Agent", "Inspector"],
+          roles: ["Listing Agent", "Inspector"],
         },
       ];
 
@@ -316,7 +316,7 @@ describe("Contacts - Deletion Prevention", () => {
       // eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- guarded by the toHaveLength assertion above
       expect(result.transactions![1]).toMatchObject({
         property_address: "456 Oak Ave",
-        roles: ["Seller Agent", "Inspector"],
+        roles: ["Listing Agent", "Inspector"],
       });
     });
 

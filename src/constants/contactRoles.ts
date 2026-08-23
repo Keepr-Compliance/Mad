@@ -63,7 +63,22 @@ export const ROLE_DISPLAY_NAMES = {
   [SPECIFIC_ROLES.BUYER]: "Buyer",
   [SPECIFIC_ROLES.SELLER]: "Seller",
   [SPECIFIC_ROLES.BUYER_AGENT]: "Buyer Agent",
-  [SPECIFIC_ROLES.SELLER_AGENT]: "Seller Agent",
+  // BACKLOG-2804 (support ticket 111): the agent representing the seller is
+  // the "Listing Agent" in the industry, and that is what the chip beside a
+  // key contact must say. The STORED value stays `seller_agent` — this is a
+  // label, and every assignment in the field already carries the enum.
+  //
+  // Both seller-side values land on one label on purpose. `listing_agent` is
+  // vestigial: AUDIT_WORKFLOW_STEPS never offers it, so it is reachable only
+  // through a contact's saved `default_role`. Two roles sharing a label is
+  // safe for read-only surfaces but would put two identical options in a
+  // picker, so ContactFormModal — the only picker built from this whole map —
+  // collapses them. Consolidating the two enum values needs a data migration
+  // and is filed separately.
+  //
+  // The export humanizes the enum on its own (electron cannot import from
+  // src/); its matching override lives in folderExport/summaryHelpers.ts.
+  [SPECIFIC_ROLES.SELLER_AGENT]: "Listing Agent",
   [SPECIFIC_ROLES.LISTING_AGENT]: "Listing Agent",
   [SPECIFIC_ROLES.APPRAISER]: "Appraiser",
   [SPECIFIC_ROLES.INSPECTOR]: "Inspector",
