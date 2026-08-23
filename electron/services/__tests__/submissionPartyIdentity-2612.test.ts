@@ -183,14 +183,14 @@ describe("BACKLOG-2758 — the submission upload names parties from the app's ow
     // Without this leg, "contacts wins" could be satisfied by never reading the
     // AddressBook at all — which would silently lose names in the field.
     addressBook.contactMap = {
-      "5035559999": "Robin Hale",
-      "+15035559999": "Robin Hale",
+      "5035550199": "Robin Hale",
+      "+15035550199": "Robin Hale",
     };
-    return resolveHandles(["+15035559999"], USER_ID, {
+    return resolveHandles(["+15035550199"], USER_ID, {
       userId: USER_ID,
       transactionId: TX,
     }).then((resolution) => {
-      expect(resolution.names["5035559999"]).toBe("Robin Hale");
+      expect(resolution.names["5035550199"]).toBe("Robin Hale");
     });
   });
 

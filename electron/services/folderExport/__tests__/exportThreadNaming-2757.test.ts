@@ -196,7 +196,7 @@ const OWNER_EMAIL = "owner-2757@example.com";
  */
 function seedWorld(fx: ExportFixture, insertionOrder: "chris-first" | "dana-first"): void {
   fx.seedUser(USER_ID, OWNER_EMAIL, "Test User");
-  fx.seedUser(OTHER_USER_ID, "other-2757@example.com", "Other User");
+  fx.seedUser(OTHER_USER_ID, "other-2757@example.com", "Test Contact");
   fx.seedTransaction({ id: TX, userId: USER_ID, address: "1 Shared Line Rd" });
   fx.seedTransaction({ id: TX_OTHER, userId: USER_ID, address: "2 Other Deal Ave" });
 
