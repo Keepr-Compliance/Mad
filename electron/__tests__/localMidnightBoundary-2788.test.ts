@@ -121,7 +121,7 @@ function localInstant(
   return new Date(y, m, d + dayOffset, hours, minutes, seconds, ms).toISOString();
 }
 
-const EARLY_OUT = "2025-12-31T23:59:59.999Z"; // before the audit start -> OUT
+const EARLY_OUT = "2025-06-01T12:00:00.000Z"; // months before the audit start -> OUT in every zone
 const MID_IN = "2026-06-15T12:00:00.000Z"; // comfortably inside -> IN
 const DAWN = localInstant(0, 30, 0, 0); // 12:30am local, the closing day (BACKLOG-2781's case)
 const EVENING = localInstant(21, 0, 0, 0); // 9pm local, the closing day (the founder's case)
@@ -428,6 +428,7 @@ describe("BACKLOG-2788 — the bound in timezones this process cannot enter", ()
     tabAtBound: Record<string, boolean>;
     tabPastBound: Record<string, boolean>;
     emailRangeEnd: string;
+    tabAtStartEdge: boolean;
   }
 
   /**
@@ -549,6 +550,33 @@ describe("BACKLOG-2788 — the bound in timezones this process cannot enter", ()
         expect([tz, day, report.tabPastBound[day]]).toEqual([tz, day, false]);
       }
     }
+  }, ZONE_TIMEOUT_MS);
+
+  it("the audit-window START still diverges east of UTC — measured, and out of this contract", () => {
+    // BACKLOG-2788 moved the END of the audit window and nothing else. The
+    // START is still parsed as UTC midnight by the export and the submission
+    // (`new Date("2026-01-01")`) while the Texts tab reads it as a LOCAL day,
+    // so for a start of 2026-01-01 the instant 2025-12-31T23:59:59.999Z is:
+    //
+    //     UTC / America/Chicago   out on all three surfaces
+    //     Europe/Berlin           out of the export and the submission,
+    //                             IN the tab (local midnight is 23:00Z on 12/31)
+    //
+    // Recorded here rather than fixed: tightening the tab would REMOVE
+    // communications a user currently sees, and loosening the other two would
+    // ADD communications to shipped broker submissions. Either direction is a
+    // founder decision, not a consequence of this one. Found by running this
+    // suite east of UTC — the sweep above deliberately no longer places a
+    // fixture in that gap, so it cannot claim an agreement that does not exist.
+    expect(runInZone("UTC").tabAtStartEdge).toBe(false);
+    expect(runInZone("America/Chicago").tabAtStartEdge).toBe(false);
+    expect(runInZone("Europe/Berlin").tabAtStartEdge).toBe(true);
+
+    // The other two surfaces exclude it in EVERY zone: their start is an
+    // absolute instant, and this fixture is one millisecond before it.
+    expect(new Date("2025-12-31T23:59:59.999Z").getTime()).toBeLessThan(
+      new Date(STARTED_AT).getTime(),
+    );
   }, ZONE_TIMEOUT_MS);
 
   it("the email/import window ends with the buffered local day in every zone", () => {

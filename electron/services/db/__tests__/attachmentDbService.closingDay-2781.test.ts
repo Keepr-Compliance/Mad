@@ -23,7 +23,8 @@
  * today, and an assertion per branch is what keeps a future un-sharing honest.
  *
  * The sweep, not a single data point, is the control — see the header of
- * `submissionDbService.closingDay-2781.test.ts` for why. *
+ * `submissionDbService.closingDay-2781.test.ts` for why.
+ *
  * BACKLOG-2788 moved the bound this suite sweeps: the founder settled
  * (2026-08-22) that the closing day ends at the user's LOCAL midnight — "they
  * work in their local time, so we need to show the transaction from their

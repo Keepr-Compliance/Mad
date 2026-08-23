@@ -250,19 +250,19 @@ describe("BACKLOG-2771: every export entry point resolves its include set once",
         exportFormat: "json",
         contentType: "both",
         startDate: "2026-01-01",
-        endDate: "2026-07-27",
+        endDate: "2026-07-28",
       });
 
-      // An earlier window: the closing-day text now falls outside it.
+      // A window ending the day BEFORE closing: both closing-day texts fall
+      // outside it, so what survives is the March email alone. That is the
+      // wire window being honored — the transaction's own `closed_at`
+      // (2026-07-29) would have kept `closing-day-text`.
       //
-      // BACKLOG-2788 changed which date does that. The fixture text is stamped
-      // 2026-07-29T04:30Z, which is 11:30pm LOCAL on July 28 west of UTC — so
-      // now that a day ends at the user's local midnight, an `endDate` of
-      // "2026-07-28" legitimately KEEPS it (it was sent on that day, as its
-      // sender experienced it) and only reads as "outside" in UTC and east of
-      // it. "2026-07-27" is outside the text's local day in every zone, which is
-      // what this test needs in order to be about window PRECEDENCE rather than
-      // about the boundary. Founder decision, 2026-08-22 (BACKLOG-2788).
+      // The date is a whole day away from the fixtures rather than one instant,
+      // so this test turns on PRECEDENCE and not on the boundary: 9pm local on
+      // the 29th is outside the local day of the 28th in every timezone
+      // (BACKLOG-2788 — the day ends at the user's local midnight), as is local
+      // midnight of the 30th.
       expect(ids(enhancedPlan().communications)).toEqual([IN_WINDOW_EMAIL.id as string]);
     });
 

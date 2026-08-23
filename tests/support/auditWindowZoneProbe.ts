@@ -38,6 +38,19 @@ const report = {
   tabPastBound: {} as Record<string, boolean>,
   /** The email/import window end (closing day + 30-day buffer). */
   emailRangeEnd: computeTransactionDateRange({ closed_at: "2026-07-29" }).end.toISOString(),
+  /**
+   * The audit-window START, which BACKLOG-2788 deliberately does NOT change.
+   * The instant one millisecond before UTC midnight of the start day: the
+   * export and the submission parse their start with `new Date("2026-01-01")`
+   * (UTC midnight) and exclude it in every zone, while the tab reads the start
+   * as a LOCAL day and so admits it east of UTC. Reported so the divergence is
+   * a recorded measurement rather than a surprise.
+   */
+  tabAtStartEdge: isTimestampInAuditPeriod(
+    "2025-12-31T23:59:59.999Z",
+    parseLocalCalendarDay(AUDIT_START),
+    parseLocalCalendarDay("2026-07-29"),
+  ),
 };
 
 for (const day of DAYS) {
