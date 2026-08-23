@@ -253,6 +253,37 @@ describe('BACKLOG-2794 — the pending→running boundary', () => {
   });
 });
 
+describe('BACKLOG-2794 — a skipped row is terminal, so the queue can clear it', () => {
+  it('is swept by the same clean-up that removes completes and errors', async () => {
+    // 'skipped' has to be in that filter's terminal set. Left out, the one row
+    // this queue can never clear is a leg the user cancelled — it survives every
+    // later run's clean-up and keeps a stale pill on the dashboard for the rest
+    // of the session.
+    jest.useFakeTimers();
+    try {
+      gateContacts();
+      const run = (syncOrchestrator as any).startSync({
+        types: ['contacts', 'messages'],
+        userId: USER,
+      });
+      await settle();
+      syncOrchestrator.markCancelRequested('messages');
+      releaseContacts();
+      await run;
+
+      expect(itemFor('messages')?.status).toBe('skipped');
+
+      // The 5s sweep in `startSync`'s finally.
+      jest.advanceTimersByTime(6000);
+
+      expect(itemFor('messages')).toBeUndefined();
+      expect(syncOrchestrator.getState().queue).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
 describe('BACKLOG-2794 — a skip belongs to one run', () => {
   it('does not suppress the NEXT sync of the same type', async () => {
     gateContacts();
