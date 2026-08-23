@@ -49,11 +49,18 @@ interface SubmitForReviewModalProps {
   onCancel: () => void;
   onSubmit: () => void;
   /**
-   * Opens the export flow (ExportModal) for this deal, closing this modal on
-   * the way. BACKLOG-2849 renamed it from `onExportFirst`: "first" described a
+   * Opens the export flow for this deal, closing this modal on the way.
+   *
+   * BACKLOG-2849 renamed it from `onExportFirst`: "first" described a
    * pre-submit nudge that no longer exists, and the SAME callback now backs
    * both offers — the action button beside Submit, and the post-submit ask.
-   * One action, one label ("Export PDF"), one handler.
+   * One action, one label ("Export"), one handler.
+   *
+   * The destination is the founder's ruling that "the export flow it brings up
+   * should be just like the individual user export": this opens the SAME
+   * ExportModal that `useCompleteTransaction` gives an individual on Complete,
+   * not a brokerage-specific path. TransactionDetails owns that wiring and a
+   * test pins the two entry points to one component by identity.
    */
   onExport?: () => void;
 }
@@ -121,7 +128,22 @@ export function SubmitForReviewModal({
   };
 
   return (
-    <ResponsiveModal onClose={onCancel} zIndex="z-[70]" panelClassName="max-w-md p-6">
+    /*
+      BACKLOG-2849 — the backdrop routes through `handleCancelClick`, the SAME
+      handler as the X. It used to be wired straight to `onCancel`, so the two
+      dismiss affordances disagreed: the X raised the mid-upload "Cancel Anyway
+      / Keep Uploading" confirm and the backdrop dropped a running submission
+      without one. Once the founder's rule is "a deal that did not submit must
+      still look unsubmitted, and one that did must look submitted", an
+      inconsistent dismiss is a correctness question, not polish — the two ways
+      out have to land in the same state.
+    */
+    <ResponsiveModal
+      onClose={handleCancelClick}
+      zIndex="z-[70]"
+      panelClassName="max-w-md p-6"
+      testId="submit-review-modal"
+    >
         {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
@@ -287,7 +309,8 @@ export function SubmitForReviewModal({
               longer competes with the decision the user is here to make.
 
               The export ACTION survives as a plain button beside Submit — his
-              point 2, "two buttons: Submit and Export PDF". What moved is the
+              point 2, "two buttons: Submit and Export PDF" — shipped as
+              "Export", see the label note on that button. What moved is the
               nudge, not the capability.
             */}
           </>
@@ -478,7 +501,7 @@ export function SubmitForReviewModal({
         {/*
           Actions. BACKLOG-2849 removed the Cancel/Close row button entirely —
           dismissal is the X in the header (and the backdrop). What is left is
-          the founder's pair: Export PDF and Submit.
+          the founder's pair: Export and Submit.
         */}
         <div className="flex items-center gap-3 justify-end">
           {/*
@@ -487,9 +510,15 @@ export function SubmitForReviewModal({
             and as the action on the post-submit ask. Hidden only while an
             upload is actually running, where leaving the modal would abort it.
 
-            It opens the export flow (ExportModal), which is a format chooser
-            defaulting to a combined PDF — the same flow an individual licence
-            gets on Complete. See the BACKLOG-2849 report on the label.
+            LABEL — shipped as "Export", NOT the dictated "Export PDF". The
+            destination is ExportModal, a FORMAT CHOOSER that defaults to a
+            combined PDF but also offers `folder` and a summary `pdf`, so
+            "Export PDF" promises an output the button does not commit to. The
+            founder then ruled the flow must be "just like the individual user
+            export" and asked for the label to agree with the destination;
+            individuals reach that chooser with no PDF promise anywhere, and
+            the header button restored alongside this one has always read
+            "Export". One word, used everywhere, that is true of all of them.
           */}
           {onExport && !isActivelySubmitting && !showCancelConfirm && (
             <button
@@ -501,7 +530,7 @@ export function SubmitForReviewModal({
                   : "border border-gray-300 text-gray-700 hover:bg-gray-100"
               }`}
             >
-              Export PDF
+              Export
             </button>
           )}
           {!progress?.stage || progress.stage === "failed" ? (

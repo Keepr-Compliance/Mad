@@ -4,11 +4,11 @@
  * Four changes, and this suite is one control per change:
  *
  *   1. The Cancel button is gone; dismissal is an X at the top right.
- *   2. A brokerage user gets TWO actions: Submit and Export PDF.
+ *   2. A brokerage user gets TWO actions: Submit and Export.
  *   3. The pre-submit export SECTION is gone — the copy "Want to keep a local
  *      copy first?" and the "Export to folder before submitting" control.
  *   4. After a SUCCESSFUL submit the modal asks "Want to keep a local copy?"
- *      with an Export PDF action.
+ *      with an Export action.
  *
  * ---------------------------------------------------------------------------
  * WHY THE ABSENCE ASSERTIONS NAME THE FULL OLD LITERALS
@@ -126,6 +126,24 @@ describe("BACKLOG-2849 §1 — dismissal is an X, not a Cancel button", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  it("the BACKDROP lands in the same state as the X, mid-upload", () => {
+    // BACKLOG-2849 follow-up. The backdrop used to be wired straight to
+    // `onCancel` while the X went through `handleCancelClick`, so the two ways
+    // out of this modal disagreed about whether a running upload gets a
+    // warning. Under the founder's rule — a deal that did not submit must not
+    // look submitted — an inconsistent dismiss is a correctness question.
+    //
+    // Clicking the overlay element itself is what ResponsiveModal treats as a
+    // backdrop click (`e.target === e.currentTarget`); clicking the panel does
+    // not close.
+    const { onCancel } = renderModal({ isSubmitting: true, progress: UPLOADING });
+
+    fireEvent.click(screen.getByTestId("submit-review-modal"));
+
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByText("Submission in progress")).toBeInTheDocument();
+  });
+
   it("the X raises the confirm mid-upload instead of aborting silently", () => {
     // The Cancel button used to be the only thing routed through
     // `handleCancelClick`. Wiring the X straight to `onCancel` would drop a
@@ -146,17 +164,17 @@ describe("BACKLOG-2849 §1 — dismissal is an X, not a Cancel button", () => {
   });
 });
 
-describe("BACKLOG-2849 §2 — a brokerage user gets Submit and Export PDF", () => {
+describe("BACKLOG-2849 §2 — a brokerage user gets Submit and Export", () => {
   it("shows both actions on the idle screen", () => {
     renderModal();
 
     expect(screen.getByRole("button", { name: "Submit" })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Export PDF" }),
+      screen.getByRole("button", { name: "Export" }),
     ).toBeInTheDocument();
   });
 
-  it("Export PDF calls the export handler and does not submit", () => {
+  it("Export calls the export handler and does not submit", () => {
     const { onExport, onSubmit } = renderModal();
 
     fireEvent.click(screen.getByTestId("submit-review-export"));
@@ -165,7 +183,7 @@ describe("BACKLOG-2849 §2 — a brokerage user gets Submit and Export PDF", () 
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("hides Export PDF while an upload is actually running", () => {
+  it("hides Export while an upload is actually running", () => {
     // Leaving for the export modal mid-upload would abort the submission.
     renderModal({ isSubmitting: true, progress: UPLOADING });
 
@@ -200,7 +218,7 @@ describe("BACKLOG-2849 §3 — the pre-submit export section is gone", () => {
 });
 
 describe("BACKLOG-2849 §4 — the ask appears only after a SUCCESSFUL submit", () => {
-  it("asks, and offers Export PDF, on success", () => {
+  it("asks, and offers Export, on success", () => {
     // The realistic post-success prop shape: `isSubmitting` is back to false
     // (the hook resets it in `finally`) while progress holds "complete".
     const { onExport } = renderModal({ isSubmitting: false, progress: SUCCESS });
@@ -208,7 +226,7 @@ describe("BACKLOG-2849 §4 — the ask appears only after a SUCCESSFUL submit", 
     expect(screen.getByTestId("submit-review-success-ask")).toBeInTheDocument();
     expect(screen.getByText(POST_SUBMIT_ASK)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Export PDF" }));
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
     expect(onExport).toHaveBeenCalledTimes(1);
   });
 
