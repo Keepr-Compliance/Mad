@@ -31,7 +31,9 @@
  *     exactly those two fields (Communication Lifecycle Contract T6/T7/T7b), so
  *     merging a review rejection with an ordinary removal would send a restore
  *     to the wrong destination.
- *  3. Keep the LATEST duplicate instead of the earliest -> RED, 1 of 5.
+ *  3. Keep the LATEST duplicate instead of the earliest -> RED, 2 of 5, not the
+ *     1 predicted: the ordering test sees it too, because which duplicate
+ *     survives also decides which ignored_id represents the group.
  */
 
 type IpcHandler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
