@@ -263,8 +263,9 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     expect(q.sql).toContain("a.message_id = m.id");
     expect(q.sql).toContain("a.external_message_id = m.external_id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    // 1 projection (Phase 1.5) + body_text/participants_flat/filename = four.
-    expect(q.params.filter((p) => p === "%receipt%")).toHaveLength(4);
+    // 1 projection (Phase 1.5) + body_text/participants_flat/filename
+    // + BACKLOG-2816 group-chat name = five.
+    expect(q.params.filter((p) => p === "%receipt%")).toHaveLength(5);
   });
 
   it("buildGlobalEmailQuery adds the attachment predicate to both SELECT and COUNT", () => {
@@ -281,8 +282,9 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     const q = buildGlobalTextQuery(USER, "settlement", 20);
     expect(q.sql).toContain("a.message_id = m.id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    // 1 projection + body_text/participants_flat/filename = four.
-    expect(q.params.filter((p) => p === "%settlement%")).toHaveLength(4);
+    // 1 projection + body_text/participants_flat/filename
+    // + BACKLOG-2816 group-chat name = five.
+    expect(q.params.filter((p) => p === "%settlement%")).toHaveLength(5);
   });
 
   it("buildUnattachedEmailQuery / buildUnattachedTextQuery also match filenames", () => {
@@ -294,7 +296,9 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     const t = buildUnattachedTextQuery(USER, "photo", 20);
     expect(t.sql).toContain("a.message_id = m.id");
     expect(t.sql).toContain("a.filename LIKE ? ESCAPE");
-    expect(t.params.filter((p) => p === "%photo%")).toHaveLength(3);
+    // body_text/participants_flat/filename + BACKLOG-2816 group-chat name = four
+    // (the unattached text query has no matched-filename projection).
+    expect(t.params.filter((p) => p === "%photo%")).toHaveLength(4);
   });
 
   it("escapes LIKE wildcards in the attachment predicate too", () => {

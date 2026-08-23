@@ -202,6 +202,33 @@ const TEXT_ATTACHMENT_MATCH = `EXISTS (
           AND a.filename LIKE ? ESCAPE '\\'
       )`;
 
+// ---------------------------------------------------------------------------
+// BACKLOG-2816: group-chat-name matching
+// ---------------------------------------------------------------------------
+// A group the user NAMED in Messages ("Sapp Rd Closing") is shown on its thread
+// card by BACKLOG-2814, but the name lives in `message_thread_names` and nothing
+// in the search path read that table — so the name he can SEE was the one thing
+// he could not search for. This predicate makes it a match target alongside
+// body_text / participants_flat, in every text query that takes a typed query.
+//
+// THE JOIN KEY IS `(user_id, thread_id)`, NOT `thread_id`. That pair is the
+// table's PK, and macOS thread ids ("macos-chat-<ROWID>") are unique only PER
+// MACHINE, so two users of one database can hold the same thread_id. Matching on
+// thread_id alone would let one user's group name pull another user's thread into
+// the results — the same isolation rule the three existing joins carry.
+//
+// Shaped as an EXISTS (scalar — no row fan-out, so no DISTINCT is required) and
+// adds exactly ONE bound `?` at its call site, appended after the body/sender/
+// attachment params. Deliberately NOT projected: this widens WHAT matches, not
+// what is displayed. Showing the matched name as a hit's reason (the Phase 1.5
+// treatment attachments got) is follow-up work.
+const TEXT_THREAD_NAME_MATCH = `EXISTS (
+        SELECT 1 FROM message_thread_names tn
+        WHERE tn.thread_id = m.thread_id
+          AND tn.user_id = m.user_id
+          AND tn.display_name LIKE ? ESCAPE '\\'
+      )`;
+
 // BACKLOG-1870 Phase 1.5: also PROJECT the matched filename(s) so the UI can show
 // WHY a hit surfaced. Correlated subqueries using the SAME escaped `filename LIKE ?`
 // term as the filter — group_concat with a newline separator (filenames never
@@ -403,8 +430,9 @@ export function buildTextQuery(
         m.body_text LIKE ? ESCAPE '\\'
         OR m.participants_flat LIKE ? ESCAPE '\\'
         OR ${TEXT_ATTACHMENT_MATCH}
+        OR ${TEXT_THREAD_NAME_MATCH}
       )`;
-  const whereParams = [transactionId, transactionId, pat, pat, pat];
+  const whereParams = [transactionId, transactionId, pat, pat, pat, pat];
 
   return {
     sql: `${MARK.texts}
@@ -765,8 +793,9 @@ export function buildGlobalTextQuery(
   const match = `
       m.body_text LIKE ? ESCAPE '\\'
       OR m.participants_flat LIKE ? ESCAPE '\\'
-      OR ${TEXT_ATTACHMENT_MATCH}`;
-  const matchParams = [pat, pat, pat];
+      OR ${TEXT_ATTACHMENT_MATCH}
+      OR ${TEXT_THREAD_NAME_MATCH}`;
+  const matchParams = [pat, pat, pat, pat];
 
   // Membership set: messages linked to some transaction (direct or thread-batch).
   const memberSet = `
@@ -912,8 +941,9 @@ export function buildUnattachedTextQuery(
         m.body_text LIKE ? ESCAPE '\\'
         OR m.participants_flat LIKE ? ESCAPE '\\'
         OR ${TEXT_ATTACHMENT_MATCH}
+        OR ${TEXT_THREAD_NAME_MATCH}
       )`;
-  const whereParams = [userId, pat, pat, pat];
+  const whereParams = [userId, pat, pat, pat, pat];
 
   return {
     sql: `${MARK.unattachedTexts}
