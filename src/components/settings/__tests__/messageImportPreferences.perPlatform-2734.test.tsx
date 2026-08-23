@@ -207,6 +207,68 @@ describe("BACKLOG-2734 · the panels no longer reconfigure each other", () => {
   });
 });
 
+describe("BACKLOG-2734 · the seed cannot race the user", () => {
+  /**
+   * The panel mounts showing its defaults and `getPreferences` is a round trip.
+   * A user who changed a dropdown inside that window used to write a choice the
+   * seed then deep-merged straight over — the panel displaying one value and the
+   * store holding another, which is the told-versus-does defect this file family
+   * exists to remove.
+   *
+   * The controls are therefore disabled until the read AND the seed have both
+   * settled. This asserts the disabled attribute rather than attempting a click,
+   * because a synthetic change event on a disabled `<select>` still reaches
+   * React's handler — the test would prove the event system's behaviour, not the
+   * guard's.
+   */
+  it("keeps both dropdowns disabled until the load and seed have settled", async () => {
+    store = {
+      messageImport: { filters: { lookbackMonths: 18, maxMessages: 10000 } },
+    };
+    let releasePrefs: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releasePrefs = resolve;
+    });
+    mockGetPreferences.mockImplementationOnce(async () => {
+      await gate;
+      return { success: true, data: store };
+    });
+
+    renderStrict(<AndroidMessagesSettings userId="u-2734" />);
+
+    const rangeSelect = screen.getByDisplayValue("Last 3 months");
+    const capSelect = screen.getByDisplayValue("50,000");
+    expect(rangeSelect).toBeDisabled();
+    expect(capSelect).toBeDisabled();
+
+    releasePrefs!();
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("Last 18 months")).not.toBeDisabled()
+    );
+    expect(screen.getByDisplayValue("10,000")).not.toBeDisabled();
+    // The seed has landed by the time the controls open, so the first thing the
+    // user can write merges onto a complete namespace.
+    expect(androidFilters()).toEqual({ lookbackMonths: 18, maxMessages: 10000 });
+  });
+
+  /**
+   * SETTLED, not succeeded — BACKLOG-2760's rule, applied here. A failed read
+   * means the component's defaults ARE the effective preference, so the user
+   * must still be able to change them; dead dropdowns would be the worse answer.
+   */
+  it("enables the dropdowns even when the preference read fails", async () => {
+    mockGetPreferences.mockRejectedValueOnce(new Error("offline"));
+
+    renderStrict(<AndroidMessagesSettings userId="u-2734" />);
+
+    await waitFor(() =>
+      expect(screen.getByDisplayValue("Last 3 months")).not.toBeDisabled()
+    );
+    expect(screen.getByDisplayValue("50,000")).not.toBeDisabled();
+  });
+});
+
 describe("BACKLOG-2734 · the one-time migration", () => {
   it("seeds the Android namespace from the value the panels shared", async () => {
     store = {

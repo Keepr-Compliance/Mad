@@ -83,6 +83,22 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
     DEFAULT_MAX_MESSAGES
   );
 
+  // BACKLOG-2734: the filter controls stay disabled until the stored preference
+  // has been read AND the one-time seed has landed.
+  //
+  // Without this the seed races the user. The panel mounts showing its
+  // defaults, `getPreferences` is a round trip, and a user who changes a
+  // dropdown inside that window writes a choice the seed then deep-merges
+  // straight over — leaving the panel displaying one value and the store
+  // holding another. That is the told-versus-does defect this whole file family
+  // exists to remove, so it is closed rather than narrowed.
+  //
+  // SETTLED, not succeeded (BACKLOG-2760's rule on the macOS panel): a failed
+  // read enables the controls too, because the component's defaults ARE the
+  // effective preference at that point and leaving the user with dead
+  // dropdowns would be the worse answer.
+  const [prefsSettled, setPrefsSettled] = useState(false);
+
   // Load sync status and filter preferences
   const refreshStatus = useCallback(async () => {
     try {
@@ -142,6 +158,8 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
         }
       } catch {
         // Use defaults
+      } finally {
+        setPrefsSettled(true);
       }
     };
     loadFilters();
@@ -252,7 +270,8 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
           <select
             value={lookbackMonths ?? "all"}
             onChange={(e) => handleLookbackChange(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900"
+            disabled={!prefsSettled}
+            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 disabled:opacity-50"
           >
             <option value="3">Last 3 months</option>
             <option value="6">Last 6 months</option>
@@ -270,7 +289,8 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
           <select
             value={maxMessages ?? "unlimited"}
             onChange={(e) => handleMaxMessagesChange(e.target.value)}
-            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900"
+            disabled={!prefsSettled}
+            className="text-xs border border-gray-300 rounded px-2 py-1 bg-white text-gray-900 disabled:opacity-50"
           >
             <option value="10000">10,000</option>
             <option value="50000">50,000</option>
