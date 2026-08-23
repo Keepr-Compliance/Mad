@@ -15,6 +15,9 @@ import { countTextThreads, generateTextIndex, getMessageTypeCounts } from "./tex
 import { groupEmailsForIndex, type EmailIndexThread } from "./emailIndexHelpers";
 import { extractParticipantHandles } from "../contactResolutionService";
 import { getContactNamesByHandles } from "../../utils/exportUtils";
+// BACKLOG-2805: mirrors src/constants/transactionTypes.ts (electron cannot
+// import from src/). Keep the two in step.
+import { TRANSACTION_TYPE_LABELS } from "../../constants/transactionTypeLabels";
 
 /**
  * Generate HTML for summary report.
@@ -222,7 +225,7 @@ export function generateSummaryHTML(
   <div class="details-grid">
     <div class="detail-card">
       <div class="label">Transaction Type</div>
-      <div class="value">${transaction.transaction_type === "purchase" ? "Purchase" : transaction.transaction_type === "sale" ? "Sale" : "N/A"}</div>
+      <div class="value">${transaction.transaction_type === "purchase" ? TRANSACTION_TYPE_LABELS.purchase : transaction.transaction_type === "sale" ? TRANSACTION_TYPE_LABELS.sale : "N/A"}</div>
     </div>
     ${transaction.closing_deadline ? `<div class="detail-card">
       <div class="label">Closing Date</div>

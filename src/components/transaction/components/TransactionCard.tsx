@@ -2,6 +2,9 @@ import React from "react";
 import type { Transaction } from "@/types";
 import { ManualEntryBadge } from "./TransactionStatusWrapper";
 import { formatLastExported } from "@/utils/formatUtils";
+// BACKLOG-2805: display label only — the ternary still branches on the
+// stored enum, and its existing fall-through is unchanged.
+import { TRANSACTION_TYPE_LABELS } from "../../../constants/transactionTypes";
 
 // ============================================
 // SVG ICONS (matching TransactionTabs)
@@ -190,8 +193,8 @@ function TransactionCard({
                   }`}
                 ></span>
                 {transaction.transaction_type === "purchase"
-                  ? "Purchase"
-                  : "Sale"}
+                  ? TRANSACTION_TYPE_LABELS.purchase
+                  : TRANSACTION_TYPE_LABELS.sale}
               </span>
             )}
             {transaction.sale_price && (
