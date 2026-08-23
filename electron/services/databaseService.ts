@@ -2569,9 +2569,47 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         if (has("last_exported_on")) flagConditions.push("last_exported_on IS NOT NULL");
 
         if (tsCandidates.length > 0 && flagConditions.length > 0) {
+          // BACKLOG-2750: SQLite's COALESCE requires AT LEAST TWO arguments —
+          // `COALESCE(x)` is not a one-element identity, it throws
+          // "wrong number of arguments to function COALESCE()". The guard above
+          // is `length > 0`, so a `transactions` table carrying EXACTLY ONE of
+          // the three candidate timestamps emitted a one-argument COALESCE and
+          // failed the entire migration with "Migration 51 ... failed", which
+          // the runner escalates to a restore-from-backup.
+          //
+          // WHERE IT IS AND IS NOT REACHABLE — measured, because the first
+          // version of this comment asserted a production crash and was WRONG.
+          //
+          // NOT reachable on any shipped database. The condition needs EXACTLY
+          // ONE of the three timestamps present, plus at least one export flag.
+          // Checked against every historical `schema.sql` state carrying a
+          // `transactions` table (70 of 70) by rebuilding each and reading
+          // `PRAGMA table_info`: ZERO match. No shipped route — neither the
+          // pre-consolidation heal paths nor the versioned chain — yields export
+          // flags without an export timestamp, because the flag and timestamp
+          // columns arrived together (6c0e67ed5, 2025-11-17).
+          //
+          // Reachable from the MIGRATION TEST HARNESS's minimal `transactions`
+          // table, which carries `updated_at` and an export flag but neither
+          // `last_exported_*`. v63 adds `last_exported_on` to exactly such a
+          // table, producing the single candidate — which is why the whole
+          // `migration-v43` suite went red the moment v63 landed.
+          //
+          // So this is a PREREQUISITE for v63, not an independent production
+          // bug fix. It remains a genuine latent defect — the guard says `> 0`
+          // where the SQL requires `>= 2` — and any future migration or schema
+          // re-baseline that adds one of these columns without the others would
+          // reach it for real. Directly regression-tested in
+          // `databaseService.migration-v51.coalesce.test.ts`.
+          //
+          // A single candidate is its own coalesce, so emit the bare column.
+          const tsExpr =
+            tsCandidates.length === 1
+              ? tsCandidates[0]
+              : `COALESCE(${tsCandidates.join(", ")})`;
           d.exec(`
             UPDATE transactions
-               SET first_exported_at = COALESCE(${tsCandidates.join(", ")})
+               SET first_exported_at = ${tsExpr}
              WHERE first_exported_at IS NULL
                AND (${flagConditions.join(" OR ")});
           `);
@@ -3446,6 +3484,471 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
           console.log(
             "[migration v62] added emails.bulk_mail_headers column (BACKLOG-2513)",
           );
+        }
+      },
+    },
+    {
+      version: 63,
+      description:
+        "Add the 7 columns the pre-consolidation migration system used to add, and move their standalone schema.sql indexes into the chain, so a real pre-2026-02-17 upgrade does not die in exec(schema.sql) (BACKLOG-2750)",
+      migrate: (d) => {
+        // BACKLOG-2750 — SAME CLASS AS BACKLOG-2298 / BACKLOG-2300, seven more instances.
+        //
+        // WHAT BROKE, AND WHEN. Not TASK-1110. `847d6eec4` (2026-01-17) shipped
+        // `attachments.external_message_id` WITH a working upgrade path — a legacy
+        // `addMissingColumns('attachments', [...ALTER TABLE...])` plus a `runSafe`
+        // index create. `db3733343` (2026-02-17, "consolidate 28 migrations into
+        // schema.sql with version-based runner", shipped v2.4.1) DELETED that legacy
+        // system and left the standalone `CREATE INDEX` statements in schema.sql.
+        // `git log -S "addMissingColumns('attachments'"` returns exactly those two
+        // commits; `grep -rn "ALTER TABLE attachments" electron/` returns nothing.
+        //
+        // WHY IT IS FATAL. runMigrations() does `exec(schemaSql)` and THEN
+        // `_runVersionedMigrations()`. `CREATE TABLE IF NOT EXISTS` is a no-op on an
+        // existing table, so a DB created before a column's date keeps its old table
+        // shape forever — nothing at any version adds these columns. The standalone
+        // `CREATE INDEX ... ON <table>(<missing column>)` in schema.sql then throws
+        // "no such column" and aborts the ENTIRE migration before the chain starts
+        // (auto-restore → stuck on "Starting up your secure database").
+        //
+        // The consolidation's premise — BASELINE_VERSION's "schema.sql contains
+        // everything through migration 28" — holds for TABLES and for fresh installs,
+        // and is false for COLUMNS on pre-existing tables. That is the whole bug.
+        //
+        // MEASURED, NOT ASSUMED. A real pre-TASK-1110 DB built from git history
+        // (`git show 847d6eec4^:electron/database/schema.sql | sqlite3 old.db`) then
+        // fed today's schema.sql with the sqlite3 CLI (no `.bail`, so it enumerates
+        // every failure instead of stopping at the first) produces ELEVEN
+        // "no such column" errors. Seven are fixed here. The other four are on
+        // `communications` (email_id, thread_id and two composites) and are NOT the
+        // same shape: migration v43 rebuilds that table and recreates those indexes,
+        // so they need index-deferral only — and v43 itself throws on such a DB
+        // (its rebuild SELECTs email_id/thread_id from communications_old, which a
+        // pre-email DB does not have). Filed separately rather than half-fixed here.
+        //
+        // WHY THIS MIGRATION ADDS RATHER THAN SKIPS. v54, the nearest precedent,
+        // SKIPS when the column is absent because v32 guaranteed it. Here NOTHING
+        // adds these columns, so skipping would leave them absent forever. The column
+        // guard below is therefore an add-if-absent, not a skip-if-absent.
+        //
+        // BOTH PATHS. Fresh installs seed schema_version 32, so this migration (63)
+        // runs there too: it finds every column already present from CREATE TABLE and
+        // only creates the indexes — which is what preserves fresh-install index
+        // parity now that the standalone statements are gone from schema.sql.
+        //
+        // WHICH IS WHY THE `!cols.includes(column)` GUARD IS LOAD-BEARING FOR
+        // EVERY INSTALL, NOT AN EDGE CASE. Measured: delete the guard so the
+        // ALTER runs unconditionally, and the upgrade suite goes 9-of-11 RED with
+        //     Migration 63 ... failed: duplicate column name: license_type
+        // on the FIRST pass — including the FRESH INSTALL test, because a fresh
+        // `users_local` already carries every one of these columns from CREATE
+        // TABLE. Without the guard this migration bricks new installs and current
+        // ones, which is a far larger blast radius than the crash it fixes.
+        // (It is additionally required for the chain REPLAY that the baseline
+        // clamp at :3756 forces on below-baseline databases — BACKLOG-2752 — but
+        // that is the second reason, not the first.)
+        //
+        // ACCEPTED DIVERGENCE: `schema.sql` declares a table-level
+        // `FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE` on
+        // attachments. SQLite cannot add a table-level FK via ALTER TABLE ADD COLUMN
+        // without a full table rebuild, so an UPGRADED DB gets the column and index
+        // but not that FK clause. A rebuild of `attachments` is a much larger blast
+        // radius than the crash being fixed; this mirrors the cost accepted by v54.
+        // Column bodies (type, DEFAULT, CHECK) are kept byte-for-byte in sync with
+        // the CREATE TABLE declarations in electron/database/schema.sql.
+        const specs: Array<{
+          table: string;
+          column: string;
+          addSql: string;
+          indexSql: string;
+        }> = [
+          {
+            table: "users_local",
+            column: "license_type",
+            addSql:
+              "ALTER TABLE users_local ADD COLUMN license_type TEXT DEFAULT 'individual' CHECK (license_type IN ('individual', 'team', 'enterprise'))",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_users_local_license_type ON users_local(license_type)",
+          },
+          {
+            table: "users_local",
+            column: "organization_id",
+            addSql: "ALTER TABLE users_local ADD COLUMN organization_id TEXT",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_users_local_organization ON users_local(organization_id)",
+          },
+          {
+            table: "attachments",
+            column: "email_id",
+            addSql: "ALTER TABLE attachments ADD COLUMN email_id TEXT",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_attachments_email_id ON attachments(email_id)",
+          },
+          {
+            table: "attachments",
+            column: "external_message_id",
+            addSql: "ALTER TABLE attachments ADD COLUMN external_message_id TEXT",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_attachments_external_message_id ON attachments(external_message_id)",
+          },
+          {
+            table: "transactions",
+            column: "last_exported_on",
+            addSql: "ALTER TABLE transactions ADD COLUMN last_exported_on DATETIME",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_transactions_last_exported_on ON transactions(last_exported_on)",
+          },
+          {
+            table: "transactions",
+            column: "submission_status",
+            addSql:
+              "ALTER TABLE transactions ADD COLUMN submission_status TEXT DEFAULT 'not_submitted' CHECK (submission_status IN ('not_submitted', 'submitted', 'under_review', 'needs_changes', 'resubmitted', 'approved', 'rejected'))",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_transactions_submission_status ON transactions(submission_status)",
+          },
+          {
+            table: "transactions",
+            column: "submission_id",
+            addSql: "ALTER TABLE transactions ADD COLUMN submission_id TEXT",
+            indexSql:
+              "CREATE INDEX IF NOT EXISTS idx_transactions_submission_id ON transactions(submission_id)",
+          },
+        ];
+
+        for (const { table, column, addSql, indexSql } of specs) {
+          // Table guard mirrors v48/v52..v56/v62: a real install always has these
+          // three tables, but a minimal partial-schema fixture may not.
+          const hasTable = d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .get(table);
+          if (!hasTable) continue;
+
+          const cols = (
+            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
+
+          if (!cols.includes(column)) {
+            d.exec(addSql);
+            console.log(
+              `[migration v63] added ${table}.${column} column (BACKLOG-2750)`,
+            );
+          }
+
+          // Idempotent, and reached whether or not the ALTER just ran — this is the
+          // statement that replaces the standalone CREATE INDEX removed from
+          // schema.sql, so it must run on the fresh-install path too.
+          d.exec(indexSql);
+        }
+      },
+    },
+    {
+      version: 64,
+      description:
+        "Re-key every persisted phone lookup key to the libphonenumber rule (BACKLOG-2630 slice 1)",
+      migrate: (d) => {
+        // BACKLOG-2630 slice 1. `toLookupKey` stopped being `digits.slice(-10)`
+        // and became the libphonenumber-parsed E.164 digits with a US default
+        // region. Every persisted key was written by the OLD rule, so without
+        // this migration the app computes "14155550109" and the database holds
+        // "4155550109" — and the two never meet again.
+        //
+        // WHAT ACTUALLY BREAKS WITHOUT IT, so the cost is concrete rather than
+        // theoretical: `contactDbService`'s recency JOIN is
+        // `plm.phone_normalized = cp.phone_normalized`, contact search is
+        // `cp.phone_normalized LIKE ?` against a needle built by the new rule,
+        // and `contactMatchIndex` probes `cp.phone_normalized IN (…)`. All three
+        // compare a freshly-computed key against a stored one. Leave the stores
+        // on the old rule and a contact becomes unfindable by his own phone
+        // number — a regression on a database that works today, which is the
+        // exact failure BACKLOG-2753 was filed to prevent.
+        //
+        // Like migration v40, this `require`s the LIVE helper rather than
+        // transcribing the rule, so it cannot drift from the function it exists
+        // to agree with. Same consequence as v40, stated rather than implied:
+        // this migration FLOATS. It is self-healing under BACKLOG-2752's chain
+        // replay, and it is NOT a substitute for a fresh re-key item if the rule
+        // ever changes again.
+        //
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { toLookupKey } = require("../utils/phoneNormalization") as {
+          toLookupKey: (raw: string | null | undefined) => string;
+        };
+
+        const hasTable = (name: string): boolean =>
+          !!d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .get(name);
+        const hasColumn = (table: string, column: string): boolean =>
+          (d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
+            (c) => c.name === column,
+          );
+
+        // ------------------------------------------------------------------
+        // 1. contact_phones.phone_normalized — recompute from phone_e164
+        // ------------------------------------------------------------------
+        // Recomputed from the SOURCE column, never from the old key. The old key
+        // is lossy: `slice(-10)` threw country codes away, so feeding a stored
+        // key back through any rule cannot recover what it dropped. `phone_e164`
+        // still holds the whole number.
+        //
+        // Recomputing from a stable source is also what makes this step
+        // idempotent for free — run it twice and the second run writes the same
+        // bytes, because its input never changed.
+        if (hasTable("contact_phones") && hasColumn("contact_phones", "phone_normalized")) {
+          const rows = d
+            .prepare("SELECT id, phone_e164 FROM contact_phones")
+            .all() as Array<{ id: string; phone_e164: string | null }>;
+          const update = d.prepare(
+            "UPDATE contact_phones SET phone_normalized = ? WHERE id = ?",
+          );
+          for (const row of rows) {
+            update.run(toLookupKey(row.phone_e164), row.id);
+          }
+          console.log(
+            `[migration v64] re-keyed ${rows.length} contact_phones rows (BACKLOG-2630)`,
+          );
+        }
+
+        // ------------------------------------------------------------------
+        // 2. external_contacts.phones_normalized_json — recompute from phones_json
+        // ------------------------------------------------------------------
+        // Keeps v40's conventions exactly, because `externalContactDbService`
+        // still writes them: map every phone, drop empty keys, and treat
+        // unparseable JSON as an empty array rather than throwing mid-migration.
+        if (
+          hasTable("external_contacts") &&
+          hasColumn("external_contacts", "phones_normalized_json")
+        ) {
+          const rows = d
+            .prepare("SELECT id, phones_json FROM external_contacts")
+            .all() as Array<{ id: string; phones_json: string | null }>;
+          const update = d.prepare(
+            "UPDATE external_contacts SET phones_normalized_json = ? WHERE id = ?",
+          );
+          for (const row of rows) {
+            let phones: unknown = [];
+            try {
+              phones = row.phones_json ? JSON.parse(row.phones_json) : [];
+            } catch {
+              phones = [];
+            }
+            if (!Array.isArray(phones)) phones = [];
+            const keys = (phones as unknown[])
+              .map((ph) => (typeof ph === "string" ? toLookupKey(ph) : ""))
+              .filter((k: string) => k.length > 0);
+            update.run(JSON.stringify(keys), row.id);
+          }
+          console.log(
+            `[migration v64] re-keyed ${rows.length} external_contacts rows (BACKLOG-2630)`,
+          );
+        }
+
+        // ------------------------------------------------------------------
+        // 3. phone_last_message.phone_normalized — the key IS (half of) the PK
+        // ------------------------------------------------------------------
+        // This table keeps NO raw phone, so there is no source column to
+        // recompute from. The key itself is the only input available, and that
+        // makes the rule below load-bearing in a way the two above are not.
+        //
+        // THE RULE: re-key a row only when its stored key is exactly ten digits
+        // AND parses as a VALID US number — then prepend the country code.
+        // Everything else is left untouched.
+        //
+        // WHY SO NARROW, when BACKLOG-2753 rebuilt this table from `messages`.
+        // That attempt had to: its hand-rolled rule re-mapped Israeli numbers,
+        // so a row keyed from an E.164 participant had been sliced beyond
+        // recovery and could only be rebuilt from raw `participants_flat`. The
+        // library rule re-maps only US numbers, and a US row's stored key is
+        // already the correct ten digits — prepending "1" IS the whole change.
+        // No rebuild, no re-derivation of another service's message predicate.
+        //
+        // WHY IT IS IDEMPOTENT, AND WHY THE OBVIOUS VERSION IS NOT. The obvious
+        // implementation — `toLookupKey(oldKey)` — is NOT idempotent under this
+        // rule, and the trap is easy to walk into: `toLookupKey("972525550123")`
+        // with a US default region does not parse, falls back, and slices to
+        // "2525550123". A second pass would therefore mangle every 11+-digit
+        // key the first pass wrote. That matters because BACKLOG-2752's baseline
+        // clamp REPLAYS the chain on below-baseline databases, so a second run
+        // is a real event and not a hypothetical. The ten-digits-and-valid-US
+        // gate makes f(f(x)) = f(x) by construction: an eleven-digit output
+        // fails the length gate on re-run, and a ten-digit key that failed the
+        // validity gate fails it identically every time.
+        //
+        // WHY NO COLLISION POLICY IS NEEDED, and why the fold is here anyway.
+        // Every key the old rule could produce is at most ten digits
+        // (`slice(-10)`), prepending "1" is injective, and no old key is eleven
+        // digits — so a re-keyed row cannot land on an existing one. That is a
+        // proof, not an expectation, but a hand-edited or third-party-written
+        // database is not bound by it, and a PK conflict here would abort the
+        // whole migration. So the write folds by MAX(last_message_at) — the same
+        // rule `messageDbService.backfillPhoneLastMessageTable` already applies
+        // when two raw phones share a key — and no row is ever dropped: the
+        // surviving row's value IS the larger of the two.
+        if (hasTable("phone_last_message")) {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { parsePhoneNumberFromString } = require("libphonenumber-js") as {
+            parsePhoneNumberFromString: (
+              text: string,
+              region: string,
+            ) => { isValid: () => boolean } | undefined;
+          };
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { DEFAULT_PHONE_REGION } = require("../utils/phoneNormalization") as {
+            DEFAULT_PHONE_REGION: string;
+          };
+
+          const rekey = (key: string): string => {
+            if (!/^\d{10}$/.test(key)) return key;
+            const parsed = parsePhoneNumberFromString(key, DEFAULT_PHONE_REGION);
+            if (!parsed || !parsed.isValid()) return key;
+            return toLookupKey(key);
+          };
+
+          const rows = d
+            .prepare(
+              "SELECT phone_normalized, user_id, last_message_at FROM phone_last_message",
+            )
+            .all() as Array<{
+            phone_normalized: string;
+            user_id: string;
+            last_message_at: string;
+          }>;
+
+          // Fold to the winning row per (new key, user), keeping the later date.
+          const folded = new Map<
+            string,
+            { key: string; userId: string; at: string }
+          >();
+          let changed = 0;
+          for (const row of rows) {
+            const newKey = rekey(row.phone_normalized);
+            if (newKey !== row.phone_normalized) changed += 1;
+            const mapKey = `${newKey}\u0000${row.user_id}`;
+            const seen = folded.get(mapKey);
+            if (seen === undefined || row.last_message_at > seen.at) {
+              folded.set(mapKey, {
+                key: newKey,
+                userId: row.user_id,
+                at: row.last_message_at,
+              });
+            }
+          }
+
+          if (changed > 0) {
+            // Delete-then-insert rather than UPDATE: the key is half the primary
+            // key, and an in-place UPDATE would collide with a not-yet-rewritten
+            // row mid-pass.
+            d.prepare("DELETE FROM phone_last_message").run();
+            const insert = d.prepare(
+              "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)",
+            );
+            for (const row of folded.values()) {
+              insert.run(row.key, row.userId, row.at);
+            }
+            console.log(
+              `[migration v64] re-keyed ${changed} of ${rows.length} phone_last_message rows into ${folded.size} (BACKLOG-2630)`,
+            );
+          }
+        }
+      },
+    },
+    {
+      version: 65,
+      // BACKLOG-2791. Renumbered 64 -> 65 at merge time, exactly as planned:
+      // PR #2346 (BACKLOG-2630 phone re-key) merged first holding v64, this
+      // branch then merged develop and took 65. It could not have been written
+      // as 65 earlier — validateNoVersionGaps throws
+      // `Migration sequence error: Missing migration version 64` on EVERY
+      // database init when the chain skips a number, so a branch holding 65
+      // without 64 present will not boot and cannot run its own migration tests.
+      //
+      // The two are independent: 64 re-keys phone lookup keys, 65 adds a new
+      // table plus transactions.last_pending_scan_at. Disjoint objects, so the
+      // execution order between them does not matter.
+      //
+      // The head-version assertions that used to make a renumber expensive
+      // (nine files, 33 tests red on a single new migration — including the only
+      // two suites that upgrade a REAL shipped database file) now DERIVE the
+      // head via __tests__/helpers/chainHead.ts. Both branches hit that wall
+      // independently; develop re-typed the literal to 64, this branch derives
+      // it, and the derived form is what survived the merge because it is
+      // correct for either value. Mutating the helper to head-1 turns 31 tests
+      // red, so it is load-bearing rather than decorative.
+      description:
+        "Add pending_review_communications (the persistent Needs-Review queue) + transactions.last_pending_scan_at (the delta watermark) (BACKLOG-2791)",
+      migrate: (d) => {
+        // BACKLOG-2791. The queue holds communications the sync FOUND for a deal
+        // but that are NOT linked until the user approves them. It is a separate
+        // table BY DESIGN: every row in `communications` IS a link, and 41 read
+        // sites across 10 files treat it that way with no choke point, so a
+        // "pending" match_reason would have leaked unapproved mail into
+        // transaction search and into per-row Quick Export (which bypasses the
+        // details-screen Complete gate entirely).
+        //
+        // NO STANDALONE `CREATE INDEX` FOR ANY OF THIS IN schema.sql
+        // (BACKLOG-2298 / 2300): schema.sql is exec'd BEFORE the chain runs, so
+        // an index naming a not-yet-added column throws "no such column" on
+        // every real upgrade. Both indexes are created HERE, after their table
+        // exists, and are reached on the fresh-install path too (a fresh DB
+        // seeds schema_version at BASELINE_VERSION, so this migration still
+        // runs) — which is what keeps fresh and upgraded installs at parity.
+        //
+        // `communications` and `ignored_communications` are deliberately NOT
+        // touched: their `match_reason` must remain the LAST column (v55 parity
+        // guard), and adding to either would risk that ordering.
+        d.exec(`
+          CREATE TABLE IF NOT EXISTS pending_review_communications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            transaction_id TEXT NOT NULL,
+            email_id TEXT,
+            thread_id TEXT,
+            found_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+            FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+            FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+            CHECK (
+              (email_id IS NOT NULL AND thread_id IS NULL)
+              OR (thread_id IS NOT NULL AND email_id IS NULL)
+            )
+          );
+        `);
+
+        // The DB backstop for the sync's dedup predicate: even a racing second
+        // sync cannot queue the same item twice. MEASURED — drop both indexes
+        // and a repeated sync leaves 4 rows where 2 belong.
+        //
+        // PARTIAL (`WHERE <col> IS NOT NULL`) keeps each index to the rows that
+        // carry that column and states the intent. That is a size/readability
+        // choice, NOT a correctness one: SQLite treats every NULL as distinct,
+        // so the non-partial form enforces the same thing — a mutation to the
+        // non-partial form did NOT go red.
+        d.exec(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_email
+             ON pending_review_communications(transaction_id, email_id)
+           WHERE email_id IS NOT NULL`,
+        );
+        d.exec(
+          `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_thread
+             ON pending_review_communications(transaction_id, thread_id)
+           WHERE thread_id IS NOT NULL`,
+        );
+
+        // The delta watermark. Add-if-absent (not skip-if-absent): nothing else
+        // in the chain adds it, so skipping would leave it missing forever.
+        const hasTxn = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'transactions'")
+          .get();
+        if (hasTxn) {
+          const cols = (
+            d.prepare("PRAGMA table_info(transactions)").all() as Array<{ name: string }>
+          ).map((c) => c.name);
+          if (!cols.includes("last_pending_scan_at")) {
+            d.exec("ALTER TABLE transactions ADD COLUMN last_pending_scan_at DATETIME");
+            console.log(
+              "[migration v65] added transactions.last_pending_scan_at (BACKLOG-2791)",
+            );
+          }
         }
       },
     },

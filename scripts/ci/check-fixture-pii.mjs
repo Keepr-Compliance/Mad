@@ -21,10 +21,42 @@
  * (see BASELINE_PATH). The guard fails ONLY on findings that are not in the
  * baseline, so it cannot go red on day one and get switched off on day two.
  *
+ * ## Scan integrity (BACKLOG-2657)
+ *
+ * A guard that drops a file reports OK on data it never read, which is the most
+ * expensive shape of wrong answer available on a public repository. This one used
+ * to do that three ways, all silent:
+ *
+ *   - `catch { continue }` around the read — the whole file, on any read error.
+ *   - `if (text.indexOf("\0") !== -1) continue` — the WHOLE FILE, on one NUL byte.
+ *     Measured on 2026-08-11: the same test file scanned `OK — 0 new` with a NUL
+ *     in it and `FAILED — 11 new` after the NUL was respelled as an escape.
+ *   - `if (line.length > 20000) continue` — that one line.
+ *
+ * And one silent degradation that was not a skip: `readFileSync(f, "utf8")` is
+ * LOSSY, so a file that is not valid UTF-8 was scanned with its bad bytes already
+ * replaced by U+FFFD — which can destroy the very value being looked for.
+ *
+ * Nothing is dropped now. Control bytes are replaced with a space and the file is
+ * scanned; a file that is not valid UTF-8 is decoded lossily and scanned anyway;
+ * and every degradation is COUNTED and PRINTED on both the pass and the fail path.
+ * The zero line is the point of it — it is the evidence that nothing was dropped.
+ * A file that genuinely cannot be read is an error (exit 2), never a skip.
+ *
+ * Note what a NUL is and is not: it is VALID UTF-8, so a strict `TextDecoder`
+ * pass does NOT catch it. The two detections are separate and both are needed.
+ *
  * Usage:
  *   node scripts/ci/check-fixture-pii.mjs            # scan, fail on new findings
  *   node scripts/ci/check-fixture-pii.mjs --list     # print every finding, never fail
  *   node scripts/ci/check-fixture-pii.mjs --update-baseline
+ *   node scripts/ci/check-fixture-pii.mjs --root DIR # scan DIR instead of this repo
+ *
+ * `--root` exists so the verification harness can point the REAL script at a
+ * throwaway tree containing a real NUL byte. Planting that fixture in the repo
+ * is not available: it would trip `scripts/ci/check-text-sources.mjs`, the
+ * sibling guard that fails CI on any tracked source carrying a control byte.
+ * With `--root` absent the behaviour is exactly what it was.
  *
  * Adding to the baseline is a deliberate act and should be reviewed: it means
  * "a human has confirmed this value is invented".
@@ -34,7 +66,29 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+// Parsed before REPO_ROOT because --root replaces it. Unknown arguments keep the
+// previous behaviour of being collected and ignored.
+const argv = process.argv.slice(2);
+const args = new Set();
+let rootOverride = null;
+for (let i = 0; i < argv.length; i++) {
+  const arg = argv[i];
+  if (arg === "--root") {
+    rootOverride = argv[++i];
+    if (rootOverride === undefined) {
+      console.error("check-fixture-pii: --root needs a directory.");
+      process.exit(2);
+    }
+  } else if (arg.startsWith("--root=")) {
+    rootOverride = arg.slice("--root=".length);
+  } else {
+    args.add(arg);
+  }
+}
+
+const REPO_ROOT = rootOverride
+  ? resolve(rootOverride)
+  : resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BASELINE_PATH = join(
   REPO_ROOT,
   "scripts",
@@ -236,9 +290,11 @@ const FICTIONAL_NAMES = new Set([
   "sam hale",
   "lee park",
   "mo park",
-  // Already this repo's established scrub name for the founder's own case —
-  // see `contact-handlers.importLinking.test.ts`, where the surrounding
-  // `mac-paul` / `out-paul` variables still carry the pre-scrub spelling.
+  // This repo's established scrub name for the founder's own case. BACKLOG-2731
+  // finished the job: an earlier pass replaced the display name and left the
+  // address, the surname and the surrounding variable names in place, so the
+  // fixtures still identified a real person under a fictional label. Name, both
+  // domains and every record id now agree on this persona.
   "casey lane",
   // BACKLOG-2514 — the message-derived person in the projection-parity fixture.
   // Invented. It must be a PLAIN NAME (not an email, not a number) because that
@@ -277,6 +333,37 @@ const FICTIONAL_NAMES = new Set([
   "wendell marchetti",
   "bianca okafor",
   "bea okafor",
+  // BACKLOG-2684 — the persona in the empty-import suite. Invented, and this
+  // repo's established name for the "two different people, same name" case:
+  // `contact-handlers.wizardClaimsRecord-2638.test.ts` is built on the question
+  // "is Dana Whitlock the same person as Dana Whitlock?", and
+  // `contactSourceLinkSql.frozenCopy-2664.test.ts` uses it for the same reason.
+  // It fires in the 2684 suite and not in those two only because this fixture
+  // puts the name and the number on ONE line. Listed here rather than baselined
+  // because it is invented, and the baseline is for values a human confirmed
+  // are safe, not for invented ones.
+  "dana whitlock",
+  // BACKLOG-2670 — the discriminating negative in the shared-office-line suites.
+  // Invented; neither refers to anyone. They are a PAIR by design, for the same
+  // reason as the 2556 names above: the rule under test is that a shared
+  // identifier is not evidence of one person, so the case needs two people who
+  // share ONE office line — `(415) 555-0120`, inside the reserved fictional
+  // range — and nothing else. `contact-handlers.foldDeleted-2556.test.ts:43`
+  // names them as its control 4, the case that would silently invert if the
+  // `namesAreCompatible` guard had been removed instead of the fold;
+  // `contactSourceLinker.nameGuard-2619.test.ts` and
+  // `autoLinkNameGuard-2624.test.ts` are built on the same pair, which is why
+  // both names are recorded together — they share every fixture line.
+  //
+  // This entry SILENCES NOTHING. Measured at `bc12fec8b`: neither name is
+  // reported under the same-line rule (0 occurrences), and both appear only
+  // once the identity-context window is widened past one line. It is recorded
+  // here because the same-line gap at `:200-203` is deliberate and depends on
+  // this list being written down — the point of BACKLOG-2670 is that "nobody
+  // has said" and "a human recorded this, and why" look identical in a repo
+  // until someone writes the second one.
+  "marcus ord",
+  "priya raman",
 ]);
 
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));
@@ -322,9 +409,86 @@ function* walk(dir) {
   }
 }
 
-/** @returns {{file: string, line: number, rule: string, match: string}[]} */
+/** Longest line the matchers are run over. See `integrity.longLines`. */
+const MAX_LINE_LENGTH = 20000;
+
+/**
+ * Read a file into scannable text, recording everything that degraded the scan.
+ *
+ * Control bytes are replaced with a space, IN PLACE, one byte for one byte:
+ *
+ *   - Never with nothing. A deletion shifts every following character, so a
+ *     match's reported column — and, for a deleted LF, every following LINE
+ *     NUMBER — would point at the wrong place.
+ *   - Never TAB / LF / CR. The scan splits on LF, so replacing one would
+ *     renumber every subsequent finding in the file.
+ *
+ * Byte-level replacement is safe on multi-byte characters: a UTF-8 continuation
+ * byte is always >= 0x80, so nothing below 0x20 can be part of one.
+ *
+ * NUL is counted separately from the other C0 bytes because only NUL blinded
+ * anything: it is what the old `indexOf` skip keyed on, and what makes the
+ * search tools classify a file as binary. ESC and friends are context — no tool
+ * skips a file for them, `scripts/hooks-doctor.mjs` legitimately carries several
+ * in terminal colour sequences, and they are replaced only for tidiness.
+ *
+ * @returns {{text: string, nuls: number, otherControls: number, validUtf8: boolean}}
+ */
+function readForScan(file) {
+  const buf = readFileSync(file);
+  let nuls = 0;
+  let otherControls = 0;
+
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i];
+    if (b === 0x09 || b === 0x0a || b === 0x0d) continue;
+    if (b === 0x00) {
+      nuls++;
+      buf[i] = 0x20;
+    } else if (b < 0x20 || b === 0x7f) {
+      otherControls++;
+      buf[i] = 0x20;
+    }
+  }
+
+  // A NUL is valid UTF-8, so this pass is NOT a NUL detector and never was —
+  // that is the whole reason the two counters above exist alongside it.
+  let validUtf8 = true;
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch {
+    validUtf8 = false;
+  }
+
+  // Lossy on purpose, and only when the strict pass already said so: bad bytes
+  // become U+FFFD and the file is scanned anyway. Scanning a mangled file finds
+  // less than scanning a clean one, which is why the count above is reported.
+  return { text: buf.toString("utf8"), nuls, otherControls, validUtf8 };
+}
+
+/**
+ * @returns {{
+ *   findings: {file: string, line: number, rule: string, match: string}[],
+ *   integrity: {
+ *     filesRead: number,
+ *     withNul: string[],
+ *     withOtherControls: {file: string, count: number}[],
+ *     notValidUtf8: string[],
+ *     longLines: {file: string, line: number, length: number}[],
+ *     unreadable: {file: string, error: string}[],
+ *   },
+ * }}
+ */
 function scan() {
   const findings = [];
+  const integrity = {
+    filesRead: 0,
+    withNul: [],
+    withOtherControls: [],
+    notValidUtf8: [],
+    longLines: [],
+    unreadable: [],
+  };
 
   for (const root of SCAN_ROOTS) {
     const abs = join(REPO_ROOT, root);
@@ -336,18 +500,34 @@ function scan() {
 
     for (const file of walk(abs)) {
       const rel = relative(REPO_ROOT, file).split(sep).join("/");
-      let text;
+      let read;
       try {
-        text = readFileSync(file, "utf8");
-      } catch {
+        read = readForScan(file);
+      } catch (err) {
+        // Reported, never skipped. A file the guard could not read is a file it
+        // cannot vouch for, and a green run that quietly excluded one is exactly
+        // the thing BACKLOG-2657 exists to stop.
+        integrity.unreadable.push({ file: rel, error: err?.code ?? String(err) });
         continue;
       }
-      if (text.indexOf(String.fromCharCode(0)) !== -1) continue; // binary
+      integrity.filesRead++;
+      if (read.nuls > 0) integrity.withNul.push(rel);
+      if (read.otherControls > 0) {
+        integrity.withOtherControls.push({ file: rel, count: read.otherControls });
+      }
+      if (!read.validUtf8) integrity.notValidUtf8.push(rel);
 
-      const lines = text.split(/\r?\n/);
+      const lines = read.text.split(/\r?\n/);
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        if (line.length > 20000) continue; // minified / generated blob
+        if (line.length > MAX_LINE_LENGTH) {
+          // Kept as a performance bound — the phone matchers compare every match
+          // against every span already claimed on the line, which is quadratic —
+          // but it is now a REPORTED skip. One dropped line in a minified blob
+          // and one dropped line hiding an address look the same from here.
+          integrity.longLines.push({ file: rel, line: i + 1, length: line.length });
+          continue;
+        }
 
         for (const m of line.matchAll(CONSUMER_EMAIL_RE)) {
           const value = m[0];
@@ -403,7 +583,7 @@ function scan() {
     }
   }
 
-  return findings;
+  return { findings, integrity };
 }
 
 // --------------------------------------------------------------------------
@@ -463,15 +643,92 @@ function writeBaseline(findings) {
 }
 
 // --------------------------------------------------------------------------
+// Scan-integrity report (BACKLOG-2657)
+// --------------------------------------------------------------------------
+
+const SAMPLE_LIMIT = 10;
+
+function sample(items, render) {
+  const shown = items.slice(0, SAMPLE_LIMIT).map((x) => `      ${render(x)}`);
+  if (items.length > SAMPLE_LIMIT) {
+    shown.push(`      ...and ${items.length - SAMPLE_LIMIT} more`);
+  }
+  return shown;
+}
+
+/**
+ * Printed on EVERY path, pass and fail alike, and printed even when every count
+ * is zero — the zero line is the whole product. "0 with a NUL byte" is the
+ * statement that no file was dropped; its absence is indistinguishable from a
+ * file having been dropped, which is the state this guard shipped in until
+ * BACKLOG-2657.
+ */
+function integrityLines(integrity) {
+  const lines = [
+    `  scan integrity: ${integrity.filesRead} file(s) read; ` +
+      `${integrity.withNul.length} with a NUL byte; ` +
+      `${integrity.notValidUtf8.length} not valid UTF-8; ` +
+      `${integrity.longLines.length} line(s) over ${MAX_LINE_LENGTH} chars skipped; ` +
+      `${integrity.unreadable.length} unreadable.`,
+  ];
+
+  if (integrity.withNul.length > 0) {
+    lines.push(
+      `    NUL byte(s) replaced with a space before scanning — these files were`,
+      `    SKIPPED ENTIRELY before BACKLOG-2657 and are now read:`,
+      ...sample(integrity.withNul, (f) => f),
+    );
+  }
+  if (integrity.notValidUtf8.length > 0) {
+    lines.push(
+      `    Not valid UTF-8. Decoded lossily (bad bytes -> U+FFFD) and scanned`,
+      `    anyway, so a value spanning one of those bytes may not be found:`,
+      ...sample(integrity.notValidUtf8, (f) => f),
+    );
+  }
+  if (integrity.longLines.length > 0) {
+    lines.push(
+      `    Line(s) over ${MAX_LINE_LENGTH} chars, NOT scanned (performance bound):`,
+      ...sample(integrity.longLines, (l) => `${l.file}:${l.line} (${l.length} chars)`),
+    );
+  }
+  if (integrity.withOtherControls.length > 0) {
+    const total = integrity.withOtherControls.reduce((n, x) => n + x.count, 0);
+    lines.push(
+      `    ${integrity.withOtherControls.length} file(s) carry ${total} other C0 byte(s) ` +
+        `(ESC and friends),`,
+      `    replaced with a space before scanning. Context only — nothing is`,
+      `    skipped for those, and terminal colour sequences legitimately use them.`,
+    );
+  }
+
+  return lines;
+}
+
+// --------------------------------------------------------------------------
 // Main
 // --------------------------------------------------------------------------
 
-const args = new Set(process.argv.slice(2));
-const findings = scan();
+const { findings, integrity } = scan();
+
+// Before any mode branches, including --update-baseline: a baseline written over
+// a tree the guard could not fully read records the wrong thing, permanently.
+if (integrity.unreadable.length > 0) {
+  console.error("");
+  console.error("Fixture PII guard: ERROR — file(s) could not be read.");
+  console.error("");
+  console.error("A file the guard cannot read is a file it cannot vouch for. This");
+  console.error("repository is public, so that is an error and not a skip:");
+  console.error("");
+  for (const u of integrity.unreadable) console.error(`  ${u.file}  (${u.error})`);
+  console.error("");
+  process.exit(2);
+}
 
 if (args.has("--update-baseline")) {
   const count = writeBaseline(findings);
   console.log(`Wrote ${count} baseline entries to ${relative(REPO_ROOT, BASELINE_PATH)}`);
+  for (const line of integrityLines(integrity)) console.log(line);
   process.exit(0);
 }
 
@@ -480,6 +737,7 @@ if (args.has("--list")) {
     console.log(`${f.file}:${f.line}  [${f.rule}]  ${f.match}`);
   }
   console.log(`\n${findings.length} total occurrence(s).`);
+  for (const line of integrityLines(integrity)) console.log(line);
   process.exit(0);
 }
 
@@ -491,6 +749,7 @@ if (offenders.length === 0) {
     `Fixture PII guard: OK — ${findings.length} known occurrence(s), ` +
       `${baseline.size} baselined, 0 new.`,
   );
+  for (const line of integrityLines(integrity)) console.log(line);
   process.exit(0);
 }
 
@@ -546,6 +805,11 @@ console.error(
   "If — and only if — a human has confirmed the value is invented, record it with:",
 );
 console.error("  node scripts/ci/check-fixture-pii.mjs --update-baseline");
+console.error("");
+
+// Same counts as the pass path. A failing run is exactly when it matters most
+// whether the list above is everything or only what survived a silent skip.
+for (const line of integrityLines(integrity)) console.error(line);
 console.error("");
 
 process.exit(1);

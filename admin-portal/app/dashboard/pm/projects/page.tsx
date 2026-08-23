@@ -15,7 +15,13 @@ import { Button } from '@keepr/design-system';
 import { listProjects, createProject } from '@/lib/pm-queries';
 import { ProjectList } from '../components/ProjectList';
 import type { PmProject } from '@/lib/pm-types';
-import { sortProjects, type ProjectSortKey, type SortDirection } from './sortProjects';
+import {
+  sortProjects,
+  DEFAULT_PROJECT_SORT_KEY,
+  DEFAULT_PROJECT_SORT_DIR,
+  type ProjectSortKey,
+  type SortDirection,
+} from './sortProjects';
 
 type StatusFilter = 'all' | 'planned' | 'active' | 'on_hold' | 'completed' | 'archived';
 
@@ -24,8 +30,11 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
-  const [sortKey, setSortKey] = useState<ProjectSortKey>('name');
-  const [sortDir, setSortDir] = useState<SortDirection>('asc');
+  // BACKLOG-2706: the list opens newest-first (days open ascending). Nothing is
+  // persisted, so these are the defaults on every visit; both controls below
+  // still offer every key and both directions.
+  const [sortKey, setSortKey] = useState<ProjectSortKey>(DEFAULT_PROJECT_SORT_KEY);
+  const [sortDir, setSortDir] = useState<SortDirection>(DEFAULT_PROJECT_SORT_DIR);
 
   const loadProjects = useCallback(async () => {
     setLoading(true);

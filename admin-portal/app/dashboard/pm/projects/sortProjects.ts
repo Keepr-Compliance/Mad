@@ -18,6 +18,21 @@ export type ProjectSortKey = 'name' | 'days_open' | 'status' | 'priority';
 export type SortDirection = 'asc' | 'desc';
 
 /**
+ * Default sort for the projects list (BACKLOG-2706).
+ *
+ * "Days open" is measured from `created_at` (see `daysOpenMs` below), and
+ * ASCENDING days-open puts the FEWEST days open first -- i.e. the most
+ * recently created project on top. That is the founder's "sorted by days open
+ * with the newest first".
+ *
+ * This is the DEFAULT only. The sort <select> and the direction toggle keep
+ * every option they had, and the list persists no sort preference, so the
+ * user's choice always wins for the rest of the session.
+ */
+export const DEFAULT_PROJECT_SORT_KEY: ProjectSortKey = 'days_open';
+export const DEFAULT_PROJECT_SORT_DIR: SortDirection = 'asc';
+
+/**
  * Lifecycle rank for project status. Lower = earlier in lifecycle.
  * Mainly meaningful on the "All" tab (a single-status tab is already uniform),
  * but harmless everywhere.

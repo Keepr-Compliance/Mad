@@ -245,3 +245,73 @@ describe("BACKLOG-2579: emails toggle keeps its left alignment", () => {
     expect(row).not.toHaveClass("relative");
   });
 });
+
+/**
+ * BACKLOG-2791 (founder, 2026-08-22) — Restore on a grouped card restores EVERY
+ * email the card represents.
+ *
+ * The card is the only thing the user can see: a "(2 emails)" card folds the
+ * second email out of sight, so clicking its single Restore button and getting
+ * one email back — with the leftover reappearing as a new card — reads as the
+ * app losing track of things. Before per-email review this was nearly
+ * unreachable (removals were whole threads, so a group usually held one
+ * ignored_id); per-email rejection made it easy to hit.
+ *
+ * Option B: restore the whole group. Option C (ungrouping Show removed so
+ * individually-removed emails list individually) was deliberately deferred to a
+ * post-release UX item — it reverses BACKLOG-1766's grouping decision on a shell
+ * the Texts tab shares.
+ */
+describe("RemovedEmailsSection — grouped restore (BACKLOG-2791)", () => {
+  const transactionId = "txn-123";
+
+  it("passes ONE representative — the restore path expands to siblings itself", async () => {
+    // Looping per member here re-restored each sibling once per member:
+    // measured, a 3-email thread reported "9 emails restored". The expansion
+    // belongs in the handler, which is where the review-rejection short-circuit
+    // was fixed.
+    (window.api.transactions.getRemovedEmails as jest.Mock).mockResolvedValue({
+      success: true,
+      removedEmails: [
+        makeRemovedEmail({ ignored_id: "ig-A", email_id: "e-A", thread_id: "thread-xyz", sent_at: "2024-01-01T08:00:00Z" }),
+        makeRemovedEmail({ ignored_id: "ig-B", email_id: "e-B", thread_id: "thread-xyz", sent_at: "2024-01-02T09:00:00Z" }),
+      ],
+    });
+    (window.api.transactions.restoreRemovedEmail as jest.Mock).mockResolvedValue({
+      success: true,
+      restoredCount: 2,
+    });
+    const onShowSuccess = jest.fn();
+
+    render(
+      <RemovedEmailsSection
+        transactionId={transactionId}
+        onShowSuccess={onShowSuccess}
+        onShowError={jest.fn()}
+      />
+    );
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("show-removed-emails-toggle"));
+    });
+    await waitFor(() => expect(screen.getByTestId("removed-emails-section")).toBeInTheDocument());
+
+    expect(screen.getAllByTestId("removed-email-card")).toHaveLength(1);
+
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("restore-email-button"));
+    });
+
+    const calls = (window.api.transactions.restoreRemovedEmail as jest.Mock).mock.calls;
+    expect(calls).toHaveLength(1);
+    // The representative is the group's FIRST member, and groups sort
+    // newest-first by sent_at — so it is ig-B, not the one inserted first.
+    expect(calls[0][0]).toBe("ig-B");
+    expect(calls[0][1]).toBe("e-B");
+
+    // The toast reports what the handler actually restored — both emails.
+    await waitFor(() => expect(onShowSuccess).toHaveBeenCalledWith("2 emails restored"));
+
+    // And no leftover card reappears.
+    await waitFor(() => expect(screen.queryAllByTestId("removed-email-card")).toHaveLength(0));
+  });
+});

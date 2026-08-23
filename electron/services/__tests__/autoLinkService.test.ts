@@ -595,7 +595,7 @@ describe("autoLinkService", () => {
 
         // BACKLOG-2338: the single-candidate confidence bypass is REMOVED. This
         // deal HAS an address ("3414 Sapp Road Southwest") and the email never
-        // names it, so even though the contact is on only ONE non-archived deal
+        // names it, so even though the contact is on only ONE live deal
         // the email is classified address_missing (Needs review), NOT
         // address_found. It still attaches (nothing is dropped) — it just surfaces
         // for the user to confirm or remove.
@@ -658,7 +658,7 @@ describe("autoLinkService", () => {
       it("multi-deal: a shared contact's no-address email surfaces on ALL their transactions (address_missing on each) — guards exclusivity removal (BACKLOG-2338)", async () => {
         // Regression guard for the DROPPED cross-transaction exclusivity backstop
         // (a smart, address-aware variant is deferred to BACKLOG-2339). A contact on
-        // TWO non-archived deals, each with a DISTINCT address, sends an email that
+        // TWO live deals, each with a DISTINCT address, sends an email that
         // names NEITHER street. It must surface as Needs review (address_missing) on
         // BOTH deals — never claimed by only one. If blanket exclusivity ever creeps
         // back, the second deal would silently get 0 and this test goes red.
@@ -669,7 +669,7 @@ describe("autoLinkService", () => {
 
         mockDbGet.mockImplementation((sql: string, params?: unknown[]) => {
           if (sql.includes("FROM contacts")) return { id: mockContactId };
-          // Multi-candidate: the contact is on TWO non-archived transactions.
+          // Multi-candidate: the contact is on TWO live transactions.
           if (sql.includes("COUNT(DISTINCT tc.transaction_id)")) return { cnt: 2 };
           if (sql.includes("FROM transactions")) {
             const txnId = params?.[0];

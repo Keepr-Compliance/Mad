@@ -27,7 +27,7 @@ import logService from "../logService";
 import { getContactNames } from "../contactsService";
 import { FIRST_SCAN_LOOKBACK_MONTHS } from "../../constants";
 import { createCommunicationReference } from "../messageMatchingService";
-import { autoLinkCommunicationsForContact } from "../autoLinkService";
+import { autoLinkCommunicationsForContact, type AutoLinkResult } from "../autoLinkService";
 import emailSyncService from "../emailSyncService";
 import { dbGet, dbAll } from "../db/core/dbConnection";
 import { isTransactionFrozen } from "../transactionFreezePolicy";
@@ -1190,17 +1190,26 @@ class TransactionService {
       const transactionId = transaction.id;
 
       if (contact_assignments && contact_assignments.length > 0) {
+        // BACKLOG-2791 (founder ruling, 2026-08-22): develop's behaviour on
+        // creation is restored. SR review blocker 6 had redirected this to queue
+        // EVERYTHING, which is why a brand-new deal announced "0 linked
+        // successfully" — on the most common entry point of all. Confident
+        // emails and every text link here as they always have; only the
+        // address-missing half waits for approval.
         let totalEmailsLinked = 0;
         let totalMessagesLinked = 0;
+        let totalQueuedForReview = 0;
 
         for (const assignment of contact_assignments) {
           try {
             const autoLinkResult = await autoLinkCommunicationsForContact({
               contactId: assignment.contact_id,
               transactionId,
+              queueAmbiguousInsteadOfLinking: true,
             });
             totalEmailsLinked += autoLinkResult.emailsLinked;
             totalMessagesLinked += autoLinkResult.messagesLinked;
+            totalQueuedForReview += autoLinkResult.queuedForReview ?? 0;
           } catch (error) {
             await logService.warn(
               `Auto-link failed for contact ${assignment.contact_id}: ${error instanceof Error ? error.message : "Unknown"}`,
@@ -1209,9 +1218,9 @@ class TransactionService {
           }
         }
 
-        if (totalEmailsLinked > 0 || totalMessagesLinked > 0) {
+        if (totalEmailsLinked > 0 || totalMessagesLinked > 0 || totalQueuedForReview > 0) {
           await logService.info(
-            `Auto-linked ${totalEmailsLinked} emails and ${totalMessagesLinked} messages for new transaction`,
+            `Linked ${totalEmailsLinked} emails and ${totalMessagesLinked} messages, queued ${totalQueuedForReview} for review, on the new transaction`,
             "TransactionService.createAuditedTransaction",
             { transactionId, contactCount: contact_assignments.length },
           );
@@ -1296,6 +1305,11 @@ class TransactionService {
             created_at: transaction.created_at,
             closed_at: transaction.closed_at,
           },
+          // BACKLOG-2791 (T2): assigning a contact — including CONFIRMING a
+          // suggested match, which the item names as an explicit trigger — is a
+          // contact change on this deal. Discovery queues it for review; it does
+          // not link it silently.
+          queueForReviewInsteadOfLinking: true,
         });
 
         return {
@@ -1304,16 +1318,36 @@ class TransactionService {
         };
       }
 
-      // Fallback: if transaction not found, still try local-only auto-link
-      const autoLinkResult = await autoLinkCommunicationsForContact({
-        contactId,
-        transactionId,
-      });
-
-      return {
-        success: true,
-        autoLink: autoLinkResult,
+      // Fallback: transaction row not found by the lookup above. BACKLOG-2791 —
+      // this residual path used to auto-link, inside the very function the
+      // redirect was applied to, so the redirect could be bypassed by whatever
+      // made getTransactionById return null. It queues like every other branch.
+      // Discovery failing must never fail the ASSIGNMENT the user asked for —
+      // the contact is already assigned by this point, and the next open sweeps
+      // again anyway. Warn-log and return a well-formed result.
+      // BACKLOG-2791: develop's classification with the ambiguous half queued.
+      // Discovery failing must never fail the ASSIGNMENT the user asked for.
+      let autoLink: AutoLinkResult = {
+        emailsLinked: 0,
+        messagesLinked: 0,
+        alreadyLinked: 0,
+        errors: 0,
+        queuedForReview: 0,
       };
+      try {
+        autoLink = await autoLinkCommunicationsForContact({
+          contactId,
+          transactionId,
+          queueAmbiguousInsteadOfLinking: true,
+        });
+      } catch (error) {
+        await logService.warn(
+          `[BACKLOG-2791] discovery failed after contact assignment: ${error instanceof Error ? error.message : "Unknown"}`,
+          "TransactionService.assignContactToTransaction",
+        );
+      }
+
+      return { success: true, autoLink };
     } catch (error) {
       await logService.warn(
         `Auto-link failed after contact assignment: ${error instanceof Error ? error.message : "Unknown"}`,
@@ -1361,6 +1395,22 @@ class TransactionService {
   ): Promise<void> {
     // BACKLOG-2150 — party add AND remove are allowed after first export; no
     // freeze guard here (identity anchors are enforced at the db layer).
+
+    /**
+     * NO CONTACT RULE IS ENFORCED HERE (BACKLOG-2683, founder decision 13 Aug).
+     *
+     * A "must not remove the last Client" guard briefly lived at this line. The
+     * founder dropped the "at least one Client" requirement entirely — a deal
+     * may be saved with nobody holding the Client role — so there is no last
+     * Client to protect and the guard went out with the rule.
+     *
+     * This seam is still the right home for a main-process contact rule: it
+     * covers every caller of this service rather than the one IPC channel. The
+     * role-presence rule BACKLOG-2680 enforces in the renderer has no
+     * main-process backing on this route, while the wizard route does
+     * (`electron/utils/validation.ts`). Filed as a follow-up on BACKLOG-2680
+     * rather than added here, where it would be unreviewed scope.
+     */
     return await databaseService.batchUpdateContactAssignments(
       transactionId,
       operations,

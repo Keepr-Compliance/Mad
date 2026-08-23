@@ -8,19 +8,36 @@ import type { IpcMainInvokeEvent } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import logService from "../services/logService";
 import databaseService from "../services/databaseService";
-import supabaseService from "../services/supabaseService";
 import macOSMessagesImportService from "../services/macOSMessagesImportService";
 import * as externalContactDb from "../services/db/externalContactDbService";
 import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
-import { computeEarliestAuditStart } from "../utils/emailDateRange";
-import { computeEffectiveImportWindow } from "../services/macOSMessagesImportService/importHelpers";
+import {
+  resolveLookbackMonths,
+  DEFAULT_LOOKBACK_MONTHS,
+} from "../services/macOSMessagesImportService/importHelpers";
+// BACKLOG-2772: the ONE assembler + resolver every import entry point calls.
+// BACKLOG-2749: `computeEffectiveImportWindow`, `computeEarliestAuditStart` and
+// `readNonRejectedTransactions` are gone from this file — the effective-window
+// label reads the plan now, so the last copy of that assembly is DELETED here
+// rather than left unused.
+import {
+  resolveImportPlanForUser,
+  loadStoredImportFilters,
+} from "../services/importPlanInputs";
+import type { StoredImportFilters } from "../services/importPlan";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
   MacOSImportResult,
   ImportProgressCallback,
-  MessageImportFilters,
 } from "../services/macOSMessagesImportService";
 import type { EffectiveImportWindow } from "../services/macOSMessagesImportService/importHelpers";
+// BACKLOG-2743: shared selection-time estimate shape (attachment bytes + disk verdict).
+import type {
+  MessageImportCountResult,
+  RecommendedImportRange,
+} from "../types/ipc/window-api-messages";
+// BACKLOG-2748: ONE spelling of the cancel channel, shared with the preload bridge.
+import { MESSAGES_IMPORT_CANCEL_CHANNEL } from "../types/ipc/messageChannels";
 
 /**
  * Attachment info with base64 data for IPC transfer (TASK-1012)
@@ -43,6 +60,70 @@ let importStartTime: number | null = null;
 /**
  * Register message import IPC handlers
  */
+
+/**
+ * BACKLOG-2749: the dialog's recommendation, computed WITH the estimate.
+ *
+ * The founder saw the cost of computing it later: "the Change the time range
+ * button takes a sec to load". The mechanism was already right — each candidate
+ * range is ASKED for its own count, never scaled proportionally from another's,
+ * because messages are not spread evenly across months and a proportional guess
+ * names a range that does not fit. It was simply happening after the click.
+ *
+ * So the same work moves ahead of the click, and only where it is needed:
+ *
+ *   - Nothing runs unless the cap is actually exceeded. A selection that fits
+ *     pays nothing, which is every user who never sees this dialog.
+ *   - Largest-first with an early return, so the common case is one extra
+ *     count rather than six.
+ *   - A candidate that is not NARROWER than the current selection is skipped:
+ *     counts grow with range length, so a longer range cannot rescue a
+ *     selection that is already over the cap. This is what stops an over-cap
+ *     "Last 3 months" from querying all six presets to learn nothing.
+ *
+ * Each candidate goes through `resolveImportPlanForUser` exactly as the
+ * selection did, so a candidate's count is the count of the plan that would
+ * really run for it — audit spans, Cap' and all.
+ *
+ * @returns the largest narrower range that fits, or `null` when none does.
+ *   `null` is an ANSWER, not a failure: it is the founder's hiding rule (when
+ *   deal audit periods force the window open, nothing shorter helps).
+ */
+const RECOMMENDATION_PRESETS = [24, 18, 12, 9, 6, 3] as const;
+
+async function resolveRecommendedRange(
+  userId: string,
+  selection: StoredImportFilters | undefined,
+  cap: number | null,
+  windowCount: number | undefined
+): Promise<RecommendedImportRange | null> {
+  if (cap === null || windowCount === undefined || windowCount <= cap) {
+    return null;
+  }
+
+  for (const months of RECOMMENDATION_PRESETS) {
+    const candidatePlan = await resolveImportPlanForUser({
+      userId,
+      mode: "delta",
+      selectionOverride: { ...(selection ?? {}), lookbackMonths: months },
+    });
+    const counts =
+      await macOSMessagesImportService.getAvailableMessageCount(candidatePlan);
+    if (!counts.success) continue;
+
+    const candidateCount = counts.windowCount ?? counts.count;
+    if (candidateCount === undefined) continue;
+    // Not narrower than what the user already has — a longer range cannot
+    // rescue an over-cap selection, and offering it would be nonsense.
+    if (candidateCount >= windowCount) continue;
+    if (candidateCount <= cap) {
+      return { lookbackMonths: months, windowCount: candidateCount };
+    }
+  }
+
+  return null;
+}
+
 export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
   // Prevent double registration
   if (handlersRegistered) {
@@ -98,81 +179,35 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         }
       }
 
-      // TASK-1952: Load message import filter preferences
-      // Defaults: 3 months lookback, 50K max messages (matches UI defaults)
-      const DEFAULT_LOOKBACK_MONTHS = 3;
-      const DEFAULT_MAX_MESSAGES = 50000;
-      let importFilters: MessageImportFilters = {
-        lookbackMonths: DEFAULT_LOOKBACK_MONTHS,
-        maxMessages: DEFAULT_MAX_MESSAGES,
-      };
-      try {
-        const preferences = await supabaseService.getPreferences(validUserId);
-        const messageImportPrefs = preferences?.messageImport;
-        if (messageImportPrefs?.filters) {
-          importFilters = {
-            lookbackMonths: messageImportPrefs.filters.lookbackMonths ?? DEFAULT_LOOKBACK_MONTHS,
-            maxMessages: messageImportPrefs.filters.maxMessages ?? DEFAULT_MAX_MESSAGES,
-          };
-        }
-      } catch (prefsError) {
-        // Use defaults if preferences unavailable
-        logService.warn(
-          "Failed to load import filter preferences, using defaults",
-          "MessageImportHandlers"
-        );
-        Sentry.captureException(prefsError, {
-          tags: { sync_type: "message_import" },
-          level: "warning",
-          extra: {
-            handler: "messages:import-macos",
-            operation: "load-preferences",
-            error_message: prefsError instanceof Error ? prefsError.message : String(prefsError),
-          },
-        });
-      }
-
-      // BACKLOG-2276: Drive the import lower bound from the transaction audit-period
-      // start (the SAME source of truth the email fetch uses). Without this, a wide
-      // audit period is silently truncated by lookbackMonths and older messages are
-      // never imported. computeImportCutoffNano takes the EARLIER of this and the
-      // lookback window, so this only ever WIDENS the window, never narrows it.
+      // BACKLOG-2772: ONE resolver decides what this run fetches.
       //
-      // BACKLOG-2308: the floor spans pending/active/closed (all carry an audit
-      // obligation) and EXCLUDES rejected (dead deals, no audit needed). The filter
-      // is `status != 'rejected'` — the prior `!= 'archived'` was a dead no-op
-      // ('archived' is not a valid status; the CHECK allows only
-      // pending/active/closed/rejected), so rejected deals were wrongly pinning it.
-      try {
-        const db = databaseService.getRawDatabase();
-        const txnRows = db
-          .prepare(
-            `SELECT started_at, created_at, closed_at
-             FROM transactions
-             WHERE user_id = ? AND status != 'rejected'`
-          )
-          .all(validUserId) as Array<{
-            started_at: string | null;
-            created_at: string | null;
-            closed_at: string | null;
-          }>;
-        const auditStart = computeEarliestAuditStart(txnRows);
-        if (auditStart) {
-          importFilters.auditPeriodStart = auditStart.toISOString();
-        }
-      } catch (auditError) {
-        // Non-fatal: fall back to lookback-only behavior.
-        logService.warn(
-          "Failed to compute audit-period start for message import, using lookback only",
-          "MessageImportHandlers",
-          { error: auditError instanceof Error ? auditError.message : String(auditError) }
-        );
-      }
-
+      // Everything that used to happen here — loading the preference object,
+      // resolving `lookbackMonths`, collapsing `maxMessages` with `??`
+      // (BACKLOG-2733), running a non-rejected-transaction query and folding the
+      // earliest audit start into an `auditPeriodStart` field — is DELETED, not
+      // moved behind a flag. It lives in `resolveImportPlanForUser`, which the
+      // estimate channel and the transaction trigger call as well, so the three
+      // can no longer reach different answers from the same stored state.
+      //
+      // D2': the button chooses the processing MODE and nothing else. Both modes
+      // cover the same window — "force re-import will always cover the whole
+      // window... it's more about the processing of msgs" (founder, 2026-08-20).
+      const plan = await resolveImportPlanForUser({
+        userId: validUserId,
+        mode: forceReimport ? "reprocess" : "delta",
+      });
       logService.info(
         `Starting macOS Messages import for user`,
         "MessageImportHandlers",
-        { userId: validUserId, forceReimport, filters: importFilters }
+        {
+          userId: validUserId,
+          mode: plan.mode,
+          fetchStartISO: plan.fetchStartISO,
+          effectiveCap: plan.effectiveCap,
+          protectedSpans: plan.protectedSpans.length,
+          fetchAttachments: plan.fetchAttachments,
+          overrides: plan.overrides.map((o) => o.kind),
+        }
       );
 
       Sentry.addBreadcrumb({
@@ -183,9 +218,9 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
           syncType: 'messages',
           platform: 'macos',
           operation: 'messages-import',
-          forceReimport,
-          lookbackMonths: importFilters.lookbackMonths,
-          maxMessages: importFilters.maxMessages,
+          mode: plan.mode,
+          effectiveCap: plan.effectiveCap,
+          protectedSpanCount: plan.protectedSpans.length,
         },
       });
 
@@ -207,8 +242,7 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         const result = await macOSMessagesImportService.importMessages(
           validUserId,
           onProgress,
-          forceReimport,
-          importFilters
+          plan
         );
 
         if (result.success) {
@@ -381,16 +415,66 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
     "messages:get-import-count",
     async (
       _event: IpcMainInvokeEvent,
-      filters?: MessageImportFilters
-    ): Promise<{ success: boolean; count?: number; filteredCount?: number; error?: string }> => {
+      userId: string,
+      selection?: StoredImportFilters
+    ): Promise<MessageImportCountResult> => {
       logService.info(
         `Getting macOS Messages count`,
         "MessageImportHandlers",
-        { filters }
+        { selection }
       );
 
       try {
-        return await macOSMessagesImportService.getAvailableMessageCount(filters);
+        // BACKLOG-2772/2760: the estimate resolves the SAME plan the button
+        // will run, so the number on the screen and the number the import
+        // enforces are the same decision object rather than two assemblies
+        // racing each other.
+        //
+        // `selection` is the panel's current, not-yet-saved dropdown state,
+        // layered over the stored preference by the assembler. That is a
+        // legitimate per-entry-point difference and it lives in the REQUEST —
+        // it is not a second filter. Mode is "delta": an estimate describes
+        // what a fetch would cover, and under D2' both modes cover the same
+        // window, so the estimate is mode-independent by construction.
+        const plan = await resolveImportPlanForUser({
+          userId,
+          mode: "delta",
+          selectionOverride: selection ?? null,
+        });
+        const counts =
+          await macOSMessagesImportService.getAvailableMessageCount(plan);
+
+        // BACKLOG-2749: carry the PLAN's own facts back with its counts.
+        //
+        // The one pre-import dialog states the cap, the coverage and the
+        // deal-driven window stretch. Every one of those is a decision this
+        // `plan` object already made; sending them means the dialog reads them
+        // instead of reconstructing them from the counts, which is what the
+        // founder saw fail — a header derived from the stored preference saying
+        // "up to 50,000" above a line derived from the counts saying 62,823.
+        //
+        // Spread here rather than inside `getAvailableMessageCount`: that
+        // function's job is to COUNT what a plan admits, and it takes the plan
+        // as an input. Having it echo its own input back would make the service
+        // the wire's assembler, which is the shape BACKLOG-2772 removed.
+        // BACKLOG-2749: the recommendation travels WITH the counts, so the
+        // dialog renders complete the instant it opens.
+        const recommendedRange = await resolveRecommendedRange(
+          userId,
+          selection,
+          plan.effectiveCap,
+          counts.windowCount ?? counts.count
+        );
+
+        return {
+          ...counts,
+          plan: {
+            effectiveCap: plan.effectiveCap,
+            fetchStartISO: plan.fetchStartISO,
+            overrides: plan.overrides,
+          },
+          recommendedRange,
+        };
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : "Unknown error";
@@ -537,8 +621,12 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
    * Cancel the current import operation (TASK-1710)
    * IPC: messages:import-cancel
    * Uses ipcMain.on (not handle) since this is a one-way event
+   *
+   * BACKLOG-2748: from TASK-1710 until now nothing sent on this channel — the
+   * handler and the service's cancellation flag were both live, and the import
+   * progress UI had no control that reached them.
    */
-  ipcMain.on("messages:import-cancel", () => {
+  ipcMain.on(MESSAGES_IMPORT_CANCEL_CHANNEL, () => {
     logService.info("Import cancel requested via IPC", "MessageImportHandlers");
     macOSMessagesImportService.requestCancellation();
   });
@@ -607,9 +695,40 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
    * import lower bound. Post-BACKLOG-2276 that bound is the EARLIER of the user's
    * lookback preference and the earliest transaction audit-period start (the pref
    * is a FLOOR the audit window can widen past). This handler is READ-ONLY and
-   * mirrors the import handler's preference + audit-start computation; it never
-   * changes import behavior. It degrades to the lookback preference on any read
-   * failure so the label always renders.
+   * never changes import behavior.
+   *
+   * BACKLOG-2749 — this handler now READS the plan instead of mirroring it.
+   *
+   * It was the last self-assembling reader on the import side: BACKLOG-2772
+   * routed its transaction query through `readNonRejectedTransactions` but left
+   * it computing its own window from `computeEffectiveImportWindow`, which the
+   * SR review recorded as the fourth hand copy (accepted then as display-only
+   * and value-identical). "Value-identical today" is the exact standing this
+   * item exists to remove: the label, the estimate, the dialog and the run must
+   * be one decision, not four that happen to agree.
+   *
+   * The mapping is exact, not approximate:
+   *   - `effectiveCutoffISO` IS `plan.fetchStartISO`. Both come from
+   *     `computeImportCutoffNano`, which is where the arithmetic has always
+   *     lived — the duplicate was the ASSEMBLY around it.
+   *   - `source` is "audit-period" exactly when the plan recorded a
+   *     `window-extended-by-deals` override. `computeEffectiveImportWindow`
+   *     said "audit-period" only when the audit start was STRICTLY earlier than
+   *     the lookback cutoff; the resolver pushes that override under the
+   *     identical strict comparison (`cutoffNano < selectionOnlyCutoff`). The
+   *     "All time" branch agrees too: an explicit `null` lookback short-circuits
+   *     to an unbounded window with no override, which is the old
+   *     `{ effectiveCutoffISO: null, source: "lookback-pref" }`.
+   *
+   * `lookbackMonths` is still the user's own preference — a fact about the
+   * SETTING rather than about the window — so it is read here. That is a second
+   * preferences read for a display-only handler, and a deliberate trade: the
+   * alternative is widening the resolver's return shape to carry an input back
+   * out, which is how assemblers grow.
+   *
+   * Degradation is unchanged in effect: `resolveImportPlanForUser` swallows a
+   * failed preferences read (defaults) and a failed deal read (selection alone,
+   * never widening on a guess), so the label always renders.
    */
   ipcMain.handle(
     "messages:get-effective-import-window",
@@ -617,18 +736,14 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
       _event: IpcMainInvokeEvent,
       userId: string
     ): Promise<EffectiveImportWindow & { success: boolean }> => {
-      // Matches the import handler's default when no preference is stored.
-      const DEFAULT_LOOKBACK_MONTHS = 3;
-
-      // 1) Resolve the lookback preference. Mirror the import handler exactly
-      //    (`?? DEFAULT`) so the displayed window equals the imported window.
+      // The user's stated preference, for the label's own field. Read through
+      // the shared loader + the shared resolver, off the shared default —
+      // BACKLOG-2561 was a second local `?? DEFAULT_LOOKBACK_MONTHS` here that
+      // collapsed an explicit "All time" to 3 months.
       let lookbackMonths: number | null = DEFAULT_LOOKBACK_MONTHS;
       try {
-        const preferences = await supabaseService.getPreferences(userId);
-        const filters = preferences?.messageImport?.filters;
-        if (filters) {
-          lookbackMonths = filters.lookbackMonths ?? DEFAULT_LOOKBACK_MONTHS;
-        }
+        const stored = await loadStoredImportFilters(userId);
+        lookbackMonths = resolveLookbackMonths(stored, DEFAULT_LOOKBACK_MONTHS);
       } catch (prefsError) {
         logService.warn(
           "Failed to load lookback preference for effective import window, using default",
@@ -637,39 +752,19 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         );
       }
 
-      // 2) Compute the earliest audit-period start across non-rejected
-      //    transactions (same source of truth the import uses). Degrade to
-      //    null (lookback-only) when the DB is unavailable.
-      //    BACKLOG-2308: pending/active/closed drive the floor; rejected (dead
-      //    deals) are excluded. Must match the import handler + messagesSyncTrigger.
-      let auditStartISO: string | null = null;
-      try {
-        if (databaseService.isInitialized()) {
-          const db = databaseService.getRawDatabase();
-          const txnRows = db
-            .prepare(
-              `SELECT started_at, created_at, closed_at
-                 FROM transactions
-                WHERE user_id = ? AND status != 'rejected'`
-            )
-            .all(userId) as Array<{
-              started_at: string | null;
-              created_at: string | null;
-              closed_at: string | null;
-            }>;
-          const auditStart = computeEarliestAuditStart(txnRows);
-          auditStartISO = auditStart ? auditStart.toISOString() : null;
-        }
-      } catch (auditError) {
-        logService.warn(
-          "Failed to compute audit-period start for effective import window, using lookback only",
-          "MessageImportHandlers",
-          { error: auditError instanceof Error ? auditError.message : String(auditError) }
-        );
-      }
+      // The window itself — resolved, not mirrored. `mode` is "delta" for the
+      // same reason the estimate uses it: under D2' both modes cover the same
+      // window, so a label is mode-independent by construction.
+      const plan = await resolveImportPlanForUser({ userId, mode: "delta" });
 
-      const window = computeEffectiveImportWindow({ lookbackMonths, auditStartISO });
-      return { success: true, ...window };
+      return {
+        success: true,
+        effectiveCutoffISO: plan.fetchStartISO,
+        source: plan.overrides.some((o) => o.kind === "window-extended-by-deals")
+          ? "audit-period"
+          : "lookback-pref",
+        lookbackMonths,
+      };
     }
   );
 

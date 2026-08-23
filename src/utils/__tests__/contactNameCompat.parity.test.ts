@@ -83,7 +83,7 @@ describe("the electron and renderer copies of the name rule agree", () => {
   });
 
   it("normalizes identically", () => {
-    for (const raw of ["Jane S.", "  Margaret   Chen ", "O'Neill, Pat", "", "PAUL DORIAN"]) {
+    for (const raw of ["Jane S.", "  Margaret   Chen ", "O'Neill, Pat", "", "CASEY LANE"]) {
       expect(rendererNormalize(raw)).toBe(electronNormalize(raw));
     }
   });

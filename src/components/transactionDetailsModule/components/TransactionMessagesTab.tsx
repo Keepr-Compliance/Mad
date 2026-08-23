@@ -97,6 +97,15 @@ interface TransactionMessagesTabProps {
   highlightTarget?: HighlightTarget | null;
   /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
   onHighlightConsumed?: () => void;
+  /** BACKLOG-2791: the shared Needs review section, rendered under the Select row. */
+  reviewSection?: React.ReactNode;
+  /** BACKLOG-2791: whether the review section has anything — suppresses the
+   *  "nothing linked" placeholder when items are waiting. */
+  hasReviewItems?: boolean;
+  /** BACKLOG-2791: bumped on every review-state change so "Show removed"
+   *  re-fetches — a trash on a review card removes the item, and the removed
+   *  list only ever fetched on mount. */
+  reviewRefreshKey?: number;
 }
 
 /**
@@ -127,6 +136,9 @@ export function TransactionMessagesTab({
   hasContacts = false,
   highlightTarget,
   onHighlightConsumed,
+  reviewSection = null,
+  hasReviewItems = false,
+  reviewRefreshKey = 0,
 }: TransactionMessagesTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running.
   // BACKLOG-2294: a BACKGROUND messages sync (audit-date-change / create auto-import, the
@@ -764,8 +776,11 @@ export function TransactionMessagesTab({
     );
   }
 
-  // Empty state
-  if (messages.length === 0) {
+  // Empty state.
+  //
+  // BACKLOG-2791 (founder, 2026-08-22): "no text messages linked" must mean
+  // genuinely nothing — no linked messages AND nothing waiting in Needs review.
+  if (messages.length === 0 && !hasReviewItems) {
     return (
       <div>
         <div className="bg-gray-50 rounded-lg p-6 text-center">
@@ -850,7 +865,7 @@ export function TransactionMessagesTab({
             onContactNamesResolved={handleContactNamesResolved}
             isOpen={removedSectionOpen}
             onOpenChange={setRemovedSectionOpen}
-            refreshKey={removedSectionRefreshKey}
+            refreshKey={removedSectionRefreshKey + reviewRefreshKey}
           />
         )}
 
@@ -998,6 +1013,23 @@ export function TransactionMessagesTab({
         )}
       </div>
 
+      {/* BACKLOG-2791: Needs review, under the Select row — the same position
+          the Emails tab uses. develop has no needs-review section on this tab
+          at all (texts never had the state), so this is new, matched to the
+          Emails tab rather than invented separately.
+
+          contactNames is injected HERE rather than passed down from
+          TransactionDetails, because this tab is where it is resolved (the
+          resolveHandles effect above). Without it MessageThreadCard falls back
+          to `contactName || phoneNumber` and every sender renders as a raw
+          number — the names regression the founder reported. */}
+      {React.isValidElement(reviewSection)
+        ? React.cloneElement(
+            reviewSection as React.ReactElement<{ contactNames?: Record<string, string> }>,
+            { contactNames },
+          )
+        : reviewSection}
+
       {/* Thread list */}
       <div className="space-y-4" data-testid="message-thread-list">
         {filteredThreads.map(([threadId, threadMessages, originalThreadIds]) => {
@@ -1072,7 +1104,7 @@ export function TransactionMessagesTab({
           onContactNamesResolved={handleContactNamesResolved}
           isOpen={removedSectionOpen}
           onOpenChange={setRemovedSectionOpen}
-          refreshKey={removedSectionRefreshKey}
+          refreshKey={removedSectionRefreshKey + reviewRefreshKey}
         />
       )}
 

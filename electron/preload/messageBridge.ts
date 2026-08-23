@@ -4,6 +4,19 @@
  */
 
 import { ipcRenderer } from "electron";
+// BACKLOG-2743: shared estimate shapes — one definition for preload, renderer,
+// and the window.api surface, so the space verdict cannot drift between them.
+import type {
+  MessageImportCountFilters,
+  MessageImportCountResult,
+  BackgroundImportSignal,
+} from "../types/ipc/window-api-messages";
+// BACKLOG-2748: ONE spelling of the cancel channel, shared with the handler.
+import {
+  MESSAGES_IMPORT_CANCEL_CHANNEL,
+  MESSAGES_BACKGROUND_IMPORT_STARTED_CHANNEL,
+  MESSAGES_BACKGROUND_IMPORT_FINISHED_CHANNEL,
+} from "../types/ipc/messageChannels";
 
 /**
  * Progress event from macOS message import (TASK-1710)
@@ -71,11 +84,20 @@ export const messageBridge = {
     ipcRenderer.invoke("messages:import-macos", userId, forceReimport),
 
   /**
-   * Get count of messages available for import from macOS Messages
-   * @returns Count of available messages
+   * Get the count and size estimate for the messages an import would cover.
+   *
+   * BACKLOG-2772: takes the user id and the panel's CURRENT, not-yet-saved
+   * selection. Main resolves the plan — the same plan the Import button will
+   * run — so the estimate on screen and the fetch that follows it are one
+   * decision rather than two assemblies racing (BACKLOG-2760).
+   *
+   * @returns Count of available messages plus the attachment/disk verdict
    */
-  getImportCount: (filters?: { lookbackMonths?: number | null; maxMessages?: number | null }): Promise<{ success: boolean; count?: number; filteredCount?: number; error?: string }> =>
-    ipcRenderer.invoke("messages:get-import-count", filters),
+  getImportCount: (
+    userId: string,
+    selection?: MessageImportCountFilters
+  ): Promise<MessageImportCountResult> =>
+    ipcRenderer.invoke("messages:get-import-count", userId, selection),
 
   /**
    * Listen for import progress updates
@@ -89,6 +111,38 @@ export const messageBridge = {
     ipcRenderer.on("messages:import-progress", handler);
     return () => {
       ipcRenderer.removeListener("messages:import-progress", handler);
+    };
+  },
+
+  /**
+   * Listen for a macOS Messages import that the RENDERER did not start
+   * (BACKLOG-2772).
+   *
+   * The sync queue lives in the renderer, so a main-initiated import — the one
+   * the transaction trigger runs when a deal is created or its start date moves
+   * earlier — cannot enqueue itself. It announces instead, and the orchestrator
+   * mirrors it into the queue as an EXTERNAL item.
+   *
+   * That queue item is what renders the Cancel button. The cancel MECHANISM was
+   * never missing (`cancelImport` below is global to the import service and
+   * would already have stopped such a run); what was missing was any surface
+   * from which a user could press it.
+   *
+   * @returns Cleanup function to remove both listeners
+   */
+  onBackgroundImport: (callbacks: {
+    onStarted: (signal: BackgroundImportSignal) => void;
+    onFinished: (signal: BackgroundImportSignal) => void;
+  }): (() => void) => {
+    const started = (_e: Electron.IpcRendererEvent, s: BackgroundImportSignal) =>
+      callbacks.onStarted(s);
+    const finished = (_e: Electron.IpcRendererEvent, s: BackgroundImportSignal) =>
+      callbacks.onFinished(s);
+    ipcRenderer.on(MESSAGES_BACKGROUND_IMPORT_STARTED_CHANNEL, started);
+    ipcRenderer.on(MESSAGES_BACKGROUND_IMPORT_FINISHED_CHANNEL, finished);
+    return () => {
+      ipcRenderer.removeListener(MESSAGES_BACKGROUND_IMPORT_STARTED_CHANNEL, started);
+      ipcRenderer.removeListener(MESSAGES_BACKGROUND_IMPORT_FINISHED_CHANNEL, finished);
     };
   },
 
@@ -121,10 +175,15 @@ export const messageBridge = {
 
   /**
    * Cancel the current import operation (TASK-1710)
-   * Gracefully stops the import, preserving partial data
+   * Gracefully stops the import, preserving partial data.
+   *
+   * BACKLOG-2748: this existed here from TASK-1710 with NO caller — the import
+   * progress UI shipped without a Cancel control, so a running import could only
+   * be escaped by force-quitting the app. The channel name is now shared with
+   * the handler rather than spelled out on both sides (PR-SOP §6.2e).
    */
   cancelImport: (): void => {
-    ipcRenderer.send("messages:import-cancel");
+    ipcRenderer.send(MESSAGES_IMPORT_CANCEL_CHANNEL);
   },
 
   /**

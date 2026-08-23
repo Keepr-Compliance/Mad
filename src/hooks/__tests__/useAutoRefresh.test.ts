@@ -728,6 +728,99 @@ describe("useAutoRefresh", () => {
       );
     });
 
+    // BACKLOG-2748: the import became cancellable, and a cancelled run leaves
+    // its queue item at status 'complete' — so it walks past the "not if they
+    // were removed (cancel)" guard, which was written for the EXTERNAL kind of
+    // cancel that empties the queue. The test above ("should send notification
+    // when sync completes") is the CONTROL for these two: identical transition,
+    // no `cancelled` flag, notification expected.
+    it("should NOT send a 'Sync Complete' notification when the user cancelled the run", async () => {
+      (useSyncOrchestrator as jest.Mock).mockReturnValue({
+        state: mockOrchestratorState,
+        isRunning: true,
+        queue: [{ type: 'messages', status: 'running', progress: 50 }],
+        currentSync: 'messages',
+        overallProgress: 50,
+        pendingRequest: null,
+        requestSync: mockRequestSync,
+        forceSync: mockForceSync,
+        acceptPending: mockAcceptPending,
+        rejectPending: mockRejectPending,
+        cancel: mockCancel,
+      });
+
+      const { rerender } = renderHook(() => useAutoRefresh(defaultOptions));
+
+      // The exact queue item a cancelled import produces: complete, with the
+      // partial count and the cancel discriminator.
+      (useSyncOrchestrator as jest.Mock).mockReturnValue({
+        state: mockOrchestratorState,
+        isRunning: false,
+        queue: [{ type: 'messages', status: 'complete', progress: 100, importedCount: 12431, cancelled: true }],
+        currentSync: null,
+        overallProgress: 100,
+        pendingRequest: null,
+        requestSync: mockRequestSync,
+        forceSync: mockForceSync,
+        acceptPending: mockAcceptPending,
+        rejectPending: mockRejectPending,
+        cancel: mockCancel,
+      });
+
+      rerender();
+
+      // An OS notification outlives the window it came from — it sits in
+      // Notification Center telling the user his data synchronized.
+      expect(mockNotificationSend).not.toHaveBeenCalled();
+    });
+
+    it("should STILL send 'Sync Failed' when a cancelled run also had an error", async () => {
+      // A cancel may silence a success notice; it must never silence a failure
+      // one. Same rule as SyncStatusIndicator's completion card.
+      (useSyncOrchestrator as jest.Mock).mockReturnValue({
+        state: mockOrchestratorState,
+        isRunning: true,
+        queue: [
+          { type: 'emails', status: 'running', progress: 50 },
+          { type: 'messages', status: 'running', progress: 50 },
+        ],
+        currentSync: 'messages',
+        overallProgress: 50,
+        pendingRequest: null,
+        requestSync: mockRequestSync,
+        forceSync: mockForceSync,
+        acceptPending: mockAcceptPending,
+        rejectPending: mockRejectPending,
+        cancel: mockCancel,
+      });
+
+      const { rerender } = renderHook(() => useAutoRefresh(defaultOptions));
+
+      (useSyncOrchestrator as jest.Mock).mockReturnValue({
+        state: mockOrchestratorState,
+        isRunning: false,
+        queue: [
+          { type: 'emails', status: 'error', progress: 40, error: 'Outlook connection expired' },
+          { type: 'messages', status: 'complete', progress: 100, importedCount: 12431, cancelled: true },
+        ],
+        currentSync: null,
+        overallProgress: 100,
+        pendingRequest: null,
+        requestSync: mockRequestSync,
+        forceSync: mockForceSync,
+        acceptPending: mockAcceptPending,
+        rejectPending: mockRejectPending,
+        cancel: mockCancel,
+      });
+
+      rerender();
+
+      expect(mockNotificationSend).toHaveBeenCalledWith(
+        "Sync Failed",
+        "One or more sync operations failed. Open Keepr for details."
+      );
+    });
+
     it("should NOT send notification when sync starts", async () => {
       // Start with not syncing
       (useSyncOrchestrator as jest.Mock).mockReturnValue({

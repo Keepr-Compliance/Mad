@@ -1,3 +1,9 @@
+// BACKLOG-2709: point userData at a development directory BEFORE anything reads
+// it. This import MUST stay first — `app.requestSingleInstanceLock()` below
+// writes SingletonLock inside userData, and the `log.*` calls further down pick
+// a log path on first write. tsconfig.electron.json emits CommonJS, which
+// preserves statement order, so import position IS execution position here.
+import "./bootstrap/installAppDataPaths";
 import {
   app,
   BrowserWindow,
@@ -9,6 +15,10 @@ import {
 } from "electron";
 import path from "path";
 import log from "electron-log";
+import {
+  buildFirstRunNotice,
+  getAppliedAppDataPaths,
+} from "./bootstrap/appDataPaths";
 import { redactEmail, redactId } from "./utils/redactSensitive";
 
 // ==========================================
@@ -130,6 +140,7 @@ import { registerTransactionSearchHandlers } from "./handlers/transactionSearchH
 import { registerEmailSyncHandlers } from "./handlers/emailSyncHandlers";
 import { registerEmailLinkingHandlers } from "./handlers/emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers";
+import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
 import { registerAttachmentHandlers } from "./handlers/attachmentHandlers";
 import { registerContactHandlers } from "./handlers/contactHandlers";
 import { registerAddressHandlers } from "./handlers/addressHandlers";
@@ -718,7 +729,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
               subscription,
               expiresAt: Date.now() + sessionService.getSessionExpirationMs(),
               createdAt: Date.now(),
-              // Store Supabase tokens for SDK session restoration (Dorian's T&C fix)
+              // Store Supabase tokens for SDK session restoration (BACKLOG-546 T&C fix)
               // Required for RLS-protected operations on app restart
               supabaseTokens: {
                 access_token: accessToken,
@@ -1396,6 +1407,40 @@ function surfaceUpdaterError(
 const appStartTime = Date.now();
 app.whenReady().then(async () => {
   log.debug(`[PERF] app.whenReady: ${Date.now() - appStartTime}ms`);
+
+  // BACKLOG-2709: on the FIRST launch against a new development directory, say
+  // so before the window appears. The app is about to open an empty database on
+  // a machine where the real one still exists, and a silently blank contact
+  // list is indistinguishable from data loss.
+  //
+  // Blocking on purpose: this is the one moment the message has to land.
+  // Suppressed under KEEPR_E2E (a modal would hang the Playwright driver) and
+  // when the caller chose the directory explicitly via KEEPR_USER_DATA_DIR.
+  const appDataPaths = getAppliedAppDataPaths();
+  if (
+    appDataPaths?.isFirstRun &&
+    !appDataPaths.isExplicitOverride &&
+    process.env.KEEPR_E2E !== "1"
+  ) {
+    const notice = buildFirstRunNotice(appDataPaths);
+    log.info("[AppData] First run in development directory", {
+      dir: appDataPaths.dir,
+    });
+    try {
+      await dialog.showMessageBox({
+        type: "info",
+        buttons: ["Continue"],
+        defaultId: 0,
+        title: notice.title,
+        message: notice.message,
+        detail: notice.detail,
+      });
+    } catch (error) {
+      // Never block startup on the notice itself.
+      log.warn("[AppData] First-run notice failed to display", error);
+    }
+  }
+
   // Configure auto-updater after app is ready
   autoUpdater.logger = log;
 
@@ -1676,6 +1721,7 @@ app.whenReady().then(async () => {
   registerEmailSyncHandlers(mainWindow!);
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
+  registerReviewQueueHandlers();
   registerAttachmentHandlers(mainWindow!);
   registerContactHandlers(mainWindow!);
   registerAddressHandlers();

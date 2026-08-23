@@ -5,6 +5,12 @@
 
 import { ipcRenderer } from "electron";
 import type { NewTransaction, Transaction, TransactionStatus } from "../types/models";
+// BACKLOG-2771: one export vocabulary, defined with the other wire types.
+import type {
+  ExportAttachmentType,
+  ExportContentType,
+  ExportEmailMode,
+} from "../types/ipc/window-api-transactions";
 
 /**
  * Options for scanning emails for transactions
@@ -24,27 +30,33 @@ export interface ScanOptions {
  */
 export interface ExportEnhancedOptions {
   exportFormat?: "pdf" | "csv" | "json" | "txt_eml" | "excel";
-  contentType?: "text" | "email" | "both";
+  /** BACKLOG-2771: the ONE content vocabulary, shared with ExportFolderOptions. */
+  contentType?: ExportContentType;
   includeContacts?: boolean;
-  includeEmails?: boolean;
   includeSummary?: boolean;
   startDate?: string;
   endDate?: string;
   summaryOnly?: boolean; // If true, only export summary + indexes (no full content)
-  attachmentType?: "all" | "email" | "text" | "none";
+  attachmentType?: ExportAttachmentType;
+  /** How emails are grouped. Previously absent from this wire entirely. */
+  emailExportMode?: ExportEmailMode;
 }
 
 /**
  * Options for folder export
  */
 export interface ExportFolderOptions {
-  includeEmails?: boolean;
-  includeTexts?: boolean;
-  includeAttachments?: boolean;
-  contentType?: "both" | "emails" | "texts";
-  attachmentType?: "all" | "email" | "text" | "none";
-  /** How emails are grouped in the folder export (consumed by the folder handler). */
-  emailExportMode?: "thread" | "individual";
+  /**
+   * BACKLOG-2771: content selection is stated ONCE. The folder wire used to
+   * carry it three times — `contentType` plus `includeEmails`/`includeTexts`,
+   * read by different consumers — and attachments twice (`includeAttachments`
+   * plus `attachmentType`). Both redundant encodings are gone; the resolver
+   * derives every one of them from these three fields.
+   */
+  contentType?: ExportContentType;
+  attachmentType?: ExportAttachmentType;
+  /** How emails are grouped in the folder export. */
+  emailExportMode?: ExportEmailMode;
 }
 
 export const transactionBridge = {
@@ -457,7 +469,7 @@ export const transactionBridge = {
    * Exports transaction to an organized folder structure
    * Creates: Summary_Report.pdf, emails/, texts/, attachments/
    * @param transactionId - Transaction ID to export
-   * @param options - Export options (includeEmails, includeTexts, includeAttachments)
+   * @param options - Export options (contentType, attachmentType, emailExportMode)
    * @returns Export result with path to created folder
    */
   exportFolder: (transactionId: string, options?: ExportFolderOptions) =>
@@ -797,6 +809,63 @@ export const transactionBridge = {
     ipcRenderer.on("transactions:messages-sync-complete", handler);
     return () => {
       ipcRenderer.removeListener("transactions:messages-sync-complete", handler);
+    };
+  },
+
+  // ==========================================================================
+  // BACKLOG-2791 / BACKLOG-2792 — the Needs Review queue.
+  //
+  // These four are the ONLY way the renderer learns review state. Every surface
+  // (the combined Needs Review screen, both tabs' needs-review sections, the
+  // header badge, the P2/P3 popups and the Complete gate) goes through
+  // getReviewState — one source of truth, founder ruling 2026-08-22.
+  // ==========================================================================
+
+  /** The combined queue for a transaction: pending + legacy, as one set. */
+  getReviewState: (transactionId: string) =>
+    ipcRenderer.invoke("review:get-state", transactionId),
+
+  /**
+   * Run discovery. "open" scans only records ingested since the watermark;
+   * "contact-change" sweeps the full window for the changed identities only.
+   * Returns { added, outstanding } — `added` drives the popup (silent at 0).
+   */
+  syncReviewQueue: (
+    transactionId: string,
+    reason: "open" | "contact-change",
+    contactIds?: string[],
+  ) => ipcRenderer.invoke("review:sync", transactionId, reason, contactIds),
+
+  /** Approve items — THIS is what links them, per the normal rules. */
+  approveReviewItems: (itemIds: string[]) =>
+    ipcRenderer.invoke("review:approve", itemIds),
+
+  /** Reject items — durable; a later sync cannot resurrect them. */
+  rejectReviewItems: (itemIds: string[]) =>
+    ipcRenderer.invoke("review:reject", itemIds),
+
+  /**
+   * BACKLOG-2791: fires whenever ANY trigger changes the queue — the on-open
+   * sweep, the provider fetch, a contact saved on the deal, a contact edited in
+   * Clients & Contacts, or deal creation.
+   *
+   * This is what lets a main-process sync reach the screen. Without it a
+   * contact-save queued items in the database and the UI showed nothing until
+   * the next open.
+   */
+  onReviewQueueChanged: (
+    callback: (data: {
+      transactionId: string;
+      added: number;
+      linked: number;
+      outstanding: number;
+      reason: "open" | "background" | "contact-change";
+    }) => void,
+  ) => {
+    const handler = (_event: unknown, data: Parameters<typeof callback>[0]) => callback(data);
+    ipcRenderer.on("review:queue-changed", handler);
+    return () => {
+      ipcRenderer.removeListener("review:queue-changed", handler);
     };
   },
 };

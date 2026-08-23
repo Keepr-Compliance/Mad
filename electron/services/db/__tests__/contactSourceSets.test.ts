@@ -121,18 +121,18 @@ describe("sanity", () => {
 // ===========================================================================
 describe("getLiveSourcesByContact — the macOS translation", () => {
   it("reports a macos link in the DISPLAY vocabulary as contacts_app", () => {
-    addContact("paul", "outlook");
-    addLink("paul", "macos", "mac-1");
+    addContact("casey", "outlook");
+    addLink("casey", "macos", "mac-1");
 
-    expect([...getLiveSourcesByContact(USER)]).toEqual([["paul", ["contacts_app"]]]);
+    expect([...getLiveSourcesByContact(USER)]).toEqual([["casey", ["contacts_app"]]]);
   });
 
   it("reports a contact linked to BOTH macOS and Outlook as both, sorted", () => {
-    addContact("paul", "outlook");
-    addLink("paul", "macos", "mac-1");
-    addLink("paul", "outlook", "out-1");
+    addContact("casey", "outlook");
+    addLink("casey", "macos", "mac-1");
+    addLink("casey", "outlook", "out-1");
 
-    expect(getLiveSourcesByContact(USER).get("paul")).toEqual(["contacts_app", "outlook"]);
+    expect(getLiveSourcesByContact(USER).get("casey")).toEqual(["contacts_app", "outlook"]);
   });
 
   it("collapses TWO macOS address books into ONE contacts_app entry", () => {
@@ -194,57 +194,57 @@ describe("getLiveSourcesByContact — the macOS translation", () => {
 // ===========================================================================
 describe("unlinking — the founder's Casey Lane case", () => {
   it("drops the unlinked source and keeps the rest, with contacts.source untouched", () => {
-    addContact("paul", "outlook"); // Outlook imported him first; the scalar is frozen there
-    addLink("paul", "macos", "mac-1");
-    addLink("paul", "outlook", "out-1");
-    expect(getLiveSourcesByContact(USER).get("paul")).toEqual(["contacts_app", "outlook"]);
+    addContact("casey", "outlook"); // Outlook imported him first; the scalar is frozen there
+    addLink("casey", "macos", "mac-1");
+    addLink("casey", "outlook", "out-1");
+    expect(getLiveSourcesByContact(USER).get("casey")).toEqual(["contacts_app", "outlook"]);
 
     dropLink("outlook", "out-1");
 
-    expect(getLiveSourcesByContact(USER).get("paul")).toEqual(["contacts_app"]);
+    expect(getLiveSourcesByContact(USER).get("casey")).toEqual(["contacts_app"]);
     // The scalar is deliberately NOT rewritten — that is why it cannot be trusted.
-    const row = db.prepare("SELECT source FROM contacts WHERE id = ?").get("paul") as {
+    const row = db.prepare("SELECT source FROM contacts WHERE id = ?").get("casey") as {
       source: string;
     };
     expect(row.source).toBe("outlook");
   });
 
   it("leaves a single-source contact alone when a DIFFERENT contact is unlinked", () => {
-    addContact("paul", "outlook");
+    addContact("casey", "outlook");
     addContact("olivia", "outlook");
-    addLink("paul", "macos", "mac-1");
-    addLink("paul", "outlook", "out-1");
+    addLink("casey", "macos", "mac-1");
+    addLink("casey", "outlook", "out-1");
     addLink("olivia", "outlook", "out-2");
 
     dropLink("outlook", "out-1");
 
     const map = getLiveSourcesByContact(USER);
     expect([...map].sort()).toEqual([
+      ["casey", ["contacts_app"]],
       ["olivia", ["outlook"]],
-      ["paul", ["contacts_app"]],
     ]);
   });
 
   it("removing the LAST link returns the contact to the no-links state", () => {
-    addContact("paul", "outlook");
-    addLink("paul", "outlook", "out-1");
+    addContact("casey", "outlook");
+    addLink("casey", "outlook", "out-1");
 
     dropLink("outlook", "out-1");
 
-    expect(getLiveSourcesByContact(USER).has("paul")).toBe(false);
-    expect(getLiveSourcesForContact("paul")).toEqual([]);
+    expect(getLiveSourcesByContact(USER).has("casey")).toBe(false);
+    expect(getLiveSourcesForContact("casey")).toEqual([]);
   });
 });
 
 // ===========================================================================
 describe("getLiveSourcesForContact — the single-contact read", () => {
   it("agrees with the list query for the same contact", () => {
-    addContact("paul", "outlook");
-    addLink("paul", "macos", "mac-1");
-    addLink("paul", "outlook", "out-1");
+    addContact("casey", "outlook");
+    addLink("casey", "macos", "mac-1");
+    addLink("casey", "outlook", "out-1");
 
-    expect(getLiveSourcesForContact("paul")).toEqual(["contacts_app", "outlook"]);
-    expect(getLiveSourcesForContact("paul")).toEqual(getLiveSourcesByContact(USER).get("paul"));
+    expect(getLiveSourcesForContact("casey")).toEqual(["contacts_app", "outlook"]);
+    expect(getLiveSourcesForContact("casey")).toEqual(getLiveSourcesByContact(USER).get("casey"));
   });
 
   it("returns [] for an unlinked contact and when the table is absent", () => {
@@ -258,15 +258,15 @@ describe("getLiveSourcesForContact — the single-contact read", () => {
 // ===========================================================================
 describe("attachLiveSources", () => {
   it("stamps source_types on linked contacts and leaves unlinked ones UNDEFINED", () => {
-    addContact("paul", "outlook");
+    addContact("casey", "outlook");
     addContact("manual-only", "manual");
-    addLink("paul", "macos", "mac-1");
-    addLink("paul", "outlook", "out-1");
+    addLink("casey", "macos", "mac-1");
+    addLink("casey", "outlook", "out-1");
 
-    const result = attachLiveSources(USER, asContacts("paul", "manual-only"));
+    const result = attachLiveSources(USER, asContacts("casey", "manual-only"));
 
     expect(result.map((c) => [c.id, c.source_types])).toEqual([
-      ["paul", ["contacts_app", "outlook"]],
+      ["casey", ["contacts_app", "outlook"]],
       // undefined, NOT [] — an empty array would hide it from every source leaf.
       ["manual-only", undefined],
     ]);

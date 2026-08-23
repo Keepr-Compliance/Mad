@@ -17,6 +17,7 @@ import type {
 import {
   MAX_GUID_LENGTH,
   ALL_SUPPORTED_EXTENSIONS,
+  MAX_ATTACHMENT_SIZE,
   SUPPORTED_IMAGE_EXTENSIONS,
   MIN_QUERY_BATCH_SIZE,
   REACTION_ASSOCIATED_TYPE_MIN,
@@ -32,6 +33,52 @@ import type { MessageImportFilters } from "./types";
 const NANOS_PER_MS = 1_000_000;
 
 /**
+ * The lookback window used when the user has expressed NO preference at all
+ * (the `lookbackMonths` key is absent). Matches the Settings dropdown's initial
+ * selection.
+ *
+ * BACKLOG-2561: this lives here, exported, because it previously existed as two
+ * independent literal `3`s inside `messageImportHandlers.ts` (the import handler
+ * and the effective-window label handler). Two copies of a default is how the
+ * import and its own label drift apart.
+ */
+export const DEFAULT_LOOKBACK_MONTHS = 3;
+
+/**
+ * BACKLOG-2561: Resolve the stored `lookbackMonths` preference, distinguishing
+ * **"no preference stored"** from **"the user explicitly chose All time"**.
+ *
+ * These are two different facts and the codebase spells them differently:
+ *  - key ABSENT (`undefined`) ⇒ the user never touched the setting ⇒ default.
+ *  - explicit `null` ⇒ the user picked "All time" in the dropdown
+ *    (`MacOSMessagesImportSettings.tsx` writes `null` for `value === "all"`)
+ *    ⇒ unbounded, and it MUST survive as `null`.
+ *
+ * `??` cannot tell those two apart — `null ?? 3 === 3` — so every reader that
+ * used it silently rewrote "All time" into "last 3 months". That was the whole
+ * of BACKLOG-2561: the count preview honoured `null`, the import and the label
+ * did not, and the user was shown an all-time total next to a 3-month label
+ * while receiving 3 months of messages.
+ *
+ * Note the key can also be absent while the surrounding `filters` object exists:
+ * changing only the message cap writes `{ maxMessages: N }`, and the
+ * preferences deep-merge leaves `lookbackMonths` absent.
+ *
+ * @param filters - The stored `messageImport.filters` object (may be absent)
+ * @param defaultMonths - Window to use when no preference is stored
+ * @returns The months to look back, or `null` for an unbounded "All time" window
+ */
+export function resolveLookbackMonths(
+  filters: { lookbackMonths?: number | null } | null | undefined,
+  defaultMonths: number = DEFAULT_LOOKBACK_MONTHS
+): number | null {
+  if (!filters) return defaultMonths;
+  const stored = filters.lookbackMonths;
+  // `undefined` = absent = no preference. `null` = an explicit "All time" choice.
+  return stored === undefined ? defaultMonths : stored;
+}
+
+/**
  * BACKLOG-2276: Compute the Apple-epoch (nanoseconds since 2001-01-01) lower-bound
  * cutoff for the macOS Messages import.
  *
@@ -42,6 +89,17 @@ const NANOS_PER_MS = 1_000_000;
  *    we never omit messages an audit needs AND never regress below the user's
  *    explicit lookback preference.
  *  - Returns `null` (no date filter → import everything) when neither is set.
+ *
+ * BACKLOG-2561: an EXPLICIT "All time" preference (`lookbackMonths === null`, or a
+ * non-positive number) is itself unbounded, so it already reaches back further
+ * than any audit period and short-circuits to `null`. Without that short-circuit
+ * this function was a fourth reader that could not tell an explicit `null` from an
+ * absent key: `null` is falsy, so it contributed no cutoff entry, but the audit
+ * entry still did — and `Math.min` of that single entry BOUNDED an "All time"
+ * import at the earliest audit start. `computeEffectiveImportWindow` below has
+ * always returned an unbounded window for the same input, so the label and the
+ * import disagreed. An ABSENT key keeps the previous behaviour: `messagesSyncTrigger`
+ * passes `{ auditPeriodStart }` alone and depends on the audit period governing.
  *
  * @param filters - Import filters (lookbackMonths and/or auditPeriodStart)
  * @param now - Reference "now" (injectable for deterministic tests)
@@ -54,6 +112,14 @@ export function computeImportCutoffNano(
   now: Date = new Date()
 ): number | null {
   const cutoffs: number[] = [];
+
+  // BACKLOG-2561: explicit "All time" ⇒ unbounded, overrides the audit floor
+  // (which only ever WIDENS a bounded window and cannot widen an unbounded one).
+  // `undefined` falls through — absence is not a choice.
+  const lookback = filters?.lookbackMonths;
+  if (lookback === null || (typeof lookback === "number" && lookback <= 0)) {
+    return null;
+  }
 
   if (filters?.lookbackMonths && filters.lookbackMonths > 0) {
     const cutoffDate = new Date(now.getTime());
@@ -293,6 +359,155 @@ export function isSupportedMediaType(filename: string | null): boolean {
 }
 
 /**
+ * One attachment row considered for copying (BACKLOG-2743).
+ *
+ * Shaped to match both the chat.db estimate query and the RawMacAttachment rows
+ * the import already carries, so the SAME eligibility rules drive the
+ * selection-time estimate and the pre-flight check.
+ */
+export interface AttachmentSizeRow {
+  filename: string | null;
+  transfer_name: string | null;
+  total_bytes: number;
+  /**
+   * macOS message GUID owning this attachment. Needed to recognise attachments
+   * that are ALREADY stored — see filterUnstoredAttachments.
+   */
+  message_guid?: string | null;
+}
+
+/**
+ * Key identifying a stored attachment: `<macOS message GUID>:<display name>`.
+ *
+ * Must match the key storeAttachments uses for its `existingByExternalId`
+ * lookup, and the `external_message_id` + `filename` pair it writes. The display
+ * name is `transfer_name || filename` in BOTH places; keying on the raw
+ * `filename` alone would never match a row stored under its transfer name.
+ */
+export function attachmentStoredKey(
+  messageGuid: string | null | undefined,
+  displayName: string | null | undefined
+): string | null {
+  if (!messageGuid || !displayName) return null;
+  return `${messageGuid}:${displayName}`;
+}
+
+/**
+ * Drop attachments that are ALREADY stored, leaving only what a copy would
+ * actually write (BACKLOG-2743).
+ *
+ * WHY THIS EXISTS. The import's attachment query is unbounded — every sync hands
+ * `storeAttachments` the user's ENTIRE attachment history, not just what is new.
+ * The copy loop then skips the already-stored ones before touching the disk. An
+ * estimate that summed the raw set would therefore describe the FIRST import
+ * forever: after a large library imported successfully and consumed the space it
+ * needed, the next routine sync would re-sum the whole history, compare it to the
+ * now-smaller free space, and refuse — permanently, and while genuinely new
+ * attachments went unimported.
+ *
+ * Rows that cannot be keyed (no GUID or no name) are KEPT, so an unrecognised
+ * row inflates the estimate rather than silently escaping the guard.
+ */
+export function filterUnstoredAttachments<T extends AttachmentSizeRow>(
+  rows: T[],
+  storedKeys: ReadonlySet<string>
+): T[] {
+  if (storedKeys.size === 0) return rows;
+  return rows.filter((row) => {
+    const key = attachmentStoredKey(row.message_guid, row.transfer_name || row.filename);
+    return key === null || !storedKeys.has(key);
+  });
+}
+
+/**
+ * Drop attachments whose owning message is not stored, leaving only what a copy
+ * could actually link and write (BACKLOG-2743).
+ *
+ * WHY THIS EXISTS — this is the SECOND axis of the mistake `filterUnstoredAttachments`
+ * fixes, and it bites harder. The import's attachment SELECT is unbounded, so
+ * `storeAttachments` receives attachments belonging to messages OUTSIDE the
+ * selected window, which were never imported. The copy loop resolves each
+ * attachment's message ID and `continue`s when it finds none, so those bytes are
+ * never written.
+ *
+ * Sizing them anyway breaks the refusal's OWN advice. The renderer's estimate is
+ * date-bounded, so narrowing the window shows a small number and re-enables
+ * Import — and then the unbounded pre-flight refuses again on the whole history.
+ * "Choose a shorter time period", which the refusal block recommends, would be a
+ * dead end at every setting, and the refusal would be permanent because it
+ * returns before any INSERT.
+ *
+ * Rows with no GUID are KEPT, matching filterUnstoredAttachments: an
+ * unrecognised row inflates the estimate rather than escaping the guard.
+ */
+export function filterResolvableAttachments<T extends AttachmentSizeRow>(
+  rows: T[],
+  resolvableGuids: ReadonlySet<string>
+): T[] {
+  return rows.filter((row) => !row.message_guid || resolvableGuids.has(row.message_guid));
+}
+
+/**
+ * Result of sizing a set of attachments (BACKLOG-2743).
+ */
+export interface AttachmentEstimate {
+  /** Bytes that would be copied — supported type, under the per-file cap. */
+  eligibleBytes: number;
+  /** Number of attachments that would be copied. */
+  eligibleCount: number;
+  /** Rejected by MAX_ATTACHMENT_SIZE (the pre-existing per-file cap). */
+  skippedOversizeCount: number;
+  /** Rejected by extension (not an importable media type). */
+  skippedUnsupportedCount: number;
+}
+
+/**
+ * Sum the bytes a set of attachments would write to disk (BACKLOG-2743).
+ *
+ * Applies EXACTLY the two per-file gates the copy loop applies, in the same
+ * order: `isSupportedMediaType` on the display filename, then
+ * `MAX_ATTACHMENT_SIZE`. Any drift between this and storeAttachments turns the
+ * estimate into a number that does not describe the import.
+ *
+ * The result is an UPPER BOUND. The copy loop additionally deduplicates by file
+ * CONTENT HASH, so two distinct attachment rows holding identical bytes are
+ * counted twice here but written once. Estimating high is the safe direction
+ * for a guard: it can refuse an import that would have just fit, but it can
+ * never wave through one that overruns the disk.
+ */
+export function summarizeAttachmentEstimate(
+  rows: AttachmentSizeRow[]
+): AttachmentEstimate {
+  let eligibleBytes = 0;
+  let eligibleCount = 0;
+  let skippedOversizeCount = 0;
+  let skippedUnsupportedCount = 0;
+
+  for (const row of rows) {
+    // Mirrors storeAttachments: transfer_name wins, filename is the fallback.
+    const displayName = row.transfer_name || row.filename;
+    if (!isSupportedMediaType(displayName)) {
+      skippedUnsupportedCount++;
+      continue;
+    }
+    const bytes = Number(row.total_bytes) || 0;
+    if (bytes > MAX_ATTACHMENT_SIZE) {
+      skippedOversizeCount++;
+      continue;
+    }
+    eligibleBytes += bytes;
+    eligibleCount++;
+  }
+
+  return {
+    eligibleBytes,
+    eligibleCount,
+    skippedOversizeCount,
+    skippedUnsupportedCount,
+  };
+}
+
+/**
  * Check if a file extension is a supported image type (for inline display)
  */
 export function isSupportedImageType(filename: string | null): boolean {
@@ -410,5 +625,205 @@ export async function processItemsInChunks<TInput, TOutput>(
     wasCancelled: false,
     batchesProcessed,
     totalBatches,
+  };
+}
+
+// ============================================================================
+// Cap' — the admitted set, resolved ONCE for both the run and the estimate
+// (BACKLOG-2772)
+// ============================================================================
+
+/**
+ * The SQL a plan's window and protection compile to.
+ *
+ * Built in one place because the strings are shared by FIVE queries across two
+ * methods — the filtered count, the unprotected count, the Nth-newest OFFSET
+ * query, the message fetch, and the attachment sizing. Any drift between them
+ * does not merely miscount: the fetch loop runs
+ * `while (fetchedCount < totalMessageCount)`, so a mismatch terminates the walk
+ * early and silently drops the NEWEST rows.
+ */
+export interface MessageWindowSql {
+  /** `""` or `AND message.date > N`. */
+  dateFilterClause: string;
+  /**
+   * "inside a protected period" — `"0"` when nothing is protected.
+   *
+   * TOTAL by construction: a NULL `message.date` yields FALSE, never NULL, so
+   * this clause and its negation partition the filtered set exactly and
+   * `protectedCount + unprotectedCount` always equals `filteredMessageCount`.
+   * Without the explicit NULL test, `NOT (date > A)` would be NULL for a
+   * null-dated row and it would fall out of BOTH buckets.
+   */
+  protectedClause: string;
+}
+
+/** Compile a plan's window and protected periods to SQL. */
+export function buildMessageWindowSql(plan: {
+  cutoffNano: number | null;
+  protectedSpans: ReadonlyArray<{ startNano: number; endNano: number | null }>;
+}): MessageWindowSql {
+  return {
+    dateFilterClause:
+      plan.cutoffNano !== null ? `AND message.date > ${plan.cutoffNano}` : "",
+    protectedClause:
+      plan.protectedSpans.length === 0
+        ? "0"
+        : plan.protectedSpans
+            .map((span) =>
+              span.endNano === null
+                ? `(message.date IS NOT NULL AND message.date > ${span.startNano})`
+                : `(message.date IS NOT NULL AND message.date > ${span.startNano} AND message.date <= ${span.endNano})`
+            )
+            .join(" OR "),
+  };
+}
+
+/** What a plan will actually admit, in numbers and in SQL. */
+export interface AdmittedMessageSet {
+  /** Messages inside the window (before the cap). */
+  filteredMessageCount: number;
+  /** Of those, the ones inside an audit period — never counted against the cap. */
+  protectedCount: number;
+  /** Of those, the ones the cap governs. */
+  unprotectedCount: number;
+  /** ROWID of the Nth-newest UNPROTECTED message, when the cap bites. */
+  capWindowStartRowId: number | null;
+  /** The cap applies but its window start could not be resolved. */
+  capWindowUnresolved: boolean;
+  /** The cap actually truncates. */
+  importWasCapped: boolean;
+  /** Everything the run admits: protected in full, plus the newest N of the rest. */
+  targetMessageCount: number;
+  /**
+   * The cap as a WHERE term: `AND (message.ROWID >= start OR (protected))`,
+   * or `""`. A term rather than a cursor seed because under Cap' the kept set
+   * is no longer a contiguous ROWID tail — protected messages can be
+   * arbitrarily old.
+   */
+  capFetchClause: string;
+}
+
+/**
+ * Resolve what a plan admits — the ONE piece of Cap' arithmetic.
+ *
+ * ## Why this is a function rather than two copies
+ *
+ * The run and the SELECTION-TIME ESTIMATE must describe the same import. Before
+ * Cap' they trivially did: any non-rejected deal switched the cap off entirely,
+ * so both simply counted the window. Under Cap' the common case — deals AND a
+ * cap — is exactly where a window count and an admitted count diverge, and the
+ * estimate reading only the window would have shown Daniel 707,842 messages in
+ * Settings for a run that stores ~50,000 plus his deal periods.
+ *
+ * Worse than the count, the estimate's attachment bytes feed
+ * `evaluateAttachmentSpace` and therefore the space guard, so a window-sized
+ * sum can refuse an import (or push "Text only") over files the cap will never
+ * fetch.
+ *
+ * Reimplementing the arithmetic on the estimate side would have rebuilt, inside
+ * one PR, the very two-readers defect the PR exists to remove.
+ *
+ * @param all - `(sql, params?) => rows`, bound to the open chat.db handle
+ * @param plan - the resolved plan's cap and protected periods
+ * @param sql - the compiled window clauses (`buildMessageWindowSql`)
+ * @param filteredMessageCount - messages in the window, already counted
+ */
+export async function resolveAdmittedMessageSet(
+  all: <T>(sql: string, params?: unknown[]) => Promise<T[]>,
+  plan: {
+    effectiveCap: number | null;
+    protectedSpans: ReadonlyArray<{ startNano: number; endNano: number | null }>;
+  },
+  sql: MessageWindowSql,
+  filteredMessageCount: number
+): Promise<AdmittedMessageSet> {
+  const { dateFilterClause, protectedClause } = sql;
+  const maxMessages = plan.effectiveCap;
+
+  // The cap acts on the UNPROTECTED remainder, so that is the number to
+  // MEASURE. `protectedCount` is derived from it rather than queried
+  // separately — the two are guaranteed to sum by the totality of the clause,
+  // and deriving the subordinate number keeps them from ever reporting a
+  // partition that does not add up.
+  //
+  // The `length === 0` branch is a PERFORMANCE skip, not a correctness one:
+  // with no spans the clause is "0", so the query would return exactly
+  // `filteredMessageCount`.
+  let unprotectedCount = filteredMessageCount;
+  if (plan.protectedSpans.length > 0) {
+    const rows = await all<{ count: number }>(`
+      SELECT COUNT(*) as count FROM message
+      WHERE message.guid IS NOT NULL ${dateFilterClause} AND NOT (${protectedClause})
+    `);
+    unprotectedCount = rows[0]?.count || 0;
+  }
+  const protectedCount = filteredMessageCount - unprotectedCount;
+
+  const capApplies = maxMessages !== null && maxMessages > 0;
+  const capWouldTruncate = capApplies && unprotectedCount > (maxMessages as number);
+
+  // BACKLOG-2744: when the cap bites, keep the NEWEST N — not the oldest. The
+  // fetch is keyset pagination on ROWID ASC, so simply stopping at N walks
+  // upward from 0 and keeps the archive, where the Settings copy promises "most
+  // recent". Do NOT fix that by flipping the ORDER BY — the ascending order IS
+  // the pagination cursor.
+  //
+  // BACKLOG-2772 adds `AND NOT (protectedClause)`, and it is load-bearing: the
+  // offset is taken against the set the cap governs, so a protected row must
+  // not occupy an offset slot. With protected rows counted, the Nth-newest
+  // lands too far back and the run keeps FEWER than `maxMessages` unprotected
+  // messages while believing it kept exactly that many.
+  //
+  // The query repeats `guid IS NOT NULL` and takes NO join. The count is
+  // join-free, and joining `chat_message_join` here would let a message
+  // belonging to two chats occupy two offset slots.
+  //
+  // THIS RUNS BEFORE THE TARGET COUNT IS DECIDED, AND THAT ORDER IS
+  // LOAD-BEARING. The first version of BACKLOG-2744 resolved the window start
+  // AFTER the target had been pinned to `maxMessages`, so the unresolved branch
+  // fell back to walking from the beginning and still stopped at `maxMessages`
+  // rows — reproducing the exact defect it existed to fix.
+  let capWindowStartRowId: number | null = null;
+  if (capWouldTruncate) {
+    const rows = await all<{ start_rowid: number }>(
+      `
+      SELECT message.ROWID as start_rowid
+      FROM message
+      WHERE message.guid IS NOT NULL
+        ${dateFilterClause}
+        AND NOT (${protectedClause})
+      ORDER BY message.ROWID DESC
+      LIMIT 1 OFFSET ?
+    `,
+      [(maxMessages as number) - 1]
+    );
+    capWindowStartRowId = rows[0]?.start_rowid ?? null;
+  }
+
+  // The cap is honoured only when we know where its window starts. If it cannot
+  // be resolved we admit the FULL window — more recent history than the user
+  // asked for, which they never notice — rather than silently handing them the
+  // archive. Reachable without a throw: each read runs against a live WAL-mode
+  // chat.db that Messages is writing to, so a bulk prune between the count and
+  // this query sends the OFFSET out of range.
+  const capWindowUnresolved = capWouldTruncate && capWindowStartRowId === null;
+  const importWasCapped = capWouldTruncate && !capWindowUnresolved;
+
+  return {
+    filteredMessageCount,
+    protectedCount,
+    unprotectedCount,
+    capWindowStartRowId,
+    capWindowUnresolved,
+    importWasCapped,
+    // Cap': every protected message PLUS the newest N of the remainder. The
+    // two sets are disjoint by construction, so this is exact.
+    targetMessageCount: importWasCapped
+      ? protectedCount + (maxMessages as number)
+      : filteredMessageCount,
+    capFetchClause: importWasCapped
+      ? `AND (message.ROWID >= ${capWindowStartRowId} OR (${protectedClause}))`
+      : "",
   };
 }

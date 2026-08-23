@@ -66,6 +66,8 @@ PHASE D: Merge & Cleanup (Steps 12-15)
 
 Before ANY handoff or task completion, you MUST document issues encountered.
 
+**This applies to work with no task, too.** A branch prune, a hook edit, a one-off script — ad-hoc work produces the same lessons and loses them faster, because nothing surfaces them at a handoff. If there is no task item, put the lesson on the item the work was for, or the item it is a lesson ABOUT, or file a new one. **Anything that cost more than ten minutes to diagnose gets written down — even when the fix was one line and nothing was blocked.**
+
 ### When to Document
 
 - Something doesn't work as expected
@@ -585,6 +587,36 @@ When making UI/CSS changes, match the existing reference implementation exactly.
 - Add business logic to App.tsx or entry files
 - Scatter `window.api`/`window.electron` calls in components
 - Exceed entry file line budgets without extraction
+
+## Development Data Directory (BACKLOG-2709)
+
+**`npm run dev` has its own profile and its own database.** Unpackaged builds resolve
+`userData` / `sessionData` / `logs` to `<appData>/keepr-dev`; the installed app keeps
+`<appData>/keepr` and is never touched by a dev build.
+
+Before this existed, `npm run dev`, every packaged QA build and the installed app all opened
+`~/Library/Application Support/keepr/mad.db` — the real database. Dev builds on a feature branch
+migrated it v55 → v62 on 11–12 Aug 2026, so the v2.28.0 install found nothing left to migrate and
+wrote no pre-migration backup. **That upgrade path can never be observed on that machine again.**
+
+| Consequence | Detail |
+|---|---|
+| Dev starts signed out | A dev profile has no session. First run shows login and an empty app — expected, not data loss. A blocking dialog says so on the first launch against a new dev directory. |
+| Both can run at once | Dev and the installed app now take separate `SingletonLock`s. Previously, launching dev with the app open made dev quit. |
+| Dev logs are separate | `keepr-dev/logs/main.log`. `app.setPath("logs", …)` alone is NOT enough — electron-log builds its macOS path from the app *name*, so `transports.file.resolvePathFn` is set explicitly in `electron/bootstrap/installAppDataPaths.ts`. |
+
+**Precedence** (`electron/bootstrap/appDataPaths.ts`): `--user-data-dir` switch (keeps E2E profiles
+hermetic) → `KEEPR_USER_DATA_DIR` → packaged (never moves) → `<appData>/keepr-dev`.
+
+`KEEPR_USER_DATA_DIR` is an **environment variable only** — it cannot be set in `.env.local`,
+because dotenv loads long after the override has already run. Use it to point a build at a seeded
+fixture:
+
+```bash
+KEEPR_USER_DATA_DIR=/tmp/keepr-fixture npm run dev
+```
+
+**Never "fix" a dev build by pointing it back at `<appData>/keepr`.** That is the defect.
 
 ## Common Commands
 

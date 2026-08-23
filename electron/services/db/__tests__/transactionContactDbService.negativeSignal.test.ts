@@ -126,10 +126,13 @@ beforeEach(async () => {
     ).run(`phone-${id}`, id, phone);
   }
 
-  // `status` must exist AND be non-NULL: the sweep query filters
-  // `t.status != 'archived'`, and in SQL a NULL status makes that predicate NULL,
-  // which excludes the row. A fixture leaving it NULL would show an empty
-  // fan-out and "prove" the filter works for the wrong reason.
+  // `status` must exist AND be non-NULL: the sweep query filters on transaction
+  // eligibility (`t.status != 'rejected'` — BACKLOG-2562 replaced the dead
+  // `!= 'archived'` form with the shared `LIVE_TRANSACTION_SQL_PREDICATE`), and
+  // in SQL a NULL status makes that predicate NULL, which excludes the row. A
+  // fixture leaving it NULL would show an empty fan-out and "prove" the filter
+  // works for the wrong reason. The NULL behaviour is identical under both
+  // spellings, so this fixture requirement is unchanged by the migration.
   db.exec(`ALTER TABLE transactions ADD COLUMN status TEXT`);
   for (const txn of [TXN_A, TXN_B]) {
     db.prepare(

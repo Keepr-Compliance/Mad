@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS contact_phones (
 
   phone_e164 TEXT NOT NULL,              -- Normalized: +14155550102
   phone_display TEXT,                    -- Display format: (415) 555-0102
-  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key (last 10 digits)
+  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key. BACKLOG-2630: E.164 digits via libphonenumber (was last 10 digits); migration v64 re-keys existing rows
   is_primary INTEGER DEFAULT 0,
   label TEXT,                            -- mobile, home, work, etc.
   source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
@@ -715,6 +715,21 @@ CREATE TABLE IF NOT EXISTS transactions (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
+  -- BACKLOG-2791: delta watermark for the Needs-Review sync, which runs on EVERY
+  -- transaction open. Holds the time of the last on-open scan; the next one only
+  -- examines rows INGESTED since (emails.created_at / messages.created_at, NOT
+  -- sent_at — a backfill writes an OLD sent_at with a NEW created_at). Without
+  -- it the scan re-examines every record that already lost, on every open, which
+  -- is the BACKLOG-2620 non-convergence shape.
+  --
+  -- Kept in sync with migration v65 (ALTER TABLE ... ADD COLUMN), which is the
+  -- ONLY source of this column on an existing install. NEVER add a standalone
+  -- CREATE INDEX on it here: schema.sql is exec'd BEFORE the migration chain, so
+  -- an index on a not-yet-added column throws on every real upgrade
+  -- (BACKLOG-2298/2300). `transactions` is never positionally copied by any
+  -- migration, so a trailing declaration is safe.
+  last_pending_scan_at DATETIME,
+
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
@@ -981,8 +996,18 @@ CREATE TABLE IF NOT EXISTS extracted_transaction_data (
 
 -- Users & Auth
 CREATE INDEX IF NOT EXISTS idx_users_local_email ON users_local(email);
-CREATE INDEX IF NOT EXISTS idx_users_local_license_type ON users_local(license_type);
-CREATE INDEX IF NOT EXISTS idx_users_local_organization ON users_local(organization_id);
+-- BACKLOG-2750: idx_users_local_license_type / idx_users_local_organization are
+-- created by migration v63 ONLY. `license_type` and `organization_id` entered
+-- schema.sql on 2026-01-22 (efb444a0b) through the PRE-CONSOLIDATION migration
+-- system, which db3733343 (2026-02-17, shipped v2.4.1) deleted without moving them
+-- into the versioned chain. `CREATE TABLE IF NOT EXISTS users_local` is a no-op on
+-- an existing DB, so a real upgrade from a DB created before 2026-01-22 still has
+-- no such column, and a standalone CREATE INDEX here throws
+-- "no such column: license_type" out of exec(schema.sql) — which runs BEFORE the
+-- versioned chain (runMigrations: exec(schemaSql) → _runVersionedMigrations), so
+-- the whole migration aborts and the app cannot start. The COLUMNS stay in CREATE
+-- TABLE above for fresh-install parity. Same deferred-index pattern as
+-- idx_messages_sync_session / idx_attachments_sync_session (v54, BACKLOG-2300).
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_provider ON oauth_tokens(user_id, provider, purpose);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
@@ -1057,8 +1082,17 @@ CREATE INDEX IF NOT EXISTS idx_messages_duplicate_of ON messages(duplicate_of);
 
 -- Attachments
 CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
-CREATE INDEX IF NOT EXISTS idx_attachments_email_id ON attachments(email_id);  -- TASK-1775
-CREATE INDEX IF NOT EXISTS idx_attachments_external_message_id ON attachments(external_message_id);
+-- BACKLOG-2750: idx_attachments_email_id (TASK-1775) and
+-- idx_attachments_external_message_id (TASK-1110) are created by migration v63 ONLY.
+-- TASK-1110 (847d6eec4, 2026-01-17) originally shipped BOTH a legacy
+-- `addMissingColumns('attachments', ...)` upgrade path AND this standalone index, so
+-- upgrades were covered at the time. db3733343 (2026-02-17, shipped v2.4.1) deleted
+-- the legacy migration system and left the standalone index behind — after which
+-- nothing added the column to a pre-existing table at ANY version. `email_id`
+-- (c90a869f8, 2026-01-31) never had an upgrade path at all. Exposed: any DB whose
+-- `attachments` table was created before those dates and that never ran a build in
+-- the v2.0.0..v2.4.0 window. The COLUMNS stay in CREATE TABLE above for
+-- fresh-install parity. Same deferred-index pattern as v54 (BACKLOG-2300).
 CREATE INDEX IF NOT EXISTS idx_attachments_document_type ON attachments(document_type);
 -- BACKLOG-2300: idx_attachments_sync_session is created by migration v54 ONLY —
 -- see the idx_messages_sync_session note above for the full rationale (a standalone
@@ -1071,9 +1105,15 @@ CREATE INDEX IF NOT EXISTS idx_transactions_property_address ON transactions(pro
 CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
 CREATE INDEX IF NOT EXISTS idx_transactions_stage ON transactions(stage);
 CREATE INDEX IF NOT EXISTS idx_transactions_export_status ON transactions(export_status);
-CREATE INDEX IF NOT EXISTS idx_transactions_last_exported_on ON transactions(last_exported_on);
-CREATE INDEX IF NOT EXISTS idx_transactions_submission_status ON transactions(submission_status);
-CREATE INDEX IF NOT EXISTS idx_transactions_submission_id ON transactions(submission_id);
+-- BACKLOG-2750: idx_transactions_last_exported_on / _submission_status /
+-- _submission_id are created by migration v63 ONLY. `last_exported_on` (6c0e67ed5,
+-- 2025-11-17) and `submission_status` / `submission_id` (b7b9d1367, 2026-01-22)
+-- entered schema.sql through the PRE-CONSOLIDATION migration system that db3733343
+-- (2026-02-17) deleted without moving them into the versioned chain. `CREATE TABLE
+-- IF NOT EXISTS transactions` is a no-op on an existing DB, so a standalone CREATE
+-- INDEX here throws "no such column: last_exported_on" out of exec(schema.sql) on a
+-- real upgrade and aborts the whole migration. The COLUMNS stay in CREATE TABLE
+-- above for fresh-install parity. Same deferred-index pattern as v54 (BACKLOG-2300).
 
 -- Transaction Participants
 CREATE INDEX IF NOT EXISTS idx_transaction_participants_transaction ON transaction_participants(transaction_id);
@@ -1317,6 +1357,61 @@ CREATE INDEX IF NOT EXISTS idx_ignored_comms_user_email
 
 CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction
   ON ignored_communications(transaction_id);
+
+-- ============================================
+-- PENDING REVIEW COMMUNICATIONS (BACKLOG-2791, Migration 65)
+-- ============================================
+-- The persistent "Needs Review" queue: communications the sync FOUND for a deal
+-- but that are NOT linked until the user approves them.
+--
+-- SEPARATE TABLE BY DESIGN. Every row in `communications` IS a link, and 41 read
+-- sites across 10 files treat it that way with no choke point. Encoding "pending"
+-- as a `match_reason` value would have surfaced unapproved mail in transaction
+-- search, and shipped it inside a per-row Quick Export from the transactions list
+-- (which bypasses the details-screen Complete gate entirely — exportGate is
+-- paywall-only). Nothing that already exists reads THIS table, so none of that is
+-- possible.
+--
+-- Read path: reviewStateService.getReviewState() unions this with the legacy
+-- BACKLOG-2319 `communications.match_reason='address_missing'` population. That
+-- union is the ONE source of truth for the badge, both tabs' needs-review
+-- sections, the combined S2 screen and the Complete gate (founder ruling
+-- 2026-08-22). No surface queries this table directly.
+--
+-- Two UNIQUE indexes are the DB backstop for the sync's dedup predicate: even a
+-- racing second sync cannot queue the same item twice. MEASURED: drop them and a
+-- repeated sync leaves 4 rows where 2 belong.
+--
+-- They are written PARTIAL (`WHERE <col> IS NOT NULL`) to keep each index to the
+-- rows that actually carry that column, and to state the intent. That is a size
+-- and readability choice, NOT a correctness one: SQLite treats every NULL as
+-- distinct, so the non-partial form enforces exactly the same thing — verified by
+-- mutation, which did NOT go red. Do not repeat the folklore that a non-partial
+-- UNIQUE would fail to constrain these rows; it would not.
+--
+-- They are created by migration 65, NOT here — schema.sql runs before the chain
+-- (BACKLOG-2298/2300).
+CREATE TABLE IF NOT EXISTS pending_review_communications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  transaction_id TEXT NOT NULL,
+
+  -- Exactly one of these is set: email_id for mail, thread_id for text threads
+  -- (which is how text links are stored — see createThreadCommunicationReference).
+  email_id TEXT,
+  thread_id TEXT,
+
+  found_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+
+  CHECK (
+    (email_id IS NOT NULL AND thread_id IS NULL)
+    OR (thread_id IS NOT NULL AND email_id IS NULL)
+  )
+);
 
 -- BACKLOG-1560: Indexes for auto-link suppression lookups
 -- These indexes are created by migration 37 (which also adds the columns).

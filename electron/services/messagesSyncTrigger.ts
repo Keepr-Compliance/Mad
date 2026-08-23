@@ -16,22 +16,39 @@
 // planFetchWindows / per-account bound here. The required lower bound is
 //   proposedStartISO ?? computeEarliestAuditStart(all non-rejected txns)
 // and when it predates the MIN(sent_at) floor AND the importer is available we
-// run ONE global re-import via macOSMessagesImportService.importMessages(...,
-// { auditPeriodStart }) — reusing the BACKLOG-2276 auditPeriodStart filter (NO
-// importer change). expandAttachedThreadsForUser ALWAYS runs after. Degrades
-// gracefully on non-macOS / no-FDA (skip import, still expand, floor unchanged;
-// the export gate still warns).
+// run ONE global import. expandAttachedThreadsForUser ALWAYS runs after.
+// Degrades gracefully on non-macOS / no-FDA (skip import, still expand, floor
+// unchanged; the export gate still warns).
 //
-// The 50K cap keeps OLDEST / drops NEWEST and is OFF when auditPeriodActive
-// (SR-correction d) — so the MIN(sent_at) floor is authoritative and the cap
-// never "eats the oldest". The global import is a full device scan → callers run
-// it in the BACKGROUND with the inline progress indicator, never synchronously
-// blocking the update IPC (SR-correction d).
+// BACKLOG-2772 — WHAT CHANGED HERE, because the paragraph this replaces was
+// still being read as live:
+//
+// This module used to call importMessages() with a hand-built
+// `{ auditPeriodStart }` and nothing else, and the old service rule was "any
+// non-rejected transaction switches the 50K cap OFF". Both are gone.
+//
+//   - The run is planned by `resolveImportPlanForUser`, the SAME resolver the
+//     Settings buttons and the estimate use, so this path now carries the
+//     user's lookback, cap and attachment preference instead of ignoring them.
+//   - The cap is no longer switched off wholesale. Under Cap' it does not apply
+//     INSIDE the audit periods of non-rejected deals — which is what keeps the
+//     MIN(sent_at) floor authoritative and the cap from "eating the oldest" —
+//     and it does apply to everything outside them.
+//   - The run announces itself (see messagesBackgroundImportSignal) so the
+//     renderer can mirror it into the sync queue. Before that it had no queue
+//     item and therefore no Cancel button at all.
+//
+// The global import is a full device scan → callers run it in the BACKGROUND
+// with the inline progress indicator, never synchronously blocking the update
+// IPC (SR-correction d).
 // ============================================
 
 import * as Sentry from "@sentry/electron/main";
 import macOSMessagesImportService from "./macOSMessagesImportService";
-import type { ImportProgressCallback } from "./macOSMessagesImportService";
+import type {
+  ImportProgressCallback,
+  MacOSImportResult,
+} from "./macOSMessagesImportService";
 import {
   expandAttachedThreadsForUser,
   autoLinkNewMessagesForUser,
@@ -46,7 +63,15 @@ import {
   recordExpansionRun,
   getDeepestImportStart,
 } from "./db/messageImportStateService";
-import { dbAll } from "./db/core/dbConnection";
+// BACKLOG-2772: the ONE assembler + resolver every import entry point calls.
+import {
+  resolveImportPlanForUser,
+  readNonRejectedTransactions,
+} from "./importPlanInputs";
+import {
+  emitBackgroundImportStarted,
+  emitBackgroundImportFinished,
+} from "./messagesBackgroundImportSignal";
 import logService from "./logService";
 
 export type MessagesSyncReason = "create" | "open" | "export" | "date-change" | "scan";
@@ -106,32 +131,17 @@ export function isMessagesSyncInFlight(userId: string): boolean {
   return inflightByUser.has(userId);
 }
 
-/**
- * Non-rejected transaction date fields for computeEarliestAuditStart.
+/*
+ * BACKLOG-2772: `getNonRejectedTxnDates` was DELETED from this file.
  *
- * BACKLOG-2308: the import floor spans pending/active/closed (all carry an
- * audit-completeness obligation) and EXCLUDES rejected (dead deals, no audit
- * needed). The filter is `status != 'rejected'` — the prior `!= 'archived'` was
- * a dead no-op ('archived' is not a valid status), so rejected deals wrongly
- * pinned the floor. Must match messageImportHandlers + the export gate
- * (auditCoverageService.checkExportCompleteness) so the two never disagree.
+ * It was a verbatim second copy of the `status != 'rejected'` query that the
+ * import plan's assembler runs — two readers of one fact, in the one module
+ * whose whole job is to decide how far back an import must reach. The shared
+ * reader is `readNonRejectedTransactions`, and the export gate
+ * (`auditCoverageService.checkExportCompleteness`) reads the same predicate, so
+ * the import floor, the plan's protected spans and the export gate can no
+ * longer disagree about which deals carry an audit obligation.
  */
-function getNonRejectedTxnDates(userId: string): Array<{
-  started_at: string | null;
-  created_at: string | null;
-  closed_at: string | null;
-}> {
-  return dbAll<{
-    started_at: string | null;
-    created_at: string | null;
-    closed_at: string | null;
-  }>(
-    `SELECT started_at, created_at, closed_at
-       FROM transactions
-      WHERE user_id = ? AND status != 'rejected'`,
-    [userId],
-  );
-}
 
 /**
  * Resolve the required lower bound: an explicit proposed start (create /
@@ -144,7 +154,7 @@ function resolveRequiredStart(userId: string, proposedStartISO?: string | null):
     const d = new Date(proposedStartISO);
     if (!Number.isNaN(d.getTime())) return d;
   }
-  return computeEarliestAuditStart(getNonRejectedTxnDates(userId));
+  return computeEarliestAuditStart(readNonRejectedTransactions(userId));
 }
 
 /**
@@ -298,15 +308,45 @@ async function runEnsure(params: {
       deepestImportStart !== null &&
       new Date(deepestImportStart).getTime() <= requiredStart.getTime();
 
-    // Targeted GLOBAL import (SR-correction a). auditPeriodStart turns the 50K
-    // cap OFF and reaches the import lower bound back to requiredStart.
+    // BACKLOG-2772: a targeted GLOBAL import, resolved by the SAME planner the
+    // Settings buttons and the estimate use.
+    //
+    // What this replaces was one line — `{ auditPeriodStart: ... }` — and it was
+    // a third assembler. It carried NO lookback, NO cap and NO attachment
+    // preference, so a deal being created silently started a full-device,
+    // uncapped, attachment-copying scan that ignored every setting the user had
+    // chosen, and the old `auditPeriodActive` rule then switched the cap off for
+    // the whole library on top of that. Under Cap' the deal's own period is
+    // protected by being a span, and the cap still governs everything else.
+    //
+    // `requestedStartISO` is how this entry point states its one legitimate
+    // difference: the deal being created may not be in the database yet, so its
+    // start has to be passed in rather than derived.
     if (gap && importerAvailable && !alreadyScannedDeep) {
-      const result = await macOSMessagesImportService.importMessages(
+      const plan = await resolveImportPlanForUser({
         userId,
-        onProgress,
-        false,
-        { auditPeriodStart: (requiredStart as Date).toISOString() },
-      );
+        mode: "delta",
+        requestedStartISO: (requiredStart as Date).toISOString(),
+      });
+
+      // BACKLOG-2772: announce the run so the renderer can mirror it into the
+      // sync queue as an external item. Until now this import had no queue item
+      // and therefore NO CANCEL SURFACE AT ALL — the service's cancel is global
+      // and would have stopped it, but nothing ever offered the button. A deal
+      // created on a large library started an unstoppable full-device scan.
+      emitBackgroundImportStarted(userId, reason);
+      let result: MacOSImportResult | undefined;
+      try {
+        result = await macOSMessagesImportService.importMessages(
+          userId,
+          onProgress,
+          plan,
+        );
+      } finally {
+        // In a `finally` so a throw cannot strand a spinning queue item that
+        // the user can never dismiss.
+        emitBackgroundImportFinished(userId, reason);
+      }
       if (result.success) {
         importRan = true;
         imported = result.messagesImported;

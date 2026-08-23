@@ -32,6 +32,9 @@ import { getUserById } from "../db/userDbService";
 import type { Transaction, Communication } from "../../types/models";
 import type { TransactionWithDetails } from "../transactionService/types";
 import type { FolderExportProgress } from "../../types/ipc";
+// BACKLOG-2771: the single include-set decision, resolved by the caller.
+import type { ExportPlan } from "../exportPlan";
+import { orderAttachmentComms } from "../exportPlan";
 import { isEmailMessage, isTextMessage } from "../../utils/channelHelpers";
 import { isReactionRow } from "../../utils/reactionUtils";
 import {
@@ -114,11 +117,6 @@ function sanitizeEmailBodyHtml(html: string | null | undefined): string {
 export interface FolderExportOptions {
   transactionId: string;
   outputPath?: string;
-  includeEmails: boolean;
-  includeTexts: boolean;
-  includeAttachments: boolean;
-  attachmentType?: "all" | "email" | "text" | "none";
-  emailExportMode?: "thread" | "individual";
   onProgress?: (progress: FolderExportProgress) => void;
 }
 
@@ -164,10 +162,26 @@ class FolderExportService {
    */
   async exportTransactionToFolder(
     transaction: TransactionWithDetails,
-    communications: Communication[],
+    plan: ExportPlan,
     options: FolderExportOptions
   ): Promise<string> {
-    const { includeEmails, includeTexts, includeAttachments, attachmentType = "all", emailExportMode, onProgress } = options;
+    const { onProgress } = options;
+
+    // BACKLOG-2771: this service no longer decides anything about the include
+    // set. `plan` is the resolver's output and the only source of truth for
+    // what to write.
+    //
+    // BACKLOG-2769 (kept closed, now structurally): the per-thread email
+    // attachment phase below used to carry no reference to the attachment
+    // selector at all, so "None" (and "Text only") still wrote
+    // emails/<thread>/attachments/<file> to disk AND pulled the declined
+    // attachments from Gmail/Outlook. Each phase re-deriving the predicate by
+    // hand is what allowed them to drift. Now every attachment phase reads
+    // `plan.writesAttachmentsToDisk` and `plan.attachmentComms` — there is no
+    // predicate left to re-derive, and the previous `attachmentType === "text"`
+    // ternary at the exportAttachments() call site is gone with it.
+    const communications = plan.communications;
+    const { includeEmails, includeTexts, emailRenderMode } = plan;
 
     try {
       logService.info("[Folder Export] Starting folder export", "FolderExport", {
@@ -191,7 +205,7 @@ class FolderExportService {
       if (includeTexts) {
         await fs.mkdir(textsPath, { recursive: true });
       }
-      if (includeAttachments) {
+      if (plan.writesAttachmentsToDisk) {
         await fs.mkdir(attachmentsPath, { recursive: true });
       }
 
@@ -251,7 +265,7 @@ class FolderExportService {
         communications,
         basePath,
         phoneNameMap,
-        emailExportMode ?? "thread"
+        emailRenderMode
       );
 
       onProgress?.({
@@ -263,7 +277,7 @@ class FolderExportService {
 
       // Export emails as PDFs
       if (includeEmails && emails.length > 0) {
-        if (emailExportMode === "individual") {
+        if (emailRenderMode === "individual") {
           for (let i = 0; i < emails.length; i++) {
             onProgress?.({
               stage: "emails",
@@ -329,10 +343,16 @@ class FolderExportService {
 
       // TASK-2050: Export email attachments into per-thread subdirectories
       // TASK-2061: Pass threadNameMap so folders match PDF names
+      // BACKLOG-2769/2771: only the emails the PLAN selected for attachment
+      // export reach this phase — it both writes files and downloads them from
+      // the provider, so a declined selection must not get here. The list is
+      // the plan's selection re-ordered to this section's own ascending order
+      // (see orderAttachmentComms); nothing re-derives the predicate.
+      const selectedEmailAttachmentComms = orderAttachmentComms(plan, emails);
       let emailAttachmentResult: AttachmentExportResult | undefined;
-      if (includeEmails && emails.length > 0) {
+      if (includeEmails && selectedEmailAttachmentComms.length > 0) {
         emailAttachmentResult = await exportEmailAttachmentsToThreadDirs(
-          emails,
+          selectedEmailAttachmentComms,
           emailsPath,
           threadNameMap,
         );
@@ -365,7 +385,8 @@ class FolderExportService {
       }
 
       // Export attachments with manifest
-      if (includeAttachments && attachmentType !== "none") {
+      // BACKLOG-2769/2771: the same single decision as the email-thread phase.
+      if (plan.writesAttachmentsToDisk) {
         onProgress?.({
           stage: "attachments",
           current: 0,
@@ -373,17 +394,11 @@ class FolderExportService {
           message: "Collecting attachments...",
         });
 
-        // Filter communications based on attachmentType
-        let attachmentComms: typeof emails;
-        if (attachmentType === "email") {
-          attachmentComms = [...emails];
-        } else if (attachmentType === "text") {
-          attachmentComms = [...texts];
-        } else {
-          // "all" — include both
-          attachmentComms = [...emails, ...texts];
-        }
-        await this.exportAttachments(transaction, attachmentComms, attachmentsPath, attachmentType === "text" ? undefined : emailAttachmentResult);
+        // The plan's selection, in this exporter's own order (emails ascending
+        // then texts ascending) — manifest.json encodes array position as
+        // `sourceEmailIndex`, so the order is observable and preserved.
+        const attachmentComms = orderAttachmentComms(plan, [...emails, ...texts]);
+        await this.exportAttachments(transaction, attachmentComms, attachmentsPath, emailAttachmentResult);
 
         onProgress?.({
           stage: "attachments",

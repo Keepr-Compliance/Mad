@@ -28,6 +28,8 @@ import { isExpansionStale, getDeepestImportStart } from "./db/messageImportState
 import permissionService from "./permissionService";
 import logService from "./logService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
+// BACKLOG-2562: the ONE definition of "is this deal live?" (see the call site).
+import { isLiveTransactionStatus } from "./transactionEligibility";
 import {
   isBeforeFloor,
   type AuditCoverageResult,
@@ -200,12 +202,18 @@ export async function checkExportCompleteness(
     const messagesImporterAvailable = await isMessagesImporterAvailable();
 
     // BACKLOG-2308: a rejected transaction is a dead deal with NO audit-completeness
-    // obligation. The import floor (messagesSyncTrigger.getNonRejectedTxnDates +
-    // messageImportHandlers) EXCLUDES rejected, so the sync would never widen the
-    // floor to cover it — demanding coverage here would be a permanent
-    // false-incomplete the sync can never heal. Treat as complete (no gap). Keep
-    // this status rule in lock-step with the floor sites above.
-    if (txn?.status === "rejected") {
+    // obligation. The import floor (readNonRejectedTransactions) EXCLUDES
+    // rejected, so the sync would never widen the floor to cover it — demanding
+    // coverage here would be a permanent false-incomplete the sync can never
+    // heal. Treat as complete (no gap).
+    //
+    // BACKLOG-2562: "keep this rule in lock-step with the floor sites by hand"
+    // is what this comment used to say, and by hand is exactly how
+    // autoLinkService drifted. The rule now has ONE definition in
+    // `transactionEligibility`. Note that `isLiveTransactionStatus` treats a
+    // NULL status as LIVE, which is what `status === "rejected"` did here —
+    // the swap is behaviour-neutral, including for NULL.
+    if (!isLiveTransactionStatus(txn?.status)) {
       return {
         success: true,
         complete: true,

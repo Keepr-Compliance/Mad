@@ -8,8 +8,12 @@ import type { Contact, NewContact, ContactFilters, Message, Communication, Conta
 import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import logService from "../logService";
-import { validateFields } from "../../utils/sqlFieldWhitelist";
-import { toLookupKey, toE164, looksLikePhoneQuery } from "../../utils/phoneNormalization";
+import {
+  validateFields,
+  type ColumnOf,
+  type FieldExpression,
+} from "../../utils/sqlFieldWhitelist";
+import { toLookupKey, toE164, looksLikePhoneQuery, legacyDigitKey } from "../../utils/phoneNormalization";
 import { contactInfoSourceFor } from "../../utils/contactValueProvenance";
 import type { ContactInfoSource, ContactUpdateFields } from "../../types/models";
 import { CONTACT_UPDATE_FIELD_TO_COLUMN } from "../../types/models";
@@ -1350,8 +1354,23 @@ export async function searchContacts(
  * anchoring `contacts` as the outer loop, which is what lets
  * `idx_contact_phones_normalized` drive the join.
  *
+ * ===========================================================================
+ * WHAT `normalizedPhone` MUST BE — BACKLOG-2630. READ THIS BEFORE CALLING.
+ * ===========================================================================
+ * A key produced by `toLookupKey` (or `toMatchingKey`, which is the same key
+ * above the digit floor) — NOT "the last ten digits". Since BACKLOG-2630 the
+ * key is the libphonenumber-parsed E.164 digits, so a US number keys as
+ * "14155550109" and migration v64 re-keyed every stored row to match.
+ *
+ * The old wording of this line said "last 10 digits", and a caller that
+ * believed it hand-rolled `digits.slice(-10)`, asked for "4155550109", and got
+ * null for every real number on file — which made the Android promotion dedup
+ * treat the entire address book as new (SR blocker B1 on PR #2346, fixed at
+ * `localSyncService.promoteToMainContacts`). Compute the key, never transcribe
+ * the rule.
+ *
  * @param userId - Owning user ID
- * @param normalizedPhone - Last 10 digits of the phone number
+ * @param normalizedPhone - A `toLookupKey`/`toMatchingKey` key. See above.
  * @returns Contact ID and display_name if found, null otherwise
  */
 export function findContactByNormalizedPhone(
@@ -1598,8 +1617,19 @@ export function updateContactSync(
   const fields = [...byColumn.keys()].map((column) => `${column} = ?`);
   const values = [...byColumn.values()];
 
-  // Validate fields against whitelist before SQL construction
-  validateFields("contacts", fields);
+  // Validate fields against whitelist before SQL construction.
+  //
+  // BACKLOG-2739 PHASE 1 SEAM — the cast is the finding, not the fix.
+  // `fields` is built above as `${column} = ?` from plain strings, so it is
+  // `string[]` and cannot satisfy the column union `validateFields` now takes.
+  // The cast keeps the build green WITHOUT touching this writer's field map,
+  // which is deliberately Phase 2 (BACKLOG-2738): the writer must declare an
+  // exhaustive `Record<Column, Decision>` so an OMITTED column is a build
+  // error. Until then a wrong name here is still only caught at runtime.
+  validateFields(
+    "contacts",
+    fields as ReadonlyArray<FieldExpression<ColumnOf<"contacts">>>,
+  );
 
   values.push(contactId);
   const sql = `UPDATE contacts SET ${fields.join(", ")} WHERE id = ?`;
@@ -1632,9 +1662,14 @@ export async function getTransactionsByContact(
       closing_deadline,
       transaction_type,
       status,
+      -- BACKLOG-2804: these strings are DISPLAY labels, not enum values --
+      -- checkCanDelete hands them to the renderer, which joins and prints them
+      -- verbatim (BlockingTransactionsModal, ContactPreview, Contacts). So the
+      -- seller-side label has to match the chip: "Listing Agent". The COLUMN
+      -- name (seller_agent_id) is untouched.
       CASE
         WHEN buyer_agent_id = ? THEN 'Buyer Agent'
-        WHEN seller_agent_id = ? THEN 'Seller Agent'
+        WHEN seller_agent_id = ? THEN 'Listing Agent'
         WHEN escrow_officer_id = ? THEN 'Escrow Officer'
         WHEN inspector_id = ? THEN 'Inspector'
       END as role
@@ -2415,7 +2450,20 @@ export function searchContactsForSelection(
   // prepared-statement caching still works.
   const phoneIsQuery = looksLikePhoneQuery(query);
   const phoneGate = phoneIsQuery ? 1 : 0;
+  /**
+   * The searchable form of one phone row: its stored key when it has one, else
+   * the raw `phone_e164` with the separators a person types stripped out.
+   * Declared once because the clause below reads it against TWO needles.
+   */
+  const PHONE_HAYSTACK_SQL = `REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+             COALESCE(NULLIF(cp_all.phone_normalized, ''), cp_all.phone_e164)
+           , '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), '.', '')`;
+
   const phonePattern = phoneIsQuery ? `%${toLookupKey(query)}%` : "%";
+  // BACKLOG-2630: the pre-2630 needle, kept alongside the new one so a row whose
+  // `phone_normalized` is NULL (written before migration v40 added the column)
+  // is still found by its own number through the `phone_e164` fallback branch.
+  const phoneLegacyPattern = phoneIsQuery ? `%${legacyDigitKey(query.trim())}%` : "%";
 
   // BACKLOG-2618: the email set that stood here was read by a filter that could
   // never fire — `messageSql` below carries the same
@@ -2481,9 +2529,19 @@ export function searchContactsForSelection(
         -- unfindable. SQLite has no regex, so closing that would mean an
         -- unbounded REPLACE chain or a backfill; the fallback exists only for
         -- rows predating the column, and every write path since populates it.
-        OR (? = 1 AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-             COALESCE(NULLIF(cp_all.phone_normalized, ''), cp_all.phone_e164)
-           , '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), '.', '') LIKE ?)
+        --
+        -- BACKLOG-2630: TWO needles, because this expression yields TWO key
+        -- spaces. phone_normalized now holds E.164 digits ("14155550109"); the
+        -- phone_e164 fallback branch yields whatever the row happens to hold
+        -- with separators stripped, which for a pre-column legacy row is a bare
+        -- national number ("2135550177"). One needle cannot match both, and the
+        -- E.164 needle alone would make a legacy-shaped row unfindable by its
+        -- own number. The second needle is the pre-2630 key, so this clause
+        -- keeps every match it makes today and adds the new-key ones.
+        OR (? = 1 AND (
+             ${PHONE_HAYSTACK_SQL} LIKE ?
+             OR ${PHONE_HAYSTACK_SQL} LIKE ?
+           ))
       )
     GROUP BY c.id
     ORDER BY
@@ -2547,7 +2605,8 @@ export function searchContactsForSelection(
       searchPattern,
       searchPattern,
       phoneGate, // BACKLOG-2467: 1 only when the query looks like a phone number
-      phonePattern, // BACKLOG-2467: digits-only needle (toLookupKey)
+      phonePattern, // BACKLOG-2467/2630: E.164-digits needle (toLookupKey)
+      phoneLegacyPattern, // BACKLOG-2630: pre-2630 needle for the phone_e164 fallback
       searchPattern, // For ORDER BY CASE
       limit,
     ]);

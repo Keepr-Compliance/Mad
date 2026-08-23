@@ -114,6 +114,10 @@ import {
 // nothing else. Those are deleted, so the imports go with them — a helper kept
 // "in case" is how a deleted rule grows a second call site.
 import { contactInfoSourceFor } from "../utils/contactValueProvenance";
+import {
+  hasNothingToImport,
+  NOTHING_TO_IMPORT_REASON,
+} from "../utils/importableRecord";
 import { applyLinkedSourceValues } from "../services/contactSourceValues";
 // BACKLOG-2617: `recordContactOrigin` was imported here for the duplicate-by-name
 // early return in `contacts:create` and nothing else. That branch is deleted, so
@@ -1856,8 +1860,41 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // rather than one line per contact (BACKLOG-2458 I2).
         const linkOutcomes: Array<{ contactId: string; outcome: LinkImportOutcome }> = [];
 
-        for (const contact of contactsToImport) {
+        for (const [index, contact] of contactsToImport.entries()) {
           const sanitizedContact = sanitizeObject(contact) as ImportableContact;
+
+          /**
+           * BACKLOG-2684 — REFUSE A RECORD WITH NOTHING ON IT.
+           *
+           * BACKLOG-2672 stopped this in the renderer: the Import button is
+           * disabled and says why. This is the door behind that button. Before
+           * this guard, `contacts:import` accepted the founder's own
+           * message-derived record — `{ name: "unknown", phone: "unknown" }` —
+           * because the literal "unknown" is a non-empty string as far as
+           * `validateContactData` is concerned. Measured on the pre-fix tree:
+           * it succeeded and created a row whose `display_name` was "unknown",
+           * exactly the state BACKLOG-2461 exists to eliminate.
+           *
+           * The renderer guard cannot protect a caller that does not go
+           * through the renderer, and the next engineer wiring a new import
+           * entry point inherits this handler.
+           *
+           * BEFORE `validateContactData` on purpose: that check refuses a
+           * missing name with "name is required", which describes the field
+           * rather than the record. "Nothing to import" is the true reason and
+           * is the one the user was already shown on the button.
+           *
+           * REFUSES THE WHOLE BATCH, by throwing rather than skipping. A
+           * silently-dropped import is worse than a rejected one: the caller
+           * would have no way to tell which of its records landed.
+           */
+          if (hasNothingToImport(sanitizedContact)) {
+            throw new ValidationError(
+              `Record ${index + 1} has ${NOTHING_TO_IMPORT_REASON.toLowerCase()}`,
+              "contactsToImport",
+            );
+          }
+
           const validatedData = validateContactData(sanitizedContact, false);
           const sourceIdentities = toSourceIdentities(sanitizedContact);
 
@@ -2650,6 +2687,56 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           userId,
           contactId: validatedContactId,
         });
+
+        // BACKLOG-2791 (T2): editing a party's EMAIL or PHONE changes exactly
+        // the inputs the matchers read, and until now NOTHING re-scanned — the
+        // renderer merely refetched links that had never been recomputed. Every
+        // deal this contact is on gets a re-scan scoped to THIS contact's
+        // identities, so a corrected address surfaces its mail immediately
+        // rather than on some later open.
+        //
+        // Scoped, not global: one indexed sweep per affected deal, for one
+        // contact. Failures are logged and swallowed — a discovery miss must
+        // never fail the contact save the user actually asked for.
+        // NOT AWAITED — deliberately, and this was changed after measuring.
+        //
+        // This loops EVERY deal the contact is on. Each sweep is bounded (the
+        // email axis is two indexed searches after BACKLOG-2791's restructure;
+        // the text axis is `SEARCH m USING INDEX idx_messages_user_sent`, i.e.
+        // the deal's own window, with the phone LIKE as a residual filter rather
+        // than the access path). Bounded is not free: a contact on N deals costs
+        // N window sweeps, and putting that on the save round-trip is how
+        // BACKLOG-820's 8-second hang happened in the first place.
+        //
+        // The renderer no longer needs the await: syncReviewQueueForTransaction
+        // broadcasts `review:queue-changed` when each sweep lands, so the badge
+        // and the popup update as results arrive instead of the save blocking on
+        // all of them. Failures warn-log; a discovery miss must never fail the
+        // contact save the user actually asked for.
+        void (async () => {
+          try {
+            const { syncReviewQueueForTransaction } = await import(
+              "../services/reviewStateService"
+            );
+            const affected = dbAll<{ transaction_id: string }>(
+              "SELECT DISTINCT transaction_id FROM transaction_contacts WHERE contact_id = ?",
+              [validatedContactId],
+            );
+            for (const row of affected) {
+              await syncReviewQueueForTransaction({
+                transactionId: row.transaction_id,
+                reason: "contact-change",
+                contactIds: [validatedContactId],
+              });
+            }
+          } catch (syncError) {
+            logService.warn(
+              "[BACKLOG-2791] review-queue sync after contact update failed",
+              "Contacts",
+              { error: syncError instanceof Error ? syncError.message : "Unknown" },
+            );
+          }
+        })();
 
         return {
           success: true,

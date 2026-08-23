@@ -917,8 +917,15 @@ class EmailSyncService {
     window?: { after: Date; before?: Date | null };
     // BACKLOG-1802: 'manual' when the user clicked Sync Emails (ingest_source).
     ingestSourceOverride?: "manual";
+    // BACKLOG-2791: when true, freshly-fetched mail is QUEUED for review instead
+    // of being auto-linked. Only the on-transaction-open trigger passes this —
+    // the founder's rule is "nothing is ever silently linked (approval links)",
+    // and that rule is scoped to discovery on the deal surface. Every other
+    // caller (the manual "Sync Emails" button, the global background sync) keeps
+    // today's auto-link behavior, which is why this defaults to false.
+    queueForReviewInsteadOfLinking?: boolean;
   }): Promise<TransactionResponse> {
-    const { transactionId, userId, contactAssignments, contactEmails, transactionDetails, window, ingestSourceOverride } = params;
+    const { transactionId, userId, contactAssignments, contactEmails, transactionDetails, window, ingestSourceOverride, queueForReviewInsteadOfLinking } = params;
 
     // TASK-2273: Breadcrumb at sync orchestration start with full context
     Sentry.addBreadcrumb({
@@ -933,8 +940,19 @@ class EmailSyncService {
     });
 
     if (contactEmails.length === 0) {
-      // No contact emails -- still run auto-link for phone-based message matching
-      return this.runAutoLinkOnly(transactionId, contactAssignments);
+      // No contact emails -- still resolve phone-based message matching.
+      //
+      // BACKLOG-2791: this early return sits ~150 lines ABOVE the
+      // queueForReviewInsteadOfLinking branch, so before the flag was threaded
+      // here it leaked straight past the redirect: a deal whose assigned parties
+      // are all PHONE-ONLY had its text messages SILENTLY LINKED on every open —
+      // never queued, never announced — on the very path this feature claims to
+      // have redirected. runAutoLinkOnly took no flag and had no queue path.
+      return this.runAutoLinkOnly(
+        transactionId,
+        contactAssignments,
+        queueForReviewInsteadOfLinking,
+      );
     }
 
     // Diagnostic: how many emails are in the local DB for this user?
@@ -1083,16 +1101,25 @@ class EmailSyncService {
     let totalAlreadyLinked = 0;
     let totalErrors = 0;
 
+    // BACKLOG-2791 (founder ruling, 2026-08-22): the SHIPPED split is restored.
+    // An earlier revision of this PR queued EVERYTHING found here, which made
+    // the popup read "0 linked successfully" on every run. The classification is
+    // develop's again — confident emails link, texts link — and the only change
+    // is that the ambiguous half is queued for review instead of being linked
+    // with an address_missing flag.
+    let totalQueuedForReview = 0;
     for (const assignment of contactAssignments) {
       try {
         const result = await autoLinkCommunicationsForContact({
           contactId: assignment.contact_id,
           transactionId,
+          queueAmbiguousInsteadOfLinking: queueForReviewInsteadOfLinking,
         });
 
         totalEmailsLinked += result.emailsLinked;
         totalMessagesLinked += result.messagesLinked;
         totalAlreadyLinked += result.alreadyLinked;
+        totalQueuedForReview += result.queuedForReview ?? 0;
         totalErrors += result.errors;
       } catch (error) {
         totalErrors++;
@@ -1174,6 +1201,9 @@ class EmailSyncService {
       totalEmailsLinked,
       totalMessagesLinked,
       totalAlreadyLinked,
+      // BACKLOG-2791: the popup's R. Reported separately from linked counts so a
+      // queued item can never be counted as a link.
+      totalQueuedForReview,
       totalErrors,
     };
     if (providerWarning) {
@@ -1189,11 +1219,19 @@ class EmailSyncService {
   private async runAutoLinkOnly(
     transactionId: string,
     contactAssignments: TransactionContactResult[],
+    // BACKLOG-2791: same contract as syncTransactionEmails — on the deal surface
+    // this QUEUES for review; every other caller keeps auto-linking.
+    queueForReviewInsteadOfLinking = false,
   ): Promise<TransactionResponse> {
     let totalMessagesLinked = 0;
     let totalAlreadyLinked = 0;
     let totalErrors = 0;
 
+    // BACKLOG-2791: nothing special to do here any more. This path exists for
+    // PHONE-ONLY contacts, and texts are never classified — TASK-2087 removed
+    // address filtering from messages entirely, so every matching thread links,
+    // exactly as it does on develop. The earlier revision queued them, which is
+    // what emptied the linked count on phone-only deals.
     for (const assignment of contactAssignments) {
       try {
         const result = await autoLinkCommunicationsForContact({
@@ -1538,8 +1576,13 @@ class EmailSyncService {
       created_at?: Date | string | null;
       closed_at?: Date | string | null;
     };
+    // BACKLOG-2791: when true, whatever the fetch brings in is QUEUED for review
+    // instead of auto-linked. The transaction-details contact-save paths pass
+    // this (discovery on the deal surface never links silently); every other
+    // caller keeps today's behavior, hence the default.
+    queueForReviewInsteadOfLinking?: boolean;
   }): Promise<FetchAndAutoLinkResult> {
-    const { userId, transactionId, contactId, transactionDetails } = params;
+    const { userId, transactionId, contactId, transactionDetails, queueForReviewInsteadOfLinking } = params;
 
     // Get contact email addresses
     const contactEmails = getEmailsByContactId(contactId);
@@ -1641,10 +1684,18 @@ class EmailSyncService {
       });
     }
 
-    // Now auto-link from local DB (which includes newly fetched emails)
-    const autoLinkResult = await autoLinkCommunicationsForContact({
+    // Now resolve from the local DB (which includes newly fetched emails).
+    // BACKLOG-2791: on the deal surface this QUEUES for review rather than
+    // linking — the founder's "nothing is ever silently linked" rule. The scan
+    // is scoped to THIS contact's identities across the full window, which is
+    // the direction the on-open watermark cannot cover (a newly added contact's
+    // matching mail is older than the watermark).
+    // BACKLOG-2791: develop's classification, with the ambiguous half queued on
+    // the details-discovery paths. Confident emails and every text still link.
+    const autoLinkResult: AutoLinkResult = await autoLinkCommunicationsForContact({
       contactId,
       transactionId,
+      queueAmbiguousInsteadOfLinking: queueForReviewInsteadOfLinking,
     });
 
     return {

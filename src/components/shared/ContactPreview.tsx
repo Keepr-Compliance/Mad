@@ -513,7 +513,7 @@ export function ContactPreview({
    * This line used to call the singular `mapToSourcePillSource(contact.source,
    * …)`. `contacts.source` is the scalar written once at INSERT that no unlink
    * revises, so the card asserted an origin it could not support: the founder's
-   * Paul Dorian read "Outlook" while every address and number on the card had
+   * Casey Lane read "Outlook" while every address and number on the card had
    * come from the Mac address book, because Outlook merely imported him first
    * and the label never moved when the Outlook link was removed. The list filter
    * had already been moved onto the live links (BACKLOG-2472) — so the filter

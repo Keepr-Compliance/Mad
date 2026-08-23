@@ -50,6 +50,13 @@ import {
 import { ReviewNotesPanel } from "./transactionDetailsModule/components/ReviewNotesPanel";
 // Import Submit for Review components (BACKLOG-391)
 import { SubmitForReviewModal } from "./transactionDetailsModule/components/modals/SubmitForReviewModal";
+// BACKLOG-2791 / BACKLOG-2792: the Needs Review queue and the merged Complete flow.
+import { useReviewQueue } from "./transactionDetailsModule/hooks/useReviewQueue";
+import { useResolvedContactNames } from "./transactionDetailsModule/hooks/useResolvedContactNames";
+import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
+import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
+import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
+import { ReviewQueueSection } from "./transactionDetailsModule/components/ReviewQueueSection";
 import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitForReview";
 import type {
   AutoLinkResult,
@@ -295,6 +302,102 @@ function TransactionDetails({
   const [syncingCommunications, setSyncingCommunications] = useState<boolean>(false);
   const [syncingMessages, setSyncingMessages] = useState<boolean>(false);
   const [showSubmitModal, setShowSubmitModal] = useState<boolean>(false);
+
+  // ---- BACKLOG-2791 / BACKLOG-2792 -------------------------------------
+  // One review-state read feeds the badge, S2, P2 and the Complete gate.
+  const [showNeedsReview, setShowNeedsReview] = useState<boolean>(false);
+  const reviewQueue = useReviewQueue(transaction.id);
+  const openSubmitFlow = useCallback(async () => {
+    try {
+      const refreshed = await transactionService.getDetails(transaction.id);
+      if (refreshed.success && refreshed.data) setTransaction(refreshed.data);
+    } catch (err) {
+      logger.error("Failed to refresh transaction before submit:", err);
+    }
+    loadAttachmentCounts();
+    setShowSubmitModal(true);
+  }, [transaction.id]);
+  // T1 — the sync runs on EVERY open. The renderer owns this call because it is
+  // the one that advances the watermark, which is what makes `added` mean "new
+  // since you last looked" rather than "inserted by this particular call": the
+  // on-open provider fetch has usually queued the same items microseconds
+  // earlier under "background", and counting only our own inserts would report
+  // 0 for exactly the mail P2 exists to announce.
+  //
+  // Keyed on the transaction id ONLY, via a ref for the callback: this must fire
+  // once per open, and runSync's own identity changes whenever the queue does,
+  // so depending on it directly would re-sync in a loop.
+  const runSyncRef = useRef(reviewQueue.runSync);
+  runSyncRef.current = reviewQueue.runSync;
+  useEffect(() => {
+    void runSyncRef.current("open");
+  }, [transaction.id]);
+
+  // Handles across every TEXT item in the queue, resolved independently of the
+  // Texts tab — the review screen can be opened from any tab.
+  const reviewTextHandles = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          reviewQueue.items
+            .filter((i) => i.kind === "text")
+            .flatMap((i) => i.display.threadParticipants),
+        ),
+      ),
+    [reviewQueue.items],
+  );
+  const reviewContactNames = useResolvedContactNames(reviewTextHandles, userId);
+
+
+  // BACKLOG-2791: review actions were silent. Every other destructive or
+  // state-changing action in this screen toasts ("2 emails restored"), so these
+  // reuse the same showSuccess/showError helpers and the same "N noun verbed"
+  // phrasing rather than introducing a second convention.
+  const reviewNoun = useCallback(
+    (ids: string[]) => {
+      const kinds = new Set(
+        reviewQueue.items.filter((i) => ids.includes(i.id)).map((i) => i.kind),
+      );
+      const noun = kinds.size === 1 && kinds.has("text") ? "conversation" : "email";
+      return ids.length === 1 ? noun : `${noun}s`;
+    },
+    [reviewQueue.items],
+  );
+
+  const handleApproveReview = useCallback(
+    async (ids: string[]) => {
+      const noun = reviewNoun(ids);
+      try {
+        await reviewQueue.approve(ids);
+        showSuccess(`${ids.length} ${noun} linked to this transaction`);
+      } catch (err) {
+        showError(`Could not link ${noun}`);
+      }
+    },
+    [reviewQueue, reviewNoun, showSuccess, showError],
+  );
+
+  const handleRejectReview = useCallback(
+    async (ids: string[]) => {
+      const noun = reviewNoun(ids);
+      try {
+        await reviewQueue.reject(ids);
+        // "removed" — the same word the Removed section uses, because that is
+        // exactly where the item now is.
+        showSuccess(`${ids.length} ${noun} removed`);
+      } catch (err) {
+        showError(`Could not remove ${noun}`);
+      }
+    },
+    [reviewQueue, reviewNoun, showSuccess, showError],
+  );
+
+  const complete = useCompleteTransaction({
+    refreshReviewState: reviewQueue.refresh,
+    openExport: () => setShowExportModal(true),
+    openSubmit: () => { void openSubmitFlow(); },
+    openNeedsReview: () => setShowNeedsReview(true),
+  });
   // BACKLOG-1832: true while the background create-trigger sync is in flight for THIS transaction.
   // Drives the "fetching emails…" indicator on the empty emails tab.
   const [autoSyncRunning, setAutoSyncRunning] = useState<boolean>(false);
@@ -731,6 +834,48 @@ function TransactionDetails({
     refreshAttachments();
   }, [refreshCommunicationsSilently, refreshAttachments]);
 
+  // BACKLOG-2791 — THE LINKED LIST HEARS THE REVIEW NOTIFICATION TOO.
+  //
+  // Founder walk, 2026-08-23: approving a suggested thread made it DISAPPEAR.
+  // It left Needs Review correctly and never arrived in the Emails tab's linked
+  // list until the transaction was closed and reopened.
+  //
+  // The cause was a missing SUBSCRIBER, not a missing write. Every review
+  // mutation broadcasts through notifyReviewStateChanged, and useReviewQueue
+  // re-reads on it — which is why the queue surfaces and the badge all moved.
+  // But the tab's linked list is a different data source (useTransactionDetails,
+  // fed by `transactions:getCommunications`), and nothing had told it that the
+  // set of LINKED communications had just changed. The item was correctly gone
+  // from one list and correctly absent from a list that had not looked again.
+  //
+  // So this is one more subscriber to the existing notification, not a patch on
+  // each action: approve, reject, restore and the discovery sweep all bump
+  // changeToken, and all of them can add to or remove from the linked list.
+  // Wiring it per-action would leave the next action to rediscover the bug.
+  //
+  // Both channels are refreshed, not just the active one. The tabs stay mounted
+  // (that is deliberate — they keep scroll and selection), so the inactive one
+  // would otherwise hold a stale list ready to show the moment it is opened —
+  // the same defect, merely deferred. Only channels actually LOADED are
+  // refreshed, so this never fetches a channel the user has not opened.
+  //
+  // Value comparison, not a mount guard: the token's previous value is compared
+  // so StrictMode's double invocation cannot double-fetch, and so the initial
+  // read (which the tab loader already performed) is not immediately repeated.
+  const lastReviewTokenRef = React.useRef(reviewQueue.changeToken);
+  useEffect(() => {
+    if (lastReviewTokenRef.current === reviewQueue.changeToken) return;
+    lastReviewTokenRef.current = reviewQueue.changeToken;
+    void (async () => {
+      for (const channel of ["email", "text"] as const) {
+        if (!loadedChannelsRef.current.has(channel)) continue;
+        await refreshCommunicationsSilently(channel);
+      }
+      // A newly linked communication brings its attachments with it.
+      refreshAttachments();
+    })();
+  }, [reviewQueue.changeToken, refreshCommunicationsSilently, refreshAttachments]);
+
   // Suggested contacts handlers with callbacks
   const suggestionCallbacks = {
     onUpdateResolvedSuggestions: setResolvedSuggestions,
@@ -913,19 +1058,9 @@ function TransactionDetails({
           onRestore={handleRestore}
           onShowExportModal={() => setShowExportModal(true)}
           onShowDeleteConfirm={() => setShowDeleteConfirm(true)}
-          onShowSubmitModal={async () => {
-            try {
-              const refreshed = await transactionService.getDetails(transaction.id);
-              if (refreshed.success && refreshed.data) {
-                setTransaction(refreshed.data);
-              }
-            } catch (err) {
-              logger.error("Failed to refresh transaction before submit:", err);
-            }
-            // Load attachment counts now (deferred from mount for perf)
-            loadAttachmentCounts();
-            setShowSubmitModal(true);
-          }}
+          reviewCount={reviewQueue.threadCount}
+          onShowNeedsReview={() => setShowNeedsReview(true)}
+          onComplete={() => { void complete.requestComplete(); }}
         />
 
         {/* Tabs */}
@@ -978,14 +1113,30 @@ function TransactionDetails({
           )}
 
           {activeTab === "emails" && (
+            <>
             <TransactionEmailsTab
+              hasReviewItems={reviewQueue.items.some((i) => i.kind === "email")}
+              /* BACKLOG-2791: the SAME set the badge counts and the Complete gate
+                 blocks on, filtered to emails, rendered by the tab under its
+                 Select row (develop's position). Not re-derived in the tab — that
+                 is what stopped the badge and the section disagreeing. */
+              reviewSection={
+                <ReviewQueueSection
+                  items={reviewQueue.items}
+                  kind="email"
+                  onApprove={handleApproveReview}
+                  onReject={handleRejectReview}
+                  onViewEmail={setViewingEmail}
+                  nameMap={emailNameMap}
+                />
+              }
               communications={emailCommunications}
               loading={loading || (autoSyncRunning && emailCommunications.length === 0)}
               unlinkingCommId={unlinkingCommId}
               onViewEmail={setViewingEmail}
               onShowUnlinkConfirm={setShowUnlinkConfirm}
               onShowUnlinkThread={handleShowUnlinkThread}
-              removedSectionRefreshKey={removedRefreshKey}
+              removedSectionRefreshKey={removedRefreshKey + reviewQueue.changeToken}
               onSyncCommunications={handleSyncCommunications}
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
@@ -1013,11 +1164,28 @@ function TransactionDetails({
               highlightTarget={highlightTarget}
               onHighlightConsumed={clearHighlightTarget}
             />
+            </>
           )}
 
 
           {activeTab === "messages" && (
+            <>
             <TransactionMessagesTab
+              hasReviewItems={reviewQueue.items.some((i) => i.kind === "text")}
+              reviewRefreshKey={reviewQueue.changeToken}
+              /* BACKLOG-2791: the texts half of the same set. develop has no
+                 needs-review section on this tab at all — texts never had the
+                 state — so this is new, positioned to match the Emails tab. */
+              reviewSection={
+                <ReviewQueueSection
+                  items={reviewQueue.items}
+                  kind="text"
+                  onApprove={handleApproveReview}
+                  onReject={handleRejectReview}
+                  auditStartDate={transaction.started_at}
+                  auditEndDate={transaction.closed_at}
+                />
+              }
               messages={textMessages}
               loading={messagesLoading || loading}
               error={messagesError}
@@ -1043,6 +1211,7 @@ function TransactionDetails({
               highlightTarget={highlightTarget}
               onHighlightConsumed={clearHighlightTarget}
             />
+            </>
           )}
 
           {activeTab === "attachments" && (
@@ -1196,6 +1365,55 @@ function TransactionDetails({
         />
       )}
 
+      {/* BACKLOG-2791 S2 — the combined review screen. An OVERLAY, not an early
+          return, so the four tabs stay mounted underneath and keep their scroll
+          position, highlight state and loaded channels. */}
+      {showNeedsReview && (
+        <NeedsReviewScreen
+          items={reviewQueue.items}
+          isLoading={reviewQueue.isLoading}
+          onApprove={handleApproveReview}
+          onReject={handleRejectReview}
+          onClose={() => setShowNeedsReview(false)}
+          /* Same props the tabs pass their cards, so the screen behaves
+             identically — including click-to-preview. Text names resolve here
+             rather than depending on the Texts tab being mounted. */
+          onViewEmail={setViewingEmail}
+          nameMap={emailNameMap}
+          contactNames={reviewContactNames}
+          auditStartDate={transaction.started_at}
+          auditEndDate={transaction.closed_at}
+        />
+      )}
+
+      {/* BACKLOG-2791 P2 — announces what this run FOUND (N = L + R). Silent
+          when it found nothing. "Later" just closes: items are already
+          persisted. Gating on `lastAdded` alone made a link-only sweep silent,
+          which is the common shape when an extended audit range pulls in mail
+          that names the property. */}
+      {reviewQueue.lastFound > 0 && !showNeedsReview && (
+        <ReviewPromptDialog
+          variant="found"
+          count={reviewQueue.lastAdded}
+          linkedCount={reviewQueue.lastLinked}
+          onReview={() => {
+            reviewQueue.clearLastAdded();
+            setShowNeedsReview(true);
+          }}
+          onDismiss={reviewQueue.clearLastAdded}
+        />
+      )}
+
+      {/* BACKLOG-2792 P3 — the completeness gate. No bypass. */}
+      {complete.blockedCount !== null && (
+        <ReviewPromptDialog
+          variant="blocked"
+          count={complete.blockedCount}
+          onReview={complete.reviewFromGate}
+          onDismiss={complete.cancelGate}
+        />
+      )}
+
       {/* Submit for Review Modal (BACKLOG-391) */}
       {showSubmitModal && (
         <SubmitForReviewModal
@@ -1213,6 +1431,14 @@ function TransactionDetails({
             resetSubmit();
           }}
           onSubmit={handleSubmitForReview}
+          // BACKLOG-2792: S4's Export option. The prop already existed and had
+          // ZERO call sites; this is the founder's "the confirmation window
+          // includes an Export option that triggers the same S3 export flow an
+          // individual gets" — literally the same modal, not a parallel path.
+          onExportFirst={() => {
+            setShowSubmitModal(false);
+            setShowExportModal(true);
+          }}
         />
       )}
     </ResponsiveModal>

@@ -1,4 +1,5 @@
-/**
+
+import { chainHeadVersion } from "./helpers/chainHead";/**
  * @jest-environment node
  */
 
@@ -431,7 +432,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toBeDefined();
       expect(plan).toEqual({
         currentVersion: 29,
-        targetVersion: 62,
+        // BACKLOG-2791: derived. A literal here re-breaks on every new migration.
+        targetVersion: chainHeadVersion(),
         pendingMigrations: [
           {
             version: 30,
@@ -565,8 +567,24 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 62,
             description: expect.stringContaining("BACKLOG-2513"),
           },
+          {
+            version: 63,
+            description: expect.stringContaining("BACKLOG-2750"),
+          },
+          {
+            version: 64,
+            description: expect.stringContaining("BACKLOG-2630"),
+          },
+          {
+            version: 65,
+            description: expect.stringContaining("BACKLOG-2791"),
+          },
         ],
-        wouldRunCount: 33,
+        // BACKLOG-2791: derived — the plan seeds at 29, so this is "every
+        // migration above 29", not a literal that needs re-typing each time.
+        wouldRunCount: (
+          databaseService.constructor as unknown as { MIGRATIONS: Array<{ version: number }> }
+        ).MIGRATIONS.filter((m) => m.version > 29).length,
       });
 
       // Verify no transaction was started (migration wasn't executed)
@@ -578,11 +596,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: version = 62 (all applied — BACKLOG-2513's v62
-      // emails.bulk_mail_headers is the chain head)
+      // BACKLOG-2791: DERIVED head — "all applied" must keep meaning that as the
+      // chain grows, rather than quietly becoming "one behind".
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 62 });
+        .mockReturnValueOnce({ version: chainHeadVersion() });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -594,8 +612,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: 62,
-        targetVersion: 62,
+        currentVersion: chainHeadVersion(),
+        targetVersion: chainHeadVersion(),
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -720,12 +738,22 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       // BACKLOG-2410 adds v59 (contact link review queue + verdicts),
       // BACKLOG-2427 adds v60 (recover hand-typed contact value provenance),
       // BACKLOG-2473 adds v61 (crosswalk origin vocabulary),
-      // BACKLOG-2513 adds v62 (emails.bulk_mail_headers)).
+      // BACKLOG-2513 adds v62 (emails.bulk_mail_headers),
+      // BACKLOG-2750 adds v63 (the seven legacy columns nothing migrated, plus
+      // the standalone schema.sql indexes deferred into the chain)).
       //
-      // BACKLOG-2571 briefly added a v63 (emails.sent_at_source) and took it
-      // out again — founder decision, 2026-08-09. The count going back to 33 is
-      // the enumeration doing its job in the removal direction.
-      expect(mockDb.transaction).toHaveBeenCalledTimes(33);
+      // BACKLOG-2571 briefly added a DIFFERENT v63 (emails.sent_at_source) and
+      // took it out again — founder decision, 2026-08-09 — which is why the
+      // count once went back to 33. BACKLOG-2791 adds v64 (the Needs-Review
+      // queue table + transactions.last_pending_scan_at).
+      //
+      // BACKLOG-2791: DERIVED from the chain rather than re-typed. The literal
+      // here was one of nine that turned red together when a migration landed;
+      // this seeds at 29, so the count is simply "every migration above 29".
+      const expectedRuns = (
+        databaseService.constructor as unknown as { MIGRATIONS: Array<{ version: number }> }
+      ).MIGRATIONS.filter((m) => m.version > 29).length;
+      expect(mockDb.transaction).toHaveBeenCalledTimes(expectedRuns);
     });
 
     it("should skip already-applied migrations", async () => {
@@ -733,11 +761,12 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 62, all migrations applied (BACKLOG-2513's v62
-      // emails.bulk_mail_headers is the chain head)
+      // BACKLOG-2791: the DERIVED chain head, so "all applied" keeps meaning
+      // "all applied" when the chain grows instead of silently becoming
+      // "one behind".
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 62 });
+        .mockReturnValueOnce({ version: chainHeadVersion() });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },

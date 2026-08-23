@@ -50,14 +50,49 @@
  *
  * The allow-list is PRINTED ON EVERY RUN, pass or fail. An exemption you cannot
  * see is a silent skip.
+ *
+ * ---------------------------------------------------------------------------
+ * ...and one NON-failure: this machine cannot run the probes (BACKLOG-2732)
+ * ---------------------------------------------------------------------------
+ * All three modes above are statements ABOUT THE REPOSITORY. A fourth condition
+ * looks identical in the output and is nothing of the kind: the runners are not
+ * installed for this checkout, every probe dies on
+ * "jest-environment-jsdom cannot be found", COVERED comes back empty and the
+ * gate declares 804 of 821 tracked test files orphaned.
+ *
+ * That red is entirely about the machine. Left as-is it does three harmful
+ * things: it buries any real finding under 804 fake ones, it trains readers to
+ * disbelieve the gate, and it points at the one remedy that must not be taken —
+ * `npm install` inside a git worktree, which rewrites the SHARED native sqlite
+ * binary through the symlinked `node_modules` and breaks the running dev app.
+ *
+ * So preflightEnvironment() runs FIRST and, if the runners cannot resolve, the
+ * script exits 2 having printed no coverage or drift output at all. Exit 1 keeps
+ * its single meaning: a real problem with the repository.
  */
 
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+/**
+ * EXIT CODES. Three outcomes, because "the gate says no" and "the gate cannot
+ * speak" are different facts and a caller must be able to tell them apart.
+ *
+ *   0  measured, nothing wrong.
+ *   1  measured, and there is a PROBLEM WITH THE REPOSITORY (orphan / dead
+ *      probe / stale allow-list entry).
+ *   2  NOT MEASURED — this machine cannot run the probes. Says nothing at all
+ *      about the repository. (2 rather than 75: scripts/test-with-restore.js
+ *      already owns 75 for the native-module restore failure, and reusing it
+ *      would make two unrelated conditions look like one.)
+ */
+const EXIT_PROBLEM = 1;
+const EXIT_ENVIRONMENT = 2;
 
 /** Tracked files with these extensions and a .test./.spec. infix are test files. */
 const TEST_FILE_RE = /\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs)$/;
@@ -120,6 +155,8 @@ const PROBES = [
     name: 'root jest (CI testMatch)',
     ciStep: 'ci.yml "Run tests"',
     cwd: '.',
+    // Resolved from `cwd` before probing — see preflightEnvironment().
+    requires: ['jest', 'jest-environment-jsdom'],
     cmd: 'npx',
     args: ['jest', '--listTests'],
     // The root config branches on process.env.CI for BOTH testMatch and
@@ -131,6 +168,8 @@ const PROBES = [
     name: 'integration tier',
     ciStep: 'ci.yml "Run integration test tier"',
     cwd: '.',
+    // Resolved from `cwd` before probing — see preflightEnvironment().
+    requires: ['jest', 'jest-environment-jsdom'],
     cmd: 'npx',
     args: ['jest', '--config', 'jest.integration.config.js', '--listTests'],
     env: { CI: 'true' },
@@ -139,6 +178,8 @@ const PROBES = [
     name: 'broker-portal jest',
     ciStep: 'ci.yml "Run broker-portal tests"',
     cwd: '.',
+    // Resolved from `cwd` before probing — see preflightEnvironment().
+    requires: ['jest', 'jest-environment-jsdom'],
     cmd: 'npx',
     args: ['jest', '--config', 'broker-portal/jest.config.js', '--listTests'],
     env: { CI: 'true' },
@@ -147,6 +188,8 @@ const PROBES = [
     name: 'admin-portal vitest',
     ciStep: 'ci.yml "Run admin-portal tests"',
     cwd: 'admin-portal',
+    // Resolved from `cwd` before probing — see preflightEnvironment().
+    requires: ['vitest'],
     cmd: 'npx',
     args: ['vitest', 'list', '--filesOnly'],
     env: { CI: 'true' },
@@ -155,6 +198,8 @@ const PROBES = [
     name: '@keepr/ui',
     ciStep: 'ci.yml "Test (@keepr/ui)" (packages-ui job)',
     cwd: 'packages/ui',
+    // Resolved from `cwd` before probing — see preflightEnvironment().
+    requires: ['jest', 'jest-environment-jsdom'],
     cmd: 'npx',
     args: ['jest', '--listTests'],
     env: { CI: 'true' },
@@ -255,7 +300,103 @@ function runProbe(probe) {
   return { ...probe, ok: true, files, error: null };
 }
 
+/**
+ * Can `moduleName` be resolved from `fromDirAbs` — the way a runner spawned
+ * there would resolve it? Checked with node's own resolver rather than by
+ * looking for a `node_modules` directory: a git worktree normally SYMLINKS the
+ * canonical checkout's `node_modules`, so directory-existence would call a
+ * perfectly runnable worktree broken, and node walks parent directories anyway.
+ */
+function canResolve(moduleName, fromDirAbs) {
+  try {
+    createRequire(resolve(fromDirAbs, 'noop.cjs')).resolve(moduleName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * ENVIRONMENT PREFLIGHT — run BEFORE any probe.
+ *
+ * A dead probe means one of two completely different things:
+ *
+ *   (a) the config is broken            -> a finding about the REPOSITORY.
+ *   (b) the runner is not installed here -> a fact about THIS MACHINE.
+ *
+ * Told apart only after the fact, (b) is indistinguishable from (a) — and it
+ * mints false findings at scale. Measured on develop @ 6c41a375c:
+ *
+ *   - a fresh `git worktree add` (no `node_modules` yet): all six probes die on
+ *     "Test environment jest-environment-jsdom cannot be found", COVERED is
+ *     empty, and the gate reports 804 of 821 tracked test files as orphaned,
+ *     "TEST-DRIFT GATE FAILED (7 problems)".
+ *   - a checkout without `android-companion/node_modules` (which includes the
+ *     canonical one — it is not an npm workspace): 32 orphans reported, and all
+ *     32 are android-companion files, i.e. every one belongs to the dead probe.
+ *
+ * Zero real findings in either run. Worse, the shape of the output invites the
+ * fix that must NOT happen: `npm install` inside a worktree rewrites the SHARED
+ * native sqlite binary through the symlinked `node_modules` and breaks the
+ * running dev app. So this returns EARLY, names the environment, prints no
+ * coverage or drift output whatsoever, and exits EXIT_ENVIRONMENT.
+ *
+ * CI is unaffected: the test-drift job installs everything, preflight passes,
+ * and the run proceeds exactly as before.
+ */
+function preflightEnvironment() {
+  const problems = [];
+
+  for (const probe of PROBES) {
+    const cwdAbs = resolve(REPO_ROOT, probe.cwd);
+
+    if (probe.needs && !existsSync(resolve(REPO_ROOT, probe.needs))) {
+      problems.push(
+        `${probe.name}: missing ${probe.needs}\n` +
+          `    This project has its own lockfile and is NOT an npm workspace, so the root\n` +
+          `    install does not provide it.  Fix: npm ci --prefix ${probe.cwd}`
+      );
+      continue;
+    }
+
+    for (const mod of probe.requires ?? []) {
+      if (!canResolve(mod, cwdAbs)) {
+        problems.push(
+          `${probe.name}: cannot resolve '${mod}' from ${probe.cwd}\n` +
+            `    The runner this probe drives is not installed for this checkout.`
+        );
+      }
+    }
+  }
+
+  return problems;
+}
+
 function main() {
+  // --- environment preflight ----------------------------------------------
+  // Nothing is printed about the repository until we know we can measure it.
+  const envProblems = preflightEnvironment();
+  if (envProblems.length > 0) {
+    console.error('='.repeat(78));
+    console.error('TEST-DRIFT GATE CANNOT RUN HERE — ENVIRONMENT, NOT A FINDING');
+    console.error('='.repeat(78));
+    console.error('');
+    console.error('The test runners this gate interrogates are not installed for this');
+    console.error('checkout, so no coverage was measured and NOTHING below would have been');
+    console.error('a statement about the repository. No drift is being claimed.');
+    console.error('');
+    for (const p of envProblems) console.error(`  - ${p}`);
+    console.error('');
+    console.error('  To measure here, apply the fix each item names above.');
+    console.error('  Do NOT reach for a bare `npm install` in a git worktree — worktrees');
+    console.error('  symlink the canonical `node_modules`, so installing there rewrites the');
+    console.error('  SHARED native sqlite binary and breaks the running dev app. A scoped');
+    console.error('  `npm ci --prefix <project>` writes only that project and is safe.');
+    console.error('');
+    console.error(`Exit ${EXIT_ENVIRONMENT} (environment). Exit 1 would mean a real finding.`);
+    process.exit(EXIT_ENVIRONMENT);
+  }
+
   const expected = trackedTestFiles();
 
   console.log('='.repeat(78));
@@ -309,28 +450,38 @@ function main() {
     );
   }
 
-  // Orphans are only trustworthy when every probe reported; with a dead probe
-  // its whole file set would masquerade as orphaned. Report them either way,
-  // but say which.
+  // A probe that did not report contributes NOTHING to COVERED, so every file
+  // it would have selected is arithmetically identical to a file no config
+  // selects. Printing that list as ORPHANED states a measurement that was not
+  // made — and the list is mostly, sometimes entirely, that dead probe's own
+  // files. The count still gets reported (the discrepancy is real, and hiding
+  // it would be its own silent skip); the FILE LIST does not, because naming
+  // files is what makes it read as a finding someone should act on.
   const orphans = expected.filter((f) => !covered.has(f) && !allowed.has(f));
-  if (orphans.length > 0) {
+  if (orphans.length > 0 && deadProbes.length > 0) {
+    problems.push(
+      `ORPHAN REPORT SUPPRESSED — ${orphans.length} tracked test file(s) are unaccounted for,\n` +
+        `  but ${deadProbes.length} probe(s) above are DEAD, so this is not a measurement and the\n` +
+        '  files are not listed. Most or all of them are likely selected by the dead probe(s).\n' +
+        '  Fix the probe, then re-run: the orphan list is only meaningful once every probe reports.'
+    );
+  } else if (orphans.length > 0) {
     problems.push(
       `ORPHANED TEST FILES (${orphans.length}) — tracked, but run by NO CI test config:\n` +
         orphans.map((f) => `  - ${f}`).join('\n') +
-        (deadProbes.length > 0
-          ? '\n  NOTE: a probe above is dead, so some of these may belong to it. Fix the probe first.'
-          : '\n\n  Fix by ONE of:\n' +
-            '    - add the file to a CI config\'s testMatch (and keep the local list converged);\n' +
-            '    - add a CI job that runs it;\n' +
-            '    - add an ALLOW_LIST entry in this file, with a reason and a filed backlog item;\n' +
-            '    - delete the file.\n' +
-            '  Do NOT widen a coverage glob just to quiet this.')
+        '\n\n  Fix by ONE of:\n' +
+        '    - add the file to a CI config\'s testMatch (and keep the local list converged);\n' +
+        '    - add a CI job that runs it;\n' +
+        '    - add an ALLOW_LIST entry in this file, with a reason and a filed backlog item;\n' +
+        '    - delete the file.\n' +
+        '  Do NOT widen a coverage glob just to quiet this.'
     );
   }
 
   const accounted = expected.filter((f) => covered.has(f)).length;
   console.log(
-    `Summary: ${accounted} covered by a CI config, ${allowed.size} allow-listed, ${orphans.length} orphaned.`
+    `Summary: ${accounted} covered by a CI config, ${allowed.size} allow-listed, ` +
+      `${orphans.length} ${deadProbes.length > 0 ? 'unaccounted (NOT measurable — a probe is dead)' : 'orphaned'}.`
   );
   console.log('');
 
@@ -340,7 +491,7 @@ function main() {
     console.error('='.repeat(78));
     for (const p of problems) console.error('\n' + p);
     console.error('');
-    process.exit(1);
+    process.exit(EXIT_PROBLEM);
   }
 
   console.log('TEST-DRIFT GATE PASSED — every tracked test file is run by a CI config or explicitly allow-listed.');

@@ -30,6 +30,10 @@ import {
 } from "../utils/addressNormalization";
 import type { MatchReason } from "../types/models";
 import { reactionExclusion } from "./db/reactionExclusion";
+// BACKLOG-2562: the ONE definition of "is this deal live?". These queries
+// previously carried `status != 'archived'`, which is a tautology ('archived'
+// is not a permitted status) and therefore admitted REJECTED deals.
+import { LIVE_TRANSACTION_SQL_PREDICATE } from "./transactionEligibility";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the transaction-linking scope.
 import { supportTrace } from "./supportAccess/trace";
@@ -52,6 +56,26 @@ export interface AutoLinkOptions {
     start: Date;
     end: Date;
   };
+  /**
+   * BACKLOG-2791 (founder ruling, 2026-08-22): keep the SHIPPED split, and only
+   * change where the ambiguous half lands.
+   *
+   *   false (default, every pre-existing caller) — develop's behaviour exactly:
+   *     confident emails link as address_found, ambiguous ones link as
+   *     address_missing and surface in the Needs-review section as a LINKED row.
+   *
+   *   true (the transaction-details discovery paths) — confident emails still
+   *     link, but the ambiguous ones are QUEUED instead of linked. Nothing else
+   *     about the classification moves: the same predicate decides, the same
+   *     disambiguation still routes an email that names another candidate deal
+   *     away, and texts are untouched.
+   *
+   * Why the ambiguous half must not link on those paths: the founder-dictated
+   * popup promises "Communications that require review will only be linked after
+   * you approve them." Linking them first and flagging them would make that
+   * sentence false.
+   */
+  queueAmbiguousInsteadOfLinking?: boolean;
 }
 
 /**
@@ -71,6 +95,13 @@ export interface AutoLinkResult {
   errors: number;
   /** BACKLOG-1364: User-facing message when address filter is ON and 0 emails found */
   addressFilterMessage?: string;
+  /**
+   * BACKLOG-2791: how many communications were QUEUED for review instead of
+   * linked. Set only on the transaction-details discovery paths, where nothing
+   * is linked without approval. Deliberately a separate field: a caller that
+   * renders `emailsLinked` must never see a queued item counted as a link.
+   */
+  queuedForReview?: number;
 }
 
 /**
@@ -208,7 +239,7 @@ interface CandidateEmail {
    */
   addressMatched: boolean | null;
   /**
-   * true = the body/subject named the address of ANOTHER (non-archived)
+   * true = the body/subject named the address of ANOTHER (live)
    * transaction the contact is on. Such an email is disambiguated to that deal
    * and is NOT surfaced as Needs review here (it is not the "uncertain
    * contact-only" case). Always false when there are no other candidate deals.
@@ -346,21 +377,24 @@ async function findCandidateEmailsWithMatch(
 }
 
 /**
- * BACKLOG-2311: Count how many non-archived transactions this contact is
- * assigned to for the user. When a contact belongs to only ONE candidate
- * transaction there is no ambiguity to disambiguate, so the address gate is
- * skipped entirely (their in-window emails attach even if the body never names
- * the street). Two or more transactions sharing the contact is exactly the
+ * BACKLOG-2311: Count how many LIVE transactions this contact is assigned to
+ * for the user. When a contact belongs to only ONE candidate transaction there
+ * is no other deal to disambiguate against, so no other-candidate addresses are
+ * gathered. Two or more transactions sharing the contact is exactly the
  * multi-candidate case the address filter exists to disambiguate.
+ *
+ * BACKLOG-2562: a REJECTED deal is not a candidate. Counting it inflated the
+ * candidate count and pulled a dead deal's address into the disambiguation set.
+ * Exported so the eligibility contract can be asserted per-site.
  */
-function countContactCandidateTransactions(userId: string, contactId: string): number {
+export function countContactCandidateTransactions(userId: string, contactId: string): number {
   const sql = `
     SELECT COUNT(DISTINCT tc.transaction_id) AS cnt
     FROM transaction_contacts tc
     JOIN transactions t ON t.id = tc.transaction_id
     WHERE tc.contact_id = ?
       AND t.user_id = ?
-      AND t.status != 'archived'
+      AND ${LIVE_TRANSACTION_SQL_PREDICATE}
       AND tc.removed_at IS NULL
   `;
   const row = dbGet<{ cnt: number }>(sql, [contactId, userId]);
@@ -368,12 +402,17 @@ function countContactCandidateTransactions(userId: string, contactId: string): n
 }
 
 /**
- * BACKLOG-2319: The property addresses of the OTHER non-archived transactions
- * this contact is on (excluding the current one). Used to disambiguate: an email
+ * BACKLOG-2319: The property addresses of the OTHER LIVE transactions this
+ * contact is on (excluding the current one). Used to disambiguate: an email
  * that clearly names one of these belongs to that deal, so it is NOT surfaced as
  * "Needs review" on the current transaction.
+ *
+ * BACKLOG-2562: a REJECTED deal's address must NOT appear here. It did, and the
+ * effect was that an email naming a deal the user had already rejected was
+ * routed away from the live deal it actually belonged to. Exported so the
+ * eligibility contract can be asserted per-site.
  */
-function getOtherCandidateTransactionAddresses(
+export function getOtherCandidateTransactionAddresses(
   userId: string,
   contactId: string,
   transactionId: string
@@ -384,7 +423,7 @@ function getOtherCandidateTransactionAddresses(
     JOIN transactions t ON t.id = tc.transaction_id
     WHERE tc.contact_id = ?
       AND t.user_id = ?
-      AND t.status != 'archived'
+      AND ${LIVE_TRANSACTION_SQL_PREDICATE}
       AND t.id != ?
       AND tc.removed_at IS NULL
       AND COALESCE(t.property_address, t.property_street) IS NOT NULL
@@ -493,7 +532,7 @@ async function findMessagesByContactPhones(
  * @param linkConfidence - Confidence score
  * @returns true if linked, false if already linked to this transaction
  */
-async function linkEmailToTransaction(
+export async function linkEmailToTransaction(
   emailId: string,
   transactionId: string,
   linkSource: "auto" | "manual" | "scan" = "auto",
@@ -725,7 +764,7 @@ export async function autoLinkCommunicationsForContact(
     //   - otherwise (address exists but this email  → address_missing → surfaces
     //     never named it)                              in the "Needs review" section
     // BACKLOG-2338 rationale: the retired single-candidate rule marked EVERY
-    // in-window email from a contact on ≤1 non-archived deal as confident
+    // in-window email from a contact on ≤1 live deal as confident
     // "Linked" — so a shared professional (e.g. a lender on 4 deals) assigned to
     // ONE Keepr deal had all their emails linked here, including emails about
     // OTHER properties, and Needs review never populated. Non-address emails now
@@ -874,6 +913,27 @@ export async function autoLinkCommunicationsForContact(
 
       const matchReason: MatchReason = isConfident ? "address_found" : "address_missing";
       const linkConfidence = matchReason === "address_missing" ? 0.5 : 0.85;
+
+      // The ONE divergence from develop, and only on the details-discovery
+      // paths: the ambiguous half is queued rather than linked.
+      if (!isConfident && options.queueAmbiguousInsteadOfLinking) {
+        try {
+          const { queueEmailForReview } = await import("./reviewStateService");
+          if (await queueEmailForReview(transactionId, candidate.id, userId)) {
+            result.queuedForReview = (result.queuedForReview ?? 0) + 1;
+          } else {
+            result.alreadyLinked++;
+          }
+        } catch (error) {
+          result.errors++;
+          await logService.warn(
+            `Failed to queue email ${candidate.id} for review: ${error instanceof Error ? error.message : "Unknown"}`,
+            "AutoLinkService",
+          );
+        }
+        continue;
+      }
+
       try {
         const linkResult = await linkEmailToTransaction(
           candidate.id,
@@ -1124,9 +1184,12 @@ export async function autoLinkNewMessagesForUser(
   };
 
   try {
-    // Query all active transactions with assigned contacts for this user.
+    // Query all LIVE transactions with assigned contacts for this user.
     // JOIN transaction_contacts to get contact-transaction pairs in one query.
-    // Only include non-archived transactions (status != 'archived').
+    //
+    // BACKLOG-2562: the filter here was `status != 'archived'` — a tautology, so
+    // every REJECTED deal was processed on every sync and kept receiving mail
+    // the user had already said did not belong to a transaction.
     //
     // BACKLOG-2366: `tc.removed_at IS NULL` is the negative-signal enforcement
     // point. This loop is what pulls newly-synced mail and messages into a deal
@@ -1141,7 +1204,7 @@ export async function autoLinkNewMessagesForUser(
       FROM transaction_contacts tc
       JOIN transactions t ON t.id = tc.transaction_id
       WHERE t.user_id = ?
-        AND t.status != 'archived'
+        AND ${LIVE_TRANSACTION_SQL_PREDICATE}
         AND tc.removed_at IS NULL
       ORDER BY tc.transaction_id
     `;

@@ -1,15 +1,21 @@
 /**
- * RTL Tests — BACKLOG-2319: "Needs review" surface on the Emails tab.
+ * RTL Tests — the Emails tab's relationship to needs-review.
  *
- * Verifies:
- *  - emails classified match_reason='address_missing' render in the Needs-review
- *    section (amber), address_found/manual/undefined render in Linked (by identity),
- *  - the ⓘ info popover toggles,
- *  - Confirm (✓) calls confirmEmailLinks with the thread's email ids and then the
- *    silent-refresh callback; on reclassification the card moves to Linked and the
- *    Needs-review count decrements / section disappears,
- *  - Remove (🗑) on a Needs-review card calls the existing unlinkCommunication,
- *  - the retired "Filter by property address" toggle is GONE.
+ * BACKLOG-2319 built a needs-review section INSIDE this tab that classified for
+ * itself (`threadMatchReason(t) === "needs_review"`). BACKLOG-2791 DELETED it:
+ * needs-review is now owned by ReviewQueueSection, mounted above this tab by
+ * TransactionDetails and fed from getReviewState — one source of trust.
+ *
+ * The tests that pinned the old section are gone with it. What survives from
+ * 2319, and is pinned here, is the part still true:
+ *  - an address_missing thread must NOT appear in this tab's Linked list (it is
+ *    in the review section instead, so leaving it here showed it TWICE),
+ *  - address_found / manual / undefined DO appear in Linked, by identity,
+ *  - this tab renders NO needs-review section of its own — the duplicate-render
+ *    regression is structurally impossible,
+ *  - the "Linked emails" divider is driven by the `hasReviewItems` PROP, not by
+ *    the tab re-deriving review state,
+ *  - the retired "Filter by property address" toggle is still gone.
  *
  * Identity, not counts: assertions target specific email ids / subjects.
  */
@@ -95,79 +101,42 @@ function renderTab(props: Partial<React.ComponentProps<typeof TransactionEmailsT
   );
 }
 
-describe("TransactionEmailsTab — BACKLOG-2319 Needs review", () => {
-  it("splits address_missing into Needs review and address_found into Linked (by identity)", () => {
+describe("TransactionEmailsTab — needs-review is NOT rendered here (BACKLOG-2791)", () => {
+  it("keeps an address_missing thread OUT of the Linked list, and renders no review section of its own", () => {
     renderTab();
 
-    // Needs-review section present with the ambiguous conversation only.
-    const reviewList = within("needs-review-list");
-    expect(reviewList).toHaveTextContent("Quick question");
-    expect(reviewList).not.toHaveTextContent("Inspection");
+    // The old in-tab section is GONE — not hidden, not empty: absent.
+    expect(screen.queryByTestId("needs-review-section")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("needs-review-list")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("needs-review-count")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("confirm-thread-button")).not.toBeInTheDocument();
 
-    // Count reflects exactly one review thread.
-    expect(within("needs-review-count")).toHaveTextContent("(1)");
+    // The ambiguous conversation is not in Linked either — it belongs to the
+    // shared review section above. Rendering it here as well was the duplicate.
+    expect(screen.queryByText("Quick question")).not.toBeInTheDocument();
 
-    // The "Linked emails" divider appears (because a Needs-review section is above).
-    expect(screen.getByTestId("linked-emails-divider")).toBeInTheDocument();
-
-    // The linked conversation is NOT in the review list.
+    // The unambiguous one IS linked, by identity.
     expect(screen.getByText("Inspection")).toBeInTheDocument();
 
-    // Retired toggle is gone.
+    // Retired toggle stays retired.
     expect(screen.queryByTestId("address-filter-toggle")).not.toBeInTheDocument();
   });
 
-  it("renders no Needs-review section (and no divider) when nothing needs review", () => {
-    render(
-      <TransactionEmailsTab
-        communications={[makeComms()[1]]} // only the address_found one
-        loading={false}
-        unlinkingCommId={null}
-        onViewEmail={jest.fn()}
-        onShowUnlinkConfirm={jest.fn()}
-        userId="user-1"
-        transactionId="txn-1"
-      />
-    );
-    expect(screen.queryByTestId("needs-review-section")).not.toBeInTheDocument();
+  it("shows the Linked divider from the hasReviewItems PROP, never from self-classification", () => {
+    // Same data that used to switch the divider on via the tab's own
+    // classification. With the prop false it must stay off — that is the proof
+    // the tab is no longer deriving review state.
+    renderTab({ hasReviewItems: false });
     expect(screen.queryByTestId("linked-emails-divider")).not.toBeInTheDocument();
   });
 
-  it("toggles the ⓘ info popover", async () => {
-    renderTab();
-    expect(screen.queryByTestId("needs-review-info-popover")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId("needs-review-info-button"));
-    expect(screen.getByTestId("needs-review-info-popover")).toHaveTextContent(
-      /didn.t mention the property address/i
-    );
-    await userEvent.click(screen.getByTestId("needs-review-info-button"));
-    expect(screen.queryByTestId("needs-review-info-popover")).not.toBeInTheDocument();
+  it("shows the divider when the shared section reports items above", () => {
+    renderTab({ hasReviewItems: true });
+    expect(screen.getByTestId("linked-emails-divider")).toBeInTheDocument();
   });
 
-  it("Confirm (✓) calls confirmEmailLinks with the thread's email ids then the silent refresh", async () => {
-    const onConfirmComplete = jest.fn().mockResolvedValue(undefined);
-    renderTab({ onConfirmComplete });
-
-    await act(async () => {
-      await userEvent.click(screen.getByTestId("confirm-thread-button"));
-    });
-
-    await waitFor(() => {
-      expect(window.api.transactions.confirmEmailLinks).toHaveBeenCalledWith(
-        ["e-review"],
-        "txn-1"
-      );
-    });
-    expect(onConfirmComplete).toHaveBeenCalledTimes(1);
-  });
-
-  it("promotes a confirmed thread to Linked and drops the Needs-review section on reclassification", () => {
-    // First render: e-review is address_missing → Needs review.
-    const { rerender } = renderTab();
-    expect(screen.getByTestId("needs-review-section")).toBeInTheDocument();
-
-    // Simulate the post-confirm silent refetch returning it as user_confirmed.
-    rerender(
+  it("a reclassified (user_confirmed) thread returns to the Linked list", () => {
+    render(
       <TransactionEmailsTab
         communications={makeComms({ "e-review": "user_confirmed" })}
         loading={false}
@@ -178,24 +147,7 @@ describe("TransactionEmailsTab — BACKLOG-2319 Needs review", () => {
         transactionId="txn-1"
       />
     );
-
-    // Needs-review section is gone; the conversation now sits in the linked list.
-    expect(screen.queryByTestId("needs-review-section")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("linked-emails-divider")).not.toBeInTheDocument();
     expect(screen.getByText("Quick question")).toBeInTheDocument();
-  });
-
-  it("Remove (🗑) on a Needs-review card routes through the existing unlink flow", async () => {
-    const onShowUnlinkThread = jest.fn();
-    renderTab({ onShowUnlinkThread });
-
-    // The trash button lives inside the needs-review list.
-    const reviewList = within("needs-review-list");
-    const trash = reviewList.querySelector('[data-testid="unlink-thread-button"]');
-    expect(trash).toBeTruthy();
-    await userEvent.click(trash as Element);
-
-    // Falls through to the parent's thread-unlink handler (existing behaviour).
-    expect(onShowUnlinkThread).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("needs-review-section")).not.toBeInTheDocument();
   });
 });

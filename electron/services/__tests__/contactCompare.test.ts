@@ -87,7 +87,7 @@ const OTHER_USER = "user-other-2471";
  * rejects the other spelling.
  *
  * ---------------------------------------------------------------------------
- * "PAUL DORIAN" IS BASELINED IN THAT GUARD, AND THIS IS THE RECORDED RULING
+ * "CASEY LANE" IS BASELINED IN THAT GUARD, AND THIS IS THE RECORDED RULING
  * ---------------------------------------------------------------------------
  * The guard flags a personal name sharing a line with a number — the identity-row
  * shape that leaked in BACKLOG-2542. It fires once in this file, on the
@@ -120,9 +120,9 @@ const SHARED_PHONE = "+12065550142";
  * `contactCompare.phoneFormat-2644.test.ts`.
  */
 const SHARED_PHONE_SHOWN = "+1 (206) 555-0142";
-const SHARED_EMAIL = "paul@example.com";
+const SHARED_EMAIL = "casey@example.com";
 /** Held by the Outlook record and by nothing else. The asymmetry in test 1. */
-const OUTLOOK_ONLY_EMAIL = "p.dorian@example.test";
+const OUTLOOK_ONLY_EMAIL = "p.lane@example.test";
 /** Reaches the contact and no source record. The other half of the asymmetry. */
 const CONTACT_ONLY_PHONE = "+12065550188";
 
@@ -315,20 +315,20 @@ describe("the column set, enumerated by execution", () => {
   });
 
   it("imported contact with nothing attached has nothing to compare", async () => {
-    addContact("c2", "Paul Dorian");
+    addContact("c2", "Casey Lane");
     origin("c2", "contacts_app");
-    addExternal("mac-1", "Paul Dorian", "macos");
+    addExternal("mac-1", "Casey Lane", "macos");
     link("c2", "macos", "mac-1", "source_id");
 
     expect(await getContactCompareColumns(USER, "c2")).toBeNull();
   });
 
   it("imported contact plus one attached record is TWO columns — the contact and the record", async () => {
-    addContact("c3", "Paul Dorian", { emails: [SHARED_EMAIL] });
+    addContact("c3", "Casey Lane", { emails: [SHARED_EMAIL] });
     const originId = origin("c3", "contacts_app");
-    addExternal("mac-3", "Paul Dorian", "macos");
+    addExternal("mac-3", "Casey Lane", "macos");
     link("c3", "macos", "mac-3", "source_id");
-    addExternal("out-3", "Paul Dorian", "outlook", { emails: [SHARED_EMAIL] });
+    addExternal("out-3", "Casey Lane", "outlook", { emails: [SHARED_EMAIL] });
     const attachedId = link("c3", "outlook", "out-3", "email");
 
     const view = await getContactCompareColumns(USER, "c3");
@@ -404,9 +404,9 @@ describe("the column set, enumerated by execution", () => {
         id: "g2",
         name: "imported, nothing attached",
         build: () => {
-          addContact("g2", "Paul Dorian");
+          addContact("g2", "Casey Lane");
           origin("g2", "contacts_app");
-          addExternal("mac-g2", "Paul Dorian", "macos");
+          addExternal("mac-g2", "Casey Lane", "macos");
           link("g2", "macos", "mac-g2", "source_id");
         },
         opens: false,
@@ -415,11 +415,11 @@ describe("the column set, enumerated by execution", () => {
         id: "g3",
         name: "imported plus one attached",
         build: () => {
-          addContact("g3", "Paul Dorian");
+          addContact("g3", "Casey Lane");
           origin("g3", "contacts_app");
-          addExternal("mac-g3", "Paul Dorian", "macos");
+          addExternal("mac-g3", "Casey Lane", "macos");
           link("g3", "macos", "mac-g3", "source_id");
-          addExternal("out-g3", "Paul Dorian", "outlook");
+          addExternal("out-g3", "Casey Lane", "outlook");
           link("g3", "outlook", "out-g3", "email");
         },
         opens: true,
@@ -474,7 +474,7 @@ describe("founder decision D5 — what a source column shows", () => {
   let manualLinkId = "";
 
   beforeEach(() => {
-    addContact("d5", "Paul Dorian", {
+    addContact("d5", "Casey Lane", {
       company: "Example Realty",
       emails: [SHARED_EMAIL],
       phones: [SHARED_PHONE, CONTACT_ONLY_PHONE],
@@ -484,9 +484,9 @@ describe("founder decision D5 — what a source column shows", () => {
     // it is genuinely a column of its own. (Selecting columns by LABEL rather
     // than by id would be wrong here in any case — an imported contact's own
     // column is labelled "Mac address book" too, from its origin row.)
-    addExternal("mac-d5", "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+    addExternal("mac-d5", "Casey Lane", "macos", { phones: [SHARED_PHONE] });
     macLinkId = link("d5", "macos", "mac-d5", "phone");
-    addExternal("out-d5", "Paul Dorian", "outlook", {
+    addExternal("out-d5", "Casey Lane", "outlook", {
       emails: [SHARED_EMAIL, OUTLOOK_ONLY_EMAIL],
       company: "Example Realty",
     });
@@ -503,7 +503,7 @@ describe("founder decision D5 — what a source column shows", () => {
       never renders as a column of its own and the control would be asserting
       about a column that is not on screen.
     */
-    addExternal("goo-d5", "Paul Dorian", "google_contacts", { emails: [SHARED_EMAIL] });
+    addExternal("goo-d5", "Casey Lane", "google_contacts", { emails: [SHARED_EMAIL] });
     manualLinkId = link("d5", "google_contacts", "goo-d5", "manual");
 
     addTransaction("txn-1", "571 Dale St N", "d5");
@@ -653,13 +653,13 @@ describe("founder decision D5 — what a source column shows", () => {
 // ===========================================================================
 describe("match marking", () => {
   it("marks a value carried by two columns, by the same keys the rest of the app uses", async () => {
-    addContact("m1", "Paul Dorian", { emails: [SHARED_EMAIL], phones: [SHARED_PHONE] });
+    addContact("m1", "Casey Lane", { emails: [SHARED_EMAIL], phones: [SHARED_PHONE] });
     origin("m1", "contacts_app");
     // Different SPELLING of the same number, and a different case of the same
     // address. CONTROL: compare raw strings instead of `toLookupKey` /
     // lower-cased trim and both marks disappear.
-    addExternal("out-m1", "Paul Dorian", "outlook", {
-      emails: ["PAUL@example.com"],
+    addExternal("out-m1", "Casey Lane", "outlook", {
+      emails: ["CASEY@example.com"],
       phones: ["(206) 555-0142"],
     });
     link("m1", "outlook", "out-m1", "email");
@@ -667,7 +667,7 @@ describe("match marking", () => {
     const view = await getContactCompareColumns(USER, "m1");
     const source = view!.columns[1];
 
-    expect(source.emails).toEqual([{ value: "PAUL@example.com", matched: true }]);
+    expect(source.emails).toEqual([{ value: "CASEY@example.com", matched: true }]);
     /*
       BACKLOG-2644 — THIS LINE USED TO ASSERT THE DEFECT.
 
@@ -684,14 +684,14 @@ describe("match marking", () => {
   });
 
   it("marks the two names that agree and leaves the third alone", async () => {
-    // The mock's three-source example: "Paul Dorian", "Paul Dorian",
-    // "Paul J. Dorian". CONTROL: require unanimity for the name mark and the
+    // The mock's three-source example: "Casey Lane", "Casey Lane",
+    // "Casey J. Lane". CONTROL: require unanimity for the name mark and the
     // first two lose their badges.
-    addContact("m2", "Paul Dorian", { emails: [SHARED_EMAIL] });
+    addContact("m2", "Casey Lane", { emails: [SHARED_EMAIL] });
     origin("m2", "contacts_app");
-    addExternal("out-m2", "Paul Dorian", "outlook", { emails: [SHARED_EMAIL] });
+    addExternal("out-m2", "Casey Lane", "outlook", { emails: [SHARED_EMAIL] });
     link("m2", "outlook", "out-m2", "email");
-    addExternal("and-m2", "Paul J. Dorian", "android_sync", { emails: [SHARED_EMAIL] });
+    addExternal("and-m2", "Casey J. Lane", "android_sync", { emails: [SHARED_EMAIL] });
     link("m2", "android_sync", "and-m2", "email");
 
     const view = await getContactCompareColumns(USER, "m2");
@@ -699,9 +699,9 @@ describe("match marking", () => {
     // Columns render in the crosswalk's own order — `source_type` first — so the
     // Android record precedes the Outlook one.
     expect(view!.columns.map((c) => c.name)).toEqual([
-      { value: "Paul Dorian", matched: true },
-      { value: "Paul J. Dorian", matched: false },
-      { value: "Paul Dorian", matched: true },
+      { value: "Casey Lane", matched: true },
+      { value: "Casey J. Lane", matched: false },
+      { value: "Casey Lane", matched: true },
     ]);
     // …and the sentence does NOT claim the names match, because they do not all.
     expect(view!.namesMatch).toBe(false);
@@ -713,14 +713,14 @@ describe("match marking", () => {
 // ===========================================================================
 describe("the reason sentence", () => {
   it("names the shared phone and the matching names, on two columns", async () => {
-    addContact("r1", "Paul Dorian", { phones: [SHARED_PHONE] });
+    addContact("r1", "Casey Lane", { phones: [SHARED_PHONE] });
     origin("r1", "contacts_app");
-    addExternal("out-r1", "Paul Dorian", "outlook", { phones: [SHARED_PHONE] });
+    addExternal("out-r1", "Casey Lane", "outlook", { phones: [SHARED_PHONE] });
     link("r1", "outlook", "out-r1", "phone");
 
     const view = await getContactCompareColumns(USER, "r1");
 
-    expect(view!.title).toBe("Is this the same Paul Dorian?");
+    expect(view!.title).toBe("Is this the same Casey Lane?");
     // The SHOWN shape, not the stored one — the sentence sits two rows above
     // the cells it names and must agree with them (BACKLOG-2644).
     expect(view!.reason).toBe(
@@ -729,11 +729,11 @@ describe("the reason sentence", () => {
   });
 
   it("counts the columns in words on three", async () => {
-    addContact("r2", "Paul Dorian", { emails: [SHARED_EMAIL] });
+    addContact("r2", "Casey Lane", { emails: [SHARED_EMAIL] });
     origin("r2", "contacts_app");
-    addExternal("out-r2", "Paul Dorian", "outlook", { emails: [SHARED_EMAIL] });
+    addExternal("out-r2", "Casey Lane", "outlook", { emails: [SHARED_EMAIL] });
     link("r2", "outlook", "out-r2", "email");
-    addExternal("and-r2", "Paul Dorian", "android_sync", { emails: [SHARED_EMAIL] });
+    addExternal("and-r2", "Casey Lane", "android_sync", { emails: [SHARED_EMAIL] });
     link("r2", "android_sync", "and-r2", "email");
 
     const view = await getContactCompareColumns(USER, "r2");
@@ -758,9 +758,9 @@ describe("the reason sentence", () => {
 // ===========================================================================
 describe("guards", () => {
   it("writes NOTHING — the crosswalk and the verdicts are untouched", async () => {
-    addContact("w1", "Paul Dorian", { phones: [SHARED_PHONE] });
+    addContact("w1", "Casey Lane", { phones: [SHARED_PHONE] });
     origin("w1", "contacts_app");
-    addExternal("out-w1", "Paul Dorian", "outlook", { phones: [SHARED_PHONE] });
+    addExternal("out-w1", "Casey Lane", "outlook", { phones: [SHARED_PHONE] });
     link("w1", "outlook", "out-w1", "phone");
 
     const before = {
@@ -779,9 +779,9 @@ describe("guards", () => {
   });
 
   it("refuses a removed contact", async () => {
-    addContact("t1", "Paul Dorian", { removedAt: "2026-08-01T00:00:00Z" });
+    addContact("t1", "Casey Lane", { removedAt: "2026-08-01T00:00:00Z" });
     origin("t1", "contacts_app");
-    addExternal("out-t1", "Paul Dorian", "outlook");
+    addExternal("out-t1", "Casey Lane", "outlook");
     link("t1", "outlook", "out-t1", "email");
 
     // CONTROL: drop `contact.removed_at` from the guard and this returns
@@ -791,7 +791,7 @@ describe("guards", () => {
   });
 
   it("keeps the column when the source record has gone, and says so", async () => {
-    addContact("v1", "Paul Dorian");
+    addContact("v1", "Casey Lane");
     const originId = origin("v1", "contacts_app");
     // A crosswalk row whose external_contacts row does not exist.
     const ghost = link("v1", "outlook", "out-vanished", "email");
@@ -809,8 +809,8 @@ describe("guards", () => {
   });
 
   it("refuses another user's contact", async () => {
-    addContact("x1", "Paul Dorian", { userId: OTHER_USER });
-    addExternal("out-x1", "Paul Dorian", "outlook");
+    addContact("x1", "Casey Lane", { userId: OTHER_USER });
+    addExternal("out-x1", "Casey Lane", "outlook");
     mockDb!
       .prepare(
         `INSERT INTO contact_source_links (id, user_id, contact_id, source_type, source_record_id, match_method)
@@ -873,11 +873,11 @@ function verdictSet(identity = "same_person"): string[] {
  * what proves `Confirm` does not forget it.
  */
 function twoColumnContact(id = "cf"): { absorbed: string; attached: string } {
-  addContact(id, "Paul Dorian", { phones: [SHARED_PHONE] });
+  addContact(id, "Casey Lane", { phones: [SHARED_PHONE] });
   origin(id, "contacts_app");
-  addExternal(`mac-${id}`, "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+  addExternal(`mac-${id}`, "Casey Lane", "macos", { phones: [SHARED_PHONE] });
   const absorbed = link(id, "macos", `mac-${id}`, "source_id");
-  addExternal(`out-${id}`, "Paul Dorian", "outlook", { phones: [SHARED_PHONE] });
+  addExternal(`out-${id}`, "Casey Lane", "outlook", { phones: [SHARED_PHONE] });
   const attached = link(id, "outlook", `out-${id}`, "email");
   return { absorbed, attached };
 }
@@ -970,7 +970,7 @@ describe("confirm — the question does NOT come back", () => {
     // CONTROL: filter the resolve loop to `cluster_key LIKE 'record:%'` — the
     // optimisation someone will reach for — and this goes red while the test
     // above stays green.
-    propose("cf", "outlook", "out-cf", "name:paul dorian");
+    propose("cf", "outlook", "out-cf", "name:casey lane");
 
     expect(countReviewQueue(USER)).toBe(1);
     expect(confirmContactSources(USER, "cf").proposalsResolved).toBe(1);
@@ -1103,7 +1103,7 @@ describe("the proposed column", () => {
     twoColumnContact("pc");
     // A record NOBODY has linked — the queue's candidate. It has no crosswalk
     // row, which is exactly why the reader cannot find it any other way.
-    addExternal("and-pc", "Paul Dorian", "android_sync", {
+    addExternal("and-pc", "Casey Lane", "android_sync", {
       emails: [SHARED_EMAIL],
       phones: [SHARED_PHONE],
     });
@@ -1120,7 +1120,7 @@ describe("the proposed column", () => {
     const last = view!.columns[view!.columns.length - 1];
     expect(last.linkId).toBe("proposed:android_sync:and-pc");
     expect(last.kind).toBe("proposed");
-    expect(last.displayName).toBe("Paul Dorian");
+    expect(last.displayName).toBe("Casey Lane");
     // Its values join the same cross-column marking — the point of showing it.
     expect(last.phones).toEqual([{ value: SHARED_PHONE_SHOWN, matched: true }]);
   });
@@ -1205,13 +1205,13 @@ describe("the proposed column", () => {
  */
 describe("linked, then unlinked, reads as unlinked again", () => {
   it("the same record goes source -> gone -> proposed, and its transactions with it", async () => {
-    addContact("rt", "Paul Dorian", { phones: [SHARED_PHONE] });
+    addContact("rt", "Casey Lane", { phones: [SHARED_PHONE] });
     origin("rt", "contacts_app");
     // Two attached records, so unlinking one still leaves something to compare
     // and the view does not collapse to null for an unrelated reason.
-    addExternal("mac-rt", "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+    addExternal("mac-rt", "Casey Lane", "macos", { phones: [SHARED_PHONE] });
     link("rt", "macos", "mac-rt", "phone");
-    addExternal("out-rt", "Paul Dorian", "outlook", { emails: [SHARED_EMAIL] });
+    addExternal("out-rt", "Casey Lane", "outlook", { emails: [SHARED_EMAIL] });
     const outLinkId = link("rt", "outlook", "out-rt", "email");
     addTransaction("txn-rt", "571 Dale St N", "rt");
 
@@ -1285,18 +1285,18 @@ describe("R8 — collapsing the contact side", () => {
    * candidate against it. Four columns before this change, two after.
    */
   function assembledContact(id: string): void {
-    addContact(id, "Paul Dorian", { phones: [SHARED_PHONE], emails: [SHARED_EMAIL] });
+    addContact(id, "Casey Lane", { phones: [SHARED_PHONE], emails: [SHARED_EMAIL] });
     origin(id, "contacts_app");
-    addExternal(`mac-${id}`, "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+    addExternal(`mac-${id}`, "Casey Lane", "macos", { phones: [SHARED_PHONE] });
     link(id, "macos", `mac-${id}`, "source_id");
     // Carries a number the contact itself does not have.
-    addExternal(`out-${id}`, "Paul Dorian", "outlook", { phones: [RECORD_ONLY_PHONE] });
+    addExternal(`out-${id}`, "Casey Lane", "outlook", { phones: [RECORD_ONLY_PHONE] });
     link(id, "outlook", `out-${id}`, "email");
     // Carries an address the contact itself does not have.
-    addExternal(`goo-${id}`, "Paul Dorian", "google_contacts", { emails: [RECORD_ONLY_EMAIL] });
+    addExternal(`goo-${id}`, "Casey Lane", "google_contacts", { emails: [RECORD_ONLY_EMAIL] });
     link(id, "google_contacts", `goo-${id}`, "phone");
     // The candidate, unlinked.
-    addExternal(`and-${id}`, "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
+    addExternal(`and-${id}`, "Casey Lane", "android_sync", { phones: [SHARED_PHONE] });
   }
 
   const candidate = (id: string) => ({
@@ -1381,11 +1381,11 @@ describe("R8 — collapsing the contact side", () => {
 
   it("draws two columns for a contact with ONE record, not one and not three", async () => {
     // R1's contact: a single source record, which is what most of the queue is.
-    addContact("r8d", "Paul Dorian", { phones: [SHARED_PHONE] });
+    addContact("r8d", "Casey Lane", { phones: [SHARED_PHONE] });
     origin("r8d", "contacts_app");
-    addExternal("mac-r8d", "Paul Dorian", "macos", { phones: [SHARED_PHONE] });
+    addExternal("mac-r8d", "Casey Lane", "macos", { phones: [SHARED_PHONE] });
     link("r8d", "macos", "mac-r8d", "source_id");
-    addExternal("and-r8d", "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
+    addExternal("and-r8d", "Casey Lane", "android_sync", { phones: [SHARED_PHONE] });
 
     // CONTROL, corrected after running it: the ordering mutation I first wrote
     // here CANNOT go red — this contact's only non-origin link is the absorbed
@@ -1401,14 +1401,14 @@ describe("R8 — collapsing the contact side", () => {
   });
 
   it("takes a record's company when the contact has none, rather than losing it", async () => {
-    addContact("r8e", "Paul Dorian", { phones: [SHARED_PHONE] });
+    addContact("r8e", "Casey Lane", { phones: [SHARED_PHONE] });
     origin("r8e", "contacts_app");
-    addExternal("out-r8e", "Paul Dorian", "outlook", {
+    addExternal("out-r8e", "Casey Lane", "outlook", {
       phones: [SHARED_PHONE],
       company: "Example Realty",
     });
     link("r8e", "outlook", "out-r8e", "email");
-    addExternal("and-r8e", "Paul Dorian", "android_sync", { phones: [SHARED_PHONE] });
+    addExternal("and-r8e", "Casey Lane", "android_sync", { phones: [SHARED_PHONE] });
 
     // Company is ONE value on both sides, so there is no union to show — but a
     // company that was visible in its own column must not vanish because that
@@ -1463,8 +1463,8 @@ describe("the one-record contact the review queue asks about", () => {
    * and this returns null — the exact dead Compare the founder hit.
    */
   it("renders TWO columns once the queue's candidate is passed", async () => {
-    const originId = oneRecordContact("g2", "Paul Dorian");
-    addExternal("out-g2", "Paul Dorian", "outlook", {
+    const originId = oneRecordContact("g2", "Casey Lane");
+    addExternal("out-g2", "Casey Lane", "outlook", {
       emails: [SHARED_EMAIL],
       phones: [SHARED_PHONE],
     });
@@ -2142,7 +2142,7 @@ describe("the review-state set", () => {
    */
   it("an open question outranks an unratified auto-link", () => {
     twoColumnContact("rP");
-    addExternal("and-rP", "Paul Dorian", "android_sync");
+    addExternal("and-rP", "Casey Lane", "android_sync");
     propose("rP", "android_sync", "and-rP", "contact:rP");
 
     const state = getReviewStateByContact(USER).get("rP")!;

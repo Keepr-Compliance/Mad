@@ -1,4 +1,3 @@
-'use strict';
 /**
  * Unit proofs for the CREATE-AUDIT DB reader's PURE parts (BACKLOG-1948).
  *
@@ -6,8 +5,32 @@
  * NOT exercised here. But its ARGUMENT parsing, its WHERE/param builder, and its LIKE escaping are
  * pure and load-bearing (a wrong query would silently mis-count the created transaction), so they are
  * proven here — pure Node, no Electron, no DB. Runs under jest.qa.config.js.
+ *
+ * BACKLOG-2782: was `.test.js`. tsconfig.json is allowJs:true / checkJs:false, so tsc LOADED this
+ * file and reported NOTHING about it — `npm run type-check:tests` (local AND CI) was blind to a
+ * literal `const n: number = 'str'` here. The rename is the whole fix; assertions are untouched.
+ *
+ * The subject module is still CommonJS `.js`, so it is pulled in with `require(...) as {...}` —
+ * the pattern already used by count-linked-by-source.test.ts in this directory. The shapes below
+ * are transcribed from ../count-transactions.js (parseArgs/buildQuery/escapeLike, exports at :111),
+ * not invented.
  */
-const { parseArgs, buildQuery, escapeLike, SENTINEL } = require('../count-transactions.js');
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { parseArgs, buildQuery, escapeLike, SENTINEL } = require('../count-transactions.js') as {
+  parseArgs: (argv: string[]) => {
+    db?: string;
+    key?: string;
+    address?: string;
+    startedAt?: string;
+    help?: boolean;
+  };
+  buildQuery: (opts: { address?: string; startedAt?: string }) => {
+    where: string;
+    params: string[];
+  };
+  escapeLike: (s: string) => string;
+  SENTINEL: string;
+};
 
 describe('parseArgs', () => {
   it('parses the full argv (db/key/address/started-at)', () => {
@@ -63,3 +86,5 @@ describe('SENTINEL', () => {
     expect(SENTINEL).toBe('__QA_TX_COUNT__ ');
   });
 });
+
+export {};

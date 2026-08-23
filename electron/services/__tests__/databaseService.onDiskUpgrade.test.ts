@@ -204,6 +204,7 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 import logService from "../logService";
 import { setDb, setDbPath, setEncryptionKey } from "../db/core/dbConnection";
 
+import { chainHeadVersion } from "./helpers/chainHead";
 // Bypass the Jest moduleNameMapper that rewrites better-sqlite3-multiple-ciphers
 // to the auto-mock — the whole point of this file is a real file-backed DB.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -233,7 +234,10 @@ const PRE_UPGRADE_VERSION = 55;
  * themselves to 56 locally via runChainThrough(), so they keep their original
  * meaning as the head moves on.
  */
-const HEAD_VERSION = 62;
+// BACKLOG-2791: derived, not a literal. A hardcoded head turned this suite
+// — one of only two that upgrade a REAL shipped DB file — red the moment a
+// migration was added, i.e. exactly when it matters most.
+const HEAD_VERSION = chainHeadVersion();
 /** The version whose isolated effects the BACKLOG-2364 assertions describe. */
 const TOMBSTONE_VERSION = 56;
 /**

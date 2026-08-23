@@ -83,11 +83,11 @@ describe("buildContactQuery", () => {
     expect(q.params).toContain("%john%");
   });
 
-  it("normalizes phone queries to the last-10-digit lookup key", () => {
+  it("normalizes phone queries to the E.164-digits lookup key", () => {
     const q = buildContactQuery(TXN, "(415) 555-0109", 20);
     // phoneKey param and phone pattern use the normalized digits.
-    expect(q.params).toContain("4155550109");
-    expect(q.params).toContain("%4155550109%");
+    expect(q.params).toContain("14155550109");
+    expect(q.params).toContain("%14155550109%");
   });
 
   it("does not phone-match when the query has no digits (empty key guard)", () => {
@@ -635,10 +635,10 @@ describe("buildGlobalContactQuery", () => {
     expect(q.params[0]).toBe(USER);
   });
 
-  it("normalizes phone queries to the last-10-digit lookup key (1866 parity)", () => {
+  it("normalizes phone queries to the E.164-digits lookup key (1866 parity)", () => {
     const q = buildGlobalContactQuery(USER, "(415) 555-0109", 20);
-    expect(q.params).toContain("4155550109");
-    expect(q.params).toContain("%4155550109%");
+    expect(q.params).toContain("14155550109");
+    expect(q.params).toContain("%14155550109%");
   });
 
   it("disables the phone predicate when the query has no digits (empty-key guard)", () => {

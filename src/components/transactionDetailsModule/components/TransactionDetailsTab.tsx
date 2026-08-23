@@ -7,6 +7,10 @@ import React, { useCallback, useState } from "react";
 import type { Transaction } from "@/types";
 import type { ContactAssignment, ResolvedSuggestedContact } from "../types";
 import { getRoleDisplayName, type TransactionType } from "@/utils/transactionRoleUtils";
+// BACKLOG-2805: display labels for transaction_type. The `default` branch
+// below keeps this surface's own "Other" answer — it is the one place that
+// already named an unmapped type correctly.
+import { TRANSACTION_TYPE_LABELS } from "@/constants/transactionTypes";
 import { formatAddress } from "@/utils/formatUtils";
 import {
   ContactPreview,
@@ -104,9 +108,9 @@ const KEY_CONTACTS_PREVIEW_COUNT = 4;
 function getTransactionTypeDisplay(type: string | undefined): { label: string; color: string } {
   switch (type) {
     case "purchase":
-      return { label: "Purchase", color: "bg-blue-100 text-blue-800" };
+      return { label: TRANSACTION_TYPE_LABELS.purchase, color: "bg-blue-100 text-blue-800" };
     case "sale":
-      return { label: "Sale", color: "bg-green-100 text-green-800" };
+      return { label: TRANSACTION_TYPE_LABELS.sale, color: "bg-green-100 text-green-800" };
     default:
       return { label: "Other", color: "bg-gray-100 text-gray-700" };
   }
@@ -250,7 +254,7 @@ export function TransactionDetailsTab({
         /**
          * BACKLOG-2493: the contact object above is built by hand from the
          * transaction assignment, so its `source` is the stale INSERT-time
-         * scalar — the field that made the founder's Paul Dorian read "Outlook"
+         * scalar — the field that made the founder's Casey Lane read "Outlook"
          * after his Outlook link was removed. This pane mounts the SAME
          * `ContactPreview` as the Clients & Contacts card, so without the live
          * set the two would name different sources for the same person on the

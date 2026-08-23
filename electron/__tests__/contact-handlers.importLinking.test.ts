@@ -366,20 +366,21 @@ describe("BACKLOG-2556 — a picker row claims EXACTLY the record it stands for"
    * claimed" from "one record claimed twice", and "one link" cannot tell "the
    * right record" from "the other one".
    *
-   * The addresses below were `paul@pauljdorian.com` / `dorian@bluespaces.com` —
-   * a real personal domain and the company domain, in a PUBLIC repo, beside a
-   * name that had itself been scrubbed to `Casey Lane` (the `mac-paul` /
-   * `out-paul` variable names are the residue). The fixture-PII guard does not
-   * catch either, because its email rule covers consumer mailbox domains only.
-   * Scrubbed here because these lines were being rewritten anyway; the guard
-   * gap is filed separately and is not this PR's to fix.
+   * The two addresses below deliberately sit on DIFFERENT domains: these cases
+   * assert a record is matched ACROSS sources, not by a shared address, so
+   * collapsing them onto one domain would quietly destroy what they check.
+   *
+   * Both addresses, the name and the `mac-` / `out-` record ids were scrubbed
+   * under BACKLOG-2731. The guard's email rule covers consumer mailbox domains
+   * only and reported none of it; closing that gap is that item's step 3 and is
+   * not this PR's to fix.
    */
   beforeEach(() => {
     mockShadowRows = [
-      shadowRow("mac-paul", "Casey Lane", "macos", ["casey@example.com"], [
+      shadowRow("mac-casey", "Casey Lane", "macos", ["casey@example.com"], [
         "(408) 555-0101",
       ]),
-      shadowRow("out-paul", "Casey Lane", "outlook", ["c.lane@example.org"], [
+      shadowRow("out-casey", "Casey Lane", "outlook", ["c.lane@example.org"], [
         "4085550101",
       ]),
     ];
@@ -391,7 +392,7 @@ describe("BACKLOG-2556 — a picker row claims EXACTLY the record it stands for"
     expect(rows.map((r) => r.name)).toEqual(["Casey Lane", "Casey Lane"]);
     expect(
       rows.map((r: any) => `${r.externalSourceType}/${r.externalRecordId}`).sort(),
-    ).toEqual(["macos/mac-paul", "outlook/out-paul"]);
+    ).toEqual(["macos/mac-casey", "outlook/out-casey"]);
     // The channel the fold used to append the loser's identity to the winner is
     // deleted, not merely empty.
     for (const row of rows) {
@@ -403,7 +404,7 @@ describe("BACKLOG-2556 — a picker row claims EXACTLY the record it stands for"
    * CONTROL 3 — THE LAUNDERING CASE, AND THE MOST IMPORTANT ONE HERE.
    *
    * Import ONE row and assert the crosswalk row ID SET. Before the deletion
-   * this returned both `macos/mac-paul/source_id` and `outlook/out-paul/source_id`
+   * this returned both `macos/mac-casey/source_id` and `outlook/out-casey/source_id`
    * from a single click.
    *
    * OBSERVED RED: restore `findDuplicateOwner` + `absorbSourceIdentity` at the
@@ -412,13 +413,13 @@ describe("BACKLOG-2556 — a picker row claims EXACTLY the record it stands for"
    */
   it("importing ONE row writes ONE source_id crosswalk row — the one the user picked", async () => {
     const rows = await getAvailable();
-    const macRow = rows.filter((r: any) => r.externalRecordId === "mac-paul");
+    const macRow = rows.filter((r: any) => r.externalRecordId === "mac-casey");
     expect(macRow).toHaveLength(1);
 
     await importRows(macRow);
 
     const casey = contactIdByName("Casey Lane");
-    expect(linkTriples(casey)).toEqual(["macos/mac-paul/source_id"]);
+    expect(linkTriples(casey)).toEqual(["macos/mac-casey/source_id"]);
     // And nothing else in the table: the Outlook record is unclaimed and still
     // importable as its own contact.
     expect(
@@ -443,8 +444,8 @@ describe("BACKLOG-2556 — a picker row claims EXACTLY the record it stands for"
     // ZEXTERNALUUID is the only candidate cross-device key and it cannot be
     // captured later. Each row must carry the uuid of the record it IS.
     mockShadowRows = [
-      shadowRow("mac-paul", "Casey Lane", "macos", [], ["(408) 555-0101"], "uuid-mac"),
-      shadowRow("out-paul", "Casey Lane", "outlook", [], ["4085550101"], "uuid-out"),
+      shadowRow("mac-casey", "Casey Lane", "macos", [], ["(408) 555-0101"], "uuid-mac"),
+      shadowRow("out-casey", "Casey Lane", "outlook", [], ["4085550101"], "uuid-out"),
     ];
 
     await importRows(await getAvailable());
@@ -462,23 +463,23 @@ describe("BACKLOG-2556 — a picker row claims EXACTLY the record it stands for"
     }>;
     expect(
       links.map((l) => `${l.source_record_id}=${l.external_uuid}`).sort(),
-    ).toEqual(["mac-paul=uuid-mac", "out-paul=uuid-out"]);
+    ).toEqual(["mac-casey=uuid-mac", "out-casey=uuid-out"]);
     expect(new Set(links.map((l) => l.contact_id)).size).toBe(2);
   });
 
   it("three records that resemble each other are three rows and three separate claims", async () => {
     mockShadowRows.push(
-      shadowRow("goo-paul", "Casey Lane", "google_contacts", [], ["408-555-0101"]),
+      shadowRow("goo-casey", "Casey Lane", "google_contacts", [], ["408-555-0101"]),
     );
 
     const rows = await getAvailable();
     expect(rows).toHaveLength(3);
 
     // Import only the Google one. The other two stay unclaimed.
-    await importRows(rows.filter((r: any) => r.externalRecordId === "goo-paul"));
+    await importRows(rows.filter((r: any) => r.externalRecordId === "goo-casey"));
 
     expect(linkTriples(contactIdByName("Casey Lane"))).toEqual([
-      "google_contacts/goo-paul/source_id",
+      "google_contacts/goo-casey/source_id",
     ]);
   });
 
@@ -490,12 +491,12 @@ describe("BACKLOG-2556 — a picker row claims EXACTLY the record it stands for"
     );
 
     const rows = await getAvailable();
-    const outRow = rows.filter((r: any) => r.externalRecordId === "out-paul");
+    const outRow = rows.filter((r: any) => r.externalRecordId === "out-casey");
     expect(outRow).toHaveLength(1);
     await importRows(outRow);
 
     expect(linkTriples(contactIdByName("Casey Lane"))).toEqual([
-      "outlook/out-paul/source_id",
+      "outlook/out-casey/source_id",
     ]);
     expect(
       mockDb!
