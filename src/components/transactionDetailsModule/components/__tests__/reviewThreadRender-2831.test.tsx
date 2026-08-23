@@ -25,10 +25,15 @@
  *      genuinely-body-less test stays GREEN, which is what makes it a real
  *      negative and not a restatement of the positive.
  *   1b. `body_text: d.bodyText ?? d.snippet` → `body_text: d.snippet` (i.e.
- *      BACKLOG-2844 reverted) → RED, 1 of 6: the 260-character message renders
- *      only its first 200 characters, so the tail assertion fails. The
- *      over-300 test stays GREEN under that mutation — a truncated string is
- *      still truncated — which is why the tail case is the one that matters.
+ *      BACKLOG-2844 reverted) → RED, 2 of 6, not the 1 predicted. The tail
+ *      assertion fails as expected; the ELLIPSIS test fails too, and its failure
+ *      is the more interesting one. Predicted reasoning was "a truncated string
+ *      is still truncated, so the ... stays". Wrong: the modal appends "..."
+ *      only past its own 300-character limit, so a 200-character snippet
+ *      produces NO ellipsis at all. That failure is the founder's actual
+ *      complaint reproduced — the cut was not just early, it was SILENT — and
+ *      it is why the ellipsis test earns its place rather than restating the
+ *      tail one.
  *   2. `id: item.email_id ?? item.id` → `id: item.id` in the projection
  *      → RED, 1 of 4 (the duplicate-key characterisation) — which is the point:
  *      that test states the constraint the service-side dedup exists to satisfy,

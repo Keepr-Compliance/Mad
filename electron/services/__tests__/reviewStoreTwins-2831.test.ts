@@ -49,6 +49,12 @@
  *    `body: null` in emailDisplay → RED, 1 of 14 (the html-only test). The
  *    genuinely-body-less case stays GREEN under that mutation, which is what
  *    makes it a real negative rather than a restatement of the positive.
+ *
+ *  FULL BODY (BACKLOG-2844) — the review path carries the whole plain body, not
+ *    the card's 200-character preview. Mutation: `bodyText: row.body_plain
+ *    ?.trim() || null` → `bodyText: null` → RED, 3 of 18 (the tail, the
+ *    paragraph-break and the trim tests). The html-only test stays GREEN, since
+ *    that email has no plain part to carry either way.
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
