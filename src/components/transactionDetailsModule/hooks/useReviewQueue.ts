@@ -25,6 +25,15 @@ export interface UseReviewQueueResult {
   lastAdded: number;
   /** Items LINKED outright by the most recent sync — the popup's "L". */
   lastLinked: number;
+  /**
+   * Increments on every review-state change.
+   *
+   * Fed into the Removed sections' refreshKey so they re-fetch too: a trash on a
+   * needs-review card writes an ignored_communications row (the item genuinely
+   * IS removed), but "Show removed" fetches on mount and never heard about it,
+   * so the founder saw the email vanish into nothing.
+   */
+  changeToken: number;
   /** Re-read the queue. Returns the state it read, for read-then-act callers. */
   refresh: () => Promise<ReviewStateResult>;
   /** Run discovery. `reason` picks the scan axis. */
@@ -44,6 +53,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   const [isLoading, setIsLoading] = useState(false);
   const [lastAdded, setLastAdded] = useState(0);
   const [lastLinked, setLastLinked] = useState(0);
+  const [changeToken, setChangeToken] = useState(0);
 
   // Guards a late response from a previous transaction overwriting this one's
   // state after a fast switch between deals.
@@ -72,6 +82,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
       const safe: ReviewStateResult = next ?? EMPTY;
       stateRef.current = safe;
       hasLoadedRef.current = true;
+      setChangeToken((t) => t + 1);
       if (activeId.current === transactionId) setState(safe);
       return safe;
     } catch (error) {
@@ -199,6 +210,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     isLoading,
     lastAdded,
     lastLinked,
+    changeToken,
     refresh,
     runSync,
     approve,

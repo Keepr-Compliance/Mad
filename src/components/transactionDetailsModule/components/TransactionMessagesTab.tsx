@@ -102,6 +102,10 @@ interface TransactionMessagesTabProps {
   /** BACKLOG-2791: whether the review section has anything — suppresses the
    *  "nothing linked" placeholder when items are waiting. */
   hasReviewItems?: boolean;
+  /** BACKLOG-2791: bumped on every review-state change so "Show removed"
+   *  re-fetches — a trash on a review card removes the item, and the removed
+   *  list only ever fetched on mount. */
+  reviewRefreshKey?: number;
 }
 
 /**
@@ -134,6 +138,7 @@ export function TransactionMessagesTab({
   onHighlightConsumed,
   reviewSection = null,
   hasReviewItems = false,
+  reviewRefreshKey = 0,
 }: TransactionMessagesTabProps): React.ReactElement {
   // TASK-2074: Disable sync when offline, already syncing, or when a global dashboard sync is running.
   // BACKLOG-2294: a BACKGROUND messages sync (audit-date-change / create auto-import, the
@@ -860,7 +865,7 @@ export function TransactionMessagesTab({
             onContactNamesResolved={handleContactNamesResolved}
             isOpen={removedSectionOpen}
             onOpenChange={setRemovedSectionOpen}
-            refreshKey={removedSectionRefreshKey}
+            refreshKey={removedSectionRefreshKey + reviewRefreshKey}
           />
         )}
 
@@ -1099,7 +1104,7 @@ export function TransactionMessagesTab({
           onContactNamesResolved={handleContactNamesResolved}
           isOpen={removedSectionOpen}
           onOpenChange={setRemovedSectionOpen}
-          refreshKey={removedSectionRefreshKey}
+          refreshKey={removedSectionRefreshKey + reviewRefreshKey}
         />
       )}
 

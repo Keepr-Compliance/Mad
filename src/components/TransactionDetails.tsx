@@ -348,6 +348,49 @@ function TransactionDetails({
   );
   const reviewContactNames = useResolvedContactNames(reviewTextHandles, userId);
 
+  // BACKLOG-2791: review actions were silent. Every other destructive or
+  // state-changing action in this screen toasts ("2 emails restored"), so these
+  // reuse the same showSuccess/showError helpers and the same "N noun verbed"
+  // phrasing rather than introducing a second convention.
+  const reviewNoun = useCallback(
+    (ids: string[]) => {
+      const kinds = new Set(
+        reviewQueue.items.filter((i) => ids.includes(i.id)).map((i) => i.kind),
+      );
+      const noun = kinds.size === 1 && kinds.has("text") ? "conversation" : "email";
+      return ids.length === 1 ? noun : `${noun}s`;
+    },
+    [reviewQueue.items],
+  );
+
+  const handleApproveReview = useCallback(
+    async (ids: string[]) => {
+      const noun = reviewNoun(ids);
+      try {
+        await reviewQueue.approve(ids);
+        showSuccess(`${ids.length} ${noun} linked to this transaction`);
+      } catch (err) {
+        showError(`Could not link ${noun}`);
+      }
+    },
+    [reviewQueue, reviewNoun, showSuccess, showError],
+  );
+
+  const handleRejectReview = useCallback(
+    async (ids: string[]) => {
+      const noun = reviewNoun(ids);
+      try {
+        await reviewQueue.reject(ids);
+        // "removed" — the same word the Removed section uses, because that is
+        // exactly where the item now is.
+        showSuccess(`${ids.length} ${noun} removed`);
+      } catch (err) {
+        showError(`Could not remove ${noun}`);
+      }
+    },
+    [reviewQueue, reviewNoun, showSuccess, showError],
+  );
+
   const complete = useCompleteTransaction({
     refreshReviewState: reviewQueue.refresh,
     openExport: () => setShowExportModal(true),
@@ -1038,8 +1081,8 @@ function TransactionDetails({
                 <ReviewQueueSection
                   items={reviewQueue.items}
                   kind="email"
-                  onApprove={reviewQueue.approve}
-                  onReject={reviewQueue.reject}
+                  onApprove={handleApproveReview}
+                  onReject={handleRejectReview}
                   onViewEmail={setViewingEmail}
                   nameMap={emailNameMap}
                 />
@@ -1050,7 +1093,7 @@ function TransactionDetails({
               onViewEmail={setViewingEmail}
               onShowUnlinkConfirm={setShowUnlinkConfirm}
               onShowUnlinkThread={handleShowUnlinkThread}
-              removedSectionRefreshKey={removedRefreshKey}
+              removedSectionRefreshKey={removedRefreshKey + reviewQueue.changeToken}
               onSyncCommunications={handleSyncCommunications}
               syncingCommunications={syncingCommunications}
               globalSyncRunning={globalSyncRunning}
@@ -1086,6 +1129,7 @@ function TransactionDetails({
             <>
             <TransactionMessagesTab
               hasReviewItems={reviewQueue.items.some((i) => i.kind === "text")}
+              reviewRefreshKey={reviewQueue.changeToken}
               /* BACKLOG-2791: the texts half of the same set. develop has no
                  needs-review section on this tab at all — texts never had the
                  state — so this is new, positioned to match the Emails tab. */
@@ -1093,8 +1137,8 @@ function TransactionDetails({
                 <ReviewQueueSection
                   items={reviewQueue.items}
                   kind="text"
-                  onApprove={reviewQueue.approve}
-                  onReject={reviewQueue.reject}
+                  onApprove={handleApproveReview}
+                  onReject={handleRejectReview}
                   auditStartDate={transaction.started_at}
                   auditEndDate={transaction.closed_at}
                 />
@@ -1285,8 +1329,8 @@ function TransactionDetails({
         <NeedsReviewScreen
           items={reviewQueue.items}
           isLoading={reviewQueue.isLoading}
-          onApprove={reviewQueue.approve}
-          onReject={reviewQueue.reject}
+          onApprove={handleApproveReview}
+          onReject={handleRejectReview}
           onClose={() => setShowNeedsReview(false)}
           /* Same props the tabs pass their cards, so the screen behaves
              identically — including click-to-preview. Text names resolve here
