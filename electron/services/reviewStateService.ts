@@ -103,6 +103,26 @@ export interface ReviewItemDisplay {
   occurredAt: string | null;
   /** Messages in the thread (texts) or emails in the thread (emails). */
   itemCount: number;
+  /**
+   * THE GROUPING KEY — the provider's conversation id (BACKLOG-2791, the
+   * contract's "unit rule": one card per thread, every button acts on the whole
+   * thread).
+   *
+   * For an EMAIL this is `emails.thread_id`. It has to be projected here
+   * because the item's OWN `thread_id` is NULL for every email row — the queue
+   * keys emails by `email_id` and threads by `thread_id`, one or the other — so
+   * the renderer has nothing to group on without it.
+   *
+   * It rides on `display` rather than on `ReviewItem.thread_id` deliberately:
+   * `rejectReviewItems` writes `item.thread_id` into the
+   * `ignored_communications` suppression row, and RemovedMessagesSection reads
+   * removed TEXT threads out of exactly that column. An email item carrying a
+   * thread_id would file rejected EMAILS under removed TEXTS.
+   *
+   * NULL when the provider never threaded the record — the renderer then keys
+   * on the item id, which is a thread of one.
+   */
+  threadId: string | null;
 
   // ---- raw fields, so the renderer can rebuild a real thread ----
   //
@@ -290,6 +310,7 @@ const EMPTY_DISPLAY: ReviewItemDisplay = {
   snippet: "",
   occurredAt: null,
   itemCount: 1,
+  threadId: null,
   recipients: null,
   cc: null,
   sender: null,
@@ -316,8 +337,9 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
     body_plain: string | null;
     sent_at: string | null;
     has_attachments: number | null;
+    thread_id: string | null;
   }>(
-    `SELECT subject, sender, recipients, cc, body_plain, sent_at, has_attachments
+    `SELECT subject, sender, recipients, cc, body_plain, sent_at, has_attachments, thread_id
        FROM emails WHERE id = ?`,
     [emailId],
   );
@@ -328,6 +350,8 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
     snippet: firstLine(row.body_plain),
     occurredAt: row.sent_at,
     itemCount: 1,
+    // The EMAIL's own thread — the grouping key. See ReviewItemDisplay.threadId.
+    threadId: row.thread_id,
     recipients: row.recipients,
     cc: row.cc,
     sender: row.sender,
@@ -380,6 +404,9 @@ function threadDisplay(threadId: string | null): ReviewItemDisplay {
     snippet: firstLine(row.body_text),
     occurredAt: row.sent_at,
     itemCount: row.n ?? 1,
+    // A TEXT item is already one row per thread; carrying the key anyway keeps
+    // the renderer's grouping uniform across both media.
+    threadId,
     recipients: null,
     cc: null,
     sender: handles[0] ?? null,

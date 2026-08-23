@@ -32,6 +32,22 @@ export interface ReviewItemDisplayDto {
   snippet: string;
   occurredAt: string | null;
   itemCount: number;
+  /**
+   * THE GROUPING KEY — the provider's conversation id for this communication
+   * (BACKLOG-2791, Communication Lifecycle Contract, "the unit rule").
+   *
+   * For an EMAIL this is `emails.thread_id`, which is NOT the same as the item's
+   * own `thread_id`: the queue keys emails by `email_id`, so an email item's
+   * `thread_id` column is NULL by design. It is carried here, on the display
+   * payload, rather than on `ReviewItemDto.thread_id`, because reject writes
+   * THAT field into the `ignored_communications` suppression row and the
+   * removed-TEXTS section selects on it — an email filed with a thread_id would
+   * surface as a removed text conversation.
+   *
+   * NULL when the provider never threaded the record; the renderer then falls
+   * back to the item id, i.e. a thread of one.
+   */
+  threadId: string | null;
   /** Raw fields so the renderer can rebuild a REAL thread for the app's own
    *  EmailThreadCard / MessageThreadCard — a pending item is absent from
    *  `communications`, so the tabs' loaders cannot hydrate it. */
