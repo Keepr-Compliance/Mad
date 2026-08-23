@@ -650,6 +650,44 @@ export function registerTransactionExportHandlers(
       );
 
       if (result.success) {
+        // BACKLOG-2563: audit the resubmission, mirroring `transactions:submit`
+        // above. This handler already wrote a `logService.info` line, which is
+        // why the omission survived review — that goes to the APPLICATION log,
+        // never to `audit_logs`, so it reaches neither the CCPA/SOC2 export nor
+        // the Supabase sync. The trail recorded the first submission to the
+        // broker and silently dropped every resubmission of the same package.
+        //
+        // ## Why TRANSACTION_SUBMIT and not a new RESUBMIT verb
+        //
+        // `audit_logs.action` carries a CHECK listing the permitted verbs
+        // (schema.sql) and no RESUBMIT verb is among them. SQLite cannot ALTER
+        // a CHECK, so adding one means rebuilding an append-only compliance
+        // table — and getting it wrong is SILENT: `auditService.log` swallows
+        // write failures by design, so an unpermitted verb would throw inside
+        // the catch, write nothing, and still return success. The resubmit
+        // would look audited and the trail would be empty, which is the very
+        // defect this change closes.
+        //
+        // So the verb stays inside the permitted set and `metadata.reason`
+        // names the specific act — the idiom BACKLOG-2365 established for
+        // contact removal and the contact-restore audit reuses.
+        const transaction = await transactionService.getTransactionDetails(
+          validatedTransactionId
+        );
+        await auditService.log({
+          userId: transaction?.user_id || "unknown",
+          action: "TRANSACTION_SUBMIT",
+          resourceType: "SUBMISSION",
+          resourceId: result.submissionId || validatedTransactionId,
+          metadata: {
+            reason: "resubmit",
+            propertyAddress: transaction?.property_address,
+            messagesCount: result.messagesCount,
+            attachmentsCount: result.attachmentsCount,
+          },
+          success: true,
+        });
+
         logService.info("Transaction resubmitted successfully", "Transactions", {
           transactionId: validatedTransactionId,
           submissionId: result.submissionId,
