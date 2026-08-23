@@ -196,8 +196,12 @@ describe("StartNewAuditModal", () => {
       renderModal();
 
       await waitFor(() => {
-        expect(screen.getByText("purchase")).toBeInTheDocument();
-        expect(screen.getByText("sale")).toBeInTheDocument();
+        // BACKLOG-2805: this asserted the RAW ENUM ("purchase" / "sale"),
+        // which is the defect written down as an expectation — the row
+        // printed the stored value and let CSS `capitalize` make it look
+        // like a label. It now asserts the founder-ruled display strings.
+        expect(screen.getByText("Listing/Purchase")).toBeInTheDocument();
+        expect(screen.getByText("Sale")).toBeInTheDocument();
       });
     });
 
