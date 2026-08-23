@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { ResponsiveModal } from "../../common/ResponsiveModal";
 import { ExtendedContact, ContactFormData, ContactEmailEntry, ContactPhoneEntry } from "../types";
-import { ROLE_DISPLAY_NAMES } from "../../../constants/contactRoles";
+import { ROLE_DISPLAY_NAMES, SPECIFIC_ROLES } from "../../../constants/contactRoles";
 import { contactService } from "../../../services/contactService";
 
 interface ContactFormModalProps {
@@ -507,16 +507,44 @@ function ContactFormModal({
               Default Role
             </label>
             <select
+              data-testid="contact-default-role"
               value={formData.defaultRole || ""}
               onChange={(e) => handleChange("defaultRole", e.target.value)}
               className="w-full px-3 py-2.5 sm:py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 text-gray-900 bg-white min-h-[44px]"
             >
               <option value="">None</option>
-              {Object.entries(ROLE_DISPLAY_NAMES).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
+              {/*
+                BACKLOG-2804: this is the one picker built from the WHOLE role
+                map, so it is the one place where renaming `seller_agent` to
+                "Listing Agent" would offer two options reading the same word.
+                `seller_agent` is the survivor — it is the only seller-side
+                agent role the audit wizard assigns — and `listing_agent` is
+                dropped from the list.
+
+                DISPLAY ONLY, and it does not hide a stored value: a contact
+                already saved as `listing_agent` keeps its option, because a
+                <select> whose value has no matching <option> renders BLANK —
+                the form would show that contact as having no default role at
+                all, and the user could not tell what it actually is.
+
+                The stored value is NOT at risk. Corrected after SR review of
+                PR #2351, which measured the hatch removed: the save reads
+                `formData.defaultRole` (React state), never the DOM, so an
+                untouched form still writes `listing_agent`. The earlier note
+                here claimed the next save would rewrite the role. It would
+                not. The defect is the blank field, which is reason enough.
+              */}
+              {Object.entries(ROLE_DISPLAY_NAMES)
+                .filter(
+                  ([value]) =>
+                    value !== SPECIFIC_ROLES.LISTING_AGENT ||
+                    formData.defaultRole === SPECIFIC_ROLES.LISTING_AGENT,
+                )
+                .map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
             </select>
             <p className="mt-1 text-xs text-gray-500">
               Auto-filled when assigning this contact to transactions
