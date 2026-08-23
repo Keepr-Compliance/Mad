@@ -47,6 +47,22 @@ function item(over: Partial<ReviewItemDto> & { id: string }): ReviewItemDto {
       snippet: "hello",
       occurredAt: "2026-06-01T00:00:00.000Z",
       itemCount: 1,
+      recipients: "me@example.com",
+      cc: null,
+      sender: "paul@example.com",
+      hasAttachments: false,
+      threadParticipants: ["+15550142"],
+      threadMessages: [
+        {
+          id: "m-1",
+          thread_id: "th-1",
+          body_text: "hello",
+          sent_at: "2026-06-01T00:00:00.000Z",
+          direction: "inbound",
+          participants_flat: "+15550142",
+          channel: "sms",
+        },
+      ],
     },
     ...over,
   };
@@ -63,11 +79,21 @@ const SET: ReviewItemDto[] = [
 
 const noop = async () => undefined;
 
+/**
+ * BACKLOG-2791 (founder revert, 2026-08-22): the review surfaces now render the
+ * app's OWN cards — EmailThreadCard for emails, MessageThreadCard for texts —
+ * instead of a bespoke card, so identity is read from each card's own testid.
+ * Email threads are keyed by `data-thread-id` (the card's existing attribute,
+ * carrying the review item id); text items keep the `review-item` wrapper.
+ */
 function renderedIds(): string[] {
-  return screen
-    .getAllByTestId("review-item")
-    .map((el) => el.getAttribute("data-item-id") as string)
-    .sort();
+  const emailIds = screen
+    .queryAllByTestId("email-thread-card")
+    .map((el) => el.getAttribute("data-thread-id") as string);
+  const textIds = screen
+    .queryAllByTestId("review-item")
+    .map((el) => el.getAttribute("data-item-id") as string);
+  return [...emailIds, ...textIds].sort();
 }
 
 describe("BACKLOG-2791 — the three renderings show the same set", () => {
@@ -160,8 +186,10 @@ describe("BACKLOG-2791 — the three renderings show the same set", () => {
 
     render(
       <>
-        <ReviewQueueSection items={SET} kind="email" onApprove={noop} onReject={noop} />
         <TransactionEmailsTab
+          reviewSection={
+            <ReviewQueueSection items={SET} kind="email" onApprove={noop} onReject={noop} />
+          }
           communications={[legacyEmail]}
           loading={false}
           unlinkingCommId={null}
@@ -178,9 +206,11 @@ describe("BACKLOG-2791 — the three renderings show the same set", () => {
     // contributes none.
     expect(renderedIds()).toEqual(["legacy:l1", "pending:p1", "pending:p2"]);
 
-    // And the tab mounts no needs-review surface of its own.
-    expect(screen.queryByTestId("needs-review-section")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("needs-review-list")).not.toBeInTheDocument();
+    // Exactly ONE needs-review surface exists in the tree — the shared one that
+    // was passed in. The tab contributes none of its own, which is what stops
+    // legacy items rendering twice at two granularities.
+    expect(screen.getAllByTestId("needs-review-section")).toHaveLength(1);
+    expect(screen.getAllByTestId("needs-review-list")).toHaveLength(1);
 
     // The ambiguous subject appears ONCE in the whole tree, not twice.
     expect(screen.queryAllByText("Ambiguous")).toHaveLength(0);

@@ -857,6 +857,7 @@ export const transactionBridge = {
     callback: (data: {
       transactionId: string;
       added: number;
+      linked: number;
       outstanding: number;
       reason: "open" | "background" | "contact-change";
     }) => void,

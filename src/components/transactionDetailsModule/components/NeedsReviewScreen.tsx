@@ -25,7 +25,7 @@
  * amber needs-review treatment, same check/trash affordances) against the
  * display payload that travels with each item.
  */
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import type { ReviewItemDto } from "../../../../electron/types/ipc/window-api-transactions";
 import { ReviewItemCard } from "./ReviewItemCard";
 
@@ -47,13 +47,6 @@ export function NeedsReviewScreen({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
 
-  const { emails, texts } = useMemo(
-    () => ({
-      emails: items.filter((i) => i.kind === "email"),
-      texts: items.filter((i) => i.kind === "text"),
-    }),
-    [items],
-  );
 
   const act = async (id: string, fn: (ids: string[]) => Promise<void>) => {
     setBusyId(id);
@@ -74,52 +67,82 @@ export function NeedsReviewScreen({
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex flex-col bg-gray-50" data-testid="needs-review-screen">
-      <header className="flex items-center justify-between gap-3 border-b border-gray-200 bg-white px-4 py-3 sm:px-6">
-        <div className="flex min-w-0 items-center gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Back"
-            className="rounded-lg p-2 text-gray-600 transition-all hover:bg-gray-100"
-          >
-            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold text-gray-900">Needs Review</h1>
-            <p className="truncate text-sm text-gray-500">
-              {items.length === 0
-                ? "Nothing to review"
-                : `${items.length} item${items.length === 1 ? "" : "s"} · ${emails.length} email${emails.length === 1 ? "" : "s"}, ${texts.length} text${texts.length === 1 ? "" : "s"}`}
+    <div
+      className="fixed inset-0 z-[70] flex flex-col bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 overflow-hidden"
+      data-testid="needs-review-screen"
+    >
+      {/* Screen chrome copied from the app's existing full-screen surfaces —
+          TransactionToolbar (Transactions) and Contacts (Clients & Contacts) —
+          rather than invented: gradient bar with shadow-lg and NO border, back
+          button hard left as a text button with the long-arrow icon, and a
+          right-aligned title block whose subtitle carries the count in the
+          gradient's own 100-weight hue.
+          Amber/orange is this screen's identity (blue/purple and purple/pink
+          are taken by the two reference screens) and already denotes review in
+          TransactionHeader's pending-review state.
+          The z-index stays z-[70]: unlike those screens, which are positioned by
+          an AppModals wrapper, this overlay is its own positioner and must sit
+          ABOVE TransactionDetails at z-[60]. */}
+      <div className="flex-shrink-0 bg-gradient-to-r from-amber-500 to-orange-500 px-3 sm:px-6 pt-6 sm:pt-10 pb-3 sm:pb-4 flex items-center justify-between shadow-lg">
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg px-2 sm:px-4 py-2 transition-all flex items-center gap-1 sm:gap-2 font-medium text-sm sm:text-base"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M10 19l-7-7m0 0l7-7m-7 7h18"
+            />
+          </svg>
+          {/* "Back to Transaction", not the references' "Back to Dashboard":
+              this overlay sits on top of the transaction, which is where the
+              button actually returns you. */}
+          <span className="hidden sm:inline">Back to Transaction</span>
+          <span className="sm:hidden">Back</span>
+        </button>
+
+        <div className="flex items-center gap-2 sm:gap-4">
+          {items.length > 0 && (
+            /* On-gradient action treatment, matching the Contacts header's
+               review-duplicates button. flex-shrink-0 here + min-w-0 on the
+               title block decide which side gives way on overflow
+               (BACKLOG-2671). */
+            <div className="flex flex-shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => actAll(onReject)}
+                disabled={bulkBusy}
+                className="whitespace-nowrap text-white bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg px-2.5 py-2 sm:px-3.5 transition-all font-medium text-xs sm:text-sm disabled:opacity-50"
+              >
+                Reject all
+              </button>
+              <button
+                type="button"
+                onClick={() => actAll(onApprove)}
+                disabled={bulkBusy}
+                className="whitespace-nowrap text-amber-700 bg-white hover:bg-opacity-90 rounded-lg px-2.5 py-2 sm:px-3.5 transition-all font-semibold text-xs sm:text-sm disabled:opacity-50"
+              >
+                Approve all
+              </button>
+            </div>
+          )}
+
+          <div className="text-right min-w-0" data-testid="needs-review-title-block">
+            <h2 className="text-lg sm:text-2xl font-bold text-white">Needs Review</h2>
+            <p
+              className="text-amber-100 text-xs sm:text-sm"
+              data-testid="needs-review-header-count"
+            >
+              {items.length} {items.length === 1 ? "thread" : "threads"} need review
             </p>
           </div>
         </div>
+      </div>
 
-        {items.length > 0 && (
-          <div className="flex flex-shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => actAll(onReject)}
-              disabled={bulkBusy}
-              className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 disabled:opacity-50"
-            >
-              Reject all
-            </button>
-            <button
-              type="button"
-              onClick={() => actAll(onApprove)}
-              disabled={bulkBusy}
-              className="rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white transition-all hover:bg-green-700 disabled:opacity-50"
-            >
-              Approve all
-            </button>
-          </div>
-        )}
-      </header>
-
-      <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+      <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-6">
         {isLoading && items.length === 0 ? (
           <p className="text-sm text-gray-500">Loading…</p>
         ) : items.length === 0 ? (

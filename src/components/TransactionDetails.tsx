@@ -1012,18 +1012,22 @@ function TransactionDetails({
 
           {activeTab === "emails" && (
             <>
-              {/* BACKLOG-2791: the SAME set the badge counts and the Complete
-                  gate blocks on, filtered to emails. Not re-derived here — that
-                  is what stopped the badge and this section disagreeing. */}
-              <ReviewQueueSection
-                items={reviewQueue.items}
-                kind="email"
-                onApprove={reviewQueue.approve}
-                onReject={reviewQueue.reject}
-                onOpenAll={() => setShowNeedsReview(true)}
-              />
             <TransactionEmailsTab
               hasReviewItems={reviewQueue.items.some((i) => i.kind === "email")}
+              /* BACKLOG-2791: the SAME set the badge counts and the Complete gate
+                 blocks on, filtered to emails, rendered by the tab under its
+                 Select row (develop's position). Not re-derived in the tab — that
+                 is what stopped the badge and the section disagreeing. */
+              reviewSection={
+                <ReviewQueueSection
+                  items={reviewQueue.items}
+                  kind="email"
+                  onApprove={reviewQueue.approve}
+                  onReject={reviewQueue.reject}
+                  onViewEmail={setViewingEmail}
+                  nameMap={emailNameMap}
+                />
+              }
               communications={emailCommunications}
               loading={loading || (autoSyncRunning && emailCommunications.length === 0)}
               unlinkingCommId={unlinkingCommId}
@@ -1064,18 +1068,21 @@ function TransactionDetails({
 
           {activeTab === "messages" && (
             <>
-              {/* BACKLOG-2791: the texts half of the same set. Texts never had a
-                  needs-review state before this item — match_reason is written
-                  only on the email insert — so this section is new, not a
-                  re-skin of an existing one. */}
-              <ReviewQueueSection
-                items={reviewQueue.items}
-                kind="text"
-                onApprove={reviewQueue.approve}
-                onReject={reviewQueue.reject}
-                onOpenAll={() => setShowNeedsReview(true)}
-              />
             <TransactionMessagesTab
+              hasReviewItems={reviewQueue.items.some((i) => i.kind === "text")}
+              /* BACKLOG-2791: the texts half of the same set. develop has no
+                 needs-review section on this tab at all — texts never had the
+                 state — so this is new, positioned to match the Emails tab. */
+              reviewSection={
+                <ReviewQueueSection
+                  items={reviewQueue.items}
+                  kind="text"
+                  onApprove={reviewQueue.approve}
+                  onReject={reviewQueue.reject}
+                  auditStartDate={transaction.started_at}
+                  auditEndDate={transaction.closed_at}
+                />
+              }
               messages={textMessages}
               loading={messagesLoading || loading}
               error={messagesError}
@@ -1274,6 +1281,7 @@ function TransactionDetails({
         <ReviewPromptDialog
           variant="found"
           count={reviewQueue.lastAdded}
+          linkedCount={reviewQueue.lastLinked}
           onReview={() => {
             reviewQueue.clearLastAdded();
             setShowNeedsReview(true);

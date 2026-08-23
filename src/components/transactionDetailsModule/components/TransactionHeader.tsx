@@ -341,7 +341,7 @@ function ActiveActions({
       <button
         onClick={onShowNeedsReview}
         data-testid="needs-review-button"
-        className="relative px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-white text-amber-700 hover:bg-opacity-90 shadow-md hover:shadow-lg text-sm flex-shrink-0"
+        className="relative px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-amber-600 text-white hover:bg-amber-700 shadow-md hover:shadow-lg text-sm flex-shrink-0"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5 19h14a2 2 0 001.84-2.75L13.74 4a2 2 0 00-3.48 0L3.16 16.25A2 2 0 005 19z" />
@@ -351,7 +351,7 @@ function ActiveActions({
         {reviewCount > 0 && (
           <span
             data-testid="needs-review-badge"
-            className="ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-amber-600 px-1.5 py-0.5 text-xs font-bold text-white"
+            className="ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-white px-1.5 py-0.5 text-xs font-bold text-amber-700"
           >
             {reviewCount}
           </span>

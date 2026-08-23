@@ -107,6 +107,41 @@ export interface ReviewItemDisplay {
   occurredAt: string | null;
   /** Messages in the thread (texts) or emails in the thread (emails). */
   itemCount: number;
+
+  // ---- raw fields, so the renderer can rebuild a real thread ----
+  //
+  // BACKLOG-2791 (founder revert, 2026-08-22): the review surfaces render the
+  // app's ORIGINAL EmailThreadCard / MessageThreadCard, which need a hydrated
+  // thread — not the compact card the first cut used. A PENDING item is
+  // deliberately absent from `communications`, so the tabs' own loaders cannot
+  // hydrate it and the renderer would show nothing for exactly the rows this
+  // feature exists to show. These are projected straight from the `emails` /
+  // `messages` rows the item points at, so the card resolves participants (and
+  // therefore CONTACT NAMES via nameMap) exactly as it does for a linked one.
+  /** Comma-separated To addresses (emails). */
+  recipients: string | null;
+  /** Comma-separated Cc addresses (emails). */
+  cc: string | null;
+  /** Sender address (emails) — the raw value, unlike `subtitle`. */
+  sender: string | null;
+  /** Whether the underlying record carries attachments. */
+  hasAttachments: boolean;
+  /** Every distinct handle on a TEXT thread, for participant display. */
+  threadParticipants: string[];
+  /**
+   * The TEXT thread's actual messages, so MessageThreadCard can render a real
+   * conversation (participants, group detection, avatar, the View modal) rather
+   * than a stand-in. Empty for email items.
+   */
+  threadMessages: Array<{
+    id: string;
+    thread_id: string | null;
+    body_text: string | null;
+    sent_at: string | null;
+    direction: string | null;
+    participants_flat: string | null;
+    channel: string | null;
+  }>;
 }
 
 export interface ReviewItem {
@@ -135,8 +170,21 @@ export interface ReviewState {
 }
 
 export interface PendingSyncResult {
-  /** Items THIS run newly added — the P2 popup is silent when 0. */
+  /** Items THIS run newly added to the review queue — the popup's "R". */
   added: number;
+  /**
+   * Communications THIS run LINKED outright, without needing approval — the
+   * popup's "L".
+   *
+   * STRUCTURALLY 0 TODAY, and reported rather than assumed. This service only
+   * ever writes to `pending_review_communications`; every deal-scoped discovery
+   * path was redirected to queue rather than link (SR review blockers 4-6), so
+   * nothing on this path links without an approval. The field exists so the
+   * popup shows a MEASURED number instead of a hardcoded zero — if confident
+   * auto-linking is ever restored for these paths, the count flows through
+   * without touching the copy.
+   */
+  linked: number;
   /** Outstanding total after the run (badge). */
   outstanding: number;
 }
@@ -254,6 +302,12 @@ const EMPTY_DISPLAY: ReviewItemDisplay = {
   snippet: "",
   occurredAt: null,
   itemCount: 1,
+  recipients: null,
+  cc: null,
+  sender: null,
+  hasAttachments: false,
+  threadParticipants: [],
+  threadMessages: [],
 };
 
 function firstLine(text: string | null): string {
@@ -266,9 +320,16 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
   const row = dbGet<{
     subject: string | null;
     sender: string | null;
+    recipients: string | null;
+    cc: string | null;
     body_plain: string | null;
     sent_at: string | null;
-  }>("SELECT subject, sender, body_plain, sent_at FROM emails WHERE id = ?", [emailId]);
+    has_attachments: number | null;
+  }>(
+    `SELECT subject, sender, recipients, cc, body_plain, sent_at, has_attachments
+       FROM emails WHERE id = ?`,
+    [emailId],
+  );
   if (!row) return EMPTY_DISPLAY;
   return {
     title: row.subject?.trim() || "(no subject)",
@@ -276,6 +337,12 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
     snippet: firstLine(row.body_plain),
     occurredAt: row.sent_at,
     itemCount: 1,
+    recipients: row.recipients,
+    cc: row.cc,
+    sender: row.sender,
+    hasAttachments: !!row.has_attachments,
+    threadParticipants: [],
+    threadMessages: [],
   };
 }
 
@@ -296,12 +363,38 @@ function threadDisplay(threadId: string | null): ReviewItemDisplay {
     [threadId],
   );
   if (!row) return EMPTY_DISPLAY;
+  // The real messages, so the card renders a real conversation.
+  const threadMessages = dbAll<{
+    id: string;
+    thread_id: string | null;
+    body_text: string | null;
+    sent_at: string | null;
+    direction: string | null;
+    participants_flat: string | null;
+    channel: string | null;
+  }>(
+    `SELECT id, thread_id, body_text, sent_at, direction, participants_flat, channel
+       FROM messages
+      WHERE thread_id = ? AND duplicate_of IS NULL
+      ORDER BY sent_at ASC`,
+    [threadId],
+  );
+  const handles = (row.participants ?? "")
+    .split(",")
+    .map((h) => h.trim())
+    .filter((h) => h.length > 0);
   return {
-    title: row.participants?.split(",")[0]?.trim() || "Text conversation",
+    title: handles[0] || "Text conversation",
     subtitle: row.participants ?? "",
     snippet: firstLine(row.body_text),
     occurredAt: row.sent_at,
     itemCount: row.n ?? 1,
+    recipients: null,
+    cc: null,
+    sender: handles[0] ?? null,
+    hasAttachments: false,
+    threadParticipants: handles,
+    threadMessages,
   };
 }
 
@@ -454,8 +547,10 @@ function findCandidateThreadIds(
 
 export interface ReviewQueueChangedEvent {
   transactionId: string;
-  /** What THIS run newly queued — drives the popup, silent at 0. */
+  /** What THIS run newly queued — the popup's "R". Silent at 0. */
   added: number;
+  /** What THIS run linked outright — the popup's "L". */
+  linked: number;
   /** Outstanding total — drives the badge. */
   outstanding: number;
   reason: PendingSyncReason;
@@ -492,7 +587,7 @@ export async function syncReviewQueueForTransaction(opts: {
 }): Promise<PendingSyncResult> {
   const { transactionId, reason, contactIds } = opts;
   const txn = getTransactionRow(transactionId);
-  if (!txn) return { added: 0, outstanding: 0 };
+  if (!txn) return { added: 0, linked: 0, outstanding: 0 };
 
   const range = computeTransactionDateRange({
     started_at: txn.started_at,
@@ -579,6 +674,9 @@ export async function syncReviewQueueForTransaction(opts: {
   broadcastReviewQueueChanged({
     transactionId,
     added,
+    // Measured, not assumed: this function performs no INSERT into
+    // `communications`, so nothing it does can be reported as linked.
+    linked: 0,
     outstanding: countReviewItems(transactionId),
     reason,
   });
@@ -591,7 +689,7 @@ export async function syncReviewQueueForTransaction(opts: {
     since,
   });
 
-  return { added, outstanding: countReviewItems(transactionId) };
+  return { added, linked: 0, outstanding: countReviewItems(transactionId) };
 }
 
 /**

@@ -32,6 +32,23 @@ export interface ReviewItemDisplayDto {
   snippet: string;
   occurredAt: string | null;
   itemCount: number;
+  /** Raw fields so the renderer can rebuild a REAL thread for the app's own
+   *  EmailThreadCard / MessageThreadCard — a pending item is absent from
+   *  `communications`, so the tabs' loaders cannot hydrate it. */
+  recipients: string | null;
+  cc: string | null;
+  sender: string | null;
+  hasAttachments: boolean;
+  threadParticipants: string[];
+  threadMessages: Array<{
+    id: string;
+    thread_id: string | null;
+    body_text: string | null;
+    sent_at: string | null;
+    direction: string | null;
+    participants_flat: string | null;
+    channel: string | null;
+  }>;
 }
 
 export interface ReviewItemDto {
@@ -55,14 +72,19 @@ export interface ReviewStateResult {
 }
 
 export interface ReviewSyncResult {
+  /** Queued by THIS run — the popup's "require review" number. */
   added: number;
+  /** Linked outright by THIS run — the popup's "linked successfully" number. */
+  linked: number;
   outstanding: number;
 }
 
 export interface ReviewQueueChangedDto {
   transactionId: string;
-  /** What THAT run newly queued — drives the popup, silent at 0. */
+  /** What THAT run newly queued — the popup's "require review". Silent at 0. */
   added: number;
+  /** What THAT run linked outright — the popup's "linked successfully". */
+  linked: number;
   /** Outstanding total — drives the badge. */
   outstanding: number;
   reason: ReviewSyncReason;

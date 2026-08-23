@@ -22,7 +22,17 @@ export type ReviewPromptVariant = "found" | "blocked";
 
 export interface ReviewPromptDialogProps {
   variant: ReviewPromptVariant;
+  /**
+   * "found": the number that REQUIRE REVIEW from this run (the copy's R).
+   * "blocked": the outstanding queue total, or -1 when it could not be read.
+   */
   count: number;
+  /**
+   * "found" only — communications THIS run linked outright (the copy's L).
+   * The total shown is L + R, so this must be the run's real linked count and
+   * never a placeholder.
+   */
+  linkedCount?: number;
   onReview: () => void;
   onDismiss: () => void;
 }
@@ -30,6 +40,7 @@ export interface ReviewPromptDialogProps {
 export function ReviewPromptDialog({
   variant,
   count,
+  linkedCount = 0,
   onReview,
   onDismiss,
 }: ReviewPromptDialogProps): React.ReactElement {
@@ -40,17 +51,33 @@ export function ReviewPromptDialog({
   const unreadable = isBlocked && count < 0;
   const plural = count === 1 ? "communication" : "communications";
 
+  // FOUNDER-DICTATED COPY (2026-08-22 R-session), transcribed verbatim. The
+  // announcement is identical for a brand-new transaction and for an
+  // open/contact-save sync, and every number is THIS RUN's delta — never a
+  // cumulative or pre-existing total.
+  //
+  //   "N total communications found
+  //    L linked successfully
+  //    R require review
+  //    Communications that require review will only be linked after you approve
+  //    them."
+  //
+  // N is computed as L + R rather than passed in, so the three lines cannot
+  // disagree with each other.
+  const requiresReview = count;
+  const totalFound = linkedCount + requiresReview;
+
   const title = unreadable
     ? "Couldn't check Needs Review"
     : isBlocked
       ? "Review needed before completing"
-      : `${count} new ${plural} found`;
+      : `${totalFound} total communications found`;
 
   const body = unreadable
     ? "The transaction can't be completed until the review queue can be read. Open Needs Review to try again."
     : isBlocked
       ? `You have ${count} ${plural} that need to be reviewed before completing the transaction.`
-      : `They've been added to Needs Review. Nothing is linked to this transaction until you approve it.`;
+      : null;
 
   return (
     <div
@@ -76,7 +103,18 @@ export function ReviewPromptDialog({
             <h2 id="review-prompt-title" className="text-lg font-semibold text-gray-900">
               {title}
             </h2>
-            <p className="mt-1 text-sm text-gray-600">{body}</p>
+            {body !== null ? (
+              <p className="mt-1 text-sm text-gray-600">{body}</p>
+            ) : (
+              <div className="mt-1 text-sm text-gray-600" data-testid="review-prompt-breakdown">
+                <p>{linkedCount} linked successfully</p>
+                <p>{requiresReview} require review</p>
+                <p className="mt-2">
+                  Communications that require review will only be linked after you approve
+                  them.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -93,7 +131,7 @@ export function ReviewPromptDialog({
             onClick={onReview}
             className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white shadow-md transition-all hover:bg-blue-700"
           >
-            Review
+            {isBlocked ? "Review" : "Review now"}
           </button>
         </div>
       </div>

@@ -90,11 +90,13 @@ interface TransactionEmailsTabProps {
    */
   onConfirmComplete?: () => Promise<void>;
   /**
-   * BACKLOG-2791: whether the shared ReviewQueueSection is showing anything
-   * above this tab. Passed in, never re-derived — this tab classifying for
-   * itself is exactly what produced the duplicate-section bug.
+   * BACKLOG-2791: whether the shared review section is showing anything.
+   * Passed in, never re-derived — this tab classifying for itself is exactly
+   * what produced the duplicate-section bug.
    */
   hasReviewItems?: boolean;
+  /** BACKLOG-2791: the shared Needs review section, rendered under the Select row. */
+  reviewSection?: React.ReactNode;
   /** BACKLOG-1869: Deep-navigate target from search; scroll+highlight the matching card. */
   highlightTarget?: HighlightTarget | null;
   /** BACKLOG-1869: Called once the highlight has been applied (or gracefully skipped). */
@@ -125,6 +127,7 @@ export function TransactionEmailsTab({
   auditStartDate,
   auditEndDate,
   hasReviewItems = false,
+  reviewSection = null,
   highlightTarget,
   onHighlightConsumed,
 }: TransactionEmailsTabProps): React.ReactElement {
@@ -506,8 +509,13 @@ export function TransactionEmailsTab({
     );
   }
 
-  // Empty state
-  if (emailThreads.length === 0) {
+  // Empty state.
+  //
+  // BACKLOG-2791 (founder, 2026-08-22): "no emails linked" must mean genuinely
+  // nothing — no linked threads AND nothing waiting in Needs review. Gating on
+  // linked threads alone told a user with a full review queue that there was
+  // nothing here, while the section right below it listed their emails.
+  if (emailThreads.length === 0 && !hasReviewItems) {
     return (
       <div>
         <div className="bg-gray-50 rounded-lg p-6 text-center">
@@ -725,7 +733,16 @@ export function TransactionEmailsTab({
         </button>
       </div>
 
-      {/* BACKLOG-2791: the old self-classifying NeedsReviewSection (BACKLOG-2319)
+      {/* BACKLOG-2791: the Needs review section, back in develop's position —
+          directly under the Select row and above the "Linked emails" divider.
+          The first cut of this PR mounted it at the very top of the tab, from
+          TransactionDetails; the founder asked for the original placement.
+          It is passed IN rather than built here: membership comes from the one
+          shared review set, and this tab classifying for itself is exactly what
+          produced the duplicate-section bug. */}
+      {reviewSection}
+
+      {/* The old self-classifying NeedsReviewSection (BACKLOG-2319)
           USED TO RENDER HERE and has been DELETED, not filtered.
           Needs-review is now owned by ReviewQueueSection, mounted above this tab
           by TransactionDetails and fed from getReviewState — the one source of

@@ -21,8 +21,10 @@ export interface UseReviewQueueResult {
   items: ReviewItemDto[];
   count: number;
   isLoading: boolean;
-  /** Items added by the most recent sync — drives the P2 popup (0 = silent). */
+  /** Items added by the most recent sync — drives the popup (0 = silent). */
   lastAdded: number;
+  /** Items LINKED outright by the most recent sync — the popup's "L". */
+  lastLinked: number;
   /** Re-read the queue. Returns the state it read, for read-then-act callers. */
   refresh: () => Promise<ReviewStateResult>;
   /** Run discovery. `reason` picks the scan axis. */
@@ -41,6 +43,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   const [state, setState] = useState<ReviewStateResult>(EMPTY);
   const [isLoading, setIsLoading] = useState(false);
   const [lastAdded, setLastAdded] = useState(0);
+  const [lastLinked, setLastLinked] = useState(0);
 
   // Guards a late response from a previous transaction overwriting this one's
   // state after a fast switch between deals.
@@ -55,6 +58,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     // Switching deals resets the announcement — a count from the previous deal
     // must never be shown against this one.
     setLastAdded(0);
+    setLastLinked(0);
     setState(EMPTY);
     stateRef.current = EMPTY;
     hasLoadedRef.current = false;
@@ -112,7 +116,10 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
         // skip-first-run guard: both invocations run, and the state keeps the
         // larger. Dismissal clears it, and switching deals resets it, so a stale
         // number cannot survive either boundary.
-        if (activeId.current === transactionId) setLastAdded((prev) => Math.max(prev, added));
+        if (activeId.current === transactionId) {
+          setLastAdded((prev) => Math.max(prev, added));
+          setLastLinked((prev) => Math.max(prev, result?.linked ?? 0));
+        }
         await refresh();
         return added;
       } catch (error) {
@@ -145,7 +152,10 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     [refresh],
   );
 
-  const clearLastAdded = useCallback(() => setLastAdded(0), []);
+  const clearLastAdded = useCallback(() => {
+    setLastAdded(0);
+    setLastLinked(0);
+  }, []);
 
   /**
    * Subscribe to main-process queue changes.
@@ -174,7 +184,10 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     const unsubscribe = subscribe((data) => {
       if (data.transactionId !== transactionId) return;
       setState((prev) => ({ ...prev, count: data.outstanding }));
-      if (data.added > 0) setLastAdded((prev) => Math.max(prev, data.added));
+      if (data.added > 0) {
+        setLastAdded((prev) => Math.max(prev, data.added));
+        setLastLinked((prev) => Math.max(prev, data.linked ?? 0));
+      }
       void refresh();
     });
     return unsubscribe;
@@ -185,6 +198,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     count: state.count,
     isLoading,
     lastAdded,
+    lastLinked,
     refresh,
     runSync,
     approve,
