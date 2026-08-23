@@ -2,13 +2,18 @@
  * EmailThreadCard Tests
  * TASK-1183: Tests for email thread grouping and display
  */
+import React from "react";
+import { render, screen, fireEvent } from "@testing-library/react";
+import "@testing-library/jest-dom";
 import {
+  EmailThreadCard,
   normalizeSubject,
   groupEmailsByThread,
   createEmailThreads,
   sortEmailThreadsByRecent,
   processEmailThreads,
 } from "../EmailThreadCard";
+import type { EmailThread } from "../EmailThreadCard";
 import type { Communication } from "../../types";
 
 // Helper to create mock emails
@@ -295,5 +300,89 @@ describe("processEmailThreads", () => {
 
     expect(threads).toHaveLength(1);
     expect(threads[0].emailCount).toBe(1);
+  });
+});
+
+
+/**
+ * BACKLOG-2826 — founder, 2026-08-23: "a lone email should open in conversation
+ * view."
+ *
+ * The card used to branch on thread length: N emails opened
+ * EmailThreadViewModal (the conversation), a lone email called `onViewEmail`,
+ * which mounts the plain reader (EmailViewModal) at the TransactionDetails
+ * level. Two different viewers for the same affordance. Now every thread opens
+ * the conversation, and the reader is one click deeper — "Open Full Email →"
+ * inside the expanded bubble — so EmailViewModal is not stranded.
+ */
+describe("View target — every thread opens the conversation view (BACKLOG-2826)", () => {
+  function makeThread(emails: Communication[]): EmailThread {
+    return {
+      id: "thread-view-target",
+      subject: "Inspection addendum",
+      participants: ["paul@example.com"],
+      emailCount: emails.length,
+      startDate: new Date(emails[0].sent_at as string),
+      endDate: new Date(emails[emails.length - 1].sent_at as string),
+      emails,
+    };
+  }
+
+  const lone = makeThread([
+    createMockEmail({
+      id: "e-1",
+      sender: "Paul Rivera <paul@example.com>",
+      recipients: "me@example.com",
+      subject: "Inspection addendum",
+      body_text: "Attaching the signed addendum.",
+      sent_at: "2024-01-01T10:00:00Z",
+    } as Partial<Communication>),
+  ]);
+
+  const conversation = makeThread([
+    createMockEmail({ id: "e-1", subject: "Inspection addendum", body_text: "First", sent_at: "2024-01-01T10:00:00Z" } as Partial<Communication>),
+    createMockEmail({ id: "e-2", subject: "Re: Inspection addendum", body_text: "Second", sent_at: "2024-01-02T10:00:00Z" } as Partial<Communication>),
+  ]);
+
+  it("a ONE-email thread opens the conversation modal, not the plain reader", () => {
+    const onViewEmail = jest.fn();
+    render(<EmailThreadCard thread={lone} onViewEmail={onViewEmail} />);
+
+    expect(screen.queryByTestId("email-thread-view-modal")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("view-thread-button"));
+
+    expect(screen.getByTestId("email-thread-view-modal")).toBeInTheDocument();
+    // The old branch called this instead of opening the conversation.
+    expect(onViewEmail).not.toHaveBeenCalled();
+  });
+
+  it("an N-email thread still opens the conversation modal — unchanged", () => {
+    const onViewEmail = jest.fn();
+    render(<EmailThreadCard thread={conversation} onViewEmail={onViewEmail} />);
+
+    fireEvent.click(screen.getByTestId("view-thread-button"));
+
+    expect(screen.getByTestId("email-thread-view-modal")).toBeInTheDocument();
+    expect(onViewEmail).not.toHaveBeenCalled();
+  });
+
+  it("the plain reader stays reachable: 'Open Full Email →' inside the conversation calls onViewEmail", () => {
+    const onViewEmail = jest.fn();
+    render(<EmailThreadCard thread={lone} onViewEmail={onViewEmail} />);
+
+    fireEvent.click(screen.getByTestId("view-thread-button"));
+    // A lone email starts expanded, so the escape hatch needs no extra tap.
+    fireEvent.click(screen.getByText("Open Full Email →"));
+
+    expect(onViewEmail).toHaveBeenCalledWith(lone.emails[0]);
+  });
+
+  it("still shows the '(N emails)' count for a real conversation, and none for one email", () => {
+    const { unmount } = render(<EmailThreadCard thread={conversation} />);
+    expect(screen.getByText("(2 emails)")).toBeInTheDocument();
+    unmount();
+
+    render(<EmailThreadCard thread={lone} />);
+    expect(screen.queryByText(/emails\)/)).not.toBeInTheDocument();
   });
 });

@@ -4,6 +4,12 @@
  * Displays emails in a chat-bubble style for easy reading.
  * Click to expand for full email details.
  * TASK-1782: Added attachment display per email in thread view.
+ *
+ * BACKLOG-2826 (founder, 2026-08-23: "a lone email should open in conversation
+ * view"): this modal is now the ONLY viewer a card's View button opens, so it
+ * has to read well at one email. A conversation of one shows its body in full
+ * and starts expanded — a 300-char bubble preview is fine as one turn of a
+ * back-and-forth, but it is not a way to read the email you just asked to open.
  */
 import React, { useState, useCallback, useMemo, useEffect } from "react";
 import DOMPurify from "dompurify";
@@ -233,6 +239,7 @@ function EmailBubble({
   onPreviewAttachment,
   userEmail,
   nameMap,
+  showFullBody = false,
 }: {
   email: Communication;
   isExpanded: boolean;
@@ -244,13 +251,21 @@ function EmailBubble({
   onPreviewAttachment: (attachment: EmailAttachment) => void;
   userEmail?: string;
   nameMap?: ReadonlyMap<string, string>;
+  /**
+   * BACKLOG-2826: render the whole body instead of the 300-char bubble
+   * preview. Set for a conversation of one, where this bubble IS the email.
+   */
+  showFullBody?: boolean;
 }): React.ReactElement {
   const emailDate = new Date(email.sent_at || email.received_at || 0);
   const isMe = isSelfSender(email.sender, userEmail);
   const senderName = extractSenderName(email.sender, userEmail, nameMap);
   const avatarInitial = isMe ? "Y" : getEmailAvatarInitial(email.sender);
   const avatarColor = getSenderColor(email.sender);
-  const preview = useMemo(() => getPlainTextPreview(email), [email]);
+  const preview = useMemo(
+    () => getPlainTextPreview(email, showFullBody ? Number.POSITIVE_INFINITY : 300),
+    [email, showFullBody],
+  );
   const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
 
   const hasAttachments = email.has_attachments || attachments.length > 0;
@@ -436,8 +451,19 @@ export function EmailThreadViewModal({
   userEmail,
   nameMap,
 }: EmailThreadViewModalProps): React.ReactElement {
-  // Track which emails are expanded (default: none - show just content bubbles)
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  /**
+   * BACKLOG-2826: a conversation of one. Every card's View opens this modal now
+   * (a lone email included), so the single-email case is a first-class reading
+   * view rather than a degenerate thread.
+   */
+  const isSoleEmail = thread.emails.length === 1;
+
+  // Track which emails are expanded (default: none - show just content bubbles).
+  // BACKLOG-2826: a lone email starts expanded — its From/To and the
+  // "Open Full Email →" escape hatch should not need a tap to find.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(
+    () => (isSoleEmail ? new Set(thread.emails.map((e) => e.id)) : new Set()),
+  );
 
   // TASK-1782: Attachment state management
   // Map of email ID -> attachments
@@ -521,7 +547,7 @@ export function EmailThreadViewModal({
   }, []);
 
   return (
-    <ResponsiveModal onClose={onClose} zIndex="z-[80]" panelBg="bg-gray-50" panelClassName="max-w-xl sm:max-h-[85vh] sm:overflow-hidden">
+    <ResponsiveModal onClose={onClose} zIndex="z-[80]" panelBg="bg-gray-50" panelClassName="max-w-xl sm:max-h-[85vh] sm:overflow-hidden" testId="email-thread-view-modal">
         {/* Header */}
         <div className="flex-shrink-0 bg-gradient-to-r from-blue-500 to-indigo-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
           {/* Mobile */}
@@ -552,7 +578,9 @@ export function EmailThreadViewModal({
                 {thread.subject || "(No Subject)"}
               </h3>
               <p className="text-blue-100 text-sm mt-1">
-                {thread.emailCount} email{thread.emailCount !== 1 ? "s" : ""} in conversation
+                {/* BACKLOG-2826: "1 email in conversation" reads oddly for a
+                    conversation of one — it is just "1 email". */}
+                {thread.emailCount} email{thread.emailCount !== 1 ? "s in conversation" : ""}
               </p>
             </div>
             <button
@@ -582,6 +610,7 @@ export function EmailThreadViewModal({
               onPreviewAttachment={setPreviewAttachment}
               userEmail={userEmail}
               nameMap={nameMap}
+              showFullBody={isSoleEmail}
             />
           ))}
         </div>
