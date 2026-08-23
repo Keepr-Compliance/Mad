@@ -508,6 +508,32 @@ export function registerTransactionCrudHandlers(
       // BACKLOG-1832: pass lifecycle callbacks so the renderer can show a
       // "fetching emails…" indicator and auto-refresh when the sync completes.
       if (transaction?.id) {
+        // BACKLOG-2563: audit the creation. `transactions:create` above logs
+        // TRANSACTION_CREATE at :199 and this path did not, so the compliance
+        // trail was missing the creation event for exactly the transactions
+        // that exist for compliance — this is the primary user path for
+        // creating an audited transaction (`useAuditSubmission.ts`).
+        //
+        // The verb stays inside the `audit_logs.action` CHECK and
+        // `metadata.reason` names the specific act — the same idiom as the
+        // contact-restore audit below, for the same reason spelled out there:
+        // an unpermitted verb would throw on the CHECK, be swallowed by
+        // `auditService.log`, and report success while writing nothing.
+        //
+        // Logged BEFORE the two fire-and-forget triggers so a background
+        // failure cannot reorder or drop the trail entry.
+        await auditService.log({
+          userId: validatedUserId as string,
+          action: "TRANSACTION_CREATE",
+          resourceType: "TRANSACTION",
+          resourceId: transaction.id,
+          metadata: {
+            propertyAddress: transaction.property_address,
+            reason: "audited_create",
+          },
+          success: true,
+        });
+
         triggerTransactionSyncInBackground({
           transactionId: transaction.id,
           userId: validatedUserId as string,
