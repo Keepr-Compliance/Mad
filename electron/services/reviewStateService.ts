@@ -213,7 +213,12 @@ export interface PendingSyncResult {
  *                   the watermark entirely (the matching mail is OLDER than it)
  *                   and does not advance it.
  */
-export type PendingSyncReason = "open" | "background" | "contact-change";
+export type PendingSyncReason =
+  | "open"
+  | "background"
+  | "contact-change"
+  /** The audit dates were edited so the window covers MORE (BACKLOG-2791). */
+  | "date-extended";
 
 interface TxnRow {
   id: string;

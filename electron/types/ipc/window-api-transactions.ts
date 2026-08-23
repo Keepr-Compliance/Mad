@@ -18,7 +18,12 @@ import type { TransactionContactResult } from "../../services/db/transactionCont
 export type ReviewOrigin = "pending" | "legacy";
 /** BACKLOG-2791: emails and texts are one queue. */
 export type ReviewKind = "email" | "text";
-export type ReviewSyncReason = "open" | "background" | "contact-change";
+export type ReviewSyncReason =
+  | "open"
+  | "background"
+  | "contact-change"
+  /** The audit dates were edited so the window covers MORE (BACKLOG-2791). */
+  | "date-extended";
 
 /**
  * What a surface needs to RENDER an item. It travels WITH the item because a

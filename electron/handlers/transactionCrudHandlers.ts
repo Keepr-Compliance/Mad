@@ -15,6 +15,7 @@ import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
 // BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
 import { triggerTransactionSyncInBackground, isAutoSyncInFlight } from "../services/transactionSyncTrigger";
+import { isAuditWindowExtended } from "../utils/emailDateRange";
 // BACKLOG-2292: automatic audit-window MESSAGES sync (the messages twin) + the
 // coverage-detection reads that drive the date-selection popup and export gate.
 import {
@@ -419,6 +420,60 @@ export function registerTransactionCrudHandlers(
           onProgress: messagesProgress,
           onComplete: (result) => emitMessagesSyncComplete(validatedTransactionId, result),
         });
+
+        // BACKLOG-2791 (founder, 2026-08-23): an EXTENDED audit window brings
+        // communications that were previously out of scope into scope, and
+        // "today nothing happens until the next open". So run the SAME review
+        // discovery the other triggers run — not a fork of it — and let it
+        // announce its own delta through the N/L/R popup.
+        //
+        // Extension only. Narrowing is deliberately not a trigger: what leaves a
+        // deal when its window shrinks is an open founder decision, so this path
+        // must not act on one. `isAuditWindowExtended` is a true superset test
+        // (see its own docblock for why the mixed cases are excluded).
+        //
+        // NOT AWAITED, matching the contact-save trigger: the sweep broadcasts
+        // `review:queue-changed` when it lands, so the badge and the popup
+        // update as results arrive instead of the save blocking on them. A
+        // discovery miss must never fail the update the user actually asked for.
+        const windowExtended = isAuditWindowExtended(
+          {
+            started_at: existingTransaction?.started_at,
+            created_at: existingTransaction?.created_at,
+            closed_at: existingTransaction?.closed_at,
+          },
+          {
+            started_at:
+              "started_at" in updatesRecord
+                ? (updatesRecord.started_at as string | null)
+                : existingTransaction?.started_at,
+            created_at: existingTransaction?.created_at,
+            closed_at:
+              "closed_at" in updatesRecord
+                ? (updatesRecord.closed_at as string | null)
+                : existingTransaction?.closed_at,
+          },
+        );
+
+        if (windowExtended) {
+          void (async () => {
+            try {
+              const { syncReviewQueueForTransaction } = await import(
+                "../services/reviewStateService"
+              );
+              await syncReviewQueueForTransaction({
+                transactionId: validatedTransactionId,
+                reason: "date-extended",
+              });
+            } catch (syncError) {
+              logService.warn(
+                "[BACKLOG-2791] review-queue sync after audit-range extension failed",
+                "Transactions",
+                { error: syncError instanceof Error ? syncError.message : "Unknown" },
+              );
+            }
+          })();
+        }
       }
 
       return {
