@@ -224,15 +224,22 @@ describe("BACKLOG-2790 — the force set's boundary, against the real schema", (
     // dropped the `user_id` term, or the `external_id IS NOT NULL` term, would
     // pass every cancellation test in the PR and quietly delete a stranger's
     // data on the SUCCESS path.
-    db.prepare(
-      `INSERT INTO messages (id, user_id, channel, external_id) VALUES ('mine','u1','imessage','g-1')`,
-    ).run();
-    db.prepare(
-      `INSERT INTO messages (id, user_id, channel, external_id) VALUES ('theirs','u2','imessage','g-2')`,
-    ).run();
-    db.prepare(
-      `INSERT INTO messages (id, user_id, channel, external_id) VALUES ('mine-null','u1','imessage',NULL)`,
-    ).run();
+    // BACKLOG-2796: all three carry the macOS importer's own provenance stamp,
+    // so each is spared by exactly ONE term of the force set and nothing else —
+    // 'theirs' by `user_id`, 'mine-null' by `external_id IS NOT NULL`. Seeding
+    // them without `metadata` would let the provenance clause spare them and
+    // this test would stop proving what it says it proves.
+    const macosMeta = JSON.stringify({
+      source: "macos_messages",
+      originalId: 1,
+      service: "iMessage",
+    });
+    const insertMessage = db.prepare(
+      `INSERT INTO messages (id, user_id, channel, external_id, metadata) VALUES (?,?,?,?,?)`,
+    );
+    insertMessage.run("mine", "u1", "imessage", "g-1", macosMeta);
+    insertMessage.run("theirs", "u2", "imessage", "g-2", macosMeta);
+    insertMessage.run("mine-null", "u1", "imessage", null, macosMeta);
     db.prepare(
       `INSERT INTO attachments (id, message_id, external_message_id, filename)
        VALUES ('a-theirs','theirs','g-2','t.jpg')`,
@@ -257,6 +264,68 @@ describe("BACKLOG-2790 — the force set's boundary, against the real schema", (
         (r) => r.id,
       ),
     ).toEqual(["a-theirs"]);
+  });
+
+  it("BACKLOG-2796 — counts what it yields, and yields only to a survivor", () => {
+    // The swap's yield exists for one window: a foreign write landing between
+    // this run's dedup read and its swap, carrying a GUID the run has staged.
+    // Only iPhone sync can produce it (Android's external_ids are sha256
+    // digests, a disjoint id space), and the row it writes survives the force
+    // set — so the staged copy stands down rather than failing the whole
+    // re-import on the unique index.
+    //
+    // Asserted here against the REAL schema because that is where
+    // `idx_messages_user_external_id` lives: without it there is no conflict to
+    // yield to, and this test would pass against code that yields nothing.
+    const survivor = JSON.stringify({ source: "iphone_sync", originalId: 5 });
+    db.prepare(
+      `INSERT INTO messages (id, user_id, channel, external_id, metadata) VALUES (?,?,?,?,?)`,
+    ).run("iphone-arrival", "u1", "imessage", "shared-guid", survivor);
+    db.prepare(
+      `INSERT INTO attachments (id, message_id, external_message_id, filename)
+       VALUES ('a-survivor','iphone-arrival','shared-guid','from-phone.jpg')`,
+    ).run();
+
+    const staging = forceStagingLifecycle.create(db, "u1");
+    const stage = db.prepare(
+      `INSERT INTO "${staging.messagesTable}" (id, user_id, channel, external_id, metadata)
+       VALUES (?,?,?,?,?)`,
+    );
+    const macos = JSON.stringify({ source: "macos_messages", originalId: 1, service: "iMessage" });
+    stage.run("staged-collides", "u1", "imessage", "shared-guid", macos);
+    stage.run("staged-clean", "u1", "imessage", "own-guid", macos);
+    db.prepare(
+      `INSERT INTO "${staging.attachmentsTable}" (id, message_id, external_message_id, filename)
+       VALUES ('a-collides','staged-collides','shared-guid','from-mac.jpg')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO "${staging.attachmentsTable}" (id, message_id, external_message_id, filename)
+       VALUES ('a-clean','staged-clean','own-guid','ok.jpg')`,
+    ).run();
+
+    const counts = swapStagingIntoLive(db, staging);
+    staging.drop();
+
+    expect(counts.messagesYieldedToSurvivors).toBe(1);
+    // The yielded message takes its staged attachment with it, or the insert
+    // would point at a row that was never written.
+    expect(counts.attachmentsYieldedToSurvivors).toBe(1);
+    expect(counts.messagesInserted).toBe(1);
+    expect(counts.attachmentsInserted).toBe(1);
+
+    // Exact identity sets, both tables: the survivor kept its row AND its
+    // attachment, the non-colliding staged row landed, and the GUID is held
+    // once.
+    expect(
+      (db.prepare(`SELECT id FROM messages ORDER BY id`).all() as Array<{ id: string }>).map(
+        (r) => r.id,
+      ),
+    ).toEqual(["iphone-arrival", "staged-clean"]);
+    expect(
+      (db.prepare(`SELECT id FROM attachments ORDER BY id`).all() as Array<{ id: string }>).map(
+        (r) => r.id,
+      ),
+    ).toEqual(["a-clean", "a-survivor"]);
   });
 
   it("shows what the `changes > 0` guard prevents: a phantom id fails the SWAP, not one attachment", () => {
