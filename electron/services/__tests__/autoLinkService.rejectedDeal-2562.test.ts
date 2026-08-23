@@ -432,11 +432,16 @@ describe("site 3: a sync-wide auto-link run skips rejected deals", () => {
 // a fourth copy of the rule and nothing notices. `transactionEligibility` is the
 // ONE definition; these assertions fail if a site stops referring to it.
 // ===========================================================================
-/** Read autoLinkService's source verbatim. */
-function readAutoLinkSource(): string {
+/** Read a sibling service's source verbatim. */
+function readServiceSource(fileName: string): string {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const fs = require("fs") as typeof import("fs");
-  return fs.readFileSync(path.join(__dirname, "..", "autoLinkService.ts"), "utf8");
+  return fs.readFileSync(path.join(__dirname, "..", fileName), "utf8");
+}
+
+/** Read autoLinkService's source verbatim. */
+function readAutoLinkSource(): string {
+  return readServiceSource("autoLinkService.ts");
 }
 
 /** Drop `//` and block-comment content so only executable code is inspected. */
@@ -515,5 +520,31 @@ describe("the eligibility rule has exactly one definition", () => {
 
     expect(underNewRule).toEqual([]);
     expect(underDeadRule).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // The two consolidation sites. Their behaviour is covered by their own
+  // suites (importIncludeSet-2772, messagesSyncTrigger, auditCoverageService),
+  // but behaviour coverage does NOT stop a correct-but-hand-written copy of the
+  // rule reappearing there — and a hand-written copy is precisely how
+  // autoLinkService drifted while its behaviour tests stayed green. These
+  // guards make "one definition" hold at all five sites, not just three.
+  // -------------------------------------------------------------------------
+  it("importPlanInputs reads the shared predicate rather than spelling it out", () => {
+    const code = stripComments(readServiceSource("importPlanInputs.ts"));
+
+    expect(code).toContain("${LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED}");
+    expect(code.match(/status\s*!=\s*'rejected'/g) ?? []).toEqual([]);
+    expect(code).not.toContain("status != 'archived'");
+  });
+
+  it("auditCoverageService reads the shared JS form rather than comparing inline", () => {
+    const code = stripComments(readServiceSource("auditCoverageService.ts"));
+
+    expect(code).toContain("isLiveTransactionStatus(");
+    // The inline comparison this replaced. Its return true/false is the exact
+    // thing that drifted out of lock-step elsewhere.
+    expect(code.match(/status\s*===\s*"rejected"/g) ?? []).toEqual([]);
+    expect(code.match(/status\s*===\s*'rejected'/g) ?? []).toEqual([]);
   });
 });
