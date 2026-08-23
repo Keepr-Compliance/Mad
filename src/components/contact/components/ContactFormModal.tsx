@@ -523,8 +523,16 @@ function ContactFormModal({
 
                 DISPLAY ONLY, and it does not hide a stored value: a contact
                 already saved as `listing_agent` keeps its option, because a
-                <select> whose value has no matching <option> renders blank and
-                would silently rewrite that contact's role on the next save.
+                <select> whose value has no matching <option> renders BLANK —
+                the form would show that contact as having no default role at
+                all, and the user could not tell what it actually is.
+
+                The stored value is NOT at risk. Corrected after SR review of
+                PR #2351, which measured the hatch removed: the save reads
+                `formData.defaultRole` (React state), never the DOM, so an
+                untouched form still writes `listing_agent`. The earlier note
+                here claimed the next save would rewrite the role. It would
+                not. The defect is the blank field, which is reason enough.
               */}
               {Object.entries(ROLE_DISPLAY_NAMES)
                 .filter(

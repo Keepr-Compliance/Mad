@@ -11,7 +11,11 @@
  * assigns (AUDIT_WORKFLOW_STEPS offers it and never offers `listing_agent`).
  * The collapse is display-only — a contact already saved as `listing_agent`
  * keeps its option, because a <select> whose value matches no <option> renders
- * blank and would rewrite that contact's role on the next save.
+ * BLANK, showing that contact as having no default role at all.
+ *
+ * It does not corrupt the stored value: the save reads React state, not the
+ * DOM, so an untouched form still writes `listing_agent` either way (measured
+ * in SR review of PR #2351). The blank field is the whole defect.
  *
  * Assertions name the exact option and its VALUE, never a count of matches:
  * "one option says Listing Agent" is satisfied by the wrong one surviving.
@@ -101,7 +105,8 @@ describe("BACKLOG-2804: Default Role picker offers one seller-side agent", () =>
 
   it("keeps the option for a contact already stored as listing_agent", () => {
     // The escape hatch. Without it this contact's select renders blank and the
-    // next save writes the blank back — a display fix silently editing data.
+    // form claims she has no default role. The stored value survives either
+    // way — this asserts what the user can SEE, which is the actual defect.
     renderModal({
       id: "contact-omar",
       user_id: "user-1",
