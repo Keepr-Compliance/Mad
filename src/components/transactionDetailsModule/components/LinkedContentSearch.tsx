@@ -132,8 +132,32 @@ function emailPrimaryLine(hit: GlobalEmailHit): string {
   return hit.subject?.trim() || "(no subject)";
 }
 
+/**
+ * BACKLOG-2816 (founder ruling, 2026-08-23): a group-chat-name hit is headed by
+ * the GROUP'S NAME. It is the thing that matched, and it is the name he gave the
+ * conversation — "it should just show the group chat name just like if i lookup a
+ * contact it has a section for the contact".
+ *
+ * Message hits are unchanged: still the sender.
+ */
 function textPrimaryLine(hit: GlobalTextHit): string {
+  const threadName = hit.threadDisplayName?.trim();
+  if (threadName) return threadName;
   return hit.sender?.trim() || "Unknown sender";
+}
+
+/**
+ * BACKLOG-2816: the member line under a group-chat-name hit — "a few of the
+ * members of the group chat (with name not numbers)".
+ *
+ * Returns null when no member resolved to a contact, so the row shows the group
+ * name alone rather than a list of raw digits. The handler has already dropped
+ * unresolved members; this only decides whether there is anything left to show.
+ */
+function textMemberLine(hit: GlobalTextHit): string | null {
+  if (!hit.threadDisplayName) return null;
+  const names = (hit.memberNames ?? []).filter((n) => n.trim());
+  return names.length > 0 ? names.join(", ") : null;
 }
 
 /** Compose the email secondary line (sender + snippet) shown under the subject. */
@@ -397,6 +421,17 @@ export function LinkedContentSearch({
                             </span>
                             {isGlobal && <AttributionBadge attribution={t.attribution} />}
                           </span>
+                          {/* BACKLOG-2816: a group-name row shows members, never
+                              body text — `snippet` is null on those rows by
+                              construction (the query does not project a body). */}
+                          {textMemberLine(t) && (
+                            <span
+                              className="block text-xs text-gray-400 truncate"
+                              data-testid="text-result-members"
+                            >
+                              {textMemberLine(t)}
+                            </span>
+                          )}
                           {t.snippet && (
                             <span className="block text-xs text-gray-400 truncate">
                               {highlightMatch(t.snippet, term)}
