@@ -1662,9 +1662,14 @@ export async function getTransactionsByContact(
       closing_deadline,
       transaction_type,
       status,
+      -- BACKLOG-2804: these strings are DISPLAY labels, not enum values --
+      -- checkCanDelete hands them to the renderer, which joins and prints them
+      -- verbatim (BlockingTransactionsModal, ContactPreview, Contacts). So the
+      -- seller-side label has to match the chip: "Listing Agent". The COLUMN
+      -- name (seller_agent_id) is untouched.
       CASE
         WHEN buyer_agent_id = ? THEN 'Buyer Agent'
-        WHEN seller_agent_id = ? THEN 'Seller Agent'
+        WHEN seller_agent_id = ? THEN 'Listing Agent'
         WHEN escrow_officer_id = ? THEN 'Escrow Officer'
         WHEN inspector_id = ? THEN 'Inspector'
       END as role

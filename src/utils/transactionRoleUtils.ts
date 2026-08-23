@@ -8,12 +8,12 @@ import { SPECIFIC_ROLES, ROLE_DISPLAY_NAMES } from "../constants/contactRoles";
  * and title-casing each word.
  *
  * Examples:
- *   "seller_agent" -> "Seller Agent"
+ *   "seller_agent" -> "Listing Agent"   (BACKLOG-2804: the industry term)
  *   "buyer_agent" -> "Buyer Agent"
  *   "inspector" -> "Inspector"
  *
  * @param role - The role string (e.g., "seller_agent", "buyer_agent")
- * @returns Human-readable label (e.g., "Seller Agent", "Buyer Agent")
+ * @returns Human-readable label (e.g., "Listing Agent", "Buyer Agent")
  */
 export function formatRoleLabel(role: string): string {
   // First check if we have a known display name

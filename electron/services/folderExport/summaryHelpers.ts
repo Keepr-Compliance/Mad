@@ -372,11 +372,26 @@ function generateContactsSection(contacts?: TransactionContactResult[]): string 
       // default in the one document meant to prove the audit is complete.
       const name = escapeHtml(labelForTransactionContact(c));
       const rawRole = c.specific_role || c.role || "";
-      // Format role: "REAL_ESTATE_ATTORNEY" -> "Real Estate Attorney"
-      const role = rawRole
-        .split("_")
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-        .join(" ");
+      // BACKLOG-2804 (support ticket 111): the seller's agent is filed under the
+      // industry term, "Listing Agent". The generic humanizer below would print
+      // "Seller Agent" — so the app on screen and the compliance summary the
+      // user actually files would name the same person on the same deal two
+      // different things.
+      //
+      // Spelled out here rather than imported: `electron/` cannot import from
+      // `src/` (rootDir), so the renderer's ROLE_DISPLAY_NAMES is out of reach
+      // and this is the second and only other place the enum becomes words. The
+      // canonical map is src/constants/contactRoles.ts; keep the two in step.
+      //
+      // Case-insensitive because rows reach this helper both ways.
+      const SELLER_SIDE_AGENT_ROLES = new Set(["seller_agent", "listing_agent"]);
+      const role = SELLER_SIDE_AGENT_ROLES.has(rawRole.toLowerCase())
+        ? "Listing Agent"
+        : // Format role: "REAL_ESTATE_ATTORNEY" -> "Real Estate Attorney"
+          rawRole
+            .split("_")
+            .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+            .join(" ");
       const roleHtml = role ? `<span class="contact-role">${escapeHtml(role)}</span>` : "";
 
       // BACKLOG-2461: when the label above fell back to the phone or the email,
