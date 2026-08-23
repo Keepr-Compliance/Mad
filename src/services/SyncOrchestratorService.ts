@@ -26,7 +26,22 @@ import type { AttachmentsRefusedForSpace } from '@electron/types/ipc/window-api-
 export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
   | 'reindex' | 'backup' | 'restore' | 'ccpa-export';
 
-export type SyncItemStatus = 'pending' | 'running' | 'complete' | 'error';
+/**
+ * BACKLOG-2794 added `'skipped'`: the run reached this leg and did not run it,
+ * because the user cancelled while it was still queued.
+ *
+ * A terminal state of its own rather than a `'complete'` carrying a flag. The
+ * distinction is load-bearing on the dashboard, where `'complete'` renders a
+ * green tick — a leg that never ran has not synced anything, and saying it did
+ * is the class of small lie this surface has spent five items removing.
+ *
+ * Consumers that ask "is this sync active?" (`status === 'running' ||
+ * status === 'pending'`) are correct unchanged: a skipped leg is not active.
+ * Consumers that enumerate TERMINAL states must include it, or the item is
+ * immortal — see the queue clean-up in `startSync` and the completion
+ * transition in `SyncStatusIndicator`.
+ */
+export type SyncItemStatus = 'pending' | 'running' | 'complete' | 'error' | 'skipped';
 
 /** Email provider that a sync error can prompt the user to reconnect. */
 export type ReconnectProvider = 'microsoft' | 'google';
@@ -61,11 +76,33 @@ export interface SyncItem {
    */
   importedCount?: number;
   /**
-   * BACKLOG-2748: the user cancelled this sync from the UI. The item still
-   * lands in status 'complete' — a cancel is not an error — but consumers must
-   * report it as a cancel with a PARTIAL `importedCount`, not as a clean finish.
+   * BACKLOG-2748: the user cancelled this sync from the UI. A cancel is never
+   * an error, and consumers must report it as a cancel — with a PARTIAL
+   * `importedCount` — rather than as a clean finish.
+   *
+   * BACKLOG-2794: the status it arrives with depends on WHEN the user pressed
+   * Cancel, and both are non-error:
+   *   - cancelled while RUNNING  → `'complete'` with whatever was kept;
+   *   - cancelled while PENDING  → `'skipped'` with nothing imported, because
+   *     the leg never ran (see `markCancelRequested`).
+   * Every consumer of this flag treats the two alike; only the pill and the
+   * green tick differ.
    */
   cancelled?: boolean;
+  /**
+   * BACKLOG-2794: this leg found the work already in flight and joined it
+   * rather than doing it again.
+   *
+   * Set when `macOSMessagesImportService` refuses a second concurrent import.
+   * The item is `'complete'` and carries NO error — the import IS happening,
+   * driven by whoever holds the service — but nothing about this run's own
+   * counts is meaningful, so surfaces must not report an outcome for it.
+   *
+   * Deliberately NOT `cancelled`: a user cancel silences the run's completion
+   * card (BACKLOG-2330/2748), and a collision in the messages leg must not
+   * silence the notice that contacts and emails synced.
+   */
+  coalesced?: boolean;
   /**
    * BACKLOG-2775: the cancelled run was a force re-import that rolled back.
    * `importedCount` is 0 and the store is byte-identical to before the run.
@@ -137,6 +174,12 @@ export interface SyncResult {
    * so `importedCount` is 0 and nothing in the store changed.
    */
   rolledBack?: boolean;
+  /**
+   * BACKLOG-2794: the sync found its work already in flight and joined it.
+   * Neither a success to report nor a failure to raise — see
+   * {@link SyncItem.coalesced}.
+   */
+  coalesced?: boolean;
 }
 
 /**
@@ -167,6 +210,22 @@ class SyncOrchestratorServiceClass {
 
   // Canonical sync functions - one per type
   private syncFunctions: Map<SyncType, SyncFunction> = new Map();
+
+  /**
+   * BACKLOG-2794: types the user cancelled while they were still PENDING, which
+   * `startSync`'s loop consults before running each leg.
+   *
+   * A set consulted by the LOOP, not a queue edit, because the loop iterates
+   * `validTypes` — the queue is a projection built from it at the top of
+   * `startSync`, not the thing being walked. Removing the queue row (the
+   * shape "a pending cancel = remove from queue" suggests) would take the row
+   * off the screen and run the sync anyway: a Cancel button that hides its own
+   * evidence. Pinned by "the messages sync function is never invoked".
+   *
+   * Scoped to one run: seeded empty by `startSync`, entries consumed when the
+   * loop reaches them, and dropped wholesale by `cancel()` / `reset()`.
+   */
+  private skipRequests: Set<SyncType> = new Set();
 
   // Track if sync functions have been initialized
   private initialized = false;
@@ -546,6 +605,28 @@ class SyncOrchestratorServiceClass {
               rolledBack: result.rolledBack,
             };
           }
+          // BACKLOG-2794: a COLLISION is not a failure, and like the cancel
+          // above it has to be caught before the throw below.
+          //
+          // `macOSMessagesImportService` serializes to one import at a time and
+          // refuses the second caller. That refusal arrives as `success: false`,
+          // so the throw turned it into a red "Import failed" pill — and, via
+          // the error escalation in `startSync`, into "Sync Completed with
+          // Errors" plus a support-ticket link for a sync in which everything
+          // else worked. Since PR #2343 promoted the transaction trigger, the
+          // collision is routine: creating a deal starts an import that the
+          // user's own dashboard sync then runs into.
+          //
+          // Coalesce instead. The messages work IS being done — by the run that
+          // holds the service — so this leg reports that, not a fault. Branching
+          // on the typed flag, never on the `error` text.
+          if (result.alreadyInProgress) {
+            logger.info(
+              '[SyncOrchestrator] Messages import already in flight; coalescing with the running import'
+            );
+            onProgress(100);
+            return { coalesced: true };
+          }
           if (!result.success) {
             throw new Error(result.error || 'Message import failed');
           }
@@ -556,10 +637,39 @@ class SyncOrchestratorServiceClass {
           // reports it (the completion message previously always showed 0
           // because only the auto-link count was surfaced). Also return the
           // cap warning when the import limit excluded messages.
+          //
+          // BACKLOG-2794: the subtrahend is `coveredCount`, not
+          // `messagesImported`. What the run FETCHED and what the window COVERS
+          // are different numbers — a delta import does not re-download what
+          // the store already holds — and only the second belongs in a sentence
+          // about exclusion. On the founder's restore this line said
+          // 708,400 − 48,781 = 659,619 messages excluded, counting the 14,042 he
+          // already had as left out; the honest figure is 708,400 − 62,824 =
+          // 645,576 (`a14b3a82`).
+          //
+          // Two silences, both deliberate:
+          //   - `excluded <= 0` emits NOTHING. A window that fits under the cap
+          //     excluded nothing, and "0 messages excluded by import limit" is
+          //     noise about a limit that did not act.
+          //   - `coveredCount` absent emits nothing either. Without it the
+          //     correct figure cannot be computed, and no clause beats the wrong
+          //     clause this item exists to remove.
+          //
+          // The SENTENCE is unchanged on purpose. `stripStaleCapClause`
+          // (`MacOSMessagesImportSettings.tsx`) deletes it from the Settings
+          // completion strip with an anchored, number-agnostic regex, because
+          // the founder removed that sentence from that surface (`fa2112c8`).
+          // Rewording here silently stops that strip matching and puts the
+          // clause back on a surface he cleared. Any copy change to this string
+          // must move the regex in the same commit — pinned by
+          // "the corrected sentence is stripped too" in
+          // `MacOSMessagesImportSettings.onePlanDialog-2749.test.tsx`.
           let warning: string | undefined;
-          if (result.wasCapped && result.totalAvailable) {
-            const excluded = result.totalAvailable - result.messagesImported;
-            warning = `${excluded.toLocaleString()} messages excluded by import limit. Adjust in Settings.`;
+          if (result.wasCapped && result.totalAvailable && result.coveredCount !== undefined) {
+            const excluded = result.totalAvailable - result.coveredCount;
+            if (excluded > 0) {
+              warning = `${excluded.toLocaleString()} messages excluded by import limit. Adjust in Settings.`;
+            }
           }
           // BACKLOG-2743: the pre-flight free-space check refused the attachment
           // copy. The messages themselves imported fine, so this is a warning and
@@ -926,13 +1036,63 @@ class SyncOrchestratorServiceClass {
    * This does NOT stop the sync: it is the acknowledgement, not the mechanism.
    * The actual cancel goes to the main process by IPC, and the run ends by
    * returning a cancelled result of its own.
+   *
+   * ## BACKLOG-2794: the same press on a PENDING item
+   *
+   * A pending leg has no run to stop — it has a run to PREVENT. The queue seeds
+   * every requested type as pending and works through them in order, so on a
+   * dashboard sync of ['contacts', 'emails', 'messages'] the messages item sits
+   * pending for the whole of the two syncs ahead of it, routinely minutes. Cancel
+   * was gated on `'running'` at both ends (here, and `cancelAvailable` in the
+   * settings panel), so for those minutes the founder had a queued import he
+   * could watch and could not stop.
+   *
+   * Pending presses register a SKIP that `startSync`'s loop consults before it
+   * runs the leg; the item lands `'skipped'`, carrying `cancelled` so every
+   * surface already reading that flag treats it as the user's cancel. No IPC
+   * belongs to this path: nothing is importing, and `requestCancellation()`
+   * ARMS a cancel for the next run to start (BACKLOG-2776), which would make
+   * this press stop an unrelated import seconds later.
+   *
+   * The status is read HERE, from live state, and returned — the caller cannot
+   * classify the press itself without racing the pending→running flip, which
+   * happens in this same tick with no await between. See `handleCancelImport`.
+   *
+   * @returns what the press actually did: `'running'` (acknowledged, the caller
+   *   must still send the cancel IPC), `'skipped'` (the leg will not run; no
+   *   IPC), or `'none'` (nothing to cancel, or already requested).
    */
-  markCancelRequested(type: SyncType): void {
+  markCancelRequested(type: SyncType): 'running' | 'skipped' | 'none' {
     const item = this.state.queue.find((queued) => queued.type === type);
-    if (!item || item.status !== 'running' || item.cancelRequested) return;
+    if (!item || item.cancelRequested) return 'none';
+
+    if (item.status === 'pending') {
+      logger.info(`[SyncOrchestrator] Cancel requested for pending '${type}' — it will be skipped`);
+      this.skipRequests.add(type);
+      // `cancelRequested` is set here too: it is what makes this method
+      // idempotent for a second press, and what freezes any surface rendering
+      // this item during the gap before the loop reaches it.
+      this.updateQueueItem(type, { cancelRequested: true });
+      return 'skipped';
+    }
+
+    if (item.status !== 'running') return 'none';
 
     logger.info(`[SyncOrchestrator] Cancel requested for '${type}' — freezing reported progress`);
     this.updateQueueItem(type, { cancelRequested: true });
+    return 'running';
+  }
+
+  /**
+   * BACKLOG-2794: read a queue item from LIVE state.
+   *
+   * The React copy a component holds is one render behind, and the one decision
+   * that cannot tolerate that is whether a Cancel press meets a running import
+   * (send the IPC) or a pending one (do not). Callers that only render should
+   * keep using the subscribed state.
+   */
+  getQueueItem(type: SyncType): SyncItem | undefined {
+    return this.state.queue.find((item) => item.type === type);
   }
 
   /**
@@ -960,6 +1120,9 @@ class SyncOrchestratorServiceClass {
     const externalItems = this.state.queue.filter((item) => item.external);
     const stillRunning = externalItems.some((item) => item.status === 'running');
 
+    // BACKLOG-2794: the run these skips belonged to is being abandoned.
+    this.skipRequests.clear();
+
     this.setState({
       isRunning: stillRunning,
       queue: externalItems,
@@ -977,6 +1140,8 @@ class SyncOrchestratorServiceClass {
       this.abortController.abort();
       // Don't null the controller here -- startSync() finally block handles cleanup.
     }
+    // BACKLOG-2794: a skip must not outlive the session it was requested in.
+    this.skipRequests.clear();
     this.setState({
       isRunning: false,
       queue: [],
@@ -1019,13 +1184,16 @@ class SyncOrchestratorServiceClass {
      * keeps going with no Cancel affordance until the queue reaches it, which
      * is minutes rather than seconds.
      *
-     * That is a UX gap, not a correctness one: the run is honestly represented
+     * That was a UX gap, not a correctness one: the run is honestly represented
      * (one row, the user's own, in the state it is actually in), and the
-     * service's cancel is global, so the button works the moment it appears.
-     * Deliberately NOT fixed here — offering Cancel on a pending item is a
-     * decision about what that button means while nothing is running, and it
-     * belongs with BACKLOG-2749's dialog wiring rather than in a queue-ownership
-     * fix.
+     * service's cancel is global, so the button worked the moment it appeared.
+     *
+     * BACKLOG-2794 closed the gap, and the answer to "what does Cancel mean
+     * while nothing is running" turned out not to involve the import service at
+     * all: a pending press registers a SKIP that the loop below consults, so
+     * the leg never starts (`markCancelRequested`). The mirrored run this
+     * comment is about is a separate case — it IS importing, so the press meets
+     * a 'running' item and takes the ordinary IPC path.
      */
     const seededTypes = new Set<SyncType>(validTypes);
     const externalItems = this.state.queue.filter(
@@ -1043,6 +1211,11 @@ class SyncOrchestratorServiceClass {
     ];
 
     this.abortController = new AbortController();
+    // BACKLOG-2794: skips belong to the run that was cancelled, never to the
+    // next one. A stale entry here would silently drop a leg the user did ask
+    // for — the failure mode `cancelRequested` had before the orchestrator
+    // started clearing it (BACKLOG-2776).
+    this.skipRequests.clear();
     this.setState({
       isRunning: true,
       queue,
@@ -1061,6 +1234,36 @@ class SyncOrchestratorServiceClass {
         const type = validTypes[i];
         const syncFn = this.syncFunctions.get(type);
         if (!syncFn) continue;
+
+        /*
+         * BACKLOG-2794: the user cancelled this leg while it was still pending.
+         *
+         * The check sits HERE, in the loop over `validTypes`, because that is
+         * what actually decides whether a sync runs. The queue is a projection
+         * built above from the same array — deleting a row from it removes the
+         * pill and runs the import regardless, which is why "a pending cancel =
+         * remove from queue" is not the implementation of "a pending cancel".
+         *
+         * Terminal in one update, with no window in which it is 'running':
+         * `cancelled` so the surfaces that already read that flag (the settings
+         * strip, the dashboard's cancel gate) treat it as the user's own stop,
+         * `progress: 100` because the item is finished — nothing renders that
+         * number for a terminal row, and leaving it at 0 would strand
+         * `overallProgress` below 100 for a run that is over.
+         */
+        if (this.skipRequests.has(type)) {
+          this.skipRequests.delete(type);
+          logger.info(`[SyncOrchestrator] Skipping '${type}' — cancelled while pending`);
+          this.updateQueueItem(type, {
+            status: 'skipped',
+            progress: 100,
+            phase: undefined,
+            cancelled: true,
+            cancelRequested: undefined,
+          });
+          this.updateOverallProgress();
+          continue;
+        }
 
         // Update current sync
         this.updateQueueItem(type, { status: 'running', progress: 0 });
@@ -1106,6 +1309,11 @@ class SyncOrchestratorServiceClass {
           // BACKLOG-2775: whether the cancelled run left the store unchanged.
           const rolledBack =
             rawResult && typeof rawResult === 'object' ? rawResult.rolledBack : undefined;
+          // BACKLOG-2794: the leg joined an import already in flight. Carried
+          // onto the item so surfaces can say so instead of reporting a run
+          // that did not happen — see `SyncItem.coalesced`.
+          const coalesced =
+            rawResult && typeof rawResult === 'object' ? rawResult.coalesced : undefined;
 
           Sentry.addBreadcrumb({
             category: 'sync',
@@ -1120,7 +1328,7 @@ class SyncOrchestratorServiceClass {
           // Mark complete (clear phase), attach warning + imported count if returned
           // BACKLOG-2776: `cancelRequested` is cleared here — the request has been
           // served, and leaving it set would freeze the NEXT run's progress at 0.
-          this.updateQueueItem(type, { status: 'complete', progress: 100, phase: undefined, warning: warning || undefined, importedCount, cancelled, rolledBack, cancelRequested: undefined });
+          this.updateQueueItem(type, { status: 'complete', progress: 100, phase: undefined, warning: warning || undefined, importedCount, cancelled, rolledBack, coalesced, cancelRequested: undefined });
         } catch (error) {
           // Check if it was cancelled
           if (this.abortController?.signal.aborted) {
@@ -1151,9 +1359,16 @@ class SyncOrchestratorServiceClass {
 
       // Auto-clear completed/errored internal items after delay
       // (mirrors external sync cleanup in completeExternalSync)
+      //
+      // BACKLOG-2794: 'skipped' is terminal and belongs in this set. Left out,
+      // a leg the user cancelled while pending is the one row this queue can
+      // never clear — it survives every later run's clean-up and keeps a stale
+      // pill on the dashboard indefinitely.
       setTimeout(() => {
         const queue = this.state.queue.filter(
-          (item) => item.external || (item.status !== 'complete' && item.status !== 'error')
+          (item) =>
+            item.external ||
+            (item.status !== 'complete' && item.status !== 'error' && item.status !== 'skipped')
         );
         if (queue.length !== this.state.queue.length) {
           this.setState({ queue });

@@ -168,6 +168,11 @@ class MacOSMessagesImportService {
     const forceReimport = plan.mode === "reprocess";
 
     // If force reimport is in progress, block ALL other imports
+    //
+    // BACKLOG-2794: `alreadyInProgress` for the same reason the concurrent-
+    // import refusal below carries it — a request another run owns is a
+    // collision, not a failure, and the orchestrator must not paint it red.
+    // The `error` text stays for the log and for anything reading the message.
     if (this.forceReimportInProgress && !forceReimport) {
       logService.warn(
         "Force reimport in progress, blocking regular import",
@@ -182,6 +187,7 @@ class MacOSMessagesImportService {
         attachmentsSkipped: 0,
         duration: 0,
         error: "Force reimport in progress",
+        alreadyInProgress: true,
       };
     }
 
@@ -212,6 +218,13 @@ class MacOSMessagesImportService {
     }
 
     // Prevent concurrent imports - only one at a time
+    //
+    // BACKLOG-2794: the refusal is announced with `alreadyInProgress` so the
+    // caller can COALESCE. Every other `success: false` from this service is a
+    // genuine failure and the orchestrator is right to throw on it; this one
+    // means the work the caller asked for is already being done by someone
+    // else, and throwing turned the transaction trigger colliding with a user's
+    // own sync into "Sync Completed with Errors".
     if (this.isImporting) {
       logService.warn(
         "Import already in progress, skipping duplicate request",
@@ -226,6 +239,7 @@ class MacOSMessagesImportService {
         attachmentsSkipped: 0,
         duration: 0,
         error: "Import already in progress",
+        alreadyInProgress: true,
       };
     }
 
@@ -976,6 +990,16 @@ class MacOSMessagesImportService {
           duration,
           totalAvailable: filteredMessageCount,
           wasCapped: importWasCapped,
+          // BACKLOG-2794: what the window COVERS, beside what the run FETCHED.
+          //
+          // The same `targetMessageCount` the support trace above reports as
+          // `target_after_cap`, and the same one `getAvailableMessageCount`
+          // returns to Settings as `filteredCount` — one arithmetic, so the
+          // dashboard and the panel cannot quote different admitted counts.
+          // Consumers subtract THIS from `totalAvailable` to say what the limit
+          // left out; subtracting `messagesImported` counts messages the store
+          // already had as excluded (`a14b3a82`).
+          coveredCount: targetMessageCount,
           // BACKLOG-2743: success stays TRUE here on purpose. By the time the
           // attachment pre-flight runs the messages are already stored, so a
           // false would render "Import failed" over a genuinely successful

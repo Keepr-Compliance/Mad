@@ -739,6 +739,41 @@ describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () =>
     expect(panel).not.toHaveTextContent(/Adjust in Settings/i);
   });
 
+  it("the corrected sentence is stripped too — the coupling guard (BACKLOG-2794)", async () => {
+    /*
+     * THE CONTROL THAT PROTECTS THIS STRIP FROM THE PRODUCER'S NEXT EDIT.
+     *
+     * BACKLOG-2794 fixed the orchestrator's arithmetic: the clause it emits now
+     * reads 645,576 (window − admitted), not 659,619 (window − fetched). The
+     * regex is number-agnostic, so that change alone is safe — but it is
+     * SENTENCE-anchored, and the same item considered rewording the clause into
+     * coverage framing. That reword would have passed every other test in this
+     * repository while silently putting an exclusion sentence back on the one
+     * surface the founder cleared of it (`fa2112c8`).
+     *
+     * So the strip is exercised with the string the orchestrator ACTUALLY
+     * emits today, not only with the historical wrong one above. Reword the
+     * producer without moving `stripStaleCapClause`, and this reds.
+     */
+    const { rerender } = renderStrict(
+      <MacOSMessagesImportSettings userId={USER_ID} />
+    );
+    await startCappedRun();
+    await completeRun(
+      rerender,
+      `${CORRECT_EXCLUDED.toLocaleString()} messages excluded by import limit. Adjust in Settings.`
+    );
+
+    const panel = screen.getByTestId("macos-messages-import");
+    expect(panel).not.toHaveTextContent(CORRECT_EXCLUDED.toLocaleString());
+    expect(panel).not.toHaveTextContent(/excluded by import limit/i);
+    expect(panel).not.toHaveTextContent(/Adjust in Settings/i);
+    // The strip still says its own sentence — this is a removal, not a blackout.
+    expect(await screen.findByTestId("import-coverage")).toHaveTextContent(
+      "Your store now covers 62,824 for this period"
+    );
+  });
+
   it("the two numbers are labelled so they cannot read as a contradiction", async () => {
     // "Re-imported 48,781 messages" is what THIS RUN fetched; "your store now
     // covers 62,824" is what the period HOLDS. A delta import does not
