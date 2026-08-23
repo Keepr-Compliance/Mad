@@ -232,6 +232,74 @@ describe("grouped restore (BACKLOG-2791) — the whole card comes back", () => {
   });
 });
 
+/**
+ * INVARIANT 1, NAMED.
+ *
+ * Communication Lifecycle Contract: "nothing ever moves SUGGESTED -> LINKED
+ * except T1's sync split or an explicit Confirm (T3) — never silently."
+ *
+ * It was already true, but only as a CONSEQUENCE of tests aimed at other
+ * things: one test showed an address-missing email is not linked at discovery,
+ * another showed approve links. Nothing asserted the gap between them — that no
+ * OTHER operation can carry an item across. So a new write path (the class of
+ * bug that produced the text-restore side door, where a rejected text came back
+ * as an ordinary link and landed in the audit unapproved) would have to be
+ * caught by a test that was not looking for it.
+ *
+ * This one looks for it: it drives every non-Confirm operation that touches
+ * review state over a SUGGESTED email and asserts, by ID SET after each, that
+ * `communications` never gains it — then approves, and shows the door opening.
+ *
+ * CONTROLS RUN (MEASURED, run with `-t "INVARIANT 1"` so the numbers describe
+ * THIS block; the whole file's totals are given after each for context):
+ *  1. Make `restoreRejectedToQueue` also link on restore — the historical side
+ *     door                            -> RED, 1 of 2 here (6 of 12 file-wide).
+ *  2. Drop the `!isConfident` branch in autoLinkService so discovery links the
+ *     ambiguous half outright         -> RED, 2 of 2 here (8 of 12 file-wide).
+ *
+ * Control 2 taking down BOTH tests here is the point: if discovery stops
+ * queueing, "SUGGESTED" has no occupants and the invariant is vacuous. A test
+ * that stayed green under it would be asserting nothing.
+ */
+describe("INVARIANT 1 — SUGGESTED reaches LINKED through exactly two doors", () => {
+  beforeEach(async () => {
+    addEmail("e-miss", "Are you free Thursday?");
+    await syncReviewQueueForTransaction({ transactionId: T, reason: "open" });
+    expect(where()).toEqual({ suggested: ["e-miss"], linked: [], removed: [] });
+  });
+
+  it("no re-sync, on any axis, ever links a suggested email", async () => {
+    for (const reason of ["open", "background", "contact-change", "date-extended"] as const) {
+      await syncReviewQueueForTransaction({ transactionId: T, reason });
+      // Asserted after EVERY axis, not once at the end, so a failure names the
+      // axis that opened the door.
+      expect(where()).toEqual({ suggested: ["e-miss"], linked: [], removed: [] });
+    }
+  });
+
+  it("a reject/restore round trip returns it to SUGGESTED and never to LINKED", async () => {
+    const id = getReviewState(T).items[0].id;
+    await rejectReviewItems([id]);
+    expect(where()).toEqual({ suggested: [], linked: [], removed: ["e-miss"] });
+
+    const ignoredId = (db
+      .prepare("SELECT id FROM ignored_communications WHERE transaction_id=? AND email_id=?")
+      .get(T, "e-miss") as { id: string }).id;
+    await restoreRejectedToQueue(ignoredId);
+
+    // Back where it started — NOT linked. It was never approved.
+    expect(where()).toEqual({ suggested: ["e-miss"], linked: [], removed: [] });
+
+    // And a sweep over the restored item still does not link it.
+    await syncReviewQueueForTransaction({ transactionId: T, reason: "open" });
+    expect(where().linked).toEqual([]);
+
+    // THE DOOR: an explicit Confirm, and only that, moves it.
+    await approveReviewItems([getReviewState(T).items[0].id]);
+    expect(where()).toEqual({ suggested: [], linked: ["e-miss"], removed: [] });
+  });
+});
+
 describe("round trip", () => {
   it("suggested -> removed -> suggested -> linked, ending linked exactly once", async () => {
     addEmail("e-miss", "Are you free Thursday?");

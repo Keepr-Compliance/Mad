@@ -1358,9 +1358,12 @@ function TransactionDetails({
         />
       )}
 
-      {/* BACKLOG-2791 P2 — announces ONLY what this run newly added. Silent at
-          zero. "Later" just closes: the items are already persisted. */}
-      {reviewQueue.lastAdded > 0 && !showNeedsReview && (
+      {/* BACKLOG-2791 P2 — announces what this run FOUND (N = L + R). Silent
+          when it found nothing. "Later" just closes: items are already
+          persisted. Gating on `lastAdded` alone made a link-only sweep silent,
+          which is the common shape when an extended audit range pulls in mail
+          that names the property. */}
+      {reviewQueue.lastFound > 0 && !showNeedsReview && (
         <ReviewPromptDialog
           variant="found"
           count={reviewQueue.lastAdded}

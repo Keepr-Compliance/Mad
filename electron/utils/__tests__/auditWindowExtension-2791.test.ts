@@ -27,19 +27,26 @@
  * THE `now` SEAM. `computeTransactionDateRange` falls back to `new Date()` when
  * `closed_at` is absent. Computing the two windows back-to-back therefore gave
  * the SECOND one a later end by a millisecond or two, and a deal with no close
- * date reported "extended" on every single save — including saves that changed
- * nothing. Both windows are now computed against ONE clock. The regression test
- * for it is "a save that changes nothing is not an extension, even with no
- * close date", which fails without the seam.
+ * date could report "extended" on a save that changed nothing. Both windows are
+ * now computed against ONE clock.
  *
- * CONTROLS RUN (mutation applied, suite re-run, MEASURED result):
- *  1. `>=`/`<=` relaxed to `>`/`<` on the containment half (i.e. accept a mixed
- *     edit)                                             -> RED, 2 of 12 tests.
- *  2. Drop the strict-widening half, keeping containment (so an identical save
- *     counts as an extension)                           -> RED, 4 of 12 tests.
- *  3. Remove the shared `now`, letting each window take its own clock
- *                                                       -> RED, 1 of 12 tests
- *     (the no-close-date test — the only one that can see it).
+ * The first regression test written for that seam DID NOT WORK, and the failure
+ * is instructive enough to keep: asserting it against the real clock left the
+ * suite fully GREEN when the seam was removed (measured, 12 of 12 passed),
+ * because two `new Date()` calls almost always land in the same millisecond. A
+ * race asserted with the real clock is a coin flip, not a control. The test that
+ * replaced it drives a monotonic clock so the drift is certain.
+ *
+ * CONTROLS RUN (mutation applied, suite re-run, MEASURED result — all against
+ * the current 14 tests):
+ *  1. `contains` forced true, i.e. accept a mixed edit    -> RED, 2 of 14 tests
+ *     (exactly the two mixed rows of the sweep).
+ *  2. `strictlyWider` forced true, i.e. an identical save counts as an extension
+ *                                                         -> RED, 3 of 14 tests.
+ *  3. Remove the shared `now` from `isAuditWindowExtended` -> RED, 1 of 14 tests
+ *     (the monotonic-clock test — the only one that can see it).
+ *  4. Ignore the `now` parameter inside `computeTransactionDateRange`
+ *                                                         -> RED, 2 of 14 tests.
  */
 
 import {
@@ -98,11 +105,45 @@ describe("BACKLOG-2791 — isAuditWindowExtended sweeps both ends", () => {
   });
 
   it("a save that changes nothing is not an extension, even with NO close date", () => {
-    // The `now` seam. Both windows end at "today" here, so without ONE shared
-    // clock the second call lands a millisecond later and every save on an open
-    // deal reports an extension.
     const open = win(START_SAME, null);
     expect(isAuditWindowExtended(open, { ...open }, NOW)).toBe(false);
+  });
+
+  it("the `now` argument is honoured — an open-ended window ends at the clock it is given", () => {
+    expect(computeTransactionDateRange(win(START_SAME, null), NOW).end.getTime()).toBe(
+      NOW.getTime(),
+    );
+  });
+
+  it("both windows are measured against ONE clock — an open deal does not drift between them", () => {
+    // THE REGRESSION THIS PINS, and why the obvious version of it does not.
+    //
+    // With no close date both ends default to "today", so the two windows were
+    // computed by two separate `new Date()` calls and the second could land a
+    // millisecond later — reporting an extension on a save that changed nothing.
+    //
+    // Asserting that with the real clock is not a test, it is a coin flip: the
+    // two calls usually fall inside the same millisecond, so removing the shared
+    // clock left the suite GREEN (measured: 12 of 12 passed). A monotonic clock
+    // makes the race certain instead of likely, which is the only way this
+    // control can go red on purpose.
+    const base = new Date("2026-08-23T12:00:00.000Z").getTime();
+    const RealDate = Date;
+    let tick = 0;
+    const spy = jest
+      .spyOn(global, "Date")
+      .mockImplementation(((...args: unknown[]) =>
+        args.length === 0
+          ? new RealDate(base + tick++)
+          : new RealDate(...(args as [string]))) as unknown as () => Date);
+
+    try {
+      const open = win(START_SAME, null);
+      // No explicit clock — the production call shape.
+      expect(isAuditWindowExtended(open, { ...open })).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("clearing the close date IS an extension — the window now runs to today", () => {

@@ -26,6 +26,16 @@ export interface UseReviewQueueResult {
   /** Items LINKED outright by the most recent sync — the popup's "L". */
   lastLinked: number;
   /**
+   * The popup's N — what the most recent sync FOUND, linked plus queued.
+   *
+   * The contract fires the popup "only when this run found something", with
+   * N = L + R. Both gates used to read R alone, so a sweep that linked six
+   * emails and queued none was silent — and the dialog's own R=0 copy shape
+   * (pinned by reviewFounderFeedback-2791) was unreachable in the app. Exposed
+   * as one number so the render gate reads it rather than re-deriving the rule.
+   */
+  lastFound: number;
+  /**
    * Increments on every review-state change.
    *
    * Fed into the Removed sections' refreshKey so they re-fetch too: a trash on a
@@ -195,7 +205,11 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     const unsubscribe = subscribe((data) => {
       if (data.transactionId !== transactionId) return;
       setState((prev) => ({ ...prev, count: data.outstanding }));
-      if (data.added > 0) {
+      // N = L + R: a run that only LINKED still found something and still
+      // announces itself. Gating on `added` alone silenced exactly the
+      // audit-range-extension case where the new mail names the property and
+      // links outright.
+      if (data.added > 0 || (data.linked ?? 0) > 0) {
         setLastAdded((prev) => Math.max(prev, data.added));
         setLastLinked((prev) => Math.max(prev, data.linked ?? 0));
       }
@@ -210,6 +224,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
     isLoading,
     lastAdded,
     lastLinked,
+    lastFound: lastAdded + lastLinked,
     changeToken,
     refresh,
     runSync,

@@ -35,12 +35,17 @@
  *
  * CONTROLS RUN (mutation applied, suite re-run, MEASURED result):
  *  1. Drop the `if (windowExtended)` guard, so every date change syncs
- *                                                        -> RED, 2 of 5 tests
- *     (both the narrowing and the same-dates controls fire).
+ *                                                        -> RED, 1 of 5 tests.
+ *     Only the NARROWING control fires, and the reason is worth recording: the
+ *     same-dates control is held by the pre-existing `auditDateChanged` guard
+ *     this block sits inside, not by the new one. So "saving identical dates
+ *     runs no sweep" is genuinely protected — but by an OUTER condition, and
+ *     this suite cannot tell the two guards apart. The predicate suite is where
+ *     the no-change case is pinned against the predicate itself.
  *  2. Invert the guard to `if (!windowExtended)`          -> RED, 3 of 5 tests.
- *  3. Change the reason to "open"                         -> RED, 1 of 5 tests
+ *  3. Change the reason to "open"                         -> RED, 2 of 5 tests
  *     (and that matters: "open" advances the ingestion watermark, which would
- *     declare records scanned that this narrower run never examined).
+ *     declare records scanned that this run never examined).
  */
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>();

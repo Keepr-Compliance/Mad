@@ -28,7 +28,7 @@ type Handler = (data: {
   added: number;
   linked: number;
   outstanding: number;
-  reason: "open" | "background" | "contact-change";
+  reason: "open" | "background" | "contact-change" | "date-extended";
 }) => void;
 
 let handler: Handler | null = null;
@@ -47,6 +47,7 @@ const item = (id: string) => ({
   found_at: "2026-08-01T00:00:00.000Z",
   display: {
     title: "s", subtitle: "", snippet: "", occurredAt: null, itemCount: 1,
+    threadId: `thr-${id}`,
     recipients: null, cc: null, sender: null, hasAttachments: false,
     threadParticipants: [], threadMessages: [],
   },
@@ -135,5 +136,58 @@ describe("review state refreshes live, without a remount", () => {
     await act(async () => { await result.current.approve(["pending:e1"]); });
 
     expect(result.current.count).toBe(0);
+  });
+});
+
+/**
+ * BACKLOG-2791 — A RUN THAT ONLY LINKED STILL FOUND SOMETHING.
+ *
+ * The Communication Lifecycle Contract puts the popup on "only when this run
+ * found something", with N = L + R and zero-count lines dropped. Both halves of
+ * the wiring gated on R alone (`added > 0`), so a sweep that linked six emails
+ * and queued none was completely silent — and `ReviewPromptDialog`'s R=0 copy
+ * shape, which reviewFounderFeedback-2791 pins ("drops the review line AND the
+ * approval sentence with it"), could never actually be reached in the app.
+ *
+ * This matters most for the newest trigger. Extending an audit range past an
+ * email that NAMES the property links it outright: L=1, R=0 — the exact shape
+ * that was silent.
+ *
+ * `lastFound` is the popup's N, so the render gate reads one number instead of
+ * re-deriving the rule at the call site.
+ *
+ * CONTROLS RUN (MEASURED):
+ *  1. Restore `if (data.added > 0)` around the announcement -> RED, 2 of 2 tests
+ *     in this block.
+ *  2. Define `lastFound` as `lastAdded` only               -> RED, 2 of 2 tests.
+ */
+describe("a link-only sweep is announced too (N = L + R)", () => {
+  it("a broadcast with linked>0 and added=0 still reports what it found", async () => {
+    getReviewState.mockResolvedValue({ items: [], count: 0 });
+    const { result } = renderHook(() => useReviewQueue("tx-1"));
+    await waitFor(() => expect(handler).not.toBeNull());
+
+    act(() => {
+      handler?.({ transactionId: "tx-1", added: 0, linked: 6, outstanding: 0, reason: "date-extended" });
+    });
+
+    await waitFor(() => expect(result.current.lastLinked).toBe(6));
+    // N — what the popup gates on and titles itself with.
+    expect(result.current.lastFound).toBe(6);
+    // R stays honestly zero; the dialog drops that line itself.
+    expect(result.current.lastAdded).toBe(0);
+  });
+
+  it("a sweep that found NOTHING stays silent — N is zero", async () => {
+    getReviewState.mockResolvedValue({ items: [], count: 0 });
+    const { result } = renderHook(() => useReviewQueue("tx-1"));
+    await waitFor(() => expect(handler).not.toBeNull());
+
+    act(() => {
+      handler?.({ transactionId: "tx-1", added: 0, linked: 0, outstanding: 4, reason: "background" });
+    });
+
+    await waitFor(() => expect(result.current.count).toBe(4));
+    expect(result.current.lastFound).toBe(0);
   });
 });
