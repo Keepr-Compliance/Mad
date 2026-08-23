@@ -55,9 +55,28 @@ import * as crypto from "crypto";
 export const STAGING_TABLE_PREFIX = "staging_msgimport_";
 
 /**
- * The force set, as ONE definition.
+ * The provenance stamp the macOS importer writes into every row's `metadata`.
  *
- * Both the swap's DELETEs and the rebuild's "what survived the clear" reads are
+ * `macOSMessagesImportService.storeMessages` builds
+ * `JSON.stringify({ source: "macos_messages", originalId, service })` and passes
+ * it as the `metadata` column of its one INSERT. `git log -S'source:
+ * "macos_messages"'` over both the current path and the pre-split one returns a
+ * single commit — `84c841252`, the commit that ADDED this service — so there is
+ * no historical version of this importer that wrote a row without it.
+ *
+ * Nor is scoping a force delete by it a new convention. The ANDROID force
+ * re-import already does exactly this: `localSyncService.clearAndroidData` calls
+ * `syncDbService.deleteMessagesByMetadataSource(userId, "android_wifi_sync")`,
+ * which is `DELETE FROM messages WHERE user_id = ? AND
+ * json_extract(metadata, '$.source') = ?` (BACKLOG-1468). The macOS path was the
+ * one that never got it.
+ */
+export const MACOS_IMPORT_METADATA_SOURCE = "macos_messages";
+
+/**
+ * The force set, as ONE definition: the rows a macOS Force Re-import replaces.
+ *
+ * Both the swap's DELETEs and the rebuild's "what will still be there" reads are
  * built from these constants. Two spellings of this predicate would be two
  * different answers to "what does a force re-import replace", and the drift
  * would be silent — the swap would delete rows the rebuild had assumed were
@@ -65,8 +84,51 @@ export const STAGING_TABLE_PREFIX = "staging_msgimport_";
  *
  * `@userId` is the run's user throughout: the force set belongs to the user
  * whose import is running, so one bound parameter serves every use.
+ *
+ * ---------------------------------------------------------------------------
+ * BACKLOG-2796 — WHY THIS IS SCOPED, AND WHY IT MUST STAY SCOPED
+ * ---------------------------------------------------------------------------
+ * This predicate used to be `user_id = @userId AND external_id IS NOT NULL` and
+ * nothing more, which made a force re-import delete every row this user had from
+ * ANY source and then rebuild only what chat.db could supply. A user with the
+ * Android companion paired lost their Android SMS; an iPhone-sync user lost
+ * their synced messages; `channel = 'email'` rows went with them. That predates
+ * stage-and-swap — the old `clearMacOSMessages` deleted the same set — so the
+ * set itself was the defect, not the machinery around it.
+ *
+ * The scope is the answer to one question: what can a chat.db rebuild put back?
+ * Each clause is one half of that answer.
+ *
+ *   - `channel IN ('sms','imessage')` — chat.db holds texts. It cannot produce
+ *     an email row, so a force re-import must not delete one.
+ *   - the provenance clause — chat.db holds THIS Mac's texts. Channel alone is
+ *     not enough, because the Android companion writes `channel: "sms"` too
+ *     (`localSyncService.storeMessages`); the id shape is not enough either,
+ *     because iPhone sync writes the SAME Apple GUID space into `external_id`
+ *     (`iPhoneSyncStorageService`). What does separate them is the
+ *     `metadata.$.source` each writer stamps on its own rows: `macos_messages`,
+ *     `android_wifi_sync`, `iphone_sync`.
+ *
+ * ALLOW-LIST, NOT DENY-LIST, deliberately. Listing the sources to SPARE would
+ * re-plant this bug for the fourth writer somebody adds. Naming the one source
+ * this importer can rebuild means an unrecognised row survives by default, which
+ * is the only defensible default for a predicate whose failure mode is deleting
+ * the user's messages.
+ *
+ * `json_valid` is a guard, not decoration. `json_extract` THROWS `malformed
+ * JSON` if it meets a single non-JSON `metadata` value among the rows it scans,
+ * and a throw here aborts the entire swap. Measured on the real driver (sqlite
+ * 3.53.2) over a table holding one `{"source":"macos_messages"}`, one
+ * `not json at all` and one NULL: the bare form throws, the guarded form returns
+ * exactly the one match. `json_valid(NULL)` is NULL, so a NULL-metadata row is
+ * not in the force set — it survives, and `SURVIVING_MESSAGES` below is what
+ * keeps the rebuild able to see it.
  */
-export const FORCE_SET_MESSAGES = `user_id = @userId AND external_id IS NOT NULL`;
+export const FORCE_SET_MESSAGES =
+  `user_id = @userId AND external_id IS NOT NULL ` +
+  `AND channel IN ('sms', 'imessage') ` +
+  `AND json_valid(metadata) ` +
+  `AND json_extract(metadata, '$.source') = '${MACOS_IMPORT_METADATA_SOURCE}'`;
 const FORCE_SET_MESSAGE_IDS = `SELECT id FROM messages WHERE ${FORCE_SET_MESSAGES}`;
 const FORCE_SET_MESSAGE_EXTERNAL_IDS = `SELECT external_id FROM messages WHERE ${FORCE_SET_MESSAGES}`;
 export const FORCE_SET_ATTACHMENTS_BY_MESSAGE_ID = `message_id IN (${FORCE_SET_MESSAGE_IDS})`;
@@ -75,10 +137,28 @@ export const FORCE_SET_ATTACHMENTS_BY_EXTERNAL_ID = `external_message_id IN (${F
 /**
  * Rows of `messages` that a force re-import does NOT replace.
  *
- * Safe to negate directly: `user_id` is NOT NULL and `external_id IS NOT NULL`
- * is never itself NULL, so this is a plain boolean.
+ * NOT NULL-safe by hand, exactly like `SURVIVING_ATTACHMENTS` below — and it had
+ * to become so when BACKLOG-2796 scoped the force set. It used to be a plain
+ * `NOT (…)`, which was correct while the predicate could only be TRUE or FALSE:
+ * `user_id` is NOT NULL and `external_id IS NOT NULL` is never itself NULL. The
+ * scoped predicate CAN evaluate to NULL — `channel` is nullable past its CHECK
+ * constraint, and `json_valid(NULL)` returns NULL rather than 0. For such a row
+ * `NOT (force set)` is NULL, so the row would survive the DELETE (correct: a
+ * DELETE removes a row only when its WHERE is TRUE) and then drop out of the
+ * rebuild's survivor read (wrong) — which is precisely how a surviving row stops
+ * being deduplicated against and has its GUID staged a second time. COALESCE
+ * spells out what "survived" means: the force set was not TRUE.
  */
-export const SURVIVING_MESSAGES = `NOT (${FORCE_SET_MESSAGES})`;
+export const SURVIVING_MESSAGES = `COALESCE(${FORCE_SET_MESSAGES}, 0) = 0`;
+
+/**
+ * The `external_id`s of THIS USER's rows that a force re-import leaves in place.
+ *
+ * Scoped to `@userId` on purpose. `idx_messages_user_external_id` is UNIQUE on
+ * `(user_id, external_id)`, so another user holding the same GUID is not a
+ * conflict and must not make this run yield to it.
+ */
+const SURVIVING_MESSAGE_EXTERNAL_IDS = `SELECT external_id FROM messages WHERE user_id = @userId AND external_id IS NOT NULL AND ${SURVIVING_MESSAGES}`;
 
 /**
  * Rows of `attachments` that a force re-import does NOT replace.
@@ -124,6 +204,16 @@ export interface ForceSwapCounts {
   messagesInserted: number;
   attachmentsInserted: number;
   messageIdsRepaired: number;
+  /**
+   * Staged rows the swap did NOT insert because a row this force re-import
+   * leaves in place already holds their `external_id` (BACKLOG-2796). Normally
+   * zero; see `insertFromStaging` for the one window that produces a non-zero
+   * count. Counted and logged rather than dropped quietly — a skip nobody can
+   * see is the thing this file spends most of its comments avoiding.
+   */
+  messagesYieldedToSurvivors: number;
+  /** Staged attachments dropped with the messages that yielded above. */
+  attachmentsYieldedToSurvivors: number;
 }
 
 /**
@@ -353,6 +443,11 @@ export function forceReadView(
   );
 }
 
+/** How many rows a staging table holds, so a yielded row can be counted rather than inferred. */
+function countRows(db: DatabaseType, table: string): number {
+  return (db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get() as { c: number }).c;
+}
+
 /** The columns of a live table, in declaration order, quoted for reuse on both sides of the swap. */
 function columnList(db: DatabaseType, table: string): string {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
@@ -405,34 +500,115 @@ export const forceSwapSteps = {
 
   /**
    * Messages before attachments, so `attachments.message_id`'s foreign key finds
-   * its row. Plain `INSERT`, not `INSERT OR IGNORE`: the delete above has just
-   * removed every row in the space these rows occupy, so a uniqueness conflict
-   * here would mean the force set and the rebuild disagree about what a force
-   * re-import replaces. Throwing is the right answer to that — it aborts the
-   * whole swap and leaves the user's store exactly as it was, which an
-   * `OR IGNORE` would turn into a silent partial import.
+   * its row.
+   *
+   * Plain `INSERT`, not `INSERT OR IGNORE`, and that is still the point: a
+   * uniqueness conflict here means the force set and the rebuild disagree about
+   * what a force re-import replaces, and throwing is the right answer to a
+   * disagreement — it aborts the whole swap and leaves the user's store exactly
+   * as it was, which `OR IGNORE` would turn into a silent partial import.
+   *
+   * WHAT CHANGED WITH BACKLOG-2796, because the old justification no longer
+   * holds. It read: "the delete above has just removed every row in the space
+   * these rows occupy". That was true of an unscoped force set, which deleted
+   * every row of this user carrying an `external_id`. A SCOPED force set leaves
+   * rows behind that still occupy part of that space — an iPhone-synced row, in
+   * particular, whose `external_id` is drawn from the SAME Apple GUID space as
+   * chat.db's.
+   *
+   * The rebuild already avoids staging those GUIDs: `storeMessages`' dedup read
+   * unions the survivors in, so a GUID a surviving row holds is skipped, not
+   * staged. The residue is a race, and it is a real one — neither
+   * `localSyncService` nor `iPhoneSyncStorageService` is behind
+   * `forceReimportInProgress` (they are reached from an inbound HTTP handler and
+   * from the device sync orchestrator), so an iPhone row carrying a GUID this
+   * run has already staged can land AFTER that dedup read and BEFORE this
+   * insert. Android cannot collide: its `external_id` is a sha256 of
+   * `sender|timestamp|body`, a disjoint id space.
+   *
+   * So the message insert yields that one row to the survivor rather than
+   * throwing, which is exactly what the run would have done had the write landed
+   * a moment earlier, and the attachment insert drops the staged attachments of
+   * a yielded message so it cannot orphan them. Both are narrow on purpose:
+   *
+   *   - only staged rows whose GUID is held by a SURVIVING row of THIS user are
+   *     yielded. Every other conflict still throws and still rolls the whole
+   *     swap back.
+   *   - only attachments belonging to a YIELDED staging message are dropped. An
+   *     attachment pointing at an id that exists nowhere — the phantom-GUID
+   *     hazard the `changes > 0` guard in `storeMessages` prevents — is NOT in
+   *     that set, so it still reaches the live table and still fails the foreign
+   *     key, which `forceStagingRealSchema-2790` pins.
+   *
+   * On the yielded attachments, stated at the strength it was actually
+   * established — TRACED, NOT ASSERTED. The message they belong to is present,
+   * which is what "yielded to a survivor" means, and the next ordinary delta
+   * import should re-copy them: `storeAttachments` builds `alreadyStoredKeys`
+   * from `external_message_id:filename` (which no longer matches), resolves the
+   * GUID through `existingMessageIdMap` — the fallback at the `internalMessageId`
+   * lookup, which reads LIVE messages — and links the copy to the survivor's row
+   * id. That path was read end to end; it was not run. No force-path fixture
+   * carries an attachment in its chat.db, so asserting it would have meant
+   * building a source tree with real attachment files first, and a claim about
+   * recovery is not worth a fixture invented to support it. What IS asserted is
+   * the part that matters here: the yielded attachment is dropped rather than
+   * left pointing at a row that was never inserted.
    */
   insertFromStaging(
     db: DatabaseType,
     staging: ForceStaging
-  ): { messagesInserted: number; attachmentsInserted: number } {
+  ): {
+    messagesInserted: number;
+    attachmentsInserted: number;
+    messagesYieldedToSurvivors: number;
+    attachmentsYieldedToSurvivors: number;
+  } {
     const messageColumns = columnList(db, "messages");
     const attachmentColumns = columnList(db, "attachments");
 
+    // Resolved ONCE, up front, into ids — not left as a subquery on `messages`
+    // inside the two INSERTs. Both statements write to the very tables such a
+    // subquery would read, and "does this SELECT see the rows this INSERT is
+    // writing" is not a question worth depending on: with the messages already
+    // inserted, every freshly-inserted row would answer the survivor test the
+    // same way a real survivor does, and the attachment filter would drop the
+    // whole rebuild's attachments. Ask before either write, and the answer
+    // cannot drift. Normally the list is EMPTY and both statements are the ones
+    // this function has always run.
+    const yieldedMessageIds = (
+      db
+        .prepare(
+          `SELECT id FROM "${staging.messagesTable}" ` +
+            `WHERE external_id IN (${SURVIVING_MESSAGE_EXTERNAL_IDS})`
+        )
+        .all({ userId: staging.userId }) as Array<{ id: string }>
+    ).map((row) => row.id);
+
+    const stagedAttachments = countRows(db, staging.attachmentsTable);
+    const placeholders = yieldedMessageIds.map(() => "?").join(", ");
+
     const messages = db
       .prepare(
-        `INSERT INTO messages (${messageColumns}) SELECT ${messageColumns} FROM "${staging.messagesTable}"`
+        `INSERT INTO messages (${messageColumns}) ` +
+          `SELECT ${messageColumns} FROM "${staging.messagesTable}"` +
+          (yieldedMessageIds.length > 0 ? ` WHERE id NOT IN (${placeholders})` : "")
       )
-      .run();
+      .run(...yieldedMessageIds);
     const attachments = db
       .prepare(
-        `INSERT INTO attachments (${attachmentColumns}) SELECT ${attachmentColumns} FROM "${staging.attachmentsTable}"`
+        `INSERT INTO attachments (${attachmentColumns}) ` +
+          `SELECT ${attachmentColumns} FROM "${staging.attachmentsTable}"` +
+          (yieldedMessageIds.length > 0
+            ? ` WHERE message_id IS NULL OR message_id NOT IN (${placeholders})`
+            : "")
       )
-      .run();
+      .run(...yieldedMessageIds);
 
     return {
       messagesInserted: messages.changes,
       attachmentsInserted: attachments.changes,
+      messagesYieldedToSurvivors: yieldedMessageIds.length,
+      attachmentsYieldedToSurvivors: stagedAttachments - attachments.changes,
     };
   },
 
@@ -471,45 +647,46 @@ export const forceSwapSteps = {
  * DELETE below cannot reach them and the exposure is genuinely gone rather than
  * narrowed.
  *
- * A write INSIDE the force set, landing mid-rebuild, is a different case and the
- * honest answer is that the swap deletes it. Compare the two designs on that
- * one row: the old transaction KEPT it if the run succeeded (it committed along
- * with everything else) and LOST it if the run was cancelled; this one LOSES it
- * if the run succeeds and KEEPS it if the run is cancelled. Neither is
- * uniformly better for that row, and both are dominated by the fact that a force
- * re-import is a declaration that chat.db is the authority for exactly those
- * rows — so replacing them is the requested behaviour, not a casualty.
+ * A write INSIDE the force set, landing mid-rebuild, is deleted by the swap on
+ * the success path — and BACKLOG-2796 is what made that sentence narrow enough
+ * to be acceptable. It used to be alarming, because the force set was every row
+ * this user had with an `external_id`, so the two OTHER services that write
+ * messages wrote inside it:
  *
- * WHO ELSE WRITES INSIDE THE FORCE SET. Two other services do, and neither is
- * behind `forceReimportInProgress`:
- *
- *   - `localSyncService.storeMessages` (`localSyncService.ts`) — the Android
- *     WiFi companion. It builds rows with `channel: "sms"` and a non-null
- *     `externalId`, and it is reached from an INBOUND HTTP handler,
- *     `POST /sync/messages` -> `handleSyncMessages`, so it fires at a moment
- *     nothing in this process controls.
- *   - `iPhoneSyncStorageService` — same shape, `externalId: msg.guid`.
+ *   - `localSyncService.storeMessages` — the Android WiFi companion, reached
+ *     from an INBOUND HTTP handler (`POST /sync/messages` ->
+ *     `handleSyncMessages`), so it fires at a moment nothing in this process
+ *     controls;
+ *   - `iPhoneSyncStorageService` — same shape, via the device sync orchestrator.
  *
  * Both insert through `databaseService.batchInsertMessages` ->
- * `syncDbService.batchInsertMessages`. `forceReimportInProgress` is read at
- * exactly ONE site — `macOSMessagesImportService.ts`'s
+ * `syncDbService.batchInsertMessages`, and NEITHER is behind
+ * `forceReimportInProgress`, which is read at exactly ONE site —
+ * `macOSMessagesImportService.ts`'s
  * `if (this.forceReimportInProgress && !forceReimport)` — where it blocks a
- * second macOS import. It knows nothing about an HTTP handler in another
- * service.
+ * second macOS import and knows nothing about an HTTP handler in another
+ * service. That has not changed and is not fixable from here.
  *
- * So a companion batch landing mid-rebuild IS deleted by the swap on the
- * success path. AND IT DOES NOT COME BACK: the companion advances a monotonic
- * cursor on the phone (`android-companion/services/backgroundSync.ts`, whose
- * native query is `minDate >=`), so it never re-reads a message it has already
- * sent. Do not write down that this self-heals — it was checked, and it does
- * not.
+ * What changed is that their rows are no longer IN the force set. Each writer
+ * stamps its own `metadata.$.source`, the predicate above admits only
+ * `macos_messages`, and so an Android batch or an iPhone batch landing at any
+ * moment of a force re-import now survives it. That matters more than a
+ * mid-run race, because it was never only about timing: before the scope, those
+ * rows were deleted whether they arrived during the run or a month earlier.
  *
- * None of that is introduced here. The old `clearMacOSMessages` deleted the
- * same set, because the set itself is the problem: it has no channel scope, so
- * a macOS Force Re-import reaches Android SMS, iPhone-synced messages and
- * `channel = 'email'` rows alike. **BACKLOG-2796** tracks scoping it. Read that
- * item before widening this predicate — and note that narrowing it is the fix,
- * not widening it.
+ * The one thing this does NOT fix, stated because the paragraph it replaces was
+ * corrected once already for claiming a bound the code did not have: a mid-run
+ * foreign write whose `external_id` collides with a GUID this run has staged.
+ * Only iPhone sync can do it (Android's ids are sha256 digests, a disjoint
+ * space). `insertFromStaging` yields that row to the survivor and counts it.
+ *
+ * The remaining occupants of the force set are this importer's own rows, and
+ * `forceReimportInProgress` does block a second macOS import — so on the success
+ * path a force re-import replaces exactly what it is a declaration about: the
+ * rows chat.db is the authority for.
+ *
+ * Read BACKLOG-2796 before touching the predicate. WIDENING it is the defect
+ * this scope exists to prevent.
  *
  * If any step throws — a full disk, a constraint the rebuild violated — the
  * transaction rolls back and the user's store is the one they started with.

@@ -23,6 +23,7 @@ import type { Database as DatabaseType } from "better-sqlite3";
 
 import {
   deriveStagingTableDdl,
+  FORCE_SET_MESSAGES,
   forceStagingLifecycle,
   sweepStaleStaging,
   STAGING_TABLE_PREFIX,
@@ -49,6 +50,12 @@ function createSchema(database: DatabaseType): void {
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       external_id TEXT,
+      -- BACKLOG-2796: the force set is scoped by these two, so a reduced schema
+      -- that omitted them would be testing a different predicate. Both are
+      -- nullable here because both are nullable in the real schema: channel
+      -- passes its CHECK when NULL, and metadata has no NOT NULL.
+      channel TEXT,
+      metadata TEXT,
       body_text TEXT,
       has_attachments INTEGER DEFAULT 0,
       is_false_positive INTEGER DEFAULT 0,
@@ -85,17 +92,71 @@ afterEach(() => {
 
 describe("BACKLOG-2790 — what a force re-import does NOT replace", () => {
   beforeEach(() => {
-    // One iMessage, one email, and their attachments.
-    db.prepare(
-      "INSERT INTO messages (id, user_id, external_id) VALUES (?, ?, ?)"
-    ).run("msg-imessage", USER, "guid-1");
-    db.prepare(
-      "INSERT INTO messages (id, user_id, external_id) VALUES (?, ?, NULL)"
-    ).run("msg-no-external", USER);
+    // One row per producer that writes into `messages`, each carrying the shape
+    // ITS producer writes — transcribed from the three insert sites, not
+    // invented (BACKLOG-2796):
+    //   macOS      `macOSMessagesImportService.storeMessages` — channel from
+    //              `msg.service`, external_id = the chat.db GUID, metadata
+    //              `{source:"macos_messages", originalId, service}`
+    //   Android    `localSyncService.storeMessages` — channel "sms", external_id
+    //              a sha256 of `sender|timestamp|body`, metadata
+    //              `{source:"android_wifi_sync", deviceId, …}`
+    //   iPhone     `iPhoneSyncStorageService` — channel from `msg.service`,
+    //              external_id = `msg.guid` (the SAME Apple GUID space as
+    //              chat.db), metadata `{source:"iphone_sync", originalId, …}`
+    const insertMessage = db.prepare(
+      "INSERT INTO messages (id, user_id, external_id, channel, metadata) VALUES (?, ?, ?, ?, ?)"
+    );
+    const macosMeta = JSON.stringify({
+      source: "macos_messages",
+      originalId: 41,
+      service: "iMessage",
+    });
+    insertMessage.run("msg-macos-imessage", USER, "guid-1", "imessage", macosMeta);
+    insertMessage.run(
+      "msg-macos-sms",
+      USER,
+      "guid-2",
+      "sms",
+      JSON.stringify({ source: "macos_messages", originalId: 42, service: "SMS" })
+    );
+    insertMessage.run(
+      "msg-android",
+      USER,
+      "3f2a9c4e5b6d7180a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718",
+      "sms",
+      JSON.stringify({
+        source: "android_wifi_sync",
+        deviceId: "pixel-7",
+        androidThreadId: 12,
+        originalSender: "+15550142",
+      })
+    );
+    insertMessage.run(
+      "msg-iphone",
+      USER,
+      "guid-3",
+      "imessage",
+      JSON.stringify({ source: "iphone_sync", originalId: 77, attachmentCount: 0 })
+    );
+    // No producer in the repo writes `channel = 'email'` into `messages` today,
+    // but the CHECK constraint admits it and `messageMatchingService` reads it,
+    // so the schema permits the row and the predicate must spare it. Seeded per
+    // the schema, and labelled as such rather than dressed up as transcribed.
+    insertMessage.run("msg-email", USER, "gmail-msg-1", "email", null);
+    // Schema-permitted, no current producer: `metadata` is nullable and
+    // `json_valid(NULL)` is NULL, which is what makes SURVIVING_MESSAGES' own
+    // COALESCE load-bearing.
+    insertMessage.run("msg-null-metadata", USER, "guid-4", "imessage", null);
+    insertMessage.run("msg-no-external", USER, null, "imessage", macosMeta);
     db.prepare(
       `INSERT INTO attachments (id, message_id, external_message_id, filename, storage_path)
        VALUES (?, ?, ?, ?, ?)`
-    ).run("att-imessage", "msg-imessage", "guid-1", "photo.jpg", "/store/aaa.jpg");
+    ).run("att-imessage", "msg-macos-imessage", "guid-1", "photo.jpg", "/store/aaa.jpg");
+    db.prepare(
+      `INSERT INTO attachments (id, message_id, external_message_id, filename, storage_path)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run("att-iphone", "msg-iphone", "guid-3", "selfie.jpg", "/store/ccc.jpg");
     db.prepare(
       `INSERT INTO attachments (id, email_id, filename, storage_path) VALUES (?, ?, ?, ?)`
     ).run("att-email", "email-1", "contract.pdf", "/store/bbb.pdf");
@@ -121,29 +182,71 @@ describe("BACKLOG-2790 — what a force re-import does NOT replace", () => {
         .all({ userId: USER }) as Array<{ id: string }>
     ).map((r) => r.id);
 
-    expect(survivors).toEqual(["att-email"]);
+    // BACKLOG-2796: the iPhone attachment is here for the same reason — its
+    // message survives now, so it must too.
+    expect(survivors.sort()).toEqual(["att-email", "att-iphone"]);
   });
 
-  it("keeps messages that carry no external_id", async () => {
+  it("BACKLOG-2796 — keeps every row a chat.db rebuild could not put back", async () => {
+    // Exact identity set, not a count. Android SMS, iPhone-synced messages and
+    // `channel = 'email'` rows are not re-importable from this Mac's chat.db, so
+    // deleting them destroys them outright — the defect this scope closes.
+    //
+    // MUTATION (provenance): drop the `json_valid`/`json_extract` clauses from
+    // FORCE_SET_MESSAGES and `msg-android` + `msg-iphone` disappear from this
+    // set — the exact rows the founder lost.
+    // MUTATION (NULL-safety): make SURVIVING_MESSAGES `NOT (…)` again and
+    // `msg-null-metadata` disappears, because `NOT NULL` is NULL.
     const survivors = (
       db
         .prepare(`SELECT id FROM messages WHERE ${SURVIVING_MESSAGES}`)
         .all({ userId: USER }) as Array<{ id: string }>
     ).map((r) => r.id);
 
-    expect(survivors).toEqual(["msg-no-external"]);
+    expect(survivors.sort()).toEqual([
+      "msg-android",
+      "msg-email",
+      "msg-iphone",
+      "msg-no-external",
+      "msg-null-metadata",
+    ]);
   });
 
   it("CONTROL: the rows it DOES replace are exactly the macOS ones", async () => {
     // The other half. Without it, a predicate that matched nothing at all would
-    // pass both tests above.
+    // pass every test above.
     const replaced = (
       db
-        .prepare(`SELECT id FROM messages WHERE NOT (${SURVIVING_MESSAGES})`)
+        .prepare(`SELECT id FROM messages WHERE ${FORCE_SET_MESSAGES}`)
         .all({ userId: USER }) as Array<{ id: string }>
     ).map((r) => r.id);
 
-    expect(replaced).toEqual(["msg-imessage"]);
+    expect(replaced.sort()).toEqual(["msg-macos-imessage", "msg-macos-sms"]);
+  });
+
+  it("BACKLOG-2796 — a malformed metadata value does not blow up the swap", async () => {
+    // `json_extract` THROWS `malformed JSON` on a non-JSON value, and the force
+    // set is evaluated inside the swap's single transaction — so one bad row
+    // would abort the whole force re-import rather than being skipped.
+    //
+    // Labelled honestly: no producer in this repo writes a non-JSON `metadata`.
+    // The column is TEXT with no CHECK, this predicate is the first code to
+    // parse it across every row of the table, and the guard costs one function
+    // call. Android's `deleteMessagesByMetadataSource` has no such guard.
+    //
+    // MUTATION: drop `json_valid(metadata) AND` from FORCE_SET_MESSAGES and this
+    // throws instead of returning.
+    db.prepare(
+      "INSERT INTO messages (id, user_id, external_id, channel, metadata) VALUES (?, ?, ?, ?, ?)"
+    ).run("msg-bad-metadata", USER, "guid-5", "sms", "not json at all");
+
+    const replaced = (
+      db
+        .prepare(`SELECT id FROM messages WHERE ${FORCE_SET_MESSAGES}`)
+        .all({ userId: USER }) as Array<{ id: string }>
+    ).map((r) => r.id);
+
+    expect(replaced.sort()).toEqual(["msg-macos-imessage", "msg-macos-sms"]);
   });
 });
 
