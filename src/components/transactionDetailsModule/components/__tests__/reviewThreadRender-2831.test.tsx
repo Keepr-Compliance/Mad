@@ -24,6 +24,11 @@
  *      → RED, 1 of 4 ("renders the html body ... rather than 'No content'"). The
  *      genuinely-body-less test stays GREEN, which is what makes it a real
  *      negative and not a restatement of the positive.
+ *   1b. `body_text: d.bodyText ?? d.snippet` → `body_text: d.snippet` (i.e.
+ *      BACKLOG-2844 reverted) → RED, 1 of 6: the 260-character message renders
+ *      only its first 200 characters, so the tail assertion fails. The
+ *      over-300 test stays GREEN under that mutation — a truncated string is
+ *      still truncated — which is why the tail case is the one that matters.
  *   2. `id: item.email_id ?? item.id` → `id: item.id` in the projection
  *      → RED, 1 of 4 (the duplicate-key characterisation) — which is the point:
  *      that test states the constraint the service-side dedup exists to satisfy,
@@ -62,6 +67,7 @@ function reviewEmail(
       cc: null,
       sender: "paul@example.com",
       body: null,
+      bodyText: null,
       hasAttachments: false,
       threadParticipants: [],
       threadMessages: [],
@@ -122,6 +128,48 @@ describe("BACKLOG-2831 — what the review path renders in the reading modal", (
 
     expect(screen.getByText("Closing moved to Friday.")).toBeInTheDocument();
     expect(screen.queryByText("No content")).not.toBeInTheDocument();
+  });
+
+
+  it("renders a 260-character body IN FULL, tail included (BACKLOG-2844)", () => {
+    // The founder's case, at the surface he saw it on. Before BACKLOG-2844 the
+    // modal received `snippet` — 200 characters — and stopped mid-word with NO
+    // "...", because the modal appends one only past ITS OWN 300-character
+    // limit, which a 200-character string never reaches. Silent truncation.
+    //
+    // 260 characters is chosen deliberately: longer than the old 200 cap,
+    // shorter than the modal's 300, so the WHOLE message must now render and the
+    // assertion is unambiguous. Asserting the head would pass on the truncated
+    // version — the first 200 characters are identical — so this asserts the
+    // TAIL.
+    const body = `${"Please review the attached addendum before Friday. ".repeat(5)}SIGNED-OFF`;
+    expect(body.length).toBeGreaterThan(200);
+    expect(body.length).toBeLessThan(300);
+
+    renderThread([
+      reviewEmail("pending:p1", "email-long", {
+        snippet: body.slice(0, 200),
+        bodyText: body,
+      }),
+    ]);
+
+    expect(screen.getByText(/SIGNED-OFF/)).toBeInTheDocument();
+  });
+
+  it("says so with an ellipsis when the body genuinely exceeds the modal's limit", () => {
+    // The other half of the founder's complaint: if it IS cut, the UI has to say
+    // so. Past 300 characters the modal's own truncation appends "...", which is
+    // the honest indicator that was never reached while the review path capped
+    // at 200. "Open Full Email" then leads to the rest.
+    const body = `${"The inspection report raises three items. ".repeat(12)}TAIL-MARKER`;
+    expect(body.length).toBeGreaterThan(300);
+
+    renderThread([
+      reviewEmail("pending:p1", "email-huge", { snippet: body.slice(0, 200), bodyText: body }),
+    ]);
+
+    expect(screen.getByText(/\.\.\.$/)).toBeInTheDocument();
+    expect(screen.queryByText(/TAIL-MARKER/)).not.toBeInTheDocument();
   });
 
   it("still says 'No content' when the email genuinely has neither body", () => {

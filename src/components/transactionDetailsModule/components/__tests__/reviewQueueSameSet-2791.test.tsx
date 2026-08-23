@@ -68,6 +68,7 @@ function item(over: Partial<ReviewItemDto> & { id: string }): ReviewItemDto {
       cc: null,
       sender: "paul@example.com",
       body: null,
+      bodyText: null,
       hasAttachments: false,
       threadParticipants: ["+15550142"],
       threadMessages: [

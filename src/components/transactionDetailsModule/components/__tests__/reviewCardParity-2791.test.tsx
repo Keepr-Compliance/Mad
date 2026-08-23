@@ -56,6 +56,7 @@ const emailItem: ReviewItemDto = {
     cc: null,
     sender: "paul@example.com",
     body: null,
+    bodyText: null,
     hasAttachments: false,
     threadParticipants: [],
     threadMessages: [],
@@ -82,6 +83,7 @@ const textItem: ReviewItemDto = {
     cc: null,
     sender: "+15555550142",
     body: null,
+    bodyText: null,
     hasAttachments: false,
     threadParticipants: ["+15555550142"],
     threadMessages: [

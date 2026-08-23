@@ -385,20 +385,67 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
       expect(item!.display.body).toBeNull();
     });
 
-    it("KNOWN LIMIT, recorded not fixed: the snippet is capped at 200 chars", async () => {
-      // The reading modal shows `snippet` for a plain-text review item, so it is
-      // a READING surface fed a PREVIEW. The linked loader projects the whole
-      // `e.body_plain` (communicationDbService: `COALESCE(m.body_text,
-      // e.body_plain) AS body_text`), so the same email reads in full once
-      // linked. Carrying the full plain body for every queued item is an IPC
-      // payload decision, so it is pinned here as a known asymmetry rather than
-      // changed silently — if someone lifts the cap, this test tells them what
-      // they are changing.
+    it("the snippet stays capped at 200 — it is the CARD's preview, not the body (BACKLOG-2844)", async () => {
+      // THIS TEST'S MEANING CHANGED. It used to be titled "KNOWN LIMIT, recorded
+      // not fixed" and stood for a reading limitation: 200 characters was all
+      // the review path carried, so the modal could not show more. BACKLOG-2844
+      // removed that limitation — `display.bodyText` now carries the whole body.
+      //
+      // The 200 cap survives with a narrower job: `snippet` feeds
+      // EmailThreadCard's one-line preview, which whitespace-collapses and
+      // truncates anyway. So this now pins that the fix did NOT change the card,
+      // rather than recording something unfixed.
       addEmail(db, "e-long", "Long", { bodyPlain: "x".repeat(900) });
       await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
-
       const item = getReviewState(TXN).items.find((i) => i.email_id === "e-long");
       expect(item!.display.snippet).toHaveLength(200);
+    });
+
+    it("carries the WHOLE body, asserted at the TAIL (BACKLOG-2844)", async () => {
+      // Asserting the HEAD would pass on the truncated version — the first 200
+      // characters are identical either way. Only the tail can tell them apart,
+      // so the sentinel sits at the very end of a body far longer than any cap
+      // in the chain (200 card, 300 modal).
+      const body = `${"filler sentence. ".repeat(60)}THE-LAST-WORD`;
+      expect(body.length).toBeGreaterThan(900);
+      addEmail(db, "e-full", "Long plain", { bodyPlain: body });
+      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+
+      const item = getReviewState(TXN).items.find((i) => i.email_id === "e-full");
+      expect(item!.display.bodyText).toContain("THE-LAST-WORD");
+      expect(item!.display.bodyText).toHaveLength(body.length);
+    });
+
+    it("preserves paragraph breaks, because the modal renders whitespace-pre-wrap", async () => {
+      // `snippet` collapses every run of whitespace to one space; bodyText must
+      // NOT, or a multi-paragraph message arrives as one run-on block.
+      addEmail(db, "e-para", "Paragraphs", {
+        bodyPlain: "First paragraph.\n\nSecond paragraph.",
+      });
+      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+
+      const item = getReviewState(TXN).items.find((i) => i.email_id === "e-para");
+      expect(item!.display.bodyText).toBe("First paragraph.\n\nSecond paragraph.");
+      expect(item!.display.snippet).toBe("First paragraph. Second paragraph.");
+    });
+
+    it("trims the ends, so a body that opens with blank lines still previews", async () => {
+      // Untrimmed, EmailThreadCard's `body_text.substring(0, 200)` would spend
+      // its whole preview window on whitespace and render an empty-looking row.
+      addEmail(db, "e-pad", "Padded", { bodyPlain: "\n\n   Real first line.\n" });
+      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+
+      const item = getReviewState(TXN).items.find((i) => i.email_id === "e-pad");
+      expect(item!.display.bodyText).toBe("Real first line.");
+    });
+
+    it("an email with no plain part carries no bodyText, and still has its html", async () => {
+      addEmail(db, "e-html2", "Invite", { bodyPlain: "", bodyHtml: "<p>Only html.</p>" });
+      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+
+      const item = getReviewState(TXN).items.find((i) => i.email_id === "e-html2");
+      expect(item!.display.bodyText).toBeNull();
+      expect(item!.display.body).toBe("<p>Only html.</p>");
     });
   });
 

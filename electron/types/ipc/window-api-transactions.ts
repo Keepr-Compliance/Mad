@@ -77,6 +77,18 @@ export interface ReviewItemDisplayDto {
    * NULL for texts and for emails that genuinely have no HTML part.
    */
   body: string | null;
+  /**
+   * The email's FULL plain-text body (BACKLOG-2844), matching what the LINKED
+   * loader projects (`COALESCE(m.body_text, e.body_plain) AS body_text`).
+   *
+   * Separate from `snippet`, which stays capped at 200 characters for the card's
+   * one-line preview. Feeding the modal that 200-char string made a message stop
+   * mid-word with NO indication: the modal appends "..." only past its own
+   * 300-character limit, which a 200-char string never reaches.
+   *
+   * NULL for texts and for emails with no plain-text part.
+   */
+  bodyText: string | null;
   hasAttachments: boolean;
   threadParticipants: string[];
   threadMessages: Array<{

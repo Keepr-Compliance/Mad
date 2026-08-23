@@ -77,8 +77,16 @@ function reviewItemToCommunication(item: ReviewItemDto): Communication {
     // `bodyPreview` computed to null and the card silently rendered two rows
     // instead of three. The row was never missing from the card; it was never
     // being given anything to show.
-    body_text: d.snippet,
-    body_plain: d.snippet,
+    //
+    // BACKLOG-2844: the FULL body when there is one, falling back to the
+    // 200-char snippet. Both consumers are happy with the whole string:
+    // EmailThreadCard takes its own `.substring(0, 200)` and then truncates to
+    // 120 for display, and EmailThreadViewModal wants everything it can get —
+    // it was the 200-char snippet that made a message stop mid-word with no
+    // "...", because the modal appends one only past ITS 300-char limit, which a
+    // 200-char string never reaches.
+    body_text: d.bodyText ?? d.snippet,
+    body_plain: d.bodyText ?? d.snippet,
     // BACKLOG-2831: the HTML, under BOTH names the reading modal tries
     // (`email.body_html || email.body`). Without it the modal had only
     // `snippet` to work with, and `snippet` is firstLine(body_plain) — which

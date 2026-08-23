@@ -156,6 +156,26 @@ export interface ReviewItemDisplay {
    * along — while the same email, once linked, rendered fine.
    */
   body: string | null;
+  /**
+   * The email's FULL plain-text body (BACKLOG-2844), matching what the LINKED
+   * loader projects (`COALESCE(m.body_text, e.body_plain) AS body_text` — the
+   * whole column, uncapped).
+   *
+   * `snippet` cannot serve this purpose and is deliberately left alone: it is
+   * capped at 200 characters and whitespace-collapsed because it feeds the
+   * CARD's one-line preview. Feeding that same 200-char string to the reading
+   * modal is what the founder hit — the message stopped mid-word with no
+   * indication, because the modal only appends "..." past ITS own 300-character
+   * limit, and a 200-character string never reaches it. So the truncation was
+   * not merely early, it was SILENT.
+   *
+   * Trimmed at the ends, newlines preserved: the modal renders
+   * `whitespace-pre-wrap`, so paragraphs matter, while leading blank lines would
+   * eat the card's preview window.
+   *
+   * NULL for texts and for emails with no plain-text part.
+   */
+  bodyText: string | null;
   /** Whether the underlying record carries attachments. */
   hasAttachments: boolean;
   /** Every distinct handle on a TEXT thread, for participant display. */
@@ -373,6 +393,7 @@ const EMPTY_DISPLAY: ReviewItemDisplay = {
   cc: null,
   sender: null,
   body: null,
+  bodyText: null,
   hasAttachments: false,
   threadParticipants: [],
   threadMessages: [],
@@ -417,6 +438,8 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
     sender: row.sender,
     // BACKLOG-2831: the HTML the modal falls back to when there is no plain text.
     body: row.body_html,
+    // BACKLOG-2844: the WHOLE plain body, not the card's 200-char preview.
+    bodyText: row.body_plain?.trim() || null,
     hasAttachments: !!row.has_attachments,
     threadParticipants: [],
     threadMessages: [],
@@ -474,6 +497,7 @@ function threadDisplay(threadId: string | null): ReviewItemDisplay {
     sender: handles[0] ?? null,
     // Texts have no HTML part; the thread's messages carry their own body_text.
     body: null,
+    bodyText: null,
     hasAttachments: false,
     threadParticipants: handles,
     threadMessages,
