@@ -210,6 +210,7 @@ describe("names resolve on review cards (the regression the founder reported)", 
       recipients: null,
       cc: null,
       sender: "+15550142",
+      body: null,
       hasAttachments: false,
       threadParticipants: ["+15550142"],
       threadMessages: [

@@ -79,6 +79,15 @@ function reviewItemToCommunication(item: ReviewItemDto): Communication {
     // being given anything to show.
     body_text: d.snippet,
     body_plain: d.snippet,
+    // BACKLOG-2831: the HTML, under BOTH names the reading modal tries
+    // (`email.body_html || email.body`). Without it the modal had only
+    // `snippet` to work with, and `snippet` is firstLine(body_plain) — which
+    // Outlook fills with Graph's `bodyPreview`. An HTML message whose preview is
+    // empty (a calendar invite, an attachment-only mail) therefore rendered
+    // "No content" here while rendering its real content once linked, because
+    // the linked loader projects `body`.
+    body_html: d.body,
+    body: d.body,
     sent_at: d.occurredAt ?? undefined,
     has_attachments: d.hasAttachments,
     communication_type: "email",

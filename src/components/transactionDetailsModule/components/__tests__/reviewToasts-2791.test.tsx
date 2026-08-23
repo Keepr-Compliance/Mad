@@ -31,7 +31,7 @@ const emailItem: ReviewItemDto = {
     occurredAt: "2026-06-01T00:00:00.000Z", itemCount: 1,
     threadId: "thr-q",
     recipients: null, cc: null, sender: "jane@example.com",
-    hasAttachments: false, threadParticipants: [], threadMessages: [],
+    body: null, hasAttachments: false, threadParticipants: [], threadMessages: [],
   },
 };
 

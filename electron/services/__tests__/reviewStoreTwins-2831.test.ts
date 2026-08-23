@@ -340,6 +340,58 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
     });
   });
 
+
+  describe('"No content" — the display projection carried no HTML at all', () => {
+    it("an HTML-only email projects its html, so the reading modal has something to show", async () => {
+      // The producing shape, transcribed from outlookFetchService `_parseMessage`
+      // (:1219-1223): Graph gives ONE body object plus a preview, and the mapper
+      // stores `body.content` in body_html and `bodyPreview || ""` in body_plain
+      // — there is no html-to-text derivation anywhere in ingestion. So an HTML
+      // message with an empty preview (a calendar invite, an attachment-only
+      // mail) lands with an EMPTY body_plain and a full body_html. That is a
+      // state the app really produces, not an invented one.
+      addEmail(db, "e-html", "Invite", {
+        bodyPlain: "",
+        bodyHtml: "<p>Closing moved to Friday.</p>",
+      });
+      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+
+      const item = getReviewState(TXN).items.find((i) => i.email_id === "e-html");
+      expect(item).toBeDefined();
+      // The snippet is empty — this is WHY the modal said "No content", and it
+      // stays empty; the fix is not to fake a preview.
+      expect(item!.display.snippet).toBe("");
+      // ...but the html now travels with the item, which is what the modal's
+      // `body_html || body` fallback reads.
+      expect(item!.display.body).toBe("<p>Closing moved to Friday.</p>");
+    });
+
+    it("a plain-text email still carries no html, and a text item never does", async () => {
+      addEmail(db, "e-plain", "Offer", { bodyPlain: "Here is the offer." });
+      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+
+      const item = getReviewState(TXN).items.find((i) => i.email_id === "e-plain");
+      expect(item!.display.snippet).toBe("Here is the offer.");
+      expect(item!.display.body).toBeNull();
+    });
+
+    it("KNOWN LIMIT, recorded not fixed: the snippet is capped at 200 chars", async () => {
+      // The reading modal shows `snippet` for a plain-text review item, so it is
+      // a READING surface fed a PREVIEW. The linked loader projects the whole
+      // `e.body_plain` (communicationDbService: `COALESCE(m.body_text,
+      // e.body_plain) AS body_text`), so the same email reads in full once
+      // linked. Carrying the full plain body for every queued item is an IPC
+      // payload decision, so it is pinned here as a known asymmetry rather than
+      // changed silently — if someone lifts the cap, this test tells them what
+      // they are changing.
+      addEmail(db, "e-long", "Long", { bodyPlain: "x".repeat(900) });
+      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+
+      const item = getReviewState(TXN).items.find((i) => i.email_id === "e-long");
+      expect(item!.display.snippet).toHaveLength(200);
+    });
+  });
+
   describe("TWIN SURVIVAL — acting on the survivor must resolve BOTH stores", () => {
     it("approve leaves NOTHING behind in either store, and the link reads user_confirmed", async () => {
       addEmail(db, "e1", "Offer");

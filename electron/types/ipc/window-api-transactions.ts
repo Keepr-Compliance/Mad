@@ -59,6 +59,24 @@ export interface ReviewItemDisplayDto {
   recipients: string | null;
   cc: string | null;
   sender: string | null;
+  /**
+   * The email's HTML body (BACKLOG-2831), under the same name the LINKED
+   * loader's projection uses (`COALESCE(m.body_html, e.body_html) AS body`), so
+   * the reading modal's existing `body_html || body` fallback finds it without a
+   * second code path.
+   *
+   * Without it a review item carried NO html at all — only `snippet`, which is
+   * `firstLine(body_plain)`. Outlook stores Graph's `bodyPreview` in
+   * `body_plain` for every HTML message (outlookFetchService `_parseMessage`),
+   * so an HTML message whose preview is empty — a calendar invite, an
+   * attachment-only mail — produced an empty snippet and the modal rendered
+   * "No content" for an email whose body was sitting in `emails.body_html`. The
+   * SAME email renders its content once LINKED, because the linked loader
+   * projects `body`. That asymmetry is the defect.
+   *
+   * NULL for texts and for emails that genuinely have no HTML part.
+   */
+  body: string | null;
   hasAttachments: boolean;
   threadParticipants: string[];
   threadMessages: Array<{

@@ -144,6 +144,18 @@ export interface ReviewItemDisplay {
   cc: string | null;
   /** Sender address (emails) — the raw value, unlike `subtitle`. */
   sender: string | null;
+  /**
+   * The email's HTML body (BACKLOG-2831), named `body` to match the LINKED
+   * loader's projection (`COALESCE(m.body_html, e.body_html) AS body`) so the
+   * reading modal's existing `body_html || body` fallback finds it.
+   *
+   * `snippet` alone was not enough: it is `firstLine(body_plain)`, and Outlook
+   * puts Graph's `bodyPreview` in `body_plain` for every HTML message. An HTML
+   * message with an empty preview therefore gave the modal nothing, and it
+   * rendered "No content" for an email whose body was in `emails.body_html` all
+   * along — while the same email, once linked, rendered fine.
+   */
+  body: string | null;
   /** Whether the underlying record carries attachments. */
   hasAttachments: boolean;
   /** Every distinct handle on a TEXT thread, for participant display. */
@@ -360,6 +372,7 @@ const EMPTY_DISPLAY: ReviewItemDisplay = {
   recipients: null,
   cc: null,
   sender: null,
+  body: null,
   hasAttachments: false,
   threadParticipants: [],
   threadMessages: [],
@@ -381,11 +394,12 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
     recipients: string | null;
     cc: string | null;
     body_plain: string | null;
+    body_html: string | null;
     sent_at: string | null;
     has_attachments: number | null;
     thread_id: string | null;
   }>(
-    `SELECT subject, sender, recipients, cc, body_plain, sent_at, has_attachments, thread_id
+    `SELECT subject, sender, recipients, cc, body_plain, body_html, sent_at, has_attachments, thread_id
        FROM emails WHERE id = ?`,
     [emailId],
   );
@@ -401,6 +415,8 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
     recipients: row.recipients,
     cc: row.cc,
     sender: row.sender,
+    // BACKLOG-2831: the HTML the modal falls back to when there is no plain text.
+    body: row.body_html,
     hasAttachments: !!row.has_attachments,
     threadParticipants: [],
     threadMessages: [],
@@ -456,6 +472,8 @@ function threadDisplay(threadId: string | null): ReviewItemDisplay {
     recipients: null,
     cc: null,
     sender: handles[0] ?? null,
+    // Texts have no HTML part; the thread's messages carry their own body_text.
+    body: null,
     hasAttachments: false,
     threadParticipants: handles,
     threadMessages,

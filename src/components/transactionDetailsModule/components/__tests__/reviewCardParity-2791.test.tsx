@@ -55,6 +55,7 @@ const emailItem: ReviewItemDto = {
     recipients: "me@example.com",
     cc: null,
     sender: "paul@example.com",
+    body: null,
     hasAttachments: false,
     threadParticipants: [],
     threadMessages: [],
@@ -80,6 +81,7 @@ const textItem: ReviewItemDto = {
     recipients: null,
     cc: null,
     sender: "+15555550142",
+    body: null,
     hasAttachments: false,
     threadParticipants: ["+15555550142"],
     threadMessages: [
