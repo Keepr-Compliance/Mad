@@ -45,11 +45,36 @@
  *       places. Anyone deleting ONE of them should know the other is then the
  *       only thing standing between this product and the original defect.
  *
- *   M2  AMBIGUITY -> FILENAME — in electron/services/folderExport/
+ *   M2a AMBIGUITY -> FILENAME — in electron/services/folderExport/
  *       threadContactLabel.ts, `threadNaming`: flip the `names.length > 1`
  *       branch to `ambiguous: false`.
- *       -> MEASURED 4 RED across this suite and the 2612 sweep: the wrong
- *          person's name returns to disk.
+ *       -> MEASURED 6 RED across this suite and the 2612 sweep.
+ *
+ *       NOTE ITS FAILURE MODE CHANGED with the 2026-08-23 ruling. It used to
+ *       put the wrong person's NAME back on disk; now the segment is already
+ *       empty, so it produces `text_001__2026-02-01.pdf` — a double underscore.
+ *       Still red, still worth keeping (it pins the caller's branch), but it no
+ *       longer demonstrates the original harm. M2b does.
+ *
+ *   M2b THE DEFECT ITSELF — in the same function, disable the ambiguity branch
+ *       (`if (false && names.length > 1)`) so naming falls through to the
+ *       single-name path.
+ *       -> MEASURED 9 RED, and the artifact on disk becomes
+ *          `text_001_Chris_Alvarez_or_Dana_Alvarez_2026-02-01.pdf` and
+ *          `text_002_Chris_Alvarez_Dana_Alvarez_or_Elliot_Alvarez_2026-02-02.pdf`.
+ *          Personal names back in a filesystem path, which is the harm this
+ *          whole item exists to remove.
+ *
+ *   N1  THE NUMBER RETURNS — in electron/services/folderExport/
+ *       folderExportService.ts, restore the handle segment to the ambiguous
+ *       filename (`text_<NNN>_<sanitised handle>_<date>.pdf`).
+ *       -> MEASURED 6 RED. Pins the 2026-08-23 ruling that a phone number is
+ *          personal data and does not belong in a path.
+ *
+ *   N2  THE DATE LEAVES — in the same expression, drop `_${firstDate}`.
+ *       -> MEASURED 6 RED. Pins the other half of the ruling: the date is what
+ *          keeps the ambiguous file sorting with its neighbours, which was the
+ *          actual inconsistency.
  *
  *   M3  TRANSACTION SCOPING — in electron/services/db/attachmentDbService.ts,
  *       `transactionLinkedSelect`: return `0 AS is_transaction_linked`
