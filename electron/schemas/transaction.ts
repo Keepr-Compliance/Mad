@@ -20,11 +20,50 @@ export const SubmissionStatusSchema = z.enum([
   'not_submitted', 'submitted', 'under_review', 'needs_changes',
   'resubmitted', 'approved', 'rejected',
 ]);
+/** Mirrors the `export_format` CHECK in schema.sql's transactions DDL. */
+export const ExportFormatSchema = z.enum([
+  'pdf', 'csv', 'json', 'txt_eml', 'excel', 'folder',
+]);
 
 // ============================================
 // TRANSACTION SCHEMA
 // ============================================
 
+/**
+ * The shape of a `transactions` row as the read paths return it.
+ *
+ * BACKLOG-2559 — TWO RULES, AND BOTH FAIL SILENTLY IF BROKEN.
+ *
+ * 1. EVERY COLUMN OF `transactions` MUST BE DECLARED HERE.
+ *    `validateResponse` (schemas/validate.ts) parses with a plain, non-strict
+ *    `z.object`, which STRIPS unknown keys and returns the stripped copy on
+ *    success. An undeclared column is therefore deleted from every row that
+ *    validates cleanly, with no error anywhere — the BACKLOG-2532 mechanism
+ *    that blanked `removed_reason` until PR #2211 declared it. Measured on
+ *    develop @ 0acaa7881, this schema was missing 17 live columns, including
+ *    `last_exported_on` (the column the export handlers actually write —
+ *    BACKLOG-2109) and `last_pending_scan_at` (the Needs-Review delta
+ *    watermark — BACKLOG-2791).
+ *
+ * 2. NO DECLARATION MAY BE STRICTER THAN ITS COLUMN.
+ *    If a column is nullable in the DDL and required here, `safeParse` FAILS,
+ *    and `validateResponse` then returns the row unvalidated. Nothing is
+ *    stripped and nothing looks wrong — validation has just been switched off
+ *    for that row, and only a log line says so. Read nullability off the DDL,
+ *    never off what the writers happen to send.
+ *
+ * ENFORCEMENT: `electron/schemas/__tests__/transactionSchemaParity.test.ts`
+ * runs the app's own `runMigrations()` against a real file-backed database and
+ * asserts, as exact SETS, that the declared keys equal
+ * `PRAGMA table_info(transactions)` in both directions, plus a NULL sweep over
+ * every nullable column. Add a column to `transactions` without adding it here
+ * and that test goes red.
+ *
+ * NOTE: this schema is currently wired to NO boundary. `getTransactionByIdSync`
+ * returns raw `SELECT t.*` with no validation. That is deliberate — wiring it
+ * is a separate, riskier change. The declarations below exist so that whoever
+ * does wire it does not amputate the rows.
+ */
 export const TransactionSchema = z.object({
   id: UuidSchema,
   user_id: UuidSchema,
@@ -39,12 +78,23 @@ export const TransactionSchema = z.object({
 
   // Transaction Type & Status
   transaction_type: TransactionTypeSchema.nullable().optional(),
-  status: TransactionStatusSchema,
+  // `status TEXT DEFAULT 'active' CHECK (...)` — a DEFAULT is not NOT NULL, and
+  // an explicit NULL write is legal. Required-and-non-null here would fail
+  // safeParse and disable validation for the whole row (rule 2 above).
+  status: TransactionStatusSchema.nullable(),
 
   // Key Dates
   started_at: OptionalTimestamp,
   closed_at: OptionalTimestamp,
   last_activity_at: OptionalTimestamp,
+  representation_start_date: OptionalTimestamp, // DATE, nullable
+  // `INTEGER DEFAULT 0` used as a boolean. Same union idiom as ContactSchema's
+  // `is_message_derived`: SQLite hands back 0/1, callers may set true/false.
+  closing_date_verified: z.union([z.number(), z.boolean()]).nullable().optional(),
+
+  // Date Confidence
+  representation_start_confidence: z.number().int().nullable().optional(),
+  closing_date_confidence: z.number().int().nullable().optional(),
 
   // Confidence
   confidence_score: z.number().nullable().optional(),
@@ -67,22 +117,40 @@ export const TransactionSchema = z.object({
   closing_deadline: OptionalTimestamp,
 
   // Stats
-  message_count: z.number().int(),
-  attachment_count: z.number().int(),
+  // message_count / attachment_count / export_count are `INTEGER DEFAULT 0`,
+  // i.e. nullable columns — see rule 2.
+  message_count: z.number().int().nullable(),
+  attachment_count: z.number().int().nullable(),
   text_thread_count: z.number().int().nullable().optional(),
+  // NOT a column. Computed by the read path — a COUNT(DISTINCT c.email_id)
+  // subquery aliased `email_count` in getTransactionByIdSync and the list
+  // SELECT (transactionDbService.ts). Removing it would strip the count the
+  // detail view renders, so the parity test allow-lists it BY NAME.
+  //
+  // `text_count` used to sit here and was removed by BACKLOG-2559: it is
+  // neither a column nor computed on any read path, so it could never hold a
+  // value. (electron/types/models.ts still declares it as an optional field;
+  // the renderer passes it into BulkSubmitModal, which never renders it. Dead
+  // plumbing, out of scope here.)
   email_count: z.number().int().nullable().optional(),
-  text_count: z.number().int().nullable().optional(),
 
   // Export Tracking
-  export_status: ExportStatusSchema,
-  export_count: z.number().int(),
-  last_exported_at: OptionalTimestamp,
+  // `export_status TEXT DEFAULT 'not_exported' CHECK (...)` — nullable in DDL.
+  export_status: ExportStatusSchema.nullable(),
+  export_format: ExportFormatSchema.nullable().optional(),
+  export_count: z.number().int().nullable(),
+  last_exported_at: OptionalTimestamp, // declared but NOT written by the export path
+  // BACKLOG-2109: the column the export handlers actually write and the list
+  // SELECT returns. `last_exported_at` above is the decoy. Leaving this
+  // undeclared is the concrete harm BACKLOG-2559 was filed for — wiring the
+  // schema would blank the real export timestamp on every valid row.
+  last_exported_on: OptionalTimestamp,
   first_exported_at: OptionalTimestamp, // BACKLOG-2013: freeze marker (first export)
 
   // Metadata
   metadata: z.string().nullable().optional(), // JSON
-  created_at: TimestampSchema,
-  updated_at: TimestampSchema,
+  created_at: TimestampSchema.nullable(), // DATETIME DEFAULT CURRENT_TIMESTAMP, nullable
+  updated_at: TimestampSchema.nullable(), // DATETIME DEFAULT CURRENT_TIMESTAMP, nullable
 
   // AI Detection Fields
   detection_source: z.enum(['manual', 'auto', 'hybrid']).nullable().optional(),
@@ -92,6 +160,27 @@ export const TransactionSchema = z.object({
   suggested_contacts: z.string().nullable().optional(), // JSON
   reviewed_at: OptionalTimestamp,
   rejection_reason: z.string().nullable().optional(),
+
+  // Agent/Contact References — plain nullable TEXT holding contact IDs
+  buyer_agent_id: z.string().nullable().optional(),
+  seller_agent_id: z.string().nullable().optional(),
+  escrow_officer_id: z.string().nullable().optional(),
+  inspector_id: z.string().nullable().optional(),
+  other_contacts: z.string().nullable().optional(), // JSON array of contact IDs
+
+  // B2B Submission Tracking (BACKLOG-390)
+  submission_status: SubmissionStatusSchema.nullable().optional(),
+  submission_id: z.string().nullable().optional(), // UUID ref to cloud submissions
+  submitted_at: OptionalTimestamp,
+  last_review_notes: z.string().nullable().optional(),
+
+  // Email Auto-Link Settings (BACKLOG-1364) — `INTEGER DEFAULT 0` as a boolean
+  skip_address_filter: z.union([z.number(), z.boolean()]).nullable().optional(),
+
+  // BACKLOG-2791: Needs-Review delta watermark, added by migration v65. Losing
+  // it on the read path makes every transaction open re-examine the full
+  // window forever — the BACKLOG-2620 non-convergence shape.
+  last_pending_scan_at: OptionalTimestamp,
 });
 
 export type ValidatedTransaction = z.infer<typeof TransactionSchema>;
