@@ -76,6 +76,7 @@ import {
 } from "../db/contactSourceLinkDbService";
 import { CONTACT_SOURCE_RECORDS_SQL } from "../db/contactSourceLinkSql";
 import { markSourceRecordsCurrent } from "../db/externalContactDbService";
+import { toLookupKey } from "../../utils/phoneNormalization";
 
 const USER = "user-2401";
 const OTHER_USER = "user-other";
@@ -97,9 +98,13 @@ const SCHEMA = CONTACT_IDENTITY_SCHEMA;
 // SEED HELPERS
 // ---------------------------------------------------------------------------
 
-/** Last 10 digits — the same lookup key `toLookupKey` produces. */
+/** The shared lookup key — see the BACKLOG-2630 note below. */
+// BACKLOG-2630: seeds through the SHARED helper rather than a local
+// transcription of the old last-ten rule. After migration v64 no database
+// holds an old-rule key, so a fixture written that way describes a state the
+// code can no longer emit — and the probe side would never meet it.
 function lookupKey(phone: string): string {
-  return phone.replace(/\D/g, "").slice(-10);
+  return toLookupKey(phone);
 }
 
 function addContact(

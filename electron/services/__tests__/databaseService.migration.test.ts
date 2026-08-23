@@ -431,7 +431,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toBeDefined();
       expect(plan).toEqual({
         currentVersion: 29,
-        targetVersion: 63,
+        targetVersion: 64,
         pendingMigrations: [
           {
             version: 30,
@@ -569,8 +569,12 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 63,
             description: expect.stringContaining("BACKLOG-2750"),
           },
+          {
+            version: 64,
+            description: expect.stringContaining("BACKLOG-2630"),
+          },
         ],
-        wouldRunCount: 34,
+        wouldRunCount: 35,
       });
 
       // Verify no transaction was started (migration wasn't executed)
@@ -582,11 +586,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: version = 63 (all applied — BACKLOG-2750's v63, the legacy
-      // columns nothing migrated plus their deferred indexes, is the chain head)
+      // Setup: version = 64 (all applied — BACKLOG-2630's v64, the phone
+      // re-key, is the chain head)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 63 });
+        .mockReturnValueOnce({ version: 64 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -598,8 +602,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: 63,
-        targetVersion: 63,
+        currentVersion: 64,
+        targetVersion: 64,
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -730,9 +734,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       //
       // BACKLOG-2571 briefly added a DIFFERENT v63 (emails.sent_at_source) and
       // took it out again — founder decision, 2026-08-09 — which is why the
-      // count once went back to 33. It is 34 again for BACKLOG-2750's v63, and
+      // count once went back to 33. It went to 34 for BACKLOG-2750's v63 and to
+      // 35 for BACKLOG-2630's v64 (re-key every persisted phone lookup key), and
       // the enumeration is doing its job in both directions.
-      expect(mockDb.transaction).toHaveBeenCalledTimes(34);
+      expect(mockDb.transaction).toHaveBeenCalledTimes(35);
     });
 
     it("should skip already-applied migrations", async () => {
@@ -740,11 +745,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 63, all migrations applied (BACKLOG-2750's v63 — the legacy
-      // columns nothing migrated plus their deferred indexes — is the chain head)
+      // version = 64, all migrations applied (BACKLOG-2630's v64 — the phone
+      // lookup-key re-key — is the chain head)
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 63 });
+        .mockReturnValueOnce({ version: 64 });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },

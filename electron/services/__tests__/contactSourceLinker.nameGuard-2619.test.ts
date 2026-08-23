@@ -74,6 +74,7 @@ jest.mock("../logService", () => {
 import { resolveSourceRecord, linkExternalContactsForUser } from "../contactSourceLinker";
 import { getLinksForContact } from "../db/contactSourceLinkDbService";
 import { formatPhoneNumber } from "../../utils/phoneNormalization";
+import { toLookupKey } from "../../utils/phoneNormalization";
 
 const USER = "user-2619";
 
@@ -82,8 +83,12 @@ const USER = "user-2619";
 // ---------------------------------------------------------------------------
 const CURRENT_SYNC = "2026-08-09T00:00:00.000Z";
 
+// BACKLOG-2630: seeds through the SHARED helper rather than a local
+// transcription of the old last-ten rule. After migration v64 no database
+// holds an old-rule key, so a fixture written that way describes a state the
+// code can no longer emit — and the probe side would never meet it.
 function lookupKey(phone: string): string {
-  return phone.replace(/\D/g, "").slice(-10);
+  return toLookupKey(phone);
 }
 
 function addContact(
