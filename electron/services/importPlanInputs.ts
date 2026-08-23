@@ -35,6 +35,8 @@ import {
   type StoredImportFilters,
 } from "./importPlan";
 
+import { LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED } from "./transactionEligibility";
+
 const SERVICE_NAME = "ImportPlanInputs";
 
 /** Transaction date columns, as stored. */
@@ -55,6 +57,11 @@ export interface TransactionDateRow {
  * The prior spelling `!= 'archived'` was a dead no-op ('archived' is not a
  * valid status), so rejected deals wrongly pinned the import floor.
  *
+ * BACKLOG-2562: the predicate itself now comes from `transactionEligibility` —
+ * the ONE definition — rather than being spelled out here. autoLinkService was
+ * still carrying the dead form long after this file was migrated; a shared
+ * constant is what stops the next reader drifting the same way.
+ *
  * Every reader on the import side now goes through this function — the plan,
  * the transaction trigger's required-start, and the effective-window label —
  * and it matches the export gate's predicate
@@ -65,7 +72,7 @@ export function readNonRejectedTransactions(userId: string): TransactionDateRow[
   return dbAll<TransactionDateRow>(
     `SELECT started_at, created_at, closed_at
        FROM transactions
-      WHERE user_id = ? AND status != 'rejected'`,
+      WHERE user_id = ? AND ${LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED}`,
     [userId]
   );
 }

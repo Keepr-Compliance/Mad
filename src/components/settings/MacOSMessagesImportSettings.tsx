@@ -32,66 +32,53 @@ import { settingsService } from '../../services';
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { parseLocalCalendarDay } from '../../utils/dateRangeUtils';
-
-/**
- * Lookback window shown when the user has stored NO `lookbackMonths` preference.
- *
- * BACKLOG-2561: must equal `DEFAULT_LOOKBACK_MONTHS` in
- * `electron/services/macOSMessagesImportService/importHelpers.ts`, which is what
- * the main process actually imports with. The renderer cannot import from
- * `electron/` (the Vite renderer build parses it as JavaScript and `rootDir`
- * forbids the reverse), so the value is duplicated here on purpose and pinned by
- * `__tests__/MacOSMessagesImportSettings.allTime-2561.test.tsx`, which asserts the
- * dropdown reads "Last 3 months" for the exact preference shape the app writes
- * when only the message cap has ever been changed.
- */
-const DEFAULT_LOOKBACK_MONTHS = 3;
-
-/**
- * Cap shown when the user has stored NO `maxMessages` preference.
- *
- * BACKLOG-2749: must equal `DEFAULT_MAX_MESSAGES` in
- * `electron/services/importPlan.ts`, which is what the resolver actually
- * enforces. Duplicated here for the same reason `DEFAULT_LOOKBACK_MONTHS` is —
- * the renderer cannot value-import from `electron/` — and pinned by
- * `__tests__/MacOSMessagesImportSettings.onePlanDialog-2749.test.tsx`.
- *
- * It exists because the absent key was being read as "Unlimited". The panel did
- * `maxMessages ?? null`, and `null` is what this dropdown writes for an explicit
- * Unlimited, so a user who had only ever changed the LOOKBACK — which leaves
- * `maxMessages` absent through the preferences deep-merge, the exact shape
- * BACKLOG-2561 documented — saw "Unlimited" while their run was capped at
- * 50,000 by `resolveMaxMessages`. That is this item's own invariant broken in
- * the quietest possible way: the setting said one thing and the run did another,
- * with no dialog in between because the panel believed there was no cap to
- * disclose. It is the renderer half of BACKLOG-2733, which was fixed in the
- * resolver alone.
- */
-const DEFAULT_MAX_MESSAGES = 50000;
+// BACKLOG-2734: the defaults and the absent-vs-null resolution now have ONE
+// renderer-side definition, shared with `AndroidMessagesSettings`. Both panels
+// mirrored the same two constants and the same two ternaries, which is how the
+// Android panel came to carry this panel's fixed defects (BACKLOG-2795).
+// This panel's preference KEY is unchanged: `messageImport.filters`, which is
+// what the main process imports with.
+import {
+  DEFAULT_LOOKBACK_MONTHS,
+  DEFAULT_MAX_MESSAGES,
+  resolveStoredLookbackMonths,
+  resolveStoredMaxMessages,
+} from './messageImportPreferences';
 
 /**
  * BACKLOG-2749: drop the orchestrator's cap sentence from a completion warning.
  *
- * `SyncOrchestratorService` builds it as `totalAvailable - messagesImported` —
- * the window minus what THIS RUN downloaded. A delta import skips messages it
- * already has, so those already-present messages get counted as excluded: the
- * founder's restore reported **659,619 messages excluded by import limit** when
- * the true figure was 645,576 (708,400 − 62,824). The number is wrong in the
- * alarming direction, and it is the last thing he reads after a long import.
+ * ## What this strips, and why it is NOT because the number is wrong
  *
- * The correct sentence is rendered by this panel from the plan the run was
- * consented to (`runCoverageRef`). This function removes the wrong one so the
- * two cannot both be on screen — while PRESERVING the disk-space clause the
- * orchestrator appends to the same string, which is accurate and is the only
- * notice that attachments were skipped.
+ * It WAS wrong when this function was written: `SyncOrchestratorService` built
+ * the sentence as `totalAvailable - messagesImported` — the window minus what
+ * THAT RUN downloaded — so the messages a delta import already had were counted
+ * as excluded, and the founder's restore reported **659,619 messages excluded
+ * by import limit** where the true figure was 645,576 (708,400 − 62,824).
  *
- * It is a targeted removal of one known producer's one known sentence, and it
- * is deliberately anchored (`^`) so it can only ever strip a leading cap
- * clause. The durable fix is arithmetic the orchestrator itself does not do —
- * it would need the admitted count on the import result, which lives in
- * `macOSMessagesImportService` and `SyncOrchestratorService`, both owned by
- * other engineers this cycle. Recorded as a residual: until that lands, the
- * DASHBOARD's sync indicator still renders the wrong figure.
+ * BACKLOG-2794 fixed the producer: the import result now carries `coveredCount`
+ * (the admitted set) and the orchestrator subtracts THAT. The sentence arriving
+ * here is arithmetically correct today.
+ *
+ * This function stays anyway, and the reason is a founder decision, not a bug:
+ * `fa2112c8` removed the exclusion sentence from THIS panel's completion strip
+ * entirely. The strip says what the store now covers and stops. So the clause is
+ * deleted here because this surface does not carry it — not because it lies.
+ * Deleting the function would put a sentence back on a surface he cleared.
+ *
+ * ## The coupling that makes this fragile, and the control that holds it
+ *
+ * The regex is number-agnostic but SENTENCE-anchored. Rewording the orchestrator's
+ * string — however truthfully — silently stops this matching, and the clause
+ * reappears in the Settings completion strip with nothing failing. Any copy
+ * change to that sentence must move this regex in the same commit. Pinned by
+ * "the corrected sentence is stripped too" in
+ * `MacOSMessagesImportSettings.onePlanDialog-2749.test.tsx`, which feeds this
+ * function the post-2794 string.
+ *
+ * The `^` anchor is what keeps the removal to a LEADING cap clause, PRESERVING
+ * the disk-space clause the orchestrator appends to the same string — accurate,
+ * and the only notice that attachments were skipped.
  */
 export function stripStaleCapClause(
   warning: string | undefined
@@ -141,7 +128,7 @@ export function MacOSMessagesImportSettings({
   disabledReason,
 }: MacOSMessagesImportSettingsProps) {
   const { isMacOS } = usePlatform();
-  const { queue, requestSync, markCancelRequested } = useSyncOrchestrator();
+  const { queue, requestSync, markCancelRequested, getQueueItem } = useSyncOrchestrator();
 
   // Derive importing state from orchestrator queue
   const messagesItem = queue.find(q => q.type === 'messages');
@@ -154,20 +141,27 @@ export function MacOSMessagesImportSettings({
   // reads to the user as "Re-imported 0 messages".
   const controlsDisabled = !enabled || isImporting;
 
-  // BACKLOG-2748: Cancel is offered ONLY while the import is actually running,
-  // never while the queue item is merely 'pending'.
+  // BACKLOG-2748/2776/2794: Cancel spans both states an unfinished import can
+  // be in — 'running' and 'pending'.
   //
-  // BACKLOG-2776 UPDATED the reason. It used to be that a cancel arriving before
-  // the main process had set `isImporting` was dropped outright; the service now
-  // HOLDS such a cancel and the next run to start consumes it, so the button is
-  // no longer a placebo in the sub-second window between 'running' and the
-  // import taking hold. What it cannot do is span the 'pending' window: a
-  // dashboard sync of ['contacts', 'emails', 'messages'] leaves the messages
-  // item pending for the whole contacts+emails run — minutes — and a cancel held
-  // that long would fire at an import the user has since forgotten asking to
-  // stop, so the service expires it (PENDING_CANCEL_TTL_MS). The gate stays.
-  // Held-cancel proof: `macOSMessagesImportService.cancel-2748.test.ts`.
-  const cancelAvailable = messagesItem?.status === 'running';
+  // The history matters, because two different things were called "the pending
+  // problem". BACKLOG-2748 gated on 'running' because a cancel arriving before
+  // main had set `isImporting` was dropped outright. BACKLOG-2776 fixed THAT by
+  // holding such a cancel for the next run to consume, and left the gate up for
+  // a second reason: a held cancel cannot span minutes, because it would fire at
+  // an import the user has long stopped thinking about (PENDING_CANCEL_TTL_MS).
+  //
+  // Both reasons are about the HELD-CANCEL mechanism, and BACKLOG-2794 stops
+  // using it here. A press while the leg is pending does not travel to main at
+  // all: it registers a skip on the orchestrator, which drops the leg when the
+  // queue reaches it (`markCancelRequested`). Nothing is running, so there is
+  // nothing to cancel and nothing to hold — and the founder's minutes-long
+  // uncancellable wait, which is what a dashboard sync of
+  // ['contacts', 'emails', 'messages'] leaves the messages row sitting in, ends.
+  //
+  // Held-cancel proof (still the running path): `macOSMessagesImportService.cancel-2748.test.ts`.
+  const cancelAvailable =
+    messagesItem?.status === 'running' || messagesItem?.status === 'pending';
 
   // Derive progress from orchestrator queue item
   const importProgress = isImporting && messagesItem?.phase ? {
@@ -194,6 +188,11 @@ export function MacOSMessagesImportSettings({
     wasForceReimport?: boolean;
     /** BACKLOG-2743: non-fatal notice (e.g. attachments skipped for disk space). */
     warning?: string;
+    /**
+     * BACKLOG-2794: the request met an import already running and joined it.
+     * Not a success and not a failure — no counts here mean anything.
+     */
+    coalesced?: boolean;
   } | null>(null);
   const [importStatus, setImportStatus] = useState<{
     messageCount?: number;
@@ -217,7 +216,9 @@ export function MacOSMessagesImportSettings({
   const [lookbackMonths, setLookbackMonths] = useState<number | null>(
     DEFAULT_LOOKBACK_MONTHS
   );
-  const [maxMessages, setMaxMessages] = useState<number | null>(50000);
+  const [maxMessages, setMaxMessages] = useState<number | null>(
+    DEFAULT_MAX_MESSAGES
+  );
 
   // BACKLOG-2286: Effective (audit-aware) import window for a truthful label.
   // Post-BACKLOG-2276 the real import lower bound is the EARLIER of the lookback
@@ -546,21 +547,13 @@ export function MacOSMessagesImportSettings({
           // the message cap writes `{ maxMessages: N }` and the preferences
           // deep-merge leaves `lookbackMonths` absent. Only an explicit `null`
           // (what this dropdown writes for "All time") means unbounded.
-          setLookbackMonths(
-            messageImport.filters.lookbackMonths === undefined
-              ? DEFAULT_LOOKBACK_MONTHS
-              : messageImport.filters.lookbackMonths
-          );
+          setLookbackMonths(resolveStoredLookbackMonths(messageImport.filters));
           // BACKLOG-2749: an ABSENT key is "no preference", not "Unlimited" —
           // the same distinction BACKLOG-2561 drew for the lookback and
           // BACKLOG-2733 drew inside the resolver. `?? null` showed
           // "Unlimited" in this dropdown while the resolver capped the run at
           // 50,000. Only an explicit `null` means Unlimited.
-          setMaxMessages(
-            messageImport.filters.maxMessages === undefined
-              ? DEFAULT_MAX_MESSAGES
-              : messageImport.filters.maxMessages
-          );
+          setMaxMessages(resolveStoredMaxMessages(messageImport.filters));
           // BACKLOG-2743: absent preference means "import attachments" (prior behavior).
           setSkipAttachments(messageImport.filters.skipAttachments === true);
         }
@@ -800,12 +793,19 @@ export function MacOSMessagesImportSettings({
    * so the panel says nothing rather than something false. See `handleImport`.
    *
    * This exists because the completion surface got the arithmetic wrong. The
-   * orchestrator computes `window - imported-this-run`, which counted the
+   * orchestrator computed `window - imported-this-run`, which counted the
    * founder's 14,042 already-present messages as EXCLUDED and told him 659,619
    * messages had been left out when the true figure was 645,576 (`a14b3a82`).
    * A delta import does not re-download what it already has, so what a run
    * FETCHES and what the store COVERS are different numbers, and only the
    * second one belongs in a sentence about exclusion.
+   *
+   * BACKLOG-2794 fixed that subtraction at the producer — the import result now
+   * carries `coveredCount` and the orchestrator subtracts it — so the two
+   * surfaces no longer disagree. This ref stays because it answers a different
+   * question: what the run was CONSENTED to, captured before it started, which
+   * is what this panel promises and what no post-hoc re-derivation can recover
+   * once the window has moved.
    */
   const runCoverageRef = useRef<{
     windowCount: number;
@@ -1180,6 +1180,28 @@ export function MacOSMessagesImportSettings({
 
   // Watch orchestrator queue for messages completion to update result/status
   useEffect(() => {
+    // BACKLOG-2794: the leg joined an import already in flight, so this run has
+    // no outcome of its own. Reported as its own line rather than through the
+    // success branch, which would say "Successfully imported 0 new messages"
+    // about a run that never started — and WITHOUT `lastCoverage`, because the
+    // coverage this panel captured describes a run that did not happen. The
+    // import the user asked for IS running; whoever owns it reports it.
+    if (messagesItem?.status === 'complete' && messagesItem.coalesced) {
+      setResultDismissed(false);
+      setLastCoverage(null);
+      setLastResult({ success: true, messagesImported: 0, coalesced: true });
+      return;
+    }
+    // BACKLOG-2794: cancelled while still queued — the leg never ran, so there
+    // is nothing to report but the cancel itself. It reuses the 2748 cancelled
+    // copy with a zero count, which already reads correctly for this case
+    // ("Import cancelled." with no count clause).
+    if (messagesItem?.status === 'skipped') {
+      setResultDismissed(false);
+      setLastCoverage(null);
+      setLastResult({ success: true, messagesImported: 0, cancelled: true });
+      return;
+    }
     if (messagesItem?.status === 'complete') {
       loadImportStatus();
       loadEffectiveWindow();
@@ -1241,7 +1263,7 @@ export function MacOSMessagesImportSettings({
         error: safeErrorMessage(messagesItem.error, 'Import failed'),
       });
     }
-  }, [messagesItem?.status, messagesItem?.error, messagesItem?.warning, messagesItem?.importedCount, messagesItem?.cancelled, messagesItem?.rolledBack]);
+  }, [messagesItem?.status, messagesItem?.error, messagesItem?.warning, messagesItem?.importedCount, messagesItem?.cancelled, messagesItem?.rolledBack, messagesItem?.coalesced]);
 
   // BACKLOG-2748: the "Cancelling..." state is cleared when the run leaves
   // 'running' — otherwise the NEXT import would render its Cancel button
@@ -1266,7 +1288,27 @@ export function MacOSMessagesImportSettings({
    * costs nothing and means the UI can never show "Cancelling…" for a cancel
    * that was never dispatched.
    */
+  /*
+   * BACKLOG-2794: which press this is — a running import to stop, or a queued
+   * one to drop — is read from LIVE orchestrator state, not from `messagesItem`.
+   *
+   * `messagesItem` comes from a subscription and is one render behind. The
+   * pending→running flip happens inside the orchestrator's loop with no await
+   * between the two states, so a press landing on that boundary would be
+   * classified from a status that is already false: the panel would decide
+   * "pending, no IPC needed" for an import that had just started, and the
+   * button would do nothing — the precise failure this item exists to end.
+   *
+   * The IPC is sent ONLY for a running import. `requestCancellation()` arms a
+   * cancel for the next run to start when nothing is importing (BACKLOG-2776),
+   * so sending it on a pending press would leave a live cancel behind for an
+   * unrelated import seconds later.
+   */
   const handleCancelImport = useCallback(() => {
+    if (getQueueItem('messages')?.status === 'pending') {
+      markCancelRequested('messages');
+      return;
+    }
     try {
       window.api.messages.cancelImport();
     } catch (err) {
@@ -1274,7 +1316,7 @@ export function MacOSMessagesImportSettings({
       return;
     }
     markCancelRequested('messages');
-  }, [markCancelRequested]);
+  }, [getQueueItem, markCancelRequested]);
 
 
   // Only render on macOS
@@ -1552,14 +1594,21 @@ export function MacOSMessagesImportSettings({
         <div
           data-testid="import-result"
           className={`relative mb-3 p-2 pr-7 rounded text-xs ${
-            lastResult.cancelled
+            lastResult.cancelled || lastResult.coalesced
               ? "bg-yellow-50 text-yellow-700 border border-yellow-200"
               : lastResult.success
                 ? "bg-green-50 text-green-700 border border-green-200"
                 : "bg-red-50 text-red-700 border border-red-200"
           }`}
         >
-          {lastResult.cancelled ? (
+          {/* BACKLOG-2794: FIRST, ahead of the success branch. A coalesced
+              request carries `success: true` with a zero count — reaching the
+              branch below would print "Successfully imported 0 new messages"
+              for a click whose real outcome is "the import you asked for is
+              already running". */}
+          {lastResult.coalesced ? (
+            <>An import is already running — this request joined it.</>
+          ) : lastResult.cancelled ? (
             // BACKLOG-2775: a cancelled FORCE re-import kept nothing and lost
             // nothing — its clear and its re-import shared one transaction that
             // rolled back. Reusing the delta wording here would read as
@@ -1611,13 +1660,16 @@ export function MacOSMessagesImportSettings({
               the coverage is legitimately the larger. Each is now named by the
               clause it sits in.
 
-              The exclusion sentence that used to follow is gone. It is worth
-              knowing why the orchestrator's version of it was wrong, because
-              its clause is still stripped from the warning channel on arrival
-              (`stripStaleCapClause`): it computed window MINUS
-              imported-this-run, which counts already-present messages as
-              excluded — 708,400 − 48,781 = 659,619 on the founder's restore,
-              where the honest figure was 645,576. */}
+              The exclusion sentence that used to follow is gone, by founder
+              decision (`fa2112c8`) — not because it was wrong. It also WAS
+              wrong, and that has since been fixed at the producer
+              (BACKLOG-2794): the orchestrator computed window MINUS
+              imported-this-run, counting already-present messages as excluded
+              (708,400 − 48,781 = 659,619 on the founder's restore, where the
+              honest figure was 645,576), and now subtracts the admitted count
+              the import result carries. The clause is still stripped from the
+              warning channel on arrival (`stripStaleCapClause`) because this
+              strip does not carry that sentence at all. */}
           {lastResult.success && !lastResult.cancelled && lastCoverage && (
             <span data-testid="import-coverage" className="text-gray-700">
               {" "}

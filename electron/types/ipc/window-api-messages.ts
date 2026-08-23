@@ -194,6 +194,20 @@ export interface WindowApiMessages {
     error?: string;
     totalAvailable?: number;
     wasCapped?: boolean;
+    /**
+     * BACKLOG-2794: what the run's plan ADMITS — protected messages in full
+     * plus the newest N of the remainder. `totalAvailable - coveredCount` is
+     * what the import limit left out; `totalAvailable - messagesImported` is
+     * not, because a delta import does not re-fetch what the store already has.
+     * The founder's restore reported 659,619 excluded where 645,576 were.
+     */
+    coveredCount?: number;
+    /**
+     * BACKLOG-2794: refused because another import owns the service. Nothing
+     * ran and nothing failed — the caller coalesces on this flag instead of
+     * turning the refusal into a red error row.
+     */
+    alreadyInProgress?: boolean;
     /** BACKLOG-2743: pre-flight free-space check refused the attachment copy */
     attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
     /** BACKLOG-2743: user chose to import without attachments */

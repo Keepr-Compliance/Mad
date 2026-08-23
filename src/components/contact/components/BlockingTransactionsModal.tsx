@@ -1,6 +1,9 @@
 import React from "react";
 import { ResponsiveModal, MODAL_PANEL } from "../../common/ResponsiveModal";
 import { TransactionWithRoles } from "../types";
+// BACKLOG-2805: display label only — the ternary still branches on the
+// stored enum, and its existing fall-through is unchanged.
+import { TRANSACTION_TYPE_LABELS } from "../../../constants/transactionTypes";
 
 interface BlockingTransactionsModalProps {
   transactions: TransactionWithRoles[];
@@ -148,8 +151,8 @@ function BlockingTransactionsModal({
                             }`}
                           >
                             {txn.transaction_type === "purchase"
-                              ? "Purchase"
-                              : "Sale"}
+                              ? TRANSACTION_TYPE_LABELS.purchase
+                              : TRANSACTION_TYPE_LABELS.sale}
                           </span>
                         </div>
                       )}

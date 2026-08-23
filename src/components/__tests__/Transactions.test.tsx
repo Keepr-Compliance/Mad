@@ -399,8 +399,12 @@ describe("Transactions", () => {
         expect(screen.getByText("123 Main Street")).toBeInTheDocument();
       });
 
-      // Mobile card shows transaction type (e.g. "Purchase")
-      expect(screen.getAllByText("Purchase").length).toBeGreaterThan(0);
+      // Mobile card shows transaction type. BACKLOG-2805: the buy-side label
+      // is now "Listing/Purchase" — exact-text, so this goes red if the card
+      // is ever reverted to the bare word.
+      expect(
+        screen.getAllByText("Listing/Purchase").length,
+      ).toBeGreaterThan(0);
     });
 
     it("should display email count on mobile card", async () => {

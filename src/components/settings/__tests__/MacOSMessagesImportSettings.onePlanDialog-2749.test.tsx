@@ -560,10 +560,26 @@ describe("BACKLOG-2749 — no surface says 'up to 50,000' while another says 62,
   });
 
   it("the panel indicator states the coverage, not the cap, when history is protected", async () => {
+    /*
+     * BACKLOG-2802 — the anchor is the RESOLVED text, deliberately.
+     *
+     * `hasProtectedHistory` is false until the estimate resolves, so this one
+     * `<p>` renders "…, up to 50,000 messages" first and "…, covering 62,824
+     * messages …" after. Anchoring on /Auto-importing messages back to/ matches
+     * BOTH, so `findByText` settled on the fallback and the assertions below
+     * then read the DOM synchronously — a race the test won or lost depending
+     * on whether the mocked estimate had resolved yet. It lost on PR #2348's CI
+     * (run 32608931455) while a sibling run on the same head passed.
+     *
+     * Waiting for /covering 62,824 messages/ waits for the state under test.
+     * The identity assertion below keeps what the old anchor established: that
+     * the coverage phrasing is on the auto-import indicator itself, not merely
+     * somewhere on the panel.
+     */
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
 
-    const indicator = await screen.findByText(/Auto-importing messages back to/);
-    expect(indicator).toHaveTextContent("covering 62,824 messages");
+    const indicator = await screen.findByText(/covering 62,824 messages/);
+    expect(indicator).toHaveTextContent("Auto-importing messages back to");
     expect(indicator).toHaveTextContent("your 50,000 newest plus your deals");
     expect(indicator).not.toHaveTextContent(/up to 50,000/i);
   });
@@ -721,6 +737,41 @@ describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () =>
     expect(panel).not.toHaveTextContent(CORRECT_EXCLUDED.toLocaleString());
     expect(panel).not.toHaveTextContent(/stay outside your import limit/i);
     expect(panel).not.toHaveTextContent(/Adjust in Settings/i);
+  });
+
+  it("the corrected sentence is stripped too — the coupling guard (BACKLOG-2794)", async () => {
+    /*
+     * THE CONTROL THAT PROTECTS THIS STRIP FROM THE PRODUCER'S NEXT EDIT.
+     *
+     * BACKLOG-2794 fixed the orchestrator's arithmetic: the clause it emits now
+     * reads 645,576 (window − admitted), not 659,619 (window − fetched). The
+     * regex is number-agnostic, so that change alone is safe — but it is
+     * SENTENCE-anchored, and the same item considered rewording the clause into
+     * coverage framing. That reword would have passed every other test in this
+     * repository while silently putting an exclusion sentence back on the one
+     * surface the founder cleared of it (`fa2112c8`).
+     *
+     * So the strip is exercised with the string the orchestrator ACTUALLY
+     * emits today, not only with the historical wrong one above. Reword the
+     * producer without moving `stripStaleCapClause`, and this reds.
+     */
+    const { rerender } = renderStrict(
+      <MacOSMessagesImportSettings userId={USER_ID} />
+    );
+    await startCappedRun();
+    await completeRun(
+      rerender,
+      `${CORRECT_EXCLUDED.toLocaleString()} messages excluded by import limit. Adjust in Settings.`
+    );
+
+    const panel = screen.getByTestId("macos-messages-import");
+    expect(panel).not.toHaveTextContent(CORRECT_EXCLUDED.toLocaleString());
+    expect(panel).not.toHaveTextContent(/excluded by import limit/i);
+    expect(panel).not.toHaveTextContent(/Adjust in Settings/i);
+    // The strip still says its own sentence — this is a removal, not a blackout.
+    expect(await screen.findByTestId("import-coverage")).toHaveTextContent(
+      "Your store now covers 62,824 for this period"
+    );
   });
 
   it("the two numbers are labelled so they cannot read as a contradiction", async () => {
