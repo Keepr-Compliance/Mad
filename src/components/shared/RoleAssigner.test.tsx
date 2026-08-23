@@ -159,7 +159,8 @@ describe("RoleAssigner", () => {
       // Should include common roles
       const optionTexts = options.map((o) => o.textContent);
       expect(optionTexts).toContain("Buyer (Client)");
-      expect(optionTexts).toContain("Seller Agent");
+      // BACKLOG-2804: seller_agent renders under the industry term.
+      expect(optionTexts).toContain("Listing Agent");
     });
   });
 
@@ -330,7 +331,7 @@ describe("RoleAssigner", () => {
       const options = within(roleSelect).getAllByRole("option");
       const optionTexts = options.map((o) => o.textContent);
 
-      expect(optionTexts).toContain("Seller Agent");
+      expect(optionTexts).toContain("Listing Agent");
       expect(optionTexts).not.toContain("Buyer Agent");
     });
 
@@ -349,7 +350,10 @@ describe("RoleAssigner", () => {
       const optionTexts = options.map((o) => o.textContent);
 
       expect(optionTexts).toContain("Buyer Agent");
-      expect(optionTexts).not.toContain("Seller Agent");
+      // BACKLOG-2804: must name the LABEL the picker would now render. Left as
+      // "Seller Agent" this assertion passes whatever the picker offers, because
+      // no picker renders that string any more.
+      expect(optionTexts).not.toContain("Listing Agent");
     });
 
     it("should show correct client label for purchase (Buyer)", () => {

@@ -10,6 +10,9 @@ import { sanitizeFileSystemName } from "../utils/fileUtils";
 // BACKLOG-2771: this service no longer decides its own include set.
 import type { ExportPlan } from "./exportPlan";
 import { orderAttachmentComms } from "./exportPlan";
+// BACKLOG-2805: mirrors src/constants/transactionTypes.ts (electron cannot
+// import from src/). Keep the two in step.
+import { getTransactionTypeLabel } from "../constants/transactionTypeLabels";
 
 /**
  * Enhanced Export Service
@@ -415,7 +418,9 @@ class EnhancedExportService {
     lines.push("========================================");
     lines.push("");
     lines.push(`Property Address: ${transaction.property_address}`);
-    lines.push(`Transaction Type: ${transaction.transaction_type || "N/A"}`);
+    // BACKLOG-2805: was `${transaction.transaction_type || "N/A"}`, which
+    // printed the raw lowercase enum into the exported document.
+    lines.push(`Transaction Type: ${getTransactionTypeLabel(transaction.transaction_type)}`);
     lines.push(`Status: ${transaction.status || "N/A"}`);
     lines.push("");
     lines.push(
