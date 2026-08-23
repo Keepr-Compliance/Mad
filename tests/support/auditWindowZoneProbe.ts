@@ -41,7 +41,10 @@ const report = {
 };
 
 for (const day of DAYS) {
-  const bound = auditWindowEnd(day)!;
+  const bound = auditWindowEnd(day);
+  if (!bound || isNaN(bound.getTime())) {
+    throw new Error(`auditWindowEnd("${day}") produced no usable instant`);
+  }
   report.bounds[day] = bound.toISOString();
   report.boundLocalParts[day] = [
     bound.getFullYear(),
