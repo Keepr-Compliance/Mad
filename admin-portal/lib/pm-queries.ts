@@ -6,6 +6,7 @@
  */
 
 import { createClient } from '@/lib/supabase/client';
+import { fetchAllPages, type FetchAllResult } from './pm-paging';
 import type {
   ItemListParams,
   ItemListResponse,
@@ -62,6 +63,25 @@ export async function listItems(params: ItemListParams): Promise<ItemListRespons
   });
   if (error) throw error;
   return validateItemListResponse(data);
+}
+
+/**
+ * List EVERY item matching `params`, paging past the server-side clamp.
+ *
+ * BACKLOG-2786: `pm_list_items` caps its page size at 200
+ * (`LEAST(COALESCE(p_page_size, 50), 200)`) and returns the truncated page
+ * with no error, so a caller that asks for 500 receives 200 and cannot tell.
+ * Use this wherever a view needs the whole set, and surface `total_count`
+ * whenever `complete` is false so a shortfall is visible rather than silent.
+ */
+export async function listAllItems(
+  params: Omit<ItemListParams, 'page' | 'page_size'>,
+  options?: { maxPages?: number }
+): Promise<FetchAllResult<PmBacklogItem>> {
+  return fetchAllPages<PmBacklogItem>(
+    (page, pageSize) => listItems({ ...params, page, page_size: pageSize }),
+    options
+  );
 }
 
 // ---------------------------------------------------------------------------
