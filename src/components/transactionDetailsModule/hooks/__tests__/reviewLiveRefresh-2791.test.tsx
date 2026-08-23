@@ -207,9 +207,21 @@ describe("a link-only sweep is announced too (N = L + R)", () => {
  * badge now reads it the same way rather than re-deriving the rule at the call
  * site.
  *
- * CONTROLS RUN (MEASURED):
+ * CONTROLS RUN (MEASURED, `-t threadCount`):
  *  1. `threadCount: state.count` (i.e. count items)        -> RED, 1 of 2 tests.
- *  2. `threadCount: 0`                                     -> RED, 2 of 2 tests.
+ *  2. `threadCount: 0`                                     -> RED, 1 of 2 tests.
+ *     Only the same-thread test can see either mutation; the empty-queue test
+ *     is zero in both units by construction and stays green. That is not slack
+ *     — it is the assertion that the badge and the Complete gate agree AT ZERO,
+ *     which is the property that lets them count in different units at all.
+ *
+ * WHAT IS STILL NOT PINNED, STATED PLAINLY. This covers the DERIVATION, not the
+ * one-line prop read in TransactionDetails' JSX. Reverting
+ * `reviewCount={reviewQueue.threadCount}` to `reviewQueue.count` was measured
+ * against all 1135 tests of the transaction-details tree: still GREEN. Pinning
+ * it needs a full TransactionDetails render harness (none of the seven existing
+ * ones mock the review IPC), which is more machinery than the line is worth —
+ * so it is protected by review, and this note, rather than by a test.
  */
 describe("threadCount — the badge counts threads, the gate counts items", () => {
   const inThread = (id: string, threadId: string) => {
