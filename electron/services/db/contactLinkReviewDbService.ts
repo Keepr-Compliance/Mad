@@ -108,6 +108,20 @@ export type LinkProposalReason =
   /** Exactly two, cross-family, but each already belongs to a DIFFERENT saved
    *  contact. Joining them is a merge (BACKLOG-2370), not a link. */
   | "name_two_saved_contacts"
+  // --- the tier gate (BACKLOG-2668) ---
+  /**
+   * The pair PASSED the unique-name rule — one record on each side, nobody else
+   * anywhere, no generational suffix — and was not linked anyway, because
+   * automatic linking is not turned on for this user.
+   *
+   * The only reason in this union that is not a doubt about the evidence. Every
+   * other name reason says "the rule could not tell"; this one says "the rule
+   * was sure and is not allowed to act on it". That is a different sentence to
+   * the user and has to stay a different value: folding it into
+   * `name_not_unique` would tell them their records are ambiguous when the
+   * entire basis of the question is that they are not.
+   */
+  | "name_unique_suggestion"
   // --- the linker's NAME VETO (BACKLOG-2619 / BACKLOG-2624) ---
   //
   // Not the rule above. Those four are reasons a NAME MATCH was refused; these

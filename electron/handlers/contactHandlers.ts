@@ -579,15 +579,23 @@ function runOpportunisticLinking(userId: string): number {
     // first cannot tell them apart. Also the reason `barredByFreeze > 0` joins
     // the emit condition — a pass whose ONLY outcome was a freeze refusal is
     // exactly the pass worth a line, and it would otherwise be silent.
+    // BACKLOG-2668 — `withheldByMode` joins the emit condition on the same
+    // argument the freeze count joined it on: a pass whose ONLY outcome was
+    // "the rule was sure and automatic linking is off" is exactly the pass
+    // worth a line, and it would otherwise be indistinguishable from a pass
+    // that found nothing. On the basic tier the pass does not run, every count
+    // is 0, and this stays silent — which is the correct report.
     if (
       nameSummary.autoLinked > 0 ||
       nameSummary.asked > 0 ||
-      nameSummary.barredByFreeze > 0
+      nameSummary.barredByFreeze > 0 ||
+      nameSummary.withheldByMode > 0
     ) {
       logService.info(
         `[Contacts] unique-name pass: auto-linked ${nameSummary.autoLinked}, ` +
           `asked ${nameSummary.asked}, barred by a previous answer ${nameSummary.barredByVerdict}, ` +
-          `withheld from a contact on an exported audit ${nameSummary.barredByFreeze}`,
+          `withheld from a contact on an exported audit ${nameSummary.barredByFreeze}, ` +
+          `offered instead of linked because automatic linking is off ${nameSummary.withheldByMode}`,
         "Contacts",
       );
     }

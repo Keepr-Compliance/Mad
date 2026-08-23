@@ -44,6 +44,20 @@ import {
 
 /** Minimal shapes for the tables this feature reads but does not own. */
 const SURROUNDING_TABLES = `
+  -- BACKLOG-2668. The tier gate reads exactly one column of this table, so the
+  -- shape is that column plus the primary key.
+  --
+  -- The CHECK is REAL, transcribed from schema.sql:33, for the reason the
+  -- contacts CHECK below states: without it the fixture accepts any string, and
+  -- a suite proving "an unrecognised tier resolves to off" would be proving it
+  -- against a value production's own constraint would have REJECTED. With the
+  -- CHECK in place that case has to be built the way it can actually occur —
+  -- a NULL, or no row at all — which is what the boundary sweep does.
+  CREATE TABLE users (
+    id TEXT PRIMARY KEY,
+    subscription_tier TEXT DEFAULT 'free' CHECK (subscription_tier IN ('free', 'pro', 'enterprise'))
+  );
+
   CREATE TABLE contacts (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

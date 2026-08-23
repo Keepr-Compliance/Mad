@@ -288,6 +288,18 @@ beforeEach(() => {
   mockDb = openTestDb();
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   mockDb.exec(EXTRA_SHADOW_COLUMNS);
+  // BACKLOG-2668 — the unique-name rule is gated by tier now, and these are
+  // WHOLE-PASS suites: they drive `runOpportunisticLinking` through the real
+  // handlers, so the gate is live in them. Without a `users` row the pass
+  // resolves to the basic tier, the rule does not run, and every proposal
+  // assertion below reads an empty queue — which is the founder's ruling
+  // working, not a broken fixture.
+  //
+  // Seeded as `pro` so these suites keep testing what they were written to
+  // test: which pairs the pass ASKS about. `pro` resolves to `suggest`, where
+  // the ask band is unchanged. The tier itself is asserted in
+  // `contactNameAutoLink.tierGate-2668.test.ts`, not here.
+  mockDb.prepare("INSERT INTO users (id, subscription_tier) VALUES (?, 'pro')").run(USER);
   macosEnabled = true;
   iphoneEnabled = true;
   send.mockClear();

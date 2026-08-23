@@ -54,10 +54,36 @@ jest.mock("../logService", () => {
 import {
   normalizeNameKey,
   evaluateNameGroup,
-  runUniqueNameAutoLink,
+  runUniqueNameAutoLinkForMode,
   collectNameGroups,
   type NameGroup,
+  type NameAutoLinkSummary,
+  type AskPair,
 } from "../contactNameAutoLink";
+import type { LinkProposalReason } from "../db/contactLinkReviewDbService";
+
+/**
+ * BACKLOG-2668 — this suite drives the pass with the mode already decided.
+ *
+ * Every test below is about the RULE: which names group, which pairs qualify,
+ * what a suffix does. None of them is about which tier the user is on. Reaching
+ * them through the public `runUniqueNameAutoLink` would mean seeding a `users`
+ * row in each one to say something none of them is asserting — and would make
+ * the whole file go red the day the tier mapping changes, for a reason that has
+ * nothing to do with names.
+ *
+ * The tier itself is asserted through the public entry, on real `users` rows,
+ * in `contactNameAutoLink.tierGate-2668.test.ts`.
+ */
+function runInAutoMode(
+  userId: string,
+  onAsk?: (
+    pair: AskPair,
+    ctx: { reason: LinkProposalReason; holderCount: number; displayName: string },
+  ) => void,
+): NameAutoLinkSummary {
+  return runUniqueNameAutoLinkForMode("auto", userId, onAsk);
+}
 import { createLink, getLinksForContact } from "../db/contactSourceLinkDbService";
 import { recordVerdict } from "../db/contactLinkReviewDbService";
 
@@ -298,7 +324,7 @@ function linkSet(contactId: string): string[] {
     .sort();
 }
 
-describe("runUniqueNameAutoLink", () => {
+describe("runUniqueNameAutoLinkForMode — the rule itself, driven in `auto`", () => {
   beforeEach(() => {
     mockDb = new RealDatabase(":memory:");
     mockDb.exec(CONTACT_IDENTITY_SCHEMA);
@@ -326,7 +352,7 @@ describe("runUniqueNameAutoLink", () => {
   it("auto-links the exactly-two cross-family case, recorded as unique_name", () => {
     seedCleanCrossFamilyPair();
 
-    const summary = runUniqueNameAutoLink(USER);
+    const summary = runInAutoMode(USER);
 
     expect(summary.actions).toEqual([
       { sourceType: "outlook", sourceRecordId: "out-1", contactId: "c-a" },
@@ -353,7 +379,7 @@ describe("runUniqueNameAutoLink", () => {
     });
     addExternal("out-jr", "John Smith Jr", "outlook");
 
-    const summary = runUniqueNameAutoLink(USER);
+    const summary = runInAutoMode(USER);
 
     expect(summary.actions).toEqual([]);
     expect(linkSet("c-dad")).toEqual(["macos|mac-dad|source_id"]);
@@ -373,7 +399,7 @@ describe("runUniqueNameAutoLink", () => {
     });
     addExternal("out-jr", "John Smith Jr", "outlook");
 
-    const summary = runUniqueNameAutoLink(USER);
+    const summary = runInAutoMode(USER);
 
     expect(summary.actions).toEqual([]);
     expect(linkSet("c-jr")).toEqual(["macos|mac-jr|source_id"]);
@@ -394,7 +420,7 @@ describe("runUniqueNameAutoLink", () => {
     });
     addExternal("out-michael", "Michael Johnson", "outlook");
 
-    const summary = runUniqueNameAutoLink(USER);
+    const summary = runInAutoMode(USER);
 
     expect(summary.actions).toEqual([]);
     expect(linkSet("c-mike")).toEqual(["macos|mac-mike|source_id"]);
@@ -412,7 +438,7 @@ describe("runUniqueNameAutoLink", () => {
     });
     addExternal("out-john", "John A. Smith", "outlook");
 
-    expect(runUniqueNameAutoLink(USER).actions).toEqual([]);
+    expect(runInAutoMode(USER).actions).toEqual([]);
     expect(linkSet("c-john")).toEqual(["macos|mac-john|source_id"]);
   });
 
@@ -420,7 +446,7 @@ describe("runUniqueNameAutoLink", () => {
     seedCleanCrossFamilyPair("Mike Johnson");
     addExternal("goog-1", "Mike Johnson", "google_contacts");
 
-    const summary = runUniqueNameAutoLink(USER);
+    const summary = runInAutoMode(USER);
 
     expect(summary.actions).toEqual([]);
     expect(linkSet("c-a")).toEqual(["macos|mac-1|source_id"]);
@@ -442,7 +468,7 @@ describe("runUniqueNameAutoLink", () => {
       matchMethod: "source_id",
     });
 
-    const summary = runUniqueNameAutoLink(USER);
+    const summary = runInAutoMode(USER);
 
     expect(summary.actions).toEqual([]);
     expect(linkSet("c-a")).toEqual(["macos|mac-1|source_id"]);
@@ -455,7 +481,7 @@ describe("runUniqueNameAutoLink", () => {
     seedCleanCrossFamilyPair("Mike Johnson");
     addContact("c-other", "Mike Johnson"); // a different, unlinked person
 
-    const summary = runUniqueNameAutoLink(USER);
+    const summary = runInAutoMode(USER);
 
     expect(summary.actions).toEqual([]);
     expect(linkSet("c-a")).toEqual(["macos|mac-1|source_id"]);
@@ -468,7 +494,7 @@ describe("runUniqueNameAutoLink", () => {
     // A removed contact is not a person competing for the name; the auto-link
     // still fires. (Negative control: drop the `removed_at IS NULL` filter from
     // collectNameGroups and this goes red with actions === [].)
-    expect(runUniqueNameAutoLink(USER).actions).toEqual([
+    expect(runInAutoMode(USER).actions).toEqual([
       { sourceType: "outlook", sourceRecordId: "out-1", contactId: "c-a" },
     ]);
   });
@@ -484,7 +510,7 @@ describe("runUniqueNameAutoLink", () => {
       decidedBy: "review_queue",
     });
 
-    const summary = runUniqueNameAutoLink(USER);
+    const summary = runInAutoMode(USER);
 
     expect(summary.actions).toEqual([]);
     expect(summary.barredByVerdict).toBe(1);
@@ -493,8 +519,8 @@ describe("runUniqueNameAutoLink", () => {
 
   it("is idempotent — a second pass adds nothing", () => {
     seedCleanCrossFamilyPair();
-    runUniqueNameAutoLink(USER);
-    const second = runUniqueNameAutoLink(USER);
+    runInAutoMode(USER);
+    const second = runInAutoMode(USER);
 
     expect(second.actions).toEqual([]);
     expect(second.alreadyLinked).toBe(1);
@@ -524,7 +550,7 @@ describe("runUniqueNameAutoLink", () => {
       matchMethod: "source_id",
     });
 
-    const summary = runUniqueNameAutoLink(USER);
+    const summary = runInAutoMode(USER);
     expect(summary.groups).toBe(0);
     expect(linkSet("c-m")).toEqual(["macos|mac-m|source_id"]);
   });
