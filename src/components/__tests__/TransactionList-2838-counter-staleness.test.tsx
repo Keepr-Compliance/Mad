@@ -22,14 +22,24 @@
  *
  * Controls run against these (see the PR body): removing either subscription
  * from useTransactionList reds the matching test, and they red independently.
+ *
+ * WHY THIS SUITE DRIVES TransactionList AND NOT Transactions. The fix lives in
+ * the shared `useTransactionList` hook, so either screen would exercise it
+ * today — but `Transactions.tsx` has no import anywhere outside tests, and
+ * `TransactionList` is the screen the founder actually reaches
+ * (`appCore/AppModals.tsx:131`). Pinning the fix through the dead screen would
+ * repeat the exact mistake this PR reports: a defect guarded by code no user
+ * runs. It would also stay green if TransactionList ever stopped using the
+ * hook, which is the one regression this suite exists to catch. Retargeted
+ * rather than duplicated — the hook is shared, so a second suite on the dead
+ * screen would add maintenance and no signal.
  */
 
 import React from "react";
 import { render as rtlRender, screen, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { NotificationProvider } from "../../contexts/NotificationContext";
-import Transactions from "../Transactions";
-import { PlatformProvider } from "../../contexts/PlatformContext";
+import TransactionList from "../TransactionList";
 import type { Transaction } from "../../../electron/types/models";
 
 const render = (
@@ -71,7 +81,9 @@ jest.mock("../../contexts/LicenseContext", () => ({
   }),
 }));
 
-jest.mock("../../hooks/useFeatureGate", () => ({
+// TASK-2159: LicenseGate reads through useFeatureGate; the existing
+// TransactionList suites mock it via the "@/" alias, matched here.
+jest.mock("@/hooks/useFeatureGate", () => ({
   useFeatureGate: () => ({
     isAllowed: () => true,
     features: {},
@@ -79,10 +91,6 @@ jest.mock("../../hooks/useFeatureGate", () => ({
     hasInitialized: true,
     refresh: jest.fn(),
   }),
-}));
-
-jest.mock("../../hooks/useSubmissionSync", () => ({
-  useSubmissionSync: () => ({ isSyncing: false, lastSync: null, syncNow: jest.fn() }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -161,9 +169,7 @@ describe("BACKLOG-2838: the card's counters refresh in place", () => {
 
   const renderList = () =>
     render(
-      <PlatformProvider>
-        <Transactions userId={USER_ID} provider="google" onClose={jest.fn()} />
-      </PlatformProvider>,
+      <TransactionList userId={USER_ID} provider="google" onClose={jest.fn()} />,
     );
 
   /** Renders with 3 emails / 7 text threads, then serves 5 / 9 on every reread. */

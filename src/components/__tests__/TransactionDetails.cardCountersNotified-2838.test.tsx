@@ -103,9 +103,17 @@ jest.mock("../transactionDetailsModule/components/TransactionEmailsTab", () => (
 }));
 jest.mock("../transactionDetailsModule/components/TransactionMessagesTab", () => ({
   TransactionMessagesTab: (props: any) => (
-    <button data-testid="fire-messages-changed" onClick={() => props.onMessagesChanged?.()}>
-      attach text
-    </button>
+    <div>
+      <button data-testid="fire-messages-changed" onClick={() => props.onMessagesChanged?.()}>
+        attach text
+      </button>
+      <button
+        data-testid="fire-messages-restore-complete"
+        onClick={() => props.onRestoreComplete?.()}
+      >
+        restore text
+      </button>
+    </div>
   ),
 }));
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -226,6 +234,26 @@ describe("BACKLOG-2838 Half B: attach and unlink tell the list its counters move
 
     await userEvent.click(screen.getByText("Emails"));
     await userEvent.click(await screen.findByTestId("fire-restore-complete"));
+
+    await waitFor(() => expect(onTransactionUpdated).toHaveBeenCalled());
+  });
+
+  /**
+   * The fifth completion point, and the one that had no control.
+   *
+   * SR review deleted `onTransactionUpdated?.()` from
+   * handleRefreshMessagesSilently and NOTHING went red across all nine
+   * TransactionDetails suites — so the PR's claim of five pinned points was
+   * true of four. A restored conversation returns to the text thread count
+   * exactly as a restored email returns to the email count; the two paths are
+   * mirrored in the source and are now mirrored in their controls.
+   */
+  it("notifies after a removed CONVERSATION is restored (the text mirror)", async () => {
+    mount();
+    await settleMount();
+
+    await userEvent.click(screen.getByText("Texts"));
+    await userEvent.click(await screen.findByTestId("fire-messages-restore-complete"));
 
     await waitFor(() => expect(onTransactionUpdated).toHaveBeenCalled());
   });
