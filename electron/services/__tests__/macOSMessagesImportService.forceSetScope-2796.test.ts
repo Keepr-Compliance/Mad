@@ -468,13 +468,28 @@ describe("BACKLOG-2796 — what a macOS force re-import is allowed to replace", 
     // THE SECOND HALF OF THE FIX. An iPhone-synced row can hold a GUID that is
     // ALSO in this Mac's chat.db — same Apple id space — and once such a row
     // survives a force re-import, a rebuild that deduplicates only against its
-    // own staging table stages that GUID again. The swap's plain INSERT then
-    // hits `idx_messages_user_external_id` and the ENTIRE force re-import fails,
-    // for exactly the users who have both an iPhone sync and a Mac.
+    // own staging table stages that GUID again.
     //
-    // MUTATION: point the dedup read in `storeMessages` back at the staging
-    // table alone and this goes red — `result.success` false, the swap rolled
-    // back on a UNIQUE constraint.
+    // MUTATIONS, and they are TWO STEPS — measured, because an earlier version
+    // of this comment claimed the second one's result for the first:
+    //
+    //   1. Point the dedup read in `storeMessages` back at the staging table
+    //      alone, leaving the rest of this PR in place: RED here, but on the
+    //      LAST assertion only — `result.success` stays TRUE. The swap's yield
+    //      filter catches the collision, so the store ends up correct and the
+    //      only trace is a report claiming the row "arrived from another source
+    //      mid-run" about one that had been there all along. That is why this
+    //      test asserts the yield count and not just the rows: the two designs
+    //      leave an identical table behind.
+    //   2. Remove the yield filter from `insertFromStaging` as well — which is
+    //      the shape of the code BEFORE this PR — and it goes red on
+    //      `result.success` being false: the plain INSERT hits
+    //      `idx_messages_user_external_id`, the swap rolls back, and the whole
+    //      force re-import fails for exactly the users who have both an iPhone
+    //      sync and a Mac.
+    //
+    // So the outright break belongs to pre-PR code. The union alone is what
+    // keeps this from being a rebuild that stages work it will throw away.
     const sharedGuid = "msg-guid-7";
     seedForeignProvenanceRows();
     mockDb

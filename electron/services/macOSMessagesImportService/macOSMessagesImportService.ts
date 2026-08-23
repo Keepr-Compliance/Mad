@@ -1142,10 +1142,24 @@ class MacOSMessagesImportService {
     // It is not a cosmetic difference. iPhone-synced rows carry Apple GUIDs in
     // `external_id`, the SAME id space chat.db draws from
     // (`iPhoneSyncStorageService` stores `externalId: msg.guid`). Read staging
-    // alone and the rebuild happily stages a GUID a surviving row still holds;
-    // the swap's plain INSERT then hits `idx_messages_user_external_id` — UNIQUE
-    // on `(user_id, external_id)` — and the whole force re-import fails for
-    // exactly the users who have both an iPhone sync and a Mac.
+    // alone and the rebuild happily stages a GUID a surviving row still holds.
+    //
+    // WHAT THAT COSTS, at the strength it was measured — two steps, because the
+    // damage depends on what else is in place. With `insertFromStaging`'s yield
+    // filter present (it is), the swap stands the duplicate down and the store
+    // still ends up correct: the cost is a rebuild that extracts text and copies
+    // attachments for messages it will discard, and a log line reporting them as
+    // having "arrived from another source mid-run" when they had been in the
+    // store all along. Take the yield filter away too — the shape of this code
+    // before BACKLOG-2796 — and the swap's plain INSERT hits
+    // `idx_messages_user_external_id` (UNIQUE on `(user_id, external_id)`), rolls
+    // back, and the whole force re-import fails for exactly the users who have
+    // both an iPhone sync and a Mac.
+    //
+    // Both steps are pinned by `macOSMessagesImportService.forceSetScope-2796`,
+    // which asserts the yield COUNT and not only the resulting rows — the two
+    // designs leave an identical table behind, so rows alone cannot tell them
+    // apart.
     //
     // `user_id` is carried through the union and filtered OUTSIDE it, not left
     // to `SURVIVING_MESSAGES`: that predicate is "not in the force set", which
