@@ -307,7 +307,44 @@ export function getReviewState(transactionId: string): ReviewState {
     display: emailDisplay(r.email_id),
   }));
 
-  const items = [...pending, ...legacy].sort((a, b) =>
+  // DEDUP ACROSS THE TWO STORES (BACKLOG-2831).
+  //
+  // The stores are NOT disjoint, and only one direction is guarded.
+  // `findCandidateEmailsWithMatch` excludes an email that already has a
+  // `communications` row for the deal, so a LEGACY email is never queued. There
+  // is no equivalent exclusion for a PENDING row, so any sweep that LINKS rather
+  // than queues — the Texts tab's "Sync Messages" button, and every
+  // `autoLinkNewMessagesForUser` run after a message import — writes a second,
+  // `address_missing` row for an email already sitting in the queue.
+  //
+  // Both rows carry the SAME `email_id` but different ids (the `pending:` /
+  // `legacy:` prefixes), so nothing keyed on the item id noticed: the card read
+  // "(2 emails)", the thread rendered the same email row twice, and React warned
+  // about two children with the same key. The badge and the Complete gate
+  // counted it twice as well.
+  //
+  // THE PENDING ROW WINS. It is the one carrying the review lifecycle — approve
+  // links it, reject suppresses it — whereas the legacy row is already linked,
+  // so surfacing the legacy twin would offer a Confirm for a decision the
+  // pending row still owns. Approve and reject then resolve BOTH stores (see
+  // resolveLegacyTwins), so the loser cannot outlive the winner.
+  //
+  // KEYED ON `email_id`, NEVER ON `thread_id`. Texts cannot twin at all — the
+  // legacy population is email-only — and two genuinely different emails in one
+  // conversation share a thread_id, so collapsing on that would silently hide a
+  // real needs-review email. Items with no `email_id` (every text) are never
+  // deduped.
+  const seenEmailIds = new Set<string>();
+  const deduped: ReviewItem[] = [];
+  for (const item of [...pending, ...legacy]) {
+    if (item.email_id) {
+      if (seenEmailIds.has(item.email_id)) continue;
+      seenEmailIds.add(item.email_id);
+    }
+    deduped.push(item);
+  }
+
+  const items = deduped.sort((a, b) =>
     (b.display.occurredAt ?? b.found_at).localeCompare(a.display.occurredAt ?? a.found_at),
   );
   return { items, count: items.length };
@@ -806,6 +843,48 @@ function loadItem(id: string): ReviewItem | undefined {
 }
 
 /**
+ * Clear the LEGACY twin of a pending item that has just been decided
+ * (BACKLOG-2831).
+ *
+ * The dedup in getReviewState hides the twin; it does not resolve it. Acting on
+ * the surviving item has to leave BOTH stores settled, or the decided email
+ * simply reappears as its other self on the next read — and, because the count
+ * is what the Complete gate reads, an already-reviewed email keeps the deal
+ * un-completable. That ghost is the reason this is not a cosmetic fix.
+ *
+ * Why each verb needs its own handling, rather than one shared "delete":
+ *
+ *  APPROVE — the legacy row is a real, wanted LINK. `linkEmailToTransaction`
+ *    returns "already_linked" and deliberately leaves `match_reason` alone
+ *    (2319 idempotency, so a re-sync cannot clobber a user_confirmed link back
+ *    to address_missing). Correct in general, wrong here: nothing then promotes
+ *    the row, so it stays `address_missing` and stays in review. Promoting it is
+ *    exactly the existing 2319 confirm.
+ *
+ *  REJECT — "not part of this deal", so the link must GO. The suppression row
+ *    is written once by the caller against `email_id`; deleting the legacy row
+ *    here keeps that to ONE row rather than two, which matters because the
+ *    Removed section renders these and a duplicate would be a second card with
+ *    a second Restore for one email.
+ */
+function resolveLegacyTwins(
+  emailId: string | null,
+  transactionId: string,
+  verb: "approve" | "reject",
+): void {
+  if (!emailId) return;
+  if (verb === "approve") {
+    confirmEmailLinksByEmailIds([emailId], transactionId);
+    return;
+  }
+  dbRun(
+    `DELETE FROM communications
+      WHERE transaction_id = ? AND email_id = ? AND match_reason = 'address_missing'`,
+    [transactionId, emailId],
+  );
+}
+
+/**
  * Approve. For a PENDING item this is what LINKS it, per the normal rules. For a
  * LEGACY item the row is already linked, so approval is the existing 2319
  * confirm (match_reason → user_confirmed). Both leave the item out of
@@ -834,6 +913,11 @@ export async function approveReviewItems(itemIds: string[]): Promise<{ approved:
         0.95,
         "user_confirmed",
       );
+      // BACKLOG-2831: and settle the legacy twin, if this email has one. When it
+      // does, the call above returned "already_linked" without promoting the
+      // existing row, so without this the approved email stays address_missing —
+      // i.e. still in review, still gating Complete.
+      resolveLegacyTwins(item.email_id, item.transaction_id, "approve");
     } else if (item.thread_id) {
       const txn = getTransactionRow(item.transaction_id);
       if (!txn) continue;
@@ -894,6 +978,12 @@ export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: 
       dbRun("DELETE FROM communications WHERE id = ?", [item.rowId]);
     } else {
       dbRun("DELETE FROM pending_review_communications WHERE id = ?", [item.rowId]);
+      // BACKLOG-2831: a rejected pending email may ALSO hold an address_missing
+      // link row, written by a sweep that linked instead of queueing. Rejecting
+      // means "not part of this deal", so that link goes too — otherwise the
+      // rejected email came straight back as its legacy self, still in review
+      // and still in the audit.
+      resolveLegacyTwins(item.email_id, item.transaction_id, "reject");
     }
     rejected++;
   }
