@@ -55,11 +55,17 @@
  *  "removed"    excluded by the user. Shown under "Show removed".
  *
  * NOTE ON STORAGE: a state is NOT the same thing as a table. "suggested" is
- * normally `pending_review_communications`, but the legacy BACKLOG-2319
- * population is physically a `communications` row carrying
- * `match_reason='address_missing'` — linked before this contract existed, yet
- * SUGGESTED by it, and counted as such by `getReviewState()`. Derive a state
- * from `getReviewState()` membership, never from which table a row sits in.
+ * normally a row in the pending-review queue, but the legacy BACKLOG-2319
+ * population is physically a link row flagged with the address-missing
+ * classification — linked before this contract existed, yet SUGGESTED by it, and
+ * counted as such by `getReviewState()`. Derive a state from `getReviewState()`
+ * membership, never from which table a row sits in.
+ *
+ * The stores are named in `reviewStateService`, and deliberately not here: the
+ * singleReadPath-2791 guard greps the source tree so that exactly one file names
+ * them, and it does not distinguish a doc comment from a query. Naming them here
+ * would have meant widening its allow-list, which is the one change that makes
+ * a guard stop guarding.
  */
 export type CommunicationLifecycleState = "suggested" | "linked" | "removed";
 
@@ -106,9 +112,9 @@ export function assertNeverLifecycleState(state: never): never {
  *
  * The single fact that is true of a state REGARDLESS of which store the row is
  * in: the gate reads `getReviewState().count`, which unions both origins, so a
- * legacy store-B item blocks Complete exactly as a `pending_review_communications`
- * row does. Deliberately the only predicate published here — "counts for audit"
- * would have been a half-truth for that same legacy population.
+ * legacy store-B item blocks Complete exactly as a queued one does. Deliberately
+ * the only predicate published here — "counts for audit" would have been a
+ * half-truth for that same legacy population.
  *
  * Pinned against shipped behaviour by `communicationLifecycle-2818.test.ts`,
  * which drives the real operations and checks the real count.
