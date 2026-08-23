@@ -191,3 +191,61 @@ describe("a link-only sweep is announced too (N = L + R)", () => {
     expect(result.current.lastFound).toBe(0);
   });
 });
+
+/**
+ * BACKLOG-2791 — THE BADGE'S NUMBER IS DERIVED WHERE IT CAN BE TESTED.
+ *
+ * The contract counts badges in THREADS. That number was first computed inline
+ * in TransactionDetails' JSX, which left the one line that actually feeds the
+ * header badge unpinned: reverting `reviewCount={reviewThreadCount}` to
+ * `reviewQueue.count` turned the badge back into an item count and NOTHING went
+ * red — TransactionHeader's own tests assert on whatever prop they are handed,
+ * and the grouping helper's tests never see the wiring.
+ *
+ * So the derivation lives on the hook instead, beside `count`. Every review
+ * surface already reads this hook, which is what stops them disagreeing; the
+ * badge now reads it the same way rather than re-deriving the rule at the call
+ * site.
+ *
+ * CONTROLS RUN (MEASURED):
+ *  1. `threadCount: state.count` (i.e. count items)        -> RED, 1 of 2 tests.
+ *  2. `threadCount: 0`                                     -> RED, 2 of 2 tests.
+ */
+describe("threadCount — the badge counts threads, the gate counts items", () => {
+  const inThread = (id: string, threadId: string) => {
+    const base = item(id);
+    return { ...base, display: { ...base.display, threadId } };
+  };
+
+  it("two pending emails in ONE provider thread count as ONE for the badge", async () => {
+    // Same fixture shape as the founder's recurring-invite pair.
+    getReviewState.mockResolvedValue({
+      items: [inThread("pending:a", "thr-pair"), inThread("pending:b", "thr-pair")],
+      count: 2,
+    });
+    const { result } = renderHook(() => useReviewQueue("tx-1"));
+    // The hook does not read on mount — TransactionDetails drives the first
+    // read. Do the same rather than asserting against an unloaded queue.
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    await waitFor(() => expect(result.current.items).toHaveLength(2));
+    // The badge: one thread.
+    expect(result.current.threadCount).toBe(1);
+    // The Complete gate: still items, and still non-zero. Both agree there IS
+    // something outstanding, which is all the gate ever asks.
+    expect(result.current.count).toBe(2);
+  });
+
+  it("an empty queue is zero in both units, so the badge and the gate agree at zero", async () => {
+    getReviewState.mockResolvedValue({ items: [], count: 0 });
+    const { result } = renderHook(() => useReviewQueue("tx-1"));
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.threadCount).toBe(0);
+    expect(result.current.count).toBe(0);
+  });
+});

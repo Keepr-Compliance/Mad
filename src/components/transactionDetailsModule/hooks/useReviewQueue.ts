@@ -16,10 +16,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { logger } from "../../../utils/logger";
 import type { ReviewItemDto, ReviewStateResult } from "../../../../electron/types/ipc/window-api-transactions";
+import { groupReviewItemsByThread } from "../utils/reviewThreads";
 
 export interface UseReviewQueueResult {
   items: ReviewItemDto[];
+  /**
+   * ITEMS outstanding — what the Complete gate blocks on. It only ever asks
+   * "is anything outstanding", and zero threads and zero items are the same
+   * zero, so the gate and the badge agree about that without counting alike.
+   */
   count: number;
+  /**
+   * THREADS outstanding — the badge's number (contract: "badges and subtitles
+   * count threads").
+   *
+   * Derived here rather than at the call site because the badge is the one
+   * thread-count surface a component test cannot see: TransactionHeader asserts
+   * on whatever prop it is handed, so an inline computation in the JSX could be
+   * reverted to `count` with nothing going red. On the hook it sits beside the
+   * items it summarises and is pinned directly.
+   */
+  threadCount: number;
   isLoading: boolean;
   /** Items added by the most recent sync — drives the popup (0 = silent). */
   lastAdded: number;
@@ -221,6 +238,7 @@ export function useReviewQueue(transactionId: string | null): UseReviewQueueResu
   return {
     items: state.items,
     count: state.count,
+    threadCount: groupReviewItemsByThread(state.items).length,
     isLoading,
     lastAdded,
     lastLinked,

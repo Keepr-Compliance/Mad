@@ -29,6 +29,13 @@ import { EmailThreadCard, type EmailThread } from "./EmailThreadCard";
 import { MessageThreadCard, type MessageLike } from "./MessageThreadCard";
 import type { Communication } from "../types";
 import type { ReviewItemDto } from "../../../../electron/types/ipc/window-api-transactions";
+// The grouping rule lives in utils/ so the COUNT (derived in useReviewQueue)
+// and the CARDS drawn here cannot drift apart. Re-exported because three
+// surfaces and their suites already import it from this module.
+import { groupReviewItemsByThread, type ReviewThreadGroup } from "../utils/reviewThreads";
+
+export { groupReviewItemsByThread };
+export type { ReviewThreadGroup };
 
 export interface ReviewQueueSectionProps {
   /** The full review set — filtered here by kind, never re-derived. */
@@ -46,49 +53,6 @@ export interface ReviewQueueSectionProps {
   contactNames?: Record<string, string>;
   auditStartDate?: Date | string | null;
   auditEndDate?: Date | string | null;
-}
-
-/**
- * ONE REVIEW CARD = ONE THREAD (BACKLOG-2791, the Communication Lifecycle
- * Contract's "unit rule": the thread is the unit of display AND of decision).
- *
- * The key is the provider's conversation id, projected onto the item as
- * `display.threadId`, falling back to the item's own id when the provider never
- * threaded the record — a lone email is a thread of one.
- *
- * SUBJECT IS DELIBERATELY NOT A FALLBACK KEY, unlike the tabs' own
- * `getEmailThreadKey`. Founder correction (2026-08-23): two separately-removed
- * emails must be two cards with two Restores, and subject-merging was the
- * suspected cause when they were not. Merging on subject here would put one
- * Confirm in charge of linking two unrelated emails — the same surprise, on the
- * more dangerous side of the decision. The contract defines a thread as "what
- * the mail/message provider says it is (thread_id)", so that is the only key.
- *
- * Order is first-appearance, so the caller's sort (newest first) survives
- * grouping.
- */
-export interface ReviewThreadGroup {
-  /** `display.threadId`, or the item id for an unthreaded one-email thread. */
-  key: string;
-  /** Every pending item in this thread. Buttons act on ALL of them. */
-  items: ReviewItemDto[];
-}
-
-export function groupReviewItemsByThread(items: ReviewItemDto[]): ReviewThreadGroup[] {
-  const groups: ReviewThreadGroup[] = [];
-  const byKey = new Map<string, ReviewThreadGroup>();
-  for (const item of items) {
-    const key = item.display.threadId ?? item.id;
-    const existing = byKey.get(key);
-    if (existing) {
-      existing.items.push(item);
-      continue;
-    }
-    const group: ReviewThreadGroup = { key, items: [item] };
-    byKey.set(key, group);
-    groups.push(group);
-  }
-  return groups;
 }
 
 /**
