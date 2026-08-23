@@ -33,9 +33,9 @@
  * (founder, 2026-08-22). The switcher supplies the medium, which is why the
  * cards carry no type label.
  */
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import type { ReviewItemDto } from "../../../../electron/types/ipc/window-api-transactions";
-import { ReviewCards } from "./ReviewQueueSection";
+import { ReviewCards, groupReviewItemsByThread } from "./ReviewQueueSection";
 import type { Communication } from "../types";
 
 export interface NeedsReviewScreenProps {
@@ -79,6 +79,14 @@ export function NeedsReviewScreen({
   const texts = items.filter((i) => i.kind === "text");
   const [medium, setMedium] = useState<"email" | "text">("email");
 
+  // THREAD counts for every number on this screen (contract: "badges and
+  // subtitles count threads"). The subtitle already said "threads" while
+  // counting items, so a two-email conversation read as "2 threads need review"
+  // above a single card. Derived from the same grouping ReviewCards renders.
+  const emailThreadCount = useMemo(() => groupReviewItemsByThread(emails).length, [emails]);
+  const textThreadCount = useMemo(() => groupReviewItemsByThread(texts).length, [texts]);
+  const threadCount = emailThreadCount + textThreadCount;
+
   // Open on the side that actually has something, so the screen never lands on
   // an empty list while the other one is full.
   const [pinned, setPinned] = useState(false);
@@ -91,10 +99,12 @@ export function NeedsReviewScreen({
   const shown = active === "email" ? emails : texts;
 
 
-  const act = async (id: string, fn: (ids: string[]) => Promise<void>) => {
-    setBusyId(id);
+  // Acts on the WHOLE thread (contract rows T3/T4); `busyId` is the thread key,
+  // so the acting card disables and its siblings do not.
+  const act = async (ids: string[], threadKey: string, fn: (ids: string[]) => Promise<void>) => {
+    setBusyId(threadKey);
     try {
-      await fn([id]);
+      await fn(ids);
     } finally {
       setBusyId(null);
     }
@@ -179,7 +189,7 @@ export function NeedsReviewScreen({
               className="text-amber-100 text-xs sm:text-sm"
               data-testid="needs-review-header-count"
             >
-              {items.length} {items.length === 1 ? "thread" : "threads"} need review
+              {threadCount} {threadCount === 1 ? "thread" : "threads"} need review
             </p>
           </div>
         </div>
@@ -195,8 +205,8 @@ export function NeedsReviewScreen({
         >
           {(
             [
-              ["email", "Emails", emails.length],
-              ["text", "Texts", texts.length],
+              ["email", "Emails", emailThreadCount],
+              ["text", "Texts", textThreadCount],
             ] as Array<["email" | "text", string, number]>
           ).map(([value, label, count]) => (
             <button
@@ -252,8 +262,8 @@ export function NeedsReviewScreen({
               items={shown}
               kind={active}
               busyId={bulkBusy ? shown[0]?.id ?? busyId : busyId}
-              onApproveItem={(id) => act(id, onApprove)}
-              onRejectItem={(id) => act(id, onReject)}
+              onApproveItem={(ids, key) => void act(ids, key, onApprove)}
+              onRejectItem={(ids, key) => void act(ids, key, onReject)}
               onViewEmail={onViewEmail}
               userEmail={userEmail}
               nameMap={nameMap}

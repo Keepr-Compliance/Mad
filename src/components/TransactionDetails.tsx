@@ -56,7 +56,10 @@ import { useResolvedContactNames } from "./transactionDetailsModule/hooks/useRes
 import { useCompleteTransaction } from "./transactionDetailsModule/hooks/useCompleteTransaction";
 import { NeedsReviewScreen } from "./transactionDetailsModule/components/NeedsReviewScreen";
 import { ReviewPromptDialog } from "./transactionDetailsModule/components/ReviewPromptDialog";
-import { ReviewQueueSection } from "./transactionDetailsModule/components/ReviewQueueSection";
+import {
+  ReviewQueueSection,
+  groupReviewItemsByThread,
+} from "./transactionDetailsModule/components/ReviewQueueSection";
 import { useSubmitForReview } from "./transactionDetailsModule/hooks/useSubmitForReview";
 import type {
   AutoLinkResult,
@@ -347,6 +350,18 @@ function TransactionDetails({
     [reviewQueue.items],
   );
   const reviewContactNames = useResolvedContactNames(reviewTextHandles, userId);
+
+  // THE BADGE COUNTS THREADS (contract: "badges and subtitles count threads"),
+  // derived from the same grouping the review surfaces render, so the number on
+  // the button and the number of cards behind it cannot disagree.
+  //
+  // The Complete GATE still reads the item count (reviewQueue.count) — it only
+  // ever asks "is anything outstanding", and zero threads and zero items are the
+  // same zero, so the gate is unaffected by which unit it counts in.
+  const reviewThreadCount = useMemo(
+    () => groupReviewItemsByThread(reviewQueue.items).length,
+    [reviewQueue.items],
+  );
 
   // BACKLOG-2791: review actions were silent. Every other destructive or
   // state-changing action in this screen toasts ("2 emails restored"), so these
@@ -1015,7 +1030,7 @@ function TransactionDetails({
           onRestore={handleRestore}
           onShowExportModal={() => setShowExportModal(true)}
           onShowDeleteConfirm={() => setShowDeleteConfirm(true)}
-          reviewCount={reviewQueue.count}
+          reviewCount={reviewThreadCount}
           onShowNeedsReview={() => setShowNeedsReview(true)}
           onComplete={() => { void complete.requestComplete(); }}
         />

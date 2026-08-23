@@ -6,6 +6,12 @@
  * showSuccess/showError helpers and the same "N noun verbed" phrasing rather
  * than a second convention, and the reject copy says "removed" — the same word
  * the Removed section uses, because that is exactly where the item goes.
+ *
+ * THE NUMBER IN THE TOAST COUNTS EMAILS, NOT THREADS (Communication Lifecycle
+ * Contract, rows T3/T4: "acts on: whole thread", toast "N emails linked").
+ * Badges and subtitles count threads; the toast reports what actually moved. A
+ * two-email thread is ONE card and ONE click that says "2 emails removed", and
+ * the last test here is the one that can tell those two units apart.
  */
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -23,6 +29,7 @@ const emailItem: ReviewItemDto = {
   display: {
     title: "Quick question", subtitle: "jane@example.com", snippet: "hi",
     occurredAt: "2026-06-01T00:00:00.000Z", itemCount: 1,
+    threadId: "thr-q",
     recipients: null, cc: null, sender: "jane@example.com",
     hasAttachments: false, threadParticipants: [], threadMessages: [],
   },
@@ -42,6 +49,18 @@ function makeHandlers(showSuccess: jest.Mock, showError: jest.Mock, fail = false
     },
   };
 }
+
+/** Two emails the provider threaded together — ONE card. */
+const threadedA: ReviewItemDto = {
+  ...emailItem,
+  id: "pending:e2", rowId: "e2", email_id: "e2",
+  display: { ...emailItem.display, threadId: "thr-pair", title: "Re: Offer" },
+};
+const threadedB: ReviewItemDto = {
+  ...emailItem,
+  id: "pending:e3", rowId: "e3", email_id: "e3",
+  display: { ...emailItem.display, threadId: "thr-pair", title: "Re: Offer" },
+};
 
 describe("review actions announce themselves", () => {
   it("trash toasts 'removed' — the word Show removed uses", async () => {
@@ -106,5 +125,45 @@ describe("the wiring TransactionDetails actually passes", () => {
     fireEvent.click(screen.getByTestId("confirm-thread-button"));
     await waitFor(() => expect(onApprove).toHaveBeenCalledWith(["pending:e1"]));
     expect(onReject).not.toHaveBeenCalled();
+  });
+});
+
+describe("the toast counts EMAILS while the card counts as ONE thread", () => {
+  it("one trash on a two-email thread toasts '2 emails removed'", async () => {
+    const showSuccess = jest.fn();
+    const h = makeHandlers(showSuccess, jest.fn());
+    render(
+      <ReviewQueueSection
+        items={[threadedA, threadedB]}
+        kind="email"
+        onApprove={h.onApprove}
+        onReject={h.onReject}
+      />,
+    );
+
+    // ONE card for the two emails, and the section counts it as one thread.
+    expect(screen.queryAllByTestId("email-thread-card")).toHaveLength(1);
+    expect(screen.getByTestId("needs-review-count")).toHaveTextContent("(1)");
+
+    fireEvent.click(screen.getByTestId("unlink-thread-button"));
+    // The toast reports EMAILS — what actually moved — not the thread count.
+    await waitFor(() => expect(showSuccess).toHaveBeenCalledWith("2 emails removed"));
+  });
+
+  it("one confirm on a two-email thread passes BOTH ids and toasts '2 emails linked'", async () => {
+    const showSuccess = jest.fn();
+    const onApprove = jest.fn().mockResolvedValue(undefined);
+    render(
+      <ReviewQueueSection
+        items={[threadedA, threadedB]}
+        kind="email"
+        onApprove={onApprove}
+        onReject={makeHandlers(showSuccess, jest.fn()).onReject}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("confirm-thread-button"));
+    // ID SET, not a count — the acts-on unit is the whole thread.
+    await waitFor(() => expect(onApprove).toHaveBeenCalledTimes(1));
+    expect([...onApprove.mock.calls[0][0]].sort()).toEqual(["pending:e2", "pending:e3"]);
   });
 });

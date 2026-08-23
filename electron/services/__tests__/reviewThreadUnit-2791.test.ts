@@ -23,16 +23,22 @@
  * stays NULL; the grouping key travels with the display payload, which is the
  * payload the renderer already uses to draw the card.
  *
- * CONTROLS RUN (each mutation applied, suite re-run, result recorded):
- *  1. Delete the `thread_id` column from emailDisplay's SELECT list  -> RED, 4 tests
- *     (SQLite errors on the missing column; the projection is genuinely read).
+ * CONTROLS RUN — each mutation applied to the source, suite re-run, the number
+ * below is the MEASURED result (not the predicted one; controls 1 and 2 each
+ * took down one more test than expected, which is why these are recorded):
+ *  1. Delete `thread_id` from emailDisplay's SELECT list   -> RED, 5 of 5 tests.
+ *     The column is simply absent from the row, so the projection yields
+ *     `undefined` — which fails even the NULL-key assertion.
  *  2. Return `threadId: null` from emailDisplay instead of `row.thread_id`
- *                                                                    -> RED, 3 tests
- *     (the shared-thread and lone-email assertions both go red; this is the
- *     mutation that proves the value is the EMAIL's thread and not a constant).
- *  3. Set `thread_id: r.thread_id ?? emailThreadOf(r.email_id)` on the ITEM
- *     (i.e. do the grouping the wrong way)                            -> RED, 1 test
- *     ("the routing thread_id stays NULL for an email item").
+ *                                                          -> RED, 4 of 5 tests.
+ *     The survivor is "an email the provider never threaded projects a NULL
+ *     key", which a constant null satisfies by accident. That is precisely why
+ *     the other four assert a SPECIFIC provider id rather than "not null".
+ *  3. Move the key onto the ITEM (`thread_id: r.thread_id ?? <email's thread>`),
+ *     i.e. group the wrong way                             -> RED, 1 of 5 tests:
+ *     "the routing thread_id stays NULL for an email item". Only one test can
+ *     see this mutation, and without that test the removed-TEXTS regression
+ *     would have shipped green.
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";

@@ -49,15 +49,58 @@ export interface ReviewQueueSectionProps {
 }
 
 /**
- * Rebuild an EmailThread from a review item.
+ * ONE REVIEW CARD = ONE THREAD (BACKLOG-2791, the Communication Lifecycle
+ * Contract's "unit rule": the thread is the unit of display AND of decision).
+ *
+ * The key is the provider's conversation id, projected onto the item as
+ * `display.threadId`, falling back to the item's own id when the provider never
+ * threaded the record — a lone email is a thread of one.
+ *
+ * SUBJECT IS DELIBERATELY NOT A FALLBACK KEY, unlike the tabs' own
+ * `getEmailThreadKey`. Founder correction (2026-08-23): two separately-removed
+ * emails must be two cards with two Restores, and subject-merging was the
+ * suspected cause when they were not. Merging on subject here would put one
+ * Confirm in charge of linking two unrelated emails — the same surprise, on the
+ * more dangerous side of the decision. The contract defines a thread as "what
+ * the mail/message provider says it is (thread_id)", so that is the only key.
+ *
+ * Order is first-appearance, so the caller's sort (newest first) survives
+ * grouping.
+ */
+export interface ReviewThreadGroup {
+  /** `display.threadId`, or the item id for an unthreaded one-email thread. */
+  key: string;
+  /** Every pending item in this thread. Buttons act on ALL of them. */
+  items: ReviewItemDto[];
+}
+
+export function groupReviewItemsByThread(items: ReviewItemDto[]): ReviewThreadGroup[] {
+  const groups: ReviewThreadGroup[] = [];
+  const byKey = new Map<string, ReviewThreadGroup>();
+  for (const item of items) {
+    const key = item.display.threadId ?? item.id;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.items.push(item);
+      continue;
+    }
+    const group: ReviewThreadGroup = { key, items: [item] };
+    byKey.set(key, group);
+    groups.push(group);
+  }
+  return groups;
+}
+
+/**
+ * Project ONE review item into the Communication shape EmailThreadCard reads.
  *
  * The item carries the raw `emails` row fields precisely so this is a
  * projection of real data rather than a stand-in — participants come from the
  * genuine sender/recipients/cc, which is what lets nameMap resolve them.
  */
-export function reviewItemToEmailThread(item: ReviewItemDto): EmailThread {
+function reviewItemToCommunication(item: ReviewItemDto): Communication {
   const d = item.display;
-  const comm = {
+  return {
     id: item.email_id ?? item.id,
     email_id: item.email_id ?? undefined,
     subject: d.title,
@@ -76,24 +119,48 @@ export function reviewItemToEmailThread(item: ReviewItemDto): EmailThread {
     has_attachments: d.hasAttachments,
     communication_type: "email",
   } as unknown as Communication;
+}
+
+/**
+ * Rebuild an EmailThread from a whole review THREAD.
+ *
+ * Mirrors the tabs' own `createEmailThreads`: emails oldest-first, the subject
+ * taken from the oldest, participants unioned across every email, and
+ * `emailCount` the real number of emails — which is what renders the card's
+ * "(N emails)" affordance, so a two-email thread reads as one card that says so
+ * rather than as two cards.
+ */
+export function reviewThreadToEmailThread(group: ReviewThreadGroup): EmailThread {
+  const ordered = [...group.items].sort((a, b) =>
+    (a.display.occurredAt ?? "").localeCompare(b.display.occurredAt ?? ""),
+  );
+  const emails = ordered.map(reviewItemToCommunication);
 
   const participants = Array.from(
     new Set(
-      [d.sender ?? "", ...(d.recipients ?? "").split(","), ...(d.cc ?? "").split(",")]
+      ordered
+        .flatMap((item) => [
+          item.display.sender ?? "",
+          ...(item.display.recipients ?? "").split(","),
+          ...(item.display.cc ?? "").split(","),
+        ])
         .map((x) => x.trim())
         .filter((x) => x.length > 0),
     ),
   );
-  const when = d.occurredAt ? new Date(d.occurredAt) : new Date();
+
+  const times = ordered.map((item) =>
+    item.display.occurredAt ? new Date(item.display.occurredAt) : new Date(),
+  );
 
   return {
-    id: item.id,
-    subject: d.title,
+    id: group.key,
+    subject: ordered[0]?.display.title ?? "(no subject)",
     participants,
-    emailCount: 1,
-    startDate: when,
-    endDate: when,
-    emails: [comm],
+    emailCount: ordered.length,
+    startDate: times[0] ?? new Date(),
+    endDate: times[times.length - 1] ?? new Date(),
+    emails,
   };
 }
 
@@ -112,9 +179,15 @@ export function ReviewCards({
 }: {
   items: ReviewItemDto[];
   kind: "email" | "text";
+  /** The THREAD key currently acting, not an item id. */
   busyId: string | null;
-  onApproveItem: (id: string) => void;
-  onRejectItem: (id: string) => void;
+  /**
+   * Called with EVERY item id in the thread — the contract's rows T3/T4 act on
+   * the whole thread, and the toasts count what came back (emails), so the
+   * caller needs the full list rather than a representative.
+   */
+  onApproveItem: (ids: string[], threadKey: string) => void;
+  onRejectItem: (ids: string[], threadKey: string) => void;
   onViewEmail?: (comm: Communication) => void;
   userEmail?: string;
   nameMap?: ReadonlyMap<string, string>;
@@ -122,20 +195,26 @@ export function ReviewCards({
   auditStartDate?: Date | string | null;
   auditEndDate?: Date | string | null;
 }): React.ReactElement {
+  // ONE CARD PER THREAD. Grouping happens here rather than in each caller so the
+  // review screen and both tab sections cannot drift into different units.
+  const groups = groupReviewItemsByThread(items);
+
   return (
     <div className="mt-3 space-y-3" data-testid="needs-review-list">
-      {items.map((item) => {
+      {groups.map((group) => {
+        const item = group.items[0];
+        const ids = group.items.map((i) => i.id);
         if (kind === "email") {
           return (
             <EmailThreadCard
-              key={item.id}
-              thread={reviewItemToEmailThread(item)}
+              key={group.key}
+              thread={reviewThreadToEmailThread(group)}
               variant="needsReview"
               onViewEmail={onViewEmail}
-              onConfirm={() => onApproveItem(item.id)}
-              onUnlink={() => onRejectItem(item.id)}
-              isConfirming={busyId === item.id}
-              isUnlinking={busyId === item.id}
+              onConfirm={() => onApproveItem(ids, group.key)}
+              onUnlink={() => onRejectItem(ids, group.key)}
+              isConfirming={busyId === group.key}
+              isUnlinking={busyId === group.key}
               userEmail={userEmail}
               nameMap={nameMap}
             />
@@ -152,7 +231,13 @@ export function ReviewCards({
         return (
           // The SAME card the rest of the tab uses, with the confirm affordance
           // inside it — no bespoke row, no button hung beside it.
-          <div key={item.id} data-testid="review-item" data-item-id={item.id} data-kind="text">
+          <div
+            key={group.key}
+            data-testid="review-item"
+            data-item-id={item.id}
+            data-thread-key={group.key}
+            data-kind="text"
+          >
             <MessageThreadCard
               threadId={item.thread_id ?? item.id}
               messages={item.display.threadMessages as unknown as MessageLike[]}
@@ -169,9 +254,9 @@ export function ReviewCards({
               contactNames={contactNames}
               auditStartDate={auditStartDate}
               auditEndDate={auditEndDate}
-              onConfirm={() => onApproveItem(item.id)}
-              isConfirming={busyId === item.id}
-              onUnlink={() => onRejectItem(item.id)}
+              onConfirm={() => onApproveItem(ids, group.key)}
+              isConfirming={busyId === group.key}
+              onUnlink={() => onRejectItem(ids, group.key)}
             />
           </div>
         );
@@ -198,13 +283,19 @@ export function ReviewQueueSection({
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const mine = useMemo(() => items.filter((i) => i.kind === kind), [items, kind]);
+  // The count in the header is a THREAD count (contract: "badges and subtitles
+  // count threads"), derived from the same grouping ReviewCards renders — so
+  // the number beside "Needs review" can never disagree with the cards below it.
+  const threadCount = useMemo(() => groupReviewItemsByThread(mine).length, [mine]);
 
   // Nothing to review → render nothing, so a clean transaction is unchanged.
   if (mine.length === 0) return null;
 
-  const act = (id: string, fn: (ids: string[]) => Promise<void>) => {
-    setBusyId(id);
-    void fn([id]).finally(() => setBusyId(null));
+  // `ids` is the whole thread; `busyId` is keyed by the thread, so both buttons
+  // on the acting card disable together and no sibling card is affected.
+  const act = (ids: string[], threadKey: string, fn: (ids: string[]) => Promise<void>) => {
+    setBusyId(threadKey);
+    void fn(ids).finally(() => setBusyId(null));
   };
 
   return (
@@ -256,7 +347,7 @@ export function ReviewQueueSection({
         </div>
 
         <span className="text-sm font-semibold text-amber-700" data-testid="needs-review-count">
-          ({mine.length})
+          ({threadCount})
         </span>
       </div>
 
@@ -265,8 +356,8 @@ export function ReviewQueueSection({
           items={mine}
           kind={kind}
           busyId={busyId}
-          onApproveItem={(id) => act(id, onApprove)}
-          onRejectItem={(id) => act(id, onReject)}
+          onApproveItem={(ids, key) => act(ids, key, onApprove)}
+          onRejectItem={(ids, key) => act(ids, key, onReject)}
           onViewEmail={onViewEmail}
           userEmail={userEmail}
           nameMap={nameMap}

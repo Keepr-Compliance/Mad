@@ -144,6 +144,8 @@ describe("names resolve on review cards (the regression the founder reported)", 
       snippet: "hi",
       occurredAt: "2026-06-01T00:00:00.000Z",
       itemCount: 1,
+      // A TEXT item is one row per thread; its grouping key IS its thread.
+      threadId: "th-1",
       recipients: null,
       cc: null,
       sender: "+15550142",

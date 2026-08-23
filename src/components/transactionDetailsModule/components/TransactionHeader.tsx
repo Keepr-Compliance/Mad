@@ -29,8 +29,13 @@ interface TransactionHeaderProps {
   onShowSubmitModal?: () => void;
   isSubmitting?: boolean;
   /**
-   * BACKLOG-2791: outstanding review items. THE count from getReviewState — the
-   * badge and the Complete gate read the same number, so they cannot disagree.
+   * BACKLOG-2791: outstanding review THREADS — the unit the contract counts
+   * badges in. Derived by the parent from the same grouping the review surfaces
+   * render, so the badge and the cards behind it cannot disagree.
+   *
+   * Zero here means zero items too (grouping never turns some items into no
+   * groups), which is why the Complete gate can keep counting items and still
+   * agree with this badge about whether anything is outstanding.
    */
   reviewCount?: number;
   /** BACKLOG-2791: open the combined Needs Review screen (S2). */

@@ -12,6 +12,15 @@
  *   - the text card resolves a sender through `contactNames[raw] ||
  *     contactNames[normalized]`; the review path looked up the raw key only, so
  *     a handle stored in normalized form rendered as a bare number.
+ *
+ * THE UNIT CHANGED (2026-08-23, Communication Lifecycle Contract). "Parity with
+ * the tabs' card" used to mean one review card per pending EMAIL. It now means
+ * what it means on the tabs: one card per THREAD. The single-item cases below
+ * are unaffected — a lone email is a thread of one, and every row, label and
+ * affordance they pin is the same. What is new is the last block: a genuine
+ * multi-email thread must render as ONE card carrying the tabs' own "(N emails)"
+ * label, which is the parity claim that could not even be expressed while the
+ * unit was the email.
  */
 import React from "react";
 import { render, screen, within, fireEvent } from "@testing-library/react";
@@ -42,6 +51,7 @@ const emailItem: ReviewItemDto = {
     snippet: PREVIEW,
     occurredAt: "2026-06-01T00:00:00.000Z",
     itemCount: 1,
+    threadId: "thr-addendum",
     recipients: "me@example.com",
     cc: null,
     sender: "paul@example.com",
@@ -66,6 +76,7 @@ const textItem: ReviewItemDto = {
     snippet: "on my way",
     occurredAt: "2026-06-01T00:00:00.000Z",
     itemCount: 1,
+    threadId: "th-1",
     recipients: null,
     cc: null,
     sender: "+15555550142",
@@ -285,5 +296,69 @@ describe("point 12 — S2 is two lists behind an Emails | Texts switcher", () =>
     );
     expect(screen.getByText(PREVIEW)).toBeInTheDocument();
     expect(screen.getByTestId("view-thread-button")).toHaveTextContent(/^View$/);
+  });
+});
+
+/**
+ * THE UNIT, AT THE CARD LEVEL.
+ *
+ * Parity with the tabs' card now includes the tabs' own grouping: a provider
+ * thread is one card that says how many emails it holds. Before the unit
+ * changed, two emails of one conversation rendered as two identical-looking
+ * cards with two Confirms — the shape the founder hit from the other direction
+ * on Show removed, where one card hid a second email behind a single Restore.
+ */
+describe("the unit — one provider thread, one card", () => {
+  const inThread = (id: string, threadId: string, title: string): ReviewItemDto => ({
+    ...emailItem,
+    id,
+    rowId: id.split(":")[1] ?? id,
+    email_id: id.split(":")[1] ?? id,
+    display: { ...emailItem.display, threadId, title },
+  });
+
+  it("two emails sharing a thread_id render ONE card with the tabs' '(2 emails)' label", () => {
+    render(
+      <ReviewQueueSection
+        items={[inThread("pending:a", "thr-x", "Re: Offer"), inThread("pending:b", "thr-x", "Re: Offer")]}
+        kind="email"
+        onApprove={noop}
+        onReject={noop}
+      />,
+    );
+    const cards = screen.queryAllByTestId("email-thread-card");
+    expect(cards).toHaveLength(1);
+    // The count label is the tabs' own, driven by EmailThread.emailCount.
+    expect(within(cards[0]).getByText("(2 emails)")).toBeInTheDocument();
+  });
+
+  it("two emails in DIFFERENT threads stay two cards — grouping never merges on subject", () => {
+    // Same subject, different conversations. The tabs' getEmailThreadKey would
+    // fall back to the subject and merge these; the review surfaces must not,
+    // because a merge here puts one Confirm in charge of two unrelated emails.
+    render(
+      <ReviewQueueSection
+        items={[inThread("pending:a", "thr-x", "Offer"), inThread("pending:b", "thr-y", "Offer")]}
+        kind="email"
+        onApprove={noop}
+        onReject={noop}
+      />,
+    );
+    expect(screen.queryAllByTestId("email-thread-card")).toHaveLength(2);
+    expect(screen.getByTestId("needs-review-count")).toHaveTextContent("(2)");
+  });
+
+  it("an unthreaded email is a thread of one — keyed by its item id", () => {
+    render(
+      <ReviewQueueSection
+        items={[{ ...emailItem, display: { ...emailItem.display, threadId: null } }]}
+        kind="email"
+        onApprove={noop}
+        onReject={noop}
+      />,
+    );
+    const card = screen.getByTestId("email-thread-card");
+    expect(card.getAttribute("data-thread-id")).toBe(emailItem.id);
+    expect(screen.queryByText(/emails\)/)).not.toBeInTheDocument();
   });
 });
