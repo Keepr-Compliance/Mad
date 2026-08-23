@@ -291,15 +291,26 @@ beforeEach(() => {
   // BACKLOG-2668 — the unique-name rule is gated by tier now, and these are
   // WHOLE-PASS suites: they drive `runOpportunisticLinking` through the real
   // handlers, so the gate is live in them. Without a `users` row the pass
-  // resolves to the basic tier, the rule does not run, and every proposal
+  // resolves to no-AI-add-on, the rule does not run, and every proposal
   // assertion below reads an empty queue — which is the founder's ruling
   // working, not a broken fixture.
   //
-  // Seeded as `pro` so these suites keep testing what they were written to
-  // test: which pairs the pass ASKS about. `pro` resolves to `suggest`, where
-  // the ask band is unchanged. The tier itself is asserted in
+  // Seeded with the AI add-on ON so these suites keep testing what they were
+  // written to test: which pairs the pass ASKS about. The add-on resolves to
+  // `suggest`, where the ask band is unchanged. The gate itself is asserted in
   // `contactNameAutoLink.tierGate-2668.test.ts`, not here.
-  mockDb.prepare("INSERT INTO users (id, subscription_tier) VALUES (?, 'pro')").run(USER);
+  //
+  // `ai_detection_enabled` is an ADD-ON, not a plan — it works with any
+  // `license_type` (founder, PR #2367). The NOT NULL columns are filled because
+  // this fixture runs production's own `users_local` DDL, sliced out of
+  // `schema.sql` by the schema helper.
+  mockDb
+    .prepare(
+      `INSERT INTO users_local
+         (id, email, oauth_provider, oauth_id, license_type, ai_detection_enabled)
+       VALUES (?, 'owner@example.com', 'google', 'oauth-owner-2668', 'individual', 1)`,
+    )
+    .run(USER);
   macosEnabled = true;
   iphoneEnabled = true;
   send.mockClear();

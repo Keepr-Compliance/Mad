@@ -16,6 +16,19 @@
  * between suggesting and linking. Three states, not two.
  *
  * ===========================================================================
+ * "AI TIER" IS AN ADD-ON, NOT A PLAN — FOUNDER CORRECTION ON PR #2367
+ * ===========================================================================
+ * The first cut of this suite swept `subscription_tier` over free/pro/enterprise.
+ * That was the wrong axis:
+ *
+ *   "AI features can be on any plan — individual, team or pro."
+ *
+ * The matrix below is therefore the ADD-ON FLAG x the three modes, and two
+ * cases exist purely to pin the correction: an `individual` plan with the
+ * add-on ON suggests, and an `enterprise` plan with it OFF does nothing. If a
+ * plan column is ever read again, those two go red.
+ *
+ * ===========================================================================
  * ASSERTED BY EXACT ID SET, NEVER BY A COUNTER AND NEVER BY AN EARLY RETURN
  * ===========================================================================
  * `expect(summary.autoLinked).toBe(0)` is satisfied by a function that returned
@@ -27,10 +40,20 @@
  * ===========================================================================
  * THE BOUNDARY IS SWEPT, NOT SAMPLED
  * ===========================================================================
- * Five tier states x the three modes. `'free'` and `'pro'` alone would leave
- * `'enterprise'`, a NULL tier and a missing user row untested — and those three
- * are where a fail-OPEN default would hide, because they are the states a real
- * database reaches by accident rather than by subscription.
+ * Every state the flag column can hold: 1, 0, the schema DEFAULT, NULL, a value
+ * the app never writes, no row at all, and an unreadable table. `1` and `0`
+ * alone would leave out exactly the states a real database reaches BY ACCIDENT
+ * rather than by entitlement — which is where a fail-OPEN default hides.
+ *
+ * ===========================================================================
+ * THE FIXTURE IS EXTRACTED FROM `schema.sql`, NOT WRITTEN HERE
+ * ===========================================================================
+ * The first cut of the gate queried `FROM users`. There is no `users` table —
+ * production has `users_local`. The query threw, the gate's `catch` returned
+ * "off" for everyone, and this suite stayed GREEN because its fixture invented
+ * a table called `users`. `CONTACT_IDENTITY_SCHEMA` now slices the real
+ * `users_local` block out of `electron/database/schema.sql`, so the table name
+ * and its NOT NULL columns are production's, not this file's.
  *
  * ===========================================================================
  * FIXTURE PROVENANCE
@@ -102,21 +125,38 @@ const OUT_PHONE = "+15035550152";
 // ---------------------------------------------------------------------------
 
 /**
- * The tier as the app actually stores it.
+ * A real `users_local` row.
  *
- * `undefined` writes a row with the column left to its schema DEFAULT rather
- * than writing the string "undefined"; `null` writes a real NULL. The three
- * cases are distinct on purpose — the default, an explicit absence and no row
- * at all are three different database states and the gate must answer for each.
+ * The NOT NULL columns are filled because production's DDL is what this fixture
+ * now runs — `email`, `oauth_provider` (CHECK IN 'google','microsoft') and
+ * `oauth_id` are not optional, and a fixture that skipped them would be
+ * describing a row the database cannot hold.
+ *
+ * `addon === undefined` leaves the column at its schema DEFAULT rather than
+ * writing the string "undefined"; `null` writes a real NULL. The default, an
+ * explicit NULL and no row at all are three different database states and the
+ * gate answers for each.
  */
-function setTier(tier: string | null | undefined): void {
-  if (tier === undefined) {
-    mockDb!.prepare("INSERT INTO users (id) VALUES (?)").run(USER);
+function seedUser(
+  addon: number | null | undefined,
+  licenseType: "individual" | "team" | "enterprise" = "individual",
+): void {
+  if (addon === undefined) {
+    mockDb!
+      .prepare(
+        `INSERT INTO users_local (id, email, oauth_provider, oauth_id, license_type)
+         VALUES (?, 'owner@example.com', 'google', 'oauth-owner-2668', ?)`,
+      )
+      .run(USER, licenseType);
     return;
   }
   mockDb!
-    .prepare("INSERT INTO users (id, subscription_tier) VALUES (?, ?)")
-    .run(USER, tier);
+    .prepare(
+      `INSERT INTO users_local
+         (id, email, oauth_provider, oauth_id, license_type, ai_detection_enabled)
+       VALUES (?, 'owner@example.com', 'google', 'oauth-owner-2668', ?, ?)`,
+    )
+    .run(USER, licenseType, addon);
 }
 
 function addContact(id: string, displayName: string): void {
@@ -248,17 +288,17 @@ describe("BACKLOG-2668 — the tier gate on the unique-name rule", () => {
   // =========================================================================
   describe("resolveContactAutoLinkMode", () => {
     /**
-     * CONTROL (break -> observed): add `"free"` to `AI_TIER_SUBSCRIPTIONS` and
-     * the first row goes red — and so does every basic-tier case below it.
+     * CONTROL (break -> observed): loosen `=== 1` to a truthy test and the
+     * "value the app never writes" row goes red.
      */
-    it.each<[string, string | null | undefined, ContactAutoLinkMode]>([
-      ["'free' — the basic tier -> off", "free", "off"],
-      ["the schema default, which is the basic tier -> off", undefined, "off"],
-      ["a NULL tier — unknown, not free, same answer -> off", null, "off"],
-      ["'pro', with no toggle to turn on yet -> suggest", "pro", "suggest"],
-      ["'enterprise', with no toggle to turn on yet -> suggest", "enterprise", "suggest"],
-    ])("resolves %s", (_label, tier, expected) => {
-      setTier(tier);
+    it.each<[string, number | null | undefined, ContactAutoLinkMode]>([
+      ["the add-on ON -> suggest", 1, "suggest"],
+      ["the add-on explicitly OFF -> off", 0, "off"],
+      ["the schema DEFAULT, which is 0 -> off", undefined, "off"],
+      ["a NULL flag — unknown, not off, same answer -> off", null, "off"],
+      ["a value the app never writes -> off", 2, "off"],
+    ])("resolves %s", (_label, addon, expected) => {
+      seedUser(addon);
       expect(resolveContactAutoLinkMode(USER)).toBe(expected);
     });
 
@@ -272,21 +312,51 @@ describe("BACKLOG-2668 — the tier gate on the unique-name rule", () => {
      * `runOpportunisticLinking` and reported as "linking failed" — which reads
      * like a transient error and is not one.
      */
-    it("resolves to off when the users table cannot be read at all", () => {
-      mockDb!.exec("DROP TABLE users");
+    it("resolves to off when users_local cannot be read at all", () => {
+      mockDb!.exec("DROP TABLE users_local");
       expect(resolveContactAutoLinkMode(USER)).toBe("off");
     });
 
-    it("resolves an unrecognised tier string to off", () => {
-      // The real column has a CHECK, so this state is reached by a future tier
-      // name arriving before this Set learns about it — the direction that must
-      // fail towards doing nothing.
-      mockDb!.exec("DROP TABLE users");
-      mockDb!.exec("CREATE TABLE users (id TEXT PRIMARY KEY, subscription_tier TEXT)");
-      mockDb!
-        .prepare("INSERT INTO users (id, subscription_tier) VALUES (?, 'ai-plus')")
-        .run(USER);
-      expect(resolveContactAutoLinkMode(USER)).toBe("off");
+    /**
+     * THE FOUNDER'S CORRECTION, PINNED IN BOTH DIRECTIONS (PR #2367).
+     *
+     *   "AI features can be on any plan — individual, team or pro."
+     *
+     * `ai_detection_enabled` is an add-on that "works with ANY base license"
+     * (`types/models.ts`), so `license_type` must not move the answer. These two
+     * rows are the ones that go red if a plan column is ever consulted again —
+     * and the second is the expensive direction: reading the plan would have
+     * silently auto-linked a paying user who never bought AI.
+     */
+    it.each<["individual" | "team" | "enterprise", number, ContactAutoLinkMode]>([
+      ["individual", 1, "suggest"],
+      ["enterprise", 0, "off"],
+      ["team", 0, "off"],
+      ["team", 1, "suggest"],
+    ])("ignores the plan: %s with the add-on %d resolves to %s", (plan, addon, expected) => {
+      seedUser(addon, plan);
+      expect(resolveContactAutoLinkMode(USER)).toBe(expected);
+    });
+
+    /**
+     * THE BUG THIS SUITE ONCE HID, NOW PINNED.
+     *
+     * The gate queried `FROM users`. There is no such table; it threw, the
+     * `catch` returned "off", and this file stayed green because its own fixture
+     * had invented one. The fixture is now sliced out of `schema.sql`.
+     *
+     * CONTROL (break -> observed): change the query in `contactAutoLinkPolicy`
+     * back to `FROM users` and the add-on-ON cases go red — the gate can no
+     * longer reach a state other than "off".
+     */
+    it("reads the table production actually has, so an ON flag is visible", () => {
+      seedUser(1);
+      expect(resolveContactAutoLinkMode(USER)).toBe("suggest");
+      // And the row really is in `users_local`, not somewhere this suite invented.
+      const row = mockDb!
+        .prepare("SELECT ai_detection_enabled FROM users_local WHERE id = ?")
+        .get(USER) as { ai_detection_enabled: number };
+      expect(row.ai_detection_enabled).toBe(1);
     });
   });
 
@@ -301,12 +371,13 @@ describe("BACKLOG-2668 — the tier gate on the unique-name rule", () => {
      * instead of `resolveContactAutoLinkMode(userId)`. This goes red on the LINK
      * SET — `outlook|out-1|unique_name` appears — not on a counter.
      */
-    it.each<[string, string | null | undefined]>([
-      ["'free', the basic tier", "free"],
+    it.each<[string, number | null | undefined]>([
+      ["the add-on explicitly OFF", 0],
       ["the schema default", undefined],
-      ["a NULL tier", null],
-    ])("decides NOTHING on %s — no link, and no question either", (_label, tier) => {
-      setTier(tier);
+      ["a NULL flag", null],
+      ["a value the app never writes", 2],
+    ])("decides NOTHING with %s — no link, and no question either", (_label, addon) => {
+      seedUser(addon);
       seedQualifyingPair();
       const onAsk = jest.fn();
 
@@ -337,13 +408,17 @@ describe("BACKLOG-2668 — the tier gate on the unique-name rule", () => {
     });
 
     /**
-     * The AI tier, as it ships today: the toggle has no storage yet
+     * The add-on ON, as it ships today, ON EVERY PLAN: the toggle has no storage yet
      * (BACKLOG-2616 owns it), a toggle nobody turned on is off, and the 13 Aug
      * ruling permits automatic linking only behind a toggle the user turned on.
      * So the pair the rule was SURE about becomes a question.
      */
-    it.each(["pro", "enterprise"])("suggests but does not link on %s", (tier) => {
-      setTier(tier);
+    it.each<"individual" | "team" | "enterprise">([
+      "individual",
+      "team",
+      "enterprise",
+    ])("suggests but does not link with the add-on on, plan %s", (plan) => {
+      seedUser(1, plan);
       seedQualifyingPair();
 
       const summary = runUniqueNameAutoLink(USER, fileNameQuestion);
