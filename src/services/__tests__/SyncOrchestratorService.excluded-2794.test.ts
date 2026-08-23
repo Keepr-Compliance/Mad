@@ -284,11 +284,31 @@ describe('BACKLOG-2794 — a collision coalesces instead of painting an error', 
     expect(item?.cancelled).toBeUndefined();
   });
 
-  it('coalesces the force-reimport refusal too — the same class', async () => {
+  it('branches on the FLAG, never on the error text', async () => {
+    /*
+     * WHAT THIS DOES AND DOES NOT COVER — stated because the earlier version of
+     * this test claimed the second one.
+     *
+     * It used to read "coalesces the force-reimport refusal too", with a fixture
+     * restating that refusal's exact wording. That title implies the SERVICE
+     * sets `alreadyInProgress` on its force-reimport gate, and this test cannot
+     * see the service at all: SR deleted the flag at that site and 12,650 tests
+     * stayed green. A fixture repeating what a producer emits cannot fail when
+     * the producer stops emitting it — the same defect as the strip guard, one
+     * file over. That site is now driven for real in
+     * `macOSMessagesImportService.coveredCount-2794.test.ts`
+     * ("refuses a delta import while a FORCE re-import holds the service").
+     *
+     * What is genuinely pinned HERE is the consumer's rule: the orchestrator
+     * coalesces on the typed discriminator and never parses the message. So the
+     * fixture deliberately carries wording no branch could match, and the flag
+     * is the only thing telling it what to do — which is what lets the service
+     * add or reword a refusal without this decision going stale.
+     */
     importResult = {
       success: false,
       messagesImported: 0,
-      error: 'Force reimport in progress',
+      error: 'Refused: some future wording nobody has string-matched',
       alreadyInProgress: true,
     };
 
@@ -296,6 +316,7 @@ describe('BACKLOG-2794 — a collision coalesces instead of painting an error', 
 
     expect(item?.status).toBe('complete');
     expect(item?.coalesced).toBe(true);
+    expect(item?.error).toBeUndefined();
   });
 
   it('ANTI-VACUITY: a genuine failure still paints the error row', async () => {

@@ -75,12 +75,24 @@ jest.mock("../permissionService", () => ({
   },
 }));
 
+/**
+ * The force path asks for the app database before it builds its staging tables.
+ * Returning null keeps this suite off the encrypted store — the collision under
+ * test happens in `importMessages`, before `doImport` is even entered, so no
+ * staging is required to reach it.
+ */
+jest.mock("../databaseService", () => ({
+  __esModule: true,
+  default: { getRawDatabase: () => null },
+}));
+
 jest.mock("../supportAccess/trace", () => ({
   __esModule: true,
   supportTrace: jest.fn(),
 }));
 
 import macOSMessagesImportService from "../macOSMessagesImportService/macOSMessagesImportService";
+import permissionService from "../permissionService";
 import type { RawMacMessage } from "../macOSMessagesImportService/types";
 // BACKLOG-2772: plans are built by the REAL resolver, never hand-written.
 import { testImportPlan } from "./helpers/importPlanFixture";
@@ -378,6 +390,88 @@ macOnly("BACKLOG-2794 — a refused concurrent import says so", () => {
   afterEach(() => {
     storeMessagesSpy?.mockRestore();
     storeAttachmentsSpy?.mockRestore();
+  });
+
+  it("refuses a delta import while a FORCE re-import holds the service", async () => {
+    /*
+     * THE SECOND REFUSAL SITE, driven rather than described.
+     *
+     * `importMessages` has TWO gates that refuse a caller because another run
+     * owns the service, and they are reached by different state:
+     *   - `forceReimportInProgress && !forceReimport`  (the one under test)
+     *   - `isImporting`                                (the next test)
+     * Both now carry `alreadyInProgress`, and the flag on the FIRST was
+     * unpinned: SR deleted it and 12,650 tests stayed green, because the only
+     * thing "covering" it was an orchestrator test restating the shape by hand.
+     * A fixture that repeats what a producer emits cannot fail when the producer
+     * changes — the same defect I found in the strip guard, one file over.
+     *
+     * So the flag is really set here: a REAL force run is held inside
+     * `doImport` (blocked at the permission check, which is the first thing it
+     * awaits and is already a seam in this suite), and a REAL delta call arrives
+     * while it holds. `error` is asserted by IDENTITY, because it is the only
+     * thing that distinguishes this gate from the `isImporting` one below —
+     * without it, this test would pass on a build where only the other site
+     * carried the flag.
+     */
+    installStorageSpies();
+
+    let releaseForce: () => void = () => {};
+    const forceIsInsideDoImport = new Promise<void>((resolve) => {
+      (permissionService.checkFullDiskAccess as jest.Mock).mockImplementationOnce(
+        async () => {
+          resolve();
+          await new Promise<void>((res) => { releaseForce = res; });
+          return { hasPermission: true };
+        },
+      );
+    });
+
+    const force = macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      testImportPlan({
+        mode: "reprocess",
+        storedFilters: { lookbackMonths: null, maxMessages: null },
+      }),
+    );
+    await forceIsInsideDoImport;
+
+    const refused = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: null } }),
+    );
+
+    /*
+     * The release is in a `finally` because a failed assertion here would
+     * otherwise leave the force run parked on the permission gate FOREVER —
+     * `isImporting` and `forceReimportInProgress` both still set — and every
+     * later test in this file would be refused for a reason it never asked
+     * about. Observed while running the control: deleting the flag reddened
+     * this test AND the next one, and only one of those reds was real. A test
+     * that poisons its neighbours reports failures nobody can locate.
+     */
+    try {
+      expect(refused.alreadyInProgress).toBe(true);
+      expect(refused.success).toBe(false);
+      // Identity, not shape: this refusal came from the FORCE gate.
+      expect(refused.error).toBe("Force reimport in progress");
+      expect(refused.messagesImported).toBe(0);
+    } finally {
+      releaseForce();
+      await force.catch(() => undefined);
+    }
+
+    // The refusal was scoped to the window, not a wedged service — otherwise
+    // every later assertion in this file would be describing a dead lock.
+    const after = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: null } }),
+    );
+    expect(after.alreadyInProgress).toBeUndefined();
+    expect(after.success).toBe(true);
   });
 
   it("returns alreadyInProgress rather than a bare failure", async () => {
