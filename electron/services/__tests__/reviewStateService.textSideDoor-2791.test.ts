@@ -148,6 +148,34 @@ describe("SR CONTROL — text rejection side door", () => {
     expect(stillIgnored.n).toBe(0);
   });
 
+  /**
+   * BACKLOG-2818 — the TEXT half of the shipped-row pin.
+   *
+   * The rejection in the test above is written by rejectReviewItems, which now
+   * uses REVIEW_REJECTION_REASON; read and write move together, so a renamed
+   * constant would leave that test green. This one spells the discriminator out
+   * LONGHAND ON PURPOSE — it is the value already persisted on users' disks by
+   * shipped builds, and a rename has to be caught on the text path too, where
+   * the side door (a rejected text restored as an ordinary, never-approved link)
+   * was the original defect.
+   */
+  it("a rejected TEXT row written by a shipped build (raw 'rejected_in_review') still routes back to the queue", async () => {
+    db.prepare(
+      `INSERT INTO ignored_communications (id, user_id, transaction_id, thread_id, reason, match_reason)
+       VALUES ('ig-shipped', ?, ?, ?, 'rejected_in_review', 'address_missing')`,
+    ).run(USER, TXN, THREAD);
+
+    expect(await restoreRejectedToQueue("ig-shipped")).toBe(1);
+
+    const after = getReviewState(TXN);
+    expect(after.count).toBe(1);
+    expect(after.items[0].thread_id).toBe(THREAD);
+    // Never linked: not in the audit, not in exports.
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM communications WHERE transaction_id=?").get(TXN),
+    ).toEqual({ n: 0 });
+  });
+
   it("an ORDINARY removal still restores as a link — the routing keys on the rejection reason, not on match_reason", () => {
     // A legacy BACKLOG-2319 removal also carries match_reason='address_missing'.
     // If the new routing keyed on that alone it would hijack every ordinary

@@ -76,6 +76,10 @@ import {
 } from "./db/communicationDbService";
 import { linkEmailToTransaction } from "./autoLinkService";
 import logService from "./logService";
+// BACKLOG-2818: the published lifecycle definition. The discriminator is a
+// persisted-data contract, so it is named here rather than spelled out at each
+// of the three sites (a read, a SQL predicate and a write) that have to agree.
+import { REVIEW_REJECTION_REASON } from "../types/ipc/communicationLifecycle";
 
 const MODULE = "ReviewStateService";
 
@@ -685,10 +689,11 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<num
   );
   if (!row) return 0;
 
-  // `reason` is the discriminator: only this service writes 'rejected_in_review'.
-  // match_reason alone would also match a legacy 2319 removal, whose restore
-  // must keep its existing link-recreating behaviour.
-  if (row.reason !== "rejected_in_review") return 0;
+  // `reason` is the discriminator: only this service writes
+  // REVIEW_REJECTION_REASON (BACKLOG-2818). match_reason alone would also match
+  // a legacy 2319 removal, whose restore must keep its existing link-recreating
+  // behaviour.
+  if (row.reason !== REVIEW_REJECTION_REASON) return 0;
 
   // THREAD-AWARE, matching restoreRemovedEmailThread.
   //
@@ -707,10 +712,14 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<num
            FROM ignored_communications ic
            JOIN emails e ON e.id = ic.email_id
           WHERE ic.transaction_id = ?
-            AND ic.reason = 'rejected_in_review'
+            AND ic.reason = ?
             AND e.thread_id IS NOT NULL
             AND e.thread_id = (SELECT thread_id FROM emails WHERE id = ?)`,
-        [row.transaction_id, row.email_id],
+        // BACKLOG-2818: BOUND, not interpolated. The sibling sweep has to agree
+        // with the single-row check four lines up; when both were spelled out as
+        // literals they could disagree, and a card would restore one email and
+        // leave its thread-mate behind.
+        [row.transaction_id, REVIEW_REJECTION_REASON, row.email_id],
       )
     : [];
 
@@ -867,7 +876,7 @@ export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: 
       email_id: item.email_id ?? undefined,
       thread_id: item.thread_id ?? undefined,
       original_communication_id: item.origin === "legacy" ? item.rowId : undefined,
-      reason: "rejected_in_review",
+      reason: REVIEW_REJECTION_REASON,
       // ALWAYS address_missing, including for a never-linked pending item.
       //
       // The suppression row is also what the Removed section renders and what
