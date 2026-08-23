@@ -12,6 +12,9 @@ import type { Transaction } from "@/types";
 import { formatAddress, formatLastExported } from "@/utils/formatUtils";
 import { ManualEntryBadge } from "./TransactionStatusWrapper";
 import { SubmissionStatusBadge } from "../../transactionDetailsModule/components/SubmissionStatusBadge";
+// BACKLOG-2805: display label only — the ternary still branches on the
+// stored enum, and its existing fall-through is unchanged.
+import { TRANSACTION_TYPE_LABELS } from "../../../constants/transactionTypes";
 
 // ============================================
 // TYPES
@@ -170,8 +173,8 @@ function TransactionMobileCardInner({
                   }`}
                 />
                 {transaction.transaction_type === "purchase"
-                  ? "Purchase"
-                  : "Sale"}
+                  ? TRANSACTION_TYPE_LABELS.purchase
+                  : TRANSACTION_TYPE_LABELS.sale}
               </span>
             )}
           </div>

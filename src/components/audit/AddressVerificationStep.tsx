@@ -14,6 +14,9 @@
  */
 import React, { useRef, useState, useEffect, useCallback } from "react";
 import type { AddressData, AddressSuggestion } from "../../hooks/useAuditTransaction";
+// BACKLOG-2805: the words on the two buttons. The values they emit are the
+// stored enum and are spelled out below, unchanged.
+import { TRANSACTION_TYPE_LABELS } from "../../constants/transactionTypes";
 
 interface AddressVerificationStepProps {
   addressData: AddressData;
@@ -174,7 +177,7 @@ function AddressVerificationStep({
             }`}
             data-testid="create-audit-type-purchase"
           >
-            Purchase
+            {TRANSACTION_TYPE_LABELS.purchase}
           </button>
           <button
             onClick={() => onTransactionTypeChange("sale")}
@@ -185,7 +188,7 @@ function AddressVerificationStep({
             }`}
             data-testid="create-audit-type-sale"
           >
-            Sale
+            {TRANSACTION_TYPE_LABELS.sale}
           </button>
         </div>
       </div>
