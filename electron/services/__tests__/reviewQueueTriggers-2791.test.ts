@@ -107,44 +107,52 @@ describe("BACKLOG-2791 CONTROL 5 — every link writer is enumerated and classif
     expect(unclassified).toEqual([]);
   });
 
-  it("the on-open trigger queues on BOTH its branches, including the phone-only early return", () => {
+  it("the on-open trigger applies the SPLIT on its fetch branch", () => {
+    // BACKLOG-2791 (founder ruling): the deal-scoped paths no longer queue
+    // everything. They run develop's classification with the ambiguous half
+    // queued, so what they must forward is the SPLIT flag.
     const sync = read("electron/services/emailSyncService.ts");
-    // The early return that leaked: it must now forward the flag.
-    expect(sync).toMatch(
-      /return this\.runAutoLinkOnly\(\s*transactionId,\s*contactAssignments,\s*queueForReviewInsteadOfLinking,?\s*\)/,
-    );
-    // ...and runAutoLinkOnly must have a queue path, not just accept the flag.
-    const body = sync.slice(sync.indexOf("private async runAutoLinkOnly"));
-    expect(body.slice(0, 1600)).toContain("syncReviewQueueForTransaction");
+    expect(sync).toContain("queueAmbiguousInsteadOfLinking: queueForReviewInsteadOfLinking");
   });
 
-  it("transaction CREATION with parties queues rather than links", () => {
-    // The most common entry point of all, and the one missed first time.
+  it("the phone-only early return links texts, as it always has", () => {
+    // This branch exists for PHONE-ONLY contacts, and texts are never
+    // classified (TASK-2087), so there is nothing to queue here. An earlier
+    // revision queued them, which emptied the linked count on phone-only deals.
+    const sync = read("electron/services/emailSyncService.ts");
+    const body = sync.slice(sync.indexOf("private async runAutoLinkOnly"));
+    expect(body.slice(0, 1400)).not.toContain("syncReviewQueueForTransaction");
+    expect(body.slice(0, 1400)).toContain("autoLinkCommunicationsForContact");
+  });
+
+  it("transaction CREATION with parties applies the split", () => {
+    // The most common entry point of all. An earlier revision redirected it to
+    // queue EVERYTHING (SR blocker 6), which is why a brand-new deal announced
+    // "0 linked successfully".
     const svc = read("electron/services/transactionService/transactionService.ts");
     const fn = svc.slice(
       svc.indexOf("async createAuditedTransaction"),
       svc.indexOf("async getTransactionWithContacts"),
     );
-    expect(fn).toContain("syncReviewQueueForTransaction");
-    expect(fn).not.toContain("autoLinkCommunicationsForContact(");
+    expect(fn).toContain("autoLinkCommunicationsForContact(");
+    expect(fn).toContain("queueAmbiguousInsteadOfLinking: true");
   });
 
-  it("assign-contact queues on BOTH branches, including the transaction-not-found fallback", () => {
+  it("assign-contact applies the split on BOTH branches, including the not-found fallback", () => {
     const svc = read("electron/services/transactionService/transactionService.ts");
     const fn = svc.slice(svc.indexOf("async assignContactToTransaction"));
     const upTo = fn.slice(0, fn.indexOf("\n  async "));
     expect(upTo).toContain("queueForReviewInsteadOfLinking: true");
-    expect(upTo).toContain("syncReviewQueueForTransaction");
-    expect(upTo).not.toContain("autoLinkCommunicationsForContact(");
+    expect(upTo).toContain("queueAmbiguousInsteadOfLinking: true");
   });
 
-  it("the contact-save paths use the contact-change axis, which ignores the watermark", () => {
-    for (const f of [
-      "electron/handlers/transactionCrudHandlers.ts",
-      "electron/handlers/contactHandlers.ts",
-    ]) {
-      expect(read(f)).toContain('reason: "contact-change"');
-    }
+  it("the contact-save paths run discovery with the split", () => {
+    // contactHandlers still sweeps via the review service (which itself applies
+    // the split); transactionCrudHandlers calls the classifier directly.
+    expect(read("electron/handlers/contactHandlers.ts")).toContain('reason: "contact-change"');
+    expect(read("electron/handlers/transactionCrudHandlers.ts")).toContain(
+      "queueAmbiguousInsteadOfLinking: true",
+    );
   });
 
   it("ONLY the open path advances the watermark", () => {

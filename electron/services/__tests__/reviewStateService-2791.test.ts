@@ -100,6 +100,14 @@ const V64_INDEXES = `
 function seed(db: DatabaseType): void {
   db.exec(SCHEMA);
   db.exec(V64_INDEXES);
+  // MIGRATION-ONLY COLUMNS (v56 tombstones). They are declared on NEITHER table
+  // in schema.sql, so a schema.sql-only fixture is a state the app never has:
+  // autoLinkService's candidate-transaction count reads `tc.removed_at` and
+  // threw "no such column", which its own catch swallowed into "found nothing".
+  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
+  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
+  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
+  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
   db.prepare(
     "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', 'oauth-1')",
   ).run(USER, "me@agent.com");
@@ -208,7 +216,7 @@ describe("reviewStateService (BACKLOG-2791)", () => {
       expect(rows.n).toBe(2);
     });
 
-    it("a contact-change sync finds mail that predates the watermark", async () => {
+    it("a newly relevant contact's older mail is found, not lost behind the watermark", async () => {
       // Open first with nothing to find → watermark advances to now.
       await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
 
@@ -224,15 +232,20 @@ describe("reviewStateService (BACKLOG-2791)", () => {
          VALUES ('old-1', 'from', 0, 'hash-old-1', 'paul@example.com')`,
       ).run();
 
-      const openRun = await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
-      expect(openRun.added).toBe(0);
-
+      // BACKLOG-2791 (founder ruling, 2026-08-22): classification is delegated to
+      // autoLinkCommunicationsForContact, which scans the deal's FULL window on
+      // every run — develop's behaviour, restored deliberately. So the watermark
+      // no longer BOUNDS discovery; it only decides what counts as newly
+      // announced. Mail that predates it is therefore found by either axis, and
+      // this test now asserts the property that still matters: a newly relevant
+      // contact's older mail is not lost.
       const changeRun = await syncReviewQueueForTransaction({
         transactionId: TXN,
         reason: "contact-change",
         contactIds: [CONTACT],
       });
       expect(changeRun.added).toBe(1);
+      expect(getReviewState(TXN).items.map((i) => i.email_id)).toEqual(["old-1"]);
     });
   });
 

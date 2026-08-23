@@ -229,16 +229,11 @@ describe("ensureTransactionEmailsSynced", () => {
    * ever linked without approval. It was also the BACKLOG-2620 non-convergence
    * shape: every unmatched record re-examined on every open, forever.
    *
-   * Now: ONE watermark-bounded sweep that adds what it finds to the Needs Review
-   * queue as pending. The cross-transaction completeness guarantee this test was
-   * written for is preserved — the deal still learns about its mail on open — it
-   * just arrives for approval instead of arriving linked.
-   *
-   * "background", not "open": this branch must NOT advance the watermark, or the
-   * renderer's on-open sync would report 0 new items and the popup would never
-   * fire for exactly the mail it exists to announce.
+   * Now: develop\'s classification again, with the address-missing half queued
+   * instead of linked-and-flagged, so the founder-dictated popup\'s promise
+   * ("only linked after you approve them") stays true.
    */
-  it("COVERED window: no fetch, and the review queue is swept instead of auto-linking", async () => {
+  it("COVERED window: no fetch, and auto-link runs with the ambiguous half queued", async () => {
     mockGetSyncState.mockReturnValue({
       newest_cached_at: "2028-06-01T00:00:00.000Z", // covers reqEnd Jan 30 2028 (closed_at Dec 31 2027 + 30d)
       oldest_cached_at: "2025-01-01T00:00:00.000Z",
@@ -247,12 +242,14 @@ describe("ensureTransactionEmailsSynced", () => {
 
     expect(result.skipped).toBe("covered");
     expect(mockSyncTransactionEmails).not.toHaveBeenCalled();
-    expect(mockSyncReviewQueue).toHaveBeenCalledWith({
+    // BACKLOG-2791 (founder ruling, 2026-08-22): the SPLIT, not a blanket queue.
+    // develop's classification runs again — confident emails and every text
+    // link — and only the address-missing half is queued for approval.
+    expect(mockAutoLink).toHaveBeenCalledWith({
+      contactId: "c1",
       transactionId: "tx-1",
-      reason: "background",
+      queueAmbiguousInsteadOfLinking: true,
     });
-    // The silent link is GONE from this path — that is the point of the change.
-    expect(mockAutoLink).not.toHaveBeenCalled();
   });
 
   it("no connected provider → skipped:no_provider", async () => {

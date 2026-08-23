@@ -50,7 +50,6 @@ jest.mock("../../workers/contactWorkerPool", () => ({ queryContacts: jest.fn(), 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
 import {
   getReviewState,
-  syncReviewQueueForTransaction,
   rejectReviewItems,
   restoreRejectedToQueue,
 } from "../reviewStateService";
@@ -65,6 +64,14 @@ const V64_INDEXES = `
 
 function seed(db: DatabaseType): void {
   db.exec(SCHEMA); db.exec(V64_INDEXES);
+  // MIGRATION-ONLY COLUMNS (v56 tombstones). They are declared on NEITHER table
+  // in schema.sql, so a schema.sql-only fixture is a state the app never has:
+  // autoLinkService's candidate-transaction count reads `tc.removed_at` and
+  // threw "no such column", which its own catch swallowed into "found nothing".
+  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
+  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
+  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
+  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
   db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?,?,'google','o1')").run(USER, "me@a.com");
   db.prepare("INSERT INTO transactions (id, user_id, property_address, started_at, closed_at) VALUES (?,?,?,?,?)")
     .run(TXN, USER, "1 St", "2026-01-01T00:00:00.000Z", "2026-12-31T00:00:00.000Z");
@@ -82,9 +89,19 @@ describe("SR CONTROL — text rejection side door", () => {
   afterEach(async () => { try { await harness.cleanup(); } catch { /* noop */ } });
 
   it("a rejected pending TEXT, restored the way the UI restores it, returns to the QUEUE and is never silently linked", async () => {
-    // 1. Discovery queues the text thread as PENDING.
-    const s = await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
-    expect(s.added).toBe(1);
+    // 1. A PENDING text thread.
+    //
+    // Constructed directly rather than through discovery: after the founder's
+    // 2026-08-22 ruling texts ALWAYS auto-link (TASK-2087 stands), so a sweep no
+    // longer produces one. The side door still has to stay shut for any pending
+    // text that does exist — rows queued by an earlier build, and anything a
+    // future change queues — so the protection is tested on the row itself
+    // instead of on a discovery path that can no longer create it.
+    db.prepare(
+      `INSERT INTO pending_review_communications (id, user_id, transaction_id, email_id, thread_id)
+       VALUES ('p-text', ?, ?, NULL, ?)`,
+    ).run(USER, TXN, THREAD);
+
     const item = getReviewState(TXN).items[0];
     expect(item.kind).toBe("text");
 

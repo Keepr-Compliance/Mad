@@ -29,7 +29,7 @@
 import * as Sentry from "@sentry/electron/main";
 import transactionService from "./transactionService";
 import emailSyncService, { EMAIL_CACHE_FRESHNESS_MS } from "./emailSyncService";
-import { syncReviewQueueForTransaction } from "./reviewStateService";
+import { autoLinkCommunicationsForContact } from "./autoLinkService";
 import logService from "./logService";
 import { computeTransactionDateRange, DEFAULT_BUFFER_DAYS } from "../utils/emailDateRange";
 import { getEmailsByContactId } from "./db/contactDbService";
@@ -234,13 +234,21 @@ export async function ensureTransactionEmailsSynced(params: {
       // is one pass bounded by the deal's ingestion watermark
       // (transactions.last_pending_scan_at), so records that already lost are
       // never re-examined — the BACKLOG-2620 convergence requirement.
-      try {
-        await syncReviewQueueForTransaction({ transactionId, reason: "background" });
-      } catch (linkError) {
-        logService.warn("[BACKLOG-2791] review-queue sync (covered path) failed", "TxnSyncTrigger", {
-          transactionId,
-          error: linkError instanceof Error ? linkError.message : "Unknown",
-        });
+      for (const assignment of contactAssignments) {
+        try {
+          await autoLinkCommunicationsForContact({
+            contactId: assignment.contact_id,
+            transactionId,
+            // BACKLOG-2791: confident emails and every text link, as they always
+            // have; only the address-missing half is queued for approval.
+            queueAmbiguousInsteadOfLinking: true,
+          });
+        } catch (linkError) {
+          logService.warn("[BACKLOG-1802] auto-link (covered path) failed", "TxnSyncTrigger", {
+            contactId: assignment.contact_id,
+            error: linkError instanceof Error ? linkError.message : "Unknown",
+          });
+        }
       }
       lastSyncAt.set(transactionId, Date.now());
       return { ran: true, reason, skipped: "covered", windowsFetched: 0 };

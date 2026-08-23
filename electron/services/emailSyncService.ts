@@ -1101,32 +1101,25 @@ class EmailSyncService {
     let totalAlreadyLinked = 0;
     let totalErrors = 0;
 
-    // BACKLOG-2791: the on-open trigger queues instead of linking, so that mail
-    // the user has never seen reaches the Needs Review screen rather than
-    // joining the audit silently. One delta-scoped pass replaces the
-    // per-contact full-window re-scan below.
-    if (queueForReviewInsteadOfLinking) {
-      const { syncReviewQueueForTransaction } = await import("./reviewStateService");
-      try {
-        await syncReviewQueueForTransaction({ transactionId, reason: "background" });
-      } catch (error) {
-        totalErrors++;
-        logService.warn("[BACKLOG-2791] review-queue sync failed after fetch", "EmailSync", {
-          transactionId,
-          error: error instanceof Error ? error.message : "Unknown",
-        });
-      }
-    } else
+    // BACKLOG-2791 (founder ruling, 2026-08-22): the SHIPPED split is restored.
+    // An earlier revision of this PR queued EVERYTHING found here, which made
+    // the popup read "0 linked successfully" on every run. The classification is
+    // develop's again — confident emails link, texts link — and the only change
+    // is that the ambiguous half is queued for review instead of being linked
+    // with an address_missing flag.
+    let totalQueuedForReview = 0;
     for (const assignment of contactAssignments) {
       try {
         const result = await autoLinkCommunicationsForContact({
           contactId: assignment.contact_id,
           transactionId,
+          queueAmbiguousInsteadOfLinking: queueForReviewInsteadOfLinking,
         });
 
         totalEmailsLinked += result.emailsLinked;
         totalMessagesLinked += result.messagesLinked;
         totalAlreadyLinked += result.alreadyLinked;
+        totalQueuedForReview += result.queuedForReview ?? 0;
         totalErrors += result.errors;
       } catch (error) {
         totalErrors++;
@@ -1208,6 +1201,9 @@ class EmailSyncService {
       totalEmailsLinked,
       totalMessagesLinked,
       totalAlreadyLinked,
+      // BACKLOG-2791: the popup's R. Reported separately from linked counts so a
+      // queued item can never be counted as a link.
+      totalQueuedForReview,
       totalErrors,
     };
     if (providerWarning) {
@@ -1231,20 +1227,11 @@ class EmailSyncService {
     let totalAlreadyLinked = 0;
     let totalErrors = 0;
 
-    if (queueForReviewInsteadOfLinking) {
-      const { syncReviewQueueForTransaction } = await import("./reviewStateService");
-      try {
-        await syncReviewQueueForTransaction({ transactionId, reason: "background" });
-      } catch (error) {
-        totalErrors++;
-        logService.warn("[BACKLOG-2791] review-queue sync failed (phone-only path)", "EmailSync", {
-          transactionId,
-          error: error instanceof Error ? error.message : "Unknown",
-        });
-      }
-      return { success: totalErrors === 0, linked: 0, skipped: 0 };
-    }
-
+    // BACKLOG-2791: nothing special to do here any more. This path exists for
+    // PHONE-ONLY contacts, and texts are never classified — TASK-2087 removed
+    // address filtering from messages entirely, so every matching thread links,
+    // exactly as it does on develop. The earlier revision queued them, which is
+    // what emptied the linked count on phone-only deals.
     for (const assignment of contactAssignments) {
       try {
         const result = await autoLinkCommunicationsForContact({
@@ -1703,29 +1690,13 @@ class EmailSyncService {
     // is scoped to THIS contact's identities across the full window, which is
     // the direction the on-open watermark cannot cover (a newly added contact's
     // matching mail is older than the watermark).
-    let autoLinkResult: AutoLinkResult;
-    if (queueForReviewInsteadOfLinking) {
-      const { syncReviewQueueForTransaction } = await import("./reviewStateService");
-      const queued = await syncReviewQueueForTransaction({
-        transactionId,
-        reason: "contact-change",
-        contactIds: [contactId],
-      });
-      // Reported as "queued", never as "linked" — a caller that renders these
-      // numbers must not claim links that were not made.
-      autoLinkResult = {
-        emailsLinked: 0,
-        messagesLinked: 0,
-        alreadyLinked: 0,
-        errors: 0,
-        queuedForReview: queued.added,
-      };
-    } else {
-      autoLinkResult = await autoLinkCommunicationsForContact({
-        contactId,
-        transactionId,
-      });
-    }
+    // BACKLOG-2791: develop's classification, with the ambiguous half queued on
+    // the details-discovery paths. Confident emails and every text still link.
+    const autoLinkResult: AutoLinkResult = await autoLinkCommunicationsForContact({
+      contactId,
+      transactionId,
+      queueAmbiguousInsteadOfLinking: queueForReviewInsteadOfLinking,
+    });
 
     return {
       emailsFetched,

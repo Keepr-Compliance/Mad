@@ -70,15 +70,11 @@ import crypto from "crypto";
 import { BrowserWindow } from "electron";
 import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
 import {
-  getIgnoredEmailIdsForTransaction,
-  getIgnoredThreadIdsForTransaction,
   createThreadCommunicationReference,
   addIgnoredCommunication,
   confirmEmailLinksByEmailIds,
 } from "./db/communicationDbService";
 import { linkEmailToTransaction } from "./autoLinkService";
-import { computeTransactionDateRange } from "../utils/emailDateRange";
-import { reactionExclusion } from "./db/reactionExclusion";
 import logService from "./logService";
 
 const MODULE = "ReviewStateService";
@@ -174,15 +170,7 @@ export interface PendingSyncResult {
   added: number;
   /**
    * Communications THIS run LINKED outright, without needing approval — the
-   * popup's "L".
-   *
-   * STRUCTURALLY 0 TODAY, and reported rather than assumed. This service only
-   * ever writes to `pending_review_communications`; every deal-scoped discovery
-   * path was redirected to queue rather than link (SR review blockers 4-6), so
-   * nothing on this path links without an approval. The field exists so the
-   * popup shows a MEASURED number instead of a hardcoded zero — if confident
-   * auto-linking is ever restored for these paths, the count flows through
-   * without touching the copy.
+   * popup's "L". Confident emails plus every matching text thread.
    */
   linked: number;
   /** Outstanding total after the run (badge). */
@@ -421,132 +409,8 @@ function getTransactionRow(transactionId: string): TxnRow | undefined {
   );
 }
 
-function getIdentities(
-  transactionId: string,
-  contactIds?: string[],
-): { emails: string[]; phones: string[] } {
-  // Narrowed into a local so the scoped branch needs no non-null assertion.
-  const scopedIds = contactIds && contactIds.length > 0 ? contactIds : null;
-  const idFilter = scopedIds
-    ? `IN (${scopedIds.map(() => "?").join(", ")})`
-    : `IN (SELECT contact_id FROM transaction_contacts WHERE transaction_id = ?)`;
-  const params: string[] = scopedIds ?? [transactionId];
 
-  const emails = dbAll<{ email: string }>(
-    `SELECT DISTINCT LOWER(TRIM(email)) AS email FROM contact_emails
-      WHERE contact_id ${idFilter} AND email IS NOT NULL AND TRIM(email) != ''`,
-    params,
-  ).map((r) => r.email);
 
-  // phone_e164 is the NOT NULL normalized column on contact_phones (there is no
-  // `phone_number`); phone_normalized is the last-10-digits lookup key
-  // BACKLOG-1727 added. Both are collected because findCandidateThreadIds
-  // matches on a digit suffix and either form yields the same suffix.
-  const phones = dbAll<{ phone: string }>(
-    `SELECT DISTINCT phone_e164 AS phone FROM contact_phones
-      WHERE contact_id ${idFilter} AND phone_e164 IS NOT NULL AND TRIM(phone_e164) != ''`,
-    params,
-  ).map((r) => r.phone);
-
-  return { emails, phones };
-}
-
-/**
- * Candidate emails: match a deal identity, inside the deal's window, NOT already
- * linked, NOT already pending, NOT previously rejected. `since` (the watermark)
- * bounds the scan to newly-INGESTED rows on the T1 path.
- */
-function findCandidateEmailIds(
-  txn: TxnRow,
-  addresses: string[],
-  range: { start: Date; end: Date },
-  since: string | null,
-): string[] {
-  if (addresses.length === 0) return [];
-  const placeholders = addresses.map(() => "?").join(", ");
-  // SHAPE CHOSEN BY MEASUREMENT, not by preference. The join-and-filter form
-  // this replaces produced:
-  //     SCAN e USING INDEX sqlite_autoindex_emails_1
-  // i.e. a FULL SCAN of `emails` on every sweep — the planner drove from `e` and
-  // probed participants by email_id, never touching the address index. Driving
-  // the address match as a subquery and keeping the window predicate on `e`
-  // gives (EXPLAIN QUERY PLAN, real schema.sql):
-  //     SEARCH e  USING INDEX idx_emails_user_sent (user_id=? AND sent_at>? AND sent_at<?)
-  //     SEARCH ep USING INDEX idx_email_participants_email_address (email_address=?)
-  //     SEARCH c  USING COVERING INDEX idx_comm_email_txn
-  // Both sides indexed, and the scan is bounded by the deal's own window. The
-  // remaining `SCAN p` is the pending queue itself, which is bounded by how much
-  // the user has left to review.
-  const sql = `
-    SELECT DISTINCT e.id
-      FROM emails e
-     WHERE e.user_id = ?
-       AND e.sent_at >= ?
-       AND e.sent_at <= ?
-       ${since ? "AND e.created_at > ?" : ""}
-       AND e.id IN (
-         SELECT ep.email_id FROM email_participants ep
-          WHERE ep.email_address IN (${placeholders})
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM communications c
-          WHERE c.email_id = e.id AND c.transaction_id = ?
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM pending_review_communications p
-          WHERE p.email_id = e.id AND p.transaction_id = ?
-       )
-  `;
-  const params: (string | number)[] = [
-    txn.user_id,
-    range.start.toISOString(),
-    range.end.toISOString(),
-  ];
-  if (since) params.push(since);
-  params.push(...addresses, txn.id, txn.id);
-  return dbAll<{ id: string }>(sql, params).map((r) => r.id);
-}
-
-/** Candidate text threads — same exclusions, keyed on thread_id. */
-function findCandidateThreadIds(
-  txn: TxnRow,
-  phones: string[],
-  range: { start: Date; end: Date },
-  since: string | null,
-): string[] {
-  if (phones.length === 0) return [];
-  const phoneConditions = phones.map(() => "m.participants_flat LIKE ?").join(" OR ");
-  const sql = `
-    SELECT DISTINCT m.thread_id AS thread_id
-      FROM messages m
-     WHERE m.user_id = ?
-       AND m.channel IN ('sms', 'imessage')
-       AND m.duplicate_of IS NULL
-       AND m.thread_id IS NOT NULL
-       AND ${reactionExclusion("m")}
-       AND (${phoneConditions})
-       AND m.sent_at >= ?
-       AND m.sent_at <= ?
-       ${since ? "AND m.created_at > ?" : ""}
-       AND m.thread_id NOT IN (
-         SELECT thread_id FROM communications
-          WHERE transaction_id = ? AND thread_id IS NOT NULL
-       )
-       AND m.thread_id NOT IN (
-         SELECT thread_id FROM pending_review_communications
-          WHERE transaction_id = ? AND thread_id IS NOT NULL
-       )
-  `;
-  const params: (string | number)[] = [txn.user_id];
-  for (const phone of phones) {
-    const digits = phone.replace(/\D/g, "");
-    params.push(`%${digits.length > 10 ? digits.slice(-10) : digits}%`);
-  }
-  params.push(range.start.toISOString(), range.end.toISOString());
-  if (since) params.push(since);
-  params.push(txn.id, txn.id);
-  return dbAll<{ thread_id: string }>(sql, params).map((r) => r.thread_id);
-}
 
 export interface ReviewQueueChangedEvent {
   transactionId: string;
@@ -579,6 +443,38 @@ function broadcastReviewQueueChanged(payload: ReviewQueueChangedEvent): void {
 }
 
 /**
+ * Queue ONE email for review, without linking it.
+ *
+ * The single write-point for the ambiguous half of develop's classification
+ * (BACKLOG-2791 founder ruling): the confident half still links exactly as it
+ * always has, and only the address-missing half lands here.
+ *
+ * Returns false when the row already existed — the caller counts that as
+ * "already handled", never as newly queued, so the popup's R stays a true delta.
+ */
+export async function queueEmailForReview(
+  transactionId: string,
+  emailId: string,
+  userId: string,
+): Promise<boolean> {
+  // A previously REJECTED email must not be re-queued; the suppression row is
+  // the same one every discovery path already filters on.
+  const rejected = dbGet<{ id: string }>(
+    "SELECT id FROM ignored_communications WHERE transaction_id = ? AND email_id = ?",
+    [transactionId, emailId],
+  );
+  if (rejected) return false;
+
+  const res = dbRun(
+    `INSERT OR IGNORE INTO pending_review_communications
+       (id, user_id, transaction_id, email_id, thread_id, found_at)
+     VALUES (?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)`,
+    [crypto.randomUUID(), userId, transactionId, emailId],
+  );
+  return (res.changes ?? 0) > 0;
+}
+
+/**
  * THE sync. Adds newly-found communications to the queue as PENDING — it never
  * links. Returns how many were added (P2 shows only when > 0) and the
  * outstanding total (B1 badge).
@@ -592,49 +488,51 @@ export async function syncReviewQueueForTransaction(opts: {
   const txn = getTransactionRow(transactionId);
   if (!txn) return { added: 0, linked: 0, outstanding: 0 };
 
-  const range = computeTransactionDateRange({
-    started_at: txn.started_at,
-    created_at: txn.created_at,
-    closed_at: txn.closed_at,
-  });
 
-  // Both watermark-scoped reasons filter on it; only "open" advances it.
+  // Only "open" advances the watermark; every reason may read it.
   const previousWatermark = txn.last_pending_scan_at;
-  const since = reason === "contact-change" ? null : previousWatermark;
-  const { emails, phones } = getIdentities(transactionId, contactIds);
 
-  const rejectedEmailIds = new Set(getIgnoredEmailIdsForTransaction(transactionId));
-  const rejectedThreadIds = new Set(getIgnoredThreadIdsForTransaction(transactionId));
+  // ONE discovery mechanism, not two.
+  //
+  // BACKLOG-2791 (founder ruling, 2026-08-22): this sweep applies DEVELOP'S
+  // classification rather than queueing everything —
+  //   texts  -> always link (TASK-2087 removed address filtering from messages,
+  //             so a matching thread has never needed review),
+  //   emails -> the shipped split: confident links, address-missing queues.
+  // It is delegated to autoLinkCommunicationsForContact so the predicate, the
+  // multi-deal disambiguation and the rejection suppression stay in the ONE
+  // place that implements them. An earlier revision ALSO ran its own candidate
+  // loop here; because that list was computed before the autoLink pass, it
+  // re-queued the very emails autoLink had just linked.
+  //
+  // The watermark still decides WHETHER to sweep and what "new" means; it no
+  // longer decides what happens to what is found.
+  const { autoLinkCommunicationsForContact } = await import("./autoLinkService");
+  const assignedContacts =
+    contactIds && contactIds.length > 0
+      ? contactIds
+      : dbAll<{ contact_id: string }>(
+          "SELECT contact_id FROM transaction_contacts WHERE transaction_id = ?",
+          [transactionId],
+        ).map((r) => r.contact_id);
 
-  const emailIds = findCandidateEmailIds(txn, emails, range, since).filter(
-    (id) => !rejectedEmailIds.has(id),
-  );
-  const threadIds = findCandidateThreadIds(txn, phones, range, since).filter(
-    (id) => !rejectedThreadIds.has(id),
-  );
-
+  let linked = 0;
   let added = 0;
-  for (const emailId of emailIds) {
-    // INSERT OR IGNORE + the UNIQUE index is the DB backstop for the dedup
-    // predicate: even a racing sync cannot double-queue an item. `changes`
-    // therefore counts only rows that were genuinely NEW, which is what makes
-    // `added` (and so the P2 popup) honest.
-    const res = dbRun(
-      `INSERT OR IGNORE INTO pending_review_communications
-         (id, user_id, transaction_id, email_id, thread_id, found_at)
-       VALUES (?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)`,
-      [crypto.randomUUID(), txn.user_id, transactionId, emailId],
-    );
-    if ((res.changes ?? 0) > 0) added++;
-  }
-  for (const threadId of threadIds) {
-    const res = dbRun(
-      `INSERT OR IGNORE INTO pending_review_communications
-         (id, user_id, transaction_id, email_id, thread_id, found_at)
-       VALUES (?, ?, ?, NULL, ?, CURRENT_TIMESTAMP)`,
-      [crypto.randomUUID(), txn.user_id, transactionId, threadId],
-    );
-    if ((res.changes ?? 0) > 0) added++;
+  for (const contactId of assignedContacts) {
+    try {
+      const r = await autoLinkCommunicationsForContact({
+        contactId,
+        transactionId,
+        queueAmbiguousInsteadOfLinking: true,
+      });
+      linked += r.emailsLinked + r.messagesLinked;
+      added += r.queuedForReview ?? 0;
+    } catch (error) {
+      await logService.warn(
+        `[BACKLOG-2791] discovery failed for contact ${contactId}: ${error instanceof Error ? error.message : "Unknown"}`,
+        MODULE,
+      );
+    }
   }
 
   // `added` is what the user has not been told about yet.
@@ -677,9 +575,7 @@ export async function syncReviewQueueForTransaction(opts: {
   broadcastReviewQueueChanged({
     transactionId,
     added,
-    // Measured, not assumed: this function performs no INSERT into
-    // `communications`, so nothing it does can be reported as linked.
-    linked: 0,
+    linked,
     outstanding: countReviewItems(transactionId),
     reason,
   });
@@ -688,11 +584,12 @@ export async function syncReviewQueueForTransaction(opts: {
     transactionId,
     reason,
     added,
+    linked,
     scopedContacts: contactIds?.length ?? null,
-    since,
+    previousWatermark,
   });
 
-  return { added, linked: 0, outstanding: countReviewItems(transactionId) };
+  return { added, linked, outstanding: countReviewItems(transactionId) };
 }
 
 /**

@@ -11,7 +11,6 @@ import { getEarliestCommunicationDate } from "../services/transactionService";
 import type { AuditedTransactionData } from "../services/transactionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
-import { syncReviewQueueForTransaction } from "../services/reviewStateService";
 import emailSyncService from "../services/emailSyncService";
 // BACKLOG-1802: automatic per-transaction email sync on create/open/date-change.
 // BACKLOG-1832: isAutoSyncInFlight supports mount-time spinner state query.
@@ -992,16 +991,33 @@ export function registerTransactionCrudHandlers(
       // window: bounded enough to await. The multi-deal loop in contacts:update
       // is NOT awaited for exactly this reason. The provider fetch below stays
       // fire-and-forget, so the 820 regression cannot return.
-      let review: { added: number; outstanding: number } | undefined;
+      let review: { added: number; linked: number; outstanding: number } | undefined;
       if (addOperations.length > 0) {
         try {
-          review = await syncReviewQueueForTransaction({
-            transactionId: validatedTransactionId as string,
-            reason: "contact-change",
-            contactIds: addOperations.map((op) => op.contactId),
-          });
+          const { autoLinkCommunicationsForContact } = await import(
+            "../services/autoLinkService"
+          );
+          const { countReviewItems } = await import("../services/reviewStateService");
+          let linked = 0;
+          let added = 0;
+          for (const op of addOperations) {
+            const r = await autoLinkCommunicationsForContact({
+              contactId: op.contactId,
+              transactionId: validatedTransactionId as string,
+              // BACKLOG-2791: develop's split — confident emails and every text
+              // link; the address-missing half waits for approval.
+              queueAmbiguousInsteadOfLinking: true,
+            });
+            linked += r.emailsLinked + r.messagesLinked;
+            added += r.queuedForReview ?? 0;
+          }
+          review = {
+            added,
+            linked,
+            outstanding: countReviewItems(validatedTransactionId as string),
+          };
         } catch (error) {
-          logService.warn("[BACKLOG-2791] review-queue sync failed after contact save", "Transactions", {
+          logService.warn("[BACKLOG-2791] discovery failed after contact save", "Transactions", {
             error: error instanceof Error ? error.message : "Unknown",
           });
         }

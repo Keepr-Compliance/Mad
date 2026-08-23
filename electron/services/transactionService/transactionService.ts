@@ -27,7 +27,7 @@ import logService from "../logService";
 import { getContactNames } from "../contactsService";
 import { FIRST_SCAN_LOOKBACK_MONTHS } from "../../constants";
 import { createCommunicationReference } from "../messageMatchingService";
-import { autoLinkCommunicationsForContact } from "../autoLinkService";
+import { autoLinkCommunicationsForContact, type AutoLinkResult } from "../autoLinkService";
 import emailSyncService from "../emailSyncService";
 import { dbGet, dbAll } from "../db/core/dbConnection";
 import { isTransactionFrozen } from "../transactionFreezePolicy";
@@ -1190,39 +1190,39 @@ class TransactionService {
       const transactionId = transaction.id;
 
       if (contact_assignments && contact_assignments.length > 0) {
-        // BACKLOG-2791: creating a deal WITH parties is a discovery event on the
-        // deal surface, so it QUEUES for review rather than linking.
-        //
-        // This writer was missed in the first enumeration, and it is the worst
-        // one to miss: it fires at the most common entry point of all. Left
-        // linking, everything discoverable was already in the audit before the
-        // deal was ever opened, so the queue was empty on first open and
-        // "nothing is ever silently linked" was bypassed for the majority of
-        // real deals while every test still passed.
-        //
-        // The sweep is identity-scoped to the parties just assigned, on the
-        // contact-change axis — the deal has no watermark yet and its parties'
-        // mail is older than "now" by definition.
-        try {
-          const { syncReviewQueueForTransaction } = await import(
-            "../reviewStateService"
-          );
-          const queued = await syncReviewQueueForTransaction({
-            transactionId,
-            reason: "contact-change",
-            contactIds: contact_assignments.map((a) => a.contact_id),
-          });
-          if (queued.added > 0) {
-            await logService.info(
-              `Queued ${queued.added} communication(s) for review on the new transaction`,
+        // BACKLOG-2791 (founder ruling, 2026-08-22): develop's behaviour on
+        // creation is restored. SR review blocker 6 had redirected this to queue
+        // EVERYTHING, which is why a brand-new deal announced "0 linked
+        // successfully" — on the most common entry point of all. Confident
+        // emails and every text link here as they always have; only the
+        // address-missing half waits for approval.
+        let totalEmailsLinked = 0;
+        let totalMessagesLinked = 0;
+        let totalQueuedForReview = 0;
+
+        for (const assignment of contact_assignments) {
+          try {
+            const autoLinkResult = await autoLinkCommunicationsForContact({
+              contactId: assignment.contact_id,
+              transactionId,
+              queueAmbiguousInsteadOfLinking: true,
+            });
+            totalEmailsLinked += autoLinkResult.emailsLinked;
+            totalMessagesLinked += autoLinkResult.messagesLinked;
+            totalQueuedForReview += autoLinkResult.queuedForReview ?? 0;
+          } catch (error) {
+            await logService.warn(
+              `Auto-link failed for contact ${assignment.contact_id}: ${error instanceof Error ? error.message : "Unknown"}`,
               "TransactionService.createAuditedTransaction",
-              { transactionId, contactCount: contact_assignments.length },
             );
           }
-        } catch (error) {
-          await logService.warn(
-            `[BACKLOG-2791] review-queue sync failed on create: ${error instanceof Error ? error.message : "Unknown"}`,
+        }
+
+        if (totalEmailsLinked > 0 || totalMessagesLinked > 0 || totalQueuedForReview > 0) {
+          await logService.info(
+            `Linked ${totalEmailsLinked} emails and ${totalMessagesLinked} messages, queued ${totalQueuedForReview} for review, on the new transaction`,
             "TransactionService.createAuditedTransaction",
+            { transactionId, contactCount: contact_assignments.length },
           );
         }
       }
@@ -1325,32 +1325,29 @@ class TransactionService {
       // Discovery failing must never fail the ASSIGNMENT the user asked for —
       // the contact is already assigned by this point, and the next open sweeps
       // again anyway. Warn-log and return a well-formed result.
-      let queuedForReview = 0;
+      // BACKLOG-2791: develop's classification with the ambiguous half queued.
+      // Discovery failing must never fail the ASSIGNMENT the user asked for.
+      let autoLink: AutoLinkResult = {
+        emailsLinked: 0,
+        messagesLinked: 0,
+        alreadyLinked: 0,
+        errors: 0,
+        queuedForReview: 0,
+      };
       try {
-        const { syncReviewQueueForTransaction } = await import("../reviewStateService");
-        const queued = await syncReviewQueueForTransaction({
+        autoLink = await autoLinkCommunicationsForContact({
+          contactId,
           transactionId,
-          reason: "contact-change",
-          contactIds: [contactId],
+          queueAmbiguousInsteadOfLinking: true,
         });
-        queuedForReview = queued.added;
       } catch (error) {
         await logService.warn(
-          `[BACKLOG-2791] review-queue sync failed after contact assignment: ${error instanceof Error ? error.message : "Unknown"}`,
+          `[BACKLOG-2791] discovery failed after contact assignment: ${error instanceof Error ? error.message : "Unknown"}`,
           "TransactionService.assignContactToTransaction",
         );
       }
 
-      return {
-        success: true,
-        autoLink: {
-          emailsLinked: 0,
-          messagesLinked: 0,
-          alreadyLinked: 0,
-          errors: 0,
-          queuedForReview,
-        },
-      };
+      return { success: true, autoLink };
     } catch (error) {
       await logService.warn(
         `Auto-link failed after contact assignment: ${error instanceof Error ? error.message : "Unknown"}`,
