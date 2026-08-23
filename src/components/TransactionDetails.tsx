@@ -1454,7 +1454,7 @@ function TransactionDetails({
       {showSubmitModal && (
         <SubmitForReviewModal
           transaction={transaction}
-          emailThreadCount={transaction.email_count || 0}
+          emailCount={transaction.email_count || 0}
           textThreadCount={transaction.text_thread_count || 0}
           attachmentCount={dbAttachmentCounts.total}
           emailAttachmentCount={dbAttachmentCounts.emailAttachments}
