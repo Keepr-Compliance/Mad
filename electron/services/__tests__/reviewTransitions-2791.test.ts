@@ -136,6 +136,28 @@ describe("SUGGESTED ->", () => {
 });
 
 describe("REMOVED -> (the reverse paths)", () => {
+  /**
+   * BACKLOG-2818 — a rejection row written by a SHIPPED build still routes home.
+   *
+   * Every other rejection in this file is written by rejectReviewItems, which
+   * now uses REVIEW_REJECTION_REASON — so read and write would move together and
+   * a renamed constant would leave the whole file green while silently
+   * reclassifying every row already on a user's disk as an ordinary removal
+   * (and handing them a one-click path from "rejected, never approved" to
+   * "linked"). The literal below is spelled out LONGHAND ON PURPOSE: it is the
+   * value shipped builds persisted, and it is what makes that rename go red.
+   */
+  it("a rejection row written by a shipped build (raw 'rejected_in_review') still restores to SUGGESTED", async () => {
+    addEmail("e-shipped", "Are you free Thursday?");
+    db.prepare(
+      `INSERT INTO ignored_communications (id,user_id,transaction_id,email_id,reason,match_reason)
+       VALUES ('ig-shipped',?,?,'e-shipped','rejected_in_review','address_missing')`,
+    ).run(U, T);
+
+    expect(await restoreRejectedToQueue("ig-shipped")).toBe(1);
+    expect(where()).toEqual({ suggested: ["e-shipped"], linked: [], removed: [] });
+  });
+
   it("restore of a REVIEW rejection -> back to SUGGESTED, never straight to linked", async () => {
     addEmail("e-miss", "Are you free Thursday?");
     await syncReviewQueueForTransaction({ transactionId: T, reason: "open" });
