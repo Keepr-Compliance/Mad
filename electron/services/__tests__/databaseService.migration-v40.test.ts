@@ -116,21 +116,34 @@ const realDatabase = require(
 
 const USER_ID = "user-v40-test";
 
+/**
+ * BACKLOG-2630: every `normalized` value below is DERIVED by running the live
+ * helper, not written down.
+ *
+ * v40 `require`s `normalizePhoneLookupKey` at migration time rather than
+ * transcribing the rule, so v40's backfill FLOATS: it emits whatever the current
+ * rule emits, and hard-coding its output would pin this suite to the rule as it
+ * stood on the day it was written rather than to the property it is testing —
+ * that the migration and the write paths agree with the shared helper.
+ *
+ * Under the pre-2630 rule these were "4155550109", "2079460958" and "12345";
+ * the first two moved when the key gained its country code, the short code did
+ * not. The whole point of deriving them is that this comment can go stale
+ * without the assertions doing so.
+ */
 const TEST_PHONES = {
   usFormatted: {
     raw: "+1 (415) 555-0109",
     e164: "+14155550109",
-    normalized: "4155550109",
+    normalized: normalizePhoneLookupKey("+14155550109"),
   },
   ukFormatted: {
-    // After normalizeToE164 (which strips non-digits then prefixes +) this becomes
-    // +442079460958. normalizePhoneLookupKey then takes the last 10 digits → 2079460958.
     raw: "+44 20 7946 0958",
-    normalized: "2079460958",
+    normalized: normalizePhoneLookupKey("+442079460958"),
   },
   shortCode: {
     raw: "12345",
-    normalized: "12345",
+    normalized: normalizePhoneLookupKey("12345"),
   },
 } as const;
 

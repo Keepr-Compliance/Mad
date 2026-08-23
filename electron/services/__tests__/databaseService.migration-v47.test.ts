@@ -268,7 +268,7 @@ describe("databaseService migration v47 (BACKLOG-1861 — legacy email dedup)", 
     // crosswalk, v56 tombstone columns (contacts / transaction_contacts
     // removed_at + removed_reason), v55 match_reason, v54 sync_session_id
     // indexes, and v53 message_import_state.
-    expect(row.version).toBe(63);
+    expect(row.version).toBe(64);
   });
 
   it("collapses a legacy+new pair: legacy deleted, comms link moved to new", async () => {

@@ -102,6 +102,7 @@ import { listPendingProposals } from "../contactLinkReviewDbService";
 import { createLink } from "../contactSourceLinkDbService";
 import { linkExternalContactsForUser } from "../../contactSourceLinker";
 import { confirmProposal, rejectProposal } from "../../contactLinkReview";
+import { toLookupKey } from "../../../utils/phoneNormalization";
 
 const USER = "user-2664";
 
@@ -147,7 +148,11 @@ describe("BACKLOG-2664 — the copy is a consequence of the link, never a siblin
   // -------------------------------------------------------------------------
 
   /** Last 10 digits — the key `toLookupKey` produces and the schema stores. */
-  const lookupKey = (phone: string): string => phone.replace(/\D/g, "").slice(-10);
+    // BACKLOG-2630: seeds through the SHARED helper rather than a local
+  // transcription of the old last-ten rule. After migration v64 no database
+  // holds an old-rule key, so a fixture written that way describes a state the
+  // code can no longer emit — and the probe side would never meet it.
+  const lookupKey = (phone: string): string => toLookupKey(phone);
 
   function addContact(
     id: string,

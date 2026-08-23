@@ -24,6 +24,7 @@ import { pairingService } from "./pairingService";
 import * as externalContactDb from "./db/externalContactDbService";
 import type { ContactOrigin } from "./db/contactOriginLink";
 import { autoLinkNewMessagesForUserDebounced } from "./autoLinkService";
+import { toMatchingKey } from "../utils/phoneNormalization";
 import type {
   EncryptedPayload,
   SyncPayload,
@@ -1561,11 +1562,27 @@ class LocalSyncService {
       }
 
       // Check if any phone number already exists in the main contacts table
+      //
+      // =====================================================================
+      // BACKLOG-2630 — THIS MUST USE THE SHARED HELPER, NOT A LOCAL RULE
+      // =====================================================================
+      // `findContactByNormalizedPhone` compares `contact_phones.phone_normalized`,
+      // and migration v64 re-keyed that column to the libphonenumber form. This
+      // site used to hand-roll the OLD key (`digits.slice(-10)`), so it asked for
+      // "4155550188" while the column held "14155550188". Every probe returned
+      // null, nothing looked like a duplicate, and per the BACKLOG-2556 note
+      // below a re-pairing re-promoted the ENTIRE Android address book as
+      // duplicate contacts.
+      //
+      // `toMatchingKey` rather than `toLookupKey` because this is a MATCHING
+      // decision — "is this Android contact already one of ours?" — and it also
+      // subsumes the `< 7` floor this loop used to carry by hand: below the
+      // floor the helper emits "" and the value is skipped, which is what the
+      // old guard did. One rule, one place, no second transcription.
       let alreadyExists = false;
       for (const phone of phones) {
-        const digits = phone.replace(/\D/g, "");
-        const normalized = digits.length >= 10 ? digits.slice(-10) : digits;
-        if (normalized.length < 7) continue;
+        const normalized = toMatchingKey(phone);
+        if (!normalized) continue;
 
         // Synchronous check against contact_phones table
         const existing = databaseService.findContactByNormalizedPhone(userId, normalized);

@@ -75,7 +75,7 @@
 
 import { dbAll, dbGet } from "./core/dbConnection";
 import type { ExternalContactSource } from "./externalContactDbService";
-import { toLookupKey } from "../../utils/phoneNormalization";
+import { toMatchingKey } from "../../utils/phoneNormalization";
 
 /** What the crosswalk knows about one source record. */
 export interface LinkedRecordRow {
@@ -166,9 +166,24 @@ function emailProbeKeys(emails: string[]): string[] {
   return emails.map((e) => e?.trim().toLowerCase()).filter((e): e is string => !!e);
 }
 
-/** Probe phones as lookup keys. Empty keys are dropped: `IN` never matches them. */
+/**
+ * Probe phones as MATCH CANDIDATE keys. Empty keys are dropped: `IN` never
+ * matches them.
+ *
+ * BACKLOG-2630 slice 1 / BACKLOG-2754: `toMatchingKey`, not `toLookupKey`. This
+ * function decides which phone values are allowed to propose that two records
+ * are the same person, so the founder's digit floor belongs exactly here — a
+ * shared extension or a 4-digit typo must not put two unrelated contacts in
+ * front of him as a duplicate.
+ *
+ * The probe side alone is sufficient. A below-floor value emits nothing and so
+ * matches nothing, and no above-floor probe key can equal a stored below-floor
+ * key (they differ in length). Flooring the STORED side as well would mean
+ * re-keying `contact_phones` to drop short values, which is the key-layer floor
+ * BACKLOG-2754 rejects.
+ */
 function phoneProbeKeys(phones: string[]): string[] {
-  return phones.map((p) => toLookupKey(p)).filter((k) => k.length > 0);
+  return phones.map((p) => toMatchingKey(p)).filter((k) => k.length > 0);
 }
 
 function placeholders(n: number): string {

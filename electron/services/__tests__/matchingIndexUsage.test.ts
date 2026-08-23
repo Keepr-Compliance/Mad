@@ -43,7 +43,7 @@ const Database = require(
 ) as typeof import("better-sqlite3-multiple-ciphers");
 import type { Database as DatabaseType } from "better-sqlite3";
 
-import { toLookupKey } from "../../utils/phoneNormalization";
+import { legacyDigitKey, toLookupKey } from "../../utils/phoneNormalization";
 import * as dbConnection from "../db/core/dbConnection";
 import { setDb } from "../db/core/dbConnection";
 import { resolveSourceRecord } from "../contactSourceLinker";
@@ -160,9 +160,9 @@ function captureProductionSql(db: DatabaseType): void {
       sourceType: "macos",
       sourceRecordId: "rec-capture",
       emails: ["nobody-a@example.com", "nobody-b@example.com", "nobody-c@example.com"],
-      phones: ["+15555550191", "+15555550192", "+15555550193"],
+      phones: ["+14155550191", "+14155550192", "+14155550193"],
     });
-    findContactByNormalizedPhone(USER_ID, "5555550191");
+    findContactByNormalizedPhone(USER_ID, toLookupKey("+14155550191"));
   } finally {
     allSpy.mockRestore();
     getSpy.mockRestore();
@@ -412,22 +412,22 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
       ).run();
       insC.run("k-other-user", "other-user", "Someone Else");
       insE.run("ke4", "k-other-user", "dana.reyes@example.com");
-      insP.run("kp4", "k-other-user", "+15555550142", "5555550142");
+      insP.run("kp4", "k-other-user", "+14155550142", toLookupKey("+14155550142"));
 
       // Phones in several shapes.
       insC.run("k-e164", USER_ID, "E164");
-      insP.run("kp1", "k-e164", "+15555550133", toLookupKey("+15555550133"));
+      insP.run("kp1", "k-e164", "+14155550133", toLookupKey("+14155550133"));
 
       insC.run("k-intl", USER_ID, "Intl");
       insP.run("kp2", "k-intl", "+442079460958", toLookupKey("+442079460958"));
 
       // Hand-typed shape — what `syncContactPhones` stores verbatim.
       insC.run("k-typed", USER_ID, "Typed");
-      insP.run("kp3", "k-typed", "(555) 555-0144", toLookupKey("(555) 555-0144"));
+      insP.run("kp3", "k-typed", "(415) 555-0144", toLookupKey("(415) 555-0144"));
 
       // The row the COALESCE fallback was written for: NULL phone_normalized.
       insC.run("k-null", USER_ID, "NullNormalized");
-      insP.run("kp5", "k-null", "+15555550155", null);
+      insP.run("kp5", "k-null", "+14155550155", null);
     }
 
     beforeEach(seedCorpus);
@@ -459,11 +459,11 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
 
     it("phone: identical id set across E.164, international, hand-typed and NULL-normalized rows", () => {
       const cases: string[][] = [
-        [toLookupKey("+15555550133"), toLookupKey("+442079460958"), toLookupKey("(555) 555-0144")],
+        [toLookupKey("+14155550133"), toLookupKey("+442079460958"), toLookupKey("(415) 555-0144")],
         // The NULL-phone_normalized row: the dropped COALESCE arm compared
-        // `phone_e164` ("+15555550155") against a lookup key ("5555550155"),
-        // which can never be equal — so the OLD form did not find it either.
-        [toLookupKey("+15555550155"), "0000000000", "1111111111"],
+        // `phone_e164` ("+14155550155") against a lookup key, which can never be
+        // equal — so the OLD form did not find it either.
+        [toLookupKey("+14155550155"), "0000000000", "1111111111"],
         ["9999999999", "8888888888", "7777777777"],
       ];
       for (const probe of cases) {
@@ -473,14 +473,14 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
       expect(
         ids(PROD_PHONE, [
           USER_ID,
-          toLookupKey("+15555550133"),
+          toLookupKey("+14155550133"),
           toLookupKey("+442079460958"),
-          toLookupKey("(555) 555-0144"),
+          toLookupKey("(415) 555-0144"),
         ]),
       ).toEqual(["k-e164", "k-intl", "k-typed"]);
       // The NULL row is found by NEITHER form. Stated rather than implied.
-      expect(ids(OLD_PHONE, [USER_ID, "5555550155", "0", "1"])).toEqual([]);
-      expect(ids(PROD_PHONE, [USER_ID, "5555550155", "0", "1"])).toEqual([]);
+      expect(ids(OLD_PHONE, [USER_ID, toLookupKey("+14155550155"), "0", "1"])).toEqual([]);
+      expect(ids(PROD_PHONE, [USER_ID, toLookupKey("+14155550155"), "0", "1"])).toEqual([]);
     });
 
     it("phone: the dropped COALESCE arm could not have matched any writable row", () => {
@@ -489,6 +489,11 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
       // bare ten-digit phone_e164 AND no phone_normalized. Constructed here by
       // hand because no write path produces it; recorded so the claim is
       // testable rather than asserted in a comment.
+      //
+      // DELIBERATE 555-555 FALLBACK FIXTURE (BACKLOG-2630). Area code 555 is not
+      // assignable, so libphonenumber rejects it and `toLookupKey` routes it
+      // through `legacyDigitKey`. That is exactly what this row wants: a bare
+      // ten-digit string compared as a raw value, with no country code added.
       db.prepare(
         "INSERT INTO contacts (id, user_id, display_name, is_imported) VALUES ('k-bare', ?, 'Bare', 1)",
       ).run(USER_ID);
@@ -506,14 +511,21 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
       expect(ids(PROD_EMAIL, [USER_ID, "dana.reyes@example.com", "z@example.com", "q@example.com"])).not.toContain(
         "k-other-user",
       );
-      expect(ids(PROD_PHONE, [USER_ID, "5555550142", "0", "1"])).toEqual([]);
-      expect(ids(PROD_PHONE, ["other-user", "5555550142", "0", "1"])).toEqual(["k-other-user"]);
+      expect(ids(PROD_PHONE, [USER_ID, toLookupKey("+14155550142"), "0", "1"])).toEqual([]);
+      expect(ids(PROD_PHONE, ["other-user", toLookupKey("+14155550142"), "0", "1"])).toEqual([
+        "k-other-user",
+      ]);
     });
 
     it("unary-plus drops column affinity — a numeric-looking user id still matches", () => {
       // The one semantic side effect of `+`: the comparison loses TEXT affinity.
       // Every caller passes a string, and this pins that a string of digits —
       // the shape most likely to expose an affinity bug — still resolves.
+      //
+      // DELIBERATE 555-555 FALLBACK FIXTURE (BACKLOG-2630): this test is about
+      // the USER ID's affinity, not about the phone rule, so the fallback path
+      // keeps the key a plain ten-digit string and the assertion stays about
+      // the thing it names.
       db.prepare(
         `INSERT INTO users_local (id, email, oauth_provider, oauth_id)
          VALUES ('12345', 'numeric@example.com', 'google', 'oauth-num')`,
@@ -539,7 +551,7 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
         {
           user_id: USER_ID,
           display_name: "Imported Ivy",
-          phone: "+1 (555) 555-0188",
+          phone: "+1 (415) 555-0188",
           is_imported: true,
         } as Parameters<typeof createContact>[0],
         { kind: "derived" },
@@ -548,14 +560,42 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
         .prepare("SELECT phone_e164, phone_normalized FROM contact_phones LIMIT 1")
         .get() as { phone_e164: string; phone_normalized: string };
       // Transcribed, not invented: createContact stores E.164.
-      expect(row.phone_e164).toBe("+15555550188");
-      expect(row.phone_normalized).toBe("5555550188");
+      expect(row.phone_e164).toBe("+14155550188");
+      // BACKLOG-2630: derived from the live rule, and 415 rather than 555 so the
+      // row is actually PARSED. With a 555 area code libphonenumber rejects the
+      // number and the key falls back to the pre-2630 digits — which is how a
+      // caller computing the OLD key stayed green here while being broken.
+      expect(row.phone_normalized).toBe(toLookupKey("+14155550188"));
+      expect(row.phone_normalized).toBe("14155550188");
 
-      const oldHit = db.prepare(OLD_FIND).get(USER_ID, "5555550188") as { id: string } | undefined;
-      const newHit = findContactByNormalizedPhone(USER_ID, "5555550188");
+      // TWO KEY SPACES, and naming them is the point (BACKLOG-2630).
+      //
+      // `OLD_FIND` is the deleted pre-2621 query: it re-derives its key from
+      // `phone_e164` IN SQL as the last ten digits. The shipped query compares
+      // the STORED `phone_normalized`, which now carries the country code. So
+      // each form must be probed with the key IT computes — and the property
+      // worth asserting is that both still resolve to the SAME contact.
+      //
+      // Probing both with one key is what made this suite blind: with a 555
+      // corpus the two key spaces coincide (the library rejects 555, so the
+      // stored key IS the last ten digits) and a caller computing the old key
+      // looked correct. That is the exact blindness that hid the Android
+      // promotion defect.
+      const newKey = toLookupKey("+14155550188");
+      const oldKey = legacyDigitKey("+14155550188");
+      expect(newKey).not.toBe(oldKey);
+
+      const oldHit = db.prepare(OLD_FIND).get(USER_ID, oldKey) as { id: string } | undefined;
+      const newHit = findContactByNormalizedPhone(USER_ID, newKey);
       expect(newHit).not.toBeNull();
       expect(oldHit).toBeDefined();
       expect(newHit!.id).toBe(oldHit!.id);
+
+      // And the cross-probe fails in BOTH directions — a caller that hands one
+      // form the other form's key finds nothing. This is the shape of the
+      // Android promotion defect, stated as an assertion.
+      expect(findContactByNormalizedPhone(USER_ID, oldKey)).toBeNull();
+      expect(db.prepare(OLD_FIND).get(USER_ID, newKey)).toBeUndefined();
     });
 
     it("INTENTIONAL DELTA: a hand-typed number the old SQL missed is now found", async () => {
@@ -566,7 +606,7 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
         {
           user_id: USER_ID,
           display_name: "Typed Tara",
-          phone: "+15555550198",
+          phone: "+14155550198",
           is_imported: false,
         } as Parameters<typeof createContact>[0],
         { kind: "derived" },
@@ -576,7 +616,7 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
         .get() as { id: string };
       const entries = getContactPhoneEntries(contact.id).map((e) => ({
         id: e.id,
-        phone: "(555) 555-0199",
+        phone: "(415) 555-0199",
         is_primary: true,
       }));
       syncContactPhones(contact.id, entries);
@@ -584,8 +624,9 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
       const row = db
         .prepare("SELECT phone_e164, phone_normalized FROM contact_phones WHERE contact_id = ?")
         .get(contact.id) as { phone_e164: string; phone_normalized: string };
-      expect(row.phone_e164).toBe("(555) 555-0199");
-      expect(row.phone_normalized).toBe("5555550199");
+      expect(row.phone_e164).toBe("(415) 555-0199");
+      expect(row.phone_normalized).toBe(toLookupKey("(415) 555-0199"));
+      expect(row.phone_normalized).toBe("14155550199");
 
       // What the OLD SQL reduced that row to — computed by SQLite, not by hand.
       const reduced = db
@@ -593,10 +634,11 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
           "SELECT SUBSTR(REPLACE(REPLACE(REPLACE(REPLACE(phone_e164,'+',''),'-',''),' ',''),'(',''), -10) AS k FROM contact_phones WHERE contact_id = ?",
         )
         .get(contact.id) as { k: string };
-      expect(reduced.k).not.toBe("5555550199");
+      expect(reduced.k).not.toBe(toLookupKey("(415) 555-0199"));
 
-      expect(db.prepare(OLD_FIND).get(USER_ID, "5555550199")).toBeUndefined();
-      expect(findContactByNormalizedPhone(USER_ID, "5555550199")?.id).toBe(contact.id);
+      const typedKey = toLookupKey("(415) 555-0199");
+      expect(db.prepare(OLD_FIND).get(USER_ID, typedKey)).toBeUndefined();
+      expect(findContactByNormalizedPhone(USER_ID, typedKey)?.id).toBe(contact.id);
     });
 
     it("still refuses short keys and still scopes by user", async () => {
@@ -604,14 +646,15 @@ describe("BACKLOG-2621 matching lookups use their indexes", () => {
         {
           user_id: USER_ID,
           display_name: "Scoped Sam",
-          phone: "+15555550197",
+          phone: "+14155550197",
           is_imported: true,
         } as Parameters<typeof createContact>[0],
         { kind: "derived" },
       );
       expect(findContactByNormalizedPhone(USER_ID, "55501")).toBeNull();
-      expect(findContactByNormalizedPhone("someone-else", "5555550197")).toBeNull();
-      expect(findContactByNormalizedPhone(USER_ID, "5555550197")).not.toBeNull();
+      const scopedKey = toLookupKey("+14155550197");
+      expect(findContactByNormalizedPhone("someone-else", scopedKey)).toBeNull();
+      expect(findContactByNormalizedPhone(USER_ID, scopedKey)).not.toBeNull();
     });
   });
 });
