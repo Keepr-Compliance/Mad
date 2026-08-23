@@ -172,6 +172,40 @@ describe("BACKLOG-2814 — getCommunicationsWithMessages joins the group name", 
     expect(rows[0].thread_display_name ?? null).toBeNull();
   });
 
+  it("does not multiply rows AT THE SQL LEVEL when a decoy name row exists", () => {
+    // A REAL FAN-OUT CONTROL, and it has to run the join predicate directly.
+    //
+    // Asserting on getCommunicationsWithMessages' RETURN VALUE cannot detect
+    // fan-out at all: the function runs `dedupedById` over its results before
+    // returning, so duplicate rows produced by a bad join are silently
+    // collapsed. Measured, not assumed -- dropping `AND tn.user_id = m.user_id`
+    // and seeding two matching name rows leaves every output-level assertion in
+    // this file, and in reactions.integration.test.ts, GREEN.
+    //
+    // So this counts the rows the JOIN itself yields, before any dedup. The
+    // decoy is a second name row for the SAME thread under a DIFFERENT user --
+    // the shape the (user_id, thread_id) PK permits and a thread_id-only join
+    // would multiply by.
+    addMessage("m-1", NAMED_THREAD);
+    addName(NAMED_THREAD, GROUP_NAME);
+    addName(NAMED_THREAD, "Their Group", OTHER_USER);
+
+    const joined = db
+      .prepare(
+        `SELECT COUNT(*) AS n
+           FROM messages m
+           LEFT JOIN message_thread_names tn ON (
+             tn.thread_id = m.thread_id AND tn.user_id = m.user_id
+           )
+          WHERE m.id = ?`,
+      )
+      .get("m-1") as { n: number };
+
+    // ONE row in, ONE row out. Reduce the predicate to `tn.thread_id =
+    // m.thread_id` and this becomes 2 (verified).
+    expect(joined.n).toBe(1);
+  });
+
   it("does not multiply rows when a name exists", async () => {
     // A join that matched more than one name row would duplicate the message and
     // put the same conversation on the tab twice, breaking the thread-unit
