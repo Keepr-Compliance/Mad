@@ -21,35 +21,50 @@
  * none is written to disk.
  *
  * ===========================================================================
- * CONTROLS — every one of these was run as a MUTATION and observed RED.
- * Paths are from the repo root. Results are recorded in the PR body.
+ * CONTROLS — MEASURED, not assumed. Every mutation below was applied, run, and
+ * the result recorded verbatim. Paths are from the repo root.
  * ===========================================================================
- *   M1  DETERMINISM — in electron/services/contactResolutionService.ts,
- *       `namesForHandle`: delete the `.sort(...)` so the order falls back to
- *       row order.
- *       -> RED on "insertion order changes NOTHING" (the two orderings produce
- *          "Dana Alvarez or Chris Alvarez" vs "Chris Alvarez or Dana Alvarez").
+ *   M1  DETERMINISM. Read this one carefully before trusting it.
+ *
+ *       The declared order is guaranteed TWICE, redundantly:
+ *         (a) SQL — `ORDER BY c.display_name COLLATE NOCASE, c.id` in
+ *             electron/services/db/attachmentDbService.ts, and
+ *         (b) JS  — the `.sort(...)` in `namesForHandle`,
+ *                   electron/services/contactResolutionService.ts.
+ *
+ *       MEASURED:
+ *         - remove (a) alone -> 15/15 GREEN. The JS sort covers it.
+ *         - remove (b) alone -> 28/28 GREEN (with the 2612 sweep). The `Map`
+ *           preserves insertion order, which is already the SQL order.
+ *         - remove BOTH      -> 3 RED, including "both insertion orders produce
+ *           the same thread LABELS".
+ *
+ *       So neither single mutation reds, and it would have been wrong to claim
+ *       otherwise. The suite IS discriminating — it goes red the moment the
+ *       property actually breaks — and the property is simply defended in two
+ *       places. Anyone deleting ONE of them should know the other is then the
+ *       only thing standing between this product and the original defect.
  *
  *   M2  AMBIGUITY -> FILENAME — in electron/services/folderExport/
- *       threadContactLabel.ts, `threadNaming`: change the `names.length > 1`
- *       branch to return `{ ...ambiguous: false }`.
- *       -> RED on the exact filename set (the wrong person's name returns to
- *          disk).
+ *       threadContactLabel.ts, `threadNaming`: flip the `names.length > 1`
+ *       branch to `ambiguous: false`.
+ *       -> MEASURED 4 RED across this suite and the 2612 sweep: the wrong
+ *          person's name returns to disk.
  *
  *   M3  TRANSACTION SCOPING — in electron/services/db/attachmentDbService.ts,
  *       `transactionLinkedSelect`: return `0 AS is_transaction_linked`
  *       unconditionally.
- *       -> RED on the scoping leg (the out-of-deal contact wins a share of the
- *          label it must not have).
+ *       -> MEASURED 3 RED: the out-of-deal contact takes a share of a label it
+ *          must not have, and a named thread loses its name.
  *
  *   M4  USER SCOPING — in the same file, `userScopeClause`: return
  *       `{ clause: "", params: [] }` unconditionally.
- *       -> RED on the cross-user leg (another user's contact names a party in
- *          this user's export).
+ *       -> MEASURED 4 RED: another user's contact names a party in this user's
+ *          export.
  *
  *   M5  APPLE-ID DETERMINISM — in the same file,
  *       `getContactNameByAppleIdPrefix`: drop the `ORDER BY`.
- *       -> RED on the prefix leg.
+ *       -> MEASURED 1 RED on the prefix leg.
  *
  * RUNNER (real native driver — plain `npx jest` cannot load it):
  *   ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js \

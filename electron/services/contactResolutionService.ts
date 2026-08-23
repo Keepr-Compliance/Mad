@@ -217,6 +217,13 @@ interface HandleMatch {
  *    and therefore NOT ambiguous. Ambiguity is about what we would print.
  * 3. **Declared order** — by name, then contact id. Never rowid, never insertion
  *    order. This is the property whose absence was the defect.
+ *
+ *    It is also guaranteed a second time, in SQL (`ORDER BY c.display_name
+ *    COLLATE NOCASE, c.id`, attachmentDbService). That redundancy is measured,
+ *    not assumed: removing EITHER one alone leaves every test green, and
+ *    removing both reds three. Deleting one of them is therefore safe today and
+ *    makes the other load-bearing tomorrow — read the control notes in
+ *    exportThreadNaming-2757.test.ts before doing it.
  */
 function namesForHandle(matches: HandleMatch[]): string[] {
   const linked = matches.filter((m) => m.linked);

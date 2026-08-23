@@ -40,16 +40,32 @@
  * only the AddressBook). A parity test whose fixture let both sides resolve
  * from the AddressBook would have passed against the defect.
  *
- * CONTROLS — run as mutations, observed RED:
+ * CONTROLS — MEASURED, not assumed:
  *   P1  in electron/services/submissionService.ts, revert `resolvePhone` to the
- *       AddressBook `contactMap` lookup
- *       -> RED: submission names are all undefined, PDF names unchanged.
- *   P2  in the same file, make `resolvePhone` return a constant
- *       -> RED on both the expectation leg and the parity leg.
- *   P3  in electron/services/contactResolutionService.ts, make `nameForHandle`
- *       skip its normalized-key lookup
- *       -> RED: the E.164-stored handle stops resolving on the submission side
- *          only, which is exactly the key-derivation drift this replaces.
+ *       AddressBook-only answer (the pre-fix behaviour, which against this
+ *       fixture's empty AddressBook resolves nothing).
+ *       -> MEASURED 7 of 13 RED. This is the definitive control: it reproduces
+ *          the exact defect — the submission naming a party differently from
+ *          the archived PDF — and the suite catches it on every case at once.
+ *
+ *   P4  in electron/services/folderExport/threadContactLabel.ts, replace the
+ *       ambiguous label's name join with a constant (breaking the PDF side
+ *       only).
+ *       -> MEASURED 1 RED, on the number-led-label leg.
+ *          Only one, and the reason is worth stating: the two surfaces agree on
+ *          the party NAME (the resolver's map value), which the per-message
+ *          sender lines still render, so mutating the thread HEADING breaks the
+ *          heading assertion without breaking name parity. P1 is the control
+ *          for parity itself; P4 is a control for the heading.
+ *
+ *   P3  (attempted) in electron/services/contactResolutionService.ts, make
+ *       `nameForHandle` skip its normalized-key lookup.
+ *       -> MEASURED 13/13 GREEN — NOT a discriminating mutation, recorded so
+ *          nobody counts it as one. The resolver writes the raw stored handle
+ *          as an alias key alongside the normalized one, so this fixture's
+ *          handles resolve either way. The normalized lookup is defensive
+ *          against handle formats the contact store does not hold verbatim;
+ *          this fixture does not produce one, and no leg here pins it.
  *
  * RUNNER (real native driver — plain `npx jest` cannot load it):
  *   ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js \

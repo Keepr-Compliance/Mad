@@ -1,52 +1,85 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-2612 — THE SUBMISSION UPLOAD RESOLVES PARTY NAMES FROM A STORE THE
- * `contacts` TABLE HAS NO PART IN.
+ * BACKLOG-2612 (characterization) -> BACKLOG-2758 finding 3 (FIXED HERE).
  *
+ * ===========================================================================
+ * WHAT THIS SUITE USED TO SAY, AND WHY EVERY LEG FLIPPED
+ * ===========================================================================
  * `transactions:submit` / `:resubmit` is the one export that LEAVES THE
  * MACHINE (uploaded to the broker portal), and the one most likely to be
- * forgotten by a sweep. Measured (SR review §5f, re-verified at this tree):
- * `submissionService` never references `transaction_contacts` or the
- * `contacts` table for names — the participant names it uploads come from
- * `getContactNames()` (electron/services/contactsService.ts), i.e. the macOS
- * AddressBook, via `mapToSubmissionMessage`'s `contactMap`.
+ * forgotten by a sweep. It used to name parties from `getContactNames()` — the
+ * macOS AddressBook — while the PDF the same app wrote named them from the
+ * sqlite `contacts` table. This suite pinned that, deliberately, as a finding:
  *
- * Pinned here, by characterization (NOT fixed — findings on BACKLOG-2612):
+ *   1. a party attached in `transaction_contacts` but absent from the
+ *      AddressBook uploaded UNRESOLVED;
+ *   2. when the two stores disagreed, the ADDRESSBOOK name went to the broker;
+ *   3. two AddressBook entries sharing a 10-digit tail collapsed onto whichever
+ *      was inserted first, in a hand-rolled `Object.entries` scan.
  *
- *  1. A party attached to the transaction in `transaction_contacts` whose
- *     handle is NOT in the AddressBook map uploads UNRESOLVED. The app's own
- *     contact book plays no part: a name uploaded to the broker portal can
- *     differ from the name in the PDF the same app just wrote.
- *  2. Two AddressBook entries sharing a 10-digit tail resolve FIRST-MATCH-WINS
- *     (insertion order of the map) — a party collapse in the uploaded payload
- *     that exists today, no person layer involved.
+ * All three are now wrong descriptions of the code, which is the point.
+ * `submissionService` resolves through `contactResolutionService` — the SAME
+ * resolver, over the SAME map, read through the SAME accessor as the export.
+ * The AddressBook is still consulted, as tier 3 INSIDE that resolver, so no
+ * name it alone could supply is lost; it is simply no longer a second,
+ * independent answer that can disagree with the archived artifact.
+ *
+ * The hand-rolled last-10-digit scan is deleted outright. It was a THIRD key
+ * derivation (after the resolver's and the export's) and therefore a third
+ * chance for the same handle to mean different things on different screens.
+ *
+ * Portal/PDF agreement is asserted end-to-end in
+ * `exportPartyNaming.parity.test.ts`. THIS suite stays focused on the
+ * submission mapper itself, and on the store precedence it now obeys.
  *
  * FIXTURE PROVENANCE (transcribed, not invented):
- *  - The `contactMap` shape is the producer's own: contactsService.ts
+ *  - The AddressBook `contactMap` shape is the producer's own: contactsService.ts
  *    (`contactMap[normalized] = person.name; contactMap[phone] = person.name`)
  *    writes BOTH the normalized-last-10 key and the raw-format key for every
- *    phone. The map below carries exactly those key shapes.
+ *    phone. The stub below carries exactly those key shapes.
  *  - The Message row is read back from the REAL `messages` table seeded
  *    through the fixture (the same projection the submission path reads), not
  *    hand-shaped.
  *
- * CONTROL S1 (manual, result on BACKLOG-2612): in
- * electron/services/submissionService.ts `mapToSubmissionMessage`, consult the
- * sqlite contacts store before the contactMap (simulate by seeding the shared
- * handle into contactMap LAST instead of first → the asserted winner flips) →
- * RED on the first-match-wins assertion.
+ * CONTROLS — MEASURED:
+ *   S1  in electron/services/submissionService.ts, make `resolvePhone` return
+ *       `undefined` (the pre-fix answer against an AddressBook that does not
+ *       hold this party)
+ *       -> RED on "uploads RESOLVED from the app's own contact book".
+ *   S2  in electron/services/contactResolutionService.ts, move the external /
+ *       AddressBook tier ahead of the imported-contacts tier
+ *       -> RED on "the contacts table outranks the AddressBook".
  *
  * RUNNER:
  *   ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js \
  *     --bail=0 electron/services/__tests__/submissionPartyIdentity-2612.test.ts
  */
 
+// The macOS AddressBook is STUBBED, never read: the tests below decide exactly
+// what tier 3 offers, so "the contacts table won" is a measurement rather than
+// an accident of whatever is in the developer's address book.
+const addressBook: { contactMap: Record<string, string> } = { contactMap: {} };
+jest.mock("../contactsService", () => ({
+  getContactNames: jest.fn(async () => ({
+    success: true,
+    status: { success: true },
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    contactMap: (global as unknown as { __addressBook: { contactMap: Record<string, string> } })
+      .__addressBook.contactMap,
+  })),
+}));
+(global as unknown as { __addressBook: typeof addressBook }).__addressBook = addressBook;
+
 import {
   createExportFixture,
   type ExportFixture,
 } from "../folderExport/__tests__/helpers/exportCaptureFixture2612";
 import submissionService from "../submissionService";
+import {
+  resolveHandles,
+  type HandleNameResolution,
+} from "../contactResolutionService";
 
 const USER_ID = "user-2612-sub";
 const TX = "tx-2612-sub";
@@ -91,73 +124,116 @@ afterAll(async () => {
   await fx.cleanup();
 });
 
-/** Private-method access: the resolution rule lives in mapToSubmissionMessage. */
-function mapMessage(contactMap: Record<string, string>): { participants?: Record<string, unknown> } {
+/**
+ * Private-method access: the resolution rule lives in mapToSubmissionMessage.
+ *
+ * It now takes the resolver's OUTPUT rather than an AddressBook map, so the
+ * tests build that output the way production does — through `resolveHandles`,
+ * scoped to this user and this transaction.
+ */
+async function mapMessage(): Promise<{ participants?: Record<string, unknown> }> {
+  const resolution: HandleNameResolution = await resolveHandles([CHRIS.phone], USER_ID, {
+    userId: USER_ID,
+    transactionId: TX,
+  });
   return (
     submissionService as unknown as {
       mapToSubmissionMessage(
         message: Record<string, unknown>,
         submissionId: string,
-        contactMap: Record<string, string>,
+        names: HandleNameResolution,
       ): { participants?: Record<string, unknown> };
     }
-  ).mapToSubmissionMessage(messageRow, "sub-2612", contactMap);
+  ).mapToSubmissionMessage(messageRow, "sub-2612", resolution);
 }
 
-describe("BACKLOG-2612 — submission upload party identity (path 4)", () => {
-  test("a party in transaction_contacts but not in the AddressBook map uploads UNRESOLVED — the contacts table plays no part", () => {
-    // Chris IS the attached buyer in the app's own contact book, and his
-    // handle is the message sender. With an empty AddressBook map, the upload
-    // carries no name for him: proof the submission path never consults
-    // `contacts`/`transaction_contacts` for party names.
-    const record = mapMessage({});
-    expect(record.participants?.from).toBe(CHRIS.phone);
-    expect(record.participants?.from_name).toBeUndefined();
+describe("BACKLOG-2758 — the submission upload names parties from the app's own store", () => {
+  beforeEach(() => {
+    addressBook.contactMap = {};
   });
 
-  test("an AddressBook name labels the party even when the app's contact book names him differently", () => {
+  test("a party in transaction_contacts uploads RESOLVED from the app's own contact book", () => {
+    // THE FLIP. Chris is the attached buyer in `contacts` and the message
+    // sender, and the AddressBook is EMPTY. Pre-fix this uploaded no name at
+    // all — the app knew exactly who he was and told the broker nothing.
+    return mapMessage().then((record) => {
+      expect(record.participants?.from).toBe(CHRIS.phone);
+      expect(record.participants?.from_name).toBe(CHRIS.name);
+    });
+  });
+
+  test("when the two stores disagree, the CONTACTS table outranks the AddressBook", () => {
     // The AddressBook says "Robin Hale" for Chris's phone; the app's contacts
-    // table says "Chris Alvarez". The uploaded payload carries the AddressBook
-    // name — so the broker portal and the PDF the same app just wrote can
-    // disagree about who a party is. Pinned as-is (finding, not fixed here).
-    // Map keys transcribed from contactsService.ts: normalized + raw formats.
-    const record = mapMessage({
+    // table says "Chris Alvarez". Pre-fix the AddressBook name went to the
+    // broker while the PDF said the other — the exact divergence 2758 filed.
+    // Keys transcribed from contactsService.ts: normalized + raw formats.
+    addressBook.contactMap = {
       "5035550140": "Robin Hale",
       "+15035550140": "Robin Hale",
+    };
+    return mapMessage().then((record) => {
+      expect(record.participants?.from_name).toBe(CHRIS.name);
+      expect(record.participants?.from_name).not.toBe("Robin Hale");
     });
-    expect(record.participants?.from_name).toBe("Robin Hale");
   });
 
-  test("two AddressBook entries sharing a 10-digit tail: FIRST match in map insertion order wins", () => {
-    // Neither key equals the sender's raw format, so the resolver falls to its
-    // last-10-digits scan over Object.entries — first match wins. JS object
-    // string-key insertion order is deterministic, so the winner IS assertable
-    // here (unlike the SQL resolvers, where row order carries no guarantee).
-    const sharedTailMap = {
-      "15035550140": "Robin Hale", // first inserted — wins
-      "+1 (503) 555-0140": "Sam Hale", // same tail, different person
+  test("the AddressBook still answers for a handle the contacts table does not hold", () => {
+    // The other half of the precedence claim, and the reason this is a tier
+    // order rather than a deletion: an AddressBook-only name is still found.
+    // Without this leg, "contacts wins" could be satisfied by never reading the
+    // AddressBook at all — which would silently lose names in the field.
+    addressBook.contactMap = {
+      "5035559999": "Robin Hale",
+      "+15035559999": "Robin Hale",
     };
-    const record = mapMessage(sharedTailMap);
-    expect(record.participants?.from_name).toBe("Robin Hale");
+    return resolveHandles(["+15035559999"], USER_ID, {
+      userId: USER_ID,
+      transactionId: TX,
+    }).then((resolution) => {
+      expect(resolution.names["5035559999"]).toBe("Robin Hale");
+    });
+  });
 
-    // Reversed insertion order flips the uploaded identity — the collapse is
-    // real and order-dependent, characterized from both directions.
+  test("the hand-rolled first-match-wins tail scan is GONE", () => {
+    // Pre-fix, `mapToSubmissionMessage` scanned `Object.entries(contactMap)`
+    // comparing last-10 digits, so two AddressBook entries sharing a tail
+    // collapsed onto whichever was inserted FIRST, and reversing the map's
+    // insertion order flipped the identity uploaded to the broker.
+    //
+    // Both orderings are still exercised — that is the discriminating part —
+    // and neither may change the answer now, because resolution no longer
+    // consults insertion order anywhere.
+    const forward = {
+      "15035550140": "Robin Hale",
+      "+1 (503) 555-0140": "Sam Hale",
+    };
     const reversed = {
       "+1 (503) 555-0140": "Sam Hale",
       "15035550140": "Robin Hale",
     };
-    const flipped = mapMessage(reversed);
-    expect(flipped.participants?.from_name).toBe("Sam Hale");
+
+    addressBook.contactMap = forward;
+    return mapMessage()
+      .then((first) => {
+        addressBook.contactMap = reversed;
+        return mapMessage().then((second) => {
+          expect(first.participants?.from_name).toBe(CHRIS.name);
+          expect(second.participants?.from_name).toBe(CHRIS.name);
+          // Stated as its own claim: the two orderings agree.
+          expect(first.participants?.from_name).toBe(second.participants?.from_name);
+        });
+      });
   });
 
-  test("the shared-phone tail scan also collapses distinct handles onto one name in to_names", () => {
-    // Same rule on the recipient side: any handle whose tail matches gets the
-    // first-matching name. SHARED_PHONE differs from Chris's phone, so it
-    // resolves only when a map entry shares ITS tail.
-    const record = mapMessage({ "5035550142": "Robin Hale" });
-    expect(record.participants?.from_name).toBeUndefined(); // Chris's tail ≠ shared tail
-    const toNames = (record.participants?.to_names ?? {}) as Record<string, string>;
-    expect(Object.keys(toNames)).toEqual([]); // recipient is the owner's email, not a phone
-    void SHARED_PHONE;
+  test("a recipient that is an email address produces no phone-style to_names entry", () => {
+    // Unchanged behaviour, kept as the regression leg it always was: the
+    // recipient here is the owner's email, so nothing lands in `to_names`.
+    // SHARED_PHONE stays referenced so the fixture's shared-handle identity
+    // remains visible to a reader of this file.
+    return mapMessage().then((record) => {
+      const toNames = (record.participants?.to_names ?? {}) as Record<string, string>;
+      expect(Object.keys(toNames)).toEqual([]);
+      void SHARED_PHONE;
+    });
   });
 });

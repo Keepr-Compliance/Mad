@@ -140,7 +140,13 @@ jest.mock("../db/userDbService", () => ({
 
 jest.mock("../contactResolutionService", () => ({
   __esModule: true,
-  resolveHandles: jest.fn().mockResolvedValue(new Map()),
+  // BACKLOG-2757: `resolveHandles` returns { names, matches }; `matchedNamesFor`
+  // is how a renderer asks how many contacts a handle names. This suite resolves
+  // no handles at all, so both are empty — but the functions must EXIST, or the
+  // export throws before it reaches anything this suite is about.
+  resolveHandles: jest.fn().mockResolvedValue({ names: {}, matches: {} }),
+  matchedNamesFor: jest.fn().mockReturnValue([]),
+  nameForHandle: jest.fn().mockReturnValue(undefined),
   resolveGroupChatParticipants: jest.fn().mockResolvedValue(""),
   extractParticipantHandles: jest.fn().mockReturnValue([]),
 }));
