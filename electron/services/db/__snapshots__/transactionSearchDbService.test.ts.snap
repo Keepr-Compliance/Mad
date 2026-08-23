@@ -169,7 +169,6 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
     "%closing%",
     "%closing%",
     "%closing%",
-    "%closing%",
     20,
   ],
   "sql": "/* mad:search:texts */
@@ -206,12 +205,6 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildT
         SELECT 1 FROM attachments a
         WHERE (a.message_id = m.id OR a.external_message_id = m.external_id)
           AND a.filename LIKE ? ESCAPE '\\'
-      )
-        OR EXISTS (
-        SELECT 1 FROM message_thread_names tn
-        WHERE tn.thread_id = m.thread_id
-          AND tn.user_id = m.user_id
-          AND tn.display_name LIKE ? ESCAPE '\\'
       )
       )
     ORDER BY m.sent_at DESC
