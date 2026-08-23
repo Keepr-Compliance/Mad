@@ -130,10 +130,15 @@ export async function isContactSourceEnabled(
  * NOT to be confused with `messageImport.filters.lookbackMonths`
  * (BACKLOG-2561/2733) — a different key on a different path.
  *
- * @param preferences - The preferences bag as stored (may be null/undefined)
+ * @param preferences - The preferences bag as stored (may be null/undefined).
+ *   Typed `Record<string, any>` to match `supabaseService.getPreferences`'s own
+ *   return type: this is arbitrary stored JSON, and `Record<string, unknown>`
+ *   would force a cast at every nested access without making one of them safer.
+ *   The single read below narrows with `typeof` before returning.
  * @returns Duration in months
  */
 export function resolveEmailCacheDurationMonths(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see @param
   preferences: Record<string, any> | null | undefined,
 ): number {
   const value =
