@@ -211,3 +211,43 @@ describe("htmlToPlainText — plain text passed through", () => {
     );
   });
 });
+
+describe("htmlToPlainText — pathological input must not stall the main process", () => {
+  /**
+   * BACKLOG-2855 / SR R1 — this converter is the FIRST code path that
+   * regex-scans attacker-supplied email HTML in the Electron MAIN process,
+   * synchronously, during sync. Anyone who can email the user controls this
+   * input. A quadratic scan here is a remote freeze of the whole app, once per
+   * message, with no user action beyond receiving mail.
+   *
+   * The shape that bites is an UNCLOSED `<script>`/`<style>` opening repeated
+   * many times: a close-tag search that restarts from every opening is O(n^2).
+   * Measured on the two-pass implementation this test was written against:
+   * 400 KB took 2,782 ms and 1 MB took 17,165 ms. The single-pass regex, which
+   * accepts end-of-input as an alternate terminator, does 1 MB in ~1 ms.
+   *
+   * The bound is deliberately loose (2 s against a ~1 ms expectation) so it can
+   * only fire on a return to quadratic behaviour, never on a slow CI runner.
+   * The failure message carries the measured elapsed time.
+   */
+  it.each([
+    ["<script>", "<script>".repeat(125_000)],
+    ["<style>", "<style>x".repeat(125_000)],
+  ])(
+    "converts 1 MB of unclosed %s openings in well under a second",
+    (_label, html) => {
+      expect(html.length).toBe(1_000_000);
+
+      const started = Date.now();
+      const out = htmlToPlainText(html);
+      const elapsed = Date.now() - started;
+
+      // Output is asserted too: the whole run is markup, so nothing survives.
+      // This keeps the test honest if the removal is ever "optimized" by
+      // dropping the unterminated-block handling altogether.
+      expect(out).toBe("");
+      expect(elapsed).toBeLessThan(2000);
+    },
+    60_000,
+  );
+});

@@ -133,14 +133,21 @@ export function htmlToPlainText(html: string | null | undefined): string {
 
   let text = html;
 
-  // 1. Script/style blocks, content included. The second pass covers an
-  //    UNTERMINATED block, which a browser also swallows to end of document —
-  //    without it, a truncated `<style>` would dump CSS into the search column.
-  text = text.replace(
-    /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi,
-    " ",
-  );
-  text = text.replace(/<(?:script|style)\b[^>]*>[\s\S]*$/gi, " ");
+  // 1. Script/style blocks, content included — in a SINGLE pass.
+  //
+  //    End-of-input is an ALTERNATE terminator (`|$`). That is what handles an
+  //    UNTERMINATED block, which a browser also swallows to end of document;
+  //    without it a truncated `<style>` would dump CSS into the search column.
+  //
+  //    This was two passes (closed blocks, then a second sweep for an
+  //    unterminated one) and that shape is QUADRATIC on repeated unclosed
+  //    openings: the closed-block pass restarts a full close-tag search from
+  //    every one of them. This function runs in the MAIN process,
+  //    synchronously, during sync, on HTML supplied by whoever sent the mail —
+  //    so the quadratic case was a remote freeze, once per message. Measured:
+  //    1 MB of `<script>` openings took 16,927 ms two-pass, ~1 ms this way.
+  //    The perf guard in the test suite fails at 2 s if this ever regresses.
+  text = text.replace(/<(script|style)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi, " ");
 
   // 2. Comments (includes Outlook's `<!--[if mso]>…<![endif]-->` blocks).
   text = text.replace(/<!--[\s\S]*?-->/g, " ");

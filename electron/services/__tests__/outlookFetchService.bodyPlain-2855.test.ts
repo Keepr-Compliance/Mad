@@ -159,9 +159,25 @@ const EXAMPLE_1_HTML =
   '<html>\r\n<head>\r\n<meta http-equiv="Content-Type" content="text/html; charset=utf-8">\r\n<meta content="text/html; charset=us-ascii">\r\n</head>\r\n<body>\r\nThe group represents Nevada.\r\n</body>\r\n</html>\r\n';
 const EXAMPLE_1_PREVIEW = "The group represents Nevada.";
 
-/** Graph `Get message` Example 3, verbatim (contentType "text"). */
+/**
+ * Graph `Get message` Example 3 `body.content`, verbatim (contentType "text").
+ *
+ * Transcribed by extracting the JSON string straight out of the doc source
+ * rather than retyped. That matters: an earlier draft dropped the five `[😊]`
+ * placeholders the real response carries, which made the "verbatim" label
+ * false (SR review, S1). They also give this pass-through case non-ASCII /
+ * surrogate-pair coverage, which is the reason to restore them rather than
+ * relax the claim.
+ *
+ * `EXAMPLE_3_PREVIEW` below does NOT contain them and is equally verbatim —
+ * Graph's own `bodyPreview` for this message omits them, so the preview is not
+ * a literal prefix of the body. Do not "fix" one to match the other.
+ *
+ * Source: microsoft-graph-docs-contrib, api-reference/v1.0/api/message-get.md,
+ * Example 3 response, `body.content` (NOT `uniqueBody.content`, which differs).
+ */
 const EXAMPLE_3_TEXT_CONTENT =
-  "Welcome to our group, Dana! Hope you will enjoy working with us !\r\n\r\nWould you like to choose a day for our orientation from the available times below:\r\n\r\n\r\nDate\r\n        Time\r\n\r\nApril 14, 2017\r\n        1-3pm\r\n\r\nApril 21, 2017\r\n        10-12noon\r\n\r\n\r\n\r\nThanks!\r\n\r\n";
+  "Welcome to our group, Dana! Hope you will enjoy working with us [😊] [😊] [😊] [😊] [😊] !\r\n\r\nWould you like to choose a day for our orientation from the available times below:\r\n\r\n\r\nDate\r\n        Time\r\n\r\nApril 14, 2017\r\n        1-3pm\r\n\r\nApril 21, 2017\r\n        10-12noon\r\n\r\n\r\n\r\nThanks!\r\n\r\n";
 const EXAMPLE_3_PREVIEW =
   "Welcome to our group, Dana! Hope you will enjoy working with us !\r\n\r\nWould you like to choose a day for our orientation from the available times below:\r\n\r\n\r\nDate\r\n        Time\r\n\r\nApril 14, 2017\r\n        1-3pm\r\n\r\nApril 21, 2017\r\n        10-12noon\r\n\r\n\r\n\r\nTh";
 
