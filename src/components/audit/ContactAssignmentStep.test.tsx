@@ -553,6 +553,85 @@ describe("ContactAssignmentStep", () => {
       expect(onAssignContact).not.toHaveBeenCalledWith("seller_agent", "contact-2", false, "");
     });
 
+    /**
+     * BACKLOG-2859 — the offered set, asserted at THIS SURFACE.
+     *
+     * The constants being right does not make the dropdown right; the wizard
+     * builds its own options, and this screen is one of the two the item names
+     * as where the defect is visible. Asserted as an EXACT SET so a role that
+     * should have been removed and wasn't fails here — a membership check would
+     * pass while the user's own role was still on offer.
+     */
+    it("offers EXACTLY the collapsed role set on a Listing (BACKLOG-2859)", () => {
+      render(<ContactAssignmentStep {...step3Props} transactionType="purchase" />);
+
+      const roleSelect = screen.getAllByTestId("role-select-contact-1")[0];
+      const values = within(roleSelect)
+        .getAllByRole("option")
+        .map((o) => (o as HTMLOptionElement).value)
+        .filter((v) => v !== "");
+
+      expect(values).toEqual([
+        "client",
+        "agent",
+        "co_agent",
+        "title_company",
+        "escrow_officer",
+        "inspector",
+        "appraiser",
+        "surveyor",
+        "mortgage_broker",
+        "real_estate_attorney",
+        "transaction_coordinator",
+        "insurance_agent",
+        "hoa_management",
+        "condo_management",
+        "other",
+      ]);
+    });
+
+    it("never offers the user's own role or the other side's principal", () => {
+      for (const type of ["purchase", "sale"] as const) {
+        const { unmount } = render(
+          <ContactAssignmentStep {...step3Props} transactionType={type} />
+        );
+        const values = within(screen.getAllByTestId("role-select-contact-1")[0])
+          .getAllByRole("option")
+          .map((o) => (o as HTMLOptionElement).value);
+
+        // The user IS the listing agent on a Listing and the buyer's agent on
+        // a Sale — neither is ever a contact.
+        expect(values).not.toContain("listing_agent");
+        expect(values).not.toContain("seller_agent");
+        expect(values).not.toContain("buyer_agent");
+        // Founder ruling: agents communicate through the other agent.
+        expect(values).not.toContain("buyer");
+        expect(values).not.toContain("seller");
+        unmount();
+      }
+    });
+
+    it("labels the party roles from the transaction type", () => {
+      const { unmount } = render(
+        <ContactAssignmentStep {...step3Props} transactionType="purchase" />
+      );
+      let labels = within(screen.getAllByTestId("role-select-contact-1")[0])
+        .getAllByRole("option")
+        .map((o) => o.textContent);
+      expect(labels).toContain("Seller (Client)");
+      expect(labels).toContain("Buyer's Agent");
+      expect(labels).not.toContain("Listing Agent");
+      unmount();
+
+      render(<ContactAssignmentStep {...step3Props} transactionType="sale" />);
+      labels = within(screen.getAllByTestId("role-select-contact-1")[0])
+        .getAllByRole("option")
+        .map((o) => o.textContent);
+      expect(labels).toContain("Buyer (Client)");
+      expect(labels).toContain("Listing Agent");
+      expect(labels).not.toContain("Buyer's Agent");
+    });
+
     it("calls onAssignContact when role is selected", async () => {
       const onAssignContact = jest.fn();
       const user = userEvent.setup();

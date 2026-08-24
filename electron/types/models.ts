@@ -72,7 +72,18 @@ export type TransactionStage =
   | "post_closing";
 
 // Participants
-/** @deprecated Use ContactRole instead — this legacy type does not match SPECIFIC_ROLES */
+/**
+ * @deprecated Use ContactRole instead — this legacy type does not match
+ * SPECIFIC_ROLES.
+ *
+ * DELIBERATELY LEFT ON THE OLD VOCABULARY (BACKLOG-2859). It types the
+ * `transaction_participants` table, which migration v30 moved
+ * `transaction_summary` off and which now has zero read or write sites. Its
+ * `role` column carries a CHECK constraint enumerating exactly these values, and
+ * SQLite cannot alter a CHECK without a full table rebuild — so changing this
+ * union without that rebuild would describe a shape the database rejects.
+ * Nothing consumes this type; it is here as a record of the dead table's shape.
+ */
 export type ParticipantRole =
   | "buyer"
   | "seller"
@@ -89,14 +100,24 @@ export type ParticipantRole =
   | "other"
   | "unknown";
 
-/** Canonical contact role type — matches SPECIFIC_ROLES in src/constants/contactRoles.ts */
+/**
+ * Canonical contact role type — MIRRORS `SPECIFIC_ROLES` in
+ * `src/constants/contactRoles.ts`, which `electron/` cannot import (rootDir).
+ *
+ * BACKLOG-2859 collapsed `buyer_agent` / `seller_agent` / `listing_agent` into
+ * the single side-neutral `agent`, and removed the counterparty principals
+ * `buyer` / `seller`. This union moved with them; a `roleVocabularyParity` test
+ * pins the two files against each other so the mirror cannot drift silently.
+ *
+ * The retired values are NOT listed here. This type describes what the app
+ * writes, and nothing writes them any more — the LLM extractor folds them and
+ * `assignContactToTransactionSync` normalizes them. Code that READS a possibly
+ * un-migrated row takes `string`, because that is honestly what it may get.
+ */
 export type ContactRole =
   | "client"
-  | "buyer"
-  | "seller"
-  | "buyer_agent"
-  | "seller_agent"
-  | "listing_agent"
+  | "agent"
+  | "co_agent"
   | "appraiser"
   | "inspector"
   | "surveyor"
