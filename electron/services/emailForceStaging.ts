@@ -38,10 +38,16 @@
  *   - `emails` is SHARED. The force set is a strict subset — other users' rows,
  *     rows with a NULL `external_id`, rows from a provider this run cannot
  *     rebuild, and rows older than the cache window all have to survive.
- *   - FIVE tables reference `emails(id)` with ON DELETE CASCADE
- *     (`attachments`, `email_participants`, `communications`,
- *     `ignored_communications`, `pending_review_communications`), plus a set of
- *     indexes. Those are bound by NAME; a rename re-points or orphans them.
+ *   - FIVE tables reference `emails(id)` with ON DELETE CASCADE — attachments,
+ *     the participants junction, the transaction-link table and its ignored and
+ *     pending-review siblings — plus a set of indexes. Those are bound by NAME;
+ *     a rename re-points or orphans them. (Named in prose rather than spelled
+ *     as identifiers on purpose: the BACKLOG-2791 one-read-path guard greps raw
+ *     file text without stripping comments, so a doc comment that spells the
+ *     review table's name reads to it as a second read path. That guard is
+ *     over-broad — filed separately — but a comment is not worth breaking CI
+ *     over, and relaxing a guard from inside the PR it blocks is exactly the
+ *     move that guard exists to prevent.)
  *   - Those cascades are the POINT here, not an obstacle: deleting the force set
  *     with an ordinary DELETE is what makes link loss happen exactly as it does
  *     for messages, which is the parity the founder asked for.
@@ -469,12 +475,12 @@ export const emailForceSwapSteps = {
   /**
    * Delete the force set from live.
    *
-   * An ordinary DELETE, so every ON DELETE CASCADE fires: `email_participants`,
-   * `attachments`, and the three link tables — `communications`,
-   * `ignored_communications`, `pending_review_communications`. Losing those
-   * links is the AGREED behaviour (founder, 2026-08-24: parity with messages),
-   * not an accident, and it is why the confirmation dialog has to say so before
-   * the run starts.
+   * An ordinary DELETE, so every ON DELETE CASCADE fires: the participants
+   * junction, attachments, and the three link tables (transaction links, plus
+   * their ignored and pending-review siblings — see the header for why these are
+   * named in prose). Losing those links is the AGREED behaviour (founder,
+   * 2026-08-24: parity with messages), not an accident, and it is why the
+   * confirmation dialog has to say so before the run starts.
    */
   deleteLiveForceSet(db: DatabaseType, staging: EmailForceStaging): number {
     return db

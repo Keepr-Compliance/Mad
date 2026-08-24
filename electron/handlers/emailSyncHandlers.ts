@@ -428,6 +428,28 @@ export function registerEmailSyncHandlers(
         force: forceRecache,
       });
 
+      // BACKLOG-2856: a run that changed NOTHING must not report success.
+      //
+      // This return used to be an unconditional `{ success: true, … }`, which was
+      // survivable while the only failure signal was `providerError`. It stopped
+      // being survivable when the force path gained two paths that decline to
+      // swap — no provider rebuilt, and a throw inside the swap. Both leave the
+      // user's mail exactly as it was and both set `error`; dropping it here
+      // printed a GREEN "Re-cached 47 emails … unlinked from their transactions"
+      // over a run that deleted nothing and unlinked nothing, sending the user
+      // off to re-attach mail that was never detached. Checked FIRST so the
+      // specific message wins over the generic token-expiry branch below, which
+      // the no-provider-rebuilt path can also satisfy.
+      if (result.error) {
+        return {
+          success: false,
+          error: result.error,
+          ...(result.providerError ? { providerError: result.providerError } : {}),
+          emailsFetched: result.fetched,
+          emailsStored: result.stored,
+        };
+      }
+
       // BACKLOG-2127: when a provider's token is dead, do NOT report an
       // unconditional success — forward the structured providerError so the
       // renderer sync flow can raise a reconnect prompt instead of showing a
@@ -446,6 +468,11 @@ export function registerEmailSyncHandlers(
         success: true,
         emailsFetched: result.fetched,
         emailsStored: result.stored,
+        // BACKLOG-2856: forwarded so the renderer can report what actually
+        // LANDED. `stored` counts rows written to STAGING, which on a force run
+        // is what was fetched — not what survived the swap — and `providers`
+        // is how the UI knows a connected mailbox was skipped.
+        ...(result.forceSwap ? { forceSwap: result.forceSwap } : {}),
       };
     }, { module: "Transactions" }),
   );

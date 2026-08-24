@@ -765,6 +765,18 @@ export interface WindowApiTransactions {
       message: string;
       tokenExpired: boolean;
     };
+    /**
+     * BACKLOG-2856: set only when a force run reached the swap. `emailsInserted`
+     * is what actually landed in the live table — `emailsStored` counts staging
+     * writes and so overstates a force run — and `providers` names the mailboxes
+     * that were rebuilt, so a caller can tell that a connected one was skipped.
+     */
+    forceSwap?: {
+      emailsDeleted: number;
+      emailsInserted: number;
+      participantsInserted: number;
+      providers: Array<"gmail" | "outlook">;
+    };
   }>;
   /** Export transaction to organized folder structure */
   exportFolder: (transactionId: string, options?: {
