@@ -145,11 +145,34 @@ export function SubmitForReviewModal({
       panelClassName="max-w-md p-6"
       testId="submit-review-modal"
     >
-        {/* Header */}
+        {/*
+          Header. BACKLOG-2849, founder test 2026-08-24 — on SUCCESS the icon
+          and the title both change, because after the success toast
+          auto-dismisses (5000ms) this header is the only thing left on screen,
+          and it was still asking a question the user had already answered.
+
+          THE GREEN IS NOT A NEW GREEN. `bg-green-100 text-green-700` and the
+          check path `M5 13l4 4L19 7` are lifted from the Submitted badge in
+          TransactionHeader.tsx — the same badge this deal now carries on the
+          screen behind this modal. The point of matching it is that the two
+          read as ONE signal: whatever told him "submitted" here is what he
+          sees on the deal afterwards. The colour lives on the disc and the
+          glyph inherits it, exactly as the badge is built.
+
+          Note the token: the badge's green is `text-green-700`. The RETIRED
+          success callout (removed earlier in this ticket) drew its duplicate
+          check in `text-green-600`. They are deliberately different tokens,
+          which is what lets the suite keep asserting `.text-green-600` at zero
+          as a guard against that callout returning.
+        */}
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+          <div
+            className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
+              isSuccess ? "bg-green-100 text-green-700" : "bg-blue-100"
+            }`}
+          >
             <svg
-              className="w-6 h-6 text-blue-600"
+              className={isSuccess ? "w-6 h-6" : "w-6 h-6 text-blue-600"}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -158,12 +181,33 @@ export function SubmitForReviewModal({
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth={2}
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                d={
+                  isSuccess
+                    ? "M5 13l4 4L19 7"
+                    : "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                }
               />
             </svg>
           </div>
+          {/*
+            TITLE — his words: "the title should say successfully submitted not
+            submit for review". SUCCESS ONLY; idle and mid-upload keep the
+            question they are actually asking.
+
+            ONE literal on both branches, resubmit included. He gave one
+            string; "Successfully Resubmitted" would be a word he did not say,
+            invented to fill a branch he did not mention. The consequence is
+            real and disclosed rather than designed around: after a successful
+            RESUBMIT this header reads "Successfully Submitted", so the success
+            screen no longer distinguishes a first submit from a resubmit. One
+            line if he wants it to.
+          */}
           <h3 className="text-lg font-bold text-gray-900">
-            {isResubmit ? "Resubmit for Review" : "Submit for Review"}
+            {isSuccess
+              ? "Successfully Submitted"
+              : isResubmit
+              ? "Resubmit for Review"
+              : "Submit for Review"}
           </h3>
           {/*
             BACKLOG-2849 — the founder removed the Cancel button and asked for
@@ -568,6 +612,40 @@ export function SubmitForReviewModal({
               )}
             </button>
           ) : null}
+          {/*
+            DONE — BACKLOG-2849, founder test 2026-08-24: "can we add a done
+            button next to the export pdf". Success only; it is the action that
+            finishes the flow, so it sits LAST in this `justify-end` row — the
+            same terminal slot Submit occupies on the idle screen, and the same
+            shape as the repo's other success screens (ExportModal step 5 puts
+            Done last beside the optional Open Audit; SupportTicketDialog's
+            success Done is this same filled blue).
+
+            It routes through `handleCancelClick`, the SAME handler as the X
+            and the backdrop, rather than raw `onCancel`. On this screen the
+            two are equivalent — a completed submit is not `isActivelySubmitting`,
+            so no confirm can fire — but keeping ONE dismissal path is the
+            invariant this file already holds, and it is what stops a future
+            change that renders Done in another state from silently aborting a
+            running upload.
+
+            EXPORT PDF ABOVE IS UNTOUCHED — same handler, same classes, same
+            position. That leaves two filled blue buttons side by side, which
+            is this repo's existing success-screen convention rather than an
+            oversight. Whether Export PDF should step back to the outlined
+            secondary now that it is no longer the only action on the screen is
+            a visual-weight preference, raised in the report for the founder,
+            not decided here.
+          */}
+          {isSuccess && (
+            <button
+              onClick={handleCancelClick}
+              data-testid="submit-review-done"
+              className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all"
+            >
+              Done
+            </button>
+          )}
         </div>
     </ResponsiveModal>
   );
