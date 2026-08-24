@@ -415,6 +415,45 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
     // column cannot detect a standalone index placed on it.
     expect(columnNames("emails")).not.toContain("bulk_mail_headers");
 
+    // ...v64's re-keyed phone lookup keys are UNWRITTEN...
+    //
+    // THIS IS WHAT KEEPS THE v64 PROBE HONEST. Every `phone_normalized` and
+    // every `phones_normalized_json` in the shipped transcript is NULL, so the
+    // values the probe below reads can only have been written by v64. A future
+    // fixture regen from a build that already ran v64 would carry the re-keyed
+    // values, the probe would pass without v64 doing anything, and these lines
+    // fail first instead.
+    expect(
+      (
+        db
+          .prepare("SELECT COUNT(*) AS n FROM contact_phones WHERE phone_normalized IS NOT NULL")
+          .get() as { n: number }
+      ).n,
+    ).toBe(0);
+    expect(
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM external_contacts WHERE phones_normalized_json IS NOT NULL",
+          )
+          .get() as { n: number }
+      ).n,
+    ).toBe(0);
+
+    // ...v65's watermark column and both of its UNIQUE indexes are absent...
+    //
+    // `pending_review_communications` itself is deliberately NOT asserted here,
+    // and that omission is the point: it IS declared in schema.sql (:1456),
+    // which runMigrations() execs BEFORE the chain, so the TABLE arrives whether
+    // or not v65 runs. Its two UNIQUE indexes are NOT in schema.sql (by design —
+    // BACKLOG-2298/2300), and `transactions` already exists here so
+    // `CREATE TABLE IF NOT EXISTS` cannot add a column to it. Those three
+    // objects are v65's only observable effects on this path, and they are
+    // exactly what the v65 probe asserts.
+    expect(columnNames("transactions")).not.toContain("last_pending_scan_at");
+    expect(indexSql("idx_pending_review_txn_email")).toBeUndefined();
+    expect(indexSql("idx_pending_review_txn_thread")).toBeUndefined();
+
     // ...and v67's column and index are absent.
     //
     // THIS IS WHAT KEEPS THE v67 PROBE HONEST. `schema.sql` NOW DECLARES
@@ -581,8 +620,47 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
   });
 
   // =========================================================================
-  // STRUCTURAL PROBES — one per migration, so control 2 goes red whichever
-  // migration is dropped from the chain.
+  // STRUCTURAL PROBES — one per migration in the chain this fixture runs
+  // (v56..HEAD), so control 2 goes red whichever migration is dropped, WITH TWO
+  // NAMED EXEMPTIONS. The header used to say "one per migration" flatly; it was
+  // false for four migrations at once (BACKLOG-2860), which is how v63..v66 all
+  // reached a state where their bodies could be replaced with `return;` and this
+  // suite stayed green. v64 and v65 are probed below. v63 and v66 CANNOT be
+  // probed here, for reasons that are measured rather than assumed:
+  //
+  //   v63 (BACKLOG-2750, seven columns + seven indexes) — ALL FOURTEEN OBJECTS
+  //       ARE ALREADY IN THE SHIPPED FIXTURE. v2.27.0's schema.sql declared each
+  //       column in its CREATE TABLE and carried each standalone CREATE INDEX,
+  //       so the restored transcript has them before anything runs. Measured on
+  //       the fixture alone, ahead of any exec: all 7 columns present, all 7
+  //       indexes present. v63's body is `if (!cols.includes(column))` plus
+  //       `CREATE INDEX IF NOT EXISTS`, so on THIS database it is a total no-op.
+  //       Any probe would assert state the fixture already holds — green with
+  //       v63 neutered, i.e. exactly the vacuous probe this item exists to
+  //       prevent. v63 is aimed at a PRE-2026-02-17 database, which is older
+  //       than this fixture; probing it needs a second, older corpus, not a
+  //       probe here. `migration-v63.test.ts` covers it on a synthetic one.
+  //
+  //   v66 (BACKLOG-2814, message_thread_names + its index) — BOTH OBJECTS ARE
+  //       CREATED BY schema.sql BEFORE THE CHAIN RUNS. schema.sql declares
+  //       `CREATE TABLE IF NOT EXISTS message_thread_names` (:333) and
+  //       `CREATE INDEX IF NOT EXISTS idx_message_thread_names_thread` (:343),
+  //       and runMigrations() execs schema.sql at :776 before
+  //       _runVersionedMigrations(). Measured: after the fixture restore both are
+  //       absent; after exec(schema.sql), before the chain, both are PRESENT.
+  //       Unlike v65's column and v67's, the table does not yet exist in the
+  //       fixture, so `IF NOT EXISTS` does not save it — schema.sql creates it
+  //       outright. v66's body is therefore unreachable-in-effect on every
+  //       runMigrations() path, which is a finding about the migration and not
+  //       about this suite (recorded on BACKLOG-2860; the migration's own comment
+  //       claims "an upgrade runs this block and never reads schema.sql", which
+  //       is not what runMigrations does). `migration-v66.test.ts` exercises the
+  //       body directly, without schema.sql, and is unaffected.
+  //
+  // Both exemptions are ENFORCED, not merely written down: the coverage test at
+  // the bottom of this file re-checks each premise against the fixture and
+  // schema.sql, so if a fixture regen or a schema.sql edit ever makes one of
+  // these migrations observable, that test goes red and demands the probe.
   // =========================================================================
 
   it("v56 applied: tombstone columns exist on contacts AND transaction_contacts", async () => {
@@ -654,6 +732,133 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
       .all() as Array<{ id: string; bulk_mail_headers: string | null }>;
     expect(rows.map((r) => r.id)).toEqual([...EMAIL_IDS].sort());
     for (const r of rows) expect(r.bulk_mail_headers).toBeNull();
+  });
+
+  it("v64 applied: every persisted phone lookup key is re-keyed to the libphonenumber rule", async () => {
+    assertRealOnDiskTarget();
+    await upgrade();
+
+    // THE EXPECTED KEYS ARE LITERALS, ON PURPOSE.
+    //
+    // v64's body `require`s the LIVE `toLookupKey` and writes whatever it
+    // returns. A probe that computed its expectation through the SAME helper
+    // would assert f(x) === f(x): it would still catch a neutered migration
+    // (NULL is not a key) but it would say nothing about the RULE, and the rule
+    // is the entire subject of BACKLOG-2630. So the values below were computed
+    // from the live helper ONCE, at authoring time, and transcribed:
+    //
+    //     toLookupKey("+14155550102") -> "14155550102"   (DEFAULT_PHONE_REGION = "US")
+    //
+    // This is the opposite call from v67's, and for the opposite reason: there
+    // the constant is INDEPENDENT of what the migration writes, so reading it is
+    // what makes the check honest; here the function IS what the migration
+    // writes, so reading it is what would make the check circular.
+    //
+    // CONSEQUENCE, STATED RATHER THAN DISCOVERED LATER: if the normalisation
+    // rule ever changes again, this goes red. That is the correct outcome and
+    // the migration's own comment says so — v64 FLOATS, and a rule change needs
+    // a fresh re-key migration, not a silently-updated expectation here.
+
+    // ------------------------------------------------------------------
+    // (1) contact_phones.phone_normalized — recomputed from phone_e164.
+    // Asserted as an exact id -> key MAP: a re-key that wrote the right values
+    // onto the wrong rows holds every count and every id set.
+    // ------------------------------------------------------------------
+    const phones = db
+      .prepare("SELECT id, phone_normalized FROM contact_phones ORDER BY id")
+      .all() as Array<{ id: string; phone_normalized: string | null }>;
+    expect(phones.map((r) => r.id)).toEqual([...CONTACT_PHONE_IDS].sort());
+    expect(Object.fromEntries(phones.map((r) => [r.id, r.phone_normalized]))).toEqual({
+      "cp-2700-ben": "14155550102",
+      "cp-2700-dan": "14155550104",
+      "cp-2700-eve": "14155550105",
+    });
+
+    // ...and none is the OLD ten-digit key. Stated separately because it names
+    // the actual regression: the app computes "14155550102" while the database
+    // holds "4155550102", and a contact becomes unfindable by his own number.
+    for (const r of phones) expect(r.phone_normalized).not.toMatch(/^\d{10}$/);
+
+    // ------------------------------------------------------------------
+    // (2) external_contacts.phones_normalized_json — recomputed from phones_json.
+    // A SEPARATE it-block assertion would be safer still, but these two share a
+    // single upgrade; they are asserted here with their own mutation control
+    // (see BACKLOG-2860) precisely because assertion (1) short-circuits.
+    // ------------------------------------------------------------------
+    const externals = db
+      .prepare("SELECT id, phones_normalized_json FROM external_contacts ORDER BY id")
+      .all() as Array<{ id: string; phones_normalized_json: string | null }>;
+    expect(externals.map((r) => r.id)).toEqual([...EXTERNAL_CONTACT_IDS].sort());
+    expect(Object.fromEntries(externals.map((r) => [r.id, r.phones_normalized_json]))).toEqual({
+      "x-2700-ext-1": '["14155550106"]',
+      "x-2700-ext-2": '["14155550107"]',
+    });
+
+    // ------------------------------------------------------------------
+    // (3) phone_last_message is NOT asserted, and this is why.
+    //
+    // v64's third operation re-keys that table. The shipped fixture contains the
+    // TABLE and ZERO ROWS (measured on the restored transcript:
+    // `SELECT COUNT(*) FROM phone_last_message` -> 0), so the operation runs its
+    // guard, finds nothing, and `changed` stays 0. Any assertion about it would
+    // pass with the whole block deleted. Recorded here rather than written as a
+    // vacuous line: a probe that cannot fail is worse than no probe, because it
+    // makes the section header true while changing nothing. Covered instead by
+    // `migration-v64.test.ts`, which seeds rows for it.
+    // ------------------------------------------------------------------
+  });
+
+  it("v65 applied: the pending-review dedup indexes and the delta watermark column exist", async () => {
+    assertRealOnDiskTarget();
+    await upgrade();
+
+    // WHAT IS DELIBERATELY NOT ASSERTED: `pending_review_communications` itself.
+    // schema.sql declares it (:1456) and runMigrations() execs schema.sql before
+    // the chain, so the table arrives on this path with or without v65 — an
+    // `expect(tableExists(...)).toBe(true)` here would be green under a neutered
+    // v65 and would be pure decoration. The three objects below are v65's only
+    // observable effects on a real upgrade, and each was confirmed absent in the
+    // precondition test above.
+
+    // (1) THE DELTA WATERMARK COLUMN, on a table that already existed — so
+    // `CREATE TABLE IF NOT EXISTS transactions` in schema.sql cannot supply it.
+    expect(columnNames("transactions")).toContain("last_pending_scan_at");
+
+    // ...and it is NULL on every pre-existing transaction. v65 adds the column
+    // and does not backfill a scan time, which is the true statement about rows
+    // that have never been scanned; a non-NULL value here would make the delta
+    // sync skip mail that predates the upgrade. Exact id -> value map, never a
+    // count of NULLs.
+    const txns = db
+      .prepare("SELECT id, last_pending_scan_at FROM transactions ORDER BY id")
+      .all() as Array<{ id: string; last_pending_scan_at: string | null }>;
+    expect(txns.map((r) => r.id)).toEqual([...TRANSACTION_IDS].sort());
+    expect(Object.fromEntries(txns.map((r) => [r.id, r.last_pending_scan_at]))).toEqual(
+      Object.fromEntries([...TRANSACTION_IDS].sort().map((id) => [id, null])),
+    );
+
+    // (2) + (3) THE TWO UNIQUE DEDUP INDEXES. These are the DB backstop for the
+    // sync's dedup predicate — measured on BACKLOG-2791: drop both and a repeated
+    // sync leaves 4 rows where 2 belong. They are NOT in schema.sql, by design
+    // (a standalone CREATE INDEX naming a not-yet-created object is the
+    // BACKLOG-2298/2300/2750 crash), so on this path only v65 can create them.
+    //
+    // UNIQUE is asserted; the `WHERE ... IS NOT NULL` partial predicate is NOT.
+    // The partial form is a size/readability choice and was mutation-tested on
+    // BACKLOG-2791 as NOT load-bearing — SQLite treats every NULL as distinct, so
+    // the non-partial form constrains identically. Asserting it would enshrine a
+    // documented non-load-bearing choice as a requirement.
+    for (const [name, columns] of [
+      ["idx_pending_review_txn_email", "email_id"],
+      ["idx_pending_review_txn_thread", "thread_id"],
+    ] as const) {
+      const sql = indexSql(name);
+      expect(sql).toBeDefined();
+      expect(sql).toMatch(/CREATE\s+UNIQUE\s+INDEX/i);
+      expect(sql).toMatch(
+        new RegExp(`ON\\s+pending_review_communications\\s*\\(\\s*transaction_id\\s*,\\s*${columns}\\s*\\)`, "i"),
+      );
+    }
   });
 
   it("v67 applied: emails.derived_version exists, is 0 on every pre-existing row, and the partial stale index is present", async () => {
@@ -777,5 +982,96 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
     } finally {
       backup.close();
     }
+  });
+
+  // =========================================================================
+  // COVERAGE — the section header above is CHECKED, not asserted in prose.
+  //
+  // BACKLOG-2860. "One per migration" was a comment, and comments do not go red:
+  // v63, v64, v65 and v66 all shipped with no probe while the header claimed
+  // otherwise, and each could have had its body replaced with `return;` without
+  // this suite noticing. This test fails when a migration joins the chain and no
+  // probe follows it, so the next one cannot arrive silently.
+  //
+  // It reads THIS FILE's own source. That is the only way to see sibling test
+  // names from inside a test, and it is deliberately narrow: the pattern anchors
+  // on `it("vNN applied:` so a mention in a comment — including the long
+  // exemption block above, which names v63 and v66 repeatedly — cannot satisfy
+  // it. Verified by construction: the exemption block would otherwise make this
+  // test pass with both probes deleted.
+  // =========================================================================
+
+  it("COVERAGE: every migration in the rehearsed chain has a probe, or a still-true exemption", () => {
+    // Probed versions, read from this file's own `it` titles.
+    const source = fs.readFileSync(__filename, "utf8");
+    const probed = new Set<number>();
+    for (const m of source.matchAll(/it\(\s*"v(\d+) applied:/g)) probed.add(Number(m[1]));
+
+    // The chain this fixture actually runs: everything ABOVE the shipped
+    // version, up to the head. Derived from MIGRATIONS the same way
+    // chainHead.ts does, so a new migration shows up here without an edit.
+    const versions = (
+      service.constructor as { MIGRATIONS: Array<{ version: number }> }
+    ).MIGRATIONS.map((m) => m.version);
+    const rehearsed = versions.filter((v) => v > EXPECTED_SHIPPED_VERSION).sort((a, b) => a - b);
+    expect(rehearsed.length).toBeGreaterThan(0);
+    expect(Math.max(...rehearsed)).toBe(HEAD_VERSION);
+
+    // ------------------------------------------------------------------
+    // The exemptions, and the PREMISE each one rests on.
+    //
+    // A permanent exemption is a probe that cannot fail wearing a different hat,
+    // so each premise is re-measured here. If a fixture regen or a schema.sql
+    // edit makes either migration observable, its premise fails and this test
+    // demands the probe that is now writable.
+    // ------------------------------------------------------------------
+    const exempt = new Set<number>([63, 66]);
+
+    // v63: every object it would add is ALREADY in the shipped transcript, so it
+    // is a no-op on this database. Checked against the fixture TEXT rather than
+    // the live handle, so it holds even if a future edit reorders beforeEach.
+    const fixtureSql = fs.readFileSync(FIXTURE_SQL_PATH, "utf8");
+    for (const index of [
+      "idx_users_local_license_type",
+      "idx_users_local_organization",
+      "idx_attachments_email_id",
+      "idx_attachments_external_message_id",
+      "idx_transactions_last_exported_on",
+      "idx_transactions_submission_status",
+      "idx_transactions_submission_id",
+    ]) {
+      // If a regenerated fixture (built by a post-BACKLOG-2750 shipped build,
+      // whose schema.sql no longer carries these) lacks one of these, v63 STOPS
+      // being a no-op and becomes probeable — and this line goes red.
+      expect(fixtureSql).toContain(index);
+    }
+    // The seven COLUMNS are not checked separately, and that is not an omission:
+    // a dump cannot contain `CREATE INDEX ... ON t(c)` for a column the table
+    // does not have, so index presence already implies column presence. A second
+    // loop over the column names would be a check that cannot fail — the exact
+    // thing this test exists to stop.
+
+    // v66: schema.sql creates both of its objects before the chain runs, so the
+    // migration body cannot be observed through runMigrations(). If either
+    // statement is removed from schema.sql, v66 becomes live on the upgrade path
+    // and this goes red.
+    const schemaSql = fs.readFileSync(
+      path.join(__dirname, "..", "..", "database", "schema.sql"),
+      "utf8",
+    );
+    expect(schemaSql).toMatch(/CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+message_thread_names/i);
+    expect(schemaSql).toMatch(
+      /CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+idx_message_thread_names_thread/i,
+    );
+
+    // ------------------------------------------------------------------
+    // No migration is both probed and exempt — an exemption left in place after
+    // someone wrote the probe would quietly re-open the hole for the NEXT one.
+    // ------------------------------------------------------------------
+    expect([...exempt].filter((v) => probed.has(v))).toEqual([]);
+
+    // ...and every rehearsed migration is one or the other.
+    const uncovered = rehearsed.filter((v) => !probed.has(v) && !exempt.has(v));
+    expect(uncovered).toEqual([]);
   });
 });
