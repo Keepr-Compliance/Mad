@@ -4,11 +4,11 @@
  * Four changes, and this suite is one control per change:
  *
  *   1. The Cancel button is gone; dismissal is an X at the top right.
- *   2. A brokerage user gets TWO actions: Submit and Export.
+ *   2. A brokerage user gets TWO actions: Submit and Export PDF.
  *   3. The pre-submit export SECTION is gone — the copy "Want to keep a local
  *      copy first?" and the "Export to folder before submitting" control.
  *   4. After a SUCCESSFUL submit the modal asks "Want to keep a local copy?"
- *      with an Export action.
+ *      with an Export PDF action.
  *
  * ---------------------------------------------------------------------------
  * WHY THE ABSENCE ASSERTIONS NAME THE FULL OLD LITERALS
@@ -164,17 +164,17 @@ describe("BACKLOG-2849 §1 — dismissal is an X, not a Cancel button", () => {
   });
 });
 
-describe("BACKLOG-2849 §2 — a brokerage user gets Submit and Export", () => {
+describe("BACKLOG-2849 §2 — a brokerage user gets Submit and Export PDF", () => {
   it("shows both actions on the idle screen", () => {
     renderModal();
 
     expect(screen.getByRole("button", { name: "Submit" })).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Export" }),
+      screen.getByRole("button", { name: "Export PDF" }),
     ).toBeInTheDocument();
   });
 
-  it("Export calls the export handler and does not submit", () => {
+  it("Export PDF calls the export handler and does not submit", () => {
     const { onExport, onSubmit } = renderModal();
 
     fireEvent.click(screen.getByTestId("submit-review-export"));
@@ -183,7 +183,7 @@ describe("BACKLOG-2849 §2 — a brokerage user gets Submit and Export", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("hides Export while an upload is actually running", () => {
+  it("hides Export PDF while an upload is actually running", () => {
     // Leaving for the export modal mid-upload would abort the submission.
     renderModal({ isSubmitting: true, progress: UPLOADING });
 
@@ -218,7 +218,7 @@ describe("BACKLOG-2849 §3 — the pre-submit export section is gone", () => {
 });
 
 describe("BACKLOG-2849 §4 — the ask appears only after a SUCCESSFUL submit", () => {
-  it("asks, and offers Export, on success", () => {
+  it("asks, and offers Export PDF, on success", () => {
     // The realistic post-success prop shape: `isSubmitting` is back to false
     // (the hook resets it in `finally`) while progress holds "complete".
     const { onExport } = renderModal({ isSubmitting: false, progress: SUCCESS });
@@ -226,7 +226,7 @@ describe("BACKLOG-2849 §4 — the ask appears only after a SUCCESSFUL submit", 
     expect(screen.getByTestId("submit-review-success-ask")).toBeInTheDocument();
     expect(screen.getByText(POST_SUBMIT_ASK)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    fireEvent.click(screen.getByRole("button", { name: "Export PDF" }));
     expect(onExport).toHaveBeenCalledTimes(1);
   });
 

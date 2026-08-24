@@ -54,7 +54,8 @@ interface SubmitForReviewModalProps {
    * BACKLOG-2849 renamed it from `onExportFirst`: "first" described a
    * pre-submit nudge that no longer exists, and the SAME callback now backs
    * both offers — the action button beside Submit, and the post-submit ask.
-   * One action, one label ("Export"), one handler.
+   * One action, one handler. The label here is the founder's "Export PDF";
+   * the header's restored button reaches the same place as "Export".
    *
    * The destination is the founder's ruling that "the export flow it brings up
    * should be just like the individual user export": this opens the SAME
@@ -510,15 +511,20 @@ export function SubmitForReviewModal({
             and as the action on the post-submit ask. Hidden only while an
             upload is actually running, where leaving the modal would abort it.
 
-            LABEL — shipped as "Export", NOT the dictated "Export PDF". The
-            destination is ExportModal, a FORMAT CHOOSER that defaults to a
-            combined PDF but also offers `folder` and a summary `pdf`, so
-            "Export PDF" promises an output the button does not commit to. The
-            founder then ruled the flow must be "just like the individual user
-            export" and asked for the label to agree with the destination;
-            individuals reach that chooser with no PDF promise anywhere, and
-            the header button restored alongside this one has always read
-            "Export". One word, used everywhere, that is true of all of them.
+            LABEL — "Export PDF", the founder's own wording from point 2 of
+            the dictation. It was briefly shipped as "Export" and reverted: a
+            relabel of his words is his call to make, not one to take on his
+            behalf.
+
+            The open question, raised for him rather than answered here: this
+            opens ExportModal, a FORMAT CHOOSER — `combined-pdf` is
+            preselected, but `folder` and a summary `pdf` are one tile away, so
+            the button names a default rather than a commitment. The header
+            Export button restored beside it reaches the SAME chooser under the
+            shorter label "Export" (its wording since BACKLOG-459), so the two
+            routes to one destination currently read differently. SR review
+            ruled the mismatch acceptable and the label keepable. See the PR
+            body's label proposal.
           */}
           {onExport && !isActivelySubmitting && !showCancelConfirm && (
             <button
@@ -530,7 +536,7 @@ export function SubmitForReviewModal({
                   : "border border-gray-300 text-gray-700 hover:bg-gray-100"
               }`}
             >
-              Export
+              Export PDF
             </button>
           )}
           {!progress?.stage || progress.stage === "failed" ? (
