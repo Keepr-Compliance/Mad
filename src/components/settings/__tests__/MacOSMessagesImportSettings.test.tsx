@@ -438,20 +438,25 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
 
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
 
-    await screen.findByTestId("import-space-block");
-    expect(screen.getByRole("button", { name: /Import Messages/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Force Re-import/i })).toBeDisabled();
+    // BACKLOG-2749: the refusal became a DIALOG (founder `2259031c` — a refusal
+    // computes the way out and offers it by name, which is a dialog's job).
+    // The fact is stated inline before any click; the DECISION lives behind
+    // Import. Every assertion below moved with it, and the set is stronger: it
+    // now pins that no run is requested, which a disabled button cannot say.
+    await screen.findByTestId("import-space-notice");
+    fireEvent.click(screen.getByRole("button", { name: /Import Messages/i }));
 
-    // The two ways through are offered...
+    const block = await screen.findByTestId("import-space-block");
+    expect(mockRequestSync).not.toHaveBeenCalled();
+
+    // The ways through are offered — text-only, and (when one exists) a shorter
+    // window named with its own estimate.
     expect(screen.getByTestId("import-without-attachments")).toBeInTheDocument();
-    expect(screen.getByTestId("import-space-block")).toHaveTextContent(
-      /shorter time period/i,
-    );
+    expect(block).toHaveTextContent(/needs up to 80\.0 GB/i);
 
     // ...and there is deliberately NO "import anyway" escape. An override is
     // exactly what would let macOS evict the user's Time Machine snapshots to
     // make room, which is the failure this guard exists to prevent.
-    const block = screen.getByTestId("import-space-block");
     expect(block).not.toHaveTextContent(/anyway/i);
     expect(block).not.toHaveTextContent(/import all/i);
   });
@@ -469,10 +474,22 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
 
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
 
+    // BACKLOG-2749: the escape hatch lives in the refusal dialog now, so it is
+    // reached by pressing Import rather than found lying on the panel.
+    await screen.findByTestId("import-space-notice");
+    fireEvent.click(screen.getByRole("button", { name: /Import Messages/i }));
     fireEvent.click(await screen.findByTestId("import-without-attachments"));
 
-    // The block lifts and the import becomes runnable — the escape hatch is what
-    // makes a refusal acceptable rather than a dead end.
+    // The refusal lifts and the import becomes runnable — the escape hatch is
+    // what makes a refusal acceptable rather than a dead end.
+    //
+    // BACKLOG-2749: awaited rather than checked synchronously, because the
+    // button now WAITS for its preference write to land before closing and
+    // importing. That wait is the fix — a save that fails must stop the run
+    // instead of letting it proceed on the old setting.
+    await waitFor(() =>
+      expect(screen.queryByTestId("import-space-notice")).not.toBeInTheDocument(),
+    );
     await waitFor(() =>
       expect(screen.queryByTestId("import-space-block")).not.toBeInTheDocument(),
     );
@@ -504,10 +521,19 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     expect(screen.getByRole("button", { name: /Import Messages/i })).toBeEnabled();
   });
 
-  it("asks for the estimate over the audit-widened window, not the raw lookback", async () => {
-    // The real import reaches back to the earliest transaction audit period, so
-    // an estimate scoped to the bare lookback preference would describe a
-    // narrower import than the one that runs.
+  it("asks for the estimate with the USER's selection and never an audit floor", async () => {
+    // BACKLOG-2743 required the estimate to cover the audit-widened window,
+    // because an estimate scoped to the bare lookback describes a narrower
+    // import than the one that runs. That requirement is unchanged — what
+    // changed in BACKLOG-2772 is WHO satisfies it.
+    //
+    // The panel used to compute the effective audit floor over a second IPC and
+    // send it back down, which made it one of four places deciding what an
+    // import covers. Main now derives the deal spans itself, from the same
+    // query the export gate reads, so the panel states only the user's
+    // selection. That the resulting window IS widened by the deals is asserted
+    // where it is now decided — `electron/__tests__/importIncludeSet-2772.test.ts`,
+    // against the real handler.
     (window.api.messages.getEffectiveImportWindow as jest.Mock).mockResolvedValue({
       success: true,
       effectiveCutoffISO: "2024-01-01T00:00:00.000Z",
@@ -527,9 +553,16 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
 
     await waitFor(() =>
       expect(window.api.messages.getImportCount).toHaveBeenCalledWith(
-        expect.objectContaining({ auditPeriodStart: "2024-01-01T00:00:00.000Z" }),
+        userId,
+        expect.objectContaining({ lookbackMonths: 3 }),
       ),
     );
+
+    // The removal is the point, so assert it: no call carries an audit floor.
+    for (const [, selection] of (window.api.messages.getImportCount as jest.Mock).mock
+      .calls) {
+      expect(selection).not.toHaveProperty("auditPeriodStart");
+    }
   });
 
   it("reports skipped attachments after an import rather than claiming plain success", async () => {

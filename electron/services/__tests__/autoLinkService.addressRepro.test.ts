@@ -154,7 +154,7 @@ function installDb(seed: Seed): {
     if (sql.includes("FROM contact_phones")) {
       return [];
     }
-    // BACKLOG-2319: getOtherCandidateTransactionAddresses — other non-archived
+    // BACKLOG-2319: getOtherCandidateTransactionAddresses — other live
     // deals this contact is on. Params: [contactId, userId, currentTxnId].
     if (sql.includes("transaction_contacts tc") && sql.includes("property_address")) {
       const contactId = params?.[0] as string;

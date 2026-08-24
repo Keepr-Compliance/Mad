@@ -16,7 +16,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { DndContext, DragOverlay, pointerWithin } from '@dnd-kit/core';
 import {
   getProjectDetail,
-  listItems,
+  listAllItems,
   updateProjectField,
   deleteProject,
   bulkUpdate,
@@ -68,6 +68,10 @@ export default function ProjectDetailPage() {
   // All items for backlog + token sums
   const [allItems, setAllItems] = useState<PmBacklogItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
+  // BACKLOG-2786: the server's own total for this project, so a short list can
+  // never pass for a complete one. Null until a load succeeds — on error we
+  // must not render "0 of 0".
+  const [itemsTotalCount, setItemsTotalCount] = useState<number | null>(null);
 
   // Status filter — clicking a segment/badge in StatusSummary narrows
   // the visible items in both the backlog panel and sprint sections.
@@ -113,14 +117,22 @@ export default function ProjectDetailPage() {
 
   useEffect(() => { loadDetail(); }, [loadDetail]);
 
-  // Load ALL items for this project
+  // Load ALL items for this project.
+  // BACKLOG-2786: this used to be a single `page_size: 500` request, but
+  // pm_list_items clamps to 200, so any project with more than 200 items
+  // silently lost the remainder — and because the RPC orders by
+  // `sort_order ASC`, the rows it dropped were the sequenced tail (epics
+  // included), i.e. exactly the ones worth seeing. listAllItems walks the
+  // pages instead, and reports the server's total so truncation is visible.
   const loadItems = useCallback(async () => {
     setLoadingItems(true);
     try {
-      const data = await listItems({ project_id: projectId, page_size: 500 });
+      const data = await listAllItems({ project_id: projectId });
       setAllItems(data.items);
+      setItemsTotalCount(data.total_count);
     } catch (err) {
       console.error('Failed to load project data:', err);
+      setItemsTotalCount(null);
     } finally {
       setLoadingItems(false);
     }
@@ -343,6 +355,18 @@ export default function ProjectDetailPage() {
       />
 
       <TokenMetricCards tokenSums={tokenSums} project={project} />
+
+      {/* BACKLOG-2786: if the fetch ever comes back short of the server's own
+          total, say so. Both workspace views render from `allItems`, so this
+          sits above the toggle and covers Sprints and Epics alike. */}
+      {!loadingItems && itemsTotalCount !== null && allItems.length < itemsTotalCount && (
+        <div className="bg-amber-50 border border-amber-200 rounded-md p-3 mb-4">
+          <p className="text-sm text-amber-800">
+            Showing {allItems.length} of {itemsTotalCount} items — {itemsTotalCount - allItems.length}{' '}
+            could not be loaded. Reload the page; if the shortfall persists, report it.
+          </p>
+        </div>
+      )}
 
       {/* Workspace view toggle: [ Sprints | Epics ] (BACKLOG-2386) */}
       <div className="mb-4">

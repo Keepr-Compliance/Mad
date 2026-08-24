@@ -136,6 +136,8 @@ jest.mock("../supportAccess/trace", () => ({
 
 import macOSMessagesImportService from "../macOSMessagesImportService/macOSMessagesImportService";
 import type { RawMacMessage } from "../macOSMessagesImportService/types";
+// BACKLOG-2772: plans are built by the REAL resolver, never hand-written.
+import { testImportPlan } from "./helpers/importPlanFixture";
 
 // ============================================================================
 // Fixture
@@ -186,7 +188,26 @@ function appleNanos(ms: number): number {
  * would come up short.
  */
 const BASE_MS = Date.UTC(2026, 0, 15, 12, 0, 0); // fixed instant, not "now"
-const NOW_MS = Date.now();
+/*
+ * Whole-SECOND aligned relative to MAC_EPOCH, deliberately (BACKLOG-2772).
+ *
+ * `message.date` is nanoseconds since 2001, so these values are ~8e17 — two
+ * orders of magnitude past `Number.MAX_SAFE_INTEGER`, where consecutive doubles
+ * are 128 apart. An arbitrary millisecond instant therefore has no exact double,
+ * and the fixture (which binds a JS number through better-sqlite3) and the
+ * generated SQL literal (which SQLite parses as an int64) can land on either
+ * side of a boundary comparison. That made the boundary sweep below pass or
+ * fail depending on the time of day it ran — observed 1 failure in 3 runs.
+ *
+ * A whole second is 1e9 nanoseconds and 1e9 = 128 x 7,812,500, so second-aligned
+ * instants ARE exactly representable and both paths agree. `DAY_MS` is a
+ * multiple of 1000, so every date derived below stays aligned.
+ *
+ * This is a fixture-precision fact, not a product one: real `message.date`
+ * values come from Apple as int64, and the ~128ns quantisation of a generated
+ * literal is immaterial against day-granular audit spans.
+ */
+const NOW_MS = MAC_EPOCH + Math.floor((Date.now() - MAC_EPOCH) / 1000) * 1000;
 
 interface FixtureRow {
   rowid: number;
@@ -491,8 +512,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: 5 },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: 5 } }),
     );
 
     expect(result.success).toBe(true);
@@ -508,8 +528,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: 5 },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: 5 } }),
     );
 
     expect(result.wasCapped).toBe(true);
@@ -526,8 +545,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: 1 },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: 1 } }),
     );
 
     expect(importedGuids()).toEqual(["msg-12"]);
@@ -539,8 +557,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: total - 1 },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: total - 1 } }),
     );
 
     expect(importedGuids()).toEqual(newestGuids(total - 1));
@@ -553,8 +570,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: total },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: total } }),
     );
 
     expect(importedGuids()).toEqual(IMPORTABLE_GUIDS_ASC);
@@ -572,8 +588,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: total + 1 },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: total + 1 } }),
     );
 
     expect(importedGuids()).toEqual(IMPORTABLE_GUIDS_ASC);
@@ -596,8 +611,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: null },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: null } }),
     );
 
     expect(importedGuids()).toEqual(IMPORTABLE_GUIDS_ASC);
@@ -615,8 +629,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: 5 },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: 5 } }),
     );
 
     expect(importedGuids()).toEqual(newestGuids(5));
@@ -630,8 +643,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { lookbackMonths: 1, maxMessages: 4 },
+      testImportPlan({ storedFilters: { lookbackMonths: 1, maxMessages: 4 } }),
     );
 
     expect(importedGuids()).toEqual(newestGuids(4, RECENT_GUIDS_ASC));
@@ -643,50 +655,138 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
   });
 
   // ==========================================================================
-  // 4. The audit-period exemption is untouched
+  // 4. Cap' — the cap is SCOPED to the unprotected remainder (BACKLOG-2772)
   // ==========================================================================
+  //
+  // The founder's final rule, 2026-08-20: "Maximum messages" applies only
+  // OUTSIDE the audit periods of non-rejected deals; inside such a period
+  // history is always complete and never counts against the cap.
+  //
+  // These tests replace two that asserted the OLD rule — that any active audit
+  // period switched the cap off for the ENTIRE library. That rule is what let
+  // the founder click "Re-import most recent 50,000 only" and get a run
+  // targeting 707,842 messages (BACKLOG-2749). The audit guarantee it protected
+  // is preserved below in full; what is gone is spending it on history that
+  // belongs to no deal.
+  //
+  // The corpus reads: msg-06 … msg-12 are the 7 messages inside a 7.5-day audit
+  // window; the 10 outside it are old-01 … old-05 and msg-01 … msg-05.
 
-  it("does NOT cap an audit-period import — the full window lands and it warns", async () => {
-    // Audit start 7.5 days back: msg-06 … msg-12 are inside the window (7 rows),
-    // which is more than the cap of 3, so the cap must be relaxed entirely.
-    const auditStart = new Date(NOW_MS - AUDIT_WINDOW_MS).toISOString();
-    const expected = RECENT_GUIDS_ASC.slice(RECENT_GUIDS_ASC.length - 7);
+  const auditSpan = () => [
+    { startISO: new Date(NOW_MS - AUDIT_WINDOW_MS).toISOString(), endISO: null },
+  ];
+  /** The 7 messages inside the 7.5-day audit window, in fetch order. */
+  const PROTECTED_GUIDS = RECENT_GUIDS_ASC.slice(RECENT_GUIDS_ASC.length - 7);
 
+  it("keeps the audit period WHOLE and applies the cap only to what is outside it", async () => {
+    // The cap (3) is far smaller than the audit window (7 messages). Under the
+    // old rule this imported all 16 importable rows — the cap was off entirely.
+    // Under Cap' it imports the 7 protected PLUS the newest 3 of the 10
+    // outside: msg-03, msg-04, msg-05.
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { auditPeriodStart: auditStart, maxMessages: 3 },
+      testImportPlan({
+        storedFilters: { lookbackMonths: null, maxMessages: 3 },
+        auditSpans: auditSpan(),
+      }),
     );
 
-    expect(importedGuids()).toEqual(expected);
-    expect(importedGuids().length).toBeGreaterThan(3);
-    expect(result.wasCapped).toBe(false);
-
-    const warned = mockLogWarn.mock.calls.map((c) => String(c[0]));
-    expect(
-      warned.some((m) => m.includes("importing the FULL audit window")),
-    ).toBe(true);
+    expect(result.success).toBe(true);
+    // Identity, not counts. A count assertion could not tell "10 arrived" from
+    // "the wrong 10 arrived", and which 10 is the entire rule.
+    expect(importedGuids()).toEqual([
+      "msg-03",
+      "msg-04",
+      "msg-05",
+      ...PROTECTED_GUIDS,
+    ]);
+    // Both halves stated separately, so a failure says which one broke.
+    expect(importedGuids()).toEqual(expect.arrayContaining(PROTECTED_GUIDS));
+    expect(importedGuids()).not.toContain("msg-02");
+    expect(importedGuids()).not.toContain("old-05");
+    expect(result.wasCapped).toBe(true);
   });
 
-  it("leaves an audit-period import alone when it already fits under the cap", async () => {
-    const auditStart = new Date(NOW_MS - AUDIT_WINDOW_MS).toISOString();
-    const expected = RECENT_GUIDS_ASC.slice(RECENT_GUIDS_ASC.length - 7);
+  it("protects the audit period even when the cap is 1 — protection is absolute, not proportional", async () => {
+    // The discriminating case for "never counted against the cap". A cap of 1
+    // still delivers all 7 protected messages, because they were never the
+    // cap's business. An implementation that merely gave audit messages
+    // PRIORITY within the cap would return one message here.
+    const result = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      testImportPlan({
+        storedFilters: { lookbackMonths: null, maxMessages: 1 },
+        auditSpans: auditSpan(),
+      }),
+    );
+
+    expect(importedGuids()).toEqual(["msg-05", ...PROTECTED_GUIDS]);
+    expect(importedGuids().length).toBe(8);
+  });
+
+  it("does not cap at all when the unprotected remainder already fits", async () => {
+    const result = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      testImportPlan({
+        storedFilters: { lookbackMonths: null, maxMessages: 5000 },
+        auditSpans: auditSpan(),
+      }),
+    );
+
+    expect(importedGuids()).toEqual(IMPORTABLE_GUIDS_ASC);
+    expect(result.wasCapped).toBe(false);
+  });
+
+  it("with NO deals, the cap governs everything — the exemption is not free", async () => {
+    // Anti-vacuity for the whole section. Without this, every assertion above
+    // would be equally green for an implementation that had quietly stopped
+    // applying the cap at all.
+    const result = await macOSMessagesImportService.importMessages(
+      "user-1",
+      undefined,
+      testImportPlan({
+        storedFilters: { lookbackMonths: null, maxMessages: 3 },
+        auditSpans: [],
+      }),
+    );
+
+    expect(importedGuids()).toEqual(newestGuids(3));
+    expect(result.wasCapped).toBe(true);
+  });
+
+  it("BOUNDARY: the span is exclusive at its start and inclusive at its end", async () => {
+    // Swept, not sampled. The protected predicate is
+    // `date > startNano AND date <= endNano`, so a message landing EXACTLY on
+    // each bound is the only input that can tell the two operators apart — and
+    // an off-by-one here silently drops an audit message or silently protects a
+    // message that belongs to no deal.
+    //
+    // The bounds are taken from two real fixture rows rather than invented, so
+    // the equality is exact in the units the fetch compares
+    // (`(ms - MAC_EPOCH) * 1e6` on both sides).
+    const recentDateISO = (n: number) =>
+      new Date(NOW_MS - (13 - n) * DAY_MS).toISOString();
 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { auditPeriodStart: auditStart, maxMessages: 5000 },
+      testImportPlan({
+        storedFilters: { lookbackMonths: null, maxMessages: 1 },
+        // Span runs from msg-08's instant to msg-10's instant.
+        auditSpans: [{ startISO: recentDateISO(8), endISO: recentDateISO(10) }],
+      }),
     );
 
-    expect(importedGuids()).toEqual(expected);
-    expect(result.wasCapped).toBe(false);
-
-    const warned = mockLogWarn.mock.calls.map((c) => String(c[0]));
-    expect(
-      warned.some((m) => m.includes("importing the FULL audit window")),
-    ).toBe(false);
+    // msg-08 sits exactly ON the start and is NOT protected (strict >).
+    // msg-10 sits exactly ON the end and IS protected (<=).
+    // msg-09 is strictly inside.
+    // The cap of 1 then admits exactly one unprotected message, the newest:
+    // msg-12.
+    expect(importedGuids()).toEqual(["msg-09", "msg-10", "msg-12"]);
+    expect(importedGuids()).not.toContain("msg-08");
   });
 
   // ==========================================================================
@@ -704,8 +804,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: 5 },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: 5 } }),
     );
 
     expect(mockWindowStartFault.hits).toBe(1);
@@ -725,8 +824,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: 5 },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: 5 } }),
     );
 
     expect(mockWindowStartFault.hits).toBe(1);
@@ -748,8 +846,7 @@ macOnly("macOS message import cap keeps the NEWEST messages (BACKLOG-2744)", () 
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: 5 },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: 5 } }),
     );
 
     expect(importedGuids()).toEqual(newestGuids(5));
@@ -817,8 +914,7 @@ macOnly("cap window survives multi-batch pagination (BACKLOG-2744)", () => {
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { maxMessages: CAP },
+      testImportPlan({ storedFilters: { lookbackMonths: null, maxMessages: CAP } }),
     );
 
     const expected = Array.from({ length: CAP }, (_, i) => {
@@ -916,8 +1012,7 @@ macOnly("the cap window respects the date filter, not just the guid filter (BACK
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      {},
+      testImportPlan({ storedFilters: { lookbackMonths: null } }),
     );
 
     expect(result.success).toBe(true);
@@ -935,8 +1030,7 @@ macOnly("the cap window respects the date filter, not just the guid filter (BACK
     const result = await macOSMessagesImportService.importMessages(
       "user-1",
       undefined,
-      false,
-      { lookbackMonths: 1, maxMessages: 4 },
+      testImportPlan({ storedFilters: { lookbackMonths: 1, maxMessages: 4 } }),
     );
 
     expect(importedGuids()).toEqual(["msg-09", "msg-10", "msg-11", "msg-12"]);

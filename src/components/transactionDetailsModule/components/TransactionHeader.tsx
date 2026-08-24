@@ -4,7 +4,6 @@
  */
 import React from "react";
 import type { Transaction } from "@/types";
-import { FeatureGate } from "@/components/common/FeatureGate";
 import { formatAddress } from "@/utils/formatUtils";
 import { useNetwork } from "@/contexts/NetworkContext";
 
@@ -22,8 +21,27 @@ interface TransactionHeaderProps {
   onRestore: () => void;
   onShowExportModal: () => void;
   onShowDeleteConfirm: () => void;
+  /**
+   * @deprecated BACKLOG-2792 — Submit for Review is no longer its own header
+   * button; it is reached through Complete, which branches by license. Kept so
+   * existing callers still type-check; the header ignores it.
+   */
   onShowSubmitModal?: () => void;
   isSubmitting?: boolean;
+  /**
+   * BACKLOG-2791: outstanding review THREADS — the unit the contract counts
+   * badges in. Derived by the parent from the same grouping the review surfaces
+   * render, so the badge and the cards behind it cannot disagree.
+   *
+   * Zero here means zero items too (grouping never turns some items into no
+   * groups), which is why the Complete gate can keep counting items and still
+   * agree with this badge about whether anything is outstanding.
+   */
+  reviewCount?: number;
+  /** BACKLOG-2791: open the combined Needs Review screen (S2). */
+  onShowNeedsReview?: () => void;
+  /** BACKLOG-2792: the merged Complete action (gate, then license branch). */
+  onComplete?: () => void;
 }
 
 export function TransactionHeader({
@@ -40,8 +58,10 @@ export function TransactionHeader({
   onRestore,
   onShowExportModal,
   onShowDeleteConfirm,
-  onShowSubmitModal,
   isSubmitting = false,
+  reviewCount = 0,
+  onShowNeedsReview,
+  onComplete,
 }: TransactionHeaderProps): React.ReactElement {
   // Determine header style based on state
   const getHeaderStyle = () => {
@@ -130,10 +150,9 @@ export function TransactionHeader({
       <ActiveActions
         transaction={transaction}
         isSubmitting={isSubmitting}
-        onShowEditModal={onShowEditModal}
-        onShowSubmitModal={onShowSubmitModal}
-        onShowExportModal={onShowExportModal}
-        onShowDeleteConfirm={onShowDeleteConfirm}
+        reviewCount={reviewCount}
+        onShowNeedsReview={onShowNeedsReview ?? (() => undefined)}
+        onComplete={onComplete ?? onShowExportModal}
       />
     );
   };
@@ -303,74 +322,83 @@ function RejectedActions({
 function ActiveActions({
   transaction,
   isSubmitting,
-  onShowEditModal,
-  onShowSubmitModal,
-  onShowExportModal,
-  onShowDeleteConfirm,
+  reviewCount,
+  onShowNeedsReview,
+  onComplete,
 }: {
   transaction: Transaction;
   isSubmitting: boolean;
-  onShowEditModal: () => void;
-  onShowSubmitModal?: () => void;
-  onShowExportModal: () => void;
-  onShowDeleteConfirm: () => void;
+  /** BACKLOG-2791: outstanding review items — the ONE count from getReviewState. */
+  reviewCount: number;
+  onShowNeedsReview: () => void;
+  onComplete: () => void;
 }) {
-  // Check if transaction can be submitted
-  const canSubmit = transaction.submission_status === "not_submitted" ||
-    transaction.submission_status === "needs_changes" ||
-    !transaction.submission_status;
-
   const { isOnline } = useNetwork();
-  const isResubmit = transaction.submission_status === "needs_changes";
   const isSubmitted = transaction.submission_status === "submitted" ||
     transaction.submission_status === "under_review" ||
     transaction.submission_status === "approved";
 
   return (
     <>
-      {/* Submit for Review Button - Team/Enterprise license only */}
-      <FeatureGate requires="team">
-        {/* Submit for Review Button - shown when not yet submitted */}
-        {onShowSubmitModal && canSubmit && (
-          <button
-            onClick={onShowSubmitModal}
-            disabled={isSubmitting || !isOnline}
-            title={!isOnline ? "You are offline" : undefined}
-            className={`px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg disabled:opacity-50 text-sm flex-shrink-0 ${!isOnline ? "cursor-not-allowed" : ""}`}
-          >
-            {isSubmitting ? (
-              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            )}
-            <span className="hidden sm:inline">{isResubmit ? "Resubmit" : "Submit for Review"}</span>
-            <span className="sm:hidden">{isResubmit ? "Resubmit" : "Submit"}</span>
-          </button>
-        )}
-        {/* Submitted Badge - shown when already submitted */}
-        {isSubmitted && (
-          <span className="px-2 sm:px-4 py-2 rounded-lg font-medium flex items-center gap-1 sm:gap-2 bg-green-100 text-green-700 text-sm flex-shrink-0">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-            </svg>
-            Submitted
-          </span>
-        )}
-      </FeatureGate>
-      {/* Export Button - Available for ALL license types (BACKLOG-459)
-          Team license: secondary action (shown alongside Submit)
-          Individual license: primary action */}
+      {/* B1 · Needs Review (BACKLOG-2791). Hidden entirely when the queue is
+          empty (founder ruling 2026-08-22, superseding "always visible") — a
+          button that opens an empty screen is a dead control. It reappears the
+          moment the count goes above zero, which rides on the same live-refresh
+          wiring as every other review surface. Complete stays always visible. */}
+      {reviewCount > 0 && (
+      <>
+      {/* live count badge.
+          Opens the combined review screen at any time. The count is the single
+          getReviewState total, so it can never disagree with the gate. */}
       <button
-        onClick={onShowExportModal}
-        className="px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-white text-green-600 hover:bg-opacity-90 shadow-md hover:shadow-lg text-sm flex-shrink-0"
+        onClick={onShowNeedsReview}
+        data-testid="needs-review-button"
+        className="relative px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-amber-600 text-white hover:bg-amber-700 shadow-md hover:shadow-lg text-sm flex-shrink-0"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5 19h14a2 2 0 001.84-2.75L13.74 4a2 2 0 00-3.48 0L3.16 16.25A2 2 0 005 19z" />
         </svg>
-        Export
+        <span className="hidden sm:inline">Needs Review</span>
+        <span className="sm:hidden">Review</span>
+        <span
+          data-testid="needs-review-badge"
+          className="ml-0.5 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-white px-1.5 py-0.5 text-xs font-bold text-amber-700"
+        >
+          {reviewCount}
+        </span>
       </button>
+      </>
+      )}
+
+      {/* B2 · Complete (BACKLOG-2792) — always visible beside B1. Export and
+          Submit for Review are GONE, merged here; the branch by license happens
+          inside the handler, after the completeness gate. */}
+      <button
+        onClick={onComplete}
+        disabled={isSubmitting}
+        data-testid="complete-button"
+        title={!isOnline ? "You are offline — export is still available" : undefined}
+        className="px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg disabled:opacity-50 text-sm flex-shrink-0"
+      >
+        {isSubmitting ? (
+          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+        ) : (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        )}
+        Complete
+      </button>
+
+      {/* Submitted badge stays — it is status, not an action. */}
+      {isSubmitted && (
+        <span className="px-2 sm:px-4 py-2 rounded-lg font-medium flex items-center gap-1 sm:gap-2 bg-green-100 text-green-700 text-sm flex-shrink-0">
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+          Submitted
+        </span>
+      )}
     </>
   );
 }

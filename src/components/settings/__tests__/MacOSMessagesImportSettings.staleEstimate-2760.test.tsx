@@ -39,7 +39,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { MacOSMessagesImportSettings } from "../MacOSMessagesImportSettings";
 
@@ -102,15 +102,47 @@ const renderStrict = (ui: React.ReactElement) =>
   render(<React.StrictMode>{ui}</React.StrictMode>);
 
 /** Filters the component sent on every `getImportCount` call, in order. */
+/**
+ * The SELECTION the panel asked each estimate for.
+ *
+ * BACKLOG-2772 moved this to the second argument — the first is now the userId,
+ * because main resolves the plan (and with it the audit-widened window) rather
+ * than trusting the renderer to describe the import. `auditPeriodStart` is gone
+ * from this shape on purpose: the panel states what the USER chose and nothing
+ * about what the deals require.
+ */
 const importCountCalls = (): Array<{
   lookbackMonths: number | null;
-  auditPeriodStart: string | null;
 }> =>
   (window.api.messages.getImportCount as jest.Mock).mock.calls.map(
-    ([filters]) => filters
+    ([, selection]) => selection
   );
 
 const importButton = () => screen.getByRole("button", { name: /Import Messages/i });
+
+/**
+ * BACKLOG-2749: what "refused" looks like now that the refusal is a DIALOG.
+ *
+ * The founder settled (`2259031c`) that a refusal computes the way out and
+ * offers it — "Import last 12 months — 8.2 GB" — which is a dialog's job, not a
+ * greyed-out button's. So the resolved-and-does-not-fit case no longer disables
+ * Import; pressing it opens the refusal.
+ *
+ * These assertions are the ones that moved, and they are STRONGER at their new
+ * home. `toBeDisabled()` pinned the appearance of a refusal; this pins the
+ * refusal itself — the fact is stated before any click, the click reaches the
+ * refusal, and NO RUN IS REQUESTED. A disabled button cannot tell you the third
+ * thing, and the third thing is the guarantee BACKLOG-2743 exists for.
+ *
+ * The fail-CLOSED cases are untouched and still assert `toBeDisabled()`: while
+ * the size is unknown there is nothing to offer, so the button stays dead.
+ */
+async function expectImportRefused(): Promise<void> {
+  expect(screen.getByTestId("import-space-notice")).toBeInTheDocument();
+  fireEvent.click(importButton());
+  expect(await screen.findByTestId("import-space-block")).toBeInTheDocument();
+  expect(mockRequestSync).not.toHaveBeenCalled();
+}
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -148,8 +180,8 @@ describe("BACKLOG-2760 — first paint estimates the STORED window, not useState
     const threeMonth = deferred<typeof THREE_MONTH_RESULT>();
 
     (window.api.messages.getImportCount as jest.Mock).mockImplementation(
-      (filters: { lookbackMonths: number | null }) =>
-        filters?.lookbackMonths === null ? allTime.promise : threeMonth.promise
+      (_userId: string, selection: { lookbackMonths: number | null }) =>
+        selection?.lookbackMonths === null ? allTime.promise : threeMonth.promise
     );
 
     renderStrict(<MacOSMessagesImportSettings userId={USER_ID} />);
@@ -177,11 +209,13 @@ describe("BACKLOG-2760 — first paint estimates the STORED window, not useState
     expect(screen.queryByText(/12,074/)).not.toBeInTheDocument();
     expect(screen.queryByText(/2\.6 GB/)).not.toBeInTheDocument();
 
-    // The whole point: the guard fires, and Import cannot be clicked.
-    expect(screen.getByTestId("import-space-block")).toHaveTextContent(
+    // The whole point: the guard fires. BACKLOG-2749 — the SENTENCE is
+    // unchanged and still inline (the user learns the fact before clicking);
+    // the DECISION moved into the dialog behind the Import button.
+    expect(screen.getByTestId("import-space-notice")).toHaveTextContent(
       "This import needs up to 61.3 GB for attachments but only 59.1 GB is available. It will not start."
     );
-    expect(importButton()).toBeDisabled();
+    await expectImportRefused();
   });
 
   it("never asks for a window the user did not choose", async () => {
@@ -241,8 +275,8 @@ describe("BACKLOG-2760 — a superseded estimate can never overwrite a newer one
     const allTime = deferred<typeof ALL_TIME_RESULT>();
 
     (window.api.messages.getImportCount as jest.Mock).mockImplementation(
-      (filters: { lookbackMonths: number | null }) =>
-        filters?.lookbackMonths === null
+      (_userId: string, selection: { lookbackMonths: number | null }) =>
+        selection?.lookbackMonths === null
           ? allTime.promise
           : Promise.resolve(THREE_MONTH_RESULT)
     );
@@ -354,8 +388,8 @@ describe("BACKLOG-2760 — the guard fails CLOSED while the estimate is unknown"
 
     const pendingAllTime = deferred<typeof ALL_TIME_RESULT>();
     (window.api.messages.getImportCount as jest.Mock).mockImplementation(
-      (filters: { lookbackMonths: number | null }) =>
-        filters?.lookbackMonths === null
+      (_userId: string, selection: { lookbackMonths: number | null }) =>
+        selection?.lookbackMonths === null
           ? pendingAllTime.promise
           : Promise.resolve(THREE_MONTH_RESULT)
     );
@@ -379,8 +413,10 @@ describe("BACKLOG-2760 — the guard fails CLOSED while the estimate is unknown"
       pendingAllTime.resolve(ALL_TIME_RESULT);
     });
 
-    expect(screen.getByTestId("import-space-block")).toBeInTheDocument();
-    expect(importButton()).toBeDisabled();
+    // BACKLOG-2749: the new verdict refuses, via the dialog rather than a dead
+    // button. The property under test is unchanged — the OLD window's "fits"
+    // verdict did not survive the switch.
+    await expectImportRefused();
   });
 
   it("still allows a text-only import when the estimate is unknown", async () => {
@@ -430,10 +466,21 @@ describe("BACKLOG-2760 — the audit period is asserted as a variable, both ways
 
     await waitFor(() => expect(screen.getByTestId("import-size-estimate")).toBeInTheDocument());
 
-    for (const filters of importCountCalls()) {
-      expect(filters).toEqual({ lookbackMonths: null, auditPeriodStart: null });
+    // BACKLOG-2772: the panel states the SELECTION only. `auditPeriodStart` is
+    // gone from this wire — main derives the deal spans itself — so the shape
+    // asserted here is the whole payload, and its narrowness is the point.
+    //
+    // BACKLOG-2749 added `maxMessages` to that payload, and it belongs: it is
+    // the user's OWN cap dropdown, exactly like `lookbackMonths`, not a value
+    // the panel derived about what an import covers. The dialog quotes
+    // `plan.effectiveCap`, so the cap has to reach the resolver or the estimate
+    // describes a plan the run will not use. `auditPeriodStart` stays out, and
+    // the exact-shape assertion is what keeps it out.
+    for (const selection of importCountCalls()) {
+      expect(selection).toEqual({ lookbackMonths: null, maxMessages: null });
     }
-    expect(importButton()).toBeDisabled();
+    // BACKLOG-2749: refused through the dialog, not a disabled button.
+    await expectImportRefused();
   });
 
   it("with a transaction present: All time still estimates unbounded", async () => {
@@ -454,13 +501,21 @@ describe("BACKLOG-2760 — the audit period is asserted as a variable, both ways
     await waitFor(() =>
       expect(screen.getByTestId("import-size-estimate")).toHaveTextContent("707,956 messages")
     );
-    expect(importButton()).toBeDisabled();
+    // BACKLOG-2749: refused through the dialog, not a disabled button.
+    await expectImportRefused();
   });
 
-  it("with an audit period that WIDENS a 3-month preference: the estimate uses the widened cutoff", async () => {
-    // Audit-driven window. The estimate must describe the widened window the
-    // import will run, not the narrower preference — under-stating here is the
-    // same fail-open in a different dress.
+  it("with an audit period that WIDENS a 3-month preference: the panel still sends only the preference", async () => {
+    // The requirement is unchanged — the estimate must describe the WIDENED
+    // window the import will run, because under-stating it is the same
+    // fail-open in a different dress. BACKLOG-2772 changed who satisfies it.
+    //
+    // The widening now happens in main, inside the one resolver, from the same
+    // deal query the export gate reads. So the panel sends the preference and
+    // the widening is asserted where it is decided:
+    // `electron/__tests__/importIncludeSet-2772.test.ts` drives the real
+    // estimate handler with a deal present and asserts the resolved plan's
+    // `fetchStartISO` reaches back to it.
     const auditCutoffISO = "2024-08-17T00:00:00.000Z";
     mockGetPreferences.mockResolvedValue({
       success: true,
@@ -483,11 +538,8 @@ describe("BACKLOG-2760 — the audit period is asserted as a variable, both ways
     await waitFor(() => expect(screen.getByTestId("import-size-estimate")).toBeInTheDocument());
 
     expect(importCountCalls().length).toBeGreaterThan(0);
-    for (const filters of importCountCalls()) {
-      expect(filters).toEqual({
-        lookbackMonths: 3,
-        auditPeriodStart: auditCutoffISO,
-      });
+    for (const selection of importCountCalls()) {
+      expect(selection).toEqual({ lookbackMonths: 3, maxMessages: null });
     }
   });
 });

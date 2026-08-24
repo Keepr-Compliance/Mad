@@ -1,6 +1,6 @@
 {
   "name": "keepr",
-  "version": "2.28.0",
+  "version": "2.29.0",
   "description": "Keepr - Export and archive iMessage conversations and emails",
   "main": "electron/main.js",
   "engines": {
@@ -38,8 +38,8 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js",
-    "lint": "eslint electron src",
-    "lint:fix": "eslint electron src --fix",
+    "lint": "eslint electron src scripts .claude/scripts",
+    "lint:fix": "eslint electron src scripts .claude/scripts --fix",
     "type-check": "tsc --noEmit",
     "type-check:tests": "tsc -p tsconfig.test.json",
     "type-check:tests:watch": "tsc -p tsconfig.test.json --watch",
@@ -66,6 +66,7 @@
     "check:pii:list": "node scripts/ci/check-fixture-pii.mjs --list",
     "check:hooks": "node scripts/ci/check-hooks-tracking.mjs",
     "check:text-sources": "node scripts/ci/check-text-sources.mjs",
+    "check:test-drift": "node scripts/ci/check-test-drift.mjs",
     "hooks:doctor": "node scripts/hooks-doctor.mjs",
     "prepare": "husky",
     "prestart": "node scripts/rebuild-native.js"
@@ -152,6 +153,7 @@
     "googleapis": "^128.0.0",
     "isomorphic-fetch": "^3.0.0",
     "jsdom": "^26.1.0",
+    "libphonenumber-js": "1.13.11",
     "mammoth": "^1.12.0",
     "mime-types": "^3.0.2",
     "node-machine-id": "^1.1.12",

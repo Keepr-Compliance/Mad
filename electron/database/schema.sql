@@ -215,7 +215,7 @@ CREATE TABLE IF NOT EXISTS contact_phones (
 
   phone_e164 TEXT NOT NULL,              -- Normalized: +14155550102
   phone_display TEXT,                    -- Display format: (415) 555-0102
-  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key (last 10 digits)
+  phone_normalized TEXT,                 -- BACKLOG-1727: shared-helper lookup key. BACKLOG-2630: E.164 digits via libphonenumber (was last 10 digits); migration v64 re-keys existing rows
   is_primary INTEGER DEFAULT 0,
   label TEXT,                            -- mobile, home, work, etc.
   source TEXT CHECK (source IN ('import', 'manual', 'inferred')),
@@ -714,6 +714,21 @@ CREATE TABLE IF NOT EXISTS transactions (
   metadata TEXT,                         -- JSON for additional data
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  -- BACKLOG-2791: delta watermark for the Needs-Review sync, which runs on EVERY
+  -- transaction open. Holds the time of the last on-open scan; the next one only
+  -- examines rows INGESTED since (emails.created_at / messages.created_at, NOT
+  -- sent_at — a backfill writes an OLD sent_at with a NEW created_at). Without
+  -- it the scan re-examines every record that already lost, on every open, which
+  -- is the BACKLOG-2620 non-convergence shape.
+  --
+  -- Kept in sync with migration v65 (ALTER TABLE ... ADD COLUMN), which is the
+  -- ONLY source of this column on an existing install. NEVER add a standalone
+  -- CREATE INDEX on it here: schema.sql is exec'd BEFORE the migration chain, so
+  -- an index on a not-yet-added column throws on every real upgrade
+  -- (BACKLOG-2298/2300). `transactions` is never positionally copied by any
+  -- migration, so a trailing declaration is safe.
+  last_pending_scan_at DATETIME,
 
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
@@ -1342,6 +1357,61 @@ CREATE INDEX IF NOT EXISTS idx_ignored_comms_user_email
 
 CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction
   ON ignored_communications(transaction_id);
+
+-- ============================================
+-- PENDING REVIEW COMMUNICATIONS (BACKLOG-2791, Migration 65)
+-- ============================================
+-- The persistent "Needs Review" queue: communications the sync FOUND for a deal
+-- but that are NOT linked until the user approves them.
+--
+-- SEPARATE TABLE BY DESIGN. Every row in `communications` IS a link, and 41 read
+-- sites across 10 files treat it that way with no choke point. Encoding "pending"
+-- as a `match_reason` value would have surfaced unapproved mail in transaction
+-- search, and shipped it inside a per-row Quick Export from the transactions list
+-- (which bypasses the details-screen Complete gate entirely — exportGate is
+-- paywall-only). Nothing that already exists reads THIS table, so none of that is
+-- possible.
+--
+-- Read path: reviewStateService.getReviewState() unions this with the legacy
+-- BACKLOG-2319 `communications.match_reason='address_missing'` population. That
+-- union is the ONE source of truth for the badge, both tabs' needs-review
+-- sections, the combined S2 screen and the Complete gate (founder ruling
+-- 2026-08-22). No surface queries this table directly.
+--
+-- Two UNIQUE indexes are the DB backstop for the sync's dedup predicate: even a
+-- racing second sync cannot queue the same item twice. MEASURED: drop them and a
+-- repeated sync leaves 4 rows where 2 belong.
+--
+-- They are written PARTIAL (`WHERE <col> IS NOT NULL`) to keep each index to the
+-- rows that actually carry that column, and to state the intent. That is a size
+-- and readability choice, NOT a correctness one: SQLite treats every NULL as
+-- distinct, so the non-partial form enforces exactly the same thing — verified by
+-- mutation, which did NOT go red. Do not repeat the folklore that a non-partial
+-- UNIQUE would fail to constrain these rows; it would not.
+--
+-- They are created by migration 65, NOT here — schema.sql runs before the chain
+-- (BACKLOG-2298/2300).
+CREATE TABLE IF NOT EXISTS pending_review_communications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  transaction_id TEXT NOT NULL,
+
+  -- Exactly one of these is set: email_id for mail, thread_id for text threads
+  -- (which is how text links are stored — see createThreadCommunicationReference).
+  email_id TEXT,
+  thread_id TEXT,
+
+  found_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+
+  CHECK (
+    (email_id IS NOT NULL AND thread_id IS NULL)
+    OR (thread_id IS NOT NULL AND email_id IS NULL)
+  )
+);
 
 -- BACKLOG-1560: Indexes for auto-link suppression lookups
 -- These indexes are created by migration 37 (which also adds the columns).

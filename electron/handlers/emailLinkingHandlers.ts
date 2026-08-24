@@ -741,6 +741,26 @@ export function registerEmailLinkingHandlers(): void {
         throw new ValidationError("Transaction not found", "transactionId");
       }
 
+      // BACKLOG-2791: a REVIEW REJECTION restores to the QUEUE, not to a link —
+      // the same guard the message handler has had. Only the text half was wired
+      // when the side door was closed, so restoring rejected EMAILS fell through
+      // to the link path below. That is the founder's repro: reject in the review
+      // screen, restore from Removed, and the emails come back as links.
+      const { restoreRejectedToQueue, notifyReviewStateChanged } = await import(
+        "../services/reviewStateService"
+      );
+      const requeued = await restoreRejectedToQueue(ignoredCommId);
+      if (requeued > 0) {
+        logService.info("Restored rejected email(s) to the review queue", "Transactions", {
+          ignoredCommId,
+          transactionId: validatedTransactionId,
+          restoredCount: requeued,
+        });
+        // The real count, so the toast reads "2 emails restored" rather than
+        // claiming one while two moved.
+        return { success: true, restoredCount: requeued };
+      }
+
       // BACKLOG-1718 (R4): Thread-aware restore — symmetric with R3 unlink expansion.
       const { restoredCount } = await transactionService.restoreRemovedEmailThread(
         ignoredCommId,
@@ -748,6 +768,10 @@ export function registerEmailLinkingHandlers(): void {
         validatedTransactionId,
         transaction.user_id,
       );
+
+      // A legacy address_missing email restores as a FLAGGED link, which puts it
+      // back in the review set too — so the surfaces must hear about it.
+      notifyReviewStateChanged(validatedTransactionId);
 
       logService.info("Removed email(s) restored", "Transactions", {
         ignoredCommId,
@@ -791,11 +815,30 @@ export function registerEmailLinkingHandlers(): void {
         throw new ValidationError("Message IDs must be a non-empty array", "messageIds");
       }
 
+      // BACKLOG-2791: if this row is a REVIEW REJECTION, restoring it returns it
+      // to the Needs Review queue — it must NOT become a link. Restoring used to
+      // call linkMessages unconditionally, and the text link path writes no
+      // match_reason, so a rejected text came back as an ordinary link: in the
+      // audit, in exports, never approved. One click, straight around the
+      // approval gate. Emails were already safe (their restore preserves
+      // address_missing); this makes both halves behave the same.
+      const { restoreRejectedToQueue, notifyReviewStateChanged: notifyText } = await import(
+        "../services/reviewStateService"
+      );
+      if ((await restoreRejectedToQueue(ignoredCommId)) > 0) {
+        logService.info("Restored a rejected item to the review queue", "Transactions", {
+          ignoredCommId,
+          transactionId: validatedTransactionId,
+        });
+        return { success: true };
+      }
+
       // Step 1: Remove the suppression record so auto-link does not suppress again
       await removeIgnoredCommunication(ignoredCommId);
 
       // Step 2: Re-link the messages to the transaction
       await transactionService.linkMessages(messageIds, validatedTransactionId);
+      notifyText(validatedTransactionId);
 
       logService.info("Removed message restored", "Transactions", {
         ignoredCommId,

@@ -7,6 +7,8 @@ import enhancedExportService from "../enhancedExportService";
 import pdfExportService from "../pdfExportService";
 import { Transaction, Communication } from "../../types/models";
 import fs from "fs/promises";
+// BACKLOG-2771: plans are built by the REAL resolver, never by hand.
+import { testExportPlan } from "./helpers/exportPlanFixture";
 
 // Mock dependencies
 jest.mock("../pdfExportService");
@@ -123,7 +125,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "json" }),
         { exportFormat: "json" },
       );
 
@@ -138,7 +140,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "json" }),
         { exportFormat: "json" },
       );
 
@@ -153,7 +155,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "json" }),
         { exportFormat: "json" },
       );
 
@@ -169,7 +171,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "json" }),
         { exportFormat: "json" },
       );
 
@@ -185,7 +187,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "json" }),
         { exportFormat: "json" },
       );
 
@@ -207,7 +209,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "json" }),
         { exportFormat: "json" },
       );
 
@@ -235,7 +237,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "csv" }),
         { exportFormat: "csv" },
       );
 
@@ -252,7 +254,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "csv" }),
         { exportFormat: "csv" },
       );
 
@@ -273,7 +275,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "txt_eml" }),
         { exportFormat: "txt_eml" },
       );
 
@@ -296,7 +298,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "txt_eml" }),
         { exportFormat: "txt_eml" },
       );
 
@@ -341,7 +343,7 @@ describe("Export Security - Secret Leak Prevention", () => {
         capturedContent = content as string;
       });
 
-      await enhancedExportService.exportTransaction(mockTransaction, susComms, {
+      await enhancedExportService.exportTransaction(mockTransaction, testExportPlan(susComms, { format: "json" }), {
         exportFormat: "json",
       });
 
@@ -362,7 +364,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "json" }),
         { exportFormat: "json" },
       );
 
@@ -380,7 +382,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         maliciousTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "json" }),
         { exportFormat: "json" },
       );
 
@@ -413,7 +415,7 @@ describe("Export Security - Secret Leak Prevention", () => {
 
       await enhancedExportService.exportTransaction(
         mockTransaction,
-        mockCommunications,
+        testExportPlan(mockCommunications, { format: "json" }),
         { exportFormat: "json" },
       );
 

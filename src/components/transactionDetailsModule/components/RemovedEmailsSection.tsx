@@ -289,6 +289,21 @@ export function RemovedEmailsSection({
 
   const restoreGroup = useCallback(
     async (group: RemovedEmailGroup): Promise<RemovedRestoreResult> => {
+      // ONE call, as shipped. `restoreRemovedEmailThread` is THREAD-AWARE: it
+      // expands to every sibling sharing the thread, which is why develop
+      // passes a single representative and why removeRestoredEmailRows prunes
+      // by thread_id.
+      //
+      // BACKLOG-2791: the leftover the founder hit was NOT this call being
+      // per-email. It was that a REVIEW REJECTION short-circuits into
+      // restoreRejectedToQueue before that thread-aware path, and that
+      // short-circuit handled exactly one row. Two rejected emails in one
+      // provider-threaded conversation (his case: recurring calendar invites,
+      // which the provider threads) therefore restored one and left the other.
+      // Fixed at the source — the short-circuit is now thread-aware too — so
+      // this stays the single call it has always been. Looping here instead
+      // would have re-restored each sibling once per member (measured: a
+      // 3-email thread reported "9 emails restored").
       const representative = group.emails[0];
       return window.api.transactions.restoreRemovedEmail(
         representative.ignored_id,
@@ -432,7 +447,8 @@ export function RemovedEmailsSection({
                 className="text-sm font-medium text-blue-600 hover:text-blue-800 transition-colors whitespace-nowrap"
                 data-testid="view-removed-email-button"
               >
-                {isThread ? "View Thread →" : "View"}
+                {/* BACKLOG-2791: every view button reads "View". */}
+                View
               </button>
               {/* Restore button — icon button, green hover (mirrors delete button style) */}
               <button

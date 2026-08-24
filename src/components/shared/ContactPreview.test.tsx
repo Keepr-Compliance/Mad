@@ -149,7 +149,7 @@ const mockExternalContact: ExtendedContact = {
 // Mock transactions
 const mockTransactions: ContactTransaction[] = [
   { id: "txn-1", property_address: "123 Main St", role: "Buyer" },
-  { id: "txn-2", property_address: "456 Oak Ave", role: "Seller Agent" },
+  { id: "txn-2", property_address: "456 Oak Ave", role: "Listing Agent" },
   { id: "txn-3", property_address: "789 Elm Blvd", role: "Transaction Coordinator" },
 ];
 

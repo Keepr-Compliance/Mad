@@ -434,7 +434,11 @@ export function SubmitForReviewModal({
               ) : isResubmit ? (
                 "Resubmit"
               ) : (
-                "Submit for Review"
+                /* BACKLOG-2792: the submit action reads "Submit" at EVERY
+                   responsive size — never "Submit for review" and never a
+                   truncated variant of it. One literal, so there is no size at
+                   which a different string can appear. */
+                "Submit"
               )}
             </button>
           ) : null}

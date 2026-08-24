@@ -39,6 +39,11 @@ jest.mock("../emailSyncService", () => ({
 }));
 
 const mockAutoLink = jest.fn();
+// BACKLOG-2791: the covered path now QUEUES for review instead of auto-linking.
+const mockSyncReviewQueue = jest.fn();
+jest.mock("../reviewStateService", () => ({
+  syncReviewQueueForTransaction: (...args: unknown[]) => mockSyncReviewQueue(...args),
+}));
 jest.mock("../autoLinkService", () => ({
   autoLinkCommunicationsForContact: mockAutoLink,
 }));
@@ -178,6 +183,7 @@ describe("ensureTransactionEmailsSynced", () => {
     mockGetSyncState.mockReturnValue(undefined); // fresh by default
     (mockSyncTransactionEmails as jest.Mock).mockResolvedValue({ success: true });
     (mockAutoLink as jest.Mock).mockResolvedValue({ emailsLinked: 0, messagesLinked: 0, alreadyLinked: 0, errors: 0 });
+    (mockSyncReviewQueue as jest.Mock).mockResolvedValue({ added: 0, outstanding: 0 });
   });
 
   it("FRESH INSTALL: fetches the full audit window with NO manual sync click", async () => {
@@ -215,7 +221,19 @@ describe("ensureTransactionEmailsSynced", () => {
     expect(mockSyncTransactionEmails).toHaveBeenCalledTimes(1);
   });
 
-  it("COVERED window: no fetch, but auto-link still runs (cross-transaction completeness)", async () => {
+  /**
+   * BACKLOG-2791 changed what this path DOES, not whether it runs.
+   *
+   * Before: a per-contact full-window auto-link, which silently linked mail the
+   * user had never seen — against the founder's standing rule that nothing is
+   * ever linked without approval. It was also the BACKLOG-2620 non-convergence
+   * shape: every unmatched record re-examined on every open, forever.
+   *
+   * Now: develop\'s classification again, with the address-missing half queued
+   * instead of linked-and-flagged, so the founder-dictated popup\'s promise
+   * ("only linked after you approve them") stays true.
+   */
+  it("COVERED window: no fetch, and auto-link runs with the ambiguous half queued", async () => {
     mockGetSyncState.mockReturnValue({
       newest_cached_at: "2028-06-01T00:00:00.000Z", // covers reqEnd Jan 30 2028 (closed_at Dec 31 2027 + 30d)
       oldest_cached_at: "2025-01-01T00:00:00.000Z",
@@ -224,7 +242,14 @@ describe("ensureTransactionEmailsSynced", () => {
 
     expect(result.skipped).toBe("covered");
     expect(mockSyncTransactionEmails).not.toHaveBeenCalled();
-    expect(mockAutoLink).toHaveBeenCalledWith({ contactId: "c1", transactionId: "tx-1" });
+    // BACKLOG-2791 (founder ruling, 2026-08-22): the SPLIT, not a blanket queue.
+    // develop's classification runs again — confident emails and every text
+    // link — and only the address-missing half is queued for approval.
+    expect(mockAutoLink).toHaveBeenCalledWith({
+      contactId: "c1",
+      transactionId: "tx-1",
+      queueAmbiguousInsteadOfLinking: true,
+    });
   });
 
   it("no connected provider → skipped:no_provider", async () => {
@@ -397,6 +422,7 @@ describe("BACKLOG-1862: open-trigger past-window policy", () => {
     mockGetSyncState.mockReturnValue(undefined); // empty email_sync_state (post-v46 migration)
     (mockSyncTransactionEmails as jest.Mock).mockResolvedValue({ success: true });
     (mockAutoLink as jest.Mock).mockResolvedValue({ emailsLinked: 0, messagesLinked: 0, alreadyLinked: 0, errors: 0 });
+    (mockSyncReviewQueue as jest.Mock).mockResolvedValue({ added: 0, outstanding: 0 });
   });
 
   it("past-window open → skipped:past_window, no provider fetch", async () => {

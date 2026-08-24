@@ -65,6 +65,9 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
 
+// BACKLOG-2791: assert the DERIVED chain head, never a literal — a hardcoded
+// head turned 7 suites / 33 tests red the moment a 64th migration was added.
+import { chainHeadVersion } from "./helpers/chainHead";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const RealDatabase = require(
   path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
@@ -253,7 +256,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
     // vocabulary); BACKLOG-2513 added v62 (emails.bulk_mail_headers) — and
     // BACKLOG-2750 v63 (the legacy columns nothing migrated, plus their
     // deferred indexes) is now the latest.
-    expect(latest).toBe(63);
+    expect(latest).toBe(chainHeadVersion());
 
     // runV49 seeds at 48 then runs ALL pending migrations, so v49..v58 run.
     await runV49();
@@ -261,7 +264,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
     const row = harness.db
       .prepare("SELECT version FROM schema_version WHERE id = 1")
       .get() as { version: number };
-    expect(row.version).toBe(63);
+    expect(row.version).toBe(chainHeadVersion());
   });
 
   // -------------------------------------------------------------------------
@@ -466,7 +469,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(63);
+      expect(row.version).toBe(chainHeadVersion());
     });
 
     it("re-invoking the v49 migrate() body directly on already-reclassified data is a no-op", async () => {
@@ -504,7 +507,7 @@ describe("databaseService migration v49 (BACKLOG-1900 P0.4 — contact-source ba
       const row = harness.db
         .prepare("SELECT version FROM schema_version WHERE id = 1")
         .get() as { version: number };
-      expect(row.version).toBe(63);
+      expect(row.version).toBe(chainHeadVersion());
     });
   });
 

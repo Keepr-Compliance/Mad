@@ -685,9 +685,18 @@ describe("Transaction Handlers Integration Tests", () => {
       });
 
       expect(result.success).toBe(true);
+      // BACKLOG-2771: the service now receives a resolved PLAN rather than a raw
+      // communications array — the include set is decided once, by
+      // resolveExportPlan, before any renderer sees it. This transaction has no
+      // started_at/closed_at and the call passes no window, so the plan includes
+      // the whole record, exactly as this assertion required before.
       expect(mockEnhancedExportService.exportTransaction).toHaveBeenCalledWith(
         mockTransactionWithComms,
-        mockTransactionWithComms.communications,
+        expect.objectContaining({
+          communications: mockTransactionWithComms.communications,
+          attachmentComms: [],
+          writesAttachmentsToDisk: false,
+        }),
         expect.objectContaining({ exportFormat: "pdf" }),
       );
     });

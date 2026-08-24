@@ -17,7 +17,7 @@ import databaseService from "./databaseService";
 import { getContactNames } from "./contactsService";
 import * as externalContactDb from "./db/externalContactDbService";
 import logService from "./logService";
-import { toLookupKey } from "../utils/phoneNormalization";
+import { legacyDigitKey } from "../utils/phoneNormalization";
 import type { Communication } from "../types/models";
 // BACKLOG-2393: scoped support-access tracing. Both calls are no-ops unless a
 // user has granted a support window covering the scope.
@@ -33,22 +33,52 @@ export interface ResolvedParticipant {
 }
 
 /**
- * Normalize phone number to last 10 digits for matching.
+ * Normalize phone number to last 10 digits for EXPORT RESOLUTION.
  * For email handles, returns lowercase as-is (don't strip non-digit chars).
  *
  * TASK-2027: Fixed to handle email handles correctly. The old version
  * stripped all non-digits, turning "quincypoe@example.com" into "" (empty string),
  * causing duplicate conversation PDFs and unresolved email participants in exports.
  *
- * BACKLOG-1729: Phone branch now delegates to the canonical `toLookupKey`
- * from `phoneNormalization`. The email branch keeps the existing lowercase
- * behaviour (toLookupKey is a phone-only helper; emails reach this function
- * via the export-resolution path and require case-insensitive matching).
+ * BACKLOG-1729: Phone branch delegated to the canonical `toLookupKey`.
+ *
+ * ===========================================================================
+ * BACKLOG-2630 slice 1 — DELIBERATELY NO LONGER `toLookupKey`. READ THIS
+ * BEFORE "TIDYING" IT BACK.
+ * ===========================================================================
+ * This function's output is not compared against `phone_normalized`. It is
+ * compared against a last-ten key that **SQL re-derives from `phone_e164` in
+ * the query itself**, in two places:
+ *
+ *   - `attachmentDbService.getContactNamesByPhoneDigits` (:575-576) — called
+ *     four lines below by `resolveHandles`
+ *   - `exportUtils.getContactNamesByPhones` (:135-136)
+ *
+ * Both read `substr(replace(replace(replace(cp.phone_e164,'+',''),'-',''),' ',''), -10)`.
+ * Nothing in either query touches the normalized column, so neither moved when
+ * `toLookupKey` became the library's E.164 digits and migration v64 re-keyed the
+ * stores. Had this branch followed `toLookupKey`, the JavaScript side would ask
+ * for "14155550109" while SQL offered "4155550109" and every lookup would miss.
+ *
+ * The failure that would have produced is worth naming, because nothing would
+ * have caught it: a party's NAME silently absent from an exported compliance
+ * PDF, with type-check, lint and every unit test green — the export would still
+ * be generated, just with a bare phone number where a person's name belongs.
+ *
+ * So this keeps the pre-2630 rule verbatim, via the shared `legacyDigitKey`
+ * helper. It agrees with the SQL beside it, which is the only thing it has ever
+ * had to agree with. If those two queries are ever changed to join on
+ * `phone_normalized` (the BACKLOG-2621 treatment), this call moves back to
+ * `toLookupKey` in the same commit — not before.
+ *
+ * The digit floor does NOT apply here either: this resolves message
+ * participants for an export, and dropping a below-floor participant would
+ * delete a row from the audit record rather than decline to guess at one.
  */
 export function normalizePhone(phone: string): string {
   // If it looks like an email, don't strip non-digits
   if (phone.includes("@")) return phone.toLowerCase();
-  return toLookupKey(phone);
+  return legacyDigitKey(phone.trim());
 }
 
 /**

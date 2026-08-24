@@ -1,4 +1,5 @@
-/**
+
+import { chainHeadVersion } from "./helpers/chainHead";/**
  * @jest-environment node
  */
 
@@ -431,7 +432,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toBeDefined();
       expect(plan).toEqual({
         currentVersion: 29,
-        targetVersion: 63,
+        // BACKLOG-2791: derived. A literal here re-breaks on every new migration.
+        targetVersion: chainHeadVersion(),
         pendingMigrations: [
           {
             version: 30,
@@ -569,8 +571,20 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 63,
             description: expect.stringContaining("BACKLOG-2750"),
           },
+          {
+            version: 64,
+            description: expect.stringContaining("BACKLOG-2630"),
+          },
+          {
+            version: 65,
+            description: expect.stringContaining("BACKLOG-2791"),
+          },
         ],
-        wouldRunCount: 34,
+        // BACKLOG-2791: derived — the plan seeds at 29, so this is "every
+        // migration above 29", not a literal that needs re-typing each time.
+        wouldRunCount: (
+          databaseService.constructor as unknown as { MIGRATIONS: Array<{ version: number }> }
+        ).MIGRATIONS.filter((m) => m.version > 29).length,
       });
 
       // Verify no transaction was started (migration wasn't executed)
@@ -582,11 +596,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: version = 63 (all applied — BACKLOG-2750's v63, the legacy
-      // columns nothing migrated plus their deferred indexes, is the chain head)
+      // BACKLOG-2791: DERIVED head — "all applied" must keep meaning that as the
+      // chain grows, rather than quietly becoming "one behind".
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 63 });
+        .mockReturnValueOnce({ version: chainHeadVersion() });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -598,8 +612,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: 63,
-        targetVersion: 63,
+        currentVersion: chainHeadVersion(),
+        targetVersion: chainHeadVersion(),
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -730,9 +744,16 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       //
       // BACKLOG-2571 briefly added a DIFFERENT v63 (emails.sent_at_source) and
       // took it out again — founder decision, 2026-08-09 — which is why the
-      // count once went back to 33. It is 34 again for BACKLOG-2750's v63, and
-      // the enumeration is doing its job in both directions.
-      expect(mockDb.transaction).toHaveBeenCalledTimes(34);
+      // count once went back to 33. BACKLOG-2791 adds v64 (the Needs-Review
+      // queue table + transactions.last_pending_scan_at).
+      //
+      // BACKLOG-2791: DERIVED from the chain rather than re-typed. The literal
+      // here was one of nine that turned red together when a migration landed;
+      // this seeds at 29, so the count is simply "every migration above 29".
+      const expectedRuns = (
+        databaseService.constructor as unknown as { MIGRATIONS: Array<{ version: number }> }
+      ).MIGRATIONS.filter((m) => m.version > 29).length;
+      expect(mockDb.transaction).toHaveBeenCalledTimes(expectedRuns);
     });
 
     it("should skip already-applied migrations", async () => {
@@ -740,11 +761,12 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // version = 63, all migrations applied (BACKLOG-2750's v63 — the legacy
-      // columns nothing migrated plus their deferred indexes — is the chain head)
+      // BACKLOG-2791: the DERIVED chain head, so "all applied" keeps meaning
+      // "all applied" when the chain grows instead of silently becoming
+      // "one behind".
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 63 });
+        .mockReturnValueOnce({ version: chainHeadVersion() });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },

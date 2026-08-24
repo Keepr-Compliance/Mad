@@ -5,6 +5,13 @@
 
 import { randomUUID } from "crypto";
 import { ensureDb } from "./core/dbConnection";
+// BACKLOG-2781: the closing-day end bound is the export resolver's canonical
+// one, so the Attachments tab and the submission package agree on where the
+// closing day ends. LATENT today — the tab's only caller
+// (TransactionDetails.tsx) passes no audit window, and deliberately so: the tab
+// shows all linked content, matching the Emails/Texts tabs. Fixed anyway so the
+// next caller that supplies a window does not inherit the wrong day.
+import { auditWindowEnd } from "../exportPlan";
 
 // ============================================
 // ATTACHMENT CRUD OPERATIONS
@@ -446,11 +453,10 @@ export function getTransactionAllAttachments(
       clause += ` AND ${column} >= ?`;
       params.push(auditStartDate.toISOString());
     }
-    if (auditEndDate) {
-      const endOfDay = new Date(auditEndDate);
-      endOfDay.setHours(23, 59, 59, 999);
+    const end = auditWindowEnd(auditEndDate);
+    if (end) {
       clause += ` AND ${column} <= ?`;
-      params.push(endOfDay.toISOString());
+      params.push(end.toISOString());
     }
     return { clause, params };
   };
