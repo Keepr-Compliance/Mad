@@ -43,7 +43,21 @@ export interface RoleConfig {
 }
 
 /**
- * Transaction type - represents which side of the deal the user represents
+ * Transaction type — which side of the deal the USER represents.
+ *
+ * The premise, stated once here because several functions below derive labels
+ * and role scoping from it (founder's ruling, BACKLOG-2850):
+ *
+ *   `purchase` — displayed "Listing". The user is the LISTING agent, so the
+ *                user's client is the SELLER.
+ *   `sale`     — displayed "Sale". The user is the BUYER's agent, so the
+ *                user's client is the BUYER.
+ *   `other`    — no side; type-dependent labels fall back to their static form.
+ *
+ * The stored enum values are deliberately NOT renamed. `purchase`/`sale` are a
+ * database column, a Zod enum, e2e selectors and a PDF badge class; only the
+ * DISPLAY moved. Reading `purchase` as "buy-side" is the error this comment
+ * exists to stop — it produced the inverted client label fixed in BACKLOG-2850.
  */
 export type TransactionType = "purchase" | "sale" | "other";
 
@@ -73,11 +87,26 @@ export interface RoleValidationResult {
 /**
  * Get filtered roles based on transaction type
  *
- * Logic:
- * - For PURCHASE: User represents buyer, so show seller's agent
- * - For SALE: User represents seller, so show buyer's agent
+ * Logic AS IMPLEMENTED (deliberately unchanged — see the warning below):
+ * - For PURCHASE: offers seller + seller's agents
+ * - For SALE: offers buyer + buyer's agent
  * - Always show client role
  * - Professional services roles are not filtered
+ *
+ * !! PRE-2850 PREMISE — KNOWN INVERTED, DELIBERATELY NOT FIXED HERE !!
+ *
+ * The scoping above encodes the old premise that `purchase` is a buy-side
+ * deal. Under the corrected premise (see TransactionType) `purchase` is a
+ * Listing, where the user represents the SELLER — so the counterparty roles
+ * offered here are on the wrong side of the deal.
+ *
+ * It is NOT flipped as part of the BACKLOG-2850 label fix, for two reasons:
+ *  1. Flipping it drops `seller`/`seller_agent` from the picker on a Listing.
+ *     That is precisely the same-side-counterparty re-scoping specified in
+ *     BACKLOG-2859, which also adds Co-Agent.
+ *  2. Transactions already in the field carry contacts assigned to those
+ *     roles. Re-scoping without deciding what becomes of them is a silent
+ *     write loss. BACKLOG-2859 owns that decision.
  *
  * @param roles - Array of role configurations
  * @param transactionType - 'purchase' or 'sale'
@@ -100,7 +129,8 @@ export function filterRolesByTransactionType(
       return true;
     }
 
-    // For purchase transactions: user is buyer, so show seller + seller's agents
+    // Pre-2850 premise (see the warning above): offers the seller side on a
+    // purchase. Left as-is; re-scoping is BACKLOG-2859.
     if (transactionType === "purchase") {
       return (
         roleConfig.role === SPECIFIC_ROLES.SELLER ||
@@ -109,7 +139,8 @@ export function filterRolesByTransactionType(
       );
     }
 
-    // For sale transactions: user is seller, so show buyer + buyer's agent
+    // Pre-2850 premise (see the warning above): offers the buyer side on a
+    // sale. Left as-is; re-scoping is BACKLOG-2859.
     if (transactionType === "sale") {
       return (
         roleConfig.role === SPECIFIC_ROLES.BUYER ||
@@ -131,6 +162,17 @@ export function filterRolesByTransactionType(
  *   seller_agent <-> buyer_agent
  *   listing_agent -> buyer_agent (one-way; listing_agent is seller-side specific)
  *   seller <-> buyer
+ *
+ * !! PRE-2850 PREMISE — KNOWN INVERTED, DELIBERATELY NOT FIXED HERE !!
+ * `purchaseRoles` below is the seller-side set, which is the old buy-side
+ * reading of `purchase`. Its side mapping is wrong under the corrected
+ * premise, and it is left alone for the same reason as
+ * filterRolesByTransactionType: flipping it re-scopes roles in the field.
+ * Tracked in BACKLOG-2859.
+ *
+ * Note also that `other` is not special-cased — it falls into the sale-side
+ * set. That is pre-existing behaviour, unrelated to the 2850 inversion, and
+ * is pinned by test so this change does not move it.
  *
  * @param defaultRole - The contact's default_role
  * @param transactionType - The current transaction type ('purchase' | 'sale' | 'other')
@@ -187,8 +229,9 @@ export function flipRoleForTransactionType(
  *  1. Smart auto-role (only when `autoRoleEnabled`): the contact's saved
  *     `default_role` — used directly if it's a valid option for this
  *     transaction type, otherwise flipped to the equivalent other-side role.
- *  2. Baseline default (always): `client` — which renders as "Buyer (Client)"
- *     on a purchase and "Seller (Client)" on a sale (see getRoleDisplayName).
+ *  2. Baseline default (always): `client` — which renders as "Seller (Client)"
+ *     on a purchase (a Listing) and "Buyer (Client)" on a sale (see
+ *     getRoleDisplayName; corrected in BACKLOG-2850).
  *     This baseline applies regardless of the auto-role setting.
  *
  * @param autoRoleEnabled - whether the smart default_role override is enabled
@@ -214,6 +257,21 @@ export function resolveDefaultContactRole(
 
 /**
  * Get context message for transaction type
+ *
+ * !! DEAD CODE, AND ITS COPY IS INVERTED AND STALE !!
+ *
+ * Measured 2026-08-24: no caller anywhere in src/ or electron/ — the only
+ * references are this file's own test and a legacy doc under tests/. The copy
+ * below is wrong twice over: it tells the user a purchase means "You're
+ * representing the buyer" (the pre-2850 premise), and its title still reads
+ * "Transaction Type: Purchase" after BACKLOG-2850 relabelled that enum to
+ * "Listing".
+ *
+ * It is NOT rewritten here on purpose. This label is founder-ruled territory —
+ * it has moved twice by explicit ruling (support ticket 112 -> BACKLOG-2805
+ * "Listing/Purchase" -> BACKLOG-2850 "Listing") — and authoring replacement
+ * copy that nothing renders would be inventing a ruling nobody made. Disposal
+ * (delete, or rewrite under the 2859 model) is recommended in BACKLOG-2859.
  *
  * @param transactionType - 'purchase' or 'sale'
  * @returns Object with title and message
@@ -264,9 +322,15 @@ export function validateRoleAssignments(
 /**
  * Get role display name based on transaction type
  *
- * For CLIENT role:
- * - Purchase: "Buyer (Client)" - agent represents the buyer
- * - Sale: "Seller (Client)" - agent represents the seller
+ * For CLIENT role (BACKLOG-2850 — these two were inverted and are now correct):
+ * - Purchase (displayed "Listing"): "Seller (Client)". The user is the listing
+ *   agent, so the user's client is the seller.
+ * - Sale: "Buyer (Client)". The user is the buyer's agent, so the user's
+ *   client is the buyer.
+ * - Other: no side, so it falls through to the static "Client (Buyer/Seller)".
+ *
+ * Do not "simplify" this by reading `purchase` as buy-side — that reading is
+ * what produced the inverted labels the founder reported on screen.
  *
  * @param role - The specific role constant
  * @param transactionType - 'purchase' or 'sale'
@@ -279,9 +343,9 @@ export function getRoleDisplayName(
   // Special handling for CLIENT role - changes based on transaction type
   if (role === SPECIFIC_ROLES.CLIENT) {
     if (transactionType === "purchase") {
-      return "Buyer (Client)";
-    } else if (transactionType === "sale") {
       return "Seller (Client)";
+    } else if (transactionType === "sale") {
+      return "Buyer (Client)";
     }
   }
 

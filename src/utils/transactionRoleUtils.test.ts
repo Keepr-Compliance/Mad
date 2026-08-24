@@ -288,14 +288,36 @@ describe("transactionRoleUtils", () => {
   });
 
   describe("getRoleDisplayName", () => {
-    it('should return "Buyer (Client)" for CLIENT role in purchase transaction', () => {
+    /**
+     * BACKLOG-2850 — THE NEXT TWO ASSERTIONS WERE DELIBERATELY INVERTED.
+     *
+     * They previously pinned "Buyer (Client)" on a purchase and "Seller
+     * (Client)" on a sale. That was not the specification — it was the defect,
+     * and these tests were holding it in place. The founder reported it on
+     * screen: a transaction whose Type read "Listing" showed a client pill
+     * reading "Buyer (Client)".
+     *
+     * The enum `purchase` displays as "Listing". On a Listing the user is the
+     * listing agent, so the user's client is the SELLER. On a `sale` the user
+     * is the buyer's agent, so the client is the BUYER.
+     *
+     * Each direction also asserts the WRONG string is ABSENT. A presence-only
+     * check cannot tell the two worlds apart: the function is self-consistent
+     * under either premise, which is exactly why the original unit tests
+     * passed while the screen was wrong.
+     */
+    it('returns "Seller (Client)", never "Buyer (Client)", for CLIENT on a purchase (a Listing)', () => {
       const result = getRoleDisplayName(SPECIFIC_ROLES.CLIENT, "purchase");
-      expect(result).toBe("Buyer (Client)");
+      expect(result).toBe("Seller (Client)");
+      expect(result).not.toBe("Buyer (Client)");
+      expect(result).not.toContain("Buyer");
     });
 
-    it('should return "Seller (Client)" for CLIENT role in sale transaction', () => {
+    it('returns "Buyer (Client)", never "Seller (Client)", for CLIENT on a sale', () => {
       const result = getRoleDisplayName(SPECIFIC_ROLES.CLIENT, "sale");
-      expect(result).toBe("Seller (Client)");
+      expect(result).toBe("Buyer (Client)");
+      expect(result).not.toBe("Seller (Client)");
+      expect(result).not.toContain("Seller");
     });
 
     it("should return standard display name for non-CLIENT roles", () => {
@@ -321,6 +343,12 @@ describe("transactionRoleUtils", () => {
       const result = getRoleDisplayName(SPECIFIC_ROLES.CLIENT, "other");
       // Falls through to ROLE_DISPLAY_NAMES lookup
       expect(result).toBe("Client (Buyer/Seller)");
+      // BACKLOG-2850: `other` has no side, so it must take NEITHER side label.
+      // Pinned so the client-label inversion fix cannot quietly move it — this
+      // assertion is a collateral guard, not a discriminator for the fix, and
+      // it must stay GREEN when the fix is reverted.
+      expect(result).not.toBe("Seller (Client)");
+      expect(result).not.toBe("Buyer (Client)");
     });
 
     it("should format unknown roles using formatRoleLabel", () => {

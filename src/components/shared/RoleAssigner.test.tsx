@@ -158,7 +158,10 @@ describe("RoleAssigner", () => {
 
       // Should include common roles
       const optionTexts = options.map((o) => o.textContent);
-      expect(optionTexts).toContain("Buyer (Client)");
+      // BACKLOG-2850: INVERTED DELIBERATELY. A purchase displays as "Listing",
+      // where the user is the listing agent — so the client is the SELLER.
+      expect(optionTexts).toContain("Seller (Client)");
+      expect(optionTexts).not.toContain("Buyer (Client)");
       // BACKLOG-2804: seller_agent renders under the industry term.
       expect(optionTexts).toContain("Listing Agent");
     });
@@ -317,6 +320,13 @@ describe("RoleAssigner", () => {
   });
 
   describe("Transaction Type Filtering", () => {
+    /**
+     * BACKLOG-2850 note: the next two tests pin filterRolesByTransactionType,
+     * whose side mapping still encodes the PRE-2850 premise and is knowingly
+     * left alone here — re-scoping which roles a type offers is BACKLOG-2859,
+     * and flipping it would invalidate roles already assigned in the field.
+     * These must stay GREEN through the client-label fix.
+     */
     it("should show seller agent for purchase transactions", () => {
       render(
         <RoleAssigner
@@ -356,7 +366,15 @@ describe("RoleAssigner", () => {
       expect(optionTexts).not.toContain("Listing Agent");
     });
 
-    it("should show correct client label for purchase (Buyer)", () => {
+    /**
+     * BACKLOG-2850 — THE NEXT TWO TESTS WERE DELIBERATELY INVERTED, titles
+     * included. They pinned the client pill as Buyer-on-a-purchase, which is
+     * the defect the founder reported on screen, not the specification.
+     *
+     * Both now assert the opposite label is ABSENT from the option list.
+     * Presence alone cannot separate the two premises.
+     */
+    it("should show correct client label for purchase / Listing (Seller)", () => {
       render(
         <RoleAssigner
           selectedContacts={mockContacts}
@@ -370,10 +388,11 @@ describe("RoleAssigner", () => {
       const options = within(roleSelect).getAllByRole("option");
       const optionTexts = options.map((o) => o.textContent);
 
-      expect(optionTexts).toContain("Buyer (Client)");
+      expect(optionTexts).toContain("Seller (Client)");
+      expect(optionTexts).not.toContain("Buyer (Client)");
     });
 
-    it("should show correct client label for sale (Seller)", () => {
+    it("should show correct client label for sale (Buyer)", () => {
       render(
         <RoleAssigner
           selectedContacts={mockContacts}
@@ -387,7 +406,8 @@ describe("RoleAssigner", () => {
       const options = within(roleSelect).getAllByRole("option");
       const optionTexts = options.map((o) => o.textContent);
 
-      expect(optionTexts).toContain("Seller (Client)");
+      expect(optionTexts).toContain("Buyer (Client)");
+      expect(optionTexts).not.toContain("Seller (Client)");
     });
   });
 
