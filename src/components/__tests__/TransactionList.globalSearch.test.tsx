@@ -128,6 +128,9 @@ function globalResultsWith(overrides: Record<string, unknown>) {
       contacts: { items: [], total: 0 },
       emails: { items: [], total: 0 },
       texts: { items: [], total: 0 },
+      // BACKLOG-2858: Group chats is its own group, and the panel reads its
+      // total unconditionally. A fixture missing it renders nothing at all.
+      groupChats: { items: [], total: 0 },
       unattached: { items: [], total: 0 },
       ...overrides,
     },

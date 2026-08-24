@@ -91,27 +91,34 @@ beforeEach(() => {
   mockResolveHandles.mockResolvedValue({ [KNOWN_A]: NAME_A, [KNOWN_B]: NAME_B });
 });
 
-const invokeLinked = async (hits: unknown[]) => {
+/**
+ * BACKLOG-2858: the thread rows carrying `memberHandles` moved to `groupChats`.
+ * Resolving `texts` alone would now resolve NOTHING — a message row has no
+ * `memberHandles` — and every member line in the app would silently go blank,
+ * which is why these tests follow the rows rather than keeping the old key.
+ */
+const invokeLinked = async (groupChatHits: unknown[], textHits: unknown[] = []) => {
   mockSearchLinked.mockReturnValue({
     contacts: emptyGroup, emails: emptyGroup,
-    texts: { items: hits, total: 546 },
+    texts: { items: textHits, total: 546 },
+    groupChats: { items: groupChatHits, total: groupChatHits.length },
   });
   const fn = handlers.get("transactions:search-linked-content");
   if (!fn) throw new Error("handler not registered");
   return (await fn({}, TXN, "kingfisher")) as {
-    results: { texts: { items: Array<{ memberNames?: string[] }> } };
+    results: { groupChats: { items: Array<{ memberNames?: string[] }> } };
   };
 };
 
 describe("BACKLOG-2816 — member handles become contact names", () => {
   it("resolves every member that maps to a contact", async () => {
     const res = await invokeLinked([threadHit([KNOWN_A, KNOWN_B])]);
-    expect(res.results.texts.items[0].memberNames).toEqual([NAME_A, NAME_B]);
+    expect(res.results.groupChats.items[0].memberNames).toEqual([NAME_A, NAME_B]);
   });
 
   it("OMITS a member with no contact rather than showing digits", async () => {
     const res = await invokeLinked([threadHit([KNOWN_A, UNKNOWN, KNOWN_B])]);
-    const names = res.results.texts.items[0].memberNames ?? [];
+    const names = res.results.groupChats.items[0].memberNames ?? [];
     expect(names).toEqual([NAME_A, NAME_B]);
     // The rule, asserted directly: nothing that looks like a number survives.
     expect(names.join(",")).not.toMatch(/\d{3}/);
@@ -120,7 +127,7 @@ describe("BACKLOG-2816 — member handles become contact names", () => {
   it("yields an EMPTY member list when nobody resolves — never a digit list", async () => {
     mockResolveHandles.mockResolvedValue({});
     const res = await invokeLinked([threadHit([UNKNOWN])]);
-    expect(res.results.texts.items[0].memberNames).toEqual([]);
+    expect(res.results.groupChats.items[0].memberNames).toEqual([]);
   });
 
   it("asks the SHARED resolver once for every handle in the response", async () => {
@@ -131,25 +138,28 @@ describe("BACKLOG-2816 — member handles become contact names", () => {
   });
 
   it("does not call the resolver when no hit carries members", async () => {
-    await invokeLinked([{ id: "m-body", sender: KNOWN_A, snippet: "hello", sentAt: null }]);
+    await invokeLinked([], [{ id: "m-body", sender: KNOWN_A, snippet: "hello", sentAt: null }]);
     expect(mockResolveHandles).not.toHaveBeenCalled();
   });
 
-  it("resolves the global Texts group and the Unattached bucket together", async () => {
+  it("resolves the global Group chats category and the Unattached bucket together", async () => {
+    // BACKLOG-2858 kept unattached thread rows in the Unattached bucket, so the
+    // handler still has TWO places to resolve and must do it in one round trip.
     mockSearchGlobal.mockReturnValue({
       transactions: emptyGroup, contacts: emptyGroup, emails: emptyGroup,
-      texts: { items: [threadHit([KNOWN_A])], total: 546 },
+      texts: emptyGroup,
+      groupChats: { items: [threadHit([KNOWN_A])], total: 1 },
       unattached: { items: [{ kind: "text", title: null, ...threadHit([KNOWN_B]) }], total: 4 },
     });
     const fn = handlers.get("transactions:search-global");
     if (!fn) throw new Error("handler not registered");
     const res = (await fn({}, USER, "kingfisher")) as {
       results: {
-        texts: { items: Array<{ memberNames?: string[] }> };
+        groupChats: { items: Array<{ memberNames?: string[] }> };
         unattached: { items: Array<{ memberNames?: string[] }> };
       };
     };
-    expect(res.results.texts.items[0].memberNames).toEqual([NAME_A]);
+    expect(res.results.groupChats.items[0].memberNames).toEqual([NAME_A]);
     expect(res.results.unattached.items[0].memberNames).toEqual([NAME_B]);
     // ONE round trip covers both groups.
     expect(mockResolveHandles).toHaveBeenCalledTimes(1);

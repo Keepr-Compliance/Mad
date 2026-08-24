@@ -80,7 +80,24 @@ export interface LinkedGroup<T> {
 export interface LinkedContentSearchResults {
   contacts: LinkedGroup<LinkedContactHit>;
   emails: LinkedGroup<LinkedEmailHit>;
+  /**
+   * BACKLOG-2858: MESSAGE-level hits only — body, participants, or an attachment
+   * filename matched. `total` counts MESSAGES, which is what these rows are.
+   */
   texts: LinkedGroup<LinkedTextHit>;
+  /**
+   * BACKLOG-2858: THREAD-level hits — the conversation's NAME matched, and the
+   * conversation is a group (2+ other members; see `GROUP_THREAD_PREDICATE`).
+   *
+   * `total` counts CONVERSATIONS, not messages. It is the only honest number for
+   * a bucket whose rows are conversations: one row under a badge of 546 was
+   * tolerable while these rows shared the Texts bucket with 546 message rows;
+   * standing alone as its own category it would be indefensible.
+   *
+   * Required, not optional, so every construction site is a compile error until
+   * it decides what to put here.
+   */
+  groupChats: LinkedGroup<LinkedTextHit>;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,12 +192,28 @@ export interface UnattachedHit {
   memberNames?: string[];
 }
 
-/** Grouped results for a global search: five groups, all optional-empty. */
+/** Grouped results for a global search: six groups, all optional-empty. */
 export interface GlobalContentSearchResults {
   transactions: LinkedGroup<GlobalTransactionHit>;
   contacts: LinkedGroup<GlobalContactHit>;
   emails: LinkedGroup<GlobalEmailHit>;
+  /** BACKLOG-2858: message-level hits only; `total` counts MESSAGES. */
   texts: LinkedGroup<GlobalTextHit>;
+  /**
+   * BACKLOG-2858: group-chat-name hits; `total` counts CONVERSATIONS.
+   * See `LinkedContentSearchResults.groupChats`.
+   */
+  groupChats: LinkedGroup<GlobalTextHit>;
+  /**
+   * Emails and texts with no communications row. Group-chat-name rows for
+   * UNATTACHED threads stay HERE rather than moving to `groupChats`
+   * (BACKLOG-2858): the founder's ask was that a group chat stop appearing under
+   * Texts, and this bucket is not Texts. Its rows are also inert by design (P1
+   * has no standalone viewer), so hoisting them into a navigable Group chats
+   * section would produce a row that either goes nowhere or sits dead among live
+   * ones. `total` still counts MESSAGES here, consistent with the bucket's other
+   * rows.
+   */
   unattached: LinkedGroup<UnattachedHit>;
 }
 
@@ -265,33 +298,72 @@ const TEXT_ATTACHMENT_MATCH = `EXISTS (
 // adds exactly ONE bound `?` at its call site.
 //
 // ===========================================================================
-// WHERE THIS PREDICATE IS AND IS NOT USED (founder test, 2026-08-23)
+// WHERE THIS PREDICATE IS AND IS NOT USED
 // ===========================================================================
-// It now appears in each text query's `countSql` but NOT in its row `sql`.
-//
-// The reason is that this predicate matches at the THREAD level — the name is a
-// property of the conversation, and every message in it is an equally
-// uninformative hit. Left in the row query, one named group with 546 messages
-// produced 546 result rows, which is what the founder saw. The body and
-// participants clauses beside it are per-MESSAGE and stay in the row query,
-// because there a row genuinely is the thing that matched.
+// This predicate matches at the THREAD level — the name is a property of the
+// conversation, and every message in it is an equally uninformative hit. Left in
+// a row query, one named group with 546 messages produced 546 result rows, which
+// is what the founder saw at BACKLOG-2816. The body and participants clauses
+// beside it are per-MESSAGE and stay in the row query, because there a row
+// genuinely is the thing that matched.
 //
 // So the group-name match gets its own row query — `build*TextThreadNameQuery`
-// below — that returns ONE row per matching thread. The count queries keep this
-// predicate: the founder was asked whether the count badge should change to
-// count conversations and said not to, so a text total still counts MESSAGES.
+// below — returning ONE row per matching CONVERSATION.
 //
-// This is the one place in this module where `sql` and `countSql` deliberately
-// do NOT share a predicate string. It is a real hazard (the shared string is
-// what normally stops rows and totals drifting apart), so it is stated here and
-// pinned by a test that asserts the count includes name matches while the rows
-// are collapsed.
+// BACKLOG-2858 REMOVED IT FROM THE TWO `texts` COUNTS. Until now the Texts badge
+// counted every message in a name-matching thread, which the founder chose at
+// BACKLOG-2816 while thread rows and message rows still shared the Texts bucket.
+// Now that group chats are their own category, a Texts badge inflated by
+// conversations whose rows live somewhere ELSE reads "Texts 546" over an EMPTY
+// list — a heading opening onto nothing, which is the dead control he ruled out
+// at BACKLOG-2791. Texts counts message-level matches; Group chats counts
+// conversations; each badge counts the rows beneath it.
+//
+// IT SURVIVES IN ONE PLACE: the UNATTACHED count, where thread rows still sit in
+// the same bucket as the message rows they are counted with (see
+// `buildUnattachedTextQuery`). There it is AND-ed with `GROUP_THREAD_PREDICATE`,
+// because the rows it counts are only ever produced for group threads — without
+// that, a named 1:1 would contribute a count with no row to show for it, which is
+// the same dead heading by a different route.
 const TEXT_THREAD_NAME_MATCH = `EXISTS (
         SELECT 1 FROM message_thread_names tn
         WHERE tn.thread_id = m.thread_id
           AND tn.user_id = m.user_id
           AND tn.display_name LIKE ? ESCAPE '\\'
       )`;
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2858: what makes a conversation a GROUP CHAT
+// ---------------------------------------------------------------------------
+// Founder, verbatim: "group chat in the search should show up as a separate
+// category called Group chats. (not under texts where it shows now)".
+//
+// A "has a display name" test is the wrong one and this is the boundary it gets
+// wrong: Apple lets a 1:1 chat carry a name, and the name writer does not care.
+// `syncMacChatThreadNames` is fed by `SELECT ROWID, display_name FROM chat WHERE
+// display_name IS NOT NULL` — every named chat, group or not — so a named 1:1 has
+// a `message_thread_names` row exactly like a group's.
+//
+// THE ROSTER IS THE TEST, AND THE IMPORTER IS WHY IT WORKS. `chat_members` is
+// written into `messages.participants` only when the chat has more than one
+// member (`macOSMessagesImportService`: `...(chatMembers && chatMembers.length > 1
+// ? { chat_members: chatMembers } : {})`), and the list comes from Apple's
+// `chat_handle_join JOIN handle`, which holds the OTHER ends and never the account
+// owner. A 1:1 therefore yields exactly one handle and NO `chat_members` key; a
+// group yields two or more.
+//
+// `>= 2` rather than "key present" is belt and braces: it also rejects a
+// one-element or empty roster, shapes the importer does not currently write but
+// which a test fixture or a future producer could.
+//
+// `json_valid` IS LOAD-BEARING, NOT DECORATION. `json_extract` THROWS `malformed
+// JSON` on a bad blob rather than returning NULL — verified against
+// better-sqlite3-multiple-ciphers before this predicate was chosen — so a single
+// corrupt `participants` value would fail the whole search without the guard.
+// (`json_array_length(NULL)` is NULL, so a NULL `participants` filters out
+// quietly, as it should.)
+const GROUP_THREAD_PREDICATE = `json_valid(m.participants)
+      AND json_array_length(json_extract(m.participants, '$.chat_members')) >= 2`;
 
 // BACKLOG-1870 Phase 1.5: also PROJECT the matched filename(s) so the UI can show
 // WHY a hit surfaced. Correlated subqueries using the SAME escaped `filename LIKE ?`
@@ -346,9 +418,7 @@ const MARK = {
   // BACKLOG-2816: thread-level (group-name) text hits. Substring routing stays
   // collision-free — "mad:search:textthreads" does not contain "mad:search:texts".
   textThreads: "/* mad:search:textthreads */",
-  textThreadsCount: "/* mad:search:textthreads:count */",
   unattachedTextThreads: "/* mad:search:unattached:textthreads */",
-  unattachedTextThreadsCount: "/* mad:search:unattached:textthreads:count */",
   transactions: "/* mad:search:transactions */",
   transactionsCount: "/* mad:search:transactions:count */",
   unattachedEmails: "/* mad:search:unattached:emails */",
@@ -366,6 +436,35 @@ export interface BuiltQuery {
   params: unknown[];
   countSql: string;
   countParams: unknown[];
+}
+
+/**
+ * BACKLOG-2858: what the three `build*TextThreadNameQuery` builders return.
+ *
+ * IT HAS NO `countSql`, AND NO `LIMIT` ON `sql`. Both absences are the same
+ * decision.
+ *
+ * The Group chats badge counts CONVERSATIONS. A conversation is not a
+ * `thread_id`: BACKLOG-2854 established that Apple keeps several chat rows for
+ * one human conversation, and the rule for merging them (same display name AND
+ * same normalized member set) runs `handleToIdentityToken` over each roster — JS,
+ * not SQL. So `SELECT COUNT(*)` over these rows would count Apple's chat rows and
+ * report 2 for the one conversation the founder is looking at, which is the
+ * BACKLOG-2854 defect moved into the badge.
+ *
+ * The total therefore has to come from the collapsed set, which means the fetch
+ * cannot be truncated before the collapse. `sql` returns EVERY matching thread,
+ * `runThreadNameGroup` collapses, and the caller's `limit` is applied to the
+ * result. This also retires `THREAD_SIBLING_FETCH_PAD` — the padding existed
+ * because `LIMIT` ran before the collapse, and now nothing does.
+ *
+ * The set is bounded by NAMED THREADS matching the query, not by messages: one
+ * row per `thread_id` with a matching `message_thread_names.display_name`. It is
+ * the same set the count query it replaces already had to scan.
+ */
+export interface ThreadNameBuiltQuery {
+  sql: string;
+  params: unknown[];
 }
 
 /**
@@ -501,11 +600,11 @@ export function buildTextQuery(
         OR m.participants_flat LIKE ? ESCAPE '\\'
         OR ${TEXT_ATTACHMENT_MATCH}
       )`;
-  // The count keeps the thread-name clause; the rows do not. See the comment on
-  // TEXT_THREAD_NAME_MATCH — the badge still counts messages, the rows collapse.
-  const whereCount = `${where.slice(0, where.lastIndexOf("\n      )"))}
-        OR ${TEXT_THREAD_NAME_MATCH}
-      )`;
+  // BACKLOG-2858: rows and count share ONE predicate string again. The
+  // thread-name clause used to be appended here and only here, so the badge
+  // counted messages in name-matching threads whose rows had been collapsed away.
+  // Those conversations now have their own category and their own badge; leaving
+  // them in this count would head an empty Texts list with their message count.
   const whereParams = [transactionId, transactionId, pat, pat, pat];
 
   return {
@@ -522,15 +621,22 @@ export function buildTextQuery(
     countSql: `${MARK.textsCount}
     SELECT COUNT(*) AS total
     ${from}
-    ${whereCount}`,
-    countParams: [...whereParams, pat],
+    ${where}`,
+    countParams: whereParams,
   };
 }
 
 /**
  * BACKLOG-2816 (founder test, 2026-08-23): texts linked to the transaction whose
  * THREAD carries a matching group chat name — ONE row per thread, not one per
- * message.
+ * message. BACKLOG-2858 routes these rows to the **Group chats** category and
+ * restricts them to actual groups via `GROUP_THREAD_PREDICATE`.
+ *
+ * A NAMED 1:1 NOW MATCHES NOTHING HERE. It used to produce a thread row (an
+ * "unmergeable" one, since it has no roster to agree on). It is not a group
+ * chat, so it does not belong in a Group chats category, and BACKLOG-2858 chose
+ * dropping it over inventing a third home for it. Its messages still surface
+ * normally in Texts whenever a body or participant matches.
  *
  * THE ROW CARRIES NO MESSAGE CONTENT (founder ruling, 2026-08-23: "just show the
  * group name, not anything from the body"). Nothing in any message's body caused
@@ -553,8 +659,7 @@ export function buildTextQuery(
 export function buildTextThreadNameQuery(
   transactionId: string,
   rawQuery: string,
-  limit: number,
-): BuiltQuery {
+): ThreadNameBuiltQuery {
   const pat = containsPattern(rawQuery);
   const linkage = `
         SELECT comm.message_id
@@ -581,21 +686,17 @@ export function buildTextThreadNameQuery(
       ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
     WHERE m.channel IN ('sms', 'imessage')
       AND ${reactionExclusion("m")}
+      AND ${GROUP_THREAD_PREDICATE}
       AND m.id IN (${linkage})
       AND tn.display_name LIKE ? ESCAPE '\\'`;
-  const params = [transactionId, transactionId, pat];
 
   return {
     sql: `${MARK.textThreads}
     SELECT id, participants, sentAt, threadDisplayName
     FROM (${ranked})
     WHERE rn = 1
-    ORDER BY sentAt DESC
-    LIMIT ?`,
-    params: [...params, limit],
-    countSql: `${MARK.textThreadsCount}
-    SELECT COUNT(*) AS total FROM (${ranked}) WHERE rn = 1`,
-    countParams: params,
+    ORDER BY sentAt DESC`,
+    params: [transactionId, transactionId, pat],
   };
 }
 
@@ -606,8 +707,7 @@ export function buildTextThreadNameQuery(
 export function buildGlobalTextThreadNameQuery(
   userId: string,
   rawQuery: string,
-  limit: number,
-): BuiltQuery {
+): ThreadNameBuiltQuery {
   const pat = containsPattern(rawQuery);
   const ranked = `
     SELECT m.id AS id, m.participants AS participants, m.sent_at AS sentAt,
@@ -651,31 +751,33 @@ export function buildGlobalTextThreadNameQuery(
     WHERE m.user_id = ?
       AND m.channel IN ('sms', 'imessage')
       AND ${reactionExclusion("m")}
+      AND ${GROUP_THREAD_PREDICATE}
       AND tn.display_name LIKE ? ESCAPE '\\'`;
-  const params = [userId, pat];
 
   return {
     sql: `${MARK.textThreads}
     SELECT id, participants, sentAt, threadDisplayName, attrTxnId, attrAddress
     FROM (${ranked})
     WHERE rn = 1
-    ORDER BY sentAt DESC
-    LIMIT ?`,
-    params: [...params, limit],
-    countSql: `${MARK.textThreadsCount}
-    SELECT COUNT(*) AS total FROM (${ranked}) WHERE rn = 1`,
-    countParams: params,
+    ORDER BY sentAt DESC`,
+    params: [userId, pat],
   };
 }
 
 /**
- * Unattached analogue: named threads with NO communications row at all.
+ * Unattached analogue: named GROUP threads with NO communications row at all.
+ *
+ * BACKLOG-2858 gives this builder the same `GROUP_THREAD_PREDICATE` as the other
+ * two — a named 1:1 must not surface as a thread row on ANY of the three
+ * surfaces, or the category is a rule that holds in some places and not others.
+ *
+ * Its rows still land in the UNATTACHED bucket rather than Group chats; see
+ * `GlobalContentSearchResults.unattached` for why.
  */
 export function buildUnattachedTextThreadNameQuery(
   userId: string,
   rawQuery: string,
-  limit: number,
-): BuiltQuery {
+): ThreadNameBuiltQuery {
   const pat = containsPattern(rawQuery);
   const ranked = `
     SELECT m.id AS id, m.participants AS participants, m.sent_at AS sentAt,
@@ -699,20 +801,16 @@ export function buildUnattachedTextThreadNameQuery(
           AND comm3.message_id IS NULL
           AND comm3.email_id IS NULL
       )
+      AND ${GROUP_THREAD_PREDICATE}
       AND tn.display_name LIKE ? ESCAPE '\\'`;
-  const params = [userId, pat];
 
   return {
     sql: `${MARK.unattachedTextThreads}
     SELECT id, participants, sentAt, threadDisplayName
     FROM (${ranked})
     WHERE rn = 1
-    ORDER BY sentAt DESC
-    LIMIT ?`,
-    params: [...params, limit],
-    countSql: `${MARK.unattachedTextThreadsCount}
-    SELECT COUNT(*) AS total FROM (${ranked}) WHERE rn = 1`,
-    countParams: params,
+    ORDER BY sentAt DESC`,
+    params: [userId, pat],
   };
 }
 
@@ -829,16 +927,6 @@ function shapeThreadName(row: RawThreadNameRow): {
 // ---------------------------------------------------------------------------
 
 /**
- * How many rows to fetch per result row we intend to keep.
- *
- * The SQL applies `LIMIT` BEFORE this collapse can run, so N sibling rows of one
- * conversation would otherwise crowd genuinely distinct conversations out of the
- * result. Apple typically splits a conversation into 2-3 chat rows; 4 leaves
- * headroom without turning a search into a table scan.
- */
-const THREAD_SIBLING_FETCH_PAD = 4;
-
-/**
  * The thread's roster, reduced to sorted, deduped identity tokens.
  *
  * `chat_members` is Apple's authoritative membership list and is written only
@@ -879,7 +967,9 @@ function threadIdentityTokens(participants: string | null): string[] {
  * contain almost any character, and a hand-picked delimiter is a collision
  * waiting to be found by a real address book.
  */
-function threadCollapseKey(row: RawThreadNameRow): string | null {
+function threadCollapseKey(
+  row: Pick<RawThreadNameRow, "participants" | "threadDisplayName">,
+): string | null {
   const name = (row.threadDisplayName ?? "").trim();
   if (!name) return null;
   const tokens = threadIdentityTokens(row.participants);
@@ -983,27 +1073,28 @@ function runGroup<TRaw, THit>(
  * representative message, so the same roster can shape into two different
  * previews. The raw `participants` blob has neither problem.
  *
- * `total` is deliberately NOT adjusted. It counts MESSAGES by founder ruling
- * (BACKLOG-2816), and every caller replaces this group's total with the message
- * group's anyway.
+ * BACKLOG-2858: `total` IS THE NUMBER OF CONVERSATIONS, and it is derived here
+ * rather than read from a `COUNT(*)`. It has to be: a conversation is a set of
+ * sibling threads, and which threads are siblings is decided by
+ * `threadCollapseKey` in JS. Counting in SQL would count Apple's chat rows and
+ * badge one conversation as 2 — the BACKLOG-2854 defect, relocated.
  *
- * @param build a builder bound to everything except its row limit, which this
- *              function pads so sibling rows cannot consume the caller's limit
+ * `limit` is applied AFTER the collapse, so siblings cannot crowd a genuinely
+ * distinct conversation out of the results (the reason the retired
+ * `THREAD_SIBLING_FETCH_PAD` existed).
  */
 function runThreadNameGroup<TRaw extends RawThreadNameRow, THit>(
   db: SearchableDb,
-  build: (fetchLimit: number) => BuiltQuery,
+  built: ThreadNameBuiltQuery,
   limit: number,
   shape: (row: TRaw) => THit,
 ): LinkedGroup<THit> {
-  const built = build(limit * THREAD_SIBLING_FETCH_PAD);
   const rows = db.prepare(built.sql).all(...built.params) as TRaw[];
-  const countRow = db
-    .prepare(built.countSql)
-    .get(...built.countParams) as { total?: number } | undefined;
-  const total =
-    typeof countRow?.total === "number" ? countRow.total : rows.length;
-  return { items: collapseThreadRows(rows).slice(0, limit).map(shape), total };
+  const conversations = collapseThreadRows(rows);
+  return {
+    items: conversations.slice(0, limit).map(shape),
+    total: conversations.length,
+  };
 }
 
 function emptyResults(): LinkedContentSearchResults {
@@ -1011,6 +1102,7 @@ function emptyResults(): LinkedContentSearchResults {
     contacts: { items: [], total: 0 },
     emails: { items: [], total: 0 },
     texts: { items: [], total: 0 },
+    groupChats: { items: [], total: 0 },
   };
 }
 
@@ -1065,38 +1157,32 @@ export function searchLinkedContent(
     matchedAttachmentFilenames: parseMatchedAttachments(row.matchedAttachments),
   }));
 
-  // BACKLOG-2816: text results are TWO row queries merged, not one.
+  // BACKLOG-2816 produced TWO row queries for texts and merged them into one
+  // bucket. BACKLOG-2858 keeps the two queries and STOPS merging them.
   //
-  //   - message rows: body / participants / attachment matched, so the row IS the
-  //     thing that matched and one row per message is right. Unchanged.
-  //   - thread rows: the conversation's NAME matched. One row per THREAD.
+  //   - message rows -> `texts`: body / participants / attachment matched, so the
+  //     row IS the thing that matched. One row per message; `total` counts
+  //     messages.
+  //   - thread rows -> `groupChats`: the group conversation's NAME matched. One
+  //     row per conversation; `total` counts conversations.
   //
-  // Thread rows come FIRST: a named conversation is a stronger, more specific
-  // answer to "Kingfisher Lane Closing" than any single message in it.
-  //
-  // The list therefore holds two row shapes. That is deliberate and was put to
-  // the founder, who chose it over collapsing body matches too ("for now don't
-  // bother"). `total` counts MESSAGES for both kinds — also his call — so a
-  // single collapsed group row can legitimately sit under a badge reading 546.
-  const textMessages = runGroup<RawTextRow, LinkedTextHit>(
+  // Founder, verbatim: "group chat in the search should show up as a separate
+  // category called Group chats. (not under texts where it shows now)". The two
+  // shapes had shared a bucket only because nothing had asked otherwise; nothing
+  // about them was ever alike.
+  const texts = runGroup<RawTextRow, LinkedTextHit>(
     db,
     buildTextQuery(transactionId, query, limit),
     shapeText,
   );
-  const textThreads = runThreadNameGroup<RawThreadNameRow, LinkedTextHit>(
+  const groupChats = runThreadNameGroup<RawThreadNameRow, LinkedTextHit>(
     db,
-    (n) => buildTextThreadNameQuery(transactionId, query, n),
+    buildTextThreadNameQuery(transactionId, query),
     limit,
     shapeThreadName,
   );
-  const texts: LinkedGroup<LinkedTextHit> = {
-    items: [...textThreads.items, ...textMessages.items].slice(0, limit),
-    // Unchanged by design: buildTextQuery's countSql still counts every matching
-    // MESSAGE, thread-name matches included.
-    total: textMessages.total,
-  };
 
-  return { contacts, emails, texts };
+  return { contacts, emails, texts, groupChats };
 }
 
 // ===========================================================================
@@ -1324,10 +1410,8 @@ export function buildGlobalTextQuery(
       OR m.participants_flat LIKE ? ESCAPE '\\'
       OR ${TEXT_ATTACHMENT_MATCH}`;
   const matchParams = [pat, pat, pat];
-  // Count keeps the thread-name clause, rows do not — see TEXT_THREAD_NAME_MATCH.
-  const matchCount = `${match}
-      OR ${TEXT_THREAD_NAME_MATCH}`;
-  const matchCountParams = [...matchParams, pat];
+  // BACKLOG-2858: rows and count share ONE predicate again — the thread-name
+  // clause moved out with the rows it counted. See TEXT_THREAD_NAME_MATCH.
 
   // Membership set: messages linked to some transaction (direct or thread-batch).
   const memberSet = `
@@ -1392,7 +1476,7 @@ export function buildGlobalTextQuery(
         AND m.channel IN ('sms', 'imessage')
         AND ${reactionExclusion("m")}
         AND m.id IN (${memberSet})
-        AND (${matchCount})
+        AND (${match})
     ) x`;
 
   return {
@@ -1400,7 +1484,7 @@ export function buildGlobalTextQuery(
     sql,
     params: [pat, userId, ...matchParams, limit],
     countSql,
-    countParams: [userId, ...matchCountParams],
+    countParams: [userId, ...matchParams],
   };
 }
 
@@ -1474,9 +1558,18 @@ export function buildUnattachedTextQuery(
         OR m.participants_flat LIKE ? ESCAPE '\\'
         OR ${TEXT_ATTACHMENT_MATCH}
       )`;
-  // Count keeps the thread-name clause, rows do not — see TEXT_THREAD_NAME_MATCH.
+  // The count keeps the thread-name clause; the rows do not. This is the ONE
+  // bucket where that asymmetry survives BACKLOG-2858, and it is legitimate here
+  // because the collapsed thread rows it counts for still live in THIS bucket —
+  // `buildUnattachedTextThreadNameQuery` feeds them straight into `unattached`.
+  //
+  // IT IS AND-ED WITH THE GROUP PREDICATE, and that pairing is load-bearing.
+  // Without it, a named 1:1 — which BACKLOG-2858 stopped producing a thread row
+  // for — would still contribute every one of its messages to this badge, and
+  // the founder would get "Unattached 12" over a section with nothing in it:
+  // the dead heading of BACKLOG-2791, arrived at from the other direction.
   const whereCount = `${where.slice(0, where.lastIndexOf("\n      )"))}
-        OR ${TEXT_THREAD_NAME_MATCH}
+        OR (${TEXT_THREAD_NAME_MATCH} AND ${GROUP_THREAD_PREDICATE})
       )`;
   const whereParams = [userId, pat, pat, pat];
 
@@ -1576,6 +1669,7 @@ function emptyGlobalResults(): GlobalContentSearchResults {
     contacts: { items: [], total: 0 },
     emails: { items: [], total: 0 },
     texts: { items: [], total: 0 },
+    groupChats: { items: [], total: 0 },
     unattached: { items: [], total: 0 },
   };
 }
@@ -1634,34 +1728,19 @@ export function searchGlobalContent(
     shapeGlobalEmail,
   );
 
-  // BACKLOG-2816: text results are TWO row queries merged, not one.
-  //
-  //   - message rows: body / participants / attachment matched, so the row IS the
-  //     thing that matched and one row per message is right. Unchanged.
-  //   - thread rows: the conversation's NAME matched. One row per THREAD.
-  //
-  // Thread rows come FIRST: a named conversation is a stronger, more specific
-  // answer to "Kingfisher Lane Closing" than any single message in it.
-  //
-  // The list therefore holds two row shapes. That is deliberate and was put to
-  // the founder, who chose it over collapsing body matches too ("for now don't
-  // bother"). `total` counts MESSAGES for both kinds — also his call — so a
-  // single collapsed group row can legitimately sit under a badge reading 546.
-  const textMessages = runGroup<RawGlobalTextRow, GlobalTextHit>(
+  // BACKLOG-2858: same split as the scoped search — message rows to `texts`,
+  // group-conversation rows to `groupChats`. See `searchLinkedContent`.
+  const texts = runGroup<RawGlobalTextRow, GlobalTextHit>(
     db,
     buildGlobalTextQuery(userId, query, limit),
     shapeGlobalText,
   );
-  const textThreads = runThreadNameGroup<RawThreadNameRow & RawAttribution, GlobalTextHit>(
+  const groupChats = runThreadNameGroup<RawThreadNameRow & RawAttribution, GlobalTextHit>(
     db,
-    (n) => buildGlobalTextThreadNameQuery(userId, query, n),
+    buildGlobalTextThreadNameQuery(userId, query),
     limit,
     (row) => ({ ...shapeThreadName(row), attribution: shapeAttribution(row) }),
   );
-  const texts: LinkedGroup<GlobalTextHit> = {
-    items: [...textThreads.items, ...textMessages.items].slice(0, limit),
-    total: textMessages.total,
-  };
 
   // Unattached bucket = emails + texts with no communications row. Two queries,
   // merged into one group with the two true totals summed.
@@ -1682,9 +1761,14 @@ export function searchGlobalContent(
     shapeUnattachedText,
   );
   // BACKLOG-2816: named threads in the unattached bucket collapse the same way.
+  // BACKLOG-2858: they STAY in this bucket rather than joining `groupChats` —
+  // see `GlobalContentSearchResults.unattached`. Their `total` is discarded
+  // because the bucket's badge counts messages, and these rows' messages are
+  // already counted by `unattachedTexts.total` via the group-gated
+  // TEXT_THREAD_NAME_MATCH clause.
   const unattachedTextThreads = runThreadNameGroup<RawThreadNameRow, UnattachedHit>(
     db,
-    (n) => buildUnattachedTextThreadNameQuery(userId, query, n),
+    buildUnattachedTextThreadNameQuery(userId, query),
     limit,
     (row) => ({ kind: "text" as const, title: null, ...shapeThreadName(row) }),
   );
@@ -1703,6 +1787,7 @@ export function searchGlobalContent(
     contacts,
     emails,
     texts,
+    groupChats,
     unattached: {
       items: unattachedItems,
       total: unattachedEmails.total + unattachedTexts.total,

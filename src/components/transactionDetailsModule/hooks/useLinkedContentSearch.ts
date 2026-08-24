@@ -49,7 +49,14 @@ export interface NormalizedSearchResults {
   transactions: LinkedContentGroup<GlobalTransactionHit> | null;
   contacts: LinkedContentGroup<GlobalContactHit>;
   emails: LinkedContentGroup<GlobalEmailHit>;
+  /** BACKLOG-2858: message-level text hits only; `total` counts MESSAGES. */
   texts: LinkedContentGroup<GlobalTextHit>;
+  /**
+   * BACKLOG-2858: group-chat-name hits, present in BOTH scopes (unlike
+   * `transactions`/`unattached`, which are global-only and null when scoped).
+   * `total` counts CONVERSATIONS.
+   */
+  groupChats: LinkedContentGroup<GlobalTextHit>;
   unattached: LinkedContentGroup<GlobalUnattachedHit> | null;
 }
 
@@ -78,6 +85,7 @@ function emptyNormalized(scope: SearchScope): NormalizedSearchResults {
     contacts: { items: [], total: 0 },
     emails: { items: [], total: 0 },
     texts: { items: [], total: 0 },
+    groupChats: { items: [], total: 0 },
     unattached: global ? { items: [], total: 0 } : null,
   };
 }
@@ -146,6 +154,16 @@ export function useLinkedContentSearch(
                     attribution: null,
                   })),
                   total: r.texts.total,
+                },
+                // BACKLOG-2858: scoped hits carry no attribution, exactly like
+                // the other groups — the badge would say the transaction the
+                // user is already looking at.
+                groupChats: {
+                  items: r.groupChats.items.map((t) => ({
+                    ...t,
+                    attribution: null,
+                  })),
+                  total: r.groupChats.total,
                 },
                 unattached: null,
               } as NormalizedSearchResults;

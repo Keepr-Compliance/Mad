@@ -268,10 +268,12 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     // 1 projection + body_text/participants_flat/filename = four.
     expect(q.params.filter((p) => p === "%receipt%")).toHaveLength(4);
     expect(q.sql).not.toContain("message_thread_names");
-    // The COUNT query DOES keep it — the badge still counts messages:
-    // body_text/participants_flat/filename/group-name = four, no projection.
-    expect(q.countSql).toContain("message_thread_names");
-    expect(q.countParams.filter((p) => p === "%receipt%")).toHaveLength(4);
+    // BACKLOG-2858: the COUNT no longer keeps it either. Those conversations are
+    // their own category with their own badge now, and counting their messages
+    // here would head an EMPTY Texts list with a number. Rows and count share one
+    // predicate again: body_text/participants_flat/filename = three.
+    expect(q.countSql).not.toContain("message_thread_names");
+    expect(q.countParams.filter((p) => p === "%receipt%")).toHaveLength(3);
   });
 
   it("buildGlobalEmailQuery adds the attachment predicate to both SELECT and COUNT", () => {
@@ -288,11 +290,12 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     const q = buildGlobalTextQuery(USER, "settlement", 20);
     expect(q.sql).toContain("a.message_id = m.id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    // BACKLOG-2816: rows drop the group-name clause, the count keeps it.
+    // BACKLOG-2858: rows AND count both drop the group-name clause — see
+    // buildTextQuery above.
     expect(q.params.filter((p) => p === "%settlement%")).toHaveLength(4);
     expect(q.sql).not.toContain("message_thread_names");
-    expect(q.countSql).toContain("message_thread_names");
-    expect(q.countParams.filter((p) => p === "%settlement%")).toHaveLength(4);
+    expect(q.countSql).not.toContain("message_thread_names");
+    expect(q.countParams.filter((p) => p === "%settlement%")).toHaveLength(3);
   });
 
   it("buildUnattachedEmailQuery / buildUnattachedTextQuery also match filenames", () => {
@@ -307,9 +310,17 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     // BACKLOG-2816: rows drop the group-name clause, the count keeps it. The
     // unattached text query has no matched-filename projection, so rows bind
     // body_text/participants_flat/filename = three and the count binds four.
+    //
+    // BACKLOG-2858: this is now the ONLY builder where that asymmetry survives —
+    // the two `texts` builders lost it when group chats became their own
+    // category, while these thread rows still land in this same bucket. Asserted
+    // as a pair with the group predicate: the clause counts messages for rows
+    // that only exist for GROUP threads, so counting a named 1:1's messages here
+    // would badge a section that has nothing to show.
     expect(t.params.filter((p) => p === "%photo%")).toHaveLength(3);
     expect(t.sql).not.toContain("message_thread_names");
     expect(t.countSql).toContain("message_thread_names");
+    expect(t.countSql).toContain("json_array_length");
     expect(t.countParams.filter((p) => p === "%photo%")).toHaveLength(4);
   });
 

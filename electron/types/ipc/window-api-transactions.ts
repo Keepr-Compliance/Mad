@@ -236,7 +236,13 @@ export interface LinkedContentGroup<T> {
 export interface LinkedContentSearchResults {
   contacts: LinkedContentGroup<LinkedContentContactHit>;
   emails: LinkedContentGroup<LinkedContentEmailHit>;
+  /** BACKLOG-2858: MESSAGE-level hits only. `total` counts MESSAGES. */
   texts: LinkedContentGroup<LinkedContentTextHit>;
+  /**
+   * BACKLOG-2858: group-chat-name hits — one row per CONVERSATION, and `total`
+   * counts conversations, not the messages inside them.
+   */
+  groupChats: LinkedContentGroup<LinkedContentTextHit>;
 }
 
 // ============================================
@@ -319,12 +325,21 @@ export interface GlobalUnattachedHit {
   memberNames?: string[];
 }
 
-/** Grouped results for a global search: five groups. */
+/** Grouped results for a global search: six groups. */
 export interface GlobalContentSearchResults {
   transactions: LinkedContentGroup<GlobalTransactionHit>;
   contacts: LinkedContentGroup<GlobalContactHit>;
   emails: LinkedContentGroup<GlobalEmailHit>;
+  /** BACKLOG-2858: MESSAGE-level hits only. `total` counts MESSAGES. */
   texts: LinkedContentGroup<GlobalTextHit>;
+  /** BACKLOG-2858: group-chat-name hits. `total` counts CONVERSATIONS. */
+  groupChats: LinkedContentGroup<GlobalTextHit>;
+  /**
+   * Emails/texts attached to no transaction. Group-chat rows for UNATTACHED
+   * threads stay here rather than in `groupChats` — these rows are inert (no
+   * standalone viewer), and this bucket is not the Texts bucket the founder
+   * asked group chats to leave.
+   */
   unattached: LinkedContentGroup<GlobalUnattachedHit>;
 }
 
