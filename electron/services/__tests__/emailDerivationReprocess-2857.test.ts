@@ -407,6 +407,78 @@ describe("BACKLOG-2857 — derivation reprocess", () => {
     });
   });
 
+  // ── Locked decisions ─────────────────────────────────────────────────────────
+  describe("documented behaviours that are decisions, not accidents", () => {
+    it("REWRITES a healthy Gmail row whose body_plain was a genuine text/plain part", async () => {
+      // Nothing on disk distinguishes a real text/plain part from a 255-char
+      // preview, so the pass cannot skip this row even though it was never
+      // damaged. Locked here so the choice is visible and a future change to it
+      // is deliberate rather than silent. See the service header.
+      const genuinePlain = "Hi Jane,\n\nConfirming Thursday at 9am.\n\nThanks";
+      seed(db, [
+        {
+          id: "e-gmail-healthy",
+          version: 0,
+          plain: genuinePlain,
+          html: "<p>Hi Jane,</p><p>Confirming Thursday at 9am.</p><p>Thanks</p>",
+        },
+      ]);
+
+      const result = await reprocessEmailDerivations({ db });
+      expect(result.rewritten).toBe(1);
+
+      const after = db
+        .prepare("SELECT body_plain FROM emails WHERE id = 'e-gmail-healthy'")
+        .get() as { body_plain: string };
+
+      // Replaced, and content-equivalent — every word survives the substitution.
+      expect(after.body_plain).not.toBe(genuinePlain);
+      for (const word of ["Jane", "Confirming", "Thursday", "9am", "Thanks"]) {
+        expect(after.body_plain).toContain(word);
+      }
+    });
+
+    it("rolls a failing batch back whole, never leaving a row stamped with its old body", async () => {
+      // The one state the design calls data loss: stamped at CURRENT while still
+      // holding the truncated text, which would be permanent. Proved by making a
+      // write throw mid-batch rather than by trusting the db.transaction() call
+      // to still be there after a refactor.
+      seed(db, [
+        { id: "e-a", version: 0 },
+        { id: "e-b", version: 0 },
+        { id: "e-c", version: 0 },
+      ]);
+
+      const realPrepare = db.prepare.bind(db);
+      let updateCalls = 0;
+      const spy = jest
+        .spyOn(db, "prepare")
+        .mockImplementation(((sql: string) => {
+          const stmt = realPrepare(sql);
+          if (sql.includes("UPDATE emails SET body_plain")) {
+            const realRun = stmt.run.bind(stmt);
+            stmt.run = ((...args: unknown[]) => {
+              if (++updateCalls === 2) throw new Error("disk full (simulated)");
+              return realRun(...(args as never[]));
+            }) as typeof stmt.run;
+          }
+          return stmt;
+        }) as typeof db.prepare);
+
+      try {
+        await expect(reprocessEmailDerivations({ db, batchSize: 10 })).rejects.toThrow(
+          /disk full/,
+        );
+      } finally {
+        spy.mockRestore();
+      }
+
+      // The whole batch rolled back: NO row is stamped, and no row lost its text.
+      expect(idsAtVersion(db, CURRENT_DERIVATION_VERSION)).toEqual([]);
+      expect(idsAtVersion(db, 0).sort()).toEqual(["e-a", "e-b", "e-c"]);
+    });
+  });
+
   // ── The transform itself ─────────────────────────────────────────────────────
   describe("reDeriveRow", () => {
     it("returns null (keep existing) when there is nothing to derive", () => {

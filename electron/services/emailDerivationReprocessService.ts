@@ -51,6 +51,33 @@
  * - It never widens beyond `body_plain` and `derived_version`. `updated_at` is
  *   deliberately not written: nothing in the codebase writes it today, and moving
  *   it here would make a silent repair look like a user edit.
+ *
+ * A DECISION, NOT AN ACCIDENT: HEALTHY GMAIL ROWS ARE REWRITTEN TOO
+ * -----------------------------------------------------------------
+ * Every pre-existing row sits at version 0 — including Gmail rows whose
+ * `body_plain` is a GENUINE `text/plain` MIME part rather than a truncated
+ * preview. This pass re-derives those from `body_html` as well, so a correct
+ * column gets replaced by HTML-derived text that will differ in whitespace and
+ * line breaks.
+ *
+ * That is accepted, for a reason that cannot be engineered around: nothing on
+ * disk records WHICH rule produced a given row's `body_plain`. A genuine
+ * text/plain part and a 255-char `bodyPreview` are both just text in the same
+ * column. The post-2855 sync prefers the real part (`bodyPlain ||
+ * htmlToPlainText(body)`), but that preference is applied at FETCH time against
+ * data this pass no longer has. Mirroring it here is not possible — only
+ * approximable by heuristics like "is it exactly 255 characters", which would
+ * silently skip genuinely damaged rows that happen to be a different length.
+ *
+ * The cost is bounded and the benefit is not: both texts describe the same
+ * message, `body_html` remains authoritative for rendering, and search/auto-link
+ * (the only two readers) match on content that is present either way. The
+ * alternative — leaving rows unrepaired because they MIGHT be healthy — is the
+ * failure this whole item exists to remove. Locked by a test.
+ *
+ * Consequence worth knowing when reading the log line: `rewritten` counts these
+ * rows too, so it is "rows whose text changed", NOT "truncated Outlook rows
+ * recovered". The two are not the same number.
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
