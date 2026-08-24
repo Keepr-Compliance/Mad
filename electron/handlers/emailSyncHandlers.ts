@@ -391,8 +391,14 @@ export function registerEmailSyncHandlers(
     wrapHandler(async (
       event: IpcMainInvokeEvent,
       userId: string,
+      force?: unknown,
     ): Promise<TransactionResponse> => {
-      logService.info("Email pre-cache requested", "Transactions", { userId });
+      // BACKLOG-2856: coerced to a STRICT boolean, never passed through as
+      // whatever crossed the IPC boundary. This flag is the difference between
+      // "fetch new mail" and "delete and rebuild this mailbox", so anything
+      // truthy-but-not-true (a stray string, an object) must read as false.
+      const forceRecache = force === true;
+      logService.info("Email pre-cache requested", "Transactions", { userId, force: forceRecache });
 
       // Validate input
       const validatedUserId = validateUserId(userId);
@@ -418,7 +424,9 @@ export function registerEmailSyncHandlers(
         };
       }
 
-      const result = await emailSyncService.precacheEmails(validatedUserId);
+      const result = await emailSyncService.precacheEmails(validatedUserId, undefined, {
+        force: forceRecache,
+      });
 
       // BACKLOG-2127: when a provider's token is dead, do NOT report an
       // unconditional success — forward the structured providerError so the

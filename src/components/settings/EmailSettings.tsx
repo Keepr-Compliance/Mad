@@ -7,6 +7,7 @@ import {
 import { settingsService, authService } from '../../services';
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
+import { ResponsiveModal } from "../common/ResponsiveModal";
 import type { Connections, ConnectionResult, PreferencesResult } from './types';
 
 // Refresh interval for connection status (60 seconds)
@@ -211,15 +212,27 @@ export function EmailSettings({
     };
   }, []);
 
-  const handleRecacheEmails = async (): Promise<void> => {
+  // BACKLOG-2856: the Force Re-cache confirmation. Gated behind an explicit
+  // dialog because the run cascade-deletes every email<->transaction link, in
+  // parity with the macOS messages Force Re-import (founder decision,
+  // 2026-08-24: "the functionality of the force button on the msg should be the
+  // same as the emails").
+  const [showForceWarning, setShowForceWarning] = useState(false);
+
+  const handleRecacheEmails = async (force = false): Promise<void> => {
     setIsRecaching(true);
     setRecacheResult(null);
     try {
-      const result = await window.api.transactions.precacheEmails(userId);
+      const result = await window.api.transactions.precacheEmails(userId, force);
       if (result.success) {
         setRecacheResult({
           success: true,
-          message: `Cached ${result.emailsStored ?? 0} new emails (${result.emailsFetched ?? 0} checked).`,
+          // The two runs did different things, so they must not report the same
+          // sentence. "Cached N new" after a force re-cache would read as though
+          // almost nothing happened, when in fact the mailbox was rebuilt.
+          message: force
+            ? `Re-cached ${result.emailsStored ?? 0} emails (${result.emailsFetched ?? 0} checked). Linked emails were unlinked from their transactions.`
+            : `Cached ${result.emailsStored ?? 0} new emails (${result.emailsFetched ?? 0} checked).`,
         });
       } else {
         setRecacheResult({
@@ -499,7 +512,7 @@ export function EmailSettings({
               </p>
             </div>
             <button
-              onClick={handleRecacheEmails}
+              onClick={() => void handleRecacheEmails(false)}
               disabled={isRecaching || !isOnline || !hasAnyConnection}
               title={
                 !isOnline
@@ -509,9 +522,38 @@ export function EmailSettings({
                     ? "Connect email to enable import"
                     : undefined
               }
+              data-testid="recache-emails"
               className="ml-4 px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
             >
               {isRecaching ? "Caching..." : "Re-cache"}
+            </button>
+          </div>
+
+          {/* BACKLOG-2856: Force Re-cache. Recessive next to the ordinary
+              Re-cache above — the incremental run is the one a user should reach
+              for, and this one destroys links. Same visual weight relationship
+              the messages Force Re-import uses. */}
+          <div className="mt-3 pt-3 border-t border-gray-200 flex items-center justify-between">
+            <p className="text-xs text-gray-600 flex-1">
+              <span className="font-medium text-gray-900">Force re-cache.</span>{" "}
+              Re-downloads every email in your cache window and replaces what is
+              stored — use this after a fix to email importing. It{" "}
+              <strong>unlinks your emails from their transactions</strong>.
+            </p>
+            <button
+              onClick={() => setShowForceWarning(true)}
+              disabled={isRecaching || !isOnline || !hasAnyConnection}
+              title={
+                !isOnline
+                  ? "You are offline"
+                  : !hasAnyConnection
+                    ? "Connect email to enable import"
+                    : undefined
+              }
+              data-testid="force-recache-emails"
+              className="ml-4 px-4 py-1.5 bg-white border border-red-300 text-red-700 hover:bg-red-50 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            >
+              Force Re-cache
             </button>
           </div>
           {recacheResult && (
@@ -525,6 +567,70 @@ export function EmailSettings({
           )}
         </div>
       </div>
+
+      {/* BACKLOG-2856: force re-cache confirmation. Mirrors the macOS messages
+          Force Re-import dialog (MacOSMessagesImportSettings.tsx) — same shared
+          ResponsiveModal, same red warning mark, same button relationship: the
+          safe way out is the PROMINENT default and the destructive action is
+          recessive while still reading as destructive (outlined, red text).
+          Cancel is deliberately not painted red; teaching the eye that "the red
+          button is the one to avoid" would be the opposite of the truth here and
+          would transfer to every other confirm in the app (BACKLOG-2749). */}
+      {showForceWarning && (
+        <ResponsiveModal
+          onClose={() => setShowForceWarning(false)}
+          zIndex="z-[70]"
+          panelClassName="max-w-md p-6"
+          testId="force-recache-confirm-modal"
+        >
+          <div className="flex items-center gap-3 mb-3">
+            <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+              <svg
+                className="w-6 h-6 text-red-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                />
+              </svg>
+            </div>
+            <h3 className="text-lg font-bold text-gray-900">
+              Re-cache all emails?
+            </h3>
+          </div>
+          <p className="text-sm text-gray-600 mb-6">
+            This re-downloads every email in your cache window from scratch and
+            will <strong>unlink your emails from their transactions</strong> —
+            you&rsquo;ll need to re-attach them afterward. Any review decisions on
+            those emails are lost, and attachments are re-downloaded when you next
+            open or export them. This can take a while.
+          </p>
+          <div className="flex items-center gap-3 justify-end">
+            <button
+              onClick={() => {
+                setShowForceWarning(false);
+                void handleRecacheEmails(true);
+              }}
+              data-testid="force-recache-confirm"
+              className="px-4 py-2 bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded-lg font-medium transition-all"
+            >
+              Re-cache &amp; unlink
+            </button>
+            <button
+              onClick={() => setShowForceWarning(false)}
+              data-testid="force-recache-cancel"
+              className="px-4 py-2 bg-blue-500 text-white hover:bg-blue-600 rounded-lg font-semibold transition-all"
+            >
+              Cancel
+            </button>
+          </div>
+        </ResponsiveModal>
+      )}
     </div>
   );
 }
