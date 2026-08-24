@@ -48,7 +48,22 @@ interface SubmitForReviewModalProps {
   error: string | null;
   onCancel: () => void;
   onSubmit: () => void;
-  onExportFirst?: () => void;
+  /**
+   * Opens the export flow for this deal, closing this modal on the way.
+   *
+   * BACKLOG-2849 renamed it from `onExportFirst`: "first" described a
+   * pre-submit nudge that no longer exists, and the SAME callback now backs
+   * both offers — the action button beside Submit, and the post-submit ask.
+   * One action, one handler. The label here is the founder's "Export PDF";
+   * the header's restored button reaches the same place as "Export".
+   *
+   * The destination is the founder's ruling that "the export flow it brings up
+   * should be just like the individual user export": this opens the SAME
+   * ExportModal that `useCompleteTransaction` gives an individual on Complete,
+   * not a brokerage-specific path. TransactionDetails owns that wiring and a
+   * test pins the two entry points to one component by identity.
+   */
+  onExport?: () => void;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -83,12 +98,27 @@ export function SubmitForReviewModal({
   error,
   onCancel,
   onSubmit,
-  onExportFirst,
+  onExport,
 }: SubmitForReviewModalProps): React.ReactElement {
   const isResubmit = transaction.submission_status === "needs_changes";
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const isActivelySubmitting = isSubmitting && progress?.stage !== "complete" && progress?.stage !== "failed";
+
+  /**
+   * BACKLOG-2849 — the submit SUCCEEDED. Load-bearing, and not the same test
+   * as "not submitting": `isSubmitting` flips back to false in the hook's
+   * `finally`, so after a successful run the state is
+   * `!isSubmitting && !error` — indistinguishable from the idle state the
+   * summary block was gated on. Without this flag the post-submit ask would
+   * render UNDERNEATH a re-shown Submission Summary.
+   *
+   * `!error` is part of the condition, not decoration: `stage: "complete"` is
+   * only ever set on the success branch, but pairing the two means a future
+   * producer that leaves a stale "complete" behind a failure cannot offer the
+   * user a keep-a-copy prompt for a submission that did not happen.
+   */
+  const isSuccess = progress?.stage === "complete" && !error;
 
   const handleCancelClick = () => {
     if (isActivelySubmitting) {
@@ -99,7 +129,22 @@ export function SubmitForReviewModal({
   };
 
   return (
-    <ResponsiveModal onClose={onCancel} zIndex="z-[70]" panelClassName="max-w-md p-6">
+    /*
+      BACKLOG-2849 — the backdrop routes through `handleCancelClick`, the SAME
+      handler as the X. It used to be wired straight to `onCancel`, so the two
+      dismiss affordances disagreed: the X raised the mid-upload "Cancel Anyway
+      / Keep Uploading" confirm and the backdrop dropped a running submission
+      without one. Once the founder's rule is "a deal that did not submit must
+      still look unsubmitted, and one that did must look submitted", an
+      inconsistent dismiss is a correctness question, not polish — the two ways
+      out have to land in the same state.
+    */
+    <ResponsiveModal
+      onClose={handleCancelClick}
+      zIndex="z-[70]"
+      panelClassName="max-w-md p-6"
+      testId="submit-review-modal"
+    >
         {/* Header */}
         <div className="flex items-center gap-3 mb-4">
           <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
@@ -120,10 +165,34 @@ export function SubmitForReviewModal({
           <h3 className="text-lg font-bold text-gray-900">
             {isResubmit ? "Resubmit for Review" : "Submit for Review"}
           </h3>
+          {/*
+            BACKLOG-2849 — the founder removed the Cancel button and asked for
+            an X at the top right. This is ImportPlanDialog's dismiss, copied
+            class-for-class: same `max-w-md p-6` ResponsiveModal, same
+            icon-circle + h3 header row, and it exists there for the same
+            reason he gave here — the way out of a "what are we asking?" dialog
+            is an unobtrusive close, not a third button competing with the
+            answers.
+
+            It routes through `handleCancelClick`, NOT raw `onCancel`. Mid
+            upload that raises the "Cancel Anyway / Keep Uploading" confirm,
+            which is the whole reason that confirm exists; wiring the X
+            straight to `onCancel` would silently abort a running submission.
+          */}
+          <button
+            onClick={handleCancelClick}
+            data-testid="submit-review-close"
+            aria-label="Close"
+            className="ml-auto -mt-1 -mr-1 p-1 text-gray-400 hover:text-gray-600 rounded transition-all"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
-        {/* Content - not submitting */}
-        {!isSubmitting && !error && (
+        {/* Content - not submitting, not yet submitted */}
+        {!isSubmitting && !error && !isSuccess && (
           <>
             <p className="text-sm text-gray-600 mb-4">
               {isResubmit
@@ -233,38 +302,63 @@ export function SubmitForReviewModal({
               </div>
             </div>
 
-            {/* Export option */}
-            {onExportFirst && (
-              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-4">
-                <div className="flex items-start gap-2">
-                  <svg
-                    className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <div className="flex-1">
-                    <p className="text-sm text-blue-800">
-                      Want to keep a local copy first?
-                    </p>
-                    <button
-                      onClick={onExportFirst}
-                      className="text-sm text-blue-600 hover:text-blue-800 font-medium underline"
-                    >
-                      Export to folder before submitting
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/*
+              BACKLOG-2849 — the pre-submit export SECTION is gone: the blue
+              callout, "Want to keep a local copy first?" and "Export to folder
+              before submitting" with it. The founder moved that ask to AFTER a
+              successful submit (see the success block below), so the offer no
+              longer competes with the decision the user is here to make.
+
+              The export ACTION survives as a plain button beside Submit — his
+              point 2, "two buttons: Submit and Export PDF" — shipped as
+              "Export", see the label note on that button. What moved is the
+              nudge, not the capability.
+            */}
           </>
+        )}
+
+        {/*
+          BACKLOG-2849 — the post-submit ask. Gated on `isSuccess`, so it is
+          reachable ONLY from a submission that actually succeeded: not from
+          the idle screen (no progress), not from a failure (`stage: "failed"`,
+          `error` set), and not mid-upload.
+
+          DISMISSING LOSES NOTHING — the deal is submitted either way, and the
+          export is still reachable. PROVISIONAL: the founder did not rule on
+          dismissibility, so this takes the conservative reading (the X and the
+          backdrop both close it). See the BACKLOG-2849 report.
+        */}
+        {isSuccess && (
+          <div
+            data-testid="submit-review-success-ask"
+            className="bg-blue-50 border border-blue-100 rounded-lg p-4 mb-4"
+          >
+            <div className="flex items-start gap-3">
+              <svg
+                className="w-6 h-6 text-green-600 flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-900">
+                  {isResubmit
+                    ? "Resubmitted to your broker."
+                    : "Submitted to your broker."}
+                </p>
+                <p className="text-sm text-gray-600 mt-1">
+                  Want to keep a local copy?
+                </p>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Progress display */}
@@ -405,14 +499,44 @@ export function SubmitForReviewModal({
           </div>
         )}
 
-        {/* Actions */}
+        {/*
+          Actions. BACKLOG-2849 removed the Cancel/Close row button entirely —
+          dismissal is the X in the header (and the backdrop). What is left is
+          the founder's pair: Export and Submit.
+        */}
         <div className="flex items-center gap-3 justify-end">
-          {!showCancelConfirm && (
+          {/*
+            EXPORT PDF — one button, one label, one handler, in both of the
+            places the founder asked for it: beside Submit before the decision,
+            and as the action on the post-submit ask. Hidden only while an
+            upload is actually running, where leaving the modal would abort it.
+
+            LABEL — "Export PDF", the founder's own wording from point 2 of
+            the dictation. It was briefly shipped as "Export" and reverted: a
+            relabel of his words is his call to make, not one to take on his
+            behalf.
+
+            The open question, raised for him rather than answered here: this
+            opens ExportModal, a FORMAT CHOOSER — `combined-pdf` is
+            preselected, but `folder` and a summary `pdf` are one tile away, so
+            the button names a default rather than a commitment. The header
+            Export button restored beside it reaches the SAME chooser under the
+            shorter label "Export" (its wording since BACKLOG-459), so the two
+            routes to one destination currently read differently. SR review
+            ruled the mismatch acceptable and the label keepable. See the PR
+            body's label proposal.
+          */}
+          {onExport && !isActivelySubmitting && !showCancelConfirm && (
             <button
-              onClick={handleCancelClick}
-              className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all"
+              onClick={onExport}
+              data-testid="submit-review-export"
+              className={`px-4 py-2 rounded-lg font-semibold transition-all ${
+                isSuccess
+                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                  : "border border-gray-300 text-gray-700 hover:bg-gray-100"
+              }`}
             >
-              {progress?.stage === "complete" || error ? "Close" : "Cancel"}
+              Export PDF
             </button>
           )}
           {!progress?.stage || progress.stage === "failed" ? (

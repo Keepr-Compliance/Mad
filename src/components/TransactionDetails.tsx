@@ -1097,6 +1097,12 @@ function TransactionDetails({
           reviewCount={reviewQueue.threadCount}
           onShowNeedsReview={() => setShowNeedsReview(true)}
           onComplete={() => { void complete.requestComplete(); }}
+          /* BACKLOG-2849 — the standalone Export button, for brokerage users
+             only. Derived from the SAME branch that decides where Complete
+             goes, so the button appears exactly when Complete does NOT already
+             lead to the export flow. An individual keeps the single merged
+             Complete that BACKLOG-2792 gave them. */
+          showExport={complete.resolveTarget() === "submit"}
         />
 
         {/* Tabs */}
@@ -1467,11 +1473,16 @@ function TransactionDetails({
             resetSubmit();
           }}
           onSubmit={handleSubmitForReview}
-          // BACKLOG-2792: S4's Export option. The prop already existed and had
-          // ZERO call sites; this is the founder's "the confirmation window
-          // includes an Export option that triggers the same S3 export flow an
-          // individual gets" — literally the same modal, not a parallel path.
-          onExportFirst={() => {
+          // BACKLOG-2792: S4's Export option — the founder's "the confirmation
+          // window includes an Export option that triggers the same S3 export
+          // flow an individual gets", literally the same modal, not a parallel
+          // path.
+          //
+          // BACKLOG-2849 renamed the prop from `onExportFirst`. The callback is
+          // unchanged and now backs BOTH offers in that modal: the button
+          // beside Submit, and the post-submit "Want to keep a local copy?"
+          // ask. Same action either way, which is why it is one prop.
+          onExport={() => {
             setShowSubmitModal(false);
             setShowExportModal(true);
           }}

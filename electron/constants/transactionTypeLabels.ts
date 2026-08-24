@@ -1,8 +1,10 @@
 /**
  * Transaction type display labels (main process / exports).
  *
- * BACKLOG-2805 (support ticket 112) — the founder-ruled strings: `purchase`
- * displays as **"Listing/Purchase"**, `sale` stays **"Sale"**.
+ * The founder-ruled strings: `purchase` displays as **"Listing"**, `sale`
+ * stays **"Sale"**. The buy-side label has moved twice — "Purchase" shipped
+ * first, support ticket 112 prompted "Listing/Purchase" (BACKLOG-2805,
+ * v2.29.0), and BACKLOG-2850 settles it at "Listing".
  *
  * THE MIRROR OF `src/constants/transactionTypes.ts`. It exists because
  * `electron/` cannot import from `src/` (rootDir), and the three export
@@ -15,7 +17,7 @@
  * for comparison, styling (`badge-${transaction_type}`) and persistence.
  */
 export const TRANSACTION_TYPE_LABELS: Record<"purchase" | "sale", string> = {
-  purchase: "Listing/Purchase",
+  purchase: "Listing",
   sale: "Sale",
 };
 

@@ -1,10 +1,12 @@
 /**
  * Transaction type display labels (renderer).
  *
- * BACKLOG-2805 (support ticket 112). A user asked for the seller-side option
- * to follow the naming convention they use; the founder ruled the exact
- * strings: `purchase` displays as **"Listing/Purchase"** and `sale` stays
- * **"Sale"**.
+ * THE LABEL HAS MOVED TWICE. It shipped as "Purchase"; support ticket 112 (a
+ * live user) asked for the seller-side convention "Listing and Sale"; the
+ * founder ruled "Listing/Purchase" (BACKLOG-2805), which shipped in v2.29.0;
+ * he then ruled **"Listing"** (BACKLOG-2850). That is the current string, and
+ * it is what a live user already sees. `sale` has stayed **"Sale"**
+ * throughout.
  *
  * DISPLAY ONLY. The keys are the values actually stored in
  * `transactions.transaction_type`, and they do not move: they are a DB column,
@@ -26,6 +28,6 @@
  * notes for the inconsistency.
  */
 export const TRANSACTION_TYPE_LABELS: Record<"purchase" | "sale", string> = {
-  purchase: "Listing/Purchase",
+  purchase: "Listing",
   sale: "Sale",
 };
