@@ -4,7 +4,8 @@
  * MIGRATION-CHAIN REHEARSAL — BACKLOG-2700
  *
  * Runs the WHOLE chain that separates the shipped build from the next release
- * (v55 -> v62, seven migrations) in ONE pass, against a COMPLETE and POPULATED
+ * (v55 -> the chain head — twelve migrations as of v67) in ONE pass, against a
+ * COMPLETE and POPULATED
  * database produced by the SHIPPED code, and asserts every record survives BY
  * EXACT IDENTITY.
  *
@@ -166,6 +167,10 @@ import {
 } from "./fixtures/rehearsalCorpus";
 
 import { chainHeadVersion } from "./helpers/chainHead";
+// The version CURRENT code produces. v67's partial index embeds this as a
+// literal (SQLite cannot parameterise an index predicate), so the probe below
+// reads the constant rather than re-typing the number.
+import { CURRENT_DERIVATION_VERSION } from "../../utils/derivationVersion";
 // Bypass the Jest moduleNameMapper that rewrites better-sqlite3-multiple-ciphers
 // to the auto-mock — the whole point of this file is a real file-backed DB.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -223,6 +228,14 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
           | undefined
       )?.sql ?? "",
     );
+  }
+
+  /** The stored DDL of an index, or undefined when no such index exists. */
+  function indexSql(name: string): string | undefined {
+    const row = db
+      .prepare("SELECT sql FROM sqlite_master WHERE type='index' AND name = ?")
+      .get(name) as { sql: string | null } | undefined;
+    return row ? String(row.sql ?? "") : undefined;
   }
 
   function schemaVersion(): number {
@@ -401,6 +414,23 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
     // declares the column (schema.sql:432) — and a fixture that already has the
     // column cannot detect a standalone index placed on it.
     expect(columnNames("emails")).not.toContain("bulk_mail_headers");
+
+    // ...and v67's column and index are absent.
+    //
+    // THIS IS WHAT KEEPS THE v67 PROBE HONEST. `schema.sql` NOW DECLARES
+    // `derived_version` inside `CREATE TABLE emails` (schema.sql:499), and
+    // runMigrations() execs schema.sql BEFORE the chain. That exec cannot add
+    // the column here — the statement is `CREATE TABLE IF NOT EXISTS` and this
+    // fixture's `emails` already exists — so on THIS path the column can only
+    // come from v67. If a future fixture regen produced a table that already had
+    // it, the probe below would pass without v67 doing anything, and this line
+    // fails first instead. Same reasoning as the bulk_mail_headers line above,
+    // and the same shape as `migration-v67.test.ts`'s own pre-state assertion.
+    expect(columnNames("emails")).not.toContain("derived_version");
+    // The partial index ships in v67 and NOT in schema.sql (a standalone
+    // CREATE INDEX on a migrated column throws "no such column" on every real
+    // upgrade — BACKLOG-2298/2300/2750), so it too must be absent here.
+    expect(indexSql("idx_emails_derived_version_stale")).toBeUndefined();
   });
 
   // =========================================================================
@@ -624,6 +654,50 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
       .all() as Array<{ id: string; bulk_mail_headers: string | null }>;
     expect(rows.map((r) => r.id)).toEqual([...EMAIL_IDS].sort());
     for (const r of rows) expect(r.bulk_mail_headers).toBeNull();
+  });
+
+  it("v67 applied: emails.derived_version exists, is 0 on every pre-existing row, and the partial stale index is present", async () => {
+    assertRealOnDiskTarget();
+    await upgrade();
+
+    // (1) THE COLUMN EXISTS on a database that really is old.
+    expect(columnNames("emails")).toContain("derived_version");
+
+    // (2) ITS VALUE ON PRE-EXISTING ROWS IS 0 — read off the migration body, not
+    // guessed. v67 runs
+    //     ALTER TABLE emails ADD COLUMN derived_version INTEGER NOT NULL DEFAULT 0
+    // and deliberately does NOT backfill: 0 is the true statement about these
+    // rows (produced by the pre-BACKLOG-2855 derivation), and stamping them
+    // CURRENT would declare them already repaired and strand the truncated
+    // bodies this column exists to find. `migration-v67.test.ts` guards the same
+    // property on a synthetic fixture; this asserts it on a real upgraded one.
+    //
+    // Asserted as an exact id -> version MAP, never as a count of zeroes: a
+    // rebuild that dropped a row or stamped the wrong one holds the count.
+    const rows = db
+      .prepare("SELECT id, derived_version FROM emails ORDER BY id")
+      .all() as Array<{ id: string; derived_version: number }>;
+    expect(rows.map((r) => r.id)).toEqual([...EMAIL_IDS].sort());
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.derived_version]))).toEqual(
+      Object.fromEntries([...EMAIL_IDS].sort().map((id) => [id, 0])),
+    );
+    // Stated separately because it is the failure that would otherwise be
+    // invisible on a corpus where 0 and CURRENT happened to coincide.
+    for (const r of rows) expect(r.derived_version).not.toBe(CURRENT_DERIVATION_VERSION);
+
+    // (3) THE PARTIAL INDEX EXISTS, and its embedded literal still agrees with
+    // the constant. Drift between the two does not change a single query RESULT
+    // — it silently degrades the reprocess pass's `WHERE derived_version < ?`
+    // scan to a table scan — so nothing else on the real-upgrade path would
+    // notice. A future version bump must ship a migration REPLACING this index;
+    // if that migration is forgotten, the chain lands here with the stale
+    // literal and this line goes red.
+    const sql = indexSql("idx_emails_derived_version_stale");
+    expect(sql).toBeDefined();
+    expect(sql).toMatch(/WHERE\s+derived_version\s*<\s*\d+/i);
+    expect(Number(/WHERE\s+derived_version\s*<\s*(\d+)/i.exec(String(sql))?.[1])).toBe(
+      CURRENT_DERIVATION_VERSION,
+    );
   });
 
   // =========================================================================
