@@ -436,6 +436,37 @@ CREATE TABLE IF NOT EXISTS emails (
   validated_at TEXT,                   -- when a $search-sourced row was existence-confirmed server-side (NULL = not validated)
   ingest_source TEXT NOT NULL DEFAULT 'legacy' CHECK (ingest_source IN ('legacy', 'filter', 'search_validated', 'manual')),
 
+  -- Derivation provenance (BACKLOG-2857). validated_at/ingest_source above stamp
+  -- HOW a row was produced; this stamps WHICH VERSION of the derivation logic
+  -- produced it, so a later mapper fix can find and repair its own history
+  -- instead of needing a human to remember the fix exists.
+  --
+  -- An INTEGER, not a boolean: a bit can only say "stale", and once the first
+  -- reprocess flips it a SECOND fix cannot tell rows that already received fix #1
+  -- from rows still on the original. An integer records exactly which
+  -- transformations a row has seen, so two fixes months apart compose and only
+  -- the missing steps run. Per ROW, not per account, because that is what makes
+  -- a reprocess resumable: kill the app mid-pass and every row's stamp is still
+  -- accurate, so the next run continues rather than restarting.
+  --
+  -- DEFAULT 0 is load-bearing. Every row written before this column existed is BY
+  -- DEFINITION at version 0 (the pre-BACKLOG-2855 body_plain derivation), which is
+  -- exactly the set the reprocess pass must find. Do NOT backfill it to CURRENT —
+  -- that would declare every legacy row already repaired and silently strand the
+  -- truncated bodies this exists to fix.
+  --
+  -- Kept in sync with migration v66 (ALTER TABLE ... ADD COLUMN), which is the
+  -- ONLY source of this column on an existing install, matching the v46
+  -- validated_at/ingest_source and v62 bulk_mail_headers convention.
+  --
+  -- NEVER add a standalone CREATE INDEX on this column to this file: schema.sql is
+  -- exec'd BEFORE the migration chain, so an index on a not-yet-added column throws
+  -- "no such column" on every real upgrade (BACKLOG-2298/2300/2750 — shipped broken
+  -- in July, caught only by founder live QA). The partial index serving
+  -- `WHERE derived_version < ?` ships INSIDE v66, which covers both paths: fresh
+  -- installs seed schema_version at BASELINE_VERSION and replay the chain.
+  derived_version INTEGER NOT NULL DEFAULT 0,
+
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 
