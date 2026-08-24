@@ -193,22 +193,39 @@ describe("BACKLOG-2816 — group chat names are a search match target", () => {
       .map((u) => u.id)
       .sort();
 
+  // BACKLOG-2858: a group-NAME hit is no longer a Texts row. It is a Group chats
+  // row, and the `*TextIds` accessors above now see message-level hits only.
+  const scopedGroupChatIds = (query: string): string[] =>
+    searchLinkedContent(asSearchable(), TXN, query).groupChats.items
+      .map((t) => t.id)
+      .sort();
+
+  const globalGroupChatIds = (query: string): string[] =>
+    searchGlobalContent(asSearchable(), USER, query).groupChats.items
+      .map((t) => t.id)
+      .sort();
+
   // =========================================================================
   // Surface 1 — transaction-scoped search (Overview tab), buildTextQuery
   // =========================================================================
   describe("transaction-scoped search (buildTextQuery)", () => {
     it("finds a thread whose ONLY possible match is its group name", () => {
-      expect(scopedTextIds(NAME_QUERY)).toEqual(["m-linked-named"]);
+      // BACKLOG-2858: the hit is real, and it is in Group chats now.
+      expect(scopedGroupChatIds(NAME_QUERY)).toEqual(["m-linked-named"]);
+      // Asserted in BOTH directions by identity: "it is in Group chats" alone
+      // would still pass if the row were ALSO left behind in Texts.
+      expect(scopedTextIds(NAME_QUERY)).toEqual([]);
     });
 
     it("leaves the unnamed group, the 1:1 thread and the body-match thread out of a name query", () => {
-      const hits = scopedTextIds(NAME_QUERY);
+      const hits = [...scopedGroupChatIds(NAME_QUERY), ...scopedTextIds(NAME_QUERY)];
       expect(hits).not.toContain("m-linked-unnamed");
       expect(hits).not.toContain("m-linked-solo");
       expect(hits).not.toContain("m-linked-body");
     });
 
     it("does not match a name row owned by another user on the same thread_id", () => {
+      expect(scopedGroupChatIds(NAME_QUERY)).not.toContain("m-linked-leak");
       expect(scopedTextIds(NAME_QUERY)).not.toContain("m-linked-leak");
     });
 
@@ -220,8 +237,13 @@ describe("BACKLOG-2816 — group chat names are a search match target", () => {
       expect(scopedTextIds("15550177")).toEqual(["m-linked-solo"]);
     });
 
-    it("counts the name-matched thread in the group total", () => {
-      expect(searchLinkedContent(asSearchable(), TXN, NAME_QUERY).texts.total).toBe(1);
+    it("counts the conversation under Group chats and NOT under Texts", () => {
+      // SUPERSEDED BY BACKLOG-2858: this used to assert `texts.total === 1`,
+      // the message inside the name-matching thread. That message's row is no
+      // longer in Texts, so counting it there would head an empty list.
+      const res = searchLinkedContent(asSearchable(), TXN, NAME_QUERY);
+      expect(res.groupChats.total).toBe(1);
+      expect(res.texts.total).toBe(0);
     });
   });
 
@@ -230,17 +252,19 @@ describe("BACKLOG-2816 — group chat names are a search match target", () => {
   // =========================================================================
   describe("global search, Texts group (buildGlobalTextQuery)", () => {
     it("finds a thread whose ONLY possible match is its group name", () => {
-      expect(globalTextIds(NAME_QUERY)).toEqual(["m-linked-named"]);
+      expect(globalGroupChatIds(NAME_QUERY)).toEqual(["m-linked-named"]);
+      expect(globalTextIds(NAME_QUERY)).toEqual([]);
     });
 
     it("leaves the unnamed group, the 1:1 thread and the body-match thread out of a name query", () => {
-      const hits = globalTextIds(NAME_QUERY);
+      const hits = [...globalGroupChatIds(NAME_QUERY), ...globalTextIds(NAME_QUERY)];
       expect(hits).not.toContain("m-linked-unnamed");
       expect(hits).not.toContain("m-linked-solo");
       expect(hits).not.toContain("m-linked-body");
     });
 
     it("does not match a name row owned by another user on the same thread_id", () => {
+      expect(globalGroupChatIds(NAME_QUERY)).not.toContain("m-linked-leak");
       expect(globalTextIds(NAME_QUERY)).not.toContain("m-linked-leak");
     });
 
@@ -252,8 +276,11 @@ describe("BACKLOG-2816 — group chat names are a search match target", () => {
       expect(globalTextIds("15550177")).toEqual(["m-linked-solo"]);
     });
 
-    it("counts the name-matched thread in the group total", () => {
-      expect(searchGlobalContent(asSearchable(), USER, NAME_QUERY).texts.total).toBe(1);
+    it("counts the conversation under Group chats and NOT under Texts", () => {
+      // SUPERSEDED BY BACKLOG-2858 — see the scoped surface above.
+      const res = searchGlobalContent(asSearchable(), USER, NAME_QUERY);
+      expect(res.groupChats.total).toBe(1);
+      expect(res.texts.total).toBe(0);
     });
   });
 
@@ -290,12 +317,14 @@ describe("BACKLOG-2816 — group chat names are a search match target", () => {
   // =========================================================================
   describe("match semantics match the surrounding filter", () => {
     it("is case-insensitive and matches a substring, like the body clause", () => {
-      expect(scopedTextIds("KINGFISHER")).toEqual(["m-linked-named"]);
-      expect(scopedTextIds("fisher lane")).toEqual(["m-linked-named"]);
+      expect(scopedGroupChatIds("KINGFISHER")).toEqual(["m-linked-named"]);
+      expect(scopedGroupChatIds("fisher lane")).toEqual(["m-linked-named"]);
     });
 
     it("treats LIKE wildcards in the query as literal text", () => {
       // "%" must not become a match-everything pattern.
+      expect(scopedGroupChatIds("%")).toEqual([]);
+      expect(scopedGroupChatIds("King_isher")).toEqual([]);
       expect(scopedTextIds("%")).toEqual([]);
       expect(scopedTextIds("King_isher")).toEqual([]);
     });

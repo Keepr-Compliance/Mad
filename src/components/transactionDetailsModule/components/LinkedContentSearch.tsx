@@ -182,12 +182,18 @@ export function LinkedContentSearch({
   // so highlighting stays consistent with the displayed hits.
   const term = query.trim();
 
+  // BACKLOG-2858: `groupChats` belongs in this sum, and its absence would be a
+  // silent regression on the founder's OWN case. Searching a group chat's name
+  // now leaves `texts.total` at 0 (that count went to the Group chats badge with
+  // the rows), so a name-only hit would fall through to "No matches" and the
+  // whole results panel would never render.
   const hasAnyMatch =
     !!results &&
     ((results.transactions?.total ?? 0) > 0 ||
       results.contacts.total > 0 ||
       results.emails.total > 0 ||
       results.texts.total > 0 ||
+      results.groupChats.total > 0 ||
       (results.unattached?.total ?? 0) > 0);
 
   return (
@@ -393,6 +399,65 @@ export function LinkedContentSearch({
                   {results.emails.total > results.emails.items.length && (
                     <p className="text-xs text-gray-400 px-3 py-1.5 bg-gray-50 border-t border-gray-100">
                       +{results.emails.total - results.emails.items.length} more
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Group chats group (BACKLOG-2858).
+                  Founder, verbatim: "group chat in the search should show up as a
+                  separate category called Group chats. (not under texts where it
+                  shows now)".
+
+                  Gated on `total > 0` like every other section, so an empty one
+                  renders NO heading — a heading over nothing is a control that
+                  opens an empty screen (BACKLOG-2791).
+
+                  Placed immediately BEFORE Texts because that is where these rows
+                  already sat: BACKLOG-2816 put thread rows at the head of the
+                  texts list, a named conversation being a more specific answer to
+                  "Kingfisher Lane Closing" than any one message inside it. */}
+              {results.groupChats.total > 0 && (
+                <div data-testid="linked-group-groupchats">
+                  <GroupHeader
+                    label="Group chats"
+                    total={results.groupChats.total}
+                    badgeClass="bg-teal-100 text-teal-700"
+                  />
+                  <ul>
+                    {results.groupChats.items.map((t) => (
+                      <li key={t.id} className="border-b border-gray-50 last:border-0">
+                        <button
+                          type="button"
+                          onClick={() => { onNavigateText(t.id, t.attribution); }}
+                          data-testid="group-chat-result"
+                          className="w-full text-left px-3 py-2 hover:bg-teal-50 transition-colors"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="block text-sm font-medium text-gray-900 truncate flex-1">
+                              {highlightMatch(textPrimaryLine(t), term)}
+                            </span>
+                            {isGlobal && <AttributionBadge attribution={t.attribution} />}
+                          </span>
+                          {/* Members, never body text: nothing in any message's
+                              body caused this hit, and `snippet` is null on these
+                              rows by construction (the query does not project a
+                              body). */}
+                          {textMemberLine(t) && (
+                            <span
+                              className="block text-xs text-gray-400 truncate"
+                              data-testid="group-chat-result-members"
+                            >
+                              {textMemberLine(t)}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  {results.groupChats.total > results.groupChats.items.length && (
+                    <p className="text-xs text-gray-400 px-3 py-1.5 bg-gray-50 border-t border-gray-100">
+                      +{results.groupChats.total - results.groupChats.items.length} more
                     </p>
                   )}
                 </div>

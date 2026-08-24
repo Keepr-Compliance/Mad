@@ -254,7 +254,7 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
   // =========================================================================
   describe("the founder's case: two chat rows, one group, members in different order", () => {
     it("returns exactly ONE row, and it is the newest message ACROSS both threads", () => {
-      const rows = threadRows(scoped("harborview").texts.items);
+      const rows = threadRows(scoped("harborview").groupChats.items);
       expect(rows).toHaveLength(1);
       // Identity, not count. A bare length of 1 also passes if the query drops
       // both siblings and returns something unrelated, so pin WHICH row it is.
@@ -264,14 +264,14 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
     });
 
     it("carries the member SET, order-independently — the fingerprint of the bug", () => {
-      const rows = threadRows(scoped("harborview").texts.items);
+      const rows = threadRows(scoped("harborview").groupChats.items);
       // The winning thread stores the roster in ITS order; assert as a set so
       // the test pins membership rather than an incidental ordering.
       expect([...members(rows[0])].sort()).toEqual([...ROSTER_A].sort());
     });
 
     it("still shows no body content on the collapsed row", () => {
-      const rows = threadRows(scoped("harborview").texts.items);
+      const rows = threadRows(scoped("harborview").groupChats.items);
       expect(rows[0].snippet).toBeNull();
       expect(rows[0].sender).toBeNull();
       expect(JSON.stringify(rows[0])).not.toContain("status update");
@@ -283,7 +283,7 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
   // =========================================================================
   describe("two DIFFERENT groups that share a name stay two rows", () => {
     it("keeps both conversations, identified by their distinct rosters", () => {
-      const rows = threadRows(scoped("closing team").texts.items);
+      const rows = threadRows(scoped("closing team").groupChats.items);
       expect(rows).toHaveLength(2);
       // Both rows carry the same NAME, so name cannot identify them — the
       // roster is what tells the founder these are two different groups.
@@ -303,7 +303,7 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
   // =========================================================================
   describe("boundaries", () => {
     it("collapses THREE chat rows on one name to one row (not just two)", () => {
-      const rows = threadRows(scoped("cedar ridge").texts.items);
+      const rows = threadRows(scoped("cedar ridge").groupChats.items);
       expect(rows).toHaveLength(1);
       expect(rows[0].id).toBe(msgId("macos-chat-203", 0)); // newest of the three
       expect(rows[0].threadDisplayName).toBe(NAME_B);
@@ -311,7 +311,7 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
 
     it("merges handles that normalize equal but are written differently", () => {
       // "+1 (415) 555-0160" and "4155550160" are the same person.
-      const rows = threadRows(scoped("birchwood").texts.items);
+      const rows = threadRows(scoped("birchwood").groupChats.items);
       expect(rows).toHaveLength(1);
       expect(rows[0].id).toBe(msgId("macos-chat-502", 0)); // newer sibling wins
       // The winner stores the BARE form; the row shows what that thread stored.
@@ -321,24 +321,42 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
     it("leaves a named thread alone when its unnamed sibling shares the roster", () => {
       // macos-chat-402 has the same people and NEWER messages, but no name row —
       // so the name query never sees it, and the named thread's own newest wins.
-      const rows = threadRows(scoped("lakeshore").texts.items);
+      const rows = threadRows(scoped("lakeshore").groupChats.items);
       expect(rows).toHaveLength(1);
       expect(rows[0].id).toBe(msgId("macos-chat-401", 1));
       expect(rows[0].sentAt).toBe("2026-03-11T00:00:00.000Z");
     });
 
-    it("never merges two named 1:1 threads — a 1:1 has no roster to agree on", () => {
-      // The importer writes chat_members only for >1 member, so both threads
-      // normalize to an EMPTY token set. Empty must never match empty.
-      const rows = threadRows(scoped("weekly check in").texts.items);
-      expect(rows).toHaveLength(2);
-      expect(rows.map((r) => r.id).sort()).toEqual(
-        [msgId("macos-chat-601", 0), msgId("macos-chat-602", 0)].sort(),
-      );
+    /**
+     * SUPERSEDED BY BACKLOG-2858, deliberately.
+     *
+     * This case used to assert that two named 1:1 threads come back as TWO rows
+     * and never merge — correct while thread rows lived in Texts, because a 1:1
+     * has no roster to agree on and empty must never match empty.
+     *
+     * BACKLOG-2858 gave group chats their own category and a 1:1 is not a group
+     * chat, so these threads no longer produce a thread row AT ALL. The question
+     * "do they merge?" no longer has a surface to be asked on, and the answer
+     * this file used to give would now be wrong.
+     *
+     * `collapseThreadRows`' empty-token-set guard stays in place as defense in
+     * depth and is still exercised by unit-level fixtures — this test now pins
+     * the stronger property that replaced it.
+     */
+    it("returns NO row for a named 1:1 — it is not a group chat", () => {
+      const res = scoped("weekly check in");
+      expect(threadRows(res.groupChats.items)).toEqual([]);
+      expect(res.groupChats.total).toBe(0);
+      // And it did not fall back into Texts either: assert the ABSENCE in both
+      // buckets by identity, because "not in Group chats" alone would also pass
+      // if the row had simply moved back where it came from.
+      const ids = [...res.groupChats.items, ...res.texts.items].map((r) => r.id);
+      expect(ids).not.toContain(msgId("macos-chat-601", 0));
+      expect(ids).not.toContain(msgId("macos-chat-602", 0));
     });
 
     it("returns nothing for a query that matches no thread name", () => {
-      expect(threadRows(scoped("nothingmatchesthisname").texts.items)).toEqual([]);
+      expect(threadRows(scoped("nothingmatchesthisname").groupChats.items)).toEqual([]);
     });
   });
 
@@ -351,7 +369,7 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
       // "cedar" matches NAME_B (three NEWER sibling rows) and NAME_B_OTHER (one
       // OLDER row). Uncollapsed, SQL `ORDER BY sentAt DESC LIMIT 2` returns two
       // siblings of the same conversation and drops NAME_B_OTHER entirely.
-      const rows = threadRows(scoped("cedar", 2).texts.items);
+      const rows = threadRows(scoped("cedar", 2).groupChats.items);
       expect(rows).toHaveLength(2);
       expect(rows.map((r) => r.threadDisplayName).sort()).toEqual(
         [NAME_B, NAME_B_OTHER].sort(),
@@ -370,7 +388,7 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
       // The two chat rows are linked to different transactions. The merged row
       // is the newest message, so it must carry THAT message's transaction —
       // otherwise the row names a deal the shown activity did not happen in.
-      const rows = threadRows(global("sunset terrace").texts.items);
+      const rows = threadRows(global("sunset terrace").groupChats.items);
       expect(rows).toHaveLength(1);
       expect(rows[0].id).toBe(msgId("macos-chat-702", 0));
       expect((rows[0] as unknown as { attribution: unknown }).attribution).toEqual({
@@ -380,12 +398,14 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
     });
 
     it("keeps two different groups sharing a name apart in global search too", () => {
-      expect(threadRows(global("closing team").texts.items)).toHaveLength(2);
+      expect(threadRows(global("closing team").groupChats.items)).toHaveLength(2);
     });
   });
 
   describe("unattached bucket", () => {
     it("collapses siblings that are linked to no transaction at all", () => {
+      // BACKLOG-2858 left these rows HERE: the founder asked group chats to stop
+      // appearing under Texts, and this bucket is not Texts (its rows are inert).
       const texts = global("maple court").unattached.items.filter((u) => u.kind === "text");
       const rows = threadRows(texts);
       expect(rows).toHaveLength(1);

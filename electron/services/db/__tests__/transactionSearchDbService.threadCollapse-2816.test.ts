@@ -123,7 +123,7 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
 
   describe("transaction-scoped search", () => {
     it("returns exactly ONE row for a named group of many messages", () => {
-      const items = scoped(NAME_QUERY).texts.items;
+      const items = scoped(NAME_QUERY).groupChats.items;
       expect(items).toHaveLength(1);
       // By identity, not count: the row is the thread's NEWEST message.
       expect(items[0].id).toBe("m-named-24");
@@ -131,7 +131,7 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
     });
 
     it("carries NO body text on that row — nothing in a body matched", () => {
-      const hit = scoped(NAME_QUERY).texts.items[0];
+      const hit = scoped(NAME_QUERY).groupChats.items[0];
       expect(hit.snippet).toBeNull();
       expect(hit.sender).toBeNull();
       // Assert ABSENCE explicitly so a future snippet cannot creep back in.
@@ -139,7 +139,7 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
     });
 
     it("offers a few members BY HANDLE for the caller to resolve, capped", () => {
-      const hit = scoped(NAME_QUERY).texts.items[0];
+      const hit = scoped(NAME_QUERY).groupChats.items[0];
       expect(hit.memberHandles).toEqual(MEMBERS.slice(0, 3));
       expect(hit.memberHandles).not.toContain("me");
     });
@@ -152,17 +152,43 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
       expect(items.every((t) => t.threadDisplayName === undefined)).toBe(true);
     });
 
-    it("keeps the count badge counting MESSAGES, not conversations", () => {
-      // Founder: "don't bother changing that". One collapsed row, total = N.
+    /**
+     * SUPERSEDED BY BACKLOG-2858, deliberately.
+     *
+     * The founder chose "don't bother changing that" while ONE bucket held both
+     * row shapes: 25 message rows had been collapsed to one, and the badge kept
+     * reporting the 25 messages that were really there. Splitting the buckets
+     * makes that number indefensible — the Group chats badge sits over a list of
+     * CONVERSATIONS, and the messages it used to count are not in it.
+     *
+     * Both numbers are asserted here, on ONE fixture where they DIFFER (1 vs 25).
+     * Equal numbers would let a badge wired to the wrong source pass.
+     */
+    it("counts CONVERSATIONS under Group chats and MESSAGES under Texts", () => {
       const res = scoped(NAME_QUERY);
-      expect(res.texts.items).toHaveLength(1);
-      expect(res.texts.total).toBe(N);
+      expect(res.groupChats.items).toHaveLength(1);
+      expect(res.groupChats.total).toBe(1);
+      // Nothing in any of the 25 bodies matched "kingfisher", so Texts is empty
+      // AND its badge says so. Before BACKLOG-2858 it said 25 — a heading over
+      // an empty list, which is the dead control of BACKLOG-2791.
+      expect(res.texts.items).toEqual([]);
+      expect(res.texts.total).toBe(0);
+      // The 25 messages are real and still findable; only the ROUTE changed.
+      expect(scoped("routine message").texts.total).toBe(N);
+    });
+
+    it("does not leave the conversation row in Texts as well", () => {
+      // The whole point of the split, asserted by IDENTITY in BOTH directions —
+      // "it appears in Group chats" alone passes while the row is duplicated.
+      const res = scoped(NAME_QUERY);
+      expect(res.groupChats.items.map((t) => t.id)).toEqual(["m-named-24"]);
+      expect(res.texts.items.map((t) => t.id)).not.toContain("m-named-24");
     });
   });
 
   describe("global search", () => {
     it("returns exactly ONE row for the named group, with attribution", () => {
-      const items = global(NAME_QUERY).texts.items;
+      const items = global(NAME_QUERY).groupChats.items;
       expect(items).toHaveLength(1);
       expect(items[0].id).toBe("m-named-24");
       expect(items[0].threadDisplayName).toBe(GROUP_NAME);
@@ -172,10 +198,12 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
       });
     });
 
-    it("carries no body text, and keeps the message count", () => {
+    it("carries no body text, and counts conversations not messages", () => {
       const res = global(NAME_QUERY);
-      expect(res.texts.items[0].snippet).toBeNull();
-      expect(res.texts.total).toBe(N);
+      expect(res.groupChats.items[0].snippet).toBeNull();
+      expect(res.groupChats.total).toBe(1);
+      expect(res.texts.total).toBe(0);
+      expect(res.texts.items.map((t) => t.id)).not.toContain("m-named-24");
     });
 
     it("leaves a body-word match as one row per message", () => {
@@ -195,5 +223,17 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
   it("a query matching nothing still returns nothing", () => {
     expect(scoped("nothingmatchesthis").texts.items).toEqual([]);
     expect(scoped("nothingmatchesthis").texts.total).toBe(0);
+    expect(scoped("nothingmatchesthis").groupChats.items).toEqual([]);
+    expect(scoped("nothingmatchesthis").groupChats.total).toBe(0);
+  });
+
+  it("leaves Group chats EMPTY for a body-only match, so its heading never renders", () => {
+    // The other half of the empty-state rule: a section that has nothing to show
+    // must report nothing, not an inherited number. "walkthrough" appears in
+    // three BODIES and in no group name.
+    const res = scoped("walkthrough");
+    expect(res.groupChats.items).toEqual([]);
+    expect(res.groupChats.total).toBe(0);
+    expect(res.texts.total).toBe(3);
   });
 });

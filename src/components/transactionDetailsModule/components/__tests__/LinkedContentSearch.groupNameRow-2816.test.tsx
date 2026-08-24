@@ -2,6 +2,12 @@
  * BACKLOG-2816 (founder ruling, 2026-08-23) — what a group-chat-name result row
  * actually renders.
  *
+ * BACKLOG-2858 moved that row out of the Texts section into its own **Group
+ * chats** section. What the row SHOWS is unchanged and is still this file's
+ * subject; only which bucket feeds it moved, so the fixtures and test ids follow
+ * it. The count assertion at the end is the one behaviour that genuinely changed
+ * — see the comment there.
+ *
  * His words: "just show the group name, not anything from the body. If you want
  * you can show a few of the members of the group chat (with name not numbers)."
  *
@@ -42,12 +48,20 @@ const BODY_TEXT = "the lockbox code is on the counter";
 
 const emptyGroup = { items: [], total: 0 };
 
-function resultsWith(textItems: unknown[]) {
+/**
+ * BACKLOG-2858: group-chat rows and message rows now arrive in DIFFERENT
+ * buckets, each with its own total, so the fixture takes them separately.
+ *
+ * The two totals deliberately DIFFER (1 conversation vs 546 messages). Equal
+ * numbers would let a badge wired to the wrong bucket pass every assertion.
+ */
+function resultsWith(groupChatItems: unknown[], textItems: unknown[] = []) {
   return {
     transactions: emptyGroup,
     contacts: emptyGroup,
     emails: emptyGroup,
-    texts: { items: textItems, total: 546 },
+    texts: { items: textItems, total: textItems.length ? 546 : 0 },
+    groupChats: { items: groupChatItems, total: groupChatItems.length },
     unattached: emptyGroup,
   };
 }
@@ -79,11 +93,22 @@ const messageRow = {
  * whole. Assert on the row's text content instead.
  */
 function rowText(index = 0): string {
+  return screen.getAllByTestId("group-chat-result")[index].textContent ?? "";
+}
+
+/** The other shape, in the other section. */
+function messageRowText(index = 0): string {
   return screen.getAllByTestId("text-result")[index].textContent ?? "";
 }
 
-async function searchFor(items: unknown[]): Promise<void> {
-  mockSearchGlobal.mockResolvedValue({ success: true, results: resultsWith(items) });
+async function searchFor(
+  groupChatItems: unknown[],
+  textItems: unknown[] = [],
+): Promise<void> {
+  mockSearchGlobal.mockResolvedValue({
+    success: true,
+    results: resultsWith(groupChatItems, textItems),
+  });
   render(
     <LinkedContentSearch
       scope={{ type: "global", userId: "u-1" }}
@@ -94,7 +119,8 @@ async function searchFor(items: unknown[]): Promise<void> {
     />,
   );
   fireEvent.change(screen.getByRole("textbox"), { target: { value: "kingfisher" } });
-  await waitFor(() => expect(screen.getAllByTestId("text-result").length).toBeGreaterThan(0));
+  const testId = groupChatItems.length > 0 ? "group-chat-result" : "text-result";
+  await waitFor(() => expect(screen.getAllByTestId(testId).length).toBeGreaterThan(0));
 }
 
 describe("BACKLOG-2816 — the group-name result row", () => {
@@ -107,7 +133,7 @@ describe("BACKLOG-2816 — the group-name result row", () => {
 
   it("lists members by resolved contact NAME, never a raw number", async () => {
     await searchFor([groupRow]);
-    const members = screen.getByTestId("text-result-members");
+    const members = screen.getByTestId("group-chat-result-members");
     expect(members).toHaveTextContent(MEMBER_A);
     expect(members).toHaveTextContent(MEMBER_B);
     // The thing he ruled out: a secondary line of raw digits.
@@ -117,7 +143,7 @@ describe("BACKLOG-2816 — the group-name result row", () => {
   it("renders NO message body on that row", async () => {
     await searchFor([groupRow]);
     expect(screen.queryByText(BODY_TEXT)).not.toBeInTheDocument();
-    const row = screen.getByTestId("text-result");
+    const row = screen.getByTestId("group-chat-result");
     expect(row.textContent ?? "").not.toContain("lockbox");
   });
 
@@ -126,31 +152,45 @@ describe("BACKLOG-2816 — the group-name result row", () => {
     // must then show the group name ALONE — not a list of numbers.
     await searchFor([{ ...groupRow, memberNames: [] }]);
     expect(rowText()).toContain(GROUP_NAME);
-    expect(screen.queryByTestId("text-result-members")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("group-chat-result-members")).not.toBeInTheDocument();
     // And nothing resembling a phone number took its place.
     expect(rowText()).not.toMatch(/\d{3}/);
   });
 
   it("leaves an ordinary message row showing its sender and body", async () => {
-    await searchFor([messageRow]);
+    await searchFor([], [messageRow]);
     expect(screen.getByText("+14155550190")).toBeInTheDocument();
     expect(screen.getByText(BODY_TEXT)).toBeInTheDocument();
-    expect(screen.queryByTestId("text-result-members")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("group-chat-result-members")).not.toBeInTheDocument();
   });
 
-  it("shows both shapes in one list — the accepted outcome", async () => {
-    await searchFor([groupRow, messageRow]);
-    expect(screen.getAllByTestId("text-result")).toHaveLength(2);
-    // Thread row first (a named conversation is the more specific answer),
-    // then the per-message row — two shapes, one list.
+  it("shows the two shapes in two SECTIONS, not one list", async () => {
+    // BACKLOG-2858 replaced the accepted "two shapes, one list" outcome. Founder,
+    // verbatim: "group chat in the search should show up as a separate category
+    // called Group chats. (not under texts where it shows now)".
+    await searchFor([groupRow], [messageRow]);
+    expect(screen.getAllByTestId("group-chat-result")).toHaveLength(1);
+    expect(screen.getAllByTestId("text-result")).toHaveLength(1);
     expect(rowText(0)).toContain(GROUP_NAME);
     expect(rowText(0)).not.toContain("lockbox");
-    expect(rowText(1)).toContain(BODY_TEXT);
+    expect(messageRowText(0)).toContain(BODY_TEXT);
+    // And the group name is not ALSO sitting in the Texts section — asserted as
+    // an absence, because "it is in Group chats" passes while it is in both.
+    expect(messageRowText(0)).not.toContain(GROUP_NAME);
   });
 
-  it("still shows the message count the founder chose to keep", async () => {
-    await searchFor([groupRow]);
-    // One collapsed row under a badge of 546 — stated, not a defect.
-    expect(screen.getByText("546")).toBeInTheDocument();
+  it("badges Group chats with CONVERSATIONS and Texts with MESSAGES", async () => {
+    // SUPERSEDED BY BACKLOG-2858. This used to assert one collapsed row under a
+    // badge of 546 — tolerable while the 546 message rows shared the bucket.
+    // With its own category the Group chats badge counts its own rows, and the
+    // fixture's two totals differ (1 vs 546) so a badge fed by the wrong bucket
+    // cannot pass.
+    await searchFor([groupRow], [messageRow]);
+    const groupChats = screen.getByTestId("linked-group-groupchats");
+    const texts = screen.getByTestId("linked-group-texts");
+    expect(groupChats).toHaveTextContent("Group chats");
+    expect(groupChats).toHaveTextContent("1");
+    expect(groupChats.textContent ?? "").not.toContain("546");
+    expect(texts).toHaveTextContent("546");
   });
 });

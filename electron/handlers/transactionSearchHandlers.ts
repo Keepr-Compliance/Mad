@@ -85,6 +85,7 @@ function emptyLinkedResults(): LinkedContentSearchResults {
     contacts: { items: [], total: 0 },
     emails: { items: [], total: 0 },
     texts: { items: [], total: 0 },
+    groupChats: { items: [], total: 0 },
   };
 }
 
@@ -95,6 +96,7 @@ function emptyGlobalResults(): GlobalContentSearchResults {
     contacts: { items: [], total: 0 },
     emails: { items: [], total: 0 },
     texts: { items: [], total: 0 },
+    groupChats: { items: [], total: 0 },
     unattached: { items: [], total: 0 },
   };
 }
@@ -128,13 +130,17 @@ export function registerTransactionSearchHandlers(): void {
         const db = getRawDatabase() as unknown as SearchableDb;
         const results = searchLinkedContent(db, validatedTxnId, trimmed);
         // BACKLOG-2816: group-name rows carry member handles; show contact names.
-        await attachMemberNames(results.texts.items);
+        // BACKLOG-2858: those rows now live in `groupChats`, which is where the
+        // handles are. Resolving `texts` alone would have quietly stopped
+        // resolving anything — every message row's `memberHandles` is undefined.
+        await attachMemberNames(results.groupChats.items);
 
         logService.info("Linked-content search", "Transactions", {
           transactionId: validatedTxnId,
           contacts: results.contacts.total,
           emails: results.emails.total,
           texts: results.texts.total,
+          groupChats: results.groupChats.total,
         });
 
         return { success: true, results };
@@ -165,10 +171,11 @@ export function registerTransactionSearchHandlers(): void {
 
         const db = getRawDatabase() as unknown as SearchableDb;
         const results = searchGlobalContent(db, validatedUserId, trimmed);
-        // BACKLOG-2816: both the Texts group and the Unattached bucket can carry
-        // group-name rows, so both are resolved in ONE round trip.
+        // BACKLOG-2816/2858: the Group chats category and the Unattached bucket
+        // both carry group-name rows (the unattached ones stay in Unattached by
+        // design), so both are resolved in ONE round trip.
         await attachMemberNames(
-          [...results.texts.items, ...results.unattached.items],
+          [...results.groupChats.items, ...results.unattached.items],
           validatedUserId,
         );
 
@@ -177,6 +184,7 @@ export function registerTransactionSearchHandlers(): void {
           contacts: results.contacts.total,
           emails: results.emails.total,
           texts: results.texts.total,
+          groupChats: results.groupChats.total,
           unattached: results.unattached.total,
         });
 

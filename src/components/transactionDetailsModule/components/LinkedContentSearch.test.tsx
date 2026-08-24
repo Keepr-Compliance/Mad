@@ -21,6 +21,7 @@ const emptyResults: LinkedContentSearchResults = {
   contacts: { items: [], total: 0 },
   emails: { items: [], total: 0 },
   texts: { items: [], total: 0 },
+  groupChats: { items: [], total: 0 },
 };
 
 const richResults: LinkedContentSearchResults = {
@@ -38,6 +39,7 @@ const richResults: LinkedContentSearchResults = {
     items: [{ id: "m1", sender: "+15555550112", snippet: "on my way", sentAt: null }],
     total: 1,
   },
+  groupChats: { items: [], total: 0 },
 };
 
 const ATTR_MAIN = { transactionId: "t1", propertyAddress: "123 Main St" };
@@ -74,6 +76,7 @@ const globalResults: GlobalContentSearchResults = {
     ],
     total: 1,
   },
+  groupChats: { items: [], total: 0 },
   unattached: {
     items: [
       { kind: "email", id: "u1", title: "Unlinked mail", sender: "b@x.com", snippet: "sn", sentAt: null },
@@ -354,6 +357,7 @@ describe("LinkedContentSearch — BACKLOG-1870 Phase 1.5 matched-attachment indi
       ],
       total: 1,
     },
+    groupChats: { items: [], total: 0 },
   };
 
   it("shows the matched attachment filename under the email and text results", async () => {
@@ -421,6 +425,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
         total: 1,
       },
       texts: { items: [], total: 0 },
+      groupChats: { items: [], total: 0 },
     };
     // "doc" appears in the subject ("docs") and the filename ("final-doc.pdf"),
     // but NOT in the sender or snippet.
@@ -457,6 +462,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
         ],
         total: 1,
       },
+      groupChats: { items: [], total: 0 },
     };
     await searchScopedWith(results, "agent");
 
@@ -485,6 +491,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
         total: 1,
       },
       texts: { items: [], total: 0 },
+      groupChats: { items: [], total: 0 },
     };
     await searchScopedWith(results, "closing");
 
@@ -506,6 +513,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
       },
       emails: { items: [], total: 0 },
       texts: { items: [], total: 0 },
+      groupChats: { items: [], total: 0 },
     };
     // "zzz" matches the (mocked) result set server-side but is not a substring of
     // any displayed field, so nothing should be visually highlighted.
@@ -531,6 +539,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
         total: 1,
       },
       texts: { items: [], total: 0 },
+      groupChats: { items: [], total: 0 },
     };
     await searchScopedWith(results, "(x)");
 
@@ -557,6 +566,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
         total: 1,
       },
       texts: { items: [], total: 0 },
+      groupChats: { items: [], total: 0 },
     };
     await searchScopedWith(results, "a.b");
 
@@ -582,6 +592,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
         total: 1,
       },
       texts: { items: [], total: 0 },
+      groupChats: { items: [], total: 0 },
     };
     // A raw "(" would make an invalid RegExp if not escaped — rendering must not throw.
     await searchScopedWith(results, "(");
