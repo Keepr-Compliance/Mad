@@ -12,7 +12,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { ResponsiveModal, MODAL_PANEL } from "../../../common/ResponsiveModal";
 import type { Transaction } from "@/types";
 import type { ExtendedContact } from "../../../../types/components";
-import { ROLE_TO_CATEGORY, AUDIT_WORKFLOW_STEPS } from "../../../../constants/contactRoles";
+import { ROLE_TO_CATEGORY } from "../../../../constants/contactRoles";
 import {
   ContactsProvider,
   useContacts,
@@ -26,7 +26,6 @@ import {
   buildRoleOptions,
   offeredRoleValues,
   resolveDefaultContactRole,
-  getRoleDisplayName,
 } from "../../../../utils/transactionRoleUtils";
 import { labelForTransactionContact } from "../../../../utils/contactDisplayLabel";
 import {
@@ -108,12 +107,6 @@ export interface EditContactsModalProps {
 /**
  * Role configuration from workflow steps
  */
-interface RoleConfig {
-  role: string;
-  required: boolean;
-  multiple: boolean;
-}
-
 // ============================================
 // EDIT CONTACTS MODAL COMPONENT
 // ============================================

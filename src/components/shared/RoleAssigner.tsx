@@ -16,11 +16,9 @@
 
 import React, { useMemo, useCallback } from "react";
 import type { ExtendedContact } from "../../types/components";
-import { AUDIT_WORKFLOW_STEPS } from "../../constants/contactRoles";
 import { labelForContact } from "../../utils/contactDisplayLabel";
 import {
   buildRoleOptions,
-  getRoleDisplayName,
 } from "../../utils/transactionRoleUtils";
 
 /**
@@ -33,12 +31,6 @@ export interface RoleAssignments {
 /**
  * Role configuration from workflow steps
  */
-interface RoleConfig {
-  role: string;
-  required: boolean;
-  multiple: boolean;
-}
-
 export interface RoleAssignerProps {
   /** Contacts that were selected in step 1 */
   selectedContacts: ExtendedContact[];

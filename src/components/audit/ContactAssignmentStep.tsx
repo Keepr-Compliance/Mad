@@ -12,11 +12,9 @@
  * between steps 2 and 3.
  */
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { AUDIT_WORKFLOW_STEPS } from "../../constants/contactRoles";
 import {
   buildRoleOptions,
   resolveDefaultContactRole,
-  getRoleDisplayName,
   type TransactionType,
 } from "../../utils/transactionRoleUtils";
 import { ContactSearchList } from "../shared/ContactSearchList";
@@ -99,12 +97,6 @@ interface ContactAssignmentStepProps {
 /**
  * Role configuration from workflow steps
  */
-interface RoleConfig {
-  role: string;
-  required: boolean;
-  multiple: boolean;
-}
-
 /**
  * BACKLOG-2400: link between an external/address-book contact the user added and
  * the DB contact its import produced. Lets the two-pane hide the external twin
