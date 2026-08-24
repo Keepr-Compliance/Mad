@@ -641,11 +641,19 @@ export function registerEmailLinkingHandlers(): void {
           m.received_at,
           m.participants,
           m.participants_flat,
-          m.direction
+          m.direction,
+          -- BACKLOG-2814: the group's user-visible name, so a removed group
+          -- conversation is identified the same way it was before removal.
+          tn.display_name as thread_display_name
         FROM ignored_communications ic
         LEFT JOIN messages m ON (
           (ic.thread_id IS NOT NULL AND ic.thread_id != '' AND m.thread_id = ic.thread_id)
           OR (ic.original_communication_id IS NOT NULL AND m.id = ic.original_communication_id)
+        )
+        -- BACKLOG-2814: (user_id, thread_id) is the table's PK; joining on
+        -- thread_id alone would leak one user's group name onto another's.
+        LEFT JOIN message_thread_names tn ON (
+          tn.thread_id = m.thread_id AND tn.user_id = m.user_id
         )
         WHERE ic.transaction_id = ?
         AND m.id IS NOT NULL

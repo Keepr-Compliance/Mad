@@ -585,6 +585,17 @@ export interface Message {
 
   // Threading
   thread_id?: string;
+  /**
+   * BACKLOG-2814: the user-visible name of the GROUP conversation this message
+   * belongs to — Apple's `chat.display_name` ("Closing Team").
+   *
+   * NOT a stored column on `messages`. It is joined in from
+   * `message_thread_names` by the loaders that feed the thread cards, so that a
+   * re-import — which stores zero new message rows for a thread it already has
+   * — still changes what the card shows. Undefined for 1:1 chats, for unnamed
+   * groups, and for any loader that does not join it.
+   */
+  thread_display_name?: string;
 
   // Timestamps
   sent_at?: string;

@@ -128,6 +128,19 @@ function createSchema(db: DatabaseType): void {
     CREATE TABLE attachments (
       id TEXT PRIMARY KEY, message_id TEXT, external_message_id TEXT, filename TEXT
     );
+    -- BACKLOG-2814: getCommunicationsWithMessages LEFT JOINs the group-chat
+    -- name. Without this table the query does not run at all -- it throws at
+    -- prepare(), before any row is read, which is how it surfaced here as two
+    -- failures in a suite about reaction dedup.
+    --
+    -- The PRIMARY KEY is load-bearing for THIS suite, not decoration: it is what
+    -- makes the join match AT MOST ONE row per message, so the join cannot
+    -- multiply rows and cannot disturb the no-collapse guarantee below.
+    CREATE TABLE message_thread_names (
+      user_id TEXT NOT NULL, thread_id TEXT NOT NULL, display_name TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, thread_id)
+    );
   `);
 }
 
@@ -206,6 +219,20 @@ describe("getCommunicationsWithMessages — INCLUDE reactions + I2 no-dedup (BAC
       `INSERT INTO communications (id, user_id, transaction_id, thread_id, link_source)
        VALUES ('c1', ?, ?, 'th-linked', 'manual')`,
     ).run(USER, TXN);
+
+    // BACKLOG-2814: NAME this thread, deliberately.
+    //
+    // Restoring the table alone would have made these tests green again while
+    // proving nothing about the join -- with no name row, the LEFT JOIN matches
+    // nothing and the multiplicity question is never asked. With a name present
+    // the join actually fires on every row of `th-linked`, so the two
+    // assertions below (an exact ID SET, and each row appearing exactly once)
+    // now ALSO pin that the group-name join does not fan out and cannot
+    // resurrect the pre-2280 collapse.
+    db.prepare(
+      `INSERT INTO message_thread_names (user_id, thread_id, display_name)
+       VALUES (?, 'th-linked', 'Closing Team')`,
+    ).run(USER);
   });
 
   it("returns the parent AND the reaction row (so pills can attach)", async () => {

@@ -579,6 +579,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 65,
             description: expect.stringContaining("BACKLOG-2791"),
           },
+          {
+            version: 66,
+            description: expect.stringContaining("BACKLOG-2814"),
+          },
         ],
         // BACKLOG-2791: derived — the plan seeds at 29, so this is "every
         // migration above 29", not a literal that needs re-typing each time.
