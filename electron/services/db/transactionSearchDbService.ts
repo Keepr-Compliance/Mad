@@ -20,6 +20,7 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import { toLookupKey } from "../../utils/phoneNormalization";
+import { handleToIdentityToken } from "../../utils/handleIdentity";
 import { reactionExclusion } from "./reactionExclusion";
 import { ACTIVE_CONTACTS_CLAUSE_C } from "./contactTombstoneSql";
 
@@ -801,6 +802,141 @@ function shapeThreadName(row: RawThreadNameRow): {
   };
 }
 
+// ---------------------------------------------------------------------------
+// BACKLOG-2854: one conversation, several Apple chat rows
+// ---------------------------------------------------------------------------
+// The founder searched a group chat's name and got the SAME conversation twice,
+// each row listing the same members in a different order.
+//
+// The three `build*TextThreadNameQuery` builders are NOT at fault. Each ranks a
+// thread's messages and keeps `rn = 1`, so it emits exactly one row per
+// `thread_id`. Two rows means two `thread_id` VALUES.
+//
+// They are real. The importer keys thread identity on the Apple `chat_id`
+// (`macChatThreadId` -> `macos-chat-{id}`), and Apple keeps SEVERAL chat rows
+// for one human conversation: an iMessage row and an SMS/MMS row, a fresh row
+// after a member's handle changes, a row from a service migration. Each carries
+// the same display name, and each contributes its own representative message —
+// which is why the member ORDER differed between the two rows the founder saw.
+//
+// `thread_id` is a stable join key, so this is fixed HERE, at read time, and not
+// by rewriting ids in the importer (a migration with a far larger blast radius).
+//
+// TWO CONDITIONS, NOT ONE. Threads merge only when the display name AND the
+// normalized member set both match. Name alone would be a data-loss bug: two
+// genuinely different groups can share a name ("Closing Team"), and merging
+// those hides a conversation from search — the opposite of the defect, and worse.
+// ---------------------------------------------------------------------------
+
+/**
+ * How many rows to fetch per result row we intend to keep.
+ *
+ * The SQL applies `LIMIT` BEFORE this collapse can run, so N sibling rows of one
+ * conversation would otherwise crowd genuinely distinct conversations out of the
+ * result. Apple typically splits a conversation into 2-3 chat rows; 4 leaves
+ * headroom without turning a search into a table scan.
+ */
+const THREAD_SIBLING_FETCH_PAD = 4;
+
+/**
+ * The thread's roster, reduced to sorted, deduped identity tokens.
+ *
+ * `chat_members` is Apple's authoritative membership list and is written only
+ * when the chat has more than one member — so a 1:1 yields an EMPTY set, which
+ * `threadCollapseKey` treats as "never mergeable". That is deliberate: a 1:1 has
+ * no roster to agree on, so two 1:1 threads sharing a name must stay apart.
+ *
+ * The sort is only ever used to build a key compared for EQUALITY against
+ * another key built by this same function, so JS's UTF-16 ordering is a
+ * canonical form here, not a linguistic one.
+ */
+function threadIdentityTokens(participants: string | null): string[] {
+  if (!participants) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(participants);
+  } catch {
+    return []; // a malformed blob must not merge anything
+  }
+  if (!parsed || typeof parsed !== "object") return [];
+  const members = (parsed as { chat_members?: unknown }).chat_members;
+  if (!Array.isArray(members)) return [];
+
+  const tokens = new Set<string>();
+  for (const m of members) {
+    if (typeof m !== "string") continue;
+    const token = handleToIdentityToken(m);
+    if (token) tokens.add(token);
+  }
+  return [...tokens].sort();
+}
+
+/**
+ * The key two sibling threads must share to be one conversation, or `null` for a
+ * row that may never merge with anything.
+ *
+ * `JSON.stringify` rather than a joined string because an email handle may
+ * contain almost any character, and a hand-picked delimiter is a collision
+ * waiting to be found by a real address book.
+ */
+function threadCollapseKey(row: RawThreadNameRow): string | null {
+  const name = (row.threadDisplayName ?? "").trim();
+  if (!name) return null;
+  const tokens = threadIdentityTokens(row.participants);
+  if (tokens.length === 0) return null;
+  return JSON.stringify([name.toLowerCase(), ...tokens]);
+}
+
+/**
+ * Newest first, then id ascending — the SAME order the builders' window function
+ * uses to pick a thread's representative (`ORDER BY m.sent_at DESC, m.id ASC`).
+ *
+ * Stated explicitly because the builders' OUTER order is `sentAt DESC` with no
+ * tiebreak, so two siblings sharing a timestamp arrive in an order SQLite does
+ * not promise. Inheriting that order would make which conversation survives a
+ * merge depend on it.
+ */
+function compareThreadRows(a: RawThreadNameRow, b: RawThreadNameRow): number {
+  const aAt = a.sentAt ?? "";
+  const bAt = b.sentAt ?? "";
+  if (aAt !== bAt) return aAt > bAt ? -1 : 1;
+  if (a.id !== b.id) return a.id < b.id ? -1 : 1;
+  return 0;
+}
+
+/**
+ * Collapse sibling threads to one row each.
+ *
+ * THE SURVIVING ROW IS THE NEWEST MESSAGE ACROSS THE MERGED THREADS. Two
+ * consequences the caller depends on:
+ *
+ *   1. **The row's `id` is a MESSAGE id, and it is the id that travels
+ *      downstream.** The result's click handler deep-navigates by message id and
+ *      locates the containing conversation card (`msgs.some(m => m.id ===
+ *      targetId)`), so carrying the newest message's id lands the user on the
+ *      half of the conversation that is actually live. Carrying the other
+ *      sibling's id would open a stale one.
+ *   2. **Everything else on the row is that winner's** — its member list, and in
+ *      global search its transaction attribution. A row must not advertise the
+ *      newest activity beside a different thread's deal.
+ */
+function collapseThreadRows<TRaw extends RawThreadNameRow>(rows: TRaw[]): TRaw[] {
+  const merged = new Map<string, TRaw>();
+  const unmergeable: TRaw[] = [];
+
+  for (const row of rows) {
+    const key = threadCollapseKey(row);
+    if (key === null) {
+      unmergeable.push(row);
+      continue;
+    }
+    const held = merged.get(key);
+    if (!held || compareThreadRows(row, held) < 0) merged.set(key, row);
+  }
+
+  return [...merged.values(), ...unmergeable].sort(compareThreadRows);
+}
+
 /** First participant token ("from") from the denormalized participants_flat. */
 function textSender(participantsFlat: string | null): string | null {
   if (!participantsFlat) return null;
@@ -834,6 +970,40 @@ function runGroup<TRaw, THit>(
   const total =
     typeof countRow?.total === "number" ? countRow.total : rows.length;
   return { items: rows.map(shape), total };
+}
+
+/**
+ * `runGroup` for the three thread-name builders, with the BACKLOG-2854 collapse
+ * in between fetching and shaping.
+ *
+ * It collapses RAW rows, before `shapeThreadName`, for two reasons that both
+ * come from the shaped row: `memberHandles` is truncated to
+ * `MEMBER_PREVIEW_CAP`, so two siblings whose rosters differ only past the third
+ * member would look identical; and the preview's ORDER follows each thread's own
+ * representative message, so the same roster can shape into two different
+ * previews. The raw `participants` blob has neither problem.
+ *
+ * `total` is deliberately NOT adjusted. It counts MESSAGES by founder ruling
+ * (BACKLOG-2816), and every caller replaces this group's total with the message
+ * group's anyway.
+ *
+ * @param build a builder bound to everything except its row limit, which this
+ *              function pads so sibling rows cannot consume the caller's limit
+ */
+function runThreadNameGroup<TRaw extends RawThreadNameRow, THit>(
+  db: SearchableDb,
+  build: (fetchLimit: number) => BuiltQuery,
+  limit: number,
+  shape: (row: TRaw) => THit,
+): LinkedGroup<THit> {
+  const built = build(limit * THREAD_SIBLING_FETCH_PAD);
+  const rows = db.prepare(built.sql).all(...built.params) as TRaw[];
+  const countRow = db
+    .prepare(built.countSql)
+    .get(...built.countParams) as { total?: number } | undefined;
+  const total =
+    typeof countRow?.total === "number" ? countRow.total : rows.length;
+  return { items: collapseThreadRows(rows).slice(0, limit).map(shape), total };
 }
 
 function emptyResults(): LinkedContentSearchResults {
@@ -913,9 +1083,10 @@ export function searchLinkedContent(
     buildTextQuery(transactionId, query, limit),
     shapeText,
   );
-  const textThreads = runGroup<RawThreadNameRow, LinkedTextHit>(
+  const textThreads = runThreadNameGroup<RawThreadNameRow, LinkedTextHit>(
     db,
-    buildTextThreadNameQuery(transactionId, query, limit),
+    (n) => buildTextThreadNameQuery(transactionId, query, n),
+    limit,
     shapeThreadName,
   );
   const texts: LinkedGroup<LinkedTextHit> = {
@@ -1481,9 +1652,10 @@ export function searchGlobalContent(
     buildGlobalTextQuery(userId, query, limit),
     shapeGlobalText,
   );
-  const textThreads = runGroup<RawThreadNameRow & RawAttribution, GlobalTextHit>(
+  const textThreads = runThreadNameGroup<RawThreadNameRow & RawAttribution, GlobalTextHit>(
     db,
-    buildGlobalTextThreadNameQuery(userId, query, limit),
+    (n) => buildGlobalTextThreadNameQuery(userId, query, n),
+    limit,
     (row) => ({ ...shapeThreadName(row), attribution: shapeAttribution(row) }),
   );
   const texts: LinkedGroup<GlobalTextHit> = {
@@ -1510,9 +1682,10 @@ export function searchGlobalContent(
     shapeUnattachedText,
   );
   // BACKLOG-2816: named threads in the unattached bucket collapse the same way.
-  const unattachedTextThreads = runGroup<RawThreadNameRow, UnattachedHit>(
+  const unattachedTextThreads = runThreadNameGroup<RawThreadNameRow, UnattachedHit>(
     db,
-    buildUnattachedTextThreadNameQuery(userId, query, limit),
+    (n) => buildUnattachedTextThreadNameQuery(userId, query, n),
+    limit,
     (row) => ({ kind: "text" as const, title: null, ...shapeThreadName(row) }),
   );
 
