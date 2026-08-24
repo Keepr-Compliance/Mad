@@ -197,6 +197,10 @@ function seedParents(): void {
   );
   token.run("acct-outlook", USER, "me@example.com");
   token.run("acct-bystander", OTHER_USER, "bystander@example.com");
+  db.prepare(
+    `INSERT INTO oauth_tokens (id, user_id, provider, purpose, connected_email_address)
+     VALUES ('acct-gmail', ?, 'google', 'mailbox', 'me@example.net')`,
+  ).run(USER);
 }
 
 /** Insert a row directly, standing in for "already cached before this run". */
@@ -209,6 +213,7 @@ function seedEmail(args: {
   bodyPlain?: string;
   derivedVersion?: number;
   messageIdHeader?: string | null;
+  accountId?: string;
 }): void {
   const userId = args.userId ?? USER;
   db.prepare(
@@ -224,8 +229,12 @@ function seedEmail(args: {
     // The bystander holds their OWN mailbox account. Sharing `acct-outlook`
     // across two users would trip `idx_emails_account_external` (UNIQUE on
     // account_id, external_id) and is not a state the app can produce — an
-    // oauth_tokens row belongs to exactly one user.
-    userId === USER ? "acct-outlook" : "acct-bystander",
+    // oauth_tokens row belongs to exactly one user. Within this user, the
+    // account follows the provider, because that is what the insert path binds
+    // (`oauthToken.id` resolved per provider) and the UNIQUE index is per
+    // account.
+    args.accountId ??
+      (userId !== USER ? "acct-bystander" : args.source === "gmail" ? "acct-gmail" : "acct-outlook"),
     `Seeded ${args.id}`,
     args.bodyPlain ?? "truncated…",
     "<html><body>seeded</body></html>",
@@ -509,6 +518,97 @@ describe("BACKLOG-2856 — what a force re-cache leaves alone", () => {
     // reported as an error rather than a green "0 re-cached".
     expect(result.forceSwap).toBeUndefined();
     expect(result.error).toMatch(/could not complete/i);
+    expect(stagingTables()).toEqual([]);
+  });
+});
+
+describe("BACKLOG-2856 — one provider succeeds while the other does not", () => {
+  const GMAIL_TOKEN = {
+    id: "acct-gmail",
+    access_token: "at",
+    connected_email_address: "me@example.net",
+  };
+
+  beforeEach(() => {
+    // Both mailboxes connected, so the force set starts optimistic over BOTH.
+    mockGetOAuthToken.mockImplementation(async (_u: string, provider: string) =>
+      provider === "microsoft" ? OUTLOOK_TOKEN : GMAIL_TOKEN,
+    );
+    mockGmailInit.mockResolvedValue(true);
+  });
+
+  /**
+   * THE BRANCH THIS TEST EXISTS FOR: `restrictForceSetToRebuiltProviders`
+   * actually pruning staged rows.
+   *
+   * Every other force test here runs Outlook-only, and the partial-failure test
+   * above ends with NO provider rebuilt — which returns `null` before the
+   * pruning loop ever runs. So the deletes, the participants-before-emails
+   * ordering, and the `attachmentMeta` splice were all unexecuted code until
+   * this test. That is the whole reason the loop was written.
+   *
+   * The scenario is the mixed one: Outlook completes both rounds, Gmail's
+   * all-labels round fails. Gmail's live rows must survive, and this run has
+   * ALREADY STAGED replacements for them from the Gmail inbox round. Those
+   * staged rows must be thrown away, because their `external_id` is now held by
+   * a surviving live row under the same `account_id` — which is precisely what
+   * `idx_emails_account_external` forbids.
+   *
+   * MUTATION: delete the pruning loop from `restrictForceSetToRebuiltProviders`
+   * -> the swap's plain INSERT hits UNIQUE, the whole swap rolls back, and the
+   * run reports "could not be applied" in exactly the case the code exists to
+   * rescue. Live stays intact either way (the safe direction), so nothing but
+   * this test distinguishes the two.
+   */
+  it("swaps in the provider that finished and leaves the failed provider's rows alone", async () => {
+    seedEmail({
+      id: "outlook-live",
+      externalId: "ext-1",
+      source: "outlook",
+      sentAt: "2026-03-01T10:00:00.000Z",
+      messageIdHeader: "<msg-1@example.com>",
+    });
+    seedEmail({
+      id: "gmail-live",
+      externalId: "gext-1",
+      source: "gmail",
+      sentAt: "2026-03-02T10:00:00.000Z",
+      messageIdHeader: "<gmsg-1@example.com>",
+    });
+
+    mockOutlookSearch.mockResolvedValue([providerEmail(1)]);
+    mockOutlookSearchAll.mockResolvedValue([]);
+
+    // Gmail's inbox round SUCCEEDS and stages a replacement carrying the same
+    // provider id as the surviving live row...
+    mockGmailSearch.mockResolvedValue([
+      { ...providerEmail(1), id: "gext-1", messageIdHeader: "<gmsg-1@example.com>" },
+    ]);
+    // ...and then its all-labels round fails (non-network, so the Gmail block
+    // completes and the run reaches the swap).
+    mockGmailSearchAll.mockRejectedValue(new Error("Gmail 403 on label list"));
+
+    const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
+
+    // The swap happened, for Outlook only.
+    expect(result.forceSwap).toEqual({
+      emailsDeleted: 1,
+      emailsInserted: 1,
+      participantsInserted: 2,
+      providers: ["outlook"],
+    });
+    expect(result.error).toBeUndefined();
+
+    // Gmail's row survives BY IDENTITY — same local id, never replaced.
+    expect(emailIdSet()).toContain("gmail-live");
+    // Outlook's row was replaced: same provider id, a new local id.
+    expect(emailIdSet()).not.toContain("outlook-live");
+    expect(externalIdSet()).toEqual(["ext-1", "gext-1"]);
+    // And exactly one row holds the Gmail provider id — the staged duplicate was
+    // pruned rather than inserted alongside it.
+    expect(
+      db.prepare(`SELECT COUNT(*) AS c FROM emails WHERE external_id = 'gext-1'`).get(),
+    ).toEqual({ c: 1 });
     expect(stagingTables()).toEqual([]);
   });
 });
