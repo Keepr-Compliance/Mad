@@ -23,7 +23,8 @@ import { ContactFormModal } from "../../../contact";
 import type { RoleOption } from "../../../shared/ContactRoleRow";
 import ContactAssignmentStep from "../../../audit/ContactAssignmentStep";
 import {
-  filterRolesByTransactionType,
+  buildRoleOptions,
+  offeredRoleValues,
   resolveDefaultContactRole,
   getRoleDisplayName,
 } from "../../../../utils/transactionRoleUtils";
@@ -219,18 +220,10 @@ export function EditContactsModal({
 
   // BACKLOG-1355: Build role options at parent level for auto-fill validation
   const transactionType = (transaction.transaction_type as "purchase" | "sale" | "other") || "purchase";
-  const validRoles = useMemo((): Set<string> => {
-    const roles = new Set<string>();
-    AUDIT_WORKFLOW_STEPS.forEach((wfStep) => {
-      const filteredRoles = filterRolesByTransactionType(
-        wfStep.roles as RoleConfig[],
-        transactionType,
-        wfStep.title
-      );
-      filteredRoles.forEach((rc) => roles.add(rc.role));
-    });
-    return roles;
-  }, [transactionType]);
+  const validRoles = useMemo(
+    (): Set<string> => offeredRoleValues(transactionType),
+    [transactionType]
+  );
 
   // BACKLOG-1355 / BACKLOG-2358: Assign a default role to a newly added contact
   // so it is never left empty. The Client baseline always applies (renders as
@@ -602,27 +595,12 @@ function Screen1Content({
     return contacts.filter((c) => assignedContactIds.includes(c.id));
   }, [contacts, assignedContactIds]);
 
-  // Build role options from workflow steps
-  const roleOptions = useMemo((): RoleOption[] => {
-    const allRoles: RoleOption[] = [];
-
-    AUDIT_WORKFLOW_STEPS.forEach((step) => {
-      const filteredRoles = filterRolesByTransactionType(
-        step.roles as RoleConfig[],
-        transactionType,
-        step.title
-      );
-
-      filteredRoles.forEach((roleConfig) => {
-        allRoles.push({
-          value: roleConfig.role,
-          label: getRoleDisplayName(roleConfig.role, transactionType),
-        });
-      });
-    });
-
-    return allRoles;
-  }, [transactionType]);
+  // The roles this picker offers — same shared definition as `validRoles` above
+  // and as every other picker (BACKLOG-2859).
+  const roleOptions = useMemo(
+    (): RoleOption[] => buildRoleOptions(transactionType),
+    [transactionType]
+  );
 
   // Get the current role for a contact (helper from RoleAssigner pattern)
   const getContactRole = useCallback(

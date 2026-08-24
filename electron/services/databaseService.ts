@@ -3952,6 +3952,137 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 66,
+      // BACKLOG-2859. TAKE THE NEXT FREE NUMBER ON YOUR OWN BASE, RENUMBER AT
+      // MERGE. This branch is based on feat/BACKLOG-2849-submit-screen, whose
+      // chain head is 65 — identical to develop, because 2849 adds no migration.
+      // On int/ui-polish-e, 66 is BACKLOG-2814 and 67 is BACKLOG-2857, so expect
+      // this to be renumbered to 68 when it gets there.
+      //
+      // Writing 68 pre-emptively is NOT the safe move, it is the broken one:
+      // validateNoVersionGaps runs on every _runVersionedMigrations call, so a
+      // branch holding 68 without 66 and 67 present throws on every database
+      // init. Not one red test — initialize() fails, so every suite that opens a
+      // database goes red, including the one that would test this migration.
+      //
+      // PURE DML. No ALTER TABLE, no ADD COLUMN, no CREATE INDEX, and no
+      // schema.sql change, so the standalone-index trap (BACKLOG-2298/2300/2750)
+      // structurally cannot arise here — there is no new object for schema.sql
+      // to reference before the chain runs. `transaction_contacts.role`,
+      // `.specific_role` and `contacts.default_role` are all bare TEXT with no
+      // CHECK constraint, verified in schema.sql and in the shipped v2.27.0
+      // fixture, so rewriting their values needs no table rebuild.
+      //
+      // NOT TOUCHED: `transaction_participants.role`, which DOES carry a CHECK
+      // constraint enumerating the old vocabulary. That table is deprecated —
+      // migration v30 already moved transaction_summary off it, and it has zero
+      // read or write sites in electron/ or src/ (measured). Collapsing it would
+      // need a full 12-step table rebuild, because SQLite cannot alter a CHECK
+      // constraint and `CREATE TABLE IF NOT EXISTS` in schema.sql is a no-op on
+      // an existing table — which would give fresh installs the new vocabulary
+      // and leave every upgraded install on the old one forever. Not worth that
+      // for a table nothing reads; recorded so the omission is a decision.
+      description:
+        "Collapse buyer_agent/seller_agent/listing_agent into the single side-neutral 'agent' role, and remove the counterparty-principal assignments (BACKLOG-2859)",
+      migrate: (d) => {
+        const LEGACY_AGENT_ROLES = ["buyer_agent", "seller_agent", "listing_agent"];
+        const legacyList = LEGACY_AGENT_ROLES.map((r) => `'${r}'`).join(", ");
+
+        const tableExists = (name: string): boolean =>
+          !!d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .get(name);
+
+        const hasColumn = (table: string, column: string): boolean =>
+          (d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
+            (c) => c.name === column,
+          );
+
+        // ---- 1. transaction_contacts: collapse the three agent values ----
+        //
+        // `role` and `specific_role` are updated SEPARATELY rather than in one
+        // statement. They are kept in sync on write (specific_role is canonical
+        // and is copied into role), but historical rows do not all honour that:
+        // in the shipped v2.27.0 database every transaction_contacts row carries
+        // a `role` with `specific_role` NULL. A combined UPDATE would have to
+        // pick one column to drive the predicate and would miss the other.
+        //
+        // LOWER() on the comparison because roles reach the database both ways.
+        if (tableExists("transaction_contacts")) {
+          const roleResult = d
+            .prepare(
+              `UPDATE transaction_contacts SET role = 'agent'
+               WHERE LOWER(role) IN (${legacyList})`,
+            )
+            .run();
+
+          const specificResult = hasColumn("transaction_contacts", "specific_role")
+            ? d
+                .prepare(
+                  `UPDATE transaction_contacts SET specific_role = 'agent'
+                   WHERE LOWER(specific_role) IN (${legacyList})`,
+                )
+                .run()
+            : { changes: 0 };
+
+          // ---- 2. Remove the counterparty-principal assignments ----
+          //
+          // Founder: "lets remove the Seller / other side, Buyer / other side
+          // completely. agents normally don't contact them." He then explicitly
+          // approved a SILENT drop — "it's ok to silently drop it" — after the
+          // write-loss concern was raised twice and overruled twice. No prompt,
+          // no preservation, no migration to 'other'.
+          //
+          // BOTH principals are deleted on EVERY transaction type, not just the
+          // counterparty side. The final role model leaves no `buyer`/`seller`
+          // offerable anywhere, so a same-side `seller` surviving on a Listing
+          // would be a stored value that no picker can render — a blank select
+          // over real data, which is the failure the deleted #2374 guard existed
+          // to prevent.
+          //
+          // COALESCE(specific_role, role): specific_role is canonical when
+          // present, role is the fallback — matching how every reader resolves
+          // these two columns.
+          const principalResult = d
+            .prepare(
+              `DELETE FROM transaction_contacts
+               WHERE LOWER(COALESCE(specific_role, role)) IN ('buyer', 'seller')`,
+            )
+            .run();
+
+          console.log(
+            `[migration v66] transaction_contacts: collapsed ${roleResult.changes} role + ` +
+              `${specificResult.changes} specific_role values to 'agent'; ` +
+              `deleted ${principalResult.changes} counterparty-principal assignments (BACKLOG-2859)`,
+          );
+        }
+
+        // ---- 3. contacts.default_role: same collapse ----
+        //
+        // default_role is a convenience ("most-recently-assigned role for
+        // auto-fill"), not an identity, but it feeds the picker's auto-fill and
+        // the contacts filter tree — so a stale `seller_agent` here would keep
+        // proposing a role no transaction offers.
+        //
+        // `buyer`/`seller` default_roles are deliberately LEFT ALONE. Unlike a
+        // transaction_contacts row, a default_role that is no longer offered
+        // degrades gracefully: resolveDefaultContactRole checks it against the
+        // offered set and falls back to the `client` baseline. Deleting data to
+        // fix something that already behaves correctly is not warranted.
+        if (tableExists("contacts") && hasColumn("contacts", "default_role")) {
+          const defaultRoleResult = d
+            .prepare(
+              `UPDATE contacts SET default_role = 'agent'
+               WHERE LOWER(default_role) IN (${legacyList})`,
+            )
+            .run();
+          console.log(
+            `[migration v66] contacts: collapsed ${defaultRoleResult.changes} default_role values to 'agent' (BACKLOG-2859)`,
+          );
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

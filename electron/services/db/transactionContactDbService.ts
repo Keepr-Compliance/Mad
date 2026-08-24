@@ -100,6 +100,29 @@ import { dbGet, dbAll, dbRun, ensureDb, dbTransaction } from "./core/dbConnectio
 
 // Transaction contact association data
 // Note: `role` now stores SPECIFIC_ROLES values (ContactRole) — normalized from specific_role on writes
+
+/**
+ * The one stored value for "the other side's agent" (BACKLOG-2859).
+ *
+ * Spelled out in electron/ rather than imported from
+ * `src/constants/contactRoles.ts` because `electron/` cannot import from `src/`
+ * (rootDir). A parity test pins the two against each other.
+ */
+export const CANONICAL_AGENT_ROLE = "agent";
+
+/** Retired agent values that collapse to CANONICAL_AGENT_ROLE. */
+export const LEGACY_AGENT_ROLES = [
+  "buyer_agent",
+  "seller_agent",
+  "listing_agent",
+] as const;
+
+/** Case-insensitive because roles reach the database layer both ways. */
+export function isLegacyAgentRole(role: string): boolean {
+  return (LEGACY_AGENT_ROLES as readonly string[]).includes(role.toLowerCase());
+}
+
+
 export interface TransactionContactData {
   contact_id: string;
   role?: string;
@@ -263,6 +286,28 @@ export function assignContactToTransactionSync(
   // Normalize: keep role in sync with specific_role (canonical source)
   if (data.specific_role) {
     data.role = data.specific_role;
+  }
+
+  // THE CHOKE POINT FOR THE COLLAPSED ROLE VOCABULARY (BACKLOG-2859).
+  //
+  // Migration v66 rewrites every stored `buyer_agent` / `seller_agent` /
+  // `listing_agent` to `agent`. A migration is a ONE-TIME event; this is the
+  // ongoing guarantee, and without it the collapse silently un-does itself.
+  //
+  // The live producer of legacy values is the LLM extraction path: its tool enum
+  // and prompt propose roles for a transaction, and those proposals reach this
+  // function when a user accepts a suggested contact. So a database migrated at
+  // upgrade would start re-accumulating three-way agent values on the next AI
+  // detection. Restored backups from an older install are the second source.
+  //
+  // Normalizing HERE rather than at each caller is deliberate: every write to
+  // transaction_contacts funnels through this function, so there is exactly one
+  // place the invariant can be broken and exactly one place it is enforced.
+  if (data.role && isLegacyAgentRole(data.role)) {
+    data.role = CANONICAL_AGENT_ROLE;
+  }
+  if (data.specific_role && isLegacyAgentRole(data.specific_role)) {
+    data.specific_role = CANONICAL_AGENT_ROLE;
   }
 
   // First check if this contact is already assigned to this transaction

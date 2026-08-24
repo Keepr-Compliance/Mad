@@ -19,11 +19,17 @@ import {
 import { ContentSanitizer } from '../contentSanitizer';
 import { contactRolesPrompt } from '../prompts';
 
+/**
+ * Retired agent values the model may still produce (BACKLOG-2859). Folded to
+ * `agent` rather than rejected — see the fold at the parse site below.
+ */
+const LEGACY_AGENT_ROLES: string[] = ['buyer_agent', 'seller_agent', 'listing_agent'];
+
 const VALID_ROLES: ContactRole[] = [
   'buyer',
   'seller',
-  'buyer_agent',
-  'seller_agent',
+  // BACKLOG-2859: one agent role, no side. See ContactRole in ./types.
+  'agent',
   'escrow',
   'title',
   'lender',
@@ -135,9 +141,21 @@ export class ExtractContactRolesTool {
         const name = String(a.name || '');
         if (!name) return null;
 
-        // Validate role
-        const role = VALID_ROLES.includes(a.role as ContactRole)
-          ? (a.role as ContactRole)
+        // Validate role.
+        //
+        // BACKLOG-2859: legacy side-specific agent values are FOLDED, not
+        // rejected. The model still emits `buyer_agent` / `seller_agent` — the
+        // vocabulary is decades old in its training data, and a cached or
+        // in-flight prompt can carry the old wording regardless of what the
+        // prompt file now says. Without this fold they fail the validity check
+        // and land on `other`, which is strictly worse than the pre-collapse
+        // behaviour: the extractor would stop identifying agents at all, and
+        // "other" is unrecoverable — nothing downstream can tell it apart from a
+        // genuinely unclassifiable party.
+        const rawRole = String(a.role || '').toLowerCase();
+        const foldedRole = LEGACY_AGENT_ROLES.includes(rawRole) ? 'agent' : rawRole;
+        const role = VALID_ROLES.includes(foldedRole as ContactRole)
+          ? (foldedRole as ContactRole)
           : 'other';
 
         // Ensure confidence is valid
