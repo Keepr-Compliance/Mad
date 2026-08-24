@@ -4033,8 +4033,9 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
 
         // Literal, not a binding: SQLite index predicates cannot be parameterised.
         // Kept equal to CURRENT_DERIVATION_VERSION in
-        // electron/services/email/derivationVersion.ts — a bump ships a new
-        // migration replacing this index (see the note above).
+        // electron/utils/derivationVersion.ts — a bump ships a new migration
+        // replacing this index (see the note above). A test asserts the two agree,
+        // so drift fails CI rather than silently degrading to a table scan.
         d.exec(
           `CREATE INDEX IF NOT EXISTS idx_emails_derived_version_stale
              ON emails(derived_version) WHERE derived_version < 1`,
