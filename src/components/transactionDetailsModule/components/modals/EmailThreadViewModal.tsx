@@ -126,9 +126,10 @@ function sanitizeHtml(html: string): string {
  *
  * Measured before choosing (100 synthetic emails across the repo's three
  * corpora — fake-mailbox/emails.json, extraction/accuracy-test-emails.json,
- * qa/harness eml-export-tx1): p50 198, p90 323, max 432 characters, and 15%
- * exceed 300. Cutting at 300 was cutting ordinary transactional mail, not
- * outliers.
+ * qa/harness eml-export-tx1 — each measured on the message BODY alone, which
+ * for the .eml five means the text after the header/body blank line and NOT
+ * the whole file): p50 187, p90 323, max 432 characters, and 14% exceed 300.
+ * Cutting at 300 was cutting ordinary transactional mail, not outliers.
  */
 function getPlainTextBody(email: Communication): string {
   let text = "";

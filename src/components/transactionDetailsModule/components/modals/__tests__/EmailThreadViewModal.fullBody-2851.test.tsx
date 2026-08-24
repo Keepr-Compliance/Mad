@@ -13,12 +13,14 @@
  * WHY A BOUNDED BUBBLE RATHER THAN AN UNBOUNDED ONE. Measured first, across the
  * repo's synthetic corpora (fake-mailbox/emails.json 35, extraction
  * accuracy-test-emails.json 60, qa/harness eml-export-tx1 5 = 100 bodies, after
- * running the component's own quote-stripping pipeline over them):
+ * running the component's own quote-stripping pipeline over them — measured on
+ * each message's BODY, which for the .eml five is the text after the
+ * header/body blank line rather than the whole file):
  *
- *     p50 198   p75 266   p90 323   p95 348   max 432
- *     >300: 15 (15%)      >600: 0      >1200: 0      >10000: 0
+ *     p50 187   p75 263   p90 323   p95 348   max 432
+ *     >300: 14 (14%)      >600: 0      >1200: 0      >10000: 0
  *
- * The first half of that is decisive and the second half is not. 15% of ordinary
+ * The first half of that is decisive and the second half is not. 14% of ordinary
  * transactional mail exceeds 300 characters, so the cap was cutting the normal
  * case, not outliers — that kills the cap. But the corpora contain no newsletter
  * and no long forwarded chain BY CONSTRUCTION (they are hand-authored for
@@ -148,6 +150,7 @@ function reviewThread(bodyText: string): EmailThread {
     display: {
       title: "Inspection Thursday",
       subtitle: "sam@example.com",
+      // Simplifies real firstLine (flattens ALL whitespace); inert for these bodies.
       snippet: bodyText.split("\n")[0].slice(0, 200),
       occurredAt: "2026-06-01T00:00:00.000Z",
       itemCount: 1,
