@@ -19,6 +19,8 @@ import type { AutoLinkResult } from "./autoLinkService";
 import { supportTrace } from "./supportAccess/trace";
 import { countEmailsByUser, getEmailByExternalId } from "./db/emailDbService";
 import type { BulkMailHeaders } from "../utils/bulkMailHeaders";
+import { CURRENT_DERIVATION_VERSION } from "../utils/derivationVersion";
+import { reprocessEmailDerivations } from "./emailDerivationReprocessService";
 import { dbGet, dbAll, getRawDatabase } from "./db/core/dbConnection";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
@@ -609,8 +611,15 @@ async function fetchStoreAndDedup(params: {
           message_id_header, content_hash, labels,
           bulk_mail_headers,
           ingest_source, validated_at,
+          -- BACKLOG-2857: stamped at write time so a later derivation fix can
+          -- tell this row apart from one produced by superseded logic.
+          -- APPENDED after every other bound parameter on purpose:
+          -- emailSyncService.retainedHeaders.test.ts transcribes positional
+          -- indices into this list, so inserting mid-list would silently
+          -- re-point its assertions at the wrong columns.
+          derived_version,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
@@ -766,6 +775,12 @@ async function fetchStoreAndDedup(params: {
                 : null,
               rowIngestSource, // BACKLOG-1802: ingest_source provenance
               validatedAt, // BACKLOG-1802: set when ingest_source='search_validated'
+              // BACKLOG-2857: this row is being written by the CURRENT derivation,
+              // so it is current by construction. Binding the constant (never a
+              // literal) is what makes a future bump reprocess these rows: the
+              // moment CURRENT_DERIVATION_VERSION moves, everything written under
+              // the old value falls below it and the pass picks it up.
+              CURRENT_DERIVATION_VERSION,
             );
 
             // BACKLOG-1722: write the junction rows atomically alongside the
@@ -1747,6 +1762,39 @@ class EmailSyncService {
     this.precacheInProgress = true;
     try {
     logService.info("Starting email pre-cache", "EmailSyncService", { userId });
+
+    // BACKLOG-2857 — repair rows produced by a superseded derivation, BEFORE any
+    // fetching.
+    //
+    // Placed here, unconditionally, rather than after the fetch loop and rather
+    // than gated on "new messages arrived". A fully-cached mailbox fetches ZERO
+    // new messages, and that is exactly the mailbox most in need of repair — its
+    // rows are the OLD ones. Gating the pass on new mail would mean the users with
+    // the most damage get the least repair, and the founder's own case (test the
+    // truncation fix against an existing mailbox with no re-download) would
+    // silently do nothing.
+    //
+    // It is safe to run every time: when nothing is stale the partial index makes
+    // the first SELECT return no rows immediately. Failures are swallowed — a
+    // repair pass must never be the reason a sync fails, and the rows it did not
+    // reach are still correctly stamped for the next run.
+    try {
+      const repair = await reprocessEmailDerivations({ userId });
+      if (repair.scanned > 0) {
+        logService.info("Derivation reprocess complete", "EmailSyncService", {
+          userId,
+          scanned: repair.scanned,
+          rewritten: repair.rewritten,
+          unchanged: repair.unchanged,
+          batches: repair.batches,
+        });
+      }
+    } catch (repairError) {
+      logService.warn("Derivation reprocess failed (sync continues)", "EmailSyncService", {
+        userId,
+        error: repairError instanceof Error ? repairError.message : String(repairError),
+      });
+    }
 
     Sentry.addBreadcrumb({
       category: "email_precache.start",

@@ -15,6 +15,7 @@ import { dbGet, dbAll, dbRun, getRawDatabase } from "./core/dbConnection";
 import { DatabaseError } from "../../types";
 import type { ParsedParticipant } from "../../types/models";
 import { computeParticipantHash, parseEmailAddressList } from "../../utils/emailAddress";
+import { CURRENT_DERIVATION_VERSION } from "../../utils/derivationVersion";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -127,8 +128,15 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
       sent_at, received_at,
       has_attachments, attachment_count,
       message_id_header, content_hash, labels,
+      -- BACKLOG-2857: stamped at write time, exactly as the emailSyncService
+      -- INSERT does. This DAO path is reached by emailLinkingHandlers (both
+      -- providers) and transactionService._saveCommunications, all of which pass
+      -- the same provider-derived bodyPlain — so leaving it to the column DEFAULT
+      -- would write version-0 rows forever from live code, and the reprocess pass
+      -- would re-derive them on every run.
+      derived_version,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `;
 
   const params = [
@@ -155,6 +163,10 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
     emailData.message_id_header || null,
     emailData.content_hash || null,
     emailData.labels || null,
+    // BACKLOG-2857: current by construction — this row is being derived by the
+    // code that defines CURRENT_DERIVATION_VERSION. Bound from the constant, so a
+    // future bump automatically demotes these rows into the reprocess set.
+    CURRENT_DERIVATION_VERSION,
   ];
 
   // BACKLOG-1722: insert email + participants atomically in a single

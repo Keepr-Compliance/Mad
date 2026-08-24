@@ -3996,6 +3996,100 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         );
       },
     },
+    {
+      version: 67,
+      // BACKLOG-2857 — derivation provenance.
+      //
+      // RENUMBERED 66 -> 67 AT MERGE TIME on int/ui-polish-e, exactly as v65 was
+      // renumbered from 64 after PR #2346. This item was written against develop,
+      // where the chain head is 65, so 66 was correct on its own branch (PR #2379)
+      // and REMAINS 66 there. PR #2368 (BACKLOG-2814, Apple group-chat names)
+      // reached the integration branch first and holds 66 here.
+      //
+      // The two are independent: 66 creates `message_thread_names`, 67 adds a
+      // column plus a partial index to `emails`. Disjoint objects, so the
+      // execution order between them does not matter.
+      //
+      // It could NOT have been written as 67 on its own branch to dodge the
+      // collision: validateNoVersionGaps throws `Missing migration version 66` on
+      // EVERY database init when the chain skips a number, so a branch holding 67
+      // without 66 present will not boot and cannot run its own migration tests.
+      // Renumbering is cheap because the head-version assertions derive through
+      // __tests__/helpers/chainHead.ts rather than re-typing a literal.
+      //
+      // WHAT THIS IS FOR. BACKLOG-2855 fixed how `body_plain` is derived from
+      // Outlook HTML and could not touch a single row already stored. Nothing on
+      // disk recorded that existing rows came from superseded logic, so repairing
+      // history required a human to remember the fix existed — or a destructive
+      // force re-cache (BACKLOG-2856). This column makes it automatic: every row
+      // carries the derivation version that produced it, and the reprocess pass
+      // repairs anything below CURRENT_DERIVATION_VERSION.
+      //
+      // NO BACKFILL, and that is the whole point. DEFAULT 0 leaves every
+      // pre-existing row at version 0, which is precisely true: they were produced
+      // by the pre-2855 derivation. Backfilling to CURRENT would declare all of
+      // them already repaired and permanently strand the truncated bodies this
+      // exists to fix.
+      //
+      // THE INDEX SHIPS HERE, NOT IN schema.sql. The access path is
+      // `WHERE derived_version < ?`, so unlike v62's bulk_mail_headers (no reader,
+      // no index) this column earns one. It is written PARTIAL on
+      // `derived_version < CURRENT` so it stays near-empty in the steady state —
+      // once a mailbox is fully reprocessed the index holds no rows at all, which
+      // is the right cost profile for a hot write table.
+      //
+      // The partial predicate necessarily embeds the literal CURRENT value, so a
+      // future version bump must ship its own migration to REPLACE this index with
+      // one carrying the new literal (SQLite cannot parameterise an index
+      // predicate). That is deliberate: a version bump is already a code change,
+      // and pairing it with the index keeps the scan cheap forever. If a bump ever
+      // lands without that DROP/CREATE, the pass stays CORRECT — the planner just
+      // falls back to a table scan for rows between the old and new literal.
+      //
+      // Standalone CREATE INDEX on a migrated column must NEVER go in schema.sql:
+      // that file is exec'd BEFORE this chain, so it throws "no such column" on
+      // every real upgrade (BACKLOG-2298/2300/2750). Here it runs AFTER the ALTER,
+      // and covers fresh installs too because they seed schema_version at
+      // BASELINE_VERSION and replay the whole chain.
+      //
+      // The table guard mirrors v48/v52..v65 (a real install always has `emails`,
+      // a minimal partial-schema fixture may not); the column guard gives re-run
+      // idempotency.
+      description:
+        "Add emails.derived_version + partial index so a derivation fix can find and repair the rows produced by superseded logic (BACKLOG-2857)",
+      migrate: (d) => {
+        const hasTable = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'emails'")
+          .get();
+        if (!hasTable) return;
+
+        const cols = (
+          d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+
+        if (!cols.includes("derived_version")) {
+          d.exec(
+            "ALTER TABLE emails ADD COLUMN derived_version INTEGER NOT NULL DEFAULT 0",
+          );
+          console.log(
+            "[migration v67] added emails.derived_version column (BACKLOG-2857)",
+          );
+        }
+
+        // Literal, not a binding: SQLite index predicates cannot be parameterised.
+        // Kept equal to CURRENT_DERIVATION_VERSION in
+        // electron/utils/derivationVersion.ts — a bump ships a new migration
+        // replacing this index (see the note above). A test asserts the two agree,
+        // so drift fails CI rather than silently degrading to a table scan.
+        d.exec(
+          `CREATE INDEX IF NOT EXISTS idx_emails_derived_version_stale
+             ON emails(derived_version) WHERE derived_version < 1`,
+        );
+        console.log(
+          "[migration v67] ensured idx_emails_derived_version_stale (BACKLOG-2857)",
+        );
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {

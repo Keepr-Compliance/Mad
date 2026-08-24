@@ -583,6 +583,14 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 66,
             description: expect.stringContaining("BACKLOG-2814"),
           },
+          {
+            // BACKLOG-2857, renumbered 66 -> 67 on int/ui-polish-e because
+            // BACKLOG-2814 reached this branch first and holds 66. On 2857's own
+            // branch (PR #2379) this entry is still 66; see the migration's own
+            // comment in databaseService.ts.
+            version: 67,
+            description: expect.stringContaining("BACKLOG-2857"),
+          },
         ],
         // BACKLOG-2791: derived — the plan seeds at 29, so this is "every
         // migration above 29", not a literal that needs re-typing each time.
