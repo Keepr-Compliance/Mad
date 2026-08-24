@@ -17,6 +17,28 @@
  * ONCE — above this block — and this block is one sentence pointing down at
  * the button. §4b below is the control for that correction.
  *
+ *   5. The screen that survives says it SUCCEEDED. Founder test, same day,
+ *      after §4b shipped: the confirmation had moved entirely into a toast
+ *      that auto-dismisses after 5000ms, and once it cleared, a dialog still
+ *      titled "Submit for Review" was all that was left — nothing on screen
+ *      saying the submission worked. His three changes, verbatim: "change the
+ *      check mark graphic to be green color theme like the submitted indicator
+ *      looks like", "the title should say successfully submitted not submit
+ *      for review", "can we add a done button next to the export pdf". §5 is
+ *      the control for all three; §4b's glyph pin is rewritten to match.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY §4b's GLYPH PIN CHANGED RATHER THAN RELAXED
+ * ---------------------------------------------------------------------------
+ * §4b pinned the single surviving check glyph BY IDENTITY to the header's blue
+ * icon. Point 5 turns that icon green on success, so the pin had to break —
+ * it had encoded the old design. It is rewritten, not weakened: the count is
+ * now taken over the UNION of both check paths (the idle circle-check and the
+ * badge's bare check), so a returning duplicate is caught whichever glyph it
+ * draws, and the survivor is still pinned by identity — green on success, blue
+ * on idle. A presence check would have removed the guard that caught the
+ * original duplication, and let the doubling back in.
+ *
  * ---------------------------------------------------------------------------
  * WHY THE ABSENCE ASSERTIONS NAME THE FULL OLD LITERALS
  * ---------------------------------------------------------------------------
@@ -95,12 +117,43 @@ const RETIRED_SUCCESS_HEADLINE = "Submitted to your broker.";
 const RETIRED_RESUBMIT_HEADLINE = "Resubmitted to your broker.";
 
 /**
- * The check-circle glyph. The header draws it in a blue disc beside "Submit
- * for Review"; the retired success callout drew the SAME path in green right
- * underneath. Counting the path is how "check mark twice" is asserted as a
- * number rather than as a vibe.
+ * The two check glyphs this modal can draw in its header.
+ *
+ * `CHECK_CIRCLE_D` is the idle header's circle-check, in a blue disc beside
+ * "Submit for Review". The retired success callout drew the SAME path in green
+ * directly underneath it — counting the path is how "check mark twice" is
+ * asserted as a number rather than as a vibe.
+ *
+ * `BADGE_CHECK_D` is the bare check from the Submitted badge in
+ * TransactionHeader.tsx, which point 5 adopts for the SUCCESS header so the
+ * modal and the badge on the deal behind it read as one signal. It is
+ * transcribed from that component, not invented here.
  */
 const CHECK_CIRCLE_D = "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z";
+const BADGE_CHECK_D = "M5 13l4 4L19 7";
+
+/**
+ * Every check glyph, whichever shape. The count assertions run over this union
+ * on purpose: pinning only the shape that is EXPECTED in a given state would
+ * let a duplicate drawn in the OTHER shape pass unseen, which is precisely the
+ * hole a shape-specific count opened when the success header changed glyphs.
+ *
+ * Scope note: `BADGE_CHECK_D` also appears in the progress block's
+ * stage-complete tick, which renders only while `isSubmitting` is true. Every
+ * count below is taken on an `isSubmitting: false` state, so that tick is out
+ * of frame — do not reuse this selector's exact-count form on a mid-upload
+ * render.
+ */
+const ANY_CHECK_GLYPH = `path[d="${CHECK_CIRCLE_D}"], path[d="${BADGE_CHECK_D}"]`;
+
+/**
+ * The three header titles, quoted in full. `SUCCESS_TITLE` is the founder's
+ * wording from 2026-08-24 ("the title should say successfully submitted"), in
+ * sentence-style title case to match the two it sits beside.
+ */
+const IDLE_TITLE = "Submit for Review";
+const RESUBMIT_TITLE = "Resubmit for Review";
+const SUCCESS_TITLE = "Successfully Submitted";
 
 const SUCCESS: SubmitProgress = {
   stage: "complete",
@@ -358,25 +411,50 @@ describe("BACKLOG-2849 §4b — the success screen confirms ONCE", () => {
    * stopped confirming the submission at all, which is the actual change.
    */
 
-  it("draws the check-circle ONCE, and the survivor is the header's", () => {
+  it("draws ONE check glyph on success, and the survivor is the header's", () => {
     const { container } = renderModal({
       isSubmitting: false,
       progress: SUCCESS,
     });
 
-    const checks = container.querySelectorAll(`path[d="${CHECK_CIRCLE_D}"]`);
+    // Counted over BOTH glyph shapes. The earlier version of this assertion
+    // counted only the circle-check, which the point-5 header no longer draws
+    // on success — a shape-specific count would now read 0 and pass while a
+    // second badge-check sat on screen.
+    const checks = container.querySelectorAll(ANY_CHECK_GLYPH);
     expect(checks).toHaveLength(1);
 
-    // Identity, not just arithmetic: the one left is the header's blue disc
-    // icon, so this cannot pass by having removed the wrong checkmark.
-    const survivingIcon = checks[0].closest("svg");
-    expect(survivingIcon).toHaveClass("text-blue-600");
-    expect(survivingIcon?.closest("div")?.parentElement).toHaveTextContent(
-      "Submit for Review",
-    );
+    // Identity, not just arithmetic: the one left is the HEADER's icon, so
+    // this cannot pass by having removed the wrong checkmark. It was pinned to
+    // the blue disc; point 5 makes the success disc green, so the pin moves to
+    // the green treatment rather than dropping to a presence check.
+    expect(checks[0]).toHaveAttribute("d", BADGE_CHECK_D);
+    const disc = checks[0].closest("svg")?.parentElement;
+    expect(disc).toHaveClass("bg-green-100");
+    expect(disc).toHaveClass("text-green-700");
+    expect(disc?.parentElement).toHaveTextContent(SUCCESS_TITLE);
 
-    // The green one is gone outright — no icon of that colour anywhere.
+    // The RETIRED callout's green is still gone. `text-green-600` is a
+    // DIFFERENT token from the badge's `text-green-700` asserted above — which
+    // is what keeps this a live guard against that callout returning, rather
+    // than a claim that nothing on the screen is green.
     expect(container.querySelectorAll(".text-green-600")).toHaveLength(0);
+  });
+
+  it("still draws ONE check glyph on the IDLE screen, and it is the blue one", () => {
+    // The other half of the pin. Without it, "green on success" is satisfied
+    // by a component that turned the icon green EVERYWHERE — including the
+    // screen that is still asking the question.
+    const { container } = renderModal();
+
+    const checks = container.querySelectorAll(ANY_CHECK_GLYPH);
+    expect(checks).toHaveLength(1);
+
+    expect(checks[0]).toHaveAttribute("d", CHECK_CIRCLE_D);
+    const icon = checks[0].closest("svg");
+    expect(icon).toHaveClass("text-blue-600");
+    expect(icon?.parentElement).toHaveClass("bg-blue-100");
+    expect(container.querySelectorAll(".bg-green-100")).toHaveLength(0);
   });
 
   it("no longer confirms the submission in its own words", () => {
@@ -399,8 +477,16 @@ describe("BACKLOG-2849 §4b — the success screen confirms ONCE", () => {
 
     expect(screen.queryAllByText(RETIRED_RESUBMIT_HEADLINE)).toHaveLength(0);
     expect(screen.queryAllByText(RETIRED_SUCCESS_HEADLINE)).toHaveLength(0);
-    // The resubmit branch really is the one that rendered.
-    expect(screen.getByText("Resubmit for Review")).toBeInTheDocument();
+    // Liveness, rewritten for point 5. This used to read
+    // `getByText("Resubmit for Review")` — the resubmit branch's own title —
+    // which is no longer true HERE: the success header renders one literal for
+    // both branches. So the proof that the success screen rendered moves to
+    // the ask and the unified title, and the proof that this FIXTURE still
+    // drives the resubmit branch moves to §5, where it is observable (the idle
+    // title). Neither claim was dropped; each moved to a state that can show
+    // it.
+    expect(screen.getByTestId("submit-review-success-ask")).toBeInTheDocument();
+    expect(screen.getByText(SUCCESS_TITLE)).toBeInTheDocument();
   });
 
   it("says the founder's sentence once, and says nothing else", () => {
@@ -431,5 +517,191 @@ describe("BACKLOG-2849 §4b — the success screen confirms ONCE", () => {
       sentence.compareDocumentPosition(exportButton) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+});
+
+
+describe("BACKLOG-2849 §5 — the success screen says it SUCCEEDED", () => {
+  /**
+   * The founder's second correction of 2026-08-24. §4b had moved the
+   * confirmation out of the modal entirely, leaving it to the header and the
+   * success toast — but the toast auto-dismisses after 5000ms, and what it
+   * leaves behind is a dialog still headed "Submit for Review", asking a
+   * question that has already been answered. His three changes:
+   *
+   *   1. the check graphic takes the green treatment of the Submitted badge
+   *   2. the title reads "Successfully Submitted"
+   *   3. a Done button beside Export PDF closes the modal
+   *
+   * Change 1 is asserted in §4b above, where the glyph count already lives —
+   * splitting the identity pin from the count would let them drift.
+   *
+   * EVERY assertion here is by identity, not presence: which title, which
+   * colour, which handler, in which order. Presence checks pass on the very
+   * defects this ticket has already produced once (two glyphs, a wrong-branch
+   * title), which is why the suite counts and names rather than merely looks.
+   */
+
+  it("titles the success screen 'Successfully Submitted'", () => {
+    renderModal({ isSubmitting: false, progress: SUCCESS });
+
+    expect(screen.getAllByText(SUCCESS_TITLE)).toHaveLength(1);
+    // ZERO, not "is not the heading". The whole complaint is that a dialog
+    // still carrying the words "Submit for Review" was the only thing left on
+    // screen once the toast cleared — anywhere on the success screen is one
+    // too many.
+    expect(screen.queryAllByText(IDLE_TITLE)).toHaveLength(0);
+    expect(screen.queryAllByText(RESUBMIT_TITLE)).toHaveLength(0);
+  });
+
+  it("leaves the IDLE title alone", () => {
+    // Guards against retitling the wrong branch: a component that simply
+    // renamed the header would pass the success case above and fail here.
+    renderModal();
+
+    expect(screen.getByText(IDLE_TITLE)).toBeInTheDocument();
+    expect(screen.queryAllByText(SUCCESS_TITLE)).toHaveLength(0);
+  });
+
+  it("leaves the idle RESUBMIT title alone", () => {
+    // Also the liveness proof for `resubmitTransaction` that §4b handed over:
+    // this is the state where the fixture's effect is observable.
+    renderModal({ transaction: resubmitTransaction });
+
+    expect(screen.getByText(RESUBMIT_TITLE)).toBeInTheDocument();
+    expect(screen.queryAllByText(SUCCESS_TITLE)).toHaveLength(0);
+  });
+
+  it("does not retitle MID-UPLOAD", () => {
+    renderModal({ isSubmitting: true, progress: UPLOADING });
+
+    expect(screen.getByText(IDLE_TITLE)).toBeInTheDocument();
+    expect(screen.queryAllByText(SUCCESS_TITLE)).toHaveLength(0);
+  });
+
+  it("does not retitle when the submit FAILED", () => {
+    // The boundary that matters most: a screen headed "Successfully Submitted"
+    // above a "Submission Failed" panel would be a lie, not a cosmetic slip.
+    renderModal({
+      isSubmitting: false,
+      progress: FAILED,
+      error: "Network unreachable",
+    });
+
+    expect(screen.queryAllByText(SUCCESS_TITLE)).toHaveLength(0);
+    expect(screen.getByText(IDLE_TITLE)).toBeInTheDocument();
+    expect(screen.getByText("Submission Failed")).toBeInTheDocument();
+  });
+
+  it("uses that ONE title on the resubmit branch too", () => {
+    // Disclosed consequence, pinned rather than left to drift: the founder
+    // gave one string and did not mention resubmits, so a successful RESUBMIT
+    // also reads "Successfully Submitted". Inventing "Successfully
+    // Resubmitted" would be his wording to choose, not this suite's. If he
+    // rules the other way, this test is what changes.
+    renderModal({
+      transaction: resubmitTransaction,
+      isSubmitting: false,
+      progress: SUCCESS,
+    });
+
+    expect(screen.getAllByText(SUCCESS_TITLE)).toHaveLength(1);
+    expect(screen.queryAllByText(RESUBMIT_TITLE)).toHaveLength(0);
+  });
+
+  it("offers Done on the success screen, and clicking it CLOSES the modal", () => {
+    const { onCancel, onSubmit } = renderModal({
+      isSubmitting: false,
+      progress: SUCCESS,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+
+    // The close handler fired — `onCancel` is what TransactionDetails wires to
+    // `setShowSubmitModal(false)` + `resetSubmit()`.
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    // And it did NOT submit. A Done wired to `onSubmit` would look identical
+    // on screen and would send an already-submitted deal a second time — the
+    // duplicate-submission hazard filed as BACKLOG-2853.
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("offers no Done BEFORE the submit", () => {
+    // He asked for Done on the success screen. On the idle screen it would sit
+    // beside Submit reading like a way to accept the dialog, next to the
+    // button that actually does.
+    renderModal();
+
+    expect(screen.queryByTestId("submit-review-done")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Done" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("offers no Done MID-UPLOAD", () => {
+    renderModal({ isSubmitting: true, progress: UPLOADING });
+
+    expect(screen.queryByTestId("submit-review-done")).not.toBeInTheDocument();
+  });
+
+  it("offers no Done after a FAILURE", () => {
+    // "Done" over a failed submit would read as an outcome. The X still gets
+    // the user out.
+    renderModal({
+      isSubmitting: false,
+      progress: FAILED,
+      error: "Network unreachable",
+    });
+
+    expect(screen.queryByTestId("submit-review-done")).not.toBeInTheDocument();
+  });
+
+  it("puts Done LAST in the actions row, after Export PDF", () => {
+    // "next to the export pdf" — and last, because it is the action that ends
+    // the flow. In this `justify-end` row last means rightmost, the slot
+    // Submit occupies on the idle screen.
+    renderModal({ isSubmitting: false, progress: SUCCESS });
+
+    const exportButton = screen.getByRole("button", { name: "Export PDF" });
+    const done = screen.getByRole("button", { name: "Done" });
+
+    expect(
+      exportButton.compareDocumentPosition(done) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // "next to", not merely "somewhere later on the screen".
+    expect(done.parentElement).toBe(exportButton.parentElement);
+  });
+
+  it("leaves Export PDF exactly as it was — same place, same styling, same handler", () => {
+    // Adding Done must not disturb the control the founder confirmed working.
+    const { onExport, onSubmit, onCancel } = renderModal({
+      isSubmitting: false,
+      progress: SUCCESS,
+    });
+
+    const sentence = screen.getByTestId("submit-review-success-ask");
+    const exportButton = screen.getByRole("button", { name: "Export PDF" });
+
+    // Still after the sentence that points at it ("...the export pdf button
+    // below").
+    expect(
+      sentence.compareDocumentPosition(exportButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    // Still the filled treatment it carried when it was the only action here.
+    // Whether it should step back to the outlined secondary now that Done sits
+    // beside it is a visual-weight question raised for the founder; until he
+    // rules, "unchanged" is the assertion, and this is what would go red if
+    // someone changed it quietly.
+    expect(exportButton).toHaveClass("bg-blue-600", "text-white");
+
+    // Still its own handler — Done did not steal the click, and Export PDF
+    // neither closes nor submits.
+    fireEvent.click(exportButton);
+    expect(onExport).toHaveBeenCalledTimes(1);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });
