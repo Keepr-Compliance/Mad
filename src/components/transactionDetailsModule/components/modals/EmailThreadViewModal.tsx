@@ -114,9 +114,23 @@ function sanitizeHtml(html: string): string {
 }
 
 /**
- * Strip HTML and get plain text preview - removes quoted content and reply headers
+ * Strip HTML and quoted content and return the message's FULL plain text.
+ *
+ * BACKLOG-2851: there is deliberately no length cap. This used to take
+ * `maxLength = 300` and return `text.substring(0, maxLength) + "..."`, which cut
+ * an ordinary message — the founder's example measured ~316 characters, so it
+ * lost the sign-off and the closing line — and made "Open Full Email" the only
+ * way to read mail that the bubble already had in hand. The bubble is bounded by
+ * HEIGHT instead (see the `max-h-96` on the text element below), so a newsletter
+ * or a long forwarded chain stays contained without any message being truncated.
+ *
+ * Measured before choosing (100 synthetic emails across the repo's three
+ * corpora — fake-mailbox/emails.json, extraction/accuracy-test-emails.json,
+ * qa/harness eml-export-tx1): p50 198, p90 323, max 432 characters, and 15%
+ * exceed 300. Cutting at 300 was cutting ordinary transactional mail, not
+ * outliers.
  */
-function getPlainTextPreview(email: Communication, maxLength: number = 300): string {
+function getPlainTextBody(email: Communication): string {
   let text = "";
 
   // Prefer plain text
@@ -155,9 +169,6 @@ function getPlainTextPreview(email: Communication, maxLength: number = 300): str
   // Clean up excessive whitespace
   text = text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+/g, ' ').trim();
 
-  if (text.length > maxLength) {
-    return text.substring(0, maxLength) + "...";
-  }
   return text;
 }
 
@@ -250,7 +261,7 @@ function EmailBubble({
   const senderName = extractSenderName(email.sender, userEmail, nameMap);
   const avatarInitial = isMe ? "Y" : getEmailAvatarInitial(email.sender);
   const avatarColor = getSenderColor(email.sender);
-  const preview = useMemo(() => getPlainTextPreview(email), [email]);
+  const messageText = useMemo(() => getPlainTextBody(email), [email]);
   const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
 
   const hasAttachments = email.has_attachments || attachments.length > 0;
@@ -320,12 +331,34 @@ function EmailBubble({
           className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors"
           onClick={onToggle}
         >
-          {/* Preview text (always shown) */}
+          {/*
+            The message text, in full, always shown.
+
+            BACKLOG-2851: bounded by HEIGHT, not by character count. The whole
+            body is in the DOM — nothing is dropped and no "..." is appended —
+            and `max-h-96` (24rem / 384px) with `overflow-y-auto` keeps a
+            10,000-character newsletter from making the conversation
+            unscrollable. An ordinary message never reaches the bound: the
+            longest body in the repo's corpora is 432 characters, roughly 8
+            lines at this width (~180px), so the founder's case renders whole
+            with no scrollbar and no click.
+
+            `max-h-96` is a SELF-RESOLVING bound on this element, deliberately
+            not a `flex-1 min-h-0` height inherited from an ancestor chain. See
+            BACKLOG-2341 (EditContactsModal): an `overflow-y-auto` whose height
+            came from a broken flex chain never bounded at all and the list grew
+            past the modal instead of scrolling.
+
+            The bound and the text must stay on the SAME element — bounding a
+            wrapper while the text overflows a different box is the failure this
+            is written to prevent.
+          */}
           <div
-            className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed"
+            className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed max-h-96 overflow-y-auto"
+            data-testid={`thread-bubble-body-${email.id}`}
             onClick={handleContentClick}
           >
-            {preview || <span className="italic text-gray-400">No content</span>}
+            {messageText || <span className="italic text-gray-400">No content</span>}
           </div>
 
           {/* TASK-1782: Collapsible attachment section */}

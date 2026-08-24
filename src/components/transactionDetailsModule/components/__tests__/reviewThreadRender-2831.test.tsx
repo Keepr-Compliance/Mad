@@ -34,6 +34,13 @@
  *      complaint reproduced — the cut was not just early, it was SILENT — and
  *      it is why the ellipsis test earns its place rather than restating the
  *      tail one.
+ *
+ *      SUPERSEDED BY BACKLOG-2851: the modal's own 300-character cap is gone,
+ *      so there is no ellipsis to assert and that test now asserts the reverse
+ *      (full render past 300, no ellipsis). The 1b mutation still reds — on the
+ *      tail assertions — because reverting 2844 still starves the review path
+ *      of everything past 200 characters. See
+ *      EmailThreadViewModal.fullBody-2851.test.tsx for the display half.
  *   2. `id: item.email_id ?? item.id` → `id: item.id` in the projection
  *      → RED, 1 of 4 (the duplicate-key characterisation) — which is the point:
  *      that test states the constraint the service-side dedup exists to satisfy,
@@ -161,11 +168,18 @@ describe("BACKLOG-2831 — what the review path renders in the reading modal", (
     expect(screen.getByText(/SIGNED-OFF/)).toBeInTheDocument();
   });
 
-  it("says so with an ellipsis when the body genuinely exceeds the modal's limit", () => {
-    // The other half of the founder's complaint: if it IS cut, the UI has to say
-    // so. Past 300 characters the modal's own truncation appends "...", which is
-    // the honest indicator that was never reached while the review path capped
-    // at 200. "Open Full Email" then leads to the rest.
+  it("renders a body PAST 300 characters in full too, with no ellipsis (BACKLOG-2851)", () => {
+    // REWRITTEN BY BACKLOG-2851. This test used to assert the opposite: that
+    // past 300 characters the modal truncated and appended "..." — "if it IS
+    // cut, the UI has to say so". The founder's answer, on testing 2844, was
+    // that it must not be cut at all: "user shouldn't have to click Open Full
+    // Email to see it in the individual email preview". So the honest indicator
+    // is gone because the thing it indicated is gone; the bubble is bounded by
+    // height now, not by character count.
+    //
+    // Kept in this file rather than moved because it is the same review-path
+    // projection under test, and because leaving the old assertion here would
+    // have re-pinned the defect.
     const body = `${"The inspection report raises three items. ".repeat(12)}TAIL-MARKER`;
     expect(body.length).toBeGreaterThan(300);
 
@@ -173,8 +187,8 @@ describe("BACKLOG-2831 — what the review path renders in the reading modal", (
       reviewEmail("pending:p1", "email-huge", { snippet: body.slice(0, 200), bodyText: body }),
     ]);
 
-    expect(screen.getByText(/\.\.\.$/)).toBeInTheDocument();
-    expect(screen.queryByText(/TAIL-MARKER/)).not.toBeInTheDocument();
+    expect(screen.getByText(/TAIL-MARKER$/)).toBeInTheDocument();
+    expect(screen.queryByText(/\.\.\.$/)).not.toBeInTheDocument();
   });
 
   it("still says 'No content' when the email genuinely has neither body", () => {
