@@ -71,13 +71,49 @@
  *     its cache format is private to that module.
  *
  * `users_local.ai_detection_enabled` is local, synchronous, and `INTEGER
- * DEFAULT 0` — fail-closed in the schema itself. It is also the column the app
- * ALREADY treats as authoritative for the add-on: `licenseHandlers`'
- * `getLicenseData()` reads it — including in the team-membership branch, where
- * it is commented "AI addon status from local database (local setting)" — and
- * the renderer's `LicenseContext.hasAIAddon` is that value. So this gate agrees
- * with what the user is already being shown, rather than introducing a second
- * opinion about whether they have AI.
+ * DEFAULT 0` — fail-closed in the schema itself. `licenseHandlers`'
+ * `getLicenseData()` reads it too, including in the team-membership branch,
+ * where it is commented "AI addon status from local database (local setting)".
+ *
+ * ===========================================================================
+ * THIS IS A THIRD OPINION ABOUT AI, NOT AN ECHO OF THE RENDERER'S — SR, 23 AUG
+ * ===========================================================================
+ * An earlier draft of this comment claimed the gate "agrees with what the user
+ * is already being shown". THAT WAS FALSE, and the correction matters more than
+ * the mistake, because the next reader will otherwise assume one source exists.
+ *
+ * `LicenseContext` writes `state.hasAIAddon` from this column (`:143`) and from
+ * `validationResult.aiEnabled` (`:198`) — and then SHADOWS both:
+ *
+ *     const hasAIAddon = featureIsAllowed("ai_detection");   // :302
+ *
+ * That const is what the provider exports (`:326`, `:345`). Nothing outside the
+ * file reads `state.hasAIAddon` at all, so the column-derived writes are dead.
+ * The header says so outright (SPRINT-127 / TASK-2160): "hasAIAddon now read
+ * from plan features via useFeatureGate ... Plan features are the sole source
+ * of truth; no license column fallback."
+ *
+ * So there are three answers to "does this user have AI?":
+ *   1. `isAllowed("ai_detection")` — the plan feature gate, behind 10+ live
+ *      surfaces and the renderer's `hasAIAddon`;
+ *   2. `isAutoDetectAllowed` — entitlement AND the `enable_auto_detect` toggle;
+ *   3. this column — which had NO live consumer before this file.
+ *
+ * They are not guaranteed to agree, and the disagreement is not symmetric:
+ * `useFeatureGate.isAllowed` FAIL-OPENS (`useFeatureGate.ts:10,29` — "Defaults
+ * to allowed for unknown features"), so the renderer can already show AI as
+ * available while this gate reads `off`. That is the safe direction and the
+ * reason the fail-open source was rejected above, but it is a divergence, not
+ * an agreement. It is invisible today only because nobody is entitled: all 15
+ * Supabase `licenses` rows are `false` (measured 23 Aug).
+ *
+ * Reconciling the three is deliberately NOT this item's work — the founder has
+ * de-prioritised feature-gate rework until the features themselves work, and
+ * `featureGateHandlers.ts:22-27` additionally lists `ai_detection` in
+ * `TEAM_ONLY_FEATURES`, which contradicts his "AI can be on any plan" ruling.
+ * Both are pre-existing. What this file owes the reader is an accurate map, and
+ * the map is: THREE sources, this one the newest consumer, chosen because it is
+ * the only one that is local, synchronous and fail-closed.
  *
  * ===========================================================================
  * KNOWN AND REPORTED: THAT COLUMN IS A MIRROR NOBODY REFILLS

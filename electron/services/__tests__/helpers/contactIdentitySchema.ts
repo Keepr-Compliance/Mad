@@ -174,7 +174,7 @@ const SURROUNDING_TABLES = `
  *
  * The first cut of the BACKLOG-2668 gate queried `FROM users`. There is no
  * `users` table — the local table is `users_local` and has been since the
- * schema was written. In production the query threw, the gate\'s `catch`
+ * schema was written. In production the query threw, the gate's `catch`
  * swallowed it, and every user resolved to "off": the right answer for the
  * wrong reason, with a warning on every sync pass. IT SURVIVED A FULLY GREEN
  * SUITE BECAUSE THIS FIXTURE INVENTED A TABLE CALLED `users`.
@@ -210,7 +210,7 @@ function extractUsersLocalDdl(): string {
   }
   const ddl = schema.slice(start, end + 3);
 
-  // The one column BACKLOG-2668\'s gate reads. Asserted loudly rather than left
+  // The one column BACKLOG-2668's gate reads. Asserted loudly rather than left
   // to a downstream "no such column", because the whole point of extracting is
   // that the fixture cannot quietly disagree with production.
   if (!ddl.includes("ai_detection_enabled")) {
@@ -226,8 +226,8 @@ function extractUsersLocalDdl(): string {
  * The real `users_local`, for suites that need one.
  *
  * NOT-NULL columns it carries (`email`, `oauth_provider` with its
- * `CHECK IN (\'google\',\'microsoft\')`, `oauth_id`) must be filled by the seeder.
- * That is the point: those constraints are production\'s, and a fixture that did
+ * `CHECK IN ('google','microsoft')`, `oauth_id`) must be filled by the seeder.
+ * That is the point: those constraints are production's, and a fixture that did
  * not satisfy them would describe a row production cannot hold.
  */
 export const USERS_LOCAL_TABLE_SQL = extractUsersLocalDdl();
