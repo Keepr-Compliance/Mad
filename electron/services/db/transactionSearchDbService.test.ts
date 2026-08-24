@@ -263,9 +263,15 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     expect(q.sql).toContain("a.message_id = m.id");
     expect(q.sql).toContain("a.external_message_id = m.external_id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    // 1 projection (Phase 1.5) + body_text/participants_flat/filename
-    // + BACKLOG-2816 group-chat name = five.
-    expect(q.params.filter((p) => p === "%receipt%")).toHaveLength(5);
+    // BACKLOG-2816: the ROW query has no group-name clause (a thread-level match
+    // is served by buildTextThreadNameQuery as ONE row), so it binds
+    // 1 projection + body_text/participants_flat/filename = four.
+    expect(q.params.filter((p) => p === "%receipt%")).toHaveLength(4);
+    expect(q.sql).not.toContain("message_thread_names");
+    // The COUNT query DOES keep it — the badge still counts messages:
+    // body_text/participants_flat/filename/group-name = four, no projection.
+    expect(q.countSql).toContain("message_thread_names");
+    expect(q.countParams.filter((p) => p === "%receipt%")).toHaveLength(4);
   });
 
   it("buildGlobalEmailQuery adds the attachment predicate to both SELECT and COUNT", () => {
@@ -282,9 +288,11 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     const q = buildGlobalTextQuery(USER, "settlement", 20);
     expect(q.sql).toContain("a.message_id = m.id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    // 1 projection + body_text/participants_flat/filename
-    // + BACKLOG-2816 group-chat name = five.
-    expect(q.params.filter((p) => p === "%settlement%")).toHaveLength(5);
+    // BACKLOG-2816: rows drop the group-name clause, the count keeps it.
+    expect(q.params.filter((p) => p === "%settlement%")).toHaveLength(4);
+    expect(q.sql).not.toContain("message_thread_names");
+    expect(q.countSql).toContain("message_thread_names");
+    expect(q.countParams.filter((p) => p === "%settlement%")).toHaveLength(4);
   });
 
   it("buildUnattachedEmailQuery / buildUnattachedTextQuery also match filenames", () => {
@@ -296,9 +304,13 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     const t = buildUnattachedTextQuery(USER, "photo", 20);
     expect(t.sql).toContain("a.message_id = m.id");
     expect(t.sql).toContain("a.filename LIKE ? ESCAPE");
-    // body_text/participants_flat/filename + BACKLOG-2816 group-chat name = four
-    // (the unattached text query has no matched-filename projection).
-    expect(t.params.filter((p) => p === "%photo%")).toHaveLength(4);
+    // BACKLOG-2816: rows drop the group-name clause, the count keeps it. The
+    // unattached text query has no matched-filename projection, so rows bind
+    // body_text/participants_flat/filename = three and the count binds four.
+    expect(t.params.filter((p) => p === "%photo%")).toHaveLength(3);
+    expect(t.sql).not.toContain("message_thread_names");
+    expect(t.countSql).toContain("message_thread_names");
+    expect(t.countParams.filter((p) => p === "%photo%")).toHaveLength(4);
   });
 
   it("escapes LIKE wildcards in the attachment predicate too", () => {

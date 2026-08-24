@@ -18,6 +18,7 @@ import {
   type GlobalContentSearchResults,
   type SearchableDb,
 } from "../services/db/transactionSearchDbService";
+import { resolveHandles } from "../services/contactResolutionService";
 import { wrapHandler } from "../utils/wrapHandler";
 import {
   ValidationError,
@@ -35,6 +36,47 @@ export interface SearchGlobalContentResponse {
   success: boolean;
   results?: GlobalContentSearchResults;
   error?: string;
+}
+
+/**
+ * BACKLOG-2816 — turn a thread-level hit's raw member handles into contact names.
+ *
+ * The founder's rule for the group-name result row is "with name not numbers".
+ * So a member that resolves to a contact is listed BY NAME, and a member that
+ * does not is OMITTED — not shown as digits, not shown as a formatted number.
+ * A group where nobody is a saved contact therefore shows its name and no member
+ * line, which is honest; a row of raw digits is the thing he ruled out.
+ *
+ * Resolution goes through the SHARED `resolveHandles` (contactResolutionService)
+ * — the same resolver `AttachMessagesModal` uses. One round trip for every hit in
+ * the response, not one per row.
+ *
+ * Mutates the hits in place: they are freshly built by the search service in this
+ * same call and are not shared with anything else.
+ */
+async function attachMemberNames(
+  hits: Array<{ memberHandles?: string[]; memberNames?: string[] }>,
+  userId?: string,
+): Promise<void> {
+  const all = new Set<string>();
+  for (const hit of hits) {
+    for (const handle of hit.memberHandles ?? []) all.add(handle);
+  }
+  if (all.size === 0) return;
+
+  const names = await resolveHandles([...all], userId);
+
+  for (const hit of hits) {
+    const handles = hit.memberHandles;
+    if (!handles || handles.length === 0) continue;
+    const resolved: string[] = [];
+    for (const handle of handles) {
+      const name = names[handle];
+      // Omit rather than fall back to the number — see above.
+      if (name && name.trim()) resolved.push(name.trim());
+    }
+    hit.memberNames = resolved;
+  }
 }
 
 /** Empty scoped result groups (no DB access needed). */
@@ -85,6 +127,8 @@ export function registerTransactionSearchHandlers(): void {
 
         const db = getRawDatabase() as unknown as SearchableDb;
         const results = searchLinkedContent(db, validatedTxnId, trimmed);
+        // BACKLOG-2816: group-name rows carry member handles; show contact names.
+        await attachMemberNames(results.texts.items);
 
         logService.info("Linked-content search", "Transactions", {
           transactionId: validatedTxnId,
@@ -121,6 +165,12 @@ export function registerTransactionSearchHandlers(): void {
 
         const db = getRawDatabase() as unknown as SearchableDb;
         const results = searchGlobalContent(db, validatedUserId, trimmed);
+        // BACKLOG-2816: both the Texts group and the Unattached bucket can carry
+        // group-name rows, so both are resolved in ONE round trip.
+        await attachMemberNames(
+          [...results.texts.items, ...results.unattached.items],
+          validatedUserId,
+        );
 
         logService.info("Global content search", "Transactions", {
           transactions: results.transactions.total,

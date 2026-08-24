@@ -284,6 +284,17 @@ export interface GlobalTextHit {
   attribution: GlobalTransactionAttribution | null;
   /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
   matchedAttachmentFilenames?: string[];
+  /**
+   * BACKLOG-2816: present ONLY on a thread-level (group chat name) hit. Its
+   * presence makes the row a CONVERSATION: the renderer shows this as the primary
+   * line and shows no body text on that row at all.
+   */
+  threadDisplayName?: string;
+  /**
+   * BACKLOG-2816: resolved contact names of a few group members. Members with no
+   * matching contact are omitted rather than rendered as digits.
+   */
+  memberNames?: string[];
 }
 
 /** An email/text with NO communications row (not attached to any transaction). */
@@ -295,6 +306,17 @@ export interface GlobalUnattachedHit {
   sender: string | null;
   snippet: string | null;
   sentAt: string | null;
+  /**
+   * BACKLOG-2816: present ONLY on a thread-level (group chat name) hit. Its
+   * presence makes the row a CONVERSATION: the renderer shows this as the primary
+   * line and shows no body text on that row at all.
+   */
+  threadDisplayName?: string;
+  /**
+   * BACKLOG-2816: resolved contact names of a few group members. Members with no
+   * matching contact are omitted rather than rendered as digits.
+   */
+  memberNames?: string[];
 }
 
 /** Grouped results for a global search: five groups. */
