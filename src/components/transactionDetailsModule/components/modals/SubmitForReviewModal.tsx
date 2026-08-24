@@ -323,42 +323,31 @@ export function SubmitForReviewModal({
           the idle screen (no progress), not from a failure (`stage: "failed"`,
           `error` set), and not mid-upload.
 
+          ONE SENTENCE, NO CARD, NO ICON — the founder's correction of
+          2026-08-24 after testing the success screen: "we don't need the same
+          text and check mark twice, keep the top one, remove this". What he
+          pasted was this block in its earlier shape: a blue callout with its
+          OWN green check-circle and its own "Submitted to your broker." line,
+          sitting directly under the header's check-circle. Two check-circle
+          glyphs in one small dialog, saying the same thing twice.
+
+          So the confirmation is left to whatever renders above this — the
+          header and the success toast — and what survives here is only the
+          part that is this block's job: pointing at the Export PDF button
+          below. His wording, verbatim, lowercase "export pdf" and all.
+
           DISMISSING LOSES NOTHING — the deal is submitted either way, and the
           export is still reachable. PROVISIONAL: the founder did not rule on
           dismissibility, so this takes the conservative reading (the X and the
           backdrop both close it). See the BACKLOG-2849 report.
         */}
         {isSuccess && (
-          <div
+          <p
             data-testid="submit-review-success-ask"
-            className="bg-blue-50 border border-blue-100 rounded-lg p-4 mb-4"
+            className="text-sm text-gray-600 mb-4"
           >
-            <div className="flex items-start gap-3">
-              <svg
-                className="w-6 h-6 text-green-600 flex-shrink-0"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-              <div className="flex-1">
-                <p className="text-sm font-medium text-gray-900">
-                  {isResubmit
-                    ? "Resubmitted to your broker."
-                    : "Submitted to your broker."}
-                </p>
-                <p className="text-sm text-gray-600 mt-1">
-                  Want to keep a local copy?
-                </p>
-              </div>
-            </div>
-          </div>
+            Want to keep a local copy, click the export pdf button below
+          </p>
         )}
 
         {/* Progress display */}
