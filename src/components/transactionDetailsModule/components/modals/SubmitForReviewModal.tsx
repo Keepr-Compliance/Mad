@@ -18,10 +18,23 @@ export interface SubmitProgress {
 
 interface SubmitForReviewModalProps {
   transaction: Transaction;
-  /** @deprecated Use emailThreadCount and textThreadCount instead */
+  /** @deprecated Use emailCount and textThreadCount instead */
   messageCount?: number;
-  /** Number of email threads */
-  emailThreadCount: number;
+  /**
+   * Number of EMAILS on the deal — not threads (BACKLOG-2838).
+   *
+   * The caller passes `transaction.email_count`, computed as
+   * COUNT(DISTINCT c.email_id) (transactionDbService.ts). This prop was called
+   * `emailThreadCount` and rendered under the label "Email threads:", so a deal
+   * with 99 emails across 40 conversations read "Email threads: 99". The value
+   * was never wrong; the name and the word around it were, and a prop whose
+   * name contradicts its contents is what produced the mis-labelling in the
+   * first place. Renamed to what it holds.
+   *
+   * `textThreadCount` below genuinely IS threads, so the two labels are
+   * deliberately asymmetric — each says what its number counts.
+   */
+  emailCount: number;
   /** Number of text message threads */
   textThreadCount: number;
   /** Total attachment count (text + email) */
@@ -60,7 +73,7 @@ function formatBytes(bytes: number): string {
 
 export function SubmitForReviewModal({
   transaction,
-  emailThreadCount,
+  emailCount,
   textThreadCount,
   attachmentCount,
   emailAttachmentCount,
@@ -160,9 +173,9 @@ export function SubmitForReviewModal({
                       d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
                     />
                   </svg>
-                  <span className="text-gray-600">Email threads:</span>
+                  <span className="text-gray-600">Emails:</span>
                   <span className="font-medium text-gray-900">
-                    {emailThreadCount}
+                    {emailCount}
                     {emailAttachmentCount > 0 && (
                       <span className="text-gray-500 font-normal">
                         {" "}({emailAttachmentCount} {emailAttachmentCount === 1 ? "attachment" : "attachments"})
