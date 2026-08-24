@@ -2204,9 +2204,31 @@ class EmailSyncService {
         };
       }
 
-      const counts = swapEmailStagingIntoLive(db, forceStaging, {
-        persistAttachmentMeta: (meta) => databaseService.upsertEmailAttachmentMetadata(meta),
-      });
+      // The swap either happens completely or not at all, so a throw here means
+      // the user's mail is exactly as it was. Reported as a structured error
+      // rather than allowed to propagate: the caller cannot distinguish a thrown
+      // precache from a crashed one, and this is the case where the single most
+      // useful thing to tell the user is that NOTHING changed.
+      let counts;
+      try {
+        counts = swapEmailStagingIntoLive(db, forceStaging, {
+          persistAttachmentMeta: (meta) => databaseService.upsertEmailAttachmentMetadata(meta),
+        });
+      } catch (swapError) {
+        logService.error("Email force re-cache swap failed; nothing was changed", "EmailSyncService", {
+          userId,
+          error: swapError instanceof Error ? swapError.message : String(swapError),
+        });
+        Sentry.captureException(swapError);
+        this.lastPrecacheCompletedAt = Date.now();
+        return {
+          fetched: totalFetched,
+          stored: totalStored,
+          providerError,
+          error: "Re-cache could not be applied. Your emails were left unchanged.",
+        };
+      }
+
       forceSwap = {
         emailsDeleted: counts.emailsDeleted,
         emailsInserted: counts.emailsInserted,
