@@ -491,10 +491,14 @@ describe("ContactAssignmentStep", () => {
       settingsService.getContactAutoRoleEnabled.mockResolvedValueOnce(true);
 
       const onAssignContact = jest.fn();
-      // seller_agent is a valid role for a purchase, so it's used directly.
+      // BACKLOG-2859: `agent` is the one stored agent role and is offered on
+      // EVERY transaction type, so it is used directly. It is deliberately no
+      // longer `seller_agent` — that value is not offered anywhere, so a
+      // contact saved with it now correctly falls back to the Client baseline
+      // (asserted separately below).
       const contactWithRole: Contact = {
         ...mockContacts[1],
-        default_role: "seller_agent",
+        default_role: "agent",
       };
 
       render(
@@ -507,10 +511,46 @@ describe("ContactAssignmentStep", () => {
       );
 
       await waitFor(() => {
-        expect(onAssignContact).toHaveBeenCalledWith("seller_agent", "contact-2", false, "");
+        expect(onAssignContact).toHaveBeenCalledWith("agent", "contact-2", false, "");
       });
       // The Client baseline must NOT be applied to this contact.
       expect(onAssignContact).not.toHaveBeenCalledWith("client", "contact-2", false, "");
+    });
+
+    /**
+     * BACKLOG-2859 — the counterpart, and the reason the PR #2374 fallback guard
+     * could be deleted rather than merely left unreachable.
+     *
+     * A contact still carrying a retired `default_role` (an un-migrated row, a
+     * restored backup) must land on the Client baseline — a role the dropdown
+     * actually offers — instead of being assigned a value the select cannot
+     * render. Under the old flip machinery this is the case that produced a
+     * blank select over a stored value.
+     */
+    it("falls back to the Client baseline for a RETIRED default_role (BACKLOG-2859)", async () => {
+      const { settingsService } = jest.requireMock("../../services");
+      settingsService.getContactAutoRoleEnabled.mockResolvedValueOnce(true);
+
+      const onAssignContact = jest.fn();
+      const contactWithRetiredRole: Contact = {
+        ...mockContacts[1],
+        default_role: "seller_agent",
+      };
+
+      render(
+        <ContactAssignmentStep
+          {...step3Props}
+          contacts={[mockContacts[0], contactWithRetiredRole, mockContacts[2]]}
+          selectedContactIds={["contact-2"]}
+          onAssignContact={onAssignContact}
+        />
+      );
+
+      await waitFor(() => {
+        expect(onAssignContact).toHaveBeenCalledWith("client", "contact-2", false, "");
+      });
+      // The retired value is never handed back to the picker.
+      expect(onAssignContact).not.toHaveBeenCalledWith("seller_agent", "contact-2", false, "");
     });
 
     it("calls onAssignContact when role is selected", async () => {
