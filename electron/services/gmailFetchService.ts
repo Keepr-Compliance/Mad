@@ -12,6 +12,7 @@ import {
 // granted a support window covering the email-sync scope.
 import { supportTrace } from "./supportAccess/trace";
 import { parseEmailAddressList } from "../utils/emailAddress";
+import { htmlToPlainText } from "../utils/htmlToPlainText";
 import { EmailDeduplicationService } from "./emailDeduplicationService";
 import {
   withRetry,
@@ -570,7 +571,20 @@ class GmailFetchService {
      * value ended up in `emails.sent_at` in the first place.
      */
     const receivedDate = new Date(parseInt(message.internalDate || "0"));
-    const bodyPlainForHash = bodyPlain || body;
+    /**
+     * BACKLOG-2855 — this value is stored in `emails.body_plain` (see the
+     * returned object below), not merely hashed, despite the name.
+     *
+     * `bodyPlain` is the `text/plain` MIME part. A message that carries ONLY a
+     * `text/html` part leaves it empty, and this line then fell back to `body`,
+     * which is RAW HTML — putting markup in the plain-text column that search
+     * (`body_plain LIKE ?`) and auto-link read. Converting keeps the fallback's
+     * intent (never lose the body) without storing tags as if they were words.
+     *
+     * A message WITH a `text/plain` part is unaffected: that part is used
+     * verbatim, exactly as before.
+     */
+    const bodyPlainForHash = bodyPlain || htmlToPlainText(body);
 
     /**
      * BACKLOG-2571 — the sender-asserted send time.

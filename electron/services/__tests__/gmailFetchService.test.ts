@@ -455,6 +455,93 @@ describe("GmailFetchService", () => {
       expect(results[0].bodyPlain).toBe("Plain version");
     });
 
+    /**
+     * BACKLOG-2855 — Gmail's adjacent hole.
+     *
+     * `bodyPlainForHash` (which is what lands in `emails.body_plain`, despite
+     * the name) fell back to the raw HTML body when a message carried no
+     * `text/plain` MIME part. Search runs `body_plain LIKE ?` against that
+     * column, so the stored value was markup rather than words — a milder form
+     * of the Outlook defect, from the opposite direction: too much, not too
+     * little.
+     *
+     * The test above is the regression guard for the unaffected case: when a
+     * `text/plain` part EXISTS it is still used verbatim.
+     */
+    it("derives plain text when a multipart message has no text/plain part", async () => {
+      const html =
+        '<html><head><style>.x { margin-top: 0; }</style></head><body>' +
+        "<p>The inspection is scheduled for Tuesday.</p>" +
+        "<p>Parcel ARBOR-CREST-PARCEL-88231 is the one to reference.</p>" +
+        "</body></html>";
+
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: {
+            mimeType: "multipart/alternative",
+            headers: [],
+            parts: [
+              {
+                mimeType: "text/html",
+                body: { data: Buffer.from(html).toString("base64") },
+              },
+            ],
+          },
+        },
+      });
+
+      const results = await gmailFetchService.searchEmails({});
+
+      // body_html keeps the markup; body_plain gets words.
+      expect(results[0].body).toBe(html);
+      expect(results[0].bodyPlain).toContain("The inspection is scheduled for Tuesday.");
+      expect(results[0].bodyPlain).toContain("ARBOR-CREST-PARCEL-88231");
+      expect(results[0].bodyPlain).not.toContain("<p>");
+      expect(results[0].bodyPlain).not.toContain("<html>");
+      expect(results[0].bodyPlain).not.toContain("margin-top");
+    });
+
+    it("derives plain text for a SINGLE-PART text/html message", async () => {
+      // The `message.payload.body.data` branch, which has no `parts` array.
+      const html = "<div>Closing moved to <b>Friday</b> &amp; confirmed.</div>";
+
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: {
+            mimeType: "text/html",
+            headers: [],
+            body: { data: Buffer.from(html).toString("base64") },
+          },
+        },
+      });
+
+      const results = await gmailFetchService.searchEmails({});
+
+      expect(results[0].bodyPlain).toBe("Closing moved to Friday & confirmed.");
+      expect(results[0].bodyPlain).not.toContain("<");
+    });
+
+    it("leaves bodyPlain empty when a message has no body at all", async () => {
+      mockMessagesGet.mockResolvedValue({
+        data: {
+          id: "msg-1",
+          threadId: "thread-1",
+          internalDate: "1700000000000",
+          payload: { mimeType: "multipart/alternative", headers: [], parts: [] },
+        },
+      });
+
+      const results = await gmailFetchService.searchEmails({});
+
+      expect(results[0].bodyPlain).toBe("");
+    });
+
     it("should extract attachments from message", async () => {
       mockMessagesGet.mockResolvedValue({
         data: {
