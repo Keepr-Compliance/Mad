@@ -158,21 +158,41 @@ export function filterRolesByTransactionType(
  * When a contact's default_role isn't valid for the current transaction type,
  * this function returns the equivalent role on the other side.
  *
- * Flip mapping:
+ * Valid "other side" sets — CORRECTED IN BACKLOG-2850, they were inverted:
+ *   `purchase` (displays as "Listing"; the user is the listing agent)
+ *        -> buyer, buyer's agent
+ *   `sale` (the user is the buyer's agent)
+ *        -> seller, seller's agent
+ *
+ * Symmetric by design: the principal and their agent on each side.
+ *
+ * The sale set accepts BOTH `seller_agent` and `listing_agent` because those
+ * are TWO STORED VALUES FOR ONE ROLE — both render "Listing Agent"
+ * (BACKLOG-2804). A contact saved as `listing_agent` is already on the correct
+ * side of a Sale and must NOT be flipped. Consolidating the two enum values
+ * needs a data migration and is filed separately; do not do it here.
+ *
+ * Flip mapping (side-agnostic — it maps a role to its counterpart, so the 2850
+ * correction did not touch it):
  *   seller_agent <-> buyer_agent
- *   listing_agent -> buyer_agent (one-way; listing_agent is seller-side specific)
+ *   listing_agent -> buyer_agent (ONE-WAY — see below)
  *   seller <-> buyer
  *
- * !! PRE-2850 PREMISE — KNOWN INVERTED, DELIBERATELY NOT FIXED HERE !!
- * `purchaseRoles` below is the seller-side set, which is the old buy-side
- * reading of `purchase`. Its side mapping is wrong under the corrected
- * premise, and it is left alone for the same reason as
- * filterRolesByTransactionType: flipping it re-scopes roles in the field.
- * Tracked in BACKLOG-2859.
+ * !! KNOWN ONE-WAY DOOR — reported, deliberately NOT fixed here !!
+ * `listing_agent` flips to `buyer_agent`, which flips back to `seller_agent` —
+ * a DIFFERENT stored value than it started as. This is unavoidable while two
+ * enum values share one role: the flip map is a function, so `buyer_agent` can
+ * have only one counterpart. It is invisible today (both render "Listing
+ * Agent"), but it means a contact's stored role can mutate simply by being
+ * assigned across two deals. Closing it needs the enum consolidation and its
+ * migration, not a change here. Pinned by a round-trip test so it cannot widen
+ * unnoticed.
  *
- * Note also that `other` is not special-cased — it falls into the sale-side
- * set. That is pre-existing behaviour, unrelated to the 2850 inversion, and
- * is pinned by test so this change does not move it.
+ * `other` is deliberately NOT special-cased, and the ternary below is written
+ * `=== "sale"` rather than `=== "purchase"` precisely so `other` keeps the
+ * exact set it had BEFORE the 2850 correction. `other` names no side, so any
+ * answer is arbitrary; holding it byte-identical means this fix moved only the
+ * two cases it was meant to move. Pinned by test.
  *
  * @param defaultRole - The contact's default_role
  * @param transactionType - The current transaction type ('purchase' | 'sale' | 'other')
@@ -183,18 +203,24 @@ export function flipRoleForTransactionType(
   transactionType: TransactionType,
 ): string | null {
   // Build the set of valid other-side roles for this transaction type
+  // On a purchase (a Listing) the user is the listing agent, so the other side
+  // is the BUYER side. BACKLOG-2850: these two sets were the wrong way round.
   const purchaseRoles = new Set([
-    SPECIFIC_ROLES.SELLER_AGENT,
-    SPECIFIC_ROLES.LISTING_AGENT,
-    SPECIFIC_ROLES.SELLER,
-  ]);
-  const saleRoles = new Set([
     SPECIFIC_ROLES.BUYER_AGENT,
     SPECIFIC_ROLES.BUYER,
   ]);
+  const saleRoles = new Set([
+    SPECIFIC_ROLES.SELLER_AGENT,
+    // Same role as SELLER_AGENT, different stored value. Present so a contact
+    // saved as `listing_agent` is NOT flipped off the correct side of a Sale.
+    SPECIFIC_ROLES.LISTING_AGENT,
+    SPECIFIC_ROLES.SELLER,
+  ]);
 
-  // Determine which roles are valid for this transaction type
-  const validRoles = transactionType === "purchase" ? purchaseRoles : saleRoles;
+  // Determine which roles are valid for this transaction type.
+  // `=== "sale"`, NOT `=== "purchase"`: this is what holds `other` on exactly
+  // the set it had before the 2850 correction. See the note above.
+  const validRoles = transactionType === "sale" ? saleRoles : purchaseRoles;
 
   // If already valid, return as-is
   if (validRoles.has(defaultRole)) {
@@ -229,6 +255,20 @@ export function flipRoleForTransactionType(
  *  1. Smart auto-role (only when `autoRoleEnabled`): the contact's saved
  *     `default_role` — used directly if it's a valid option for this
  *     transaction type, otherwise flipped to the equivalent other-side role.
+ *     The flip result is then re-checked against `isRoleValid`, and a role the
+ *     caller would not offer is discarded in favour of the Client baseline.
+ *
+ *     THAT RE-CHECK IS LOAD-BEARING TODAY, and is not defensive padding.
+ *     BACKLOG-2850 corrected the sides in `flipRoleForTransactionType`, but
+ *     BOTH callers build `isRoleValid` from `filterRolesByTransactionType`,
+ *     which still carries the pre-2850 premise (re-scoping it is BACKLOG-2859).
+ *     The two therefore disagree: on a Listing the flip now correctly yields
+ *     `buyer_agent`, while the picker still offers only seller-side roles.
+ *     Without the re-check the contact is assigned a role its own dropdown
+ *     cannot display — a blank select over a stored value, which is a worse
+ *     failure than the wrong-but-visible role it replaced. Returning the
+ *     Client baseline instead is at least true and renders the correct side.
+ *     When BACKLOG-2859 corrects the filter, this re-check becomes a no-op.
  *  2. Baseline default (always): `client` — which renders as "Seller (Client)"
  *     on a purchase (a Listing) and "Buyer (Client)" on a sale (see
  *     getRoleDisplayName; corrected in BACKLOG-2850).
@@ -250,7 +290,10 @@ export function resolveDefaultContactRole(
     const effective = isRoleValid(defaultRole)
       ? defaultRole
       : flipRoleForTransactionType(defaultRole, transactionType);
-    if (effective) return effective;
+    // Never hand back a role this caller would not offer — see the note above.
+    // (When `effective` came from the `isRoleValid` branch this is trivially
+    // true, so the only path it can reject is a flip result.)
+    if (effective && isRoleValid(effective)) return effective;
   }
   return SPECIFIC_ROLES.CLIENT;
 }
