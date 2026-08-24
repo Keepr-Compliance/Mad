@@ -7,20 +7,29 @@
  *   2. A brokerage user gets TWO actions: Submit and Export PDF.
  *   3. The pre-submit export SECTION is gone — the copy "Want to keep a local
  *      copy first?" and the "Export to folder before submitting" control.
- *   4. After a SUCCESSFUL submit the modal asks "Want to keep a local copy?"
- *      with an Export PDF action.
+ *   4. After a SUCCESSFUL submit the modal points the user at the Export PDF
+ *      action, and does so with ONE plain sentence.
+ *
+ * Point 4 shipped first as a blue callout carrying its own green check-circle
+ * and its own "Submitted to your broker." headline. The founder tested it on
+ * 2026-08-24: "we don't need the same text and check mark twice, keep the top
+ * one, remove this", pasting that callout. So the success screen now confirms
+ * ONCE — above this block — and this block is one sentence pointing down at
+ * the button. §4b below is the control for that correction.
  *
  * ---------------------------------------------------------------------------
  * WHY THE ABSENCE ASSERTIONS NAME THE FULL OLD LITERALS
  * ---------------------------------------------------------------------------
- * The retired copy "Want to keep a local copy first?" CONTAINS the new ask
- * "Want to keep a local copy?" only up to the word "first" — but a substring
- * matcher run the other way (`toContain("Want to keep a local copy")`) is
- * satisfied by both, and Testing Library's default string matcher normalises
- * whitespace and matches the full trimmed text, not a fragment. So the
- * absence assertions below quote the OLD strings in full and the presence
- * assertions quote the NEW one exactly. A rename that shortened the old copy
- * to the new one would otherwise pass on both halves.
+ * Three strings share the prefix "Want to keep a local copy": the retired
+ * pre-submit callout ("...first?"), the retired post-submit ask ("...copy?")
+ * and the sentence that shipped in its place ("...copy, click the export pdf
+ * button below"). A substring matcher (`toContain("Want to keep a local
+ * copy")`) is satisfied by all three, so it can tell none of them apart.
+ *
+ * Testing Library's default string matcher normalises whitespace and matches
+ * the full trimmed text, not a fragment — so every assertion below quotes its
+ * string IN FULL, absences and presences alike. A rewording that left the old
+ * copy in place under a shorter name would otherwise pass.
  *
  * ---------------------------------------------------------------------------
  * WHO REACHES THIS MODAL
@@ -49,12 +58,49 @@ const transaction = {
   status: "active",
 } as unknown as Transaction;
 
+/**
+ * The same deal, in the state that makes the modal take its RESUBMIT branch.
+ * `submission_status: "needs_changes"` is the only input the component reads
+ * for it (`const isResubmit = transaction.submission_status === ...`), so this
+ * is the real producer's shape, not a stand-in.
+ */
+const resubmitTransaction = {
+  ...transaction,
+  submission_status: "needs_changes",
+} as unknown as Transaction;
+
 /** The exact strings BACKLOG-2849 retires. Quoted in full, on purpose. */
 const RETIRED_PRE_SUBMIT_COPY = "Want to keep a local copy first?";
 const RETIRED_PRE_SUBMIT_ACTION = "Export to folder before submitting";
 
-/** The exact string BACKLOG-2849 introduces, asked only after success. */
-const POST_SUBMIT_ASK = "Want to keep a local copy?";
+/**
+ * The exact sentence shown only after success, in the founder's own wording
+ * from 2026-08-24 — lowercase "export pdf", comma splice, no full stop. It is
+ * quoted here verbatim on purpose: copyediting his words is his call, not one
+ * to take on his behalf, and this constant is what pins it.
+ */
+const POST_SUBMIT_ASK =
+  "Want to keep a local copy, click the export pdf button below";
+
+/** The ask as it read BEFORE the 2026-08-24 correction. Retired. */
+const RETIRED_POST_SUBMIT_ASK = "Want to keep a local copy?";
+
+/**
+ * The success headlines the correction retires. The modal no longer confirms
+ * the submission itself — that is the job of what renders ABOVE this block —
+ * so BOTH variants must be absent, the resubmit one included. Nothing else in
+ * the suite (or the repo) asserted either string.
+ */
+const RETIRED_SUCCESS_HEADLINE = "Submitted to your broker.";
+const RETIRED_RESUBMIT_HEADLINE = "Resubmitted to your broker.";
+
+/**
+ * The check-circle glyph. The header draws it in a blue disc beside "Submit
+ * for Review"; the retired success callout drew the SAME path in green right
+ * underneath. Counting the path is how "check mark twice" is asserted as a
+ * number rather than as a vibe.
+ */
+const CHECK_CIRCLE_D = "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z";
 
 const SUCCESS: SubmitProgress = {
   stage: "complete",
@@ -83,7 +129,7 @@ function renderModal(
   const onCancel = jest.fn();
   const onSubmit = jest.fn();
   const onExport = jest.fn();
-  render(
+  const { container } = render(
     <SubmitForReviewModal
       transaction={transaction}
       emailCount={99}
@@ -100,7 +146,7 @@ function renderModal(
       {...overrides}
     />,
   );
-  return { onCancel, onSubmit, onExport };
+  return { onCancel, onSubmit, onExport, container };
 }
 
 describe("BACKLOG-2849 §1 — dismissal is an X, not a Cancel button", () => {
@@ -224,7 +270,9 @@ describe("BACKLOG-2849 §4 — the ask appears only after a SUCCESSFUL submit", 
     const { onExport } = renderModal({ isSubmitting: false, progress: SUCCESS });
 
     expect(screen.getByTestId("submit-review-success-ask")).toBeInTheDocument();
-    expect(screen.getByText(POST_SUBMIT_ASK)).toBeInTheDocument();
+    // Exact count, not presence: presence is also satisfied by two copies,
+    // which is the defect §4b exists to keep out.
+    expect(screen.getAllByText(POST_SUBMIT_ASK)).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Export PDF" }));
     expect(onExport).toHaveBeenCalledTimes(1);
@@ -283,5 +331,105 @@ describe("BACKLOG-2849 §4 — the ask appears only after a SUCCESSFUL submit", 
     expect(
       screen.queryByRole("button", { name: "Submit" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("BACKLOG-2849 §4b — the success screen confirms ONCE", () => {
+  /**
+   * The founder's correction of 2026-08-24, after testing the screen §4 built:
+   * "we don't need the same text and check mark twice, keep the top one,
+   * remove this" — "this" being the blue callout that carried a second
+   * check-circle and a second confirmation line directly under the header's.
+   *
+   * WHY THESE ARE COUNTS AND NOT PRESENCE CHECKS
+   * A presence check (`toBeInTheDocument`) passes with two copies on screen.
+   * Two copies IS the bug. So the check-circle glyph and the sentence are both
+   * asserted as exact numbers, and the survivor is pinned by identity — which
+   * one is left, not merely how many.
+   *
+   * WHAT IS *NOT* ASSERTED HERE, AND WHY
+   * The obvious phrasing — "'Submitted to your broker.' appears exactly ONCE"
+   * — cannot go red. That string was in this modal exactly once BEFORE the
+   * correction too (the second confirmation the founder saw was the header's
+   * check-circle and the success toast, not a second copy of the sentence), so
+   * a `toHaveLength(1)` on it passes on the unfixed component and survives the
+   * revert control. The count that does discriminate is the glyph count: 2
+   * before, 1 after. The string is asserted at zero instead — the modal has
+   * stopped confirming the submission at all, which is the actual change.
+   */
+
+  it("draws the check-circle ONCE, and the survivor is the header's", () => {
+    const { container } = renderModal({
+      isSubmitting: false,
+      progress: SUCCESS,
+    });
+
+    const checks = container.querySelectorAll(`path[d="${CHECK_CIRCLE_D}"]`);
+    expect(checks).toHaveLength(1);
+
+    // Identity, not just arithmetic: the one left is the header's blue disc
+    // icon, so this cannot pass by having removed the wrong checkmark.
+    const survivingIcon = checks[0].closest("svg");
+    expect(survivingIcon).toHaveClass("text-blue-600");
+    expect(survivingIcon?.closest("div")?.parentElement).toHaveTextContent(
+      "Submit for Review",
+    );
+
+    // The green one is gone outright — no icon of that colour anywhere.
+    expect(container.querySelectorAll(".text-green-600")).toHaveLength(0);
+  });
+
+  it("no longer confirms the submission in its own words", () => {
+    renderModal({ isSubmitting: false, progress: SUCCESS });
+
+    // queryAll, not getAll: getAllByText THROWS on zero matches, and zero is
+    // the expected number.
+    expect(screen.queryAllByText(RETIRED_SUCCESS_HEADLINE)).toHaveLength(0);
+    // Present, so this is not passing because the success screen never
+    // rendered.
+    expect(screen.getByTestId("submit-review-success-ask")).toBeInTheDocument();
+  });
+
+  it("no longer confirms it on the RESUBMIT branch either", () => {
+    renderModal({
+      transaction: resubmitTransaction,
+      isSubmitting: false,
+      progress: SUCCESS,
+    });
+
+    expect(screen.queryAllByText(RETIRED_RESUBMIT_HEADLINE)).toHaveLength(0);
+    expect(screen.queryAllByText(RETIRED_SUCCESS_HEADLINE)).toHaveLength(0);
+    // The resubmit branch really is the one that rendered.
+    expect(screen.getByText("Resubmit for Review")).toBeInTheDocument();
+  });
+
+  it("says the founder's sentence once, and says nothing else", () => {
+    renderModal({ isSubmitting: false, progress: SUCCESS });
+
+    expect(screen.getAllByText(POST_SUBMIT_ASK)).toHaveLength(1);
+
+    // The block IS the sentence — no headline above it, no wrapper copy. An
+    // exact textContent match fails if any of the removed lines came back
+    // inside it.
+    expect(screen.getByTestId("submit-review-success-ask")).toHaveTextContent(
+      new RegExp(`^${POST_SUBMIT_ASK}$`),
+    );
+
+    // The shorter wording it replaced is gone, not merely reworded around.
+    expect(screen.queryAllByText(RETIRED_POST_SUBMIT_ASK)).toHaveLength(0);
+  });
+
+  it("puts the Export PDF button BELOW the sentence, as the sentence claims", () => {
+    renderModal({ isSubmitting: false, progress: SUCCESS });
+
+    const sentence = screen.getByTestId("submit-review-success-ask");
+    const exportButton = screen.getByRole("button", { name: "Export PDF" });
+
+    // The copy tells the user to click "the export pdf button below". DOM
+    // order is what makes that sentence true.
+    expect(
+      sentence.compareDocumentPosition(exportButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
