@@ -115,8 +115,14 @@ describe('ExtractContactRolesTool', () => {
       expect(result.success).toBe(true);
       expect(result.data).toBeDefined();
       expect(result.data?.assignments).toHaveLength(2);
-      expect(result.data?.assignments[0].role).toBe('seller_agent');
-      expect(result.data?.assignments[1].role).toBe('buyer_agent');
+      // BACKLOG-2859: the MODEL still emits the retired side-specific values —
+      // the fixtures above are deliberately left that way, because that is what
+      // a real response looks like. The tool FOLDS them to the single `agent`
+      // role rather than rejecting them. Rejection would send them to `other`,
+      // which is unrecoverable: nothing downstream can tell an `other` that was
+      // really an agent from a genuinely unclassifiable party.
+      expect(result.data?.assignments[0].role).toBe('agent');
+      expect(result.data?.assignments[1].role).toBe('agent');
     });
 
     it('should extract roles with evidence quotes', async () => {
@@ -159,8 +165,11 @@ describe('ExtractContactRolesTool', () => {
       expect(result.data?.assignments).toHaveLength(4);
 
       const roles = result.data?.assignments.map(a => a.role);
-      expect(roles).toContain('buyer_agent');
-      expect(roles).toContain('seller_agent');
+      // Both agents fold to one role (BACKLOG-2859).
+      expect(roles).toContain('agent');
+      expect(roles.filter((r) => r === 'agent')).toHaveLength(2);
+      expect(roles).not.toContain('buyer_agent');
+      expect(roles).not.toContain('seller_agent');
       expect(roles).toContain('lender');
       expect(roles).toContain('inspector');
     });

@@ -495,10 +495,16 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
     }
     db.prepare(
       "INSERT INTO transaction_contacts (id, transaction_id, contact_id, role) VALUES (?, ?, ?, ?)",
-    ).run(TC_IDS[0], TXN_ID, CONTACT_IDS[0], "buyer");
+      // BACKLOG-2859: roles chosen so this suite keeps testing what it was
+      // written for — that rows SURVIVE the upgrade. `buyer_agent` is COLLAPSED
+      // by migration v66 (the row survives, its value changes), which is the
+      // interesting case for a row-survival test. It was previously `buyer`, a
+      // value v66 DELETES, which would have made the id-set assertion below fail
+      // for a reason that has nothing to do with the schema rebuild under test.
+    ).run(TC_IDS[0], TXN_ID, CONTACT_IDS[0], "buyer_agent");
     db.prepare(
       "INSERT INTO transaction_contacts (id, transaction_id, contact_id, role) VALUES (?, ?, ?, ?)",
-    ).run(TC_IDS[1], TXN_ID, CONTACT_IDS[1], "seller");
+    ).run(TC_IDS[1], TXN_ID, CONTACT_IDS[1], "inspector");
 
     // Drop log calls made while BUILDING the fixture so the backup assertion
     // can only be satisfied by the act phase. clearAllMocks clears call history

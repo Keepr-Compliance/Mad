@@ -69,72 +69,132 @@ function optionsOf(select: HTMLSelectElement) {
   }));
 }
 
-describe("BACKLOG-2804: Default Role picker offers one seller-side agent", () => {
-  it('offers exactly one "Listing Agent" option, and it is seller_agent', () => {
-    renderModal();
-
-    const listing = optionsOf(roleSelect()).filter(
-      (o) => o.label === "Listing Agent",
-    );
-
-    // Identity, not count: the surviving option must be the value the wizard
-    // assigns. Dropping the wrong one of the pair also leaves exactly one.
-    expect(listing).toHaveLength(1);
-    expect(listing[0].value).toBe("seller_agent");
-  });
-
-  it('no longer offers "Seller Agent" anywhere in the list', () => {
-    renderModal();
-
-    expect(
-      optionsOf(roleSelect()).some((o) => o.label === "Seller Agent"),
-    ).toBe(false);
-  });
-
-  it("still offers every other role, including the buyer-side agent", () => {
-    // The negative control. Filtering too broadly — dropping every option that
-    // says "Agent", say — would pass both cases above.
+describe("BACKLOG-2859: Default Role picker offers the LIVE vocabulary only", () => {
+  /**
+   * This picker sets a contact's `default_role`, which has no transaction and
+   * therefore no side — so every option is a static label.
+   *
+   * The distinction it has to get right is OFFERED vs RENDERED.
+   * ROLE_DISPLAY_NAMES deliberately retains entries for the retired values so
+   * an un-migrated row still humanizes; this picker is built from that map and
+   * must not turn those entries back into offers, or it would quietly write the
+   * very values migration v66 collapsed back into the database.
+   */
+  it("offers the collapsed agent role, and NONE of the three it replaced", () => {
     renderModal();
     const byValue = new Map(optionsOf(roleSelect()).map((o) => [o.value, o.label]));
 
-    expect(byValue.get("buyer_agent")).toBe("Buyer Agent");
+    expect(byValue.get("agent")).toBe("Agent");
+    // Identity, not absence-of-one: all three retired values are gone.
+    expect(byValue.has("buyer_agent")).toBe(false);
+    expect(byValue.has("seller_agent")).toBe(false);
+    expect(byValue.has("listing_agent")).toBe(false);
+  });
+
+  it("offers co_agent, and the retired principals are gone", () => {
+    renderModal();
+    const byValue = new Map(optionsOf(roleSelect()).map((o) => [o.value, o.label]));
+
+    expect(byValue.get("co_agent")).toBe("Co-Agent");
+    expect(byValue.has("buyer")).toBe(false);
+    expect(byValue.has("seller")).toBe(false);
+  });
+
+  it("still offers every unrelated role", () => {
+    // The negative control. Filtering too broadly — dropping every option whose
+    // label contains "Agent", say — would pass both cases above.
+    renderModal();
+    const byValue = new Map(optionsOf(roleSelect()).map((o) => [o.value, o.label]));
+
     expect(byValue.get("insurance_agent")).toBe("Insurance Agent");
     expect(byValue.get("inspector")).toBe("Inspector");
     expect(byValue.get("client")).toBe("Client (Buyer/Seller)");
+    expect(byValue.get("escrow_officer")).toBe("Escrow Officer");
   });
 
-  it("keeps the option for a contact already stored as listing_agent", () => {
-    // The escape hatch. Without it this contact's select renders blank and the
-    // form claims she has no default role. The stored value survives either
-    // way — this asserts what the user can SEE, which is the actual defect.
+  it("offers EXACTLY the live vocabulary — an exact set, so nothing creeps back", () => {
+    renderModal();
+    const values = optionsOf(roleSelect())
+      .map((o) => o.value)
+      .filter((v) => v !== "");
+
+    expect(values.sort()).toEqual(
+      [
+        "client",
+        "agent",
+        "co_agent",
+        "appraiser",
+        "inspector",
+        "surveyor",
+        "title_company",
+        "escrow_officer",
+        "mortgage_broker",
+        "lender",
+        "real_estate_attorney",
+        "transaction_coordinator",
+        "insurance_agent",
+        "hoa_management",
+        "condo_management",
+        "other",
+      ].sort(),
+    );
+  });
+
+  /**
+   * THE ESCAPE HATCH, generalised from BACKLOG-2804.
+   *
+   * Previously hardcoded for `listing_agent`; it now covers every retired value.
+   * Without it, a contact still carrying one renders a BLANK select — the form
+   * claims she has no default role at all and the user cannot tell what it
+   * actually is. The stored value is not at risk either way (the save reads
+   * React state, not the DOM); the defect is the blank field.
+   */
+  it.each(["listing_agent", "seller_agent", "buyer_agent", "buyer", "seller"])(
+    "keeps the option for a contact already stored as %s",
+    (storedRole) => {
+      renderModal({
+        id: "contact-omar",
+        user_id: "user-1",
+        name: "Omar Example",
+        default_role: storedRole,
+      } as unknown as ExtendedContact);
+
+      const select = roleSelect();
+      expect(select.value).toBe(storedRole);
+
+      const byValue = new Map(optionsOf(select).map((o) => [o.value, o.label]));
+      expect(byValue.has(storedRole)).toBe(true);
+      // It renders under a name a person recognises, not a raw enum.
+      expect(byValue.get(storedRole)).not.toBe(storedRole);
+    },
+  );
+
+  it("preserves the 2804 wording for a retired seller-side value", () => {
     renderModal({
       id: "contact-omar",
       user_id: "user-1",
       name: "Omar Example",
-      default_role: "listing_agent",
+      default_role: "seller_agent",
     } as unknown as ExtendedContact);
 
-    const select = roleSelect();
-    expect(select.value).toBe("listing_agent");
-
-    const byValue = new Map(optionsOf(select).map((o) => [o.value, o.label]));
-    expect(byValue.get("listing_agent")).toBe("Listing Agent");
-    // And the pair is still not both on offer for someone else's contact.
+    const byValue = new Map(optionsOf(roleSelect()).map((o) => [o.value, o.label]));
     expect(byValue.get("seller_agent")).toBe("Listing Agent");
+    expect(byValue.get("seller_agent")).not.toBe("Seller Agent");
   });
 
-  it("hides listing_agent for a contact stored as something else", () => {
+  it("does NOT leak a retired option onto a contact stored as something else", () => {
     // Boundary: the escape hatch is keyed to the CURRENT value, so it must not
-    // leak the vestigial option onto every other contact's form.
+    // put every retired value on every other contact's form.
     renderModal({
       id: "contact-dana",
       user_id: "user-1",
       name: "Dana Example",
-      default_role: "buyer_agent",
+      default_role: "agent",
     } as unknown as ExtendedContact);
 
     const byValue = new Map(optionsOf(roleSelect()).map((o) => [o.value, o.label]));
     expect(byValue.has("listing_agent")).toBe(false);
-    expect(byValue.get("seller_agent")).toBe("Listing Agent");
+    expect(byValue.has("seller_agent")).toBe(false);
+    expect(byValue.has("buyer_agent")).toBe(false);
   });
 });

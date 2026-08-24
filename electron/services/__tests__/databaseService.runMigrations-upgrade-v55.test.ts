@@ -253,7 +253,10 @@ describe("databaseService runMigrations() — real v55 upgrade over current sche
     harness.db
       .prepare(
         `INSERT INTO transaction_contacts (id, transaction_id, contact_id, role)
-         VALUES ('tc-legacy-1', 'txn-1', 'c-legacy-1', 'buyer')`,
+         -- BACKLOG-2859: was 'buyer', which migration v66 DELETES. This suite
+         -- is about the v55 tombstone columns, so the row has to survive the
+         -- chain for its assertions to mean anything; 'client' is untouched.
+         VALUES ('tc-legacy-1', 'txn-1', 'c-legacy-1', 'client')`,
       )
       .run();
 
