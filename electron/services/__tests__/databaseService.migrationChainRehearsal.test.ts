@@ -152,6 +152,10 @@ import {
   CONTACT_IDS,
   CONTACT_PHONE_IDS,
   TRANSACTION_CONTACT_IDS,
+  TRANSACTION_CONTACT_IDS_SEEDED,
+  TRANSACTION_CONTACTS_REMOVED_BY_V66,
+  TRANSACTION_CONTACT_ROLES_AFTER_V66,
+  CONTACT_DEFAULT_ROLES_AFTER_V66,
   EMAIL_IDS,
   EXPECTED_ROW_COUNTS,
   EXPECTED_SHIPPED_VERSION,
@@ -159,6 +163,7 @@ import {
   FROZEN_EXPORT_STAMPS,
   MESSAGE_IDS,
   PARTIES_BY_TRANSACTION,
+  PARTIES_BY_TRANSACTION_SEEDED,
   TRANSACTION_FROZEN,
   TRANSACTION_IDS,
   TRANSACTION_OPEN,
@@ -358,11 +363,32 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
     expect(ids("SELECT id FROM external_contacts")).toEqual([...EXTERNAL_CONTACT_IDS].sort());
     expect(ids("SELECT id FROM contact_emails")).toEqual([...CONTACT_EMAIL_IDS].sort());
     expect(ids("SELECT id FROM contact_phones")).toEqual([...CONTACT_PHONE_IDS].sort());
-    expect(ids("SELECT id FROM transaction_contacts")).toEqual([...TRANSACTION_CONTACT_IDS].sort());
-    expect(partySet(TRANSACTION_OPEN)).toEqual([...PARTIES_BY_TRANSACTION[TRANSACTION_OPEN]].sort());
-    expect(partySet(TRANSACTION_FROZEN)).toEqual(
-      [...PARTIES_BY_TRANSACTION[TRANSACTION_FROZEN]].sort(),
+    // SEEDED sets here, survivor sets after the chain: this test reads the
+    // fixture BEFORE any migration runs, and v66 deletes two of these rows. Using
+    // the post-chain set here would make the precondition agree with the outcome
+    // by construction and stop being a precondition.
+    expect(ids("SELECT id FROM transaction_contacts")).toEqual(
+      [...TRANSACTION_CONTACT_IDS_SEEDED].sort(),
     );
+    expect(partySet(TRANSACTION_OPEN)).toEqual(
+      [...PARTIES_BY_TRANSACTION_SEEDED[TRANSACTION_OPEN]].sort(),
+    );
+    expect(partySet(TRANSACTION_FROZEN)).toEqual(
+      [...PARTIES_BY_TRANSACTION_SEEDED[TRANSACTION_FROZEN]].sort(),
+    );
+
+    // The fixture really does carry every value migration v66 has to move. If
+    // this ever goes red the rehearsal has stopped being a test of v66 — an
+    // UPDATE that matches nothing passes, so a narrowed corpus would leave the
+    // whole suite green and vacuous (BACKLOG-2859).
+    const seededRoles = (
+      db
+        .prepare("SELECT DISTINCT role FROM transaction_contacts")
+        .all() as Array<{ role: string }>
+    ).map((r) => r.role);
+    for (const required of ["buyer_agent", "seller_agent", "listing_agent", "buyer", "seller"]) {
+      expect(seededRoles).toContain(required);
+    }
 
     // The corpus spans more than one source — a single-source corpus would let a
     // migration that collapses provenance pass unnoticed.
@@ -624,6 +650,95 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
       .all() as Array<{ id: string; bulk_mail_headers: string | null }>;
     expect(rows.map((r) => r.id)).toEqual([...EMAIL_IDS].sort());
     for (const r of rows) expect(r.bulk_mail_headers).toBeNull();
+  });
+
+  // =========================================================================
+  // v66 — the role collapse, observed on a REAL shipped database.
+  //
+  // THIS PROBE IS THE POINT OF THE EXERCISE, and it is here because the chain
+  // completing proves nothing about it: the version stamp advances whether or
+  // not a migrate body did any work. Measured on a sibling branch — neutering a
+  // migration's body to `return;` left this whole rehearsal GREEN, because no
+  // assertion named what that migration was supposed to have changed.
+  //
+  // The corpus was extended for exactly this migration. Before that, the shipped
+  // fixture held only `buyer_agent` and `seller_agent`, so `listing_agent`, both
+  // counterparty principals, `specific_role` and `contacts.default_role` all had
+  // ZERO input rows — four of v66's six operations would have run against
+  // nothing and passed. An UPDATE matching no rows succeeds; so does a DELETE.
+  // =========================================================================
+
+  it("v66 applied: every legacy agent value collapsed to 'agent', by EXACT ID, on a real shipped database", async () => {
+    assertRealOnDiskTarget();
+    await upgrade();
+
+    const rows = db
+      .prepare("SELECT id, role, specific_role FROM transaction_contacts ORDER BY id")
+      .all() as Array<{ id: string; role: string | null; specific_role: string | null }>;
+
+    // IDENTITY, not counts: the exact role each surviving row holds, keyed by
+    // id. A migration that collapsed the right NUMBER of rows onto the wrong
+    // ones passes a count and fails this.
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r.role]));
+    expect(byId).toEqual(TRANSACTION_CONTACT_ROLES_AFTER_V66);
+
+    // The second collapsed column. Only ivy carried a non-NULL specific_role,
+    // and it must have moved in step with `role` — the two are kept in sync on
+    // write, so a migration that updated one and not the other would leave a row
+    // whose canonical column still says `buyer_agent`.
+    const ivy = rows.find((r) => r.id === "tc-2700-frozen-ivy");
+    expect(ivy?.specific_role).toBe("agent");
+
+    // No legacy value survives ANYWHERE in either column.
+    for (const r of rows) {
+      expect(["buyer_agent", "seller_agent", "listing_agent"]).not.toContain(r.role);
+      expect(["buyer_agent", "seller_agent", "listing_agent"]).not.toContain(r.specific_role);
+    }
+  });
+
+  it("v66 applied: the counterparty-principal assignments are gone — and ONLY those", async () => {
+    assertRealOnDiskTarget();
+    await upgrade();
+
+    const ids = (
+      db.prepare("SELECT id FROM transaction_contacts ORDER BY id").all() as Array<{ id: string }>
+    ).map((r) => r.id);
+
+    // Two exact sets that PARTITION the seed. Naming the removals individually
+    // is what keeps this honest: the survivor assertion could have been made
+    // green by deleting it or by swapping it for a row count, and either would
+    // hide a migration that deleted the wrong rows.
+    expect(ids).toEqual([...TRANSACTION_CONTACT_IDS].sort());
+    for (const removed of TRANSACTION_CONTACTS_REMOVED_BY_V66) {
+      expect(ids).not.toContain(removed);
+    }
+    expect(ids.length + TRANSACTION_CONTACTS_REMOVED_BY_V66.length).toBe(
+      TRANSACTION_CONTACT_IDS_SEEDED.length,
+    );
+
+    // The CONTACTS themselves are untouched — v66 removes an assignment, never a
+    // person. Deleting the contact would also pass every assertion above.
+    const contactIds = (
+      db.prepare("SELECT id FROM contacts ORDER BY id").all() as Array<{ id: string }>
+    ).map((r) => r.id);
+    expect(contactIds).toEqual([...CONTACT_IDS].sort());
+  });
+
+  it("v66 applied: contacts.default_role collapsed, and buyer/seller left deliberately alone", async () => {
+    assertRealOnDiskTarget();
+    await upgrade();
+
+    const rows = db
+      .prepare("SELECT id, default_role FROM contacts ORDER BY id")
+      .all() as Array<{ id: string; default_role: string | null }>;
+
+    // Includes the NOT-migrated `buyer` and `inspector` rows on purpose. This
+    // asserts the migration's NARROWNESS as well as its effect: a broader
+    // UPDATE that swept every principal default_role into `agent` would pass a
+    // "no legacy agent values remain" check and fail this one.
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.default_role]))).toEqual(
+      CONTACT_DEFAULT_ROLES_AFTER_V66,
+    );
   });
 
   // =========================================================================
