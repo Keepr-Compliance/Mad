@@ -83,9 +83,34 @@ describe('ExtractContactRolesTool', () => {
     tool = new ExtractContactRolesTool(mockService);
   });
 
+  /**
+   * WHAT THE MODEL SENDS — deliberately NOT `ContactRoleExtraction`.
+   *
+   * `ContactRoleExtraction.role` is `ContactRole`, the vocabulary the APP
+   * writes. A model response is an untrusted external payload: it arrives as a
+   * JSON string and is not bound by our union, and it still emits the retired
+   * side-specific agent values because that vocabulary is decades old in its
+   * training data (BACKLOG-2859).
+   *
+   * Typing these fixtures as `ContactRoleExtraction` asserted the opposite —
+   * that the model cannot produce them — which is exactly the claim the fold
+   * under test exists to falsify.
+   */
+  type RawModelResponse = {
+    assignments: Array<{
+      name: string;
+      email?: string;
+      phone?: string;
+      role: string;
+      confidence: number;
+      evidence: string[];
+    }>;
+    transactionContext?: Record<string, unknown>;
+  };
+
   describe('successful extraction', () => {
     it('should extract contact roles from buyer-side communication', async () => {
-      const mockResponse: ContactRoleExtraction = {
+      const mockResponse: RawModelResponse = {
         assignments: [
           {
             name: 'Sarah Smith',
@@ -148,7 +173,7 @@ describe('ExtractContactRolesTool', () => {
     });
 
     it('should handle multi-party extraction', async () => {
-      const mockResponse: ContactRoleExtraction = {
+      const mockResponse: RawModelResponse = {
         assignments: [
           { name: 'Agent 1', role: 'buyer_agent', confidence: 0.9, evidence: [] },
           { name: 'Agent 2', role: 'seller_agent', confidence: 0.9, evidence: [] },
@@ -164,7 +189,7 @@ describe('ExtractContactRolesTool', () => {
       expect(result.success).toBe(true);
       expect(result.data?.assignments).toHaveLength(4);
 
-      const roles = result.data?.assignments.map(a => a.role);
+      const roles = result.data?.assignments.map(a => a.role) ?? [];
       // Both agents fold to one role (BACKLOG-2859).
       expect(roles).toContain('agent');
       expect(roles.filter((r) => r === 'agent')).toHaveLength(2);
