@@ -13,6 +13,7 @@ import {
   type BulkMailHeaders,
 } from "../utils/bulkMailHeaders";
 import { normalizeEmailAddress } from "../utils/emailAddress";
+import { htmlToPlainText } from "../utils/htmlToPlainText";
 import { EmailDeduplicationService } from "./emailDeduplicationService";
 import {
   withRetry,
@@ -1217,10 +1218,29 @@ class OutlookFetchService {
 
     // Extract body
     const body = message.body ? message.body.content : "";
+    /**
+     * BACKLOG-2855 — `emails.body_plain` is NOT a display convenience.
+     *
+     * It is the column search (`transactionSearchDbService.ts:443/1097/1252` —
+     * `e.body_plain LIKE ?`, with ZERO references to `body_html` in that file)
+     * and auto-link (`autoLinkService.ts:330/368` — `subject + body_plain`)
+     * read. Whatever is not in it is, for those two features, not in the email.
+     *
+     * This line used to fall back to `message.bodyPreview` whenever Graph
+     * reported `contentType: "html"` — i.e. for nearly every real business
+     * email. Graph documents `bodyPreview` as "The first 255 characters of the
+     * message body" (v1.0 `message` resource), so a term appearing later in the
+     * message was unfindable and an address later in the message could not
+     * auto-link. The `$select` above already requests `body`, so the full
+     * message was fetched and then discarded HERE.
+     *
+     * `bodyPreview` is kept as the LAST resort so a message with no body at all
+     * still yields something.
+     */
     const bodyPlain =
       message.body && message.body.contentType === "text"
         ? message.body.content
-        : message.bodyPreview || "";
+        : htmlToPlainText(message.body?.content) || message.bodyPreview || "";
 
     /**
      * The sender-asserted send time. BACKLOG-2571 makes this what
