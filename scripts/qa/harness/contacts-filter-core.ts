@@ -50,6 +50,13 @@ export interface ExpectedFilterContact {
  * KEEPR_QA_SEED_CONTACT_FILTER=1. Per-source-leaf counts: manual=2 · contacts_app=1 · outlook=2 ·
  * google_contacts=1 · iphone=2. Per-role-leaf: buyers(buyer/client)=2 · sellers(seller)=2 ·
  * agents(seller_agent)=2 · unassigned(NULL)=2. Ids/tails echo BACKLOG-1977.
+ *
+ * BACKLOG-2859 — DELIBERATELY LEFT ON THE RETIRED VALUES, and this cell still passes.
+ * `seller` and `seller_agent` are no longer OFFERED anywhere, but the filter leaves still MATCH them:
+ * this cell filters `contacts.default_role`, and a contact whose default_role was never migrated (an
+ * older install, a restored backup) must keep appearing under Sellers / Agents rather than silently
+ * dropping out of the tree. Keeping them here is what exercises that guarantee, so do not "modernise"
+ * these seeds — swapping them to `client`/`agent` would delete the only coverage of it.
  */
 export const EXPECTED_FILTER_CONTACTS: readonly ExpectedFilterContact[] = [
   { id: '00000000-0000-4000-8000-000000001971', source: 'manual', default_role: 'buyer' },
