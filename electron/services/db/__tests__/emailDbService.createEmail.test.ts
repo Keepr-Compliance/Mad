@@ -30,6 +30,7 @@ jest.mock("@sentry/electron/main", () => ({
 
 import { setDb } from "../core/dbConnection";
 import { createEmail } from "../emailDbService";
+import { CURRENT_DERIVATION_VERSION } from "../../../utils/derivationVersion";
 
 function createSchema(db: DatabaseType): void {
   db.exec(`
@@ -59,6 +60,11 @@ function createSchema(db: DatabaseType): void {
       message_id_header TEXT,
       content_hash TEXT,
       labels TEXT,
+      -- BACKLOG-2857: mirrors the production column (migration v67). Declared
+      -- with the same NOT NULL DEFAULT 0 so a createEmail that FAILED to bind it
+      -- would land at 0 here exactly as it would on a real database, and the
+      -- stamping assertion below can tell the two apart.
+      derived_version INTEGER NOT NULL DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
     );
@@ -206,4 +212,34 @@ describe("emailDbService.createEmail + participants (BACKLOG-1722)", () => {
 
     expect(addrs).toEqual(["alisa@x.com", "lisa@x.com"]);
   });
+
+  /**
+   * BACKLOG-2857 — this write path stamps the derivation version too.
+   *
+   * `createEmail` is reached by emailLinkingHandlers (both providers) and
+   * transactionService._saveCommunications. It is a SEPARATE INSERT from the one
+   * in emailSyncService, with its own column list that already omits
+   * bulk_mail_headers/ingest_source/validated_at — so "the sync stamps it" is no
+   * evidence whatsoever about this path. Asserted by executing the real function
+   * against the real driver and reading the column back.
+   */
+  it("stamps derived_version at CURRENT, not the column default (BACKLOG-2857)", async () => {
+    const created = await createEmail({
+      user_id: USER_ID,
+      subject: "Disclosure package",
+      body_plain: "text",
+      sender: "jane@example.com",
+      recipients: "agent@example.com",
+    } as Parameters<typeof createEmail>[0]);
+
+    const row = db
+      .prepare("SELECT derived_version FROM emails WHERE id = ?")
+      .get(created.id) as { derived_version: number };
+
+    expect(row.derived_version).toBe(CURRENT_DERIVATION_VERSION);
+    // The fixture column defaults to 0, which is what separates "bound" from
+    // "silently fell through to the default".
+    expect(row.derived_version).not.toBe(0);
+  });
 });
+

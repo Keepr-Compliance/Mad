@@ -56,11 +56,20 @@ describe('EXPECTED_ROLE_TRIPLES — deterministic, purchase-valid ground truth',
     expect(EXPECTED_ROLE_TRIPLES.map((t) => t.contactId)).toEqual(seededIds);
   });
 
-  it('uses only PURCHASE-valid roles (seller / seller_agent / escrow_officer), never buyer/listing_agent', () => {
+  it('uses only OFFERED roles (client / agent / escrow_officer), never a retired one', () => {
+    // BACKLOG-2859. The cell drives the REAL dropdown and selects by option
+    // VALUE, so an expectation naming a role the picker no longer offers does
+    // not just fail — it cannot be performed at all.
     const roles = EXPECTED_ROLE_TRIPLES.map((t) => t.role);
-    expect(roles).toEqual(['seller', 'seller_agent', 'escrow_officer']);
+    expect(roles).toEqual(['client', 'agent', 'escrow_officer']);
+    // The counterparty principals, removed by founder ruling.
     expect(roles).not.toContain('buyer');
+    expect(roles).not.toContain('seller');
+    // The three collapsed agent values. On this `purchase` fixture the LISTING
+    // agent is the USER, which is why it was never assignable here either.
     expect(roles).not.toContain('listing_agent');
+    expect(roles).not.toContain('seller_agent');
+    expect(roles).not.toContain('buyer_agent');
   });
 
   it('keeps role and specific_role in sync (the add path normalizes them)', () => {
@@ -72,8 +81,8 @@ describe('EXPECTED_ROLE_TRIPLES — deterministic, purchase-valid ground truth',
   it('maps each role to its ROLE_TO_CATEGORY category', () => {
     const byRole = Object.fromEntries(EXPECTED_ROLE_TRIPLES.map((t) => [t.role, t.roleCategory]));
     expect(byRole).toEqual({
-      seller: 'client',
-      seller_agent: 'agent',
+      client: 'client',
+      agent: 'agent',
       escrow_officer: 'title_escrow',
     });
   });
@@ -98,7 +107,7 @@ describe('diffRoles — FAIL classification', () => {
     expect(devs).toContainEqual({
       contactId: QA_SEED_CONTACT_IDS[1],
       kind: 'wrong-role',
-      expected: 'seller',
+      expected: 'client',
       got: 'buyer',
     });
   });
@@ -133,7 +142,7 @@ describe('diffRoles — FAIL classification', () => {
     expect(devs).toContainEqual({
       contactId: QA_SEED_CONTACT_IDS[1],
       kind: 'missing',
-      expected: 'seller',
+      expected: 'client',
       got: null,
     });
   });

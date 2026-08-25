@@ -11,7 +11,8 @@ import { OfflineNotice } from "./common/OfflineNotice";
 import { formatDate as formatDateShared, formatCurrency as formatCurrencyShared } from "../utils/formatUtils";
 // BACKLOG-2805: this row printed the RAW ENUM and leaned on CSS `capitalize`
 // to make it look like a label, so it read "Purchase" while every other
-// surface said "Listing/Purchase". No "Purchase" token on the line, which is
+// surface said "Listing" (BACKLOG-2850; "Listing/Purchase" before it). No
+// "Purchase" token on the line, which is
 // why a text sweep never found it.
 import { TRANSACTION_TYPE_LABELS } from "../constants/transactionTypes";
 

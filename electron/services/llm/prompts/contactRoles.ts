@@ -21,7 +21,7 @@ IMPORTANT: Return ONLY valid JSON matching this exact schema:
       "name": string,
       "email": string | null,
       "phone": string | null,
-      "role": "buyer" | "seller" | "buyer_agent" | "seller_agent" | "escrow" | "title" | "lender" | "inspector" | "appraiser" | "attorney" | "other",
+      "role": "buyer" | "seller" | "agent" | "escrow" | "title" | "lender" | "inspector" | "appraiser" | "attorney" | "other",
       "confidence": number (0-1),
       "evidence": [string] (direct quotes from emails supporting this role assignment)
     }
@@ -35,8 +35,9 @@ IMPORTANT: Return ONLY valid JSON matching this exact schema:
 Role definitions:
 - buyer: The person/entity purchasing the property
 - seller: The person/entity selling the property
-- buyer_agent: Real estate agent representing the buyer
-- seller_agent: Real estate agent representing the seller (listing agent)
+- agent: Any real estate agent representing a party to the deal. Do NOT try to
+  say which side they are on — the app derives that from the transaction type
+  (BACKLOG-2859). One role covers the buyer's agent and the listing agent alike.
 - escrow: Escrow officer or company
 - title: Title company representative
 - lender: Mortgage lender or loan officer

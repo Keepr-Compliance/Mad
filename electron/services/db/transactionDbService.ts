@@ -13,6 +13,10 @@ import type {
 } from "../../types";
 import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
+import {
+  countLinkedEmailsByTransaction,
+  type ScopedEmailRow,
+} from "./emailThreadScope";
 import logService from "../logService";
 import {
   getTransactionContactsWithRoles,
@@ -613,62 +617,121 @@ export function getPendingTransactionCount(userId: string): number {
 }
 
 /**
+ * BACKLOG-2865: the attached emails of some set of transactions, in the shape
+ * and the ORDER the linked-email count needs.
+ *
+ * `transactionScope` is a SQL fragment selecting transaction ids, spliced in as
+ * a subselect so this stays ONE query no matter how many deals the list holds.
+ * It carries no caller-supplied text of its own — the only call sites pass a
+ * literal `?` or the same WHERE clause the transaction query just ran, with the
+ * same bound params.
+ *
+ * TWO THINGS THAT ARE LOAD-BEARING:
+ *
+ * 1. INNER JOIN, not LEFT. It mirrors `getCommunicationsWithMessages`, whose
+ *    channel is derived from the emails join: a `communications` row whose
+ *    `email_id` points at no `emails` row comes back as channel 'unknown' and is
+ *    dropped by `processEmailThreads`. The old `COUNT(DISTINCT c.email_id)`
+ *    counted those rows — a divergence from the tab that predates this item and
+ *    does not survive it.
+ *
+ * 2. `ORDER BY e.sent_at DESC` is the loader's order, and the de-duplication in
+ *    `countLinkedEmailsByTransaction` keeps the first row per email id on that
+ *    basis. Changing the order here silently changes which duplicate wins.
+ */
+function fetchScopedEmailRows(
+  transactionScope: string,
+  params: unknown[],
+): ScopedEmailRow[] {
+  return dbAll<ScopedEmailRow>(
+    `SELECT c.transaction_id  as transaction_id,
+            c.email_id       as email_id,
+            c.match_reason   as match_reason,
+            e.thread_id      as thread_id,
+            e.subject        as subject
+       FROM communications c
+       INNER JOIN emails e ON e.id = c.email_id
+      WHERE c.email_id IS NOT NULL
+        AND c.transaction_id IN (${transactionScope})
+      ORDER BY e.sent_at DESC`,
+    params,
+  );
+}
+
+/**
  * Get all transactions for a user
  */
 export async function getTransactions(
   filters?: TransactionFilters,
 ): Promise<Transaction[]> {
-  // BACKLOG-390: Count emails using subquery for accurate count
   // BACKLOG-396: Use stored text_thread_count for texts (updated on link/unlink)
-  // TASK-1403: Updated email_count to use email_id IS NOT NULL (new three-table architecture)
-  // This ensures consistency between card view and details page
-  let sql = `SELECT t.*,
-             (SELECT COUNT(*) FROM communications c WHERE c.transaction_id = t.id) as total_communications_count,
-             (SELECT COUNT(DISTINCT c.email_id)
-              FROM communications c
-              WHERE c.transaction_id = t.id
-              AND c.email_id IS NOT NULL) as email_count
-             FROM transactions t WHERE 1=1`;
+  //
+  // BACKLOG-2865: `email_count` is NOT computed in this SQL any more. It was a
+  // `COUNT(DISTINCT c.email_id)` subquery over EVERY attached email, and once
+  // BACKLOG-2861 scoped the Emails tab to its linked list the card and the tab
+  // described different sets — 9 on the card, "0 conversations (0 emails)" in
+  // the tab, on the same deal. It is now derived below from the rules the tab
+  // classifies with. Do not reintroduce a SQL count here: two producers of one
+  // number is the shape this item exists to remove.
+  let whereClause = " WHERE 1=1";
   const params: unknown[] = [];
 
   if (filters?.user_id) {
-    sql += " AND t.user_id = ?";
+    whereClause += " AND t.user_id = ?";
     params.push(filters.user_id);
   }
 
   if (filters?.transaction_type) {
-    sql += " AND t.transaction_type = ?";
+    whereClause += " AND t.transaction_type = ?";
     params.push(filters.transaction_type);
   }
 
   if (filters?.status) {
-    sql += " AND t.status = ?";
+    whereClause += " AND t.status = ?";
     params.push(filters.status);
   }
 
   if (filters?.export_status) {
-    sql += " AND t.export_status = ?";
+    whereClause += " AND t.export_status = ?";
     params.push(filters.export_status);
   }
 
   if (filters?.start_date) {
-    sql += " AND t.closing_deadline >= ?";
+    whereClause += " AND t.closing_deadline >= ?";
     params.push(filters.start_date);
   }
 
   if (filters?.end_date) {
-    sql += " AND t.closing_deadline <= ?";
+    whereClause += " AND t.closing_deadline <= ?";
     params.push(filters.end_date);
   }
 
   if (filters?.property_address) {
-    sql += " AND t.property_address LIKE ?";
+    whereClause += " AND t.property_address LIKE ?";
     params.push(`%${filters.property_address}%`);
   }
 
-  sql += " ORDER BY t.created_at DESC";
+  const sql = `SELECT t.*,
+             (SELECT COUNT(*) FROM communications c WHERE c.transaction_id = t.id) as total_communications_count
+             FROM transactions t${whereClause} ORDER BY t.created_at DESC`;
 
-  return dbAll<Transaction>(sql, params);
+  const transactions = dbAll<Transaction>(sql, params);
+  if (transactions.length === 0) return transactions;
+
+  // The SAME predicate the rows above were selected by, re-used as a subselect
+  // rather than an `IN` list of ids: a user with a thousand deals would blow
+  // SQLite's bound-variable limit, and re-deriving the filter by hand is how
+  // the two halves drift apart.
+  const counts = countLinkedEmailsByTransaction(
+    fetchScopedEmailRows(`SELECT t.id FROM transactions t${whereClause}`, [
+      ...params,
+    ]),
+  );
+  for (const transaction of transactions) {
+    transaction.email_count = counts.get(transaction.id) ?? 0;
+  }
+
+  return transactions;
 }
 
 /**
@@ -722,17 +785,26 @@ export function createTransactionWithContactsSync(
 export function getTransactionByIdSync(
   transactionId: string,
 ): Transaction | null {
-  // BACKLOG-446: Include email_count using same subquery as getTransactions
-  // TASK-1403: Updated email_count to use email_id IS NOT NULL (new three-table architecture)
-  // This ensures consistent email counts between list view and detail view
-  const sql = `SELECT t.*,
-               (SELECT COUNT(DISTINCT c.email_id)
-                FROM communications c
-                WHERE c.transaction_id = t.id
-                AND c.email_id IS NOT NULL) as email_count
-               FROM transactions t WHERE t.id = ?`;
-  const transaction = dbGet<Transaction>(sql, [transactionId]);
-  return transaction || null;
+  // BACKLOG-446: Include email_count so list view and detail view agree.
+  //
+  // BACKLOG-2865: THIS producer is not optional to fix, and fixing only
+  // `getTransactions` would have looked correct in every static test. This one
+  // is what `getOverview` returns (handler → transactionService.getTransactionOverview
+  // → databaseService.getTransactionById → here), and TransactionDetails re-reads
+  // `email_count` from `getOverview` after every auto-sync (BACKLOG-2838). A card
+  // scoped in one producer and not the other shows the scoped number on load and
+  // flips to the unscoped one the moment anything refreshes behind the modal.
+  const transaction = dbGet<Transaction>(
+    "SELECT t.* FROM transactions t WHERE t.id = ?",
+    [transactionId],
+  );
+  if (!transaction) return null;
+
+  const counts = countLinkedEmailsByTransaction(
+    fetchScopedEmailRows("SELECT ?", [transactionId]),
+  );
+  transaction.email_count = counts.get(transactionId) ?? 0;
+  return transaction;
 }
 
 /**

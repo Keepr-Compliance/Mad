@@ -200,7 +200,7 @@ describe("StartNewAuditModal", () => {
         // which is the defect written down as an expectation — the row
         // printed the stored value and let CSS `capitalize` make it look
         // like a label. It now asserts the founder-ruled display strings.
-        expect(screen.getByText("Listing/Purchase")).toBeInTheDocument();
+        expect(screen.getByText("Listing")).toBeInTheDocument();
         expect(screen.getByText("Sale")).toBeInTheDocument();
       });
     });

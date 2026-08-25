@@ -453,11 +453,30 @@ export const ROLE_GROUP = {
  * set and drop the `disabled` flag on the leaf.
  */
 export const ROLE_LEAF_TO_DEFAULT_ROLES: Record<string, readonly string[]> = {
-  // Clients — `client` is the legacy combined "Buyer/Seller" role, folded under Buyers.
+  // Clients — `client` is the role the app now stores for the party a user
+  // represents; `buyer`/`seller` are retired values (BACKLOG-2859) that can
+  // still sit in a `default_role`, so both leaves keep matching them.
   [ROLE_LEAF.BUYERS]: ["buyer", "client"],
   [ROLE_LEAF.SELLERS]: ["seller"],
-  // Colleagues
-  [ROLE_LEAF.AGENTS]: ["buyer_agent", "seller_agent", "listing_agent"],
+  // Colleagues.
+  //
+  // BACKLOG-2859 collapsed `buyer_agent` / `seller_agent` / `listing_agent` into
+  // the single side-neutral `agent`, so the live vocabulary contributes ONE
+  // value here. The three legacy values stay in the set on purpose: this leaf
+  // filters `contacts.default_role`, and a contact whose default_role was never
+  // migrated (restored backup, external source) must still land under Agents
+  // rather than silently vanishing from the filter.
+  //
+  // `co_agent` is grouped here too: a co-agent is a colleague, which is exactly
+  // what this branch of the tree means. It gets no leaf of its own because the
+  // founder has not asked for one — flagged on the item rather than invented.
+  [ROLE_LEAF.AGENTS]: [
+    "agent",
+    "co_agent",
+    "buyer_agent",
+    "seller_agent",
+    "listing_agent",
+  ],
   [ROLE_LEAF.BROKERS]: [], // no backing role value — greyed "no data"
   [ROLE_LEAF.TRANSACTION_COORDINATORS]: ["transaction_coordinator"],
   // Vendors

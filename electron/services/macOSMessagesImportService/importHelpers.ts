@@ -8,6 +8,7 @@ import crypto from "crypto";
 import path from "path";
 import fs from "fs";
 import cliProgress from "cli-progress";
+import type { Database as DatabaseType } from "better-sqlite3";
 
 import type {
   ChunkedProcessingOptions,
@@ -319,6 +320,154 @@ export function calculateQueryBatchSize(totalMessages: number): number {
  */
 export function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * BACKLOG-2814: the thread_id the importer writes for a macOS chat. One chat
+ * row -> one thread, so a group's name maps onto a thread without collapsing.
+ */
+export function macChatThreadId(chatId: number): string {
+  return `macos-chat-${chatId}`;
+}
+
+/**
+ * BACKLOG-2814: normalize Apple's `chat.display_name` into "the group has a
+ * name" or "it does not".
+ *
+ * Apple represents "unnamed" TWO ways and the empty string is by far the more
+ * common one. Measured against a real chat.db (2,886 chats): 2,564 empty
+ * strings vs 234 NULLs, with only 88 chats actually named. A check that tested
+ * `!= null` alone would therefore treat 2,564 unnamed chats as named and
+ * render a blank title where the participant list belongs.
+ *
+ * Whitespace is trimmed for the same reason: a name of " " is not a name.
+ */
+export function normalizeChatDisplayName(
+  raw: string | null | undefined
+): string | null {
+  if (raw === null || raw === undefined) return null;
+  const trimmed = String(raw).trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+/**
+ * BACKLOG-2814: rows of Apple's `chat` table carrying a candidate group name.
+ */
+export interface ChatDisplayNameRow {
+  chat_id: number;
+  display_name: string | null;
+}
+
+/**
+ * BACKLOG-2814: reduce raw `chat` rows to the chats that genuinely HAVE a name.
+ * Both of Apple's "unnamed" representations (NULL and "") drop out here.
+ */
+export function buildChatNameMap(
+  rows: ChatDisplayNameRow[]
+): Map<number, string> {
+  const names = new Map<number, string>();
+  for (const row of rows) {
+    const name = normalizeChatDisplayName(row.display_name);
+    if (name !== null) {
+      names.set(row.chat_id, name);
+    }
+  }
+  return names;
+}
+
+/**
+ * BACKLOG-2814: what one name-sync pass changed. Reported so a pass that
+ * silently did nothing is distinguishable from one that had nothing to do.
+ */
+export interface ThreadNameSyncCounts {
+  named: number;
+  cleared: number;
+}
+
+/**
+ * BACKLOG-2814: make `message_thread_names` match chat.db for this user's
+ * macOS threads.
+ *
+ * WHY THIS IS NOT PART OF THE MESSAGE INSERT. The importer stores messages with
+ * `INSERT OR IGNORE` keyed on the Apple GUID, so an ordinary re-import writes
+ * ZERO rows for a thread it already has. A name carried on the message row
+ * would therefore never reach an existing user's already-imported threads —
+ * only a destructive force reimport would place it. This pass is driven by the
+ * `chat` table instead, so it runs to completion whether the run stored six
+ * hundred messages or none, and one ordinary re-import names the threads a user
+ * already had.
+ *
+ * IT ALSO CLEARS. A user who removes a group's name in Messages must not keep
+ * the old one forever, so any macOS thread of theirs that is no longer named
+ * loses its row. Scoped by the `macos-chat-` prefix so it can never reach a
+ * thread name from another source.
+ *
+ * Names are never logged — only counts. A group name is user content.
+ */
+export function syncMacChatThreadNames(
+  db: DatabaseType,
+  userId: string,
+  chatNames: Map<number, string>
+): ThreadNameSyncCounts {
+  const upsert = db.prepare(
+    `INSERT INTO message_thread_names (user_id, thread_id, display_name, updated_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(user_id, thread_id) DO UPDATE SET
+       display_name = excluded.display_name,
+       updated_at = CURRENT_TIMESTAMP`
+  );
+
+  const run = db.transaction((): ThreadNameSyncCounts => {
+    let named = 0;
+    const keep: string[] = [];
+    for (const [chatId, name] of chatNames) {
+      const threadId = macChatThreadId(chatId);
+      upsert.run(userId, threadId, name);
+      keep.push(threadId);
+      named++;
+    }
+
+    // Everything of this user's that this importer owns and chat.db no longer
+    // names. `NOT IN` over a parameter list, chunked: SQLite's variable limit
+    // is 999 and a heavy user can name more chats than that.
+    let cleared = 0;
+    const CHUNK = 400;
+    if (keep.length === 0) {
+      cleared = db
+        .prepare(
+          `DELETE FROM message_thread_names
+            WHERE user_id = ? AND thread_id LIKE 'macos-chat-%'`
+        )
+        .run(userId).changes;
+    } else {
+      // Delete in one statement per chunk of KEEPERS would be wrong (a row kept
+      // by chunk A would be deleted by chunk B), so collect the doomed ids first.
+      const existing = db
+        .prepare(
+          `SELECT thread_id FROM message_thread_names
+            WHERE user_id = ? AND thread_id LIKE 'macos-chat-%'`
+        )
+        .all(userId) as Array<{ thread_id: string }>;
+      const keepSet = new Set(keep);
+      const doomed = existing
+        .map((r) => r.thread_id)
+        .filter((t) => !keepSet.has(t));
+      for (let i = 0; i < doomed.length; i += CHUNK) {
+        const slice = doomed.slice(i, i + CHUNK);
+        const placeholders = slice.map(() => "?").join(",");
+        cleared += db
+          .prepare(
+            `DELETE FROM message_thread_names
+              WHERE user_id = ? AND thread_id IN (${placeholders})`
+          )
+          .run(userId, ...slice).changes;
+      }
+    }
+
+    return { named, cleared };
+  });
+
+  return run();
 }
 
 /**

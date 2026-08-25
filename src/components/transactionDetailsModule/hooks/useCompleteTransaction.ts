@@ -19,6 +19,15 @@
  *
  * TWO THINGS THAT ARE LOAD-BEARING:
  *
+ * BACKLOG-2866 — THE GATE ITSELF NOW LIVES IN `src/services/exportReviewGate.ts`.
+ * It was extracted, not copied, because three more routes reach an export
+ * (the brokerage-only header Export button, the submit modal's Export offer,
+ * and Bulk Export from the transactions list) and the founder's rule is that
+ * the mechanism stopping a Complete is the SAME one stopping an Export. Four
+ * copies of one rule is how they drift. `requestExport` below is that same gate
+ * run without the license branch, sharing this hook's `blockedCount` so all
+ * three details-screen routes raise ONE P3 dialog.
+ *
  * 1. THE GATE RE-READS THE COUNT AT CLICK TIME. It calls refresh() and acts on
  *    the returned value, never on a render-stale prop. A prop-based gate opens
  *    the export modal for a queue that filled a moment ago, and no test that
@@ -32,11 +41,14 @@
  */
 import { useCallback, useState } from "react";
 import { useLicense } from "@/contexts/LicenseContext";
+import { evaluateExportGate } from "@/services/exportReviewGate";
 import type { ReviewStateResult } from "../../../../electron/types/ipc/window-api-transactions";
 
 export type CompleteTarget = "export" | "submit";
 
 export interface UseCompleteTransactionArgs {
+  /** The deal being gated. Carried so a refusal can name it. */
+  transactionId: string;
   /** Re-reads the ONE review state. Must hit the service, not a cached prop. */
   refreshReviewState: () => Promise<ReviewStateResult>;
   openExport: () => void;
@@ -52,6 +64,12 @@ export interface UseCompleteTransactionResult {
    */
   blockedCount: number | null;
   requestComplete: () => Promise<void>;
+  /**
+   * BACKLOG-2866 — the SAME gate, then straight to export with no license
+   * branch. Backs the brokerage-only header Export button and the submit
+   * modal's Export offer, neither of which consulted review state before.
+   */
+  requestExport: () => Promise<void>;
   /** P3 "Review" — straight to S2. */
   reviewFromGate: () => void;
   /** P3 "Cancel" — back to S1, nothing completed. */
@@ -61,6 +79,7 @@ export interface UseCompleteTransactionResult {
 }
 
 export function useCompleteTransaction({
+  transactionId,
   refreshReviewState,
   openExport,
   openSubmit,
@@ -76,32 +95,39 @@ export function useCompleteTransaction({
     [canSubmit, organizationId],
   );
 
-  const requestComplete = useCallback(async () => {
-    // Re-read at click time — see note 1 above.
-    //
-    // A THROW here means "cannot confirm the queue is empty", which is not the
-    // same as "the queue is empty". Completing on an unverified queue is the
-    // failure this gate exists to prevent, so an unreadable queue blocks. The
-    // hook re-throws only on a COLD failure (nothing ever loaded); once a good
-    // read exists it falls back to that rather than nagging.
-    let state: ReviewStateResult;
-    try {
-      state = await refreshReviewState();
-    } catch {
-      setBlockedCount(-1);
-      return;
-    }
-    if (state.count > 0) {
-      setBlockedCount(state.count);
-      return;
+  /**
+   * Run THE gate. Returns true when an export/complete may proceed.
+   *
+   * `evaluateExportGate` owns the rule — the click-time re-read, the
+   * unreadable-queue block, the `count > 0` block. Nothing is re-implemented
+   * here; the reader passed in is this transaction's BOUND refresh, so the gate
+   * and the header badge read on one path.
+   */
+  const runGate = useCallback(async (): Promise<boolean> => {
+    const decision = await evaluateExportGate([{ transactionId }], () =>
+      refreshReviewState(),
+    );
+    if (!decision.allowed) {
+      setBlockedCount(decision.blocked[0].count);
+      return false;
     }
     setBlockedCount(null);
+    return true;
+  }, [transactionId, refreshReviewState]);
+
+  const requestComplete = useCallback(async () => {
+    if (!(await runGate())) return;
     if (resolveTarget() === "submit") {
       openSubmit();
     } else {
       openExport();
     }
-  }, [refreshReviewState, resolveTarget, openExport, openSubmit]);
+  }, [runGate, resolveTarget, openExport, openSubmit]);
+
+  const requestExport = useCallback(async () => {
+    if (!(await runGate())) return;
+    openExport();
+  }, [runGate, openExport]);
 
   const reviewFromGate = useCallback(() => {
     setBlockedCount(null);
@@ -110,5 +136,12 @@ export function useCompleteTransaction({
 
   const cancelGate = useCallback(() => setBlockedCount(null), []);
 
-  return { blockedCount, requestComplete, reviewFromGate, cancelGate, resolveTarget };
+  return {
+    blockedCount,
+    requestComplete,
+    requestExport,
+    reviewFromGate,
+    cancelGate,
+    resolveTarget,
+  };
 }

@@ -351,7 +351,24 @@ describe("OutlookFetchService", () => {
       expect(results[0].bodyPlain).toBe("Plain text content");
     });
 
-    it("should use bodyPreview for HTML emails", async () => {
+    /**
+     * BACKLOG-2855 — INVERTED. This test was named "should use bodyPreview for
+     * HTML emails" and asserted `bodyPlain === "Preview text for plain"`. It
+     * codified the defect as intended behaviour, which is why every green check
+     * in this repo agreed with the truncation for as long as it shipped.
+     *
+     * Its fixture could never have caught the bug either: the "full" HTML body
+     * was `<p>HTML</p>` (11 characters) against a 22-character `bodyPreview`,
+     * so the full body was SHORTER than the preview and even a length
+     * comparison passed both ways. The fixture below keeps the same shape but
+     * makes the HTML body carry text the preview does not, so the assertion can
+     * separate pass from fail.
+     *
+     * The real proof — a multi-thousand-character body with a sentinel past the
+     * cutoff, plus the search consequence — lives in
+     * outlookFetchService.bodyPlain-2855.test.ts.
+     */
+    it("should derive plain text from the HTML body, NOT bodyPreview", async () => {
       const mockMessage = {
         id: "msg-1",
         conversationId: "conv-1",
@@ -359,7 +376,10 @@ describe("OutlookFetchService", () => {
         receivedDateTime: "2024-01-15T10:00:00Z",
         sentDateTime: "2024-01-15T09:59:00Z",
         hasAttachments: false,
-        body: { content: "<p>HTML</p>", contentType: "html" },
+        body: {
+          content: "<p>HTML body text the preview omits</p>",
+          contentType: "html",
+        },
         bodyPreview: "Preview text for plain",
       };
 
@@ -367,7 +387,8 @@ describe("OutlookFetchService", () => {
 
       const results = await outlookFetchService.searchEmails({});
 
-      expect(results[0].bodyPlain).toBe("Preview text for plain");
+      expect(results[0].bodyPlain).toBe("HTML body text the preview omits");
+      expect(results[0].bodyPlain).not.toBe("Preview text for plain");
     });
 
     it("should handle missing body", async () => {

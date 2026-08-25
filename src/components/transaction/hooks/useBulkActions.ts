@@ -4,6 +4,10 @@
  */
 import { useState, useCallback, useRef, useEffect } from "react";
 import { isPaywallLockedError } from "../../../services/entitlementService";
+import {
+  describeBlockedExport,
+  evaluateExportGate,
+} from "../../../services/exportReviewGate";
 
 /**
  * Return type for useBulkActions hook
@@ -39,6 +43,12 @@ export interface UseBulkActionsCallbacks {
   closeBulkDeleteModal: () => void;
   /** Callback to close bulk export modal */
   closeBulkExportModal: () => void;
+  /**
+   * BACKLOG-2866: property address for a selected id, for the review gate's
+   * refusal. Bulk export ships deals the user has not opened, so a refusal that
+   * does not NAME the deal sends them hunting through the whole selection.
+   */
+  labelForTransaction?: (transactionId: string) => string | undefined;
 }
 
 /**
@@ -88,6 +98,7 @@ export function useBulkActions(
     exitSelectionMode,
     closeBulkDeleteModal,
     closeBulkExportModal,
+    labelForTransaction,
   } = callbacks;
 
   /**
@@ -137,6 +148,41 @@ export function useBulkActions(
       setIsBulkExporting(true);
       try {
         const selectedTransactionIds = Array.from(selectedIds);
+
+        // BACKLOG-2866 — THE REVIEW GATE, before a single export starts.
+        //
+        // Founder ruling: unreviewed emails must never reach an exported audit
+        // package, and "a user is forced to review them before the submit or
+        // export". This is the highest-risk route to that, because the user is
+        // exporting deals they never opened — an unreviewed email is easiest to
+        // miss here.
+        //
+        // ALL-OR-NOTHING. One blocked deal stops the batch and nothing is
+        // written. Excluding the blocked deals and exporting the rest was
+        // rejected: it does not force the review the rule requires, it makes one
+        // click mean two different things depending on the selection, and a set
+        // of packages silently missing deals under a "Successfully exported 4
+        // transactions" toast is the very defect this gate exists to prevent.
+        //
+        // Deliberately NOT the BACKLOG-2075 locked shape below, which DOES
+        // exclude and continue. A locked deal cannot be fixed in-app, so
+        // blocking there would brick bulk export; a review queue is fixable
+        // right now, so blocking is a prompt to act. Running the gate FIRST
+        // also fixes the precedence: review refuses the batch outright rather
+        // than being counted as one more per-deal failure inside the loop.
+        const gate = await evaluateExportGate(
+          selectedTransactionIds.map((id) => ({
+            transactionId: id,
+            label: labelForTransaction?.(id),
+          })),
+        );
+        if (!gate.allowed) {
+          showError(describeBlockedExport(gate.blocked));
+          // Selection is deliberately KEPT — the user reviews, then retries the
+          // same batch.
+          return;
+        }
+
         let successCount = 0;
         // BACKLOG-2075: locked transactions (PAYWALL_LOCKED) are counted SEPARATELY
         // from generic failures. We do NOT storm the user with per-tx unlock modals
@@ -207,6 +253,7 @@ export function useBulkActions(
       showError,
       exitSelectionMode,
       closeBulkExportModal,
+      labelForTransaction,
     ]
   );
 

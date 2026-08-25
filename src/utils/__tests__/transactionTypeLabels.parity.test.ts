@@ -33,12 +33,14 @@ import { TRANSACTION_TYPE_LABELS as RENDERER_LABELS } from "../../constants/tran
  * The expected strings are asserted too, not just parity.
  *
  * Two copies that are identically WRONG would agree perfectly, so agreement on
- * its own proves nothing. These are the founder's exact ruled strings for
- * BACKLOG-2805 — including the slash, which is the whole point of the ticket
- * and the character most at risk from a slugify or escape helper.
+ * its own proves nothing. These are the founder's exact ruled strings, now at
+ * their THIRD value for `purchase`: "Purchase" -> "Listing/Purchase"
+ * (BACKLOG-2805, shipped v2.29.0) -> **"Listing"** (BACKLOG-2850). Pinning the
+ * literal here is what makes a half-finished rename — one map moved, the other
+ * left behind — fail on this file rather than ship two vocabularies.
  */
 const EXPECTED: Record<"purchase" | "sale", string> = {
-  purchase: "Listing/Purchase",
+  purchase: "Listing",
   sale: "Sale",
 };
 

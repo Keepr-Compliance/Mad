@@ -90,8 +90,10 @@ import {
   filterUnstoredAttachments,
   filterResolvableAttachments,
   attachmentStoredKey,
+  buildChatNameMap,
+  syncMacChatThreadNames,
 } from "./importHelpers";
-import type { AttachmentSizeRow } from "./importHelpers";
+import type { AttachmentSizeRow, ChatDisplayNameRow } from "./importHelpers";
 // BACKLOG-2772: the ONE decision object every entry point hands this service.
 import type { ImportPlan } from "../importPlan";
 import { normalizeAssociatedGuid } from "../../utils/reactionUtils";
@@ -689,6 +691,34 @@ class MacOSMessagesImportService {
           MacOSMessagesImportService.SERVICE_NAME
         );
 
+        // BACKLOG-2814: the user-visible GROUP NAME ("Closing Team"). Read here,
+        // beside the other two chat-table reads, and written after the store is
+        // committed.
+        //
+        // This is a SEPARATE query from the `account_login` one above rather
+        // than another column on it, because that query is filtered
+        // `WHERE account_login IS NOT NULL` — a named group whose chat row has
+        // no account_login would be silently dropped by it.
+        //
+        // NULL is filtered in SQL, the empty string in `buildChatNameMap`.
+        // Apple uses BOTH for "unnamed", and against a real chat.db the empty
+        // string outnumbers NULL more than ten to one (2,564 vs 234 of 2,886),
+        // so treating only NULL as absent would name almost every chat "".
+        const chatNameRows = await dbAll<ChatDisplayNameRow>(`
+          SELECT
+            ROWID as chat_id,
+            display_name
+          FROM chat
+          WHERE display_name IS NOT NULL
+        `);
+        const chatNamesMap = buildChatNameMap(chatNameRows);
+
+        // Counts only — a group name is user content and never goes to a log.
+        logService.info(
+          `Loaded ${chatNamesMap.size} named chats (of ${chatNameRows.length} with a non-NULL name)`,
+          MacOSMessagesImportService.SERVICE_NAME
+        );
+
         await yieldToEventLoop();
 
         // Fetch messages using cursor-based pagination to avoid loading all 600K+ at once
@@ -978,6 +1008,32 @@ class MacOSMessagesImportService {
               MacOSMessagesImportService.SERVICE_NAME
             );
           }
+        }
+
+        // BACKLOG-2814: name the threads. AFTER the swap and on the success
+        // path only — a cancelled force run returns `rolledBack:
+        // nothingChangedYet()`, which is a promise that the run changed nothing,
+        // and a name written before the swap would make that promise false.
+        //
+        // This pass does NOT depend on how many messages the run stored. That is
+        // the point: `INSERT OR IGNORE` means a re-import of an already-imported
+        // thread stores zero rows, and the names still arrive.
+        try {
+          const nameDb = appDb ?? databaseService.getRawDatabase();
+          const nameCounts = syncMacChatThreadNames(nameDb, userId, chatNamesMap);
+          logService.info(
+            `Thread names synced: ${nameCounts.named} named, ${nameCounts.cleared} cleared`,
+            MacOSMessagesImportService.SERVICE_NAME
+          );
+        } catch (nameError) {
+          // A name is a display convenience. It must never turn a successful
+          // message import into a failed one.
+          logService.warn(
+            `Thread name sync failed; messages imported normally: ${
+              nameError instanceof Error ? nameError.message : String(nameError)
+            }`,
+            MacOSMessagesImportService.SERVICE_NAME
+          );
         }
 
         return {

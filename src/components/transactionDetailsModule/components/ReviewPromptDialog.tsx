@@ -20,6 +20,18 @@
  *                  review screen.
  */
 import React from "react";
+// BACKLOG-2866: the blocked copy moved to the gate module BYTE-IDENTICAL, so the
+// bulk-export refusal says the same thing as this dialog. One condition, one
+// wording.
+//
+// PROOF THE EXTRACTION DID NOT DRIFT: the "blocked" variant had NO pre-existing
+// test — reviewFounderFeedback-2791 covers only variant="found" — so "the old
+// tests still pass" would have proved nothing here. Instead the rendered
+// textContent of variant="blocked" was captured at counts 1, 3 and -1 both
+// before and after the extraction and diffed: identical, to the byte. It is
+// pinned going forward by the transcription test in
+// `src/services/__tests__/exportReviewGate-2866.test.ts`.
+import { reviewBlockedBody, reviewBlockedTitle } from "@/services/exportReviewGate";
 
 export type ReviewPromptVariant = "found" | "blocked";
 
@@ -50,9 +62,7 @@ export function ReviewPromptDialog({
   const isBlocked = variant === "blocked";
   // BACKLOG-2791: -1 means the queue could not be READ. The gate blocks on that
   // rather than assuming empty, so the message must not claim a count it does
-  // not have.
-  const unreadable = isBlocked && count < 0;
-  const plural = count === 1 ? "communication" : "communications";
+  // not have. `reviewBlockedTitle`/`reviewBlockedBody` carry that branch now.
 
   // FOUNDER-DICTATED COPY (2026-08-22 R-session), transcribed verbatim. The
   // announcement is identical for a brand-new transaction and for an
@@ -77,17 +87,11 @@ export function ReviewPromptDialog({
   // simply closes. R > 0 keeps both, because there the choice is real.
   const acknowledgeOnly = !isBlocked && requiresReview === 0;
 
-  const title = unreadable
-    ? "Couldn't check Needs Review"
-    : isBlocked
-      ? "Review needed before completing"
-      : `${totalFound} total communications found`;
+  const title = isBlocked
+    ? reviewBlockedTitle(count)
+    : `${totalFound} total communications found`;
 
-  const body = unreadable
-    ? "The transaction can't be completed until the review queue can be read. Open Needs Review to try again."
-    : isBlocked
-      ? `You have ${count} ${plural} that need to be reviewed before completing the transaction.`
-      : null;
+  const body = isBlocked ? reviewBlockedBody(count) : null;
 
   return (
     <div
