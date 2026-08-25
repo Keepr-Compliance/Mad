@@ -54,7 +54,15 @@ const mockLicense = {
 jest.mock("../ExportModal", () => ({
   __esModule: true,
   default: (props: { transaction: { id: string }; userId: string }) => {
-    exportMounts.push({ transactionId: props.transaction.id, userId: props.userId });
+    // Counts MOUNTS, not renders — which is what the assertions below say they
+    // measure. BACKLOG-2866 made the export routes re-read review state at
+    // click time, and that read refreshes the badge, so the screen legitimately
+    // re-renders after an export opens. A push-on-render mock counted those as
+    // extra export destinations.
+    const { useEffect } = require("react") as typeof import("react");
+    useEffect(() => {
+      exportMounts.push({ transactionId: props.transaction.id, userId: props.userId });
+    }, []);
     return <div data-testid="export-destination" />;
   },
 }));

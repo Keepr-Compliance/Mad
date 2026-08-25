@@ -396,6 +396,7 @@ function TransactionDetails({
   );
 
   const complete = useCompleteTransaction({
+    transactionId: transaction.id,
     refreshReviewState: reviewQueue.refresh,
     openExport: () => setShowExportModal(true),
     openSubmit: () => { void openSubmitFlow(); },
@@ -1092,7 +1093,13 @@ function TransactionDetails({
           onShowEditModal={() => setShowEditModal(true)}
           onApprove={handleApprove}
           onRestore={handleRestore}
-          onShowExportModal={() => setShowExportModal(true)}
+          /* BACKLOG-2866 — was `() => setShowExportModal(true)`, which opened the
+             export modal without ever consulting review state. The one class of
+             user with a separate export route (brokerage, whose Complete leads
+             to Submit) was the one class that could skip the gate and produce an
+             audit package containing emails nobody reviewed. Same gate as
+             Complete, same P3 dialog. */
+          onShowExportModal={() => { void complete.requestExport(); }}
           onShowDeleteConfirm={() => setShowDeleteConfirm(true)}
           reviewCount={reviewQueue.threadCount}
           onShowNeedsReview={() => setShowNeedsReview(true)}
@@ -1482,9 +1489,13 @@ function TransactionDetails({
           // unchanged and now backs BOTH offers in that modal: the button
           // beside Submit, and the post-submit "Want to keep a local copy?"
           // ask. Same action either way, which is why it is one prop.
+          // BACKLOG-2866: re-gated. This offer sits downstream of Complete's
+          // gate, but the modal can stay open while a background sync queues
+          // new items, so the queue it was cleared against is not the queue at
+          // click time. Same gate, re-read now.
           onExport={() => {
             setShowSubmitModal(false);
-            setShowExportModal(true);
+            void complete.requestExport();
           }}
         />
       )}
