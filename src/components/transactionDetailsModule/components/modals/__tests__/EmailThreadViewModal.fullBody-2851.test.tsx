@@ -283,11 +283,15 @@ describe("BACKLOG-2851 — the thread bubble renders the whole message", () => {
 
     it("renders the longest body in the repo's corpora with room to spare", () => {
       // 432 characters is the measured maximum across all 100 corpus bodies,
-      // re-measured independently on BACKLOG-2862 and unchanged. At this width
-      // that is roughly 8 lines (~190px) against a ~765px thread viewport, so
-      // the realistic worst case shows in full with no scrollbar and no click —
-      // which is also why the corpora CANNOT justify a bound or a cap: they
-      // contain no case that would have hit either.
+      // re-measured independently on BACKLOG-2862 and unchanged.
+      //
+      // Two different line counts, and conflating them is easy: the body BELOW
+      // is a single newline-free string, so it WRAPS to ~8 lines at this width.
+      // The real corpus body of the same length carries explicit newlines and
+      // occupies ~19 lines / ~432px. Both sit inside a ~765px thread viewport,
+      // so the realistic worst case shows in full with no scrollbar and no
+      // click — which is also why the corpora CANNOT justify a bound or a cap:
+      // they contain no case that would have hit either.
       const body = `${"Escrow opened this morning and the wire instructions follow under separate cover. ".repeat(6)}CORPUS-MAX-TAIL`;
       expect(body.length).toBeGreaterThanOrEqual(CORPUS_MAX_LENGTH);
 
