@@ -202,6 +202,11 @@ describe("emails:precache handler — a force run that changed nothing (BACKLOG-
     expect(result.success).toBe(true);
     expect(result.emailsStored).toBe(3);
     expect(result.forceSwap).toBeUndefined();
-    expect(mockPrecacheEmails).toHaveBeenCalledWith("user-1", undefined, { force: false });
+    // BACKLOG-2856 (progress/cancel round): the second argument was `undefined`
+    // here for five months, which is precisely why the service's progress marks
+    // never reached a user. Asserting a FUNCTION is passed is strictly stronger
+    // than the `undefined` this replaced — the forwarding itself is pinned in
+    // `emailSyncHandlers.precacheProgress-2856`.
+    expect(mockPrecacheEmails).toHaveBeenCalledWith("user-1", expect.any(Function), { force: false });
   });
 });

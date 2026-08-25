@@ -821,7 +821,7 @@ export function EmailSettings({
             data-testid="force-recache-losses"
           >
             {FORCE_RECACHE_LOSSES.map((loss) => (
-              <li key={loss.table}>{loss.text}</li>
+              <li key={loss.key}>{loss.text}</li>
             ))}
           </ul>
           <p className="text-sm text-gray-600 mb-6">{FORCE_RECACHE_WARNING_TAIL}</p>

@@ -15,22 +15,28 @@
  * to check the wording covers them, so the copy and the behaviour cannot drift
  * apart again without something going red.
  *
- * `table` is documentation for that test, not something the UI renders.
+ * `key` is the join to that test, not something the UI renders. It is a
+ * semantic name deliberately, NOT a table name: BACKLOG-2791 requires that no
+ * renderer file names the pending review store, and this module is a renderer
+ * file. The key -> table mapping lives on the electron side, in the suite that
+ * actually observes the deletions.
  */
+export type ForceRecacheLossKey = "links" | "review-queue" | "decisions";
+
 export interface ForceRecacheLoss {
-  /** The table the swap empties, as proven in the blast-radius suite. */
-  table: string;
+  /** Joins this sentence to the deletion proven in the blast-radius suite. */
+  key: ForceRecacheLossKey;
   /** The sentence shown in the confirmation dialog. */
   text: string;
 }
 
 export const FORCE_RECACHE_LOSSES: readonly ForceRecacheLoss[] = [
   {
-    table: "communications",
+    key: "links",
     text: "Your emails will be unlinked from their transactions — you'll need to re-attach them.",
   },
   {
-    table: "pending_review_communications",
+    key: "review-queue",
     // Measured, not assumed: after a force re-cache `queueEmailForReview`
     // returns true again for the same message, so discovery does put these back.
     // Saying so matters — "your queue is emptied" alone would read as permanent
@@ -39,7 +45,7 @@ export const FORCE_RECACHE_LOSSES: readonly ForceRecacheLoss[] = [
       "Your Needs Review queue will be emptied. Emails come back to it as your transactions are re-scanned, but as new items.",
   },
   {
-    table: "ignored_communications",
+    key: "decisions",
     text:
       "Approve and remove decisions you already made on these emails will be lost, so previously removed emails can reappear for review.",
   },

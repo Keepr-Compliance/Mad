@@ -417,9 +417,18 @@ describe("BACKLOG-2856 — MEASURING what a force re-cache destroys", () => {
       "utf8",
     );
 
-    // Every emptied table is declared as a loss the dialog enumerates.
+    // The key -> table mapping lives HERE, on the electron side, because
+    // BACKLOG-2791 forbids a renderer file from naming the pending review store
+    // at all. The renderer carries semantic keys; this suite owns which table
+    // each one stands for, and it is the side that can actually observe the
+    // deletions.
+    const KEY_FOR_TABLE: Record<string, string> = {
+      communications: "links",
+      pending_review_communications: "review-queue",
+      ignored_communications: "decisions",
+    };
     for (const table of emptied) {
-      expect(warningSource).toContain(`table: "${table}"`);
+      expect(warningSource).toContain(`key: "${KEY_FOR_TABLE[table]}"`);
     }
 
     // And the copy says the three things in plain words, so a future edit that
