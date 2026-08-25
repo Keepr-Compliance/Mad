@@ -143,7 +143,7 @@ export function SubmitForReviewModal({
    * `electron/services/submissionStatusMessages.ts`.
    * ===========================================================================
    *
-   * Walk the case that filed this. Madison submits a deal; her broker REJECTS
+   * Walk the case that filed this. An agent submits a deal; her broker REJECTS
    * it. `TransactionHeader` keeps Complete visible in every state and its
    * `isSubmitted` badge set covers only `submitted | under_review | approved`,
    * so a rejected deal shows no badge and a live Complete button — one click to
@@ -154,6 +154,10 @@ export function SubmitForReviewModal({
    *
    * It is not with her broker for review; he rejected it. He is not going to
    * ask for changes. She waits for a message that is never coming.
+   *
+   * (The walkthrough is deliberately unnamed. This repo is PUBLIC and has a
+   * PII-purge history where removing a name after merge means history surgery;
+   * the named version of this case lives on BACKLOG-2868 in Supabase.)
    *
    * And it compounds. The accurate line already existed in the service, and
    * before BACKLOG-2853 she reached it by pressing the (enabled) button and
