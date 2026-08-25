@@ -226,22 +226,29 @@ export interface LinkedContentTextHit {
   matchedAttachmentFilenames?: string[];
 }
 
-/** One result group: up to `limit` items plus the true total match count. */
+/**
+ * One result group: up to `limit` items, plus whether more were left behind.
+ *
+ * BACKLOG-2863 replaced the match COUNT with this flag. Six uncapped
+ * `SELECT COUNT(*)` queries ran per keystroke at 190-210 ms each and could not
+ * exit early — proving a total means visiting every match. Founder, choosing
+ * between capped counts reading "200+" and no counts at all: *"i'm also fine with
+ * just show more and not counting it."*
+ *
+ * Mirrors `LinkedGroup` in `electron/services/db/transactionSearchDbService.ts`.
+ */
 export interface LinkedContentGroup<T> {
   items: T[];
-  total: number;
+  hasMore: boolean;
 }
 
 /** Grouped results for a linked-content search, one group per content type. */
 export interface LinkedContentSearchResults {
   contacts: LinkedContentGroup<LinkedContentContactHit>;
   emails: LinkedContentGroup<LinkedContentEmailHit>;
-  /** BACKLOG-2858: MESSAGE-level hits only. `total` counts MESSAGES. */
+  /** BACKLOG-2858: MESSAGE-level hits only — one row per message. */
   texts: LinkedContentGroup<LinkedContentTextHit>;
-  /**
-   * BACKLOG-2858: group-chat-name hits — one row per CONVERSATION, and `total`
-   * counts conversations, not the messages inside them.
-   */
+  /** BACKLOG-2858: group-chat-name hits — one row per CONVERSATION. */
   groupChats: LinkedContentGroup<LinkedContentTextHit>;
 }
 
@@ -330,9 +337,9 @@ export interface GlobalContentSearchResults {
   transactions: LinkedContentGroup<GlobalTransactionHit>;
   contacts: LinkedContentGroup<GlobalContactHit>;
   emails: LinkedContentGroup<GlobalEmailHit>;
-  /** BACKLOG-2858: MESSAGE-level hits only. `total` counts MESSAGES. */
+  /** BACKLOG-2858: MESSAGE-level hits only — one row per message. */
   texts: LinkedContentGroup<GlobalTextHit>;
-  /** BACKLOG-2858: group-chat-name hits. `total` counts CONVERSATIONS. */
+  /** BACKLOG-2858: group-chat-name hits — one row per CONVERSATION. */
   groupChats: LinkedContentGroup<GlobalTextHit>;
   /**
    * Emails/texts attached to no transaction. Group-chat rows for UNATTACHED

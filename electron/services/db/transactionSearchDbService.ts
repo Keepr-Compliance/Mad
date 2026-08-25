@@ -73,8 +73,22 @@ export interface LinkedTextHit {
 export interface LinkedGroup<T> {
   /** Up to `limit` hits. */
   items: T[];
-  /** Total number of matches for this group (may exceed items.length). */
-  total: number;
+  /**
+   * BACKLOG-2863: whether the database held MORE matches than `items` carries.
+   *
+   * IT REPLACED A COUNT, AND THE COUNT IS NOT COMING BACK. Six `SELECT COUNT(*)`
+   * queries ran on every keystroke, uncapped, at 190-210 ms each — and unlike the
+   * row queries they could not exit early, because proving a total means visiting
+   * every match. Capping them would have made the badges read "200+".
+   *
+   * Founder, choosing between the two: *"i'm also fine with just show more and not
+   * counting it."* So the panel now says "Show more" where it used to say a
+   * number, and this flag is what that control is gated on.
+   *
+   * It costs nothing to know: each row query fetches ONE row beyond the limit, so
+   * a group that came back full is a group with more behind it.
+   */
+  hasMore: boolean;
 }
 
 export interface LinkedContentSearchResults {
@@ -82,17 +96,17 @@ export interface LinkedContentSearchResults {
   emails: LinkedGroup<LinkedEmailHit>;
   /**
    * BACKLOG-2858: MESSAGE-level hits only — body, participants, or an attachment
-   * filename matched. `total` counts MESSAGES, which is what these rows are.
+   * filename matched. Each row IS the thing that matched.
    */
   texts: LinkedGroup<LinkedTextHit>;
   /**
    * BACKLOG-2858: THREAD-level hits — the conversation's NAME matched, and the
    * conversation is a group (2+ other members; see `GROUP_THREAD_PREDICATE`).
    *
-   * `total` counts CONVERSATIONS, not messages. It is the only honest number for
-   * a bucket whose rows are conversations: one row under a badge of 546 was
-   * tolerable while these rows shared the Texts bucket with 546 message rows;
-   * standing alone as its own category it would be indefensible.
+   * Each row is a CONVERSATION, not a message — which is why the badge that used
+   * to sit here counted conversations rather than the 546 messages inside one.
+   * BACKLOG-2863 retired the badge altogether; `hasMore` is still derived from the
+   * COLLAPSED set for the same reason the count was.
    *
    * Required, not optional, so every construction site is a compile error until
    * it decides what to put here.
@@ -197,10 +211,10 @@ export interface GlobalContentSearchResults {
   transactions: LinkedGroup<GlobalTransactionHit>;
   contacts: LinkedGroup<GlobalContactHit>;
   emails: LinkedGroup<GlobalEmailHit>;
-  /** BACKLOG-2858: message-level hits only; `total` counts MESSAGES. */
+  /** BACKLOG-2858: message-level hits only — one row per message. */
   texts: LinkedGroup<GlobalTextHit>;
   /**
-   * BACKLOG-2858: group-chat-name hits; `total` counts CONVERSATIONS.
+   * BACKLOG-2858: group-chat-name hits — one row per CONVERSATION.
    * See `LinkedContentSearchResults.groupChats`.
    */
   groupChats: LinkedGroup<GlobalTextHit>;
@@ -211,8 +225,7 @@ export interface GlobalContentSearchResults {
    * Texts, and this bucket is not Texts. Its rows are also inert by design (P1
    * has no standalone viewer), so hoisting them into a navigable Group chats
    * section would produce a row that either goes nowhere or sits dead among live
-   * ones. `total` still counts MESSAGES here, consistent with the bucket's other
-   * rows.
+   * ones.
    */
   unattached: LinkedGroup<UnattachedHit>;
 }
@@ -280,59 +293,6 @@ const TEXT_ATTACHMENT_MATCH = `EXISTS (
       )`;
 
 // ---------------------------------------------------------------------------
-// BACKLOG-2816: group-chat-name matching
-// ---------------------------------------------------------------------------
-// A group the user NAMED in Messages ("Sapp Rd Closing") is shown on its thread
-// card by BACKLOG-2814, but the name lives in `message_thread_names` and nothing
-// in the search path read that table — so the name he can SEE was the one thing
-// he could not search for. This predicate makes it a match target alongside
-// body_text / participants_flat, in every text query that takes a typed query.
-//
-// THE JOIN KEY IS `(user_id, thread_id)`, NOT `thread_id`. That pair is the
-// table's PK, and macOS thread ids ("macos-chat-<ROWID>") are unique only PER
-// MACHINE, so two users of one database can hold the same thread_id. Matching on
-// thread_id alone would let one user's group name pull another user's thread into
-// the results — the same isolation rule the three existing joins carry.
-//
-// Shaped as an EXISTS (scalar — no row fan-out, so no DISTINCT is required) and
-// adds exactly ONE bound `?` at its call site.
-//
-// ===========================================================================
-// WHERE THIS PREDICATE IS AND IS NOT USED
-// ===========================================================================
-// This predicate matches at the THREAD level — the name is a property of the
-// conversation, and every message in it is an equally uninformative hit. Left in
-// a row query, one named group with 546 messages produced 546 result rows, which
-// is what the founder saw at BACKLOG-2816. The body and participants clauses
-// beside it are per-MESSAGE and stay in the row query, because there a row
-// genuinely is the thing that matched.
-//
-// So the group-name match gets its own row query — `build*TextThreadNameQuery`
-// below — returning ONE row per matching CONVERSATION.
-//
-// BACKLOG-2858 REMOVED IT FROM THE TWO `texts` COUNTS. Until now the Texts badge
-// counted every message in a name-matching thread, which the founder chose at
-// BACKLOG-2816 while thread rows and message rows still shared the Texts bucket.
-// Now that group chats are their own category, a Texts badge inflated by
-// conversations whose rows live somewhere ELSE reads "Texts 546" over an EMPTY
-// list — a heading opening onto nothing, which is the dead control he ruled out
-// at BACKLOG-2791. Texts counts message-level matches; Group chats counts
-// conversations; each badge counts the rows beneath it.
-//
-// IT SURVIVES IN ONE PLACE: the UNATTACHED count, where thread rows still sit in
-// the same bucket as the message rows they are counted with (see
-// `buildUnattachedTextQuery`). There it is AND-ed with `GROUP_THREAD_PREDICATE`,
-// because the rows it counts are only ever produced for group threads — without
-// that, a named 1:1 would contribute a count with no row to show for it, which is
-// the same dead heading by a different route.
-const TEXT_THREAD_NAME_MATCH = `EXISTS (
-        SELECT 1 FROM message_thread_names tn
-        WHERE tn.thread_id = m.thread_id
-          AND tn.user_id = m.user_id
-          AND tn.display_name LIKE ? ESCAPE '\\'
-      )`;
-
-// ---------------------------------------------------------------------------
 // BACKLOG-2858: what makes a conversation a GROUP CHAT
 // ---------------------------------------------------------------------------
 // Founder, verbatim: "group chat in the search should show up as a separate
@@ -370,7 +330,7 @@ const GROUP_THREAD_PREDICATE = `json_valid(m.participants)
 // term as the filter — group_concat with a newline separator (filenames never
 // contain newlines), split + de-duped + capped in `parseMatchedAttachments`. Each
 // SELECT adds exactly ONE bound `?` at the FRONT of the statement (the SELECT list
-// precedes WHERE), so callers prepend the pattern to `params` (NOT `countParams`).
+// precedes WHERE), so callers prepend the pattern to `params`.
 const MATCHED_ATTACHMENT_CAP = 5;
 const EMAIL_MATCHED_ATTACHMENTS_SELECT = `(
       SELECT group_concat(a.filename, char(10))
@@ -410,11 +370,8 @@ function parseMatchedAttachments(raw: unknown): string[] | undefined {
 // not contain "mad:search:emails".
 const MARK = {
   contacts: "/* mad:search:contacts */",
-  contactsCount: "/* mad:search:contacts:count */",
   emails: "/* mad:search:emails */",
-  emailsCount: "/* mad:search:emails:count */",
   texts: "/* mad:search:texts */",
-  textsCount: "/* mad:search:texts:count */",
   // BACKLOG-2816: thread-level (group-name) text hits. Substring routing stays
   // collision-free — "mad:search:textthreads" does not contain "mad:search:texts".
   textThreads: "/* mad:search:textthreads */",
@@ -427,29 +384,29 @@ const MARK = {
   textThreadsAttribution: "/* mad:search:textthreads:attribution */",
   unattachedTextThreads: "/* mad:search:unattached:textthreads */",
   transactions: "/* mad:search:transactions */",
-  transactionsCount: "/* mad:search:transactions:count */",
   unattachedEmails: "/* mad:search:unattached:emails */",
-  unattachedEmailsCount: "/* mad:search:unattached:emails:count */",
   unattachedTexts: "/* mad:search:unattached:texts */",
-  unattachedTextsCount: "/* mad:search:unattached:texts:count */",
 } as const;
 
 // ---------------------------------------------------------------------------
 // Query builders (pure — exported for unit testing)
 // ---------------------------------------------------------------------------
 
+/**
+ * BACKLOG-2863 removed `countSql` / `countParams` from this shape. See
+ * `LinkedGroup.hasMore` for why, and `runGroup` for what replaced them.
+ */
 export interface BuiltQuery {
   sql: string;
   params: unknown[];
-  countSql: string;
-  countParams: unknown[];
 }
 
 /**
  * BACKLOG-2858: what the three `build*TextThreadNameQuery` builders return.
  *
- * IT HAS NO `countSql`, AND NO `LIMIT` ON `sql`. Both absences are the same
- * decision.
+ * IT HAS NO `LIMIT` ON `sql`, and BACKLOG-2863 left that alone while removing
+ * every count in the search path. The reason it never had a count is the reason
+ * it still has no limit.
  *
  * The Group chats badge counts CONVERSATIONS. A conversation is not a
  * `thread_id`: BACKLOG-2854 established that Apple keeps several chat rows for
@@ -495,9 +452,7 @@ export function buildContactQuery(
   const phonePat = phoneKey ? containsPattern(phoneKey) : "";
 
   // BACKLOG-2366: `tc.removed_at IS NULL` — searching within a transaction must
-  // not return a party who was removed from it. This predicate is shared by `sql`
-  // and `countSql` below (both interpolate `where`), so the row set and the count
-  // cannot drift apart.
+  // not return a party who was removed from it.
   const where = `
     WHERE tc.transaction_id = ?
       AND tc.removed_at IS NULL
@@ -521,11 +476,6 @@ export function buildContactQuery(
     ORDER BY c.display_name COLLATE NOCASE ASC
     LIMIT ?`,
     params: [...whereParams, limit],
-    countSql: `${MARK.contactsCount}
-    SELECT COUNT(DISTINCT c.id) AS total
-    ${from}
-    ${where}`,
-    countParams: whereParams,
   };
 }
 
@@ -563,13 +513,8 @@ export function buildEmailQuery(
     ${where}
     ORDER BY e.sent_at DESC
     LIMIT ?`,
-    // Projection pattern binds first (SELECT precedes WHERE); count has no projection.
+    // Projection pattern binds first (SELECT precedes WHERE).
     params: [pat, ...whereParams, limit],
-    countSql: `${MARK.emailsCount}
-    SELECT COUNT(DISTINCT e.id) AS total
-    ${from}
-    ${where}`,
-    countParams: whereParams,
   };
 }
 
@@ -623,13 +568,8 @@ export function buildTextQuery(
     ${where}
     ORDER BY m.sent_at DESC
     LIMIT ?`,
-    // Projection pattern binds first (SELECT precedes WHERE); count has no projection.
+    // Projection pattern binds first (SELECT precedes WHERE).
     params: [pat, ...whereParams, limit],
-    countSql: `${MARK.textsCount}
-    SELECT COUNT(*) AS total
-    ${from}
-    ${where}`,
-    countParams: whereParams,
   };
 }
 
@@ -1154,18 +1094,27 @@ function shapeText(row: RawTextRow): LinkedTextHit {
 // Orchestrator
 // ---------------------------------------------------------------------------
 
+/**
+ * Run one group's row query and decide whether there is more behind it.
+ *
+ * BACKLOG-2863: THE CALLER BUILDS THE QUERY WITH `limit + 1` AND PASSES `limit`
+ * HERE. Fetching one row past the end is the whole mechanism: if the extra row
+ * came back there are more matches, and if it did not, the user is looking at all
+ * of them. The row queries exit in ~0 ms under `LIMIT` and an index, so the probe
+ * row is free — where the `SELECT COUNT(*)` it replaced had to visit every match
+ * to report a number, six times per keystroke.
+ */
 function runGroup<TRaw, THit>(
   db: SearchableDb,
   built: BuiltQuery,
+  limit: number,
   shape: (row: TRaw) => THit,
 ): LinkedGroup<THit> {
   const rows = db.prepare(built.sql).all(...built.params) as TRaw[];
-  const countRow = db
-    .prepare(built.countSql)
-    .get(...built.countParams) as { total?: number } | undefined;
-  const total =
-    typeof countRow?.total === "number" ? countRow.total : rows.length;
-  return { items: rows.map(shape), total };
+  return {
+    items: rows.slice(0, limit).map(shape),
+    hasMore: rows.length > limit,
+  };
 }
 
 /**
@@ -1179,11 +1128,12 @@ function runGroup<TRaw, THit>(
  * representative message, so the same roster can shape into two different
  * previews. The raw `participants` blob has neither problem.
  *
- * BACKLOG-2858: `total` IS THE NUMBER OF CONVERSATIONS, and it is derived here
- * rather than read from a `COUNT(*)`. It has to be: a conversation is a set of
- * sibling threads, and which threads are siblings is decided by
- * `threadCollapseKey` in JS. Counting in SQL would count Apple's chat rows and
- * badge one conversation as 2 — the BACKLOG-2854 defect, relocated.
+ * BACKLOG-2858 established that this group's size can only be decided HERE, not
+ * by a `COUNT(*)`: a conversation is a set of sibling threads, and which threads
+ * are siblings is decided by `threadCollapseKey` in JS. SQL would count Apple's
+ * chat rows and call one conversation 2 — the BACKLOG-2854 defect, relocated.
+ * BACKLOG-2863 removed the count; `hasMore` is derived from the collapsed set for
+ * exactly the same reason.
  *
  * `limit` is applied AFTER the collapse, so siblings cannot crowd a genuinely
  * distinct conversation out of the results (the reason the retired
@@ -1199,16 +1149,20 @@ function runThreadNameGroup<TRaw extends RawThreadNameRow, THit>(
   const conversations = collapseThreadRows(rows);
   return {
     items: conversations.slice(0, limit).map(shape),
-    total: conversations.length,
+    // BACKLOG-2863: derived from the COLLAPSED set, like the total it replaces.
+    // These rows have no SQL `LIMIT` to probe past — the fetch is deliberately
+    // uncapped so the collapse sees every sibling — so "is there more" is decided
+    // here, after the merge, and never in the query.
+    hasMore: conversations.length > limit,
   };
 }
 
 function emptyResults(): LinkedContentSearchResults {
   return {
-    contacts: { items: [], total: 0 },
-    emails: { items: [], total: 0 },
-    texts: { items: [], total: 0 },
-    groupChats: { items: [], total: 0 },
+    contacts: { items: [], hasMore: false },
+    emails: { items: [], hasMore: false },
+    texts: { items: [], hasMore: false },
+    groupChats: { items: [], hasMore: false },
   };
 }
 
@@ -1234,11 +1188,16 @@ export function searchLinkedContent(
 
   const limit =
     options.limit && options.limit > 0 ? options.limit : DEFAULT_LIMIT;
+  // BACKLOG-2863: every row query fetches ONE row past `limit`. That extra row is
+  // the entire evidence for "Show more" — it came back, so there is more — and it
+  // replaces six uncapped `SELECT COUNT(*)` queries that cost 190-210 ms each on
+  // every keystroke. `runGroup` slices it back off before shaping.
+  const probe = limit + 1;
 
   const contacts = runGroup<
     { contactId: string; displayName: string; role: string | null },
     LinkedContactHit
-  >(db, buildContactQuery(transactionId, query, limit), (row) => ({
+  >(db, buildContactQuery(transactionId, query, probe), limit, (row) => ({
     contactId: row.contactId,
     displayName: row.displayName,
     role: row.role ?? null,
@@ -1254,7 +1213,7 @@ export function searchLinkedContent(
       matchedAttachments: string | null;
     },
     LinkedEmailHit
-  >(db, buildEmailQuery(transactionId, query, limit), (row) => ({
+  >(db, buildEmailQuery(transactionId, query, probe), limit, (row) => ({
     id: row.id,
     subject: row.subject ?? null,
     sender: row.sender ?? null,
@@ -1267,10 +1226,9 @@ export function searchLinkedContent(
   // bucket. BACKLOG-2858 keeps the two queries and STOPS merging them.
   //
   //   - message rows -> `texts`: body / participants / attachment matched, so the
-  //     row IS the thing that matched. One row per message; `total` counts
-  //     messages.
+  //     row IS the thing that matched. One row per message.
   //   - thread rows -> `groupChats`: the group conversation's NAME matched. One
-  //     row per conversation; `total` counts conversations.
+  //     row per conversation.
   //
   // Founder, verbatim: "group chat in the search should show up as a separate
   // category called Group chats. (not under texts where it shows now)". The two
@@ -1278,7 +1236,8 @@ export function searchLinkedContent(
   // about them was ever alike.
   const texts = runGroup<RawTextRow, LinkedTextHit>(
     db,
-    buildTextQuery(transactionId, query, limit),
+    buildTextQuery(transactionId, query, probe),
+    limit,
     shapeText,
   );
   const groupChats = runThreadNameGroup<RawThreadNameRow, LinkedTextHit>(
@@ -1378,11 +1337,6 @@ export function buildTransactionsQuery(
     ORDER BY t.property_address COLLATE NOCASE ASC
     LIMIT ?`,
     params: [...whereParams, limit],
-    countSql: `${MARK.transactionsCount}
-    SELECT COUNT(DISTINCT t.id) AS total
-    ${from}
-    ${where}`,
-    countParams: whereParams,
   };
 }
 
@@ -1452,20 +1406,10 @@ export function buildGlobalContactQuery(
   // BACKLOG-2365: this tombstone filter MUST stay identical to the rows query
   // above. The two are read together — the count labels that list — so any
   // divergence shows the user "12 contacts" above a list of 9.
-  const countSql = `${MARK.contactsCount}
-    SELECT COUNT(*) AS total FROM (
-      SELECT c.id
-      FROM contacts c
-      WHERE c.user_id = ?${ACTIVE_CONTACTS_CLAUSE_C}
-        AND (${match})
-      GROUP BY c.id
-    ) x`;
 
   return {
     sql,
     params: [userId, ...matchParams, limit],
-    countSql,
-    countParams: [userId, ...matchParams],
   };
 }
 
@@ -1506,19 +1450,11 @@ export function buildGlobalEmailQuery(
     ORDER BY e.sent_at DESC
     LIMIT ?`;
 
-  const countSql = `${MARK.emailsCount}
-    SELECT COUNT(DISTINCT e.id) AS total
-    FROM emails e
-    JOIN communications comm ON comm.email_id = e.id AND comm.transaction_id IS NOT NULL
-    WHERE e.user_id = ?
-      AND (${match})`;
 
   return {
-    // Projection pattern binds first (SELECT precedes WHERE); count has no projection.
+    // Projection pattern binds first (SELECT precedes WHERE).
     sql,
     params: [pat, userId, ...matchParams, limit],
-    countSql,
-    countParams: [userId, ...matchParams],
   };
 }
 
@@ -1541,8 +1477,6 @@ export function buildGlobalTextQuery(
       OR m.participants_flat LIKE ? ESCAPE '\\'
       OR ${TEXT_ATTACHMENT_MATCH}`;
   const matchParams = [pat, pat, pat];
-  // BACKLOG-2858: rows and count share ONE predicate again — the thread-name
-  // clause moved out with the rows it counted. See TEXT_THREAD_NAME_MATCH.
 
   // Membership set: messages linked to some transaction (direct or thread-batch).
   const memberSet = `
@@ -1599,23 +1533,11 @@ export function buildGlobalTextQuery(
     ORDER BY m.sent_at DESC
     LIMIT ?`;
 
-  const countSql = `${MARK.textsCount}
-    SELECT COUNT(*) AS total FROM (
-      SELECT m.id
-      FROM messages m
-      WHERE m.user_id = ?
-        AND m.channel IN ('sms', 'imessage')
-        AND ${reactionExclusion("m")}
-        AND m.id IN (${memberSet})
-        AND (${match})
-    ) x`;
 
   return {
-    // Projection pattern binds first (SELECT precedes WHERE); count has no projection.
+    // Projection pattern binds first (SELECT precedes WHERE).
     sql,
     params: [pat, userId, ...matchParams, limit],
-    countSql,
-    countParams: [userId, ...matchParams],
   };
 }
 
@@ -1651,11 +1573,6 @@ export function buildUnattachedEmailQuery(
     ORDER BY e.sent_at DESC
     LIMIT ?`,
     params: [...whereParams, limit],
-    countSql: `${MARK.unattachedEmailsCount}
-    SELECT COUNT(*) AS total
-    ${from}
-    ${where}`,
-    countParams: whereParams,
   };
 }
 
@@ -1689,19 +1606,6 @@ export function buildUnattachedTextQuery(
         OR m.participants_flat LIKE ? ESCAPE '\\'
         OR ${TEXT_ATTACHMENT_MATCH}
       )`;
-  // The count keeps the thread-name clause; the rows do not. This is the ONE
-  // bucket where that asymmetry survives BACKLOG-2858, and it is legitimate here
-  // because the collapsed thread rows it counts for still live in THIS bucket —
-  // `buildUnattachedTextThreadNameQuery` feeds them straight into `unattached`.
-  //
-  // IT IS AND-ED WITH THE GROUP PREDICATE, and that pairing is load-bearing.
-  // Without it, a named 1:1 — which BACKLOG-2858 stopped producing a thread row
-  // for — would still contribute every one of its messages to this badge, and
-  // the founder would get "Unattached 12" over a section with nothing in it:
-  // the dead heading of BACKLOG-2791, arrived at from the other direction.
-  const whereCount = `${where.slice(0, where.lastIndexOf("\n      )"))}
-        OR (${TEXT_THREAD_NAME_MATCH} AND ${GROUP_THREAD_PREDICATE})
-      )`;
   const whereParams = [userId, pat, pat, pat];
 
   return {
@@ -1713,11 +1617,6 @@ export function buildUnattachedTextQuery(
     ORDER BY m.sent_at DESC
     LIMIT ?`,
     params: [...whereParams, limit],
-    countSql: `${MARK.unattachedTextsCount}
-    SELECT COUNT(*) AS total
-    ${from}
-    ${whereCount}`,
-    countParams: [...whereParams, pat],
   };
 }
 
@@ -1796,12 +1695,12 @@ function shapeUnattachedText(row: RawTextRow): UnattachedHit {
 
 function emptyGlobalResults(): GlobalContentSearchResults {
   return {
-    transactions: { items: [], total: 0 },
-    contacts: { items: [], total: 0 },
-    emails: { items: [], total: 0 },
-    texts: { items: [], total: 0 },
-    groupChats: { items: [], total: 0 },
-    unattached: { items: [], total: 0 },
+    transactions: { items: [], hasMore: false },
+    contacts: { items: [], hasMore: false },
+    emails: { items: [], hasMore: false },
+    texts: { items: [], hasMore: false },
+    groupChats: { items: [], hasMore: false },
+    unattached: { items: [], hasMore: false },
   };
 }
 
@@ -1829,10 +1728,16 @@ export function searchGlobalContent(
   const limit =
     options.limit && options.limit > 0 ? options.limit : DEFAULT_LIMIT;
 
+  // BACKLOG-2863: every row query fetches ONE row past `limit`. That extra row is
+  // the entire evidence for "Show more" — it came back, so there is more — and it
+  // replaces six uncapped `SELECT COUNT(*)` queries that cost 190-210 ms each on
+  // every keystroke. `runGroup` slices it back off before shaping.
+  const probe = limit + 1;
+
   const transactions = runGroup<
     { id: string; propertyAddress: string },
     GlobalTransactionHit
-  >(db, buildTransactionsQuery(userId, query, limit), (row) => ({
+  >(db, buildTransactionsQuery(userId, query, probe), limit, (row) => ({
     id: row.id,
     propertyAddress: row.propertyAddress,
   }));
@@ -1846,7 +1751,7 @@ export function searchGlobalContent(
       attrAddress: string | null;
     },
     GlobalContactHit
-  >(db, buildGlobalContactQuery(userId, query, limit), (row) => ({
+  >(db, buildGlobalContactQuery(userId, query, probe), limit, (row) => ({
     contactId: row.contactId,
     displayName: row.displayName,
     role: row.role ?? null,
@@ -1855,7 +1760,8 @@ export function searchGlobalContent(
 
   const emails = runGroup<RawGlobalEmailRow, GlobalEmailHit>(
     db,
-    buildGlobalEmailQuery(userId, query, limit),
+    buildGlobalEmailQuery(userId, query, probe),
+    limit,
     shapeGlobalEmail,
   );
 
@@ -1863,7 +1769,8 @@ export function searchGlobalContent(
   // group-conversation rows to `groupChats`. See `searchLinkedContent`.
   const texts = runGroup<RawGlobalTextRow, GlobalTextHit>(
     db,
-    buildGlobalTextQuery(userId, query, limit),
+    buildGlobalTextQuery(userId, query, probe),
+    limit,
     shapeGlobalText,
   );
   // BACKLOG-2863: attribution is resolved ROW BY ROW, and only for the rows a
@@ -1888,7 +1795,7 @@ export function searchGlobalContent(
   );
 
   // Unattached bucket = emails + texts with no communications row. Two queries,
-  // merged into one group with the two true totals summed.
+  // merged into one group.
   const unattachedEmails = runGroup<
     {
       id: string;
@@ -1898,19 +1805,17 @@ export function searchGlobalContent(
       snippet: string | null;
     },
     UnattachedHit
-  >(db, buildUnattachedEmailQuery(userId, query, limit), shapeUnattachedEmail);
+  >(db, buildUnattachedEmailQuery(userId, query, probe), limit, shapeUnattachedEmail);
 
   const unattachedTexts = runGroup<RawTextRow, UnattachedHit>(
     db,
-    buildUnattachedTextQuery(userId, query, limit),
+    buildUnattachedTextQuery(userId, query, probe),
+    limit,
     shapeUnattachedText,
   );
   // BACKLOG-2816: named threads in the unattached bucket collapse the same way.
   // BACKLOG-2858: they STAY in this bucket rather than joining `groupChats` —
-  // see `GlobalContentSearchResults.unattached`. Their `total` is discarded
-  // because the bucket's badge counts messages, and these rows' messages are
-  // already counted by `unattachedTexts.total` via the group-gated
-  // TEXT_THREAD_NAME_MATCH clause.
+  // see `GlobalContentSearchResults.unattached`.
   const unattachedTextThreads = runThreadNameGroup<RawThreadNameRow, UnattachedHit>(
     db,
     buildUnattachedTextThreadNameQuery(userId, query),
@@ -1920,12 +1825,13 @@ export function searchGlobalContent(
 
   // Thread rows lead, then the date-sorted message/email rows — the same
   // precedence the linked and global groups use.
-  const unattachedItems = [
+  const unattachedMerged = [
     ...unattachedTextThreads.items,
     ...[...unattachedEmails.items, ...unattachedTexts.items].sort((a, b) =>
       (b.sentAt ?? "").localeCompare(a.sentAt ?? ""),
     ),
-  ].slice(0, limit);
+  ];
+  const unattachedItems = unattachedMerged.slice(0, limit);
 
   return {
     transactions,
@@ -1935,7 +1841,16 @@ export function searchGlobalContent(
     groupChats,
     unattached: {
       items: unattachedItems,
-      total: unattachedEmails.total + unattachedTexts.total,
+      // BACKLOG-2863: THREE sources feed this one bucket, and each is capped
+      // before they meet. The merged length alone would under-report — three
+      // groups of exactly `limit` rows merge to more than `limit`, but three
+      // groups that each had more behind them can merge to fewer — so the
+      // sub-groups' own `hasMore` counts too.
+      hasMore:
+        unattachedMerged.length > limit ||
+        unattachedEmails.hasMore ||
+        unattachedTexts.hasMore ||
+        unattachedTextThreads.hasMore,
     },
   };
 }

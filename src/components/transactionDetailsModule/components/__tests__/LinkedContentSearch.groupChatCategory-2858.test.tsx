@@ -43,7 +43,7 @@ beforeAll(() => {
 
 const GROUP_NAME = "Kingfisher Lane Closing";
 const BODY_TEXT = "the lockbox code is on the counter";
-const emptyGroup = { items: [], total: 0 };
+const emptyGroup = { items: [], hasMore: false };
 
 const groupRow = {
   id: "m-newest",
@@ -68,8 +68,8 @@ function globalResults(groupChats: unknown[], texts: unknown[]) {
     transactions: emptyGroup,
     contacts: emptyGroup,
     emails: emptyGroup,
-    texts: { items: texts, total: texts.length },
-    groupChats: { items: groupChats, total: groupChats.length },
+    texts: { items: texts, hasMore: false },
+    groupChats: { items: groupChats, hasMore: false },
     unattached: emptyGroup,
   };
 }
@@ -79,8 +79,8 @@ function scopedResults(groupChats: unknown[], texts: unknown[]) {
   return {
     contacts: emptyGroup,
     emails: emptyGroup,
-    texts: { items: texts, total: texts.length },
-    groupChats: { items: groupChats, total: groupChats.length },
+    texts: { items: texts, hasMore: false },
+    groupChats: { items: groupChats, hasMore: false },
   };
 }
 

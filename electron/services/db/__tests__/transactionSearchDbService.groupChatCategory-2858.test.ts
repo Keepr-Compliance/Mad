@@ -23,11 +23,17 @@
  * would look like a success in a screenshot. So each of those tests also names
  * the id that must NOT be in the other bucket.
  *
- * **2. The two badges are asserted on a fixture where their numbers DIFFER.**
- * Group chats counts CONVERSATIONS, Texts counts MESSAGES. On a group of three
- * messages those are 1 and 3. Had the fixture been built with one message, both
- * badges would read 1 and a badge wired to the wrong source would pass every
- * assertion in this file.
+ * **2. The two buckets are asserted on a fixture where their SIZES DIFFER.**
+ * Group chats yields one row per CONVERSATION, Texts one per MESSAGE. On a group
+ * of three messages those are 1 and 3. Had the fixture been built with one
+ * message, both would hold one row and a bucket wired to the wrong source would
+ * pass every assertion in this file.
+ *
+ * BACKLOG-2863 REMOVED THE BADGES these assertions were originally written
+ * against — six uncapped `SELECT COUNT(*)` queries were what made a single
+ * keystroke slow, and the founder chose "Show more" over a capped "200+". The
+ * claims are now made against the ROWS, which is where they were always pinned
+ * anyway: every one of them names the ids it expects.
  *
  * ===========================================================================
  * THE BOUNDARY A NAIVE IMPLEMENTATION GETS WRONG
@@ -426,48 +432,45 @@ describe("BACKLOG-2858 — Group chats is its own category", () => {
   });
 
   // =========================================================================
-  // THE COUNTS — on a fixture where the two numbers DIFFER
+  // THE TWO BUCKETS — on a fixture where their SIZES DIFFER
   // =========================================================================
-  describe("each badge counts the rows beneath it", () => {
-    it("Group chats counts CONVERSATIONS (1) while Texts counts MESSAGES (3)", () => {
+  describe("each bucket holds the rows that belong to it", () => {
+    it("Group chats holds ONE conversation while Texts holds THREE messages", () => {
       const res = scoped("sandpiper");
-      expect(res.groupChats.total).toBe(1);
-      expect(res.texts.total).toBe(3);
-      // Pinned against the ITEMS, so a total that drifts from its own list fails.
       expect(res.groupChats.items).toHaveLength(1);
       expect(res.texts.items).toHaveLength(3);
     });
 
-    it("global search reports the same two numbers", () => {
+    it("global search splits them the same way", () => {
       const res = global("sandpiper");
-      expect(res.groupChats.total).toBe(1);
-      expect(res.texts.total).toBe(3);
+      expect(res.groupChats.items).toHaveLength(1);
+      expect(res.texts.items).toHaveLength(3);
     });
 
-    it("counts ONE conversation for a group split across three Apple chat rows", () => {
-      // A `SELECT COUNT(*)` over the thread rows would say 3 — one per thread_id.
-      // Only the JS collapse knows these are one conversation, which is why the
-      // total is derived from the collapsed set and not from SQL.
+    it("yields ONE row for a group split across three Apple chat rows", () => {
+      // The query returns three — one per thread_id. Only the JS collapse knows
+      // they are one conversation, which is why this group's size is decided
+      // after the collapse and never in SQL.
       const res = scoped("cedar ridge");
-      expect(res.groupChats.total).toBe(1);
       expect(ids(res.groupChats.items)).toEqual([msgId("macos-chat-403", 0)]);
+      expect(res.groupChats.items).toHaveLength(1);
     });
 
-    it("counts TWO conversations for two different groups sharing a name", () => {
-      // The guard on the other side: a count that merged by NAME would say 1 and
-      // hide a real conversation.
+    it("yields TWO rows for two different groups sharing a name", () => {
+      // The guard on the other side: a collapse keyed on NAME alone would merge
+      // these into one and hide a real conversation.
       const res = scoped("closing team");
-      expect(res.groupChats.total).toBe(2);
       expect(ids(res.groupChats.items)).toEqual(
         [msgId("macos-chat-501", 0), msgId("macos-chat-502", 0)].sort(),
       );
+      expect(res.groupChats.items).toHaveLength(2);
     });
 
-    it("no longer inflates the Texts badge with a name-only match", () => {
-      // Before BACKLOG-2858 this read 2 — every message in the name-matching
-      // thread — over a Texts list with nothing in it.
-      expect(scoped("kingfisher").texts.total).toBe(0);
-      expect(global("kingfisher").texts.total).toBe(0);
+    it("no longer puts a name-only match into Texts", () => {
+      // Before BACKLOG-2858 every message in the name-matching thread landed
+      // here, under a heading whose list was empty.
+      expect(scoped("kingfisher").texts.items).toEqual([]);
+      expect(global("kingfisher").texts.items).toEqual([]);
     });
   });
 
@@ -485,14 +488,12 @@ describe("BACKLOG-2858 — Group chats is its own category", () => {
       const res = scoped(query);
       // Its name matched a thread name — it just is not a group.
       expect(res.groupChats.items).toEqual([]);
-      expect(res.groupChats.total).toBe(0);
       // And it did not fall back into Texts: absence asserted by identity in
       // both buckets, since "not in Group chats" alone would also pass if the
       // row had simply gone back where it came from.
       const everywhere = [...res.groupChats.items, ...res.texts.items].map((r) => r.id);
       expect(everywhere).not.toContain(msgId(thread, 0));
       expect(res.texts.items).toEqual([]);
-      expect(res.texts.total).toBe(0);
     });
 
     it("does not appear as a thread row in GLOBAL search either", () => {
@@ -511,7 +512,7 @@ describe("BACKLOG-2858 — Group chats is its own category", () => {
       // Sweep the boundary from the other side: >= 2 must admit exactly 2.
       const res = scoped("two person escrow");
       expect(ids(res.groupChats.items)).toEqual([msgId("macos-chat-301", 0)]);
-      expect(res.groupChats.total).toBe(1);
+      expect(res.groupChats.items).toHaveLength(1);
     });
   });
 
@@ -534,33 +535,36 @@ describe("BACKLOG-2858 — Group chats is its own category", () => {
   // EMPTY STATES — a heading over nothing is a dead control (BACKLOG-2791)
   // =========================================================================
   describe("a bucket with nothing in it reports nothing", () => {
-    it("Group chats is empty AND zero for a body-only match", () => {
-      // "sandpiper paperwork" is in a body and in no group name.
+    it("Group chats is empty for a body-only match", () => {
+      // "sandpiper paperwork" is in a body and in no group name. BACKLOG-2863
+      // gates the heading on `items.length`, so an empty list renders no heading.
       const res = scoped("paperwork");
       expect(res.groupChats.items).toEqual([]);
-      expect(res.groupChats.total).toBe(0);
-      expect(res.texts.total).toBe(1);
+      expect(res.groupChats.hasMore).toBe(false);
+      expect(res.texts.items).toHaveLength(1);
     });
 
-    it("Texts is empty AND zero for a name-only match", () => {
+    it("Texts is empty for a name-only match", () => {
       const res = scoped("kingfisher");
       expect(res.texts.items).toEqual([]);
-      expect(res.texts.total).toBe(0);
-      expect(res.groupChats.total).toBe(1);
+      expect(res.texts.hasMore).toBe(false);
+      expect(res.groupChats.items).toHaveLength(1);
     });
 
     it("both are empty for a query that matches nothing at all", () => {
       const res = scoped("nothingmatchesthisanywhere");
       expect(res.groupChats.items).toEqual([]);
-      expect(res.groupChats.total).toBe(0);
       expect(res.texts.items).toEqual([]);
-      expect(res.texts.total).toBe(0);
+      // Neither may claim there is more behind an empty list — that would offer
+      // "Show more" over nothing.
+      expect(res.groupChats.hasMore).toBe(false);
+      expect(res.texts.hasMore).toBe(false);
     });
 
     it("an empty query short-circuits to empty groups", () => {
       const res = scoped("   ");
-      expect(res.groupChats).toEqual({ items: [], total: 0 });
-      expect(res.texts).toEqual({ items: [], total: 0 });
+      expect(res.groupChats).toEqual({ items: [], hasMore: false });
+      expect(res.texts).toEqual({ items: [], hasMore: false });
     });
   });
 
@@ -568,7 +572,7 @@ describe("BACKLOG-2858 — Group chats is its own category", () => {
   // THE THIRD BUILDER — the unattached bucket
   // =========================================================================
   describe("the unattached bucket", () => {
-    it("keeps an unattached GROUP's conversation row, and counts its messages", () => {
+    it("keeps an unattached GROUP's conversation row in this bucket", () => {
       // BACKLOG-2858 deliberately left these rows here rather than hoisting them
       // into Group chats: the founder asked group chats to stop appearing under
       // TEXTS, and this bucket is not Texts. Its rows are inert (no standalone
@@ -577,21 +581,20 @@ describe("BACKLOG-2858 — Group chats is its own category", () => {
       const rows = res.unattached.items.filter((u) => u.threadDisplayName !== undefined);
       expect(ids(rows)).toEqual([msgId("macos-chat-801", 1)]);
       expect(rows[0].threadDisplayName).toBe(NAME_UNATT_GROUP);
-      expect(res.unattached.total).toBe(2); // two messages in that thread
       // It is NOT also in the Group chats category.
       expect(ids(res.groupChats.items)).not.toContain(msgId("macos-chat-801", 1));
       expect(res.groupChats.items).toEqual([]);
     });
 
-    it("applies the 1:1 rule here too — no row AND no count", () => {
-      // The count is the half that is easy to miss. The unattached count keeps a
-      // thread-name clause (its thread rows live in this same bucket), so without
-      // the group predicate AND-ed onto it this named 1:1 would contribute all
-      // THREE of its messages to a badge with nothing beneath it — the same dead
-      // heading, reached from the other direction.
+    it("applies the 1:1 rule here too — no row anywhere", () => {
+      // Until BACKLOG-2863 this bucket's COUNT carried a thread-name clause the
+      // rows did not, and the risk it guarded was a named 1:1 contributing all
+      // three of its messages to a badge with nothing beneath it. The count is
+      // gone and so is the asymmetry; what remains to assert is that the named
+      // 1:1 produces no row on any surface.
       const res = global("daily standup");
       expect(res.unattached.items).toEqual([]);
-      expect(res.unattached.total).toBe(0);
+      expect(res.unattached.hasMore).toBe(false);
       expect(res.groupChats.items).toEqual([]);
     });
   });

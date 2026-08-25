@@ -82,22 +82,22 @@ async function attachMemberNames(
 /** Empty scoped result groups (no DB access needed). */
 function emptyLinkedResults(): LinkedContentSearchResults {
   return {
-    contacts: { items: [], total: 0 },
-    emails: { items: [], total: 0 },
-    texts: { items: [], total: 0 },
-    groupChats: { items: [], total: 0 },
+    contacts: { items: [], hasMore: false },
+    emails: { items: [], hasMore: false },
+    texts: { items: [], hasMore: false },
+    groupChats: { items: [], hasMore: false },
   };
 }
 
 /** Empty global result groups (no DB access needed). */
 function emptyGlobalResults(): GlobalContentSearchResults {
   return {
-    transactions: { items: [], total: 0 },
-    contacts: { items: [], total: 0 },
-    emails: { items: [], total: 0 },
-    texts: { items: [], total: 0 },
-    groupChats: { items: [], total: 0 },
-    unattached: { items: [], total: 0 },
+    transactions: { items: [], hasMore: false },
+    contacts: { items: [], hasMore: false },
+    emails: { items: [], hasMore: false },
+    texts: { items: [], hasMore: false },
+    groupChats: { items: [], hasMore: false },
+    unattached: { items: [], hasMore: false },
   };
 }
 
@@ -137,10 +137,13 @@ export function registerTransactionSearchHandlers(): void {
 
         logService.info("Linked-content search", "Transactions", {
           transactionId: validatedTxnId,
-          contacts: results.contacts.total,
-          emails: results.emails.total,
-          texts: results.texts.total,
-          groupChats: results.groupChats.total,
+          // BACKLOG-2863: the search no longer computes totals, so the log
+          // records what was RETURNED. Renaming the keys keeps a reader of old
+          // log lines from comparing two different quantities under one name.
+          contactsReturned: results.contacts.items.length,
+          emailsReturned: results.emails.items.length,
+          textsReturned: results.texts.items.length,
+          groupChatsReturned: results.groupChats.items.length,
         });
 
         return { success: true, results };
@@ -180,12 +183,13 @@ export function registerTransactionSearchHandlers(): void {
         );
 
         logService.info("Global content search", "Transactions", {
-          transactions: results.transactions.total,
-          contacts: results.contacts.total,
-          emails: results.emails.total,
-          texts: results.texts.total,
-          groupChats: results.groupChats.total,
-          unattached: results.unattached.total,
+          // BACKLOG-2863: see the scoped handler — returned rows, not totals.
+          transactionsReturned: results.transactions.items.length,
+          contactsReturned: results.contacts.items.length,
+          emailsReturned: results.emails.items.length,
+          textsReturned: results.texts.items.length,
+          groupChatsReturned: results.groupChats.items.length,
+          unattachedReturned: results.unattached.items.length,
         });
 
         return { success: true, results };

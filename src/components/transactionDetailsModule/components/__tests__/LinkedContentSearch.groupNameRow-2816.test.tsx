@@ -46,22 +46,25 @@ const MEMBER_A = "Dana Whitfield";
 const MEMBER_B = "Marcus Otero";
 const BODY_TEXT = "the lockbox code is on the counter";
 
-const emptyGroup = { items: [], total: 0 };
+const emptyGroup = { items: [], hasMore: false };
 
 /**
- * BACKLOG-2858: group-chat rows and message rows now arrive in DIFFERENT
- * buckets, each with its own total, so the fixture takes them separately.
+ * BACKLOG-2858: group-chat rows and message rows arrive in DIFFERENT buckets, so
+ * the fixture takes them separately.
  *
- * The two totals deliberately DIFFER (1 conversation vs 546 messages). Equal
- * numbers would let a badge wired to the wrong bucket pass every assertion.
+ * BACKLOG-2863 REPLACED THE TOTALS WITH `hasMore`, and the two buckets still
+ * deliberately DIFFER: the group chat holds the one row it has (nothing behind
+ * it), while Texts stands for the 546 messages that no longer fit — so exactly
+ * one of the two sections offers an affordance. Matching values would let a
+ * section wired to the wrong bucket pass every assertion in this file.
  */
 function resultsWith(groupChatItems: unknown[], textItems: unknown[] = []) {
   return {
     transactions: emptyGroup,
     contacts: emptyGroup,
     emails: emptyGroup,
-    texts: { items: textItems, total: textItems.length ? 546 : 0 },
-    groupChats: { items: groupChatItems, total: groupChatItems.length },
+    texts: { items: textItems, hasMore: textItems.length > 0 },
+    groupChats: { items: groupChatItems, hasMore: false },
     unattached: emptyGroup,
   };
 }
@@ -179,18 +182,22 @@ describe("BACKLOG-2816 — the group-name result row", () => {
     expect(messageRowText(0)).not.toContain(GROUP_NAME);
   });
 
-  it("badges Group chats with CONVERSATIONS and Texts with MESSAGES", async () => {
-    // SUPERSEDED BY BACKLOG-2858. This used to assert one collapsed row under a
-    // badge of 546 — tolerable while the 546 message rows shared the bucket.
-    // With its own category the Group chats badge counts its own rows, and the
-    // fixture's two totals differ (1 vs 546) so a badge fed by the wrong bucket
-    // cannot pass.
+  it("gives each section the affordance its OWN bucket earned", async () => {
+    // SUPERSEDED TWICE. BACKLOG-2858 gave the collapsed row its own category
+    // instead of a badge of 546 over one row; BACKLOG-2863 removed the badges
+    // altogether, because the six `SELECT COUNT(*)` queries behind them were what
+    // made a single keystroke slow.
+    //
+    // The discrimination survives the change: Group chats holds everything it
+    // has, Texts is standing in for 546 messages that do not fit, and so exactly
+    // one of the two sections says there is more. A section reading the wrong
+    // bucket's `hasMore` fails here.
     await searchFor([groupRow], [messageRow]);
     const groupChats = screen.getByTestId("linked-group-groupchats");
-    const texts = screen.getByTestId("linked-group-texts");
     expect(groupChats).toHaveTextContent("Group chats");
-    expect(groupChats).toHaveTextContent("1");
+    // No number anywhere in the heading — that is the thing that was removed.
     expect(groupChats.textContent ?? "").not.toContain("546");
-    expect(texts).toHaveTextContent("546");
+    expect(screen.queryByTestId("show-more-groupchats-refine")).not.toBeInTheDocument();
+    expect(screen.getByTestId("show-more-texts-refine")).toBeInTheDocument();
   });
 });

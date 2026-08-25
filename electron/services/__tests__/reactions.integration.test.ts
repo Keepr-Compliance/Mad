@@ -317,9 +317,10 @@ describe("C2 leakage enforcement — reactions never surface in list/count/searc
   it("buildUnattachedTextQuery SQL excludes reactions from search results", () => {
     const q = buildUnattachedTextQuery(USER, "3105559999", 50);
     const rows = db.prepare(q.sql).all(...q.params) as Array<{ id: string }>;
+    // BACKLOG-2863 removed the count query this used to assert alongside the
+    // rows; the row set was always the stronger of the two claims, because it
+    // names WHICH message survived rather than how many did.
     expect(new Set(rows.map((r) => r.id))).toEqual(new Set(["PU1"]));
-    const count = db.prepare(q.countSql).get(...q.countParams) as { total: number };
-    expect(count.total).toBe(1);
   });
 
   it("getMessageDerivedContacts excludes a reaction with a name-like sender", () => {
