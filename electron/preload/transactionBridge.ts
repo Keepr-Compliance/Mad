@@ -11,6 +11,7 @@ import type {
   ExportContentType,
   ExportEmailMode,
 } from "../types/ipc/window-api-transactions";
+import type { EmailPrecacheProgress } from "../services/emailPrecacheProgress";
 
 /**
  * Options for scanning emails for transactions
@@ -520,6 +521,36 @@ export const transactionBridge = {
    */
   precacheEmails: (userId: string, force = false) =>
     ipcRenderer.invoke("emails:precache", userId, force),
+
+  /**
+   * BACKLOG-2856: stop an in-flight pre-cache / re-cache at its next loop
+   * boundary. Safe at any moment: nothing is undone, the run simply stops doing
+   * more work, and a force run's staged rows are discarded without live email
+   * ever having been touched. A cancel that arrives after the swap has committed
+   * is ignored and the run reports its real success.
+   */
+  cancelPrecacheEmails: () => ipcRenderer.invoke("emails:cancel-precache"),
+
+  /**
+   * BACKLOG-2856: subscribe to pre-cache / re-cache progress.
+   *
+   * Same shape and same transport as `window.api.messages.onImportProgress`.
+   * The last event of every run is `phase: "done"` — on success, on failure and
+   * on cancel alike — so a subscriber can settle its UI on that alone.
+   *
+   * @returns Cleanup function to remove the listener
+   */
+  onPrecacheProgress: (
+    callback: (progress: EmailPrecacheProgress) => void,
+  ): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: EmailPrecacheProgress) => {
+      callback(progress);
+    };
+    ipcRenderer.on("emails:precache-progress", handler);
+    return () => {
+      ipcRenderer.removeListener("emails:precache-progress", handler);
+    };
+  },
 
   /**
    * Link emails to a transaction
