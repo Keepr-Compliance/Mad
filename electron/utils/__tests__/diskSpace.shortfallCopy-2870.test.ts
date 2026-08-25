@@ -191,6 +191,42 @@ describe("BACKLOG-2870 — describeDiskShortfall", () => {
     expect(text).toContain("1.2 GB");
   });
 
+  /**
+   * THE EXACT MESSAGE A WINDOWS USER READS, PINNED ON EVERY PLATFORM.
+   *
+   * `readLocalSnapshotCount()` returns null off darwin, so this is the shape
+   * Windows and Linux always get. The integration suite compares the whole
+   * string too, but only when it is actually RUNNING on those platforms — so on
+   * a macOS CI job that assertion never executes, and this machine cannot run
+   * Windows at all.
+   *
+   * This test closes that gap: it feeds the null directly, so the Windows-shaped
+   * copy is verified character-for-character everywhere, including here.
+   *
+   * A clause built from a null can render "null snapshots", "undefined
+   * snapshots", or an empty fragment with orphaned punctuation. None of that is
+   * visible to a test that only checks the message lacks a NUMBER, which is why
+   * this compares the complete string rather than probing for absences.
+   */
+  it("renders the exact message a platform without snapshots receives", () => {
+    const text = describeDiskShortfall({
+      requiredBytes: REQUIRED,
+      availableBytes: Math.floor(1.2 * GB),
+      snapshotCount: null, // what every non-macOS platform reports
+      phase: "before",
+    });
+
+    expect(text).toBe(
+      "Keepr needs about 3 GB of free disk space to import your messages, " +
+        "but only 1.2 GB is actually available."
+    );
+
+    // The macOS-only wording must not survive into a platform with no Time
+    // Machine — it cannot today, and this keeps it that way if somebody later
+    // feeds this a Windows VSS shadow-copy count.
+    expect(text).not.toMatch(/\bMac\b|snapshot/i);
+  });
+
   it("drops the clause on a Mac that genuinely holds no snapshots", () => {
     const text = describeDiskShortfall({
       requiredBytes: REQUIRED,

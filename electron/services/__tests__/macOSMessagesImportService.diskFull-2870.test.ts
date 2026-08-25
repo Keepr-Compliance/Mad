@@ -353,12 +353,37 @@ describe("BACKLOG-2870 — CONTROL 1: refuse before any write", () => {
     const result = await runImport(true);
 
     expect(result.success).toBe(false);
-    expect(result.refusedForDiskSpace).toEqual({
+
+    const { snapshotCount, ...refusal } = result.refusedForDiskSpace!;
+    expect(refusal).toEqual({
       requiredBytes: REQUIRED_BYTES,
       availableBytes: BELOW_FLOOR_BYTES,
-      snapshotCount: expect.anything(),
       phase: "before",
     });
+
+    /**
+     * `snapshotCount` is PLATFORM-DEPENDENT, and asserting it loosely is how this
+     * suite first went red on Windows against correct code.
+     *
+     * It was written `expect.anything()`, which does not match `null` — so the
+     * Windows job failed on a value `readLocalSnapshotCount` is RIGHT to return.
+     * The fix is to say what each platform returns, not to widen the matcher:
+     * `expect.any(Number)`, deleting the key, or a truthiness check would all
+     * have gone green on Windows AND on a macOS build that had stopped reading
+     * snapshots entirely.
+     */
+    if (process.platform === "darwin") {
+      // `tmutil listlocalsnapshots /` reports a count. ZERO IS NORMAL and must
+      // stay passing — a CI runner has no Time Machine snapshots — so this can
+      // never be asserted as truthy.
+      expect(typeof snapshotCount).toBe("number");
+      expect(Number.isInteger(snapshotCount)).toBe(true);
+      expect(snapshotCount as number).toBeGreaterThanOrEqual(0);
+    } else {
+      // Windows and Linux have no APFS snapshots. `readLocalSnapshotCount`
+      // returns null on the platform check, before spawning anything.
+      expect(snapshotCount).toBeNull();
+    }
 
     // NOTHING was written — this is the whole claim.
     expect(stagingTableNames()).toEqual([]);
@@ -399,6 +424,59 @@ describe("BACKLOG-2870 — CONTROL 1: refuse before any write", () => {
     expect(result.error).toMatch(/actually available/i);
     // The raw driver sentence must never be what the user reads.
     expect(result.error).not.toMatch(/database or disk is full/i);
+  });
+
+  /**
+   * THE WHOLE RENDERED MESSAGE, ON WHATEVER PLATFORM THIS IS RUNNING.
+   *
+   * The Windows CI failure that sent this suite red was an assertion bug, but it
+   * was pointing at a real question nobody had asked: what does the shortfall
+   * copy actually LOOK like where `snapshotCount` is null? A clause built from a
+   * null can render "null snapshots", "undefined snapshots", or an empty
+   * fragment with orphaned punctuation, and none of that is visible to a test
+   * that only checks the message lacks a number.
+   *
+   * So this asserts the ENTIRE string. On Windows and Linux it is fully
+   * determined, so it is compared exactly — this is the only assertion in the
+   * repo that pins the copy a Windows user actually reads, and this machine
+   * cannot run that platform.
+   */
+  it("renders a complete, clean message on every platform", async () => {
+    fakeFreeBytes(BELOW_FLOOR_BYTES);
+
+    const result = await runImport(true);
+    const message = result.error!;
+
+    const BASE =
+      "Keepr needs about 3 GB of free disk space to import your messages, " +
+      "but only 1.2 GB is actually available.";
+
+    if (process.platform === "darwin") {
+      // The snapshot clause is appended only when the count is > 0, so both
+      // shapes are legitimate here depending on the machine.
+      expect(message.startsWith(BASE)).toBe(true);
+      const extra = message.slice(BASE.length);
+      if (extra !== "") {
+        expect(extra).toMatch(
+          /^ Your Mac may show more free space than this: \d+ local Time Machine snapshots? (is|are) holding space that macOS reports as free but apps cannot use until it reclaims them\.$/
+        );
+      }
+    } else {
+      // WINDOWS / LINUX: no snapshots exist, the clause is dropped whole, and
+      // this is the complete message — asserted to the character.
+      expect(message).toBe(BASE);
+      // Belt and braces: the macOS-only wording must never leak onto a platform
+      // that has no Time Machine. It cannot today (the clause is gated on a
+      // count that is null off darwin), and this is what keeps that true if
+      // somebody later feeds it a VSS shadow-copy count.
+      expect(message).not.toMatch(/\bMac\b|snapshot/i);
+    }
+
+    // True on EVERY platform: no formatting artefacts of a missing value.
+    expect(message).not.toMatch(/null|undefined|NaN/);
+    expect(message).not.toMatch(/\s{2,}/); // no gap left by an omitted clause
+    expect(message).not.toMatch(/[,:;]\s*$/); // no dangling punctuation
+    expect(message.trim()).toBe(message);
   });
 
   /**
