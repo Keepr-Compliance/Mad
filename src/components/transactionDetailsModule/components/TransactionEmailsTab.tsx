@@ -645,12 +645,17 @@ export function TransactionEmailsTab({
   //
   // That reachability is not assumed — it holds by construction, and the proof
   // is pinned by TransactionEmailsTab-2861 and reviewStateService.tabReachability-2861:
-  // a thread is needs-review here only when EVERY email in it carries
-  // match_reason='address_missing', and such a row can only reach this tab with a
+  // a thread is needs-review here only when EVERY email in it carries the
+  // address_missing classification, and such a row can only reach this tab with a
   // non-NULL email_id (getCommunicationsWithMessages derives channel='email' from
   // the emails join), which is exactly the row getReviewState's legacy population
   // selects. Tab needs-review is therefore a SUBSET of the review queue, and the
   // button cannot be hidden while this tab holds one.
+  //
+  // That predicate is described in prose rather than spelled as SQL on purpose:
+  // reviewStateService.singleReadPath-2791 greps the shipped source for a second
+  // place SELECTing on it, and it is right to fire on the literal. This tab
+  // classifies (threadMatchReason), it does not query.
   const totalEmailCount = linkedThreads.reduce(
     (sum, thread) => sum + thread.emailCount,
     0
