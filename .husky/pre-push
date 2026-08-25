@@ -234,8 +234,15 @@ fi
 #      in the pushed range, so for those, fixing a finding in a NEW commit and
 #      pushing both still publishes the offending one. That is why the message
 #      below says amend/rebase -- do not soften it. It is PR #2314's exact
-#      shape. `--diff-range` below adds a second pass that reads EVERY commit
+#      shape. `--diff-range` below adds a second pass that reads the commits
 #      being pushed, so the bare-uuid rule does not have this hole.
+#
+#      ONE EXCEPTION, measured: `git log -p` emits NO PATCH for a merge commit,
+#      so a value existing only in a conflict RESOLUTION -- in neither parent --
+#      is invisible to the bare-uuid rule too. `--cc` would surface it and is not
+#      adopted: combined diffs use two prefix columns, so every added line would
+#      arrive as "++ ..." and collide with the header disambiguation the parser
+#      depends on. Pinned as case D14 in the verify harness.
 #   2. UNTRACKED FILES are scanned, so a stray scratch file can block an
 #      unrelated push. PREPUSH_SKIP_PII exists for that, and announces itself.
 #   3. NUL BYTES. A file containing a raw NUL reads as binary and is skipped

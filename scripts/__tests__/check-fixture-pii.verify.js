@@ -790,6 +790,81 @@ function main() {
     );
   }
 
+  // ------------------------------------------------------------------ D13
+  // THE `++` TRAP. An added line whose CONTENT begins with "++ " reaches the
+  // parser as "+++ ..." and is indistinguishable from a file header by prefix
+  // alone. The first version of this rule matched it as one, pointed `file` at
+  // something out of scope, and then silently dropped every remaining added line
+  // in that file -- reporting `OK — 0 new` over a UUID two lines below. Same
+  // silent-skip class as BACKLOG-2657, inside the rule built to close a leak.
+  //
+  // `.md` is in scope and diff-quoting inside a comment is ordinary, so this is
+  // reachable input and not a curiosity.
+  {
+    const dir = newGitFixture("d13", SCANNER);
+    const base = headSha(dir);
+    const hidden = randomUuid();
+    commitFile(
+      dir,
+      "src/fixtures/trap.ts",
+      [
+        "// a comment that quotes a diff:",
+        "++ note about a patch",
+        `export const ID = "${hidden}";`,
+        "",
+      ].join("\n"),
+      "test: a line beginning with ++",
+    );
+    const r = runDiff(dir, `${base}..HEAD`);
+    record(
+      "D13",
+      "an added line starting with '++ ' does not swallow the rest of the file",
+      r.code === 1 && r.out.includes(hidden) && r.out.includes("src/fixtures/trap.ts:3"),
+      `exit=${r.code} caught=${r.out.includes(hidden)} rightLine=${r.out.includes("trap.ts:3")}`,
+    );
+  }
+
+  // ------------------------------------------------------------------ D14
+  // A DOCUMENTED GAP, pinned so it cannot be forgotten -- same spirit as C7.
+  //
+  // `git log -p` emits NO PATCH for a merge commit, so a value that exists only
+  // in a conflict RESOLUTION -- in neither parent -- is invisible to this rule.
+  // The tree rules do not check UUIDs, so nothing covers it. Measured here, not
+  // reasoned about.
+  //
+  // `--cc` / `-m` would surface it and are deliberately NOT adopted: combined
+  // diffs prefix lines with TWO columns, so every added line would arrive as
+  // "++ ..." and collide head-on with the header disambiguation D13 pins. That
+  // is a separate change with its own parser, and it is filed rather than
+  // smuggled in here.
+  //
+  // IF THIS CASE GOES RED, the gap was closed -- update the comments in
+  // scripts/ci/check-fixture-pii.mjs and .husky/pre-push, then delete this case.
+  {
+    const dir = newGitFixture("d14", SCANNER);
+    const base = headSha(dir);
+    const mergeOnly = randomUuid();
+    gitIn(dir, ["checkout", "-q", "-b", "side"]);
+    commitFile(dir, "src/fixtures/conflict.ts", 'export const C = "side";\n', "side");
+    gitIn(dir, ["checkout", "-q", "-"]);
+    commitFile(dir, "src/fixtures/conflict.ts", 'export const C = "main";\n', "mainline");
+    spawnSync("git", ["-C", dir, "merge", "side", "-q"], { encoding: "utf8" }); // conflicts
+    fs.writeFileSync(
+      path.join(dir, "src", "fixtures", "conflict.ts"),
+      `export const C = "${mergeOnly}";\n`,
+    );
+    gitIn(dir, ["add", "-A"]);
+    gitIn(dir, ["commit", "-qm", "merge: resolve by inventing a value"]);
+
+    const r = runDiff(dir, `${base}..HEAD`);
+    record(
+      "D14",
+      "KNOWN GAP: a value existing only in a merge resolution is NOT caught (git log -p emits no patch for merges)",
+      r.code === 0 && !r.out.includes(mergeOnly),
+      `exit=${r.code} gapStillOpen=${!r.out.includes(mergeOnly)} — if this went red the gap closed; update the docs and delete this case`,
+    );
+  }
+
   // ------------------------------------------------------------------ D12
   // The counters print on the PASS path too, zeros included — same argument as
   // C3. "0 commit(s)" is a statement; its absence is indistinguishable from diff

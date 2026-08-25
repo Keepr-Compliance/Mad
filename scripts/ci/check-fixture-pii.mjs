@@ -683,9 +683,18 @@ function scan() {
  * than disables.
  *
  * Diff mode is also STRICTER than the tree scan in one way that matters: it reads
- * every commit in the pushed range, so a value introduced in one commit and
+ * each commit in the pushed range, so a value introduced in one commit and
  * removed in a later one is still reported. The tree scan cannot see that, and it
  * is exactly the shape of PR #2314 (documented in .husky/pre-push, limit 1).
+ *
+ * WHAT IT DOES NOT SEE, measured rather than assumed: `git log -p` emits no patch
+ * for a MERGE commit, so a value that exists only in a conflict RESOLUTION --
+ * present in neither parent -- is invisible to this rule, and the tree rules do
+ * not check UUIDs. `--cc` would surface it and is deliberately not adopted here:
+ * a combined diff prefixes added lines with two columns, so every one of them
+ * would arrive looking like the "++ " case the parser below had to be repaired
+ * for. That is a separate change with its own parser. The gap is pinned as case
+ * D14 in scripts/__tests__/check-fixture-pii.verify.js so it stays visible.
  *
  * ## An entropy filter was evaluated and REJECTED
  *
@@ -809,36 +818,59 @@ function scanDiff(rangeArgs) {
   let file = null;
   let newLine = 0;
   let prevNewLine = "";
+  // Which half of a file's diff we are in. INSIDE a hunk every line is content
+  // and carries a +/-/space prefix; OUTSIDE one, the lines are headers.
+  //
+  // This distinction is load-bearing and was missing from the first version of
+  // this parser. An ADDED line whose content begins with "++ " arrives here as
+  // "+++ ..." and matched the `+++ ` file-header branch, which set `file` to
+  // something out of scope and then SILENTLY DROPPED EVERY REMAINING ADDED LINE
+  // in that file. Measured against a fixture containing a line "++ note" above a
+  // UUID: `OK — 0 new`, exit 0. That is the BACKLOG-2657 silent-skip class
+  // reproduced inside the rule written to close a leak, so the state machine is
+  // now explicit rather than implied by branch order.
+  //
+  // `diff --git `, `index `, `Binary files ` and `@@` are unambiguous at column
+  // zero, because a content line always carries its prefix. Only `+++ ` and
+  // `--- ` collide with content, so only those two are gated on `inHunk`.
+  let inHunk = false;
 
   for (const raw of out.split("\n")) {
     if (raw.startsWith("\0")) {
       commit = raw.slice(1).trim();
       diff.commits++;
       file = null;
+      inHunk = false;
       prevNewLine = "";
       continue;
     }
     if (raw.startsWith("diff --git ")) {
       file = null;
+      inHunk = false;
       prevNewLine = "";
       continue;
     }
     if (raw.startsWith("Binary files ") || raw.startsWith("GIT binary patch")) {
       diff.binaryHeaders++;
+      inHunk = false;
       continue;
     }
-    if (raw.startsWith("+++ ")) {
-      file = pathFromDiffHeader(raw.slice(4));
-      if (file !== null && !isScannablePath(file)) file = null;
-      if (file !== null) diff.files.add(file);
-      prevNewLine = "";
-      continue;
-    }
-    if (raw.startsWith("--- ") || raw.startsWith("index ")) continue;
     if (raw.startsWith("@@")) {
       const m = /^@@+ (?:-\d+(?:,\d+)? )*\+(\d+)(?:,\d+)? /.exec(raw);
       newLine = m ? Number(m[1]) : 0;
+      inHunk = true;
       prevNewLine = "";
+      continue;
+    }
+    if (!inHunk) {
+      // Per-file preamble: `index`, mode lines, similarity index, and the two
+      // ambiguous ones, which are only headers HERE.
+      if (raw.startsWith("+++ ")) {
+        file = pathFromDiffHeader(raw.slice(4));
+        if (file !== null && !isScannablePath(file)) file = null;
+        if (file !== null) diff.files.add(file);
+        prevNewLine = "";
+      }
       continue;
     }
     if (file === null) continue;
