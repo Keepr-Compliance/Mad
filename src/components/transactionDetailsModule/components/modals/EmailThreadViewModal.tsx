@@ -13,7 +13,7 @@ import type { EmailThread } from "../EmailThreadCard";
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal";
 import { formatFileSize } from "../../../../utils/formatUtils";
 import { getEmailAvatarInitial } from "../../../../utils/avatarUtils";
-import { resolveDisplayName, formatParticipantLine, formatParticipantListLine } from "../../../../utils/emailParticipantUtils";
+import { resolveDisplayName, formatParticipantListLine } from "../../../../utils/emailParticipantUtils";
 import logger from '../../../../utils/logger';
 
 /**
@@ -410,8 +410,6 @@ function AttachmentListModal({
  */
 function EmailBubble({
   email,
-  isExpanded,
-  onToggle,
   onViewFull,
   attachments,
   loadingAttachments,
@@ -421,8 +419,6 @@ function EmailBubble({
   nameMap,
 }: {
   email: Communication;
-  isExpanded: boolean;
-  onToggle: () => void;
   onViewFull?: () => void;
   attachments: EmailAttachment[];
   loadingAttachments: boolean;
@@ -524,11 +520,30 @@ function EmailBubble({
         </div>
 
         {/* Content bubble */}
-        <div
-          className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors"
-          onClick={onToggle}
-        >
+        <div className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border border-gray-100">
           {/*
+            BACKLOG-2862 FOLLOW-UP round 2: the expand/collapse behaviour that
+            used to live in this bubble is GONE, at the founder's explicit
+            ruling: "we don't need the info the tap for details provides, can we
+            remove the tap for details?"
+
+            Deleted with it: the "Tap for details" indicator, the expanded
+            From:/To: panel, its duplicate "Open Full Email →" button, the
+            `isExpanded`/`onToggle` props, the parent's `expandedIds` state and
+            `toggleEmail`, and the bubble's own `onClick` + `cursor-pointer
+            hover:bg-gray-50` — a bubble that advertises itself as clickable but
+            does nothing is worse than one that does not.
+
+            KNOWN CONSEQUENCE, ruled on with the numbers in hand. The deleted
+            panel's "Open Full Email →" was gated only on `onViewFull`, while
+            "View formatted email" below is additionally gated on
+            `hasFormattedVersion`. So a message with no HTML part, inside a
+            MULTI-email thread, now has no route to the full view from this
+            modal. Single-email threads are unaffected — EmailThreadCard's
+            "View" button opens the full view directly without this modal
+            (EmailThreadCard.tsx:215-223). The sender's email address, which
+            only the deleted panel rendered, is likewise no longer shown here.
+
             BACKLOG-2862: recipients ABOVE the message, and `To` only.
 
             The sender is already named outside the bubble, immediately above
@@ -578,6 +593,21 @@ function EmailBubble({
             shows, so the control would change nothing visible and must not
             render — that gate is the whole reason the label is honest.
 
+            BACKLOG-2862 FOLLOW-UP round 2: LEFT-ALIGNED, and the divider
+            above it is gone.
+
+            There was never a literal <br> here. The wrapper carried
+            `mt-2 pt-2 border-t border-gray-100` — 0.5rem margin plus 0.5rem
+            padding is almost exactly one text-xs line-height, and the border
+            drew a rule across the bubble, which together read as a line break
+            before the button. All four classes are gone; the button now sits
+            directly under the body.
+
+            `justify-start` is EXPLICIT rather than relied upon. The button was
+            already left-aligned — no ancestor in the bubble carries a centering
+            class — but nothing pinned it, so a later wrapper change could have
+            moved it silently. Now a test fails instead.
+
             BACKLOG-2862 FOLLOW-UP: a grey BUTTON, not a blue text link. The
             founder asked for it to be "more obvious" — the element was already
             a <button>, so only the treatment changed. Grey tokens are the ones
@@ -587,7 +617,7 @@ function EmailBubble({
             than in a modal footer. The gate above is UNCHANGED.
           */}
           {hasFormattedVersion && onViewFull && (
-            <div className="mt-2 pt-2 border-t border-gray-100">
+            <div className="flex justify-start">
               <button
                 type="button"
                 onClick={(e) => {
@@ -602,45 +632,6 @@ function EmailBubble({
             </div>
           )}
 
-          {/* Expanded details */}
-          {isExpanded && (
-            <div className="mt-3 pt-3 border-t border-gray-100">
-              <div className="text-xs text-gray-500 space-y-1">
-                <div>
-                  <span className="font-medium">From:</span>{" "}
-                  {email.sender ? formatParticipantLine(email.sender, nameMap) : "Unknown"}
-                </div>
-                {email.recipients && (
-                  <div>
-                    <span className="font-medium">To:</span>{" "}
-                    {formatParticipantListLine(email.recipients, nameMap)}
-                  </div>
-                )}
-              </div>
-
-              {onViewFull && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onViewFull();
-                  }}
-                  className="mt-2 text-xs text-blue-600 hover:text-blue-800 font-medium"
-                >
-                  Open Full Email →
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* Expand indicator */}
-          {!isExpanded && !hasAttachments && (
-            <div className="mt-2 text-xs text-gray-400 flex items-center gap-1">
-              <span>Tap for details</span>
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-            </div>
-          )}
         </div>
       </div>
 
@@ -668,9 +659,6 @@ export function EmailThreadViewModal({
   userEmail,
   nameMap,
 }: EmailThreadViewModalProps): React.ReactElement {
-  // Track which emails are expanded (default: none - show just content bubbles)
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-
   // TASK-1782: Attachment state management
   // Map of email ID -> attachments
   const [attachmentsByEmail, setAttachmentsByEmail] = useState<Map<string, EmailAttachment[]>>(new Map());
@@ -725,18 +713,6 @@ export function EmailThreadViewModal({
     });
   }, [thread.emails]);
 
-  const toggleEmail = useCallback((emailId: string) => {
-    setExpandedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(emailId)) {
-        next.delete(emailId);
-      } else {
-        next.add(emailId);
-      }
-      return next;
-    });
-  }, []);
-
   // TASK-1782: Handle opening an attachment with system viewer
   const handleOpenAttachment = useCallback(async (storagePath: string) => {
     try {
@@ -753,7 +729,7 @@ export function EmailThreadViewModal({
   }, []);
 
   return (
-    <ResponsiveModal onClose={onClose} zIndex="z-[80]" panelBg="bg-gray-50" panelClassName="max-w-xl sm:max-h-[85vh] sm:overflow-hidden">
+    <ResponsiveModal onClose={onClose} zIndex="z-[80]" panelBg="bg-gray-50" panelClassName="max-w-xl sm:max-h-[85vh] sm:overflow-hidden" testId="thread-modal-backdrop">
         {/* Header */}
         <div className="flex-shrink-0 bg-gradient-to-r from-blue-500 to-indigo-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
           {/* Mobile */}
@@ -805,8 +781,6 @@ export function EmailThreadViewModal({
             <EmailBubble
               key={email.id}
               email={email}
-              isExpanded={expandedIds.has(email.id)}
-              onToggle={() => toggleEmail(email.id)}
               onViewFull={onViewEmail ? () => onViewEmail(email) : undefined}
               attachments={attachmentsByEmail.get(email.id) || []}
               loadingAttachments={loadingAttachmentIds.has(email.id)}
