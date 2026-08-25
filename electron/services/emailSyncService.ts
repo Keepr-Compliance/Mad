@@ -980,6 +980,20 @@ class EmailSyncService {
    * run is in progress; `requestPrecacheCancellation` aborts it and every loop
    * boundary in `precacheEmails` consults the signal.
    *
+   * BACKLOG-2856, SECOND ROUND — the signal now also goes INTO the fetch
+   * services. Checking it here alone was not enough and the founder measured
+   * why: one `searchAllFolders()` call spans folder discovery, every folder and
+   * every Graph page, so the phase boundaries below could not be reached until
+   * the entire download had finished. His cancel took 28.3 seconds, by which
+   * point all 487 messages had been fetched AND staged, and were then thrown
+   * away. Cancel cost exactly as much as not cancelling.
+   *
+   * The fetch services check the signal between pages, between folders/labels
+   * and between Gmail detail batches, and hand it to axios/gaxios so the request
+   * in flight is torn down. On abort they RETURN WHAT THEY HAVE, so fewer rows
+   * reach staging — which is the observable difference between a cancel that
+   * works and the one he reported.
+   *
    * There is deliberately no compensating rollback attached to this: the force
    * run writes to staging and the `finally` drops staging on every exit, so a
    * cancelled run is a no-op against live BY CONSTRUCTION. Cancelling is
@@ -2171,6 +2185,9 @@ class EmailSyncService {
               fetchFn: () => outlookFetchService.searchEmails({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: fetchSinceDate,
+                // BACKLOG-2856: the signal reaches the paging loop and the HTTP
+                // request, not just the boundary check above.
+                signal: abort.signal,
               }),
               userId,
               seenIds: seenEmailIds,
@@ -2199,6 +2216,11 @@ class EmailSyncService {
                 fetchFn: () => outlookFetchService.searchAllFolders({
                   maxResults: EMAIL_FETCH_SAFETY_CAP,
                   after: fetchSinceDate,
+                  // BACKLOG-2856: THE call the founder's 28.3 seconds were spent
+                  // inside. It walks every folder under one await; without the
+                  // signal the next boundary check below is unreachable until it
+                  // has finished.
+                  signal: abort.signal,
                 }),
                 userId,
                 seenIds: seenEmailIds,
@@ -2266,6 +2288,7 @@ class EmailSyncService {
               fetchFn: () => gmailFetchService.searchEmails({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: fetchSinceDate,
+                signal: abort.signal,
               }),
               userId,
               seenIds: seenEmailIds,
@@ -2286,6 +2309,7 @@ class EmailSyncService {
                 fetchFn: () => gmailFetchService.searchAllLabels({
                   maxResults: EMAIL_FETCH_SAFETY_CAP,
                   after: fetchSinceDate,
+                  signal: abort.signal,
                 }),
                 userId,
                 seenIds: seenEmailIds,

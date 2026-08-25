@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useNetwork } from '../../contexts/NetworkContext';
 import {
   emitEmailConnectionChanged,
@@ -39,6 +39,46 @@ const MAILBOX_LABEL: Record<"gmail" | "outlook", string> = {
  * on `success: true`, so that combination is not an error — it is the ordinary
  * "nothing needed replacing" case — and it must NOT claim an unlink.
  */
+/**
+ * BACKLOG-2856 (founder live QA, 2026-08-25): what to tell the user after they
+ * cancel a re-cache.
+ *
+ * The two runs stop with genuinely different results, and one sentence for both
+ * would be dishonest about at least one of them:
+ *
+ *   - A FORCE run wrote only to staging, and the `finally` dropped staging. Its
+ *     download is gone. Naming a count here would claim rows were kept that were
+ *     not, which is exactly the class of false claim BACKLOG-2775 filed against
+ *     the messages panel ("0 messages were imported" after the run that emptied
+ *     his store). So a cancelled force run reports what is TRUE of it — nothing
+ *     changed — and never a number.
+ *   - An ORDINARY run writes straight to live `emails`, so whatever it cached
+ *     before stopping is still there and is worth saying. Saying nothing would
+ *     make an interrupted run look like a wasted one.
+ *
+ * And a cancel that landed before a single row was cached says only that it was
+ * cancelled — the messages panel makes the same distinction, dropping its count
+ * clause when nothing ran (`MacOSMessagesImportSettings.tsx`, the BACKLOG-2748
+ * cancelled copy).
+ *
+ * @param force whether the cancelled run was a Force Re-cache
+ * @param emailsCached rows this run wrote before it stopped (ordinary runs only)
+ */
+export function describeCancelledRecache(
+  force: boolean,
+  emailsCached: number,
+): string {
+  if (force) {
+    return "Re-cache cancelled. Your emails and their links were left unchanged.";
+  }
+  if (emailsCached > 0) {
+    return `Re-cache cancelled. ${emailsCached.toLocaleString()} email${
+      emailsCached === 1 ? " was" : "s were"
+    } cached before it stopped.`;
+  }
+  return "Re-cache cancelled.";
+}
+
 export function describeForceRecache(
   forceSwap: ForceSwapSummary | undefined,
   connections: Connections,
@@ -260,7 +300,22 @@ export function EmailSettings({
     cancelled?: boolean;
     message: string;
   } | null>(null);
-  const recacheTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * BACKLOG-2856 (founder live QA, 2026-08-25): the result strip has been
+   * dismissed.
+   *
+   * Same state, same reset rule and same control as the messages panel's
+   * `resultDismissed` (`MacOSMessagesImportSettings.tsx:831`), which BACKLOG-2749
+   * added from his QA of that panel — "the completion strip has been dismissed.
+   * It used to linger with no way to close it." Dismissing hides THIS run's
+   * message and nothing else; a new run resets it.
+   *
+   * The 8-second auto-clear this replaces is deliberately gone. A strip that
+   * clears itself makes the dismiss control decorative — a button that cannot
+   * change anything — and the panel he compared this to keeps its strip up until
+   * dismissed. "Like messages" means this as much as it means the highlight.
+   */
+  const [recacheResultDismissed, setRecacheResultDismissed] = useState(false);
 
   // BACKLOG-2856: live progress for BOTH re-cache buttons.
   //
@@ -275,15 +330,6 @@ export function EmailSettings({
     percent: number;
   } | null>(null);
   const [isCancellingRecache, setIsCancellingRecache] = useState(false);
-
-  // Clean up timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (recacheTimeoutRef.current) {
-        clearTimeout(recacheTimeoutRef.current);
-      }
-    };
-  }, []);
 
   // BACKLOG-2856: subscribe to pre-cache progress for the lifetime of the panel.
   //
@@ -318,6 +364,9 @@ export function EmailSettings({
   const handleRecacheEmails = async (force = false): Promise<void> => {
     setIsRecaching(true);
     setRecacheResult(null);
+    // BACKLOG-2856: a new run gets a fresh strip. Without this reset a user who
+    // dismissed one result would never see the next one.
+    setRecacheResultDismissed(false);
     try {
       const result = await window.api.transactions.precacheEmails(userId, force);
       // BACKLOG-2856: a cancel is the user getting what they asked for, so it is
@@ -327,9 +376,10 @@ export function EmailSettings({
         setRecacheResult({
           success: false,
           cancelled: true,
-          message: force
-            ? "Re-cache cancelled. Your emails and their links were left unchanged."
-            : "Re-cache cancelled.",
+          // BACKLOG-2856: an ordinary run's rows went to LIVE and survive the
+          // cancel, so they are named; a force run's went to staging and were
+          // dropped, so it claims no count at all. See the helper.
+          message: describeCancelledRecache(force, result.emailsStored ?? 0),
         });
       } else if (result.success) {
         setRecacheResult({
@@ -375,8 +425,6 @@ export function EmailSettings({
       // means the bar is tied to this invocation's lifetime, not to a shared
       // channel, so no event ordering can leave it up.
       setRecacheProgress(null);
-      // Clear result after 8 seconds
-      recacheTimeoutRef.current = setTimeout(() => setRecacheResult(null), 8000);
     }
   };
 
@@ -751,19 +799,45 @@ export function EmailSettings({
               </div>
             </div>
           )}
-          {recacheResult && (
-            <p
-              className={`text-xs mt-2 ${
+          {/* BACKLOG-2856 (founder live QA, 2026-08-25): "it would be nice if
+              the msg when it's cancelled is like messages — highlight and
+              dismissable msg."
+
+              This is the messages panel's strip, not a second pattern invented
+              alongside it: same box (`relative p-2 pr-7 rounded text-xs`), same
+              colour rule with cancelled on its own yellow track, same absolute
+              dismiss control — see `MacOSMessagesImportSettings.tsx:1593`, which
+              BACKLOG-2749 built from his QA of that panel.
+
+              The yellow supersedes the grey text this replaces. That grey was a
+              deliberate choice (a cancel is neither success nor failure, so
+              neither green nor red) and the yellow keeps that property while
+              giving him the highlight he asked for — it is also the exact track
+              the messages panel already uses for its own cancelled runs, so the
+              two panels now say "you stopped this" the same way. */}
+          {recacheResult && !recacheResultDismissed && (
+            <div
+              className={`relative mt-2 p-2 pr-7 rounded text-xs ${
                 recacheResult.cancelled
-                  ? "text-gray-600"
+                  ? "bg-yellow-50 text-yellow-700 border border-yellow-200"
                   : recacheResult.success
-                    ? "text-green-600"
-                    : "text-red-600"
+                    ? "bg-green-50 text-green-700 border border-green-200"
+                    : "bg-red-50 text-red-700 border border-red-200"
               }`}
               data-testid="recache-result"
             >
               {typeof recacheResult.message === 'string' ? recacheResult.message : String(recacheResult.message)}
-            </p>
+              <button
+                onClick={() => setRecacheResultDismissed(true)}
+                data-testid="recache-result-dismiss"
+                aria-label="Dismiss"
+                className="absolute top-1 right-1 p-0.5 text-gray-400 hover:text-gray-600 rounded transition-all"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           )}
         </div>
       </div>

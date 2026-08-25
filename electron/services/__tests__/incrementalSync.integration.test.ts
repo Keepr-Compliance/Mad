@@ -143,11 +143,14 @@ describe("Incremental Sync Integration (SPRINT-014)", () => {
       });
 
       // Assert: Query should include after: filter
+      // BACKLOG-2856: `messages.list` now carries a second argument — the gaxios
+      // request options holding the cancellation signal, which is `undefined` on
+      // this (non-cancellable) sync path.
       expect(mockMessagesList).toHaveBeenCalledWith({
         userId: "me",
         q: expect.stringContaining(`after:${Math.floor(lastSync.getTime() / 1000)}`),
         maxResults: 100,
-      });
+      }, { signal: undefined });
     });
 
     it("should use date filter for incremental sync queries", async () => {
@@ -167,7 +170,7 @@ describe("Incremental Sync Integration (SPRINT-014)", () => {
         userId: "me",
         q: expect.stringContaining("after:"),
         maxResults: 100,
-      });
+      }, { signal: undefined });
     });
 
     it("should fetch emails without date filter when not specified", async () => {

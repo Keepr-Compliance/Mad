@@ -1,4 +1,9 @@
 import { google, gmail_v1, Auth } from "googleapis";
+import {
+  FetchCancelledError,
+  isFetchCancelledError,
+  throwIfCancelled,
+} from "../utils/fetchCancellation";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
@@ -126,6 +131,12 @@ interface EmailSearchOptions {
   skip?: number;
   contactEmails?: string[];
   onProgress?: (progress: FetchProgress) => void;
+  /**
+   * BACKLOG-2856: cancellation signal, checked between list pages AND between
+   * message-detail batches — Gmail's long phase is the second one, because the
+   * list call returns bare IDs and every body is a separate `messages.get`.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -172,9 +183,42 @@ class GmailFetchService {
    *
    * @private
    */
-  private async _throttledCall<T>(fn: () => Promise<T>): Promise<T> {
+  private async _throttledCall<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    // BACKLOG-2856: checked on both sides of the throttler, which can hold a
+    // call for hundreds of milliseconds — long enough for a cancel to arrive
+    // and be ignored.
+    // BACKLOG-2856: checked BEFORE the throttler, so a call the user has already
+    // cancelled does not take a slot from the calls that are still wanted. There
+    // is deliberately no second check straight after `throttle()` — `guarded`
+    // below opens with one, and a mutation sweep showed nothing could tell the
+    // two apart. A guard no test can red is not defence in depth.
+    throwIfCancelled(signal, "gmail:throttledCall");
     await apiThrottlers.gmail.throttle();
-    return withRetry(fn, this.retryOptions);
+    // BACKLOG-2856 — THE CONVERSION HAPPENS INSIDE THE RETRY, NOT AROUND IT.
+    //
+    // This wrapper was first written around `withRetry`, and a control caught
+    // it: gaxios rejects an aborted request with a network-ish error, so
+    // `isRetryableError` said "transient" and `withRetry` spent five backoffs —
+    // 31 seconds of retries — before the cancel was recognised. The user's
+    // Cancel produced MORE requests, not fewer, which is a sharper version of
+    // the defect being fixed.
+    //
+    // Converting per ATTEMPT fixes it: `FetchCancelledError` carries no status
+    // and no error code, so `isRetryableError` returns false and `withRetry`
+    // stops at once. The check is on the signal we passed, never on the gaxios
+    // error shape, which is library-version-dependent.
+    const guarded = async (): Promise<T> => {
+      throwIfCancelled(signal, "gmail:throttledCall");
+      try {
+        return await fn();
+      } catch (error) {
+        if (signal?.aborted) {
+          throw new FetchCancelledError("gmail:throttledCall");
+        }
+        throw error;
+      }
+    };
+    return withRetry(guarded, this.retryOptions);
   }
 
   /**
@@ -258,6 +302,7 @@ class GmailFetchService {
     maxResults = 100,
     contactEmails,
     onProgress,
+    signal,
   }: EmailSearchOptions = {}): Promise<ParsedEmail[]> {
     try {
       if (!this.gmail) {
@@ -296,15 +341,28 @@ class GmailFetchService {
         pageCount++;
         logService.debug(`Fetching page ${pageCount}`, "GmailFetch");
 
-        const response: { data: gmail_v1.Schema$ListMessagesResponse } =
-          await this._throttledCall(() =>
-            this.gmail!.users.messages.list({
-              userId: "me",
-              q: searchQuery.trim(),
-              maxResults: Math.min(100, maxResults - allMessages.length), // Fetch up to 100 per page
-              pageToken: nextPageToken,
-            })
+        let response: { data: gmail_v1.Schema$ListMessagesResponse };
+        try {
+          response = await this._throttledCall(
+            () =>
+              this.gmail!.users.messages.list(
+                {
+                  userId: "me",
+                  q: searchQuery.trim(),
+                  maxResults: Math.min(100, maxResults - allMessages.length), // Fetch up to 100 per page
+                  pageToken: nextPageToken,
+                },
+                // BACKLOG-2856: aborts the request in flight. `MethodOptions`
+                // extends gaxios' options, which carry `signal`.
+                { signal },
+              ),
+            signal,
           );
+        } catch (error) {
+          // Cancelled mid-page: keep the IDs already listed and stop.
+          if (isFetchCancelledError(error)) break;
+          throw error;
+        }
 
         // Get estimated total from first response
         if (pageCount === 1 && response.data.resultSizeEstimate) {
@@ -354,12 +412,33 @@ class GmailFetchService {
       const fullMessages: ParsedEmail[] = [];
       const batchSize = 10;
       for (let i = 0; i < allMessages.length; i += batchSize) {
+        // BACKLOG-2856 — GMAIL'S LONG PHASE.
+        //
+        // The list call returns bare IDs; every body is a separate
+        // `messages.get`. On a large mailbox nearly all the time goes here, not
+        // in the paging above, so this is the boundary that decides how quickly
+        // a Gmail cancel is felt.
+        //
+        // Stated precisely, because the loose version is wrong: every completed
+        // BATCH is kept, and the batch that was in flight when the abort landed
+        // is dropped — `Promise.all` rejects as soon as one of its ten
+        // `getEmailById` calls hits the guard in `_throttledCall`. Up to nine
+        // bodies are therefore discarded. That is accepted rather than papered
+        // over with `allSettled`, which would also swallow a genuine per-message
+        // failure; nine messages against a mailbox-sized download is not worth
+        // weakening the error path for.
         const batch = allMessages.slice(i, i + batchSize);
-        const batchResults = await Promise.all(
-          batch
-            .filter((msg) => msg.id)
-            .map((msg) => this.getEmailById(msg.id as string)),
-        );
+        let batchResults: ParsedEmail[];
+        try {
+          batchResults = await Promise.all(
+            batch
+              .filter((msg) => msg.id)
+              .map((msg) => this.getEmailById(msg.id as string, signal)),
+          );
+        } catch (error) {
+          if (isFetchCancelledError(error)) break;
+          throw error;
+        }
         fullMessages.push(...batchResults);
 
         // Report progress for fetching details
@@ -428,18 +507,23 @@ class GmailFetchService {
    * @param messageId - Gmail message ID
    * @returns Parsed email object
    */
-  async getEmailById(messageId: string): Promise<ParsedEmail> {
+  async getEmailById(messageId: string, signal?: AbortSignal): Promise<ParsedEmail> {
     try {
       if (!this.gmail) {
         throw new Error("Gmail API not initialized. Call initialize() first.");
       }
 
-      const response = await this._throttledCall(() =>
-        this.gmail!.users.messages.get({
-          userId: "me",
-          id: messageId,
-          format: "full",
-        })
+      const response = await this._throttledCall(
+        () =>
+          this.gmail!.users.messages.get(
+            {
+              userId: "me",
+              id: messageId,
+              format: "full",
+            },
+            { signal },
+          ),
+        signal,
       );
 
       const message = response.data;
@@ -815,15 +899,25 @@ class GmailFetchService {
    *
    * @returns Array of syncable labels with id and name
    */
-  async discoverLabels(): Promise<Array<{ id: string; name: string }>> {
+  async discoverLabels(signal?: AbortSignal): Promise<Array<{ id: string; name: string }>> {
     try {
       if (!this.gmail) {
         throw new Error("Gmail API not initialized. Call initialize() first.");
       }
 
-      const response = await this._throttledCall(() =>
-        this.gmail!.users.labels.list({ userId: "me" })
-      );
+      let response;
+      try {
+        response = await this._throttledCall(
+          () => this.gmail!.users.labels.list({ userId: "me" }, { signal }),
+          signal,
+        );
+      } catch (error) {
+        // BACKLOG-2856: EMPTY rather than a rethrow, so `searchAllLabels` sees
+        // "no labels to walk" and finishes as a cancel rather than surfacing to
+        // `precacheEmails` as a Gmail failure.
+        if (isFetchCancelledError(error)) return [];
+        throw error;
+      }
 
       const allLabels = response.data.labels || [];
 
@@ -879,6 +973,8 @@ class GmailFetchService {
       before?: Date | null;
       maxResults?: number;
       onProgress?: (progress: FetchProgress & { label?: string }) => void;
+      /** BACKLOG-2856: stop paging this label when the user cancels. */
+      signal?: AbortSignal;
     } = {}
   ): Promise<ParsedEmail[]> {
     try {
@@ -886,7 +982,7 @@ class GmailFetchService {
         throw new Error("Gmail API not initialized. Call initialize() first.");
       }
 
-      const { after = null, before = null, maxResults = 500, onProgress } = options;
+      const { after = null, before = null, maxResults = 500, onProgress, signal } = options;
 
       // Build query string for date filter. Gmail after:/before: accept epoch-seconds
       // bounds with sub-day (second-level) precision -- after: is inclusive, before: is
@@ -914,16 +1010,30 @@ class GmailFetchService {
 
       for (;;) {
         pageCount++;
-        const response: { data: gmail_v1.Schema$ListMessagesResponse } =
-          await this._throttledCall(() =>
-            this.gmail!.users.messages.list({
-              userId: "me",
-              labelIds: [labelId],
-              q: searchQuery.trim() || undefined,
-              maxResults: Math.min(100, maxResults - allMessages.length),
-              pageToken: nextPageToken,
-            })
+        let response: { data: gmail_v1.Schema$ListMessagesResponse };
+        try {
+          response = await this._throttledCall(
+            () =>
+              this.gmail!.users.messages.list(
+                {
+                  userId: "me",
+                  labelIds: [labelId],
+                  q: searchQuery.trim() || undefined,
+                  maxResults: Math.min(100, maxResults - allMessages.length),
+                  pageToken: nextPageToken,
+                },
+                { signal },
+              ),
+            signal,
           );
+        } catch (error) {
+          // Returning the partial accumulation rather than rethrowing matters
+          // here for the same reason it does in the Outlook folder walk: the
+          // caller's per-label `try/catch` logs and moves to the NEXT label, so
+          // a throw would be swallowed and the walk would carry on regardless.
+          if (isFetchCancelledError(error)) break;
+          throw error;
+        }
 
         const messages = response.data.messages || [];
         allMessages.push(...messages);
@@ -944,11 +1054,17 @@ class GmailFetchService {
       const batchSize = 10;
       for (let i = 0; i < allMessages.length; i += batchSize) {
         const batch = allMessages.slice(i, i + batchSize);
-        const batchResults = await Promise.all(
-          batch
-            .filter((msg) => msg.id)
-            .map((msg) => this.getEmailById(msg.id as string))
-        );
+        let batchResults: ParsedEmail[];
+        try {
+          batchResults = await Promise.all(
+            batch
+              .filter((msg) => msg.id)
+              .map((msg) => this.getEmailById(msg.id as string, signal))
+          );
+        } catch (error) {
+          if (isFetchCancelledError(error)) break;
+          throw error;
+        }
         fullMessages.push(...batchResults);
 
         if (onProgress) {
@@ -1024,6 +1140,8 @@ class GmailFetchService {
       before?: Date | null;
       maxResults?: number;
       onProgress?: (progress: FetchProgress & { label?: string; currentLabel?: string }) => void;
+      /** BACKLOG-2856: stop between labels, and inside each label's paging. */
+      signal?: AbortSignal;
     } = {}
   ): Promise<ParsedEmail[]> {
     try {
@@ -1031,7 +1149,7 @@ class GmailFetchService {
         throw new Error("Gmail API not initialized. Call initialize() first.");
       }
 
-      const labels = await this.discoverLabels();
+      const labels = await this.discoverLabels(options.signal);
       logService.info(
         `Starting multi-label fetch across ${labels.length} labels`,
         "GmailFetch"
@@ -1041,11 +1159,23 @@ class GmailFetchService {
       const allEmails: ParsedEmail[] = [];
 
       for (const label of labels) {
+        // BACKLOG-2856: the between-label check — Gmail's counterpart to the
+        // between-folder check in `outlookFetchService.searchAllFolders`. One
+        // `searchAllLabels` call walks every label, so without this a cancel was
+        // not seen until the last label had finished.
+        if (options.signal?.aborted) {
+          logService.info(
+            `Multi-label fetch cancelled after ${allEmails.length} email(s)`,
+            "GmailFetch"
+          );
+          break;
+        }
         try {
           const emails = await this.searchEmailsByLabel(label.id, {
             after: options.after,
             before: options.before,
             maxResults: options.maxResults,
+            signal: options.signal,
             onProgress: options.onProgress
               ? (progress) => {
                   options.onProgress!({

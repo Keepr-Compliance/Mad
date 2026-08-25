@@ -232,8 +232,15 @@ describe("BACKLOG-2856 — the Cancel control", () => {
    * A cancel is the user getting what they asked for. Painting it red would
    * report their own decision as a failure.
    *
+   * The colour assertion moved from grey TEXT to the yellow STRIP when the
+   * founder asked for the messages panel's treatment ("it would be nice if the
+   * msg when it's cancelled is like messages — highlight and dismissable msg").
+   * The property being pinned is unchanged and is the one that matters: a cancel
+   * is neither the success track nor the failure track. Yellow is also the track
+   * the messages panel already uses for its own cancelled runs.
+   *
    * MUTATION: delete the `result.cancelled` branch in `handleRecacheEmails`
-   * -> RED (the message becomes the generic failure copy, in red).
+   * -> RED (the message becomes the generic failure copy, on the red track).
    */
   it("reports a cancelled force run in neutral terms, and says nothing changed", async () => {
     const user = userEvent.setup();
@@ -247,8 +254,9 @@ describe("BACKLOG-2856 — the Cancel control", () => {
     const result = await screen.findByTestId("recache-result");
     expect(result).toHaveTextContent(/cancelled/i);
     expect(result).toHaveTextContent(/left unchanged/i);
-    expect(result).toHaveClass("text-gray-600");
-    expect(result).not.toHaveClass("text-red-600");
+    expect(result).toHaveClass("bg-yellow-50");
+    expect(result).not.toHaveClass("bg-red-50");
+    expect(result).not.toHaveClass("bg-green-50");
   });
 });
 
