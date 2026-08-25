@@ -251,7 +251,12 @@ class FakeSupabase {
             };
           }
         }
-        rows().push({ ...rec });
+        // `id UUID PRIMARY KEY DEFAULT gen_random_uuid()` on all three tables:
+        // submission_messages / submission_attachments records are inserted
+        // WITHOUT an id and the database supplies one. Without this the fake
+        // stored `id: undefined` and an id-SET diff read as `undefined`
+        // instead of naming the row that replaced the original.
+        rows().push({ id: rec.id ?? `gen-${Math.random().toString(16).slice(2)}`, ...rec });
       }
       return { data: incoming, error: null };
     };
@@ -345,6 +350,13 @@ function seedSubmission(status: string, version = 1): { id: string; messageIds: 
 
 const idSet = (rows: Row[]): Set<unknown> => new Set(rows.map((r) => r.id));
 
+/** All three tables at once, sorted, so one diff shows a whole cascade. */
+const survivors = (): Record<string, unknown[]> => ({
+  submissions: fake.submissions.map((r) => r.id).sort(),
+  messages: fake.messages.map((r) => r.id).sort(),
+  attachments: fake.attachments.map((r) => r.id).sort(),
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   fake = new FakeSupabase();
@@ -416,9 +428,9 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
 
     const result = await submissionService.submitTransaction(TX);
 
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/already been submitted/i);
-
+    // SURVIVAL IS ASSERTED FIRST, ON PURPOSE. It is the load-bearing claim, so
+    // it must be the assertion a revert turns red — not a message string that
+    // happens to be checked earlier and fails for its own reasons.
     // Identity, not count: a delete-then-insert keeps the count at one.
     expect(idSet(fake.submissions)).toEqual(beforeSubs);
     expect(idSet(fake.submissions)).toEqual(new Set([seeded.id]));
@@ -426,6 +438,9 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
     expect(idSet(fake.messages)).toEqual(new Set(seeded.messageIds));
     expect(idSet(fake.attachments)).toEqual(beforeAtts);
     expect(idSet(fake.attachments)).toEqual(new Set(seeded.attachmentIds));
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/already been submitted/i);
 
     // The refusal happens BEFORE the longest stage. Without the guard this
     // upload runs to completion and only then does the insert die on the
@@ -469,10 +484,12 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
     expect(fresh?.parent_submission_id).toBe(seeded.id);
 
     // The row it versioned FROM is still there, with its cascaded children.
-    expect(fake.submissions.map((s) => s.id)).toContain(seeded.id);
-    expect(idSet(fake.messages).has(seeded.messageIds[0])).toBe(true);
-    expect(idSet(fake.attachments)).toEqual(
-      new Set([...seeded.attachmentIds, ...fake.attachments.filter((a) => a.submission_id === result.submissionId).map((a) => a.id)])
+    expect(fake.submissions.map((r) => r.id)).toContain(seeded.id);
+    expect(fake.messages.map((r) => r.id)).toEqual(
+      expect.arrayContaining(seeded.messageIds)
+    );
+    expect(fake.attachments.map((r) => r.id)).toEqual(
+      expect.arrayContaining(seeded.attachmentIds)
     );
   });
 
@@ -505,30 +522,45 @@ describe("BACKLOG-2853 · PERMIT_DELETE disposition (service_role_full_access_su
 
     const result = await submissionService.submitTransaction(TX);
 
+    // Survival first — see the note in the LIVE_RLS twin of this test.
+    //
+    // ONE comparison over all three tables, so a revert shows the WHOLE
+    // cascade in a single diff instead of stopping at the first table. With
+    // "submitted" removed from blockedStatuses the delete lands, the FK
+    // cascade takes the messages and the attachments with it, and the
+    // replacement carries a fresh uuid — while the row COUNT stays at one,
+    // which is the trap this assertion exists to avoid.
+    expect(survivors()).toEqual({
+      submissions: [seeded.id],
+      messages: [...seeded.messageIds].sort(),
+      attachments: [...seeded.attachmentIds].sort(),
+    });
+
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/already been submitted/i);
-
-    // With "submitted" removed from blockedStatuses these three go RED here:
-    // the delete lands, the FK cascade takes the messages and the attachments
-    // with it, and the replacement is a different id.
-    expect(idSet(fake.submissions)).toEqual(new Set([seeded.id]));
-    expect(idSet(fake.messages)).toEqual(new Set(seeded.messageIds));
-    expect(idSet(fake.attachments)).toEqual(new Set(seeded.attachmentIds));
   });
 
   test("a resubmit from 'needs_changes' does NOT delete its own parent — the row `parent_submission_id` points at is still there", async () => {
     const seeded = seedSubmission("needs_changes", 1);
 
     const result = await submissionService.resubmitTransaction(TX);
+    // PARENT SURVIVAL FIRST. Without the `options?.parentSubmissionId` guard
+    // a PERMITTED delete destroys the parent, the FK cascade takes its
+    // messages and attachments, the versioned insert then violates
+    // transaction_submissions_parent_submission_id_fkey, and
+    // `cleanupFailedSubmission` clears what the failed attempt wrote —
+    // measured end state: every one of the three tables EMPTY. A legitimate
+    // broker round trip losing the whole submission.
+    expect(fake.submissions.map((r) => r.id)).toContain(seeded.id);
+    expect(fake.messages.map((r) => r.id)).toEqual(
+      expect.arrayContaining(seeded.messageIds)
+    );
+    expect(fake.attachments.map((r) => r.id)).toEqual(
+      expect.arrayContaining(seeded.attachmentIds)
+    );
 
     expect(result.success).toBe(true);
-
-    // Without the `options?.parentSubmissionId` guard this is where a delete
-    // that is PERMITTED destroys the parent and the versioned insert then
-    // violates transaction_submissions_parent_submission_id_fkey — the
-    // original lost AND the replacement rejected.
-    expect(fake.submissions.map((s) => s.id)).toContain(seeded.id);
-    expect(idSet(fake.messages).has(seeded.messageIds[0])).toBe(true);
+    expect(result.error ?? null).toBeNull();
 
     const fresh = fake.submissions.find((s) => s.id === result.submissionId);
     expect(fresh?.version).toBe(2);
