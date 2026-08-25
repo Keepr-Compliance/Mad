@@ -301,7 +301,7 @@ describe("BACKLOG-2677: a role the user set by hand is never re-defaulted", () =
           contacts: [ALICE, BEN],
           contactAssignments: {
             // contact-2 was changed by hand to Seller Agent.
-            [SPECIFIC_ROLES.SELLER_AGENT]: [
+            [SPECIFIC_ROLES.AGENT]: [
               { contactId: "contact-2", isPrimary: false, notes: "" },
             ],
           },
@@ -391,7 +391,12 @@ describe("BACKLOG-2677: the default_role override still wins when auto-role is O
     settingsService.getContactAutoRoleEnabled.mockResolvedValueOnce(true);
 
     const onAssignContact = jest.fn();
-    const benWithRole = { ...BEN, default_role: "seller_agent" } as Contact;
+    // BACKLOG-2859: `agent` is the one stored agent role, offered on every
+    // transaction type. `seller_agent` is retired and no longer offered, so a
+    // contact carrying it now correctly falls back to the Client baseline —
+    // which is a different behaviour and is asserted in ContactAssignmentStep
+    // .test.tsx rather than folded into this one.
+    const benWithRole = { ...BEN, default_role: SPECIFIC_ROLES.AGENT } as Contact;
 
     render(
       <ContactAssignmentStep
@@ -405,7 +410,7 @@ describe("BACKLOG-2677: the default_role override still wins when auto-role is O
 
     await waitFor(() => {
       expect(assignedPairs(onAssignContact)).toContainEqual([
-        "seller_agent",
+        SPECIFIC_ROLES.AGENT,
         "contact-2",
       ]);
     });

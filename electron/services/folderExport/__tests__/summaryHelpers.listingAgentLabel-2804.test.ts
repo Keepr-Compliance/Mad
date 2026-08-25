@@ -114,7 +114,17 @@ describe("BACKLOG-2804 — the audit summary calls the seller's agent the Listin
     );
     const section = contactsSection(html);
 
-    expect(section).toContain("Buyer Agent");
+    // BACKLOG-2859: "Buyer's Agent", HTML-ESCAPED. The role goes through
+    // escapeHtml, which maps `'` to `&#039;`, so the apostrophe is an entity in
+    // the source and renders as an apostrophe in the filed PDF. Asserting the
+    // escaped form is asserting what the file actually contains — matching the
+    // unescaped string here would fail while the output was correct.
+    //
+    // This is a RETIRED stored value (`buyer_agent`) reaching the export from an
+    // un-migrated row; it must still humanize rather than print a raw enum into
+    // a compliance document.
+    expect(section).toContain("Buyer&#039;s Agent");
+    expect(section).not.toContain("Buyer Agent");
     expect(section).toContain("Real Estate Attorney");
     expect(section).toContain("Inspector");
   });

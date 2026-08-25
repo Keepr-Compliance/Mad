@@ -208,14 +208,14 @@ export const SAMPLE_CONTACT_ROLES_RESPONSE: ContactRoleExtraction = {
     {
       name: 'Sarah Smith',
       email: 'sarah.smith@remax.com',
-      role: 'seller_agent',
+      role: 'agent',
       confidence: 0.95,
       evidence: ['I am the listing agent for this property'],
     },
     {
       name: 'John Doe',
       email: 'john.doe@coldwell.com',
-      role: 'buyer_agent',
+      role: 'agent',
       confidence: 0.9,
       evidence: ['John Doe, Buyer Agent'],
     },
