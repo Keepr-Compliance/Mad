@@ -1,6 +1,8 @@
 /**
- * BACKLOG-2862 follow-ups — the two founder refinements shipped on top of the
- * bubble redesign he tested and passed (int/ui-polish-e @ 4951bef3a).
+ * BACKLOG-2862 follow-ups — the five founder refinements shipped on top of the
+ * bubble redesign he tested and passed (int/ui-polish-e @ 4951bef3a), across
+ * two rounds. Items 2 and 3 came first; item 1 was reported BLOCKED, ruled on
+ * by the founder, and then shipped in round 2 alongside items 4 and 5.
  *
  *   ITEM 2. "View formatted email" was a blue text link. His words: "maybe make
  *           more obvious and turn it into a button in gray." It becomes a grey
@@ -15,10 +17,20 @@
  *           The whole strip, not just the button — the strip existed only to
  *           hold it.
  *
- * ITEM 1 OF THE BRIEF IS NOT IMPLEMENTED HERE, deliberately. Deleting "Tap for
- * details" and the expansion it drives would remove content that exists nowhere
- * else in this modal; see the PR body and the BACKLOG-2862 comment. No
- * assertion in this file pins that block either way.
+ *   ITEM 1. "Tap for details" and the whole expanded panel are DELETED. First
+ *           reported as blocked — the panel was the only place the sender's
+ *           email address appeared, and for plain-text-only mail its
+ *           "Open Full Email →" was the only route to the full view. The
+ *           founder was shown both and ruled anyway: "we don't need the info
+ *           the tap for details provides, can we remove the tap for details?"
+ *
+ *   ITEM 4. The button is LEFT-ALIGNED, explicitly. It already was — no
+ *           ancestor carries a centering class — but nothing pinned it, so the
+ *           assertion exists to keep it that way.
+ *
+ *   ITEM 5. The "line break" before the button is gone. There was never a
+ *           literal <br>: the wrapper's `mt-2 pt-2 border-t border-gray-100`
+ *           was ~one text-xs line-height of space plus a rule.
  *
  * WHY THE TAG-NAME CHECK IS NOT THE ITEM-2 CONTROL. The element was ALREADY a
  * `<button type="button">` before this change — "text link" described how it
@@ -192,5 +204,152 @@ describe("BACKLOG-2862 follow-up — a dismiss route still works", () => {
     fireEvent.click(closeControls[closeControls.length - 1]);
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* --------------------- ITEM 1: the expansion is gone ---------------------- */
+
+/**
+ * The deleted panel's own class signature, transcribed from the markup that was
+ * removed: `<div className="mt-3 pt-3 border-t border-gray-100">`. Asserted on
+ * the CONTAINER as well as the labels, so a partial edit that strips the text
+ * but leaves an empty bordered wrapper still fails.
+ */
+const EXPANDED_PANEL_SELECTOR = "div.mt-3.pt-3.border-t";
+
+describe("BACKLOG-2862 follow-up — 'Tap for details' and its panel are deleted", () => {
+  it("mounts no expanded-details panel container", () => {
+    const { container } = renderModal({ body_html: HTML_BODY } as Partial<Communication>);
+
+    expect(container.querySelector(EXPANDED_PANEL_SELECTOR)).toBeNull();
+  });
+
+  it("renders neither the 'Tap for details' affordance nor its 'Open Full Email' button", () => {
+    // Separate it-block from the container check above: the first failing
+    // assertion in an it-block short-circuits the rest, so a single revert
+    // would otherwise leave one of these two untested.
+    renderModal({ body_html: HTML_BODY } as Partial<Communication>);
+
+    expect(screen.queryByText(/tap for details/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/open full email/i)).not.toBeInTheDocument();
+  });
+
+  it("does not expand when the bubble is clicked", () => {
+    // The behaviour, not just the markup. Clicking the bubble used to toggle
+    // the panel; `onToggle` and the parent's `expandedIds` are gone, so a click
+    // must now be inert. Without this, reinstating the panel behind a restored
+    // toggle would leave the two assertions above green on first render.
+    const { container } = renderModal({ body_html: HTML_BODY } as Partial<Communication>);
+
+    fireEvent.click(screen.getByTestId(`thread-bubble-body-${EMAIL_ID}`));
+
+    expect(container.querySelector(EXPANDED_PANEL_SELECTOR)).toBeNull();
+    expect(screen.queryByText(/open full email/i)).not.toBeInTheDocument();
+  });
+
+  it("loses nothing else: the recipients line and the body still render", () => {
+    // The deletion's blast radius, asserted directly. These three surfaces sit
+    // in the same bubble as the panel that was removed.
+    renderModal({ body_html: HTML_BODY } as Partial<Communication>);
+
+    const recipients = screen.getByTestId(`thread-bubble-recipients-${EMAIL_ID}`);
+    expect(recipients.textContent).toContain("sam@example.test");
+    expect(screen.getByTestId(`thread-bubble-body-${EMAIL_ID}`).textContent).toContain("NEWEST-SIGNOFF");
+  });
+
+  it("loses nothing else: the attachment pill still renders", () => {
+    // Its own it-block because it needs a different fixture: the pill is gated
+    // on has_attachments, and it is ALSO the element whose presence used to
+    // suppress the "Tap for details" indicator (`!isExpanded && !hasAttachments`).
+    renderModal({ has_attachments: true } as unknown as Partial<Communication>);
+
+    expect(screen.getByTestId(`attachment-pill-${EMAIL_ID}`)).toBeInTheDocument();
+  });
+});
+
+/* ------------------ ITEMS 4 + 5: alignment and the gap -------------------- */
+
+describe("BACKLOG-2862 follow-up — the button is left-aligned with no gap above", () => {
+  /** The wrapper is the button's parent element. */
+  function wrapperOf(): HTMLElement {
+    const btn = screen.getByTestId(`thread-bubble-formatted-${EMAIL_ID}`);
+    const wrapper = btn.parentElement;
+    if (!wrapper) throw new Error("button has no wrapper element");
+    return wrapper;
+  }
+
+  it("is left-aligned, and carries no centring", () => {
+    renderModal({ body_html: HTML_BODY } as Partial<Communication>);
+
+    const classes = wrapperOf().className.split(/\s+/);
+    expect(classes).toContain("justify-start");
+    // Both directions: justify-start present is not enough if a centring class
+    // survives alongside it and wins by CSS source order.
+    expect(classes).not.toContain("justify-center");
+    expect(classes).not.toContain("justify-end");
+    expect(classes).not.toContain("text-center");
+  });
+
+  it("carries none of the spacing or divider that read as a line break", () => {
+    // Separate it-block from alignment: items 4 and 5 are different changes and
+    // must be revertible independently without one masking the other.
+    renderModal({ body_html: HTML_BODY } as Partial<Communication>);
+
+    const classes = wrapperOf().className.split(/\s+/);
+    for (const cls of ["mt-2", "pt-2", "border-t", "border-gray-100"]) {
+      expect(classes).not.toContain(cls);
+    }
+  });
+});
+
+/* ------------- the three dismiss routes, each asserted functionally -------- */
+
+describe("BACKLOG-2862 follow-up — all three dismiss routes still fire onClose", () => {
+  it("desktop header X", () => {
+    const onClose = jest.fn();
+    renderModal({ body_html: HTML_BODY } as Partial<Communication>, onClose);
+
+    // jsdom mounts BOTH header variants (Tailwind hides one by CSS, which jsdom
+    // does not apply). The desktop X is the second.
+    const controls = screen.getAllByLabelText("Close");
+    expect(controls.length).toBe(2);
+    fireEvent.click(controls[1]);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("mobile header Back", () => {
+    const onClose = jest.fn();
+    renderModal({ body_html: HTML_BODY } as Partial<Communication>, onClose);
+
+    const controls = screen.getAllByLabelText("Close");
+    fireEvent.click(controls[0]);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("backdrop click", () => {
+    // ResponsiveModal closes only when the click LANDS ON the overlay itself
+    // (`e.target === e.currentTarget`), so this dispatches on the overlay
+    // element rather than bubbling one up from a child — a click inside the
+    // panel must NOT close, and firing on a child would test the opposite.
+    const onClose = jest.fn();
+    renderModal({ body_html: HTML_BODY } as Partial<Communication>, onClose);
+
+    fireEvent.click(screen.getByTestId("thread-modal-backdrop"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("a click INSIDE the panel does not close the modal", () => {
+    // The other direction of the backdrop rule. Without this, an overlay that
+    // closed on every click would pass the backdrop test above while making the
+    // modal impossible to interact with.
+    const onClose = jest.fn();
+    renderModal({ body_html: HTML_BODY } as Partial<Communication>, onClose);
+
+    fireEvent.click(screen.getByTestId(`thread-bubble-body-${EMAIL_ID}`));
+
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

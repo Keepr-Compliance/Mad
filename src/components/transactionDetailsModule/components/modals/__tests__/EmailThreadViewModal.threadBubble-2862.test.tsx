@@ -276,9 +276,12 @@ describe("BACKLOG-2862 — the bubble is not a scroll region", () => {
 
 describe("BACKLOG-2862 — recipients above the body, To only", () => {
   it("shows To above the message and no From inside the unexpanded bubble", () => {
-    // Explicitly the DEFAULT render. The expanded "Tap for details" block still
-    // renders From:/To: and is out of scope for this item — so this control
-    // never clicks, and would be worthless if it did.
+    // COMMENT UPDATED (2862 follow-up round 2), assertion UNCHANGED. This used
+    // to read "the expanded 'Tap for details' block still renders From:/To' and
+    // is out of scope" — the reason this control never clicked. That block has
+    // since been DELETED entirely at the founder's ruling, so `From:` is now
+    // absent from every render rather than merely from the default one, and the
+    // assertion below is strictly stronger than when it was written.
     const { view } = renderBubble({ body_text: NEWEST });
 
     const recipients = screen.getByTestId(`thread-bubble-recipients-${EMAIL_ID}`);
@@ -389,9 +392,12 @@ describe("BACKLOG-2862 — 'View formatted email' is gated on a formatted versio
     renderBubble({ body_text: NEWEST, body_html: HTML_BODY } as Partial<Communication>);
 
     expect(screen.getByText("View formatted email")).toBeInTheDocument();
-    // The superseded label must not survive a partial edit. Case-insensitive,
-    // and safe here because this is the UNEXPANDED render — the expanded
-    // details block, which has its own "Open Full Email" button, is not mounted.
+    // The superseded label must not survive a partial edit. Case-insensitive.
+    // COMMENT UPDATED (2862 follow-up round 2), assertion UNCHANGED. The caveat
+    // that used to sit here — "safe because this is the UNEXPANDED render; the
+    // expanded block has its own 'Open Full Email' button" — no longer applies:
+    // that block is deleted, so "Open Full Email" exists nowhere in the
+    // component and this assertion holds unconditionally.
     expect(screen.queryByText(/open full email/i)).not.toBeInTheDocument();
   });
 
