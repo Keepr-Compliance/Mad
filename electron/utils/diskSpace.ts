@@ -385,14 +385,49 @@ export function describeDiskShortfall(copy: DiskShortfallCopy): string {
     }
   }
 
-  // The clause that stops the true number reading as a lie. Omitted entirely
-  // when the count is unreadable (null) or when this Mac genuinely holds no
-  // snapshots (0) — in both cases there is nothing truthful to say here.
+  /**
+   * The clause that stops the true number reading as a lie — and the one place
+   * this message is most likely to overclaim, so read the constraints before
+   * editing it.
+   *
+   * -------------------------------------------------------------------------
+   * IT DESCRIBES WHAT macOS DOES. IT DOES NOT SAY WHAT HOLDS THE SPACE.
+   * -------------------------------------------------------------------------
+   * This sentence used to read "N local Time Machine snapshots are HOLDING
+   * space that macOS reports as free". It printed no byte figure, so it passed
+   * the no-fabricated-number test — but it asserted the CAUSAL claim that test
+   * was standing in for, and that claim cannot be supported.
+   *
+   * macOS exposes no purgeable-bytes figure anywhere. `purge` appears in no key
+   * of `diskutil info -plist`, none of `system_profiler`'s, neither `tmutil`
+   * subcommand, `diskutil apfs listSnapshots` (which reports `Purgeable: Yes`
+   * per snapshot and no size), nor the NSURL resource keys. The gap between what
+   * Finder shows and what an app can write is snapshots PLUS caches PLUS trash
+   * plus other purgeable classes, and its composition is itemised NOWHERE.
+   *
+   * So naming snapshots as the cause tells the user, on no evidence, where their
+   * space went — and points them at the one remedy that destroys something:
+   * deleting local Time Machine snapshots, which may reclaim far less than the
+   * gap implies. Preventing exactly that eviction is why BACKLOG-2743's guard
+   * reads `bavail` in the first place; this copy must not talk the user into
+   * doing it by hand.
+   *
+   * WHY NO COUNT. The count IS readable and would be true, but a number next to
+   * a missing quantity invites the arithmetic ("157 GB across 22 snapshots") and
+   * makes the sentence read as an accounting of the gap. It buys concreteness in
+   * exchange for a false implication, which is the wrong trade in a message
+   * whose entire job is to be believed. It stays in `ImportRefusedForDiskSpace`
+   * for diagnostics; it just does not appear in the prose.
+   *
+   * The count still GATES the clause: > 0 means this Mac genuinely has local
+   * snapshots, so listing them among the examples is accurate. Unreadable (null)
+   * or zero drops the clause whole rather than describing a machine this is not.
+   */
   if (snapshotCount !== null && snapshotCount > 0) {
     sentences.push(
-      `Your Mac may show more free space than this: ${snapshotCount} local Time Machine ` +
-        `${snapshotCount === 1 ? "snapshot is" : "snapshots are"} holding space that macOS ` +
-        `reports as free but apps cannot use until it reclaims them.`
+      "Your Mac may show more free space than this — macOS counts space it would free " +
+        "up if needed, such as cached files and local snapshots, which apps cannot use " +
+        "until it reclaims them."
     );
   }
 

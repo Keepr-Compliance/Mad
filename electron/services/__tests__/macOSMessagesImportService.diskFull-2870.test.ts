@@ -457,9 +457,21 @@ describe("BACKLOG-2870 — CONTROL 1: refuse before any write", () => {
       expect(message.startsWith(BASE)).toBe(true);
       const extra = message.slice(BASE.length);
       if (extra !== "") {
-        expect(extra).toMatch(
-          /^ Your Mac may show more free space than this: \d+ local Time Machine snapshots? (is|are) holding space that macOS reports as free but apps cannot use until it reclaims them\.$/
+        // The clause, exactly — it describes what macOS DOES with the space and
+        // never says what HOLDS it. See `describeDiskShortfall` for why: macOS
+        // publishes no purgeable-bytes figure, and the gap is snapshots plus
+        // caches plus trash with the split itemised nowhere.
+        expect(extra).toBe(
+          " Your Mac may show more free space than this — macOS counts space it would free " +
+            "up if needed, such as cached files and local snapshots, which apps cannot use " +
+            "until it reclaims them."
         );
+        // Named separately so the failure says WHICH property broke: no causal
+        // attribution, and no number where no readable quantity exists.
+        expect(extra).not.toMatch(
+          /holding|held by|because of|taken up by|occupied by|consumed by|used by/i
+        );
+        expect(extra).not.toMatch(/\d/);
       }
     } else {
       // WINDOWS / LINUX: no snapshots exist, the clause is dropped whole, and

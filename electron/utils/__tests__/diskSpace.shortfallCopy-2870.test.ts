@@ -138,8 +138,48 @@ describe("BACKLOG-2870 — describeDiskShortfall", () => {
     });
 
     expect(text).toMatch(/may show more free space/i);
-    expect(text).toContain("23 local Time Machine snapshots");
+    // Describes what macOS DOES with the space...
+    expect(text).toMatch(/macOS counts space it would free up if needed/i);
     expect(text).toMatch(/cannot use until it reclaims them/i);
+    // ...and names snapshots only as one EXAMPLE among the purgeable classes,
+    // never as the thing that holds the gap.
+    expect(text).toMatch(/such as cached files and local snapshots/i);
+  });
+
+  /**
+   * CONTROL — THE CLAUSE MUST NOT ASSERT CAUSATION.
+   *
+   * This is the assertion the earlier copy would have failed. It read
+   * "N local Time Machine snapshots are HOLDING space that macOS reports as
+   * free" — no byte figure, so it passed the no-fabricated-number test above,
+   * while asserting the very claim that test was standing in for.
+   *
+   * Nothing can support it. macOS exposes no purgeable-bytes figure anywhere
+   * (every interface enumerated in `utils/localSnapshots.ts`), and the gap is
+   * snapshots plus caches plus trash with the split itemised nowhere. Telling a
+   * user their snapshots hold the space points them at deleting local Time
+   * Machine snapshots — destroying restore points, possibly reclaiming far less
+   * than implied, and doing by hand the eviction BACKLOG-2743's guard exists to
+   * prevent.
+   */
+  it("never asserts that snapshots HOLD the space", () => {
+    for (const phase of ["before", "during"] as const) {
+      for (const snapshotCount of [1, 22, 500]) {
+        const clause = snapshotClause(
+          describeDiskShortfall({
+            requiredBytes: REQUIRED,
+            availableBytes: 17 * GB,
+            snapshotCount,
+            phase,
+          })
+        );
+        expect(clause).toMatch(/snapshot/i); // the clause IS present...
+        // ...and carries no causal verb attributing the space to anything.
+        expect(clause).not.toMatch(
+          /holding|held by|because of|taken up by|occupied by|consumed by|used by/i
+        );
+      }
+    }
   });
 
   /**
@@ -167,6 +207,11 @@ describe("BACKLOG-2870 — describeDiskShortfall", () => {
           });
           expect(snapshotClause(text)).toMatch(/snapshot/i);
           expect(sizeFigures(snapshotClause(text))).toEqual([]);
+          // Stronger than "no byte figure": the clause carries NO NUMBER of any
+          // kind. There is no readable quantity here to put in a sentence — not
+          // the purgeable bytes, and (deliberately) not the snapshot count
+          // either, which would invite dividing the gap by it.
+          expect(snapshotClause(text)).not.toMatch(/\d/);
         }
       }
     }
@@ -237,14 +282,26 @@ describe("BACKLOG-2870 — describeDiskShortfall", () => {
     expect(text).not.toMatch(/snapshot/i);
   });
 
-  it("uses the singular for exactly one snapshot", () => {
-    const text = describeDiskShortfall({
-      requiredBytes: REQUIRED,
-      availableBytes: 1.2 * GB,
-      snapshotCount: 1,
-      phase: "before",
-    });
-    expect(text).toContain("1 local Time Machine snapshot is");
+  /**
+   * The count GATES the clause but never SHAPES it.
+   *
+   * This replaces a singular/plural test, and the replacement is the point: once
+   * the count left the prose there was no grammatical number to agree with, so
+   * one snapshot and five hundred produce the same sentence. Pinned because a
+   * future edit that reintroduces the count would break it — and reintroducing
+   * the count is how the causal claim gets back in.
+   */
+  it("renders identical prose regardless of how many snapshots exist", () => {
+    const render = (snapshotCount: number) =>
+      describeDiskShortfall({
+        requiredBytes: REQUIRED,
+        availableBytes: Math.floor(1.2 * GB),
+        snapshotCount,
+        phase: "before",
+      });
+
+    expect(render(1)).toBe(render(22));
+    expect(render(22)).toBe(render(500));
   });
 
   /**
@@ -331,7 +388,27 @@ describe("BACKLOG-2870 — describeDiskShortfall", () => {
       snapshotCount: 23,
       phase: "before",
     });
-    expect(text).not.toMatch(/delete|remove|free up|thin|purge/i);
+    // Every destructive verb, unconditionally — there is no phrasing in which
+    // this message should contain one.
+    expect(text).not.toMatch(/\b(delete|deleting|remove|removing|thin|thinning|purge|purging|clear|empty)\b/i);
+    // No instruction or suggestion aimed at the reader.
+    expect(text).not.toMatch(/\byou (can|could|should|may want to|might want to|need to|must)\b/i);
+    expect(text).not.toMatch(/\bto (free|make) (up )?(space|room|disk)/i);
+
+    /**
+     * NOTE ON "free up". This assertion used to be a flat
+     * `not.toMatch(/delete|remove|free up|thin|purge/i)` and it went RED on the
+     * rewritten clause, over the phrase "macOS counts space it would free up if
+     * needed" — where the subject is macOS DESCRIBING ITS OWN behaviour, not the
+     * app suggesting the user do anything.
+     *
+     * Narrowed rather than deleted, and narrowed along the axis that matters:
+     * the risk is an IMPERATIVE or a second-person suggestion pointed at the
+     * user's snapshots, not the appearance of a verb. "Free up space by deleting
+     * snapshots" is still caught (`deleting`), "You can free up space" is still
+     * caught (`you can`), "To free up space, ..." is still caught. What is now
+     * allowed is exactly the descriptive reading, and nothing else.
+     */
   });
 
   it("omits the comparison rather than printing a placeholder when free space is unknown", () => {
