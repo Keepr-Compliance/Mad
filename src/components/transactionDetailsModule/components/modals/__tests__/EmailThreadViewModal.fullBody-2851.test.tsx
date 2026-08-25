@@ -40,6 +40,35 @@
  * from the component: importing it would make the control follow the source, and
  * emptying the bound would stay green.
  *
+ * ---------------------------------------------------------------------------
+ * REWRITTEN BY BACKLOG-2862 — THE HEIGHT BOUND IS GONE, AND SO THIS FILE'S
+ * BOUND ASSERTIONS ARE INVERTED RATHER THAN DELETED.
+ *
+ * `max-h-96 overflow-y-auto` made the bubble a scroll region nested inside the
+ * thread's own scroll region, so a single wheel gesture had two possible
+ * targets. That was the founder's complaint on testing 2851, and BACKLOG-2862
+ * removed the bound. The two tests per path that asserted the bound now assert
+ * its ABSENCE, on the same element and for the same reason — the claim
+ * "the bubble is not a nested scroller" needs a control exactly as much as
+ * "the bubble is bounded" did, and deleting them would have left the removal
+ * untested on both paths.
+ *
+ * What did NOT change, and is the reason this file survives 2862 intact: every
+ * completeness assertion (the tails, the ellipsis absence, the two-path
+ * equality test) still holds, because 2862 added no character cap. The founder
+ * deferred the cap once quote stripping proved to be a reliable boundary. If a
+ * cap is ever added, these tail assertions are the controls it must answer to.
+ *
+ * The corpus measurement below was RE-TAKEN independently on 2862 rather than
+ * inherited, by rendering all 100 bodies through the component and reading
+ * textContent: p50 186, p75 261, p90 318, p95 342, max 432, 14 over 300 — the
+ * same distribution, which is why CORPUS_MAX_LENGTH is unchanged.
+ *
+ * The consequence 2862 knowingly accepts: with neither a cap nor a bound, a
+ * long body containing NO quoted chain renders unbounded. See the 10,000-char
+ * test below, which now measures that instead of asserting containment.
+ * ---------------------------------------------------------------------------
+ *
  * MEASURED CONTROLS (each mutation applied to source, both suites re-run, counts
  * observed rather than predicted):
  *   1. Restore the cap — `if (text.length > 300) return text.substring(0, 300)
@@ -70,8 +99,12 @@ import { reviewThreadToEmailThread } from "../../ReviewQueueSection";
 import { groupReviewItemsByThread } from "../../../utils/reviewThreads";
 import type { ReviewItemDto } from "../../../../../../electron/types/ipc/window-api-transactions";
 
-/** The bound, as a literal. See the header for why this is not imported. */
-const BOUND_CLASSES = ["max-h-96", "overflow-y-auto"];
+/**
+ * The bound BACKLOG-2862 removed, as literals. See the header for why these are
+ * not imported: importing would make the control follow the source, so
+ * reinstating the bound in the component would keep these tests green.
+ */
+const REMOVED_BOUND_CLASSES = ["max-h-96", "overflow-y-auto"];
 
 const EMAIL_ID = "email-2851";
 
@@ -213,37 +246,48 @@ describe("BACKLOG-2851 — the thread bubble renders the whole message", () => {
       expect(text).not.toContain("…");
     });
 
-    it("bounds the bubble by height on the very element holding the text", () => {
-      // The bound and the text must be the same box. Reading the className off
-      // a different element than the one the tail was just read from is the
-      // mistake this is written to catch.
+    it("does NOT make the bubble a nested scroll region (BACKLOG-2862)", () => {
+      // INVERTED BY BACKLOG-2862. This asserted the presence of the bound.
+      // Same element, same reason: the claim is about the box that holds the
+      // text, so reading the className off any other element proves nothing.
+      // Asserted on BOTH paths because the removal has to hold on both
+      // surfaces, which the 2862 suite (linked path only) does not cover.
       const { element, text } = renderBubble(buildThread(ORDINARY_BODY));
 
       expect(text).toContain("Sam Fielding, Closing Coordinator");
-      for (const cls of BOUND_CLASSES) {
-        expect(element.className.split(/\s+/)).toContain(cls);
+      for (const cls of REMOVED_BOUND_CLASSES) {
+        expect(element.className.split(/\s+/)).not.toContain(cls);
       }
     });
 
-    it("keeps a 10,000-character newsletter whole AND still bounded", () => {
-      // The bound's boundary case. There is no character boundary to sweep —
-      // that is the point of choosing a height bound — so the assertion is that
-      // the largest body still loses nothing and is still contained.
+    it("keeps a 10,000-character newsletter whole, and now UNBOUNDED (BACKLOG-2862)", () => {
+      // REWRITTEN BY BACKLOG-2862, and this is the test that records the
+      // accepted cost of the change rather than hiding it.
+      //
+      // A newsletter carries no quoted chain, so quote stripping — the whole
+      // mechanism now — does not shorten it, and no cap replaces the bound the
+      // founder had removed. The body therefore renders whole AND unbounded:
+      // ~152 lines at 66 chars per line, ~3,460px, against a thread viewport of
+      // ~765px on a 900px window. That is the case to point at if the deferred
+      // character cap stops being "later".
       expect(HUGE_BODY.length).toBeGreaterThan(10000);
 
       const { element, text } = renderBubble(buildThread(HUGE_BODY));
 
       expect(text.endsWith("END-OF-NEWSLETTER")).toBe(true);
       expect(text.length).toBeGreaterThan(10000);
-      for (const cls of BOUND_CLASSES) {
-        expect(element.className.split(/\s+/)).toContain(cls);
+      for (const cls of REMOVED_BOUND_CLASSES) {
+        expect(element.className.split(/\s+/)).not.toContain(cls);
       }
     });
 
     it("renders the longest body in the repo's corpora with room to spare", () => {
-      // 432 characters is the measured maximum across all 100 corpus bodies.
-      // At this width that is roughly 8 lines — well inside 384px — so the
-      // realistic worst case shows in full with no scrollbar and no click.
+      // 432 characters is the measured maximum across all 100 corpus bodies,
+      // re-measured independently on BACKLOG-2862 and unchanged. At this width
+      // that is roughly 8 lines (~190px) against a ~765px thread viewport, so
+      // the realistic worst case shows in full with no scrollbar and no click —
+      // which is also why the corpora CANNOT justify a bound or a cap: they
+      // contain no case that would have hit either.
       const body = `${"Escrow opened this morning and the wire instructions follow under separate cover. ".repeat(6)}CORPUS-MAX-TAIL`;
       expect(body.length).toBeGreaterThanOrEqual(CORPUS_MAX_LENGTH);
 

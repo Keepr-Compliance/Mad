@@ -174,8 +174,13 @@ describe("BACKLOG-2831 — what the review path renders in the reading modal", (
     // cut, the UI has to say so". The founder's answer, on testing 2844, was
     // that it must not be cut at all: "user shouldn't have to click Open Full
     // Email to see it in the individual email preview". So the honest indicator
-    // is gone because the thing it indicated is gone; the bubble is bounded by
-    // height now, not by character count.
+    // is gone because the thing it indicated is gone.
+    //
+    // UPDATED BY BACKLOG-2862: this used to add "the bubble is bounded by
+    // height now, not by character count". The height bound has since been
+    // removed — it made the bubble a scroll region inside the thread's own
+    // scroller — and no cap replaced it. The assertion below is unaffected and
+    // stayed green through that change; only the explanation was stale.
     //
     // Kept in this file rather than moved because it is the same review-path
     // projection under test, and because leaving the old assertion here would

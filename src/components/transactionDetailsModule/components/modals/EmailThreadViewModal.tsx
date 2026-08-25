@@ -114,22 +114,87 @@ function sanitizeHtml(html: string): string {
 }
 
 /**
- * Strip HTML and quoted content and return the message's FULL plain text.
+ * A quoted-reply header block, as the mail clients actually emit one.
  *
- * BACKLOG-2851: there is deliberately no length cap. This used to take
- * `maxLength = 300` and return `text.substring(0, maxLength) + "..."`, which cut
- * an ordinary message — the founder's example measured ~316 characters, so it
- * lost the sign-off and the closing line — and made "Open Full Email" the only
- * way to read mail that the bubble already had in hand. The bubble is bounded by
- * HEIGHT instead (see the `max-h-96` on the text element below), so a newsletter
- * or a long forwarded chain stays contained without any message being truncated.
+ * BACKLOG-2862. The rule this replaces was
+ * `/\nFrom:.*?\nSent:.*?(?:\nTo:.*?)?(?:\nSubject:.*?)?(?:\n|$)/gi`, and it
+ * had two faults that compounded:
  *
- * Measured before choosing (100 synthetic emails across the repo's three
- * corpora — fake-mailbox/emails.json, extraction/accuracy-test-emails.json,
- * qa/harness eml-export-tx1 — each measured on the message BODY alone, which
- * for the .eml five means the text after the header/body blank line and NOT
- * the whole file): p50 187, p90 323, max 432 characters, and 14% exceed 300.
- * Cutting at 300 was cutting ordinary transactional mail, not outliers.
+ *   1. It REQUIRED `Sent:`. Windows Outlook writes `Sent:`, but Outlook for Mac
+ *      and Apple Mail write `Date:` — which is the founder's own mail — so the
+ *      rule never fired on his client at all.
+ *   2. Even when it did fire it ended at `(?:\n|$)`, so it removed the header
+ *      LINES and left the entire quoted message beneath them. Contrast the
+ *      Gmail rule below, whose `[\s\S]*` runs to the end and does remove it.
+ *
+ * Anchoring on a single token (`Date:`) would over-match: a body with "Date:"
+ * in ordinary prose ("...confirm the Date: Thursday works") would be truncated
+ * there. So the anchor is the whole BLOCK — a `From:` line followed by a run of
+ * contiguous header lines, at least one of which is `Sent:` or `Date:`. Prose
+ * cannot satisfy that without looking exactly like a header block.
+ *
+ * Matching is order-independent inside the block, because the producers
+ * disagree on order and hardcoding one would silently miss the others. The
+ * three shapes covered, each transcribed from something that actually emits it
+ * rather than recalled (see the test file for the citation of each):
+ *
+ *   From: / Sent: / To: / Subject:        Windows Outlook
+ *   From: / Date: / To: / Subject:        Outlook for Mac, Apple Mail
+ *   From: / To: / Cc: / Subject: / Date:  an RFC-822 block, Subject BEFORE Date
+ *
+ * The third is why the rule cannot assume Date follows From: this repo's own
+ * .eml export writes exactly that order, so a forwarded export produces it.
+ */
+const REPLY_HEADER_START = /^[ \t]*From:[ \t]*\S/i;
+const REPLY_HEADER_KEY = /^[ \t]*(?:From|Sent|Date|To|Cc|Bcc|Reply-To|Subject|Importance|Attachments):/i;
+/** The line that PROVES the block is a header block rather than prose. */
+const REPLY_HEADER_PROOF = /^[ \t]*(?:Sent|Date):[ \t]*\S/i;
+
+/**
+ * Cut from the first quoted-reply header block to the end of the text.
+ *
+ * Returns the text unchanged when no block is found. Everything from a header
+ * block down is the PREVIOUS message, so a two-level chain collapses in one
+ * pass — there is no need to walk the levels.
+ */
+function stripQuotedReplyChain(text: string): string {
+  const lines = text.split("\n");
+
+  for (let i = 0; i < lines.length; i++) {
+    if (!REPLY_HEADER_START.test(lines[i])) continue;
+
+    // Consume the contiguous run of header lines that follows.
+    let end = i + 1;
+    let proven = false;
+    while (end < lines.length && REPLY_HEADER_KEY.test(lines[end])) {
+      if (REPLY_HEADER_PROOF.test(lines[end])) proven = true;
+      end++;
+    }
+
+    if (proven) return lines.slice(0, i).join("\n");
+    // Not a header block (a bare "From: the seller" line in prose). Keep looking
+    // — a real block may still appear further down.
+  }
+
+  return text;
+}
+
+/**
+ * Strip HTML and quoted content and return the message's plain text.
+ *
+ * BACKLOG-2851 removed a 300-character cap that was cutting ordinary mail.
+ * BACKLOG-2862 removed the `max-h-96 overflow-y-auto` height bound that
+ * replaced it: a long message scrolled inside a bubble that itself sits inside
+ * the scrolling thread, so two scroll regions competed for one gesture.
+ *
+ * There is deliberately NO character cap. The founder deferred it once the
+ * header block proved to be a reliable boundary — "we can build the char limit
+ * later now that i know it's easy for us to find out where emails start and end
+ * using the sent/to/from repeated section" — which makes quote stripping the
+ * whole mechanism for keeping a bubble short. A genuinely long body with NO
+ * quoted chain (a newsletter, an automated report) is therefore unbounded here;
+ * that is a known, accepted consequence recorded on BACKLOG-2862, not an
+ * oversight.
  */
 function getPlainTextBody(email: Communication): string {
   let text = "";
@@ -150,14 +215,25 @@ function getPlainTextBody(email: Communication): string {
 
   if (!text) return "";
 
-  // Remove Outlook-style reply headers (starts with underscores or dashes)
-  // Pattern: ________________________________\nFrom: ...\nSent: ...\nTo: ...
+  // The header-block strip MUST run BEFORE the underscore rule below.
+  //
+  // Outlook emits `____...____\nFrom:\nSent:\nTo:\nSubject:\n\n<quoted body>`.
+  // The underscore rule is LAZY to the first blank line, so running it first
+  // eats the header lines and leaves the quoted body orphaned with no anchor
+  // for this rule to find. Run this first and the underscore remnant is left
+  // trailing at `$`, where the underscore rule still removes it.
+  const withoutQuotedChain = stripQuotedReplyChain(text);
+  // A bare forward — the sender added no words of their own — strips to nothing.
+  // Showing "No content" there would be a regression: the forwarded message IS
+  // the content. Keep the original when stripping would empty the bubble.
+  if (withoutQuotedChain.trim()) {
+    text = withoutQuotedChain;
+  }
+
+  // Remove the Outlook separator rule left behind above (and any that stands
+  // alone, e.g. an "-----Original Message-----"-style divider run of "_").
   const outlookReplyPattern = /_{10,}[\s\S]*?(?=\n\n|$)/g;
   text = text.replace(outlookReplyPattern, '');
-
-  // Also catch "From: ... Sent: ..." pattern without underscores
-  const fromSentPattern = /\nFrom:.*?\nSent:.*?(?:\nTo:.*?)?(?:\nSubject:.*?)?(?:\n|$)/gi;
-  text = text.replace(fromSentPattern, '\n');
 
   // Remove Gmail-style quoted content "On [date], [name] wrote:"
   const gmailQuotePattern = /On .+? wrote:[\s\S]*/gi;
@@ -231,8 +307,106 @@ function getSenderColor(sender: string | undefined): string {
 }
 
 /**
+ * The attachment list, as a popup.
+ *
+ * BACKLOG-2862 replaced TASK-1782's in-bubble collapsible strip (the
+ * `mt-3 pt-2 border-t` block with `data-testid="attachment-toggle-*"`) with the
+ * header pill opening this. The strip put a second disclosure INSIDE a bubble
+ * that is itself a disclosure, and pushed the message text down to make room
+ * for filenames the reader had not asked for.
+ *
+ * The three states the strip owned all move here rather than being dropped:
+ * loading, BACKLOG-1369's blocked/offline message, and "has attachments but the
+ * list did not arrive". Rows keep the strip's markup so files stay clickable
+ * into AttachmentPreviewModal instead of becoming a dead list.
+ *
+ * z-[90] is deliberate and sits BETWEEN the thread modal (z-[80]) and
+ * AttachmentPreviewModal (z-[100]), so a preview opened FROM this list stacks
+ * above it rather than behind it.
+ */
+function AttachmentListModal({
+  attachments,
+  loading,
+  message,
+  senderName,
+  onPreview,
+  onClose,
+}: {
+  attachments: EmailAttachment[];
+  loading: boolean;
+  message?: string | null;
+  senderName: string;
+  onPreview: (attachment: EmailAttachment) => void;
+  onClose: () => void;
+}): React.ReactElement {
+  const heading = loading
+    ? "Attachments"
+    : `${attachments.length} attachment${attachments.length !== 1 ? "s" : ""}`;
+
+  return (
+    <ResponsiveModal
+      onClose={onClose}
+      zIndex="z-[90]"
+      panelClassName="max-w-sm"
+      testId="thread-attachment-list-backdrop"
+    >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+        <strong className="text-sm font-semibold text-gray-900">
+          {heading} — {senderName}
+        </strong>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-gray-400 hover:text-gray-600 text-xl leading-none px-1"
+          aria-label="Close"
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="p-2 max-h-[300px] overflow-y-auto">
+        {loading && (
+          <p className="px-2 py-3 text-xs text-gray-500">Loading attachments...</p>
+        )}
+
+        {!loading && message && (
+          <p className="px-2 py-3 text-xs text-gray-500" data-testid="thread-attachment-message">
+            {message}
+          </p>
+        )}
+
+        {!loading && !message && attachments.length === 0 && (
+          <p className="px-2 py-3 text-xs text-gray-500">
+            This email has attachments, but they are not downloaded yet.
+          </p>
+        )}
+
+        {attachments.map((attachment) => (
+          <button
+            key={attachment.id}
+            type="button"
+            onClick={() => onPreview(attachment)}
+            className="flex items-center gap-2 w-full px-2 py-2 rounded-lg text-xs transition-colors hover:bg-gray-100 text-gray-700"
+            title={`Preview ${attachment.filename}`}
+            data-testid={`thread-attachment-${attachment.id}`}
+          >
+            {getFileTypeIcon(attachment.mime_type)}
+            <span className="truncate flex-1 text-left">{attachment.filename}</span>
+            {attachment.file_size_bytes && (
+              <span className="text-gray-500 flex-shrink-0">
+                {formatFileSize(attachment.file_size_bytes)}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+    </ResponsiveModal>
+  );
+}
+
+/**
  * Chat bubble for a single email
- * TASK-1782: Added attachment display support
+ * BACKLOG-2862: recipients above the body, attachments behind the header pill.
  */
 function EmailBubble({
   email,
@@ -263,10 +437,23 @@ function EmailBubble({
   const avatarInitial = isMe ? "Y" : getEmailAvatarInitial(email.sender);
   const avatarColor = getSenderColor(email.sender);
   const messageText = useMemo(() => getPlainTextBody(email), [email]);
-  const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
+  const [showAttachments, setShowAttachments] = useState(false);
 
   const hasAttachments = email.has_attachments || attachments.length > 0;
   const attachmentCount = attachments.length || (email.has_attachments ? 1 : 0);
+
+  /**
+   * Does a FORMATTED version of this message exist?
+   *
+   * BACKLOG-2862. The bubble renders plain text — getPlainTextBody strips the
+   * markup — while the full view renders the real HTML: EmailViewModal derives
+   * `html = email.body_html || email.body` (:166), defaults `viewMode` to
+   * "html" when that is present (:185), and renders the HTML branch at :434.
+   * So the key here must be that SAME expression: gate on anything else and the
+   * control would offer a "formatted" view that falls back to the same plain
+   * text the bubble already shows, which is a control that changes nothing.
+   */
+  const hasFormattedVersion = Boolean(email.body_html || email.body);
 
   const handleContentClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -289,10 +476,10 @@ function EmailBubble({
     []
   );
 
-  const handleAttachmentToggle = useCallback((e: React.MouseEvent) => {
+  const handleOpenAttachments = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    setAttachmentsExpanded(!attachmentsExpanded);
-  }, [attachmentsExpanded]);
+    setShowAttachments(true);
+  }, []);
 
   return (
     <div className="flex gap-3">
@@ -313,17 +500,26 @@ function EmailBubble({
           <span className="text-xs text-gray-400">
             {formatTime(emailDate)}
           </span>
-          {/* TASK-1782: Attachment count badge in header */}
+          {/*
+            BACKLOG-2862: the pill is a BUTTON, not the inert <span> with a
+            `title` it used to be. The count was information the reader could
+            see but not act on — the only way to the files was the strip inside
+            the bubble, which is now gone.
+          */}
           {hasAttachments && (
-            <span
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-gray-500 bg-gray-100 rounded-full"
+            <button
+              type="button"
+              onClick={handleOpenAttachments}
+              disabled={loadingAttachments}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-xs text-gray-500 bg-gray-100 rounded-full hover:text-gray-900 hover:bg-gray-200 transition-colors"
               title={`${attachmentCount} attachment${attachmentCount !== 1 ? "s" : ""}`}
+              data-testid={`attachment-pill-${email.id}`}
             >
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
               </svg>
               {loadingAttachments ? "..." : attachmentCount}
-            </span>
+            </button>
           )}
         </div>
 
@@ -333,88 +529,68 @@ function EmailBubble({
           onClick={onToggle}
         >
           {/*
+            BACKLOG-2862: recipients ABOVE the message, and `To` only.
+
+            The sender is already named outside the bubble, immediately above
+            it, so repeating `From` inside says nothing. `From` still appears in
+            the expanded "Tap for details" block below — that block is a
+            different surface and is out of scope here.
+          */}
+          {email.recipients && (
+            <div
+              className="text-xs text-gray-400 pb-2 mb-2 border-b border-gray-100"
+              data-testid={`thread-bubble-recipients-${email.id}`}
+            >
+              <span className="font-medium text-gray-500">To</span>{" "}
+              {formatParticipantListLine(email.recipients, nameMap)}
+            </div>
+          )}
+
+          {/*
             The message text, in full, always shown.
 
-            BACKLOG-2851: bounded by HEIGHT, not by character count. The whole
-            body is in the DOM — nothing is dropped and no "..." is appended —
-            and `max-h-96` (24rem / 384px) with `overflow-y-auto` keeps a
-            10,000-character newsletter from making the conversation
-            unscrollable. An ordinary message never reaches the bound: the
-            longest body in the repo's corpora is 432 characters, roughly 8
-            lines at this width (~180px), so the founder's case renders whole
-            with no scrollbar and no click.
+            BACKLOG-2862 REMOVED the `max-h-96 overflow-y-auto` height bound that
+            BACKLOG-2851 added here. It made the bubble a scroll region nested
+            inside the thread's own scroll region, so one wheel gesture had two
+            possible targets and the reader got whichever the pointer happened to
+            be over. The founder's complaint was exactly that.
 
-            `max-h-96` is a SELF-RESOLVING bound on this element, deliberately
-            not a `flex-1 min-h-0` height inherited from an ancestor chain. See
-            BACKLOG-2341 (EditContactsModal): an `overflow-y-auto` whose height
-            came from a broken flex chain never bounded at all and the list grew
-            past the modal instead of scrolling.
-
-            The bound and the text must stay on the SAME element — bounding a
-            wrapper while the text overflows a different box is the failure this
-            is written to prevent.
+            Nothing bounds this element now. Quote stripping is the whole
+            mechanism: a reply chain — the reason bubbles got long — is cut at
+            the header block, and the founder deferred the character cap once
+            that boundary proved reliable. A long body with NO quoted chain is
+            therefore unbounded; see BACKLOG-2862 for the measured worst case and
+            the decision to accept it for now.
           */}
           <div
-            className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed max-h-96 overflow-y-auto"
+            className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed"
             data-testid={`thread-bubble-body-${email.id}`}
             onClick={handleContentClick}
           >
             {messageText || <span className="italic text-gray-400">No content</span>}
           </div>
 
-          {/* TASK-1782: Collapsible attachment section */}
-          {hasAttachments && (
-            <div className="mt-3 pt-2 border-t border-gray-100">
+          {/*
+            BACKLOG-2862: "View formatted email", gated on a formatted version
+            EXISTING. The bubble is plain text with the markup stripped; this
+            opens the view that renders the real HTML. When there is no HTML the
+            full view falls back to the same plain text the bubble already
+            shows, so the control would change nothing visible and must not
+            render — that gate is the whole reason the label is honest.
+          */}
+          {hasFormattedVersion && onViewFull && (
+            <div className="mt-2 pt-2 border-t border-gray-100">
               <button
-                onClick={handleAttachmentToggle}
-                className="flex items-center gap-2 text-xs text-gray-600 hover:text-gray-900 transition-colors w-full text-left"
-                disabled={loadingAttachments}
-                data-testid={`attachment-toggle-${email.id}`}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onViewFull();
+                }}
+                className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                data-testid={`thread-bubble-formatted-${email.id}`}
               >
-                <svg
-                  className={`w-3 h-3 transition-transform ${attachmentsExpanded ? "rotate-90" : ""}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                </svg>
-                <span className="font-medium">
-                  {loadingAttachments
-                    ? "Loading attachments..."
-                    : attachmentMessage
-                      ? attachmentMessage
-                      : `${attachmentCount} attachment${attachmentCount !== 1 ? "s" : ""}`}
-                </span>
+                View formatted email
               </button>
-
-              {attachmentsExpanded && attachments.length > 0 && (
-                <div className="mt-2 space-y-1" data-testid={`attachment-list-${email.id}`}>
-                  {attachments.map((attachment) => (
-                    <button
-                      key={attachment.id}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onPreviewAttachment(attachment);
-                      }}
-                      className="flex items-center gap-2 w-full px-2 py-2 sm:py-1.5 rounded-lg text-xs transition-colors bg-gray-50 hover:bg-gray-100 text-gray-700"
-                      title={`Preview ${attachment.filename}`}
-                      data-testid={`thread-attachment-${attachment.id}`}
-                    >
-                      {getFileTypeIcon(attachment.mime_type)}
-                      <span className="truncate flex-1 text-left">{attachment.filename}</span>
-                      {attachment.file_size_bytes && (
-                        <span className="text-gray-500 flex-shrink-0">
-                          {formatFileSize(attachment.file_size_bytes)}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
           )}
 
@@ -459,6 +635,20 @@ function EmailBubble({
           )}
         </div>
       </div>
+
+      {showAttachments && (
+        <AttachmentListModal
+          attachments={attachments}
+          loading={loadingAttachments}
+          message={attachmentMessage}
+          senderName={senderName}
+          onPreview={(attachment) => {
+            setShowAttachments(false);
+            onPreviewAttachment(attachment);
+          }}
+          onClose={() => setShowAttachments(false)}
+        />
+      )}
     </div>
   );
 }
