@@ -1205,6 +1205,18 @@ class MacOSMessagesImportService {
           availableBytes,
           snapshotCount,
           phase: "during",
+          /**
+           * The reassurance is offered ONLY where it is true, and
+           * `nothingChangedYet()` is already the authority on that: it is `true`
+           * only for a force run that has not reached its swap — the one case
+           * where stage-and-swap guarantees the store is untouched.
+           *
+           * A DELTA import is deliberately excluded. `storeMessages` commits per
+           * BATCH, so a mid-run throw keeps every earlier batch's rows; telling
+           * that user "nothing was changed" would be a sentence the app cannot
+           * back up, which is the exact failure this item exists to remove.
+           */
+          liveStoreUnchanged: nothingChangedYet() === true,
         });
         refusedForDiskSpace = {
           requiredBytes: DISK_SPACE_THRESHOLDS.messagesImport * 1024 * 1024,
@@ -1729,6 +1741,32 @@ class MacOSMessagesImportService {
               messageIdMap.set(msg.guid, messageId);
             }
           } catch (insertError) {
+            /**
+             * BACKLOG-2870: a full disk is not a bad message, and must not be
+             * counted as one.
+             *
+             * This catch exists so one malformed row cannot kill an import, and
+             * for that it is right. `SQLITE_FULL` is a different kind of thing:
+             * it is not a property of THIS message, it will be true of every
+             * message after it, and SQLite has ALREADY rolled the batch
+             * transaction back by the time we get here.
+             *
+             * Swallowing it produced the delta path's real behaviour, observed
+             * on the real driver: every remaining insert failed and was counted
+             * as "skipped", then better-sqlite3's wrapper tried to COMMIT a
+             * transaction SQLite had already discarded and the user was shown
+             * `cannot commit - no transaction is active` — an error even less
+             * actionable than the `database or disk is full` this item was filed
+             * about, and one no disk-full matcher would ever recognise.
+             *
+             * So a disk-full stops the run and reaches the translation in
+             * `doImport`'s catch, which is the only place that can say something
+             * useful about it.
+             */
+            if (isDiskFullError(insertError)) {
+              throw insertError;
+            }
+
             const errMsg =
               insertError instanceof Error
                 ? insertError.message

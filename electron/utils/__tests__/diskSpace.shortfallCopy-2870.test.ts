@@ -228,6 +228,7 @@ describe("BACKLOG-2870 — describeDiskShortfall", () => {
       availableBytes: 1.2 * GB,
       snapshotCount: null,
       phase: "during",
+      liveStoreUnchanged: true,
     });
 
     expect(before).toMatch(/needs about/i);
@@ -235,6 +236,50 @@ describe("BACKLOG-2870 — describeDiskShortfall", () => {
 
     expect(during).toMatch(/ran out of disk space/i);
     expect(during).toMatch(/Nothing was changed/i);
+  });
+
+  /**
+   * THE REASSURANCE IS A CLAIM, AND IT IS ONLY MADE WHERE IT IS TRUE.
+   *
+   * "Nothing was changed — your existing messages are as they were" holds for a
+   * force run that died before its swap, because stage-and-swap deletes nothing
+   * until then. It does NOT hold for a delta import: `storeMessages` commits per
+   * batch, so a mid-run throw keeps every earlier batch's rows. On a volume at
+   * 99% that is the likely case, not an edge one.
+   *
+   * Shipping a reassurance the app cannot back up is the same failure class as
+   * the raw SQLite error this item removes — a sentence shown to someone who is
+   * already deciding whether to trust the app's numbers.
+   */
+  it("does NOT claim nothing changed when the caller cannot vouch for it", () => {
+    for (const liveStoreUnchanged of [false, undefined]) {
+      const text = describeDiskShortfall({
+        requiredBytes: REQUIRED,
+        availableBytes: 1.2 * GB,
+        snapshotCount: null,
+        phase: "during",
+        liveStoreUnchanged,
+      });
+
+      // Still says the useful, true things...
+      expect(text).toMatch(/ran out of disk space/i);
+      expect(text).toContain("1.2 GB");
+      // ...and makes no claim about the store it cannot support.
+      expect(text).not.toMatch(/Nothing was changed/i);
+      expect(text).not.toMatch(/as they were/i);
+    }
+  });
+
+  it("still omits the claim when free space is unknown and the store is not vouched for", () => {
+    const text = describeDiskShortfall({
+      requiredBytes: REQUIRED,
+      availableBytes: null,
+      snapshotCount: null,
+      phase: "during",
+      liveStoreUnchanged: false,
+    });
+    expect(text).toMatch(/ran out of disk space/i);
+    expect(text).not.toMatch(/Nothing was changed/i);
   });
 
   /**

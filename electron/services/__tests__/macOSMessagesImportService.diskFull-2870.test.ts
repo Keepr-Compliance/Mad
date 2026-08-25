@@ -439,7 +439,43 @@ describe("BACKLOG-2870 — CONTROL 2: the check at t0 does not bind the disk at 
     // Translated, not passed through.
     expect(result.error).not.toMatch(/database or disk is full/i);
     expect(result.error).toMatch(/ran out of disk space/i);
+    // A force run that died before its swap CAN vouch for the store.
     expect(result.error).toMatch(/Nothing was changed/i);
+  });
+
+  /**
+   * THE OTHER HALF OF THAT CLAIM — and the path most likely on a 99%-full disk.
+   *
+   * A DELTA import commits per batch (`storeMessages`), so a mid-run disk-full
+   * leaves every earlier batch's rows in the store. The message must therefore
+   * NOT say "nothing was changed": rows were added, and telling the user
+   * otherwise is a sentence the app cannot back up — the same failure class as
+   * the raw SQLite error this item removes.
+   *
+   * Asserted against the real store, so the "rows survived" premise is observed
+   * rather than assumed.
+   */
+  it("does NOT tell a delta import that nothing changed — its earlier batches survived", async () => {
+    fakeFreeBytes(500 * GB); // pre-flight passes
+    // Room for the first batch of 100 and not the second — a genuine partial.
+    capDatabasePages(10);
+
+    const result = await runImport(false);
+    uncapDatabasePages();
+
+    expect(result.success).toBe(false);
+    expect(result.refusedForDiskSpace?.phase).toBe("during");
+    expect(result.error).toMatch(/ran out of disk space/i);
+
+    // The premise, OBSERVED: a delta import really did keep what it had written.
+    const survivors = storedRowIdentities();
+    expect(survivors.length).toBeGreaterThan(0);
+    expect(survivors.length).toBeLessThan(MESSAGE_COUNT);
+
+    // ...so the reassurance must be absent.
+    expect(result.error).not.toMatch(/Nothing was changed/i);
+    expect(result.error).not.toMatch(/as they were/i);
+    expect(result.rolledBack).toBeUndefined();
   });
 
   /**

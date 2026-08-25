@@ -307,6 +307,29 @@ export interface DiskShortfallCopy {
    * `"during"` — the disk filled mid-run, after the pre-flight had passed.
    */
   phase: "before" | "during";
+  /**
+   * Is the user's message store genuinely as it was? Consulted only for
+   * `phase: "during"` — a `"before"` refusal has written nothing by construction.
+   *
+   * -------------------------------------------------------------------------
+   * WHY THIS IS A PARAMETER AND NOT AN ASSUMPTION
+   * -------------------------------------------------------------------------
+   * The reassuring sentence is TRUE for a force run that died before its swap —
+   * stage-and-swap builds BESIDE the live store and deletes nothing until the
+   * swap — and FALSE on at least two other reachable paths:
+   *
+   *   - A DELTA import. `storeMessages` commits per BATCH, so a throw partway
+   *     leaves every earlier batch's rows in place. On a volume at 99% that is
+   *     not hypothetical, it is the likely case.
+   *   - A FORCE run that fills the disk AFTER its swap committed — an attachment
+   *     `copyFile` ENOSPC, for instance. The force set has already been replaced.
+   *
+   * Telling a user "nothing was changed" when rows were in fact added is the
+   * same class of failure as the raw SQLite error this item exists to remove: a
+   * sentence the app cannot back up, shown to someone already deciding whether
+   * to trust it. So the claim is made only where the caller can vouch for it.
+   */
+  liveStoreUnchanged?: boolean;
 }
 
 /**
@@ -333,7 +356,8 @@ export interface DiskShortfallCopy {
  * It also does NOT tell him to delete anything. The fact is his to act on.
  */
 export function describeDiskShortfall(copy: DiskShortfallCopy): string {
-  const { requiredBytes, availableBytes, snapshotCount, phase } = copy;
+  const { requiredBytes, availableBytes, snapshotCount, phase, liveStoreUnchanged } =
+    copy;
 
   const need = formatSpace(requiredBytes);
   const opening =
@@ -352,10 +376,13 @@ export function describeDiskShortfall(copy: DiskShortfallCopy): string {
   } else {
     sentences.push(
       availableBytes === null
-        ? `${opening}. Nothing was changed — your existing messages are as they were.`
-        : `${opening} — only ${formatSpace(availableBytes)} is actually available. ` +
-            `Nothing was changed — your existing messages are as they were.`
+        ? `${opening}.`
+        : `${opening} — only ${formatSpace(availableBytes)} is actually available.`
     );
+    // Claimed ONLY where the caller can vouch for it. See `liveStoreUnchanged`.
+    if (liveStoreUnchanged === true) {
+      sentences.push("Nothing was changed — your existing messages are as they were.");
+    }
   }
 
   // The clause that stops the true number reading as a lie. Omitted entirely
