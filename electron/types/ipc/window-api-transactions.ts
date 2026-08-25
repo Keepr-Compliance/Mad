@@ -792,7 +792,42 @@ export interface WindowApiTransactions {
       participantsInserted: number;
       providers: Array<"gmail" | "outlook">;
     };
+    /**
+     * BACKLOG-2856: the user stopped the run. Arrives with `success: false` and
+     * a plain-language `error`, but must NOT be rendered as a failure — nothing
+     * went wrong, and on a force run nothing was changed either.
+     */
+    cancelled?: boolean;
   }>;
+
+  /**
+   * BACKLOG-2856: stop an in-flight pre-cache / re-cache at its next loop
+   * boundary. Resolves `success: true` if a run was asked to stop, `false` if
+   * none was in flight (already finished — the outcome the user wanted anyway).
+   */
+  cancelPrecacheEmails: () => Promise<{ success: boolean; error?: string }>;
+
+  /**
+   * BACKLOG-2856: subscribe to pre-cache / re-cache progress, mirroring
+   * `window.api.messages.onImportProgress`.
+   *
+   * Sequences differ by path, because the two runs do different work:
+   *   ordinary  repairing -> fetching -> done
+   *   force                  fetching -> swapping -> done
+   *
+   * `percent` never decreases within a run. The final event is always
+   * `phase: "done"` with an `outcome`, on success, failure AND cancel, so the
+   * subscriber can settle on it without tracking which path ran.
+   */
+  onPrecacheProgress: (
+    callback: (progress: {
+      phase: "repairing" | "fetching" | "swapping" | "done";
+      current: number;
+      total: number;
+      percent: number;
+      outcome?: "success" | "error" | "cancelled";
+    }) => void,
+  ) => () => void;
   /** Export transaction to organized folder structure */
   exportFolder: (transactionId: string, options?: {
     contentType?: ExportContentType;

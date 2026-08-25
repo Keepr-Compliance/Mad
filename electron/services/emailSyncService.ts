@@ -21,6 +21,11 @@ import { countEmailsByUser, getEmailByExternalId } from "./db/emailDbService";
 import type { BulkMailHeaders } from "../utils/bulkMailHeaders";
 import { CURRENT_DERIVATION_VERSION } from "../utils/derivationVersion";
 import { reprocessEmailDerivations } from "./emailDerivationReprocessService";
+import {
+  EMAIL_PRECACHE_PERCENT,
+  terminalProgress,
+  type EmailPrecacheProgressCallback,
+} from "./emailPrecacheProgress";
 import { dbGet, dbAll, dbRun, getRawDatabase } from "./db/core/dbConnection";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
@@ -969,6 +974,18 @@ export async function storeParsedEmailsForAccount(params: {
  */
 class EmailSyncService {
   private precacheInProgress = false;
+  /**
+   * BACKLOG-2856: the in-flight pre-cache's cancellation handle, mirroring
+   * `MacOSMessagesImportService`'s own `abortController`. Non-null only while a
+   * run is in progress; `requestPrecacheCancellation` aborts it and every loop
+   * boundary in `precacheEmails` consults the signal.
+   *
+   * There is deliberately no compensating rollback attached to this: the force
+   * run writes to staging and the `finally` drops staging on every exit, so a
+   * cancelled run is a no-op against live BY CONSTRUCTION. Cancelling is
+   * "stop doing more work", never "undo what was done".
+   */
+  private precacheAbortController: AbortController | null = null;
   private lastPrecacheCompletedAt: number | null = null;
 
   /**
@@ -1815,14 +1832,55 @@ class EmailSyncService {
    * 2026-08-24). Written through stage-and-swap, so an interrupted force run
    * leaves the live table exactly as it was.
    */
+  /**
+   * Stop the in-flight email pre-cache at its next loop boundary (BACKLOG-2856).
+   *
+   * Mirrors `macOSMessagesImportService.requestCancellation()` and, like it, is
+   * only ever "stop doing more work". It does NOT undo anything, because there
+   * is nothing to undo: an ordinary run has written only repaired rows that were
+   * already correct to write, and a force run has written only to staging, which
+   * the `finally` drops. Live email is untouched until the swap, so a cancelled
+   * run is a no-op against it by construction rather than by recovery.
+   *
+   * DIVERGENCE FROM THE MESSAGES VERSION, ON PURPOSE: no pending-cancellation
+   * held for a future run. The messages importer stores one because its cancel
+   * can race a not-yet-started import; the email Cancel control only exists
+   * while a run is in flight, so holding an unconsumed abort would let a stray
+   * click kill an unrelated re-cache the user started minutes later.
+   *
+   * @returns true if a run was in flight and has been asked to stop.
+   */
+  requestPrecacheCancellation(): boolean {
+    if (!this.precacheInProgress || !this.precacheAbortController) {
+      logService.info(
+        "Email pre-cache cancellation requested with no run in flight — ignored",
+        "EmailSyncService",
+      );
+      return false;
+    }
+    logService.info("Email pre-cache cancellation requested", "EmailSyncService");
+    this.precacheAbortController.abort();
+    return true;
+  }
+
   async precacheEmails(
     userId: string,
-    onProgress?: (percent: number) => void,
+    onProgress?: EmailPrecacheProgressCallback,
     options?: { force?: boolean },
   ): Promise<{
     fetched: number;
     stored: number;
     error?: string;
+    /**
+     * BACKLOG-2856: the user stopped the run via `requestPrecacheCancellation`.
+     * Set only when the abort was observed BEFORE the swap committed — a cancel
+     * that lands after the swap is too late to mean anything and the run reports
+     * its real success, because the mail has already been rebuilt.
+     *
+     * Never accompanied by `error`: a cancel is the user getting what they asked
+     * for, and painting it as a failure would be wrong.
+     */
+    cancelled?: boolean;
     /** BACKLOG-2856: present only on a force run that reached the swap. */
     forceSwap?: {
       emailsDeleted: number;
@@ -1842,6 +1900,18 @@ class EmailSyncService {
   }> {
     if (this.precacheInProgress) {
       logService.info("[EmailSync] Precache already in progress, skipping", "EmailSync");
+      // BACKLOG-2856 — DELIBERATELY NO TERMINAL PROGRESS EVENT ON THIS PATH.
+      //
+      // Every other exit emits one so the bar cannot strand. This one must not,
+      // and emitting it here would cause the very defect the others prevent:
+      // the guard means a run IS already live, the progress channel is shared by
+      // every window, so a rejected second invocation's "done" would settle the
+      // RUNNING run's bar and hide a re-cache that is still going.
+      //
+      // The rejected caller is settled by its own invoke response instead — the
+      // `error` below — and the renderer clears its bar on promise resolution
+      // regardless of events, which is the stronger guarantee anyway. Covered at
+      // the handler/renderer boundary, not here.
       return { fetched: 0, stored: 0, error: "Precache already in progress" };
     }
     this.precacheInProgress = true;
@@ -1850,6 +1920,26 @@ class EmailSyncService {
     // untouched until `swapEmailStagingIntoLive`, so an abandoned run costs two
     // ephemeral tables and nothing else.
     const isForce = options?.force === true;
+    // BACKLOG-2856: fresh controller per run; cleared in the `finally` so a
+    // cancel requested between runs can never abort the next one.
+    const abort = new AbortController();
+    this.precacheAbortController = abort;
+    const isCancelled = (): boolean => abort.signal.aborted;
+
+    // Progress bookkeeping. Declared out here because the terminal event is
+    // emitted from the `finally`, which cannot see the counters declared inside
+    // the try. `progressOutcome` defaults to "error" so an exit nobody
+    // anticipated — a throw, a return added later — still settles the bar, and
+    // settles it honestly rather than claiming success.
+    let lastPercent = 0;
+    let progressCurrent = 0;
+    let progressOutcome: "success" | "error" | "cancelled" = "error";
+    const emitProgress: EmailPrecacheProgressCallback = (progress) => {
+      lastPercent = progress.percent;
+      progressCurrent = progress.current;
+      onProgress?.(progress);
+    };
+
     let forceStaging: EmailForceStaging | null = null;
     let forceSwap: {
       emailsDeleted: number;
@@ -1882,8 +1972,38 @@ class EmailSyncService {
     // would rewrite the whole corpus immediately before discarding it — and it
     // writes LIVE, which a force run's whole design is to avoid until the swap.
     if (!isForce) {
+    // BACKLOG-2856: the repair pass is the FIRST thing an ordinary re-cache
+    // waits through and on a large mailbox it is minutes of it, so it reports
+    // before anything fetch-related. `percent` holds at REPAIRING while
+    // `current` climbs — the count moves, the bar does not go backwards when
+    // fetching starts.
+    //
+    // (There is no repairing phase on a force run at all: the pass is skipped
+    // there, because every row it would repair is inside the force set and about
+    // to be deleted and re-fetched. Its sequence starts at `fetching`.)
+    emitProgress({
+      phase: "repairing",
+      current: 0,
+      total: 0,
+      percent: EMAIL_PRECACHE_PERCENT.REPAIRING,
+    });
     try {
-      const repair = await reprocessEmailDerivations({ userId });
+      const repair = await reprocessEmailDerivations({
+        userId,
+        // Consulted BETWEEN batches by the pass itself, so a cancel takes effect
+        // at a batch boundary with every already-processed row correctly
+        // stamped — never mid-transaction.
+        shouldCancel: isCancelled,
+        onProgress: ({ scanned, rewritten }) => {
+          emitProgress({
+            phase: "repairing",
+            current: scanned,
+            total: scanned,
+            percent: EMAIL_PRECACHE_PERCENT.REPAIRING,
+          });
+          void rewritten;
+        },
+      });
       if (repair.scanned > 0) {
         logService.info("Derivation reprocess complete", "EmailSyncService", {
           userId,
@@ -1898,6 +2018,17 @@ class EmailSyncService {
         userId,
         error: repairError instanceof Error ? repairError.message : String(repairError),
       });
+    }
+
+    // Cancelled during the repair pass — the earliest phase, and the one a user
+    // is most likely to reach for the Cancel button in, because it is the part
+    // that shows no mail arriving. Nothing has been fetched and (on this path)
+    // no staging exists, so returning here leaves everything as it was.
+    if (isCancelled()) {
+      logService.info("Email pre-cache cancelled during derivation repair", "EmailSyncService", { userId });
+      progressOutcome = "cancelled";
+      this.lastPrecacheCompletedAt = Date.now();
+      return { fetched: 0, stored: 0, cancelled: true };
     }
     }
 
@@ -2012,10 +2143,24 @@ class EmailSyncService {
       });
     }
 
-    onProgress?.(10);
+    // Cancelled before any provider was contacted. On a force run the staging
+    // tables exist by now; the `finally` drops them, and live was never touched.
+    if (isCancelled()) {
+      logService.info("Email pre-cache cancelled before fetching", "EmailSyncService", { userId });
+      progressOutcome = "cancelled";
+      this.lastPrecacheCompletedAt = Date.now();
+      return { fetched: 0, stored: 0, cancelled: true };
+    }
+
+    emitProgress({
+      phase: "fetching",
+      current: 0,
+      total: 0,
+      percent: EMAIL_PRECACHE_PERCENT.FETCH_START,
+    });
 
     // Fetch from Outlook (no contact filter = all emails)
-    if (microsoftToken) {
+    if (microsoftToken && !isCancelled()) {
       try {
         await retryOnNetwork(async () => {
           const outlookReady = await outlookFetchService.initialize(userId);
@@ -2041,7 +2186,14 @@ class EmailSyncService {
             // this run holds the inbox and little else — deleting the rest would
             // trim the corpus to whatever arrived before the failure.
             let allFoldersComplete = true;
+            // BACKLOG-2856: a cancel between the two Outlook rounds skips the
+            // second one AND withholds the rebuilt mark. The pre-swap checkpoint
+            // would stop the swap anyway; withholding the mark means that even
+            // if it were ever removed, a half-fetched Outlook could not license
+            // deleting Outlook's live rows.
+            if (isCancelled()) allFoldersComplete = false;
             try {
+              if (!isCancelled()) {
               allFolderResult = await fetchStoreAndDedup({
                 provider: "outlook",
                 fetchFn: () => outlookFetchService.searchAllFolders({
@@ -2053,6 +2205,7 @@ class EmailSyncService {
                 getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
                 force: forceStaging ?? undefined,
               });
+              }
             } catch (folderError) {
               if (isNetworkError(folderError)) throw folderError;
               allFoldersComplete = false;
@@ -2093,10 +2246,17 @@ class EmailSyncService {
       }
     }
 
-    onProgress?.(50);
+    emitProgress({
+      phase: "fetching",
+      current: totalFetched,
+      total: totalFetched,
+      percent: EMAIL_PRECACHE_PERCENT.FETCH_SECOND_PROVIDER,
+    });
 
-    // Fetch from Gmail (no contact filter = all emails)
-    if (googleToken) {
+    // Fetch from Gmail (no contact filter = all emails).
+    // Skipped outright if the user cancelled during the Outlook round — a cancel
+    // must stop the NEXT unit of work, not merely stop the current one early.
+    if (googleToken && !isCancelled()) {
       try {
         await retryOnNetwork(async () => {
           const gmailReady = await gmailFetchService.initialize(userId);
@@ -2117,7 +2277,10 @@ class EmailSyncService {
             // BACKLOG-2856: same rule as Outlook's all-folders round — a partial
             // Gmail fetch must not license deleting Gmail's live rows.
             let allLabelsComplete = true;
+            // Same rule as Outlook's rounds above.
+            if (isCancelled()) allLabelsComplete = false;
             try {
+              if (!isCancelled()) {
               allLabelResult = await fetchStoreAndDedup({
                 provider: "gmail",
                 fetchFn: () => gmailFetchService.searchAllLabels({
@@ -2128,6 +2291,7 @@ class EmailSyncService {
                 seenIds: seenEmailIds,
                 force: forceStaging ?? undefined,
               });
+              }
             } catch (labelError) {
               if (isNetworkError(labelError)) throw labelError;
               allLabelsComplete = false;
@@ -2165,7 +2329,12 @@ class EmailSyncService {
       }
     }
 
-    onProgress?.(90);
+    emitProgress({
+      phase: "fetching",
+      current: totalFetched,
+      total: totalFetched,
+      percent: EMAIL_PRECACHE_PERCENT.FETCH_DONE,
+    });
 
     // BACKLOG-1369: Attachment backfill removed from precache pipeline.
     // Attachments are now downloaded on-demand when user views email or during export.
@@ -2177,7 +2346,38 @@ class EmailSyncService {
     // disk-full or any error above skips it entirely and the `finally` drops the
     // staging tables, which is why an interrupted force re-cache leaves live
     // exactly as it was BY CONSTRUCTION rather than by rollback.
+    // THE LAST MOMENT A CANCEL CAN MEAN ANYTHING (BACKLOG-2856).
+    //
+    // Placed here, before the swap block, so it governs BOTH paths: an ordinary
+    // run that was cancelled during the fetch must report `cancelled` too, not
+    // fall through to the success return and tell the user it completed.
+    //
+    // On a force run everything above wrote to staging only, so stopping here
+    // costs nothing but the download. One line further and the swap has begun;
+    // past that point "cancel" would have to mean UNDO, and undoing a committed
+    // swap is precisely the compensating-rollback design that stage-and-swap was
+    // adopted to get rid of. So the signal is consulted here and never again: a
+    // cancel arriving during or after the swap is too late, and the run reports
+    // the success it actually achieved.
+    if (isCancelled()) {
+      logService.info(
+        "Email pre-cache cancelled before the swap — the email store was never touched",
+        "EmailSyncService",
+        { userId, staged: totalStored, force: isForce },
+      );
+      progressOutcome = "cancelled";
+      this.lastPrecacheCompletedAt = Date.now();
+      return { fetched: totalFetched, stored: totalStored, cancelled: true };
+    }
+
     if (isForce && forceStaging) {
+      emitProgress({
+        phase: "swapping",
+        current: totalFetched,
+        total: totalFetched,
+        percent: EMAIL_PRECACHE_PERCENT.SWAPPING,
+      });
+
       const db = getRawDatabase();
       const restricted = restrictForceSetToRebuiltProviders(
         db,
@@ -2263,7 +2463,10 @@ class EmailSyncService {
       });
     }
 
-    onProgress?.(100);
+    // The terminal event is emitted once, from the `finally` — not here — so
+    // that every exit path gets exactly one and no path can be added later that
+    // forgets it. Marking the outcome is all this line has to do.
+    progressOutcome = "success";
 
     logService.info("Email pre-cache complete", "EmailSyncService", {
       totalFetched,
@@ -2282,6 +2485,20 @@ class EmailSyncService {
     return { fetched: totalFetched, stored: totalStored, providerError, forceSwap };
     } finally {
       this.precacheInProgress = false;
+      this.precacheAbortController = null;
+
+      // BACKLOG-2856 — THE ONE TERMINAL PROGRESS EVENT, on every exit path.
+      //
+      // Success, a structured error return, a thrown failure, a cancel: all of
+      // them land here, so the bar cannot be stranded at whatever fraction it
+      // last saw. That is the failure the messages importer's explicit final
+      // 100% exists to prevent, arrived at from the other side — instead of one
+      // emission per happy path, one emission for all paths.
+      //
+      // `percent` reaches 100 only when `progressOutcome` is "success"; a cancel
+      // or an error reports the last percent actually reached and settles the UI
+      // by `phase: "done"`.
+      onProgress?.(terminalProgress(progressOutcome, progressCurrent, lastPercent));
       // BACKLOG-2856: the one cleanup that runs on EVERY exit path — success,
       // early return, thrown error, cancellation. On the success path the swap
       // has already consumed these tables; on every other path dropping them is

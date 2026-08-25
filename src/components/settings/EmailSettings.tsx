@@ -256,9 +256,25 @@ export function EmailSettings({
   const [isRecaching, setIsRecaching] = useState(false);
   const [recacheResult, setRecacheResult] = useState<{
     success: boolean;
+    /** BACKLOG-2856: the user stopped it. Neither green nor red. */
+    cancelled?: boolean;
     message: string;
   } | null>(null);
   const recacheTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // BACKLOG-2856: live progress for BOTH re-cache buttons.
+  //
+  // The founder reported the force button running blind after its confirmation
+  // dialog; the ordinary Re-cache was equally silent and, since BACKLOG-2857,
+  // has a derivation repair pass in front of it that shows nothing at all while
+  // it works. One subscription serves both — shipping a bar on one of two
+  // adjacent buttons would just move the complaint.
+  const [recacheProgress, setRecacheProgress] = useState<{
+    phase: "repairing" | "fetching" | "swapping" | "done";
+    current: number;
+    percent: number;
+  } | null>(null);
+  const [isCancellingRecache, setIsCancellingRecache] = useState(false);
 
   // Clean up timeout on unmount
   useEffect(() => {
@@ -267,6 +283,29 @@ export function EmailSettings({
         clearTimeout(recacheTimeoutRef.current);
       }
     };
+  }, []);
+
+  // BACKLOG-2856: subscribe to pre-cache progress for the lifetime of the panel.
+  //
+  // `phase: "done"` is the terminal event the main process emits on EVERY exit
+  // path — success, failure and cancel alike — so clearing on it is sufficient
+  // to guarantee the bar is never stranded mid-run. `handleRecacheEmails` clears
+  // it again when the invoke resolves, which covers the one case no event can:
+  // the run that was rejected because another was already in flight.
+  useEffect(() => {
+    const subscribe = window.api.transactions.onPrecacheProgress;
+    if (!subscribe) return;
+    return subscribe((progress) => {
+      if (progress.phase === "done") {
+        setRecacheProgress(null);
+        return;
+      }
+      setRecacheProgress({
+        phase: progress.phase,
+        current: progress.current,
+        percent: progress.percent,
+      });
+    });
   }, []);
 
   // BACKLOG-2856: the Force Re-cache confirmation. Gated behind an explicit
@@ -281,7 +320,18 @@ export function EmailSettings({
     setRecacheResult(null);
     try {
       const result = await window.api.transactions.precacheEmails(userId, force);
-      if (result.success) {
+      // BACKLOG-2856: a cancel is the user getting what they asked for, so it is
+      // reported in neutral terms and BEFORE the error branch — routing it
+      // through `result.error` would paint their own decision red.
+      if (result.cancelled) {
+        setRecacheResult({
+          success: false,
+          cancelled: true,
+          message: force
+            ? "Re-cache cancelled. Your emails and their links were left unchanged."
+            : "Re-cache cancelled.",
+        });
+      } else if (result.success) {
         setRecacheResult({
           success: true,
           // The two runs did different things, so they must not report the same
@@ -314,8 +364,33 @@ export function EmailSettings({
       });
     } finally {
       setIsRecaching(false);
+      setIsCancellingRecache(false);
+      // BACKLOG-2856 — the anti-strand backstop.
+      //
+      // The main process emits a terminal event on every exit path, so this is
+      // usually redundant. It is here for the path that CANNOT emit one: a run
+      // rejected because another was already in flight returns before any
+      // progress is emitted (and deliberately so — a terminal broadcast there
+      // would settle the RUNNING run's bar). Clearing on promise resolution
+      // means the bar is tied to this invocation's lifetime, not to a shared
+      // channel, so no event ordering can leave it up.
+      setRecacheProgress(null);
       // Clear result after 8 seconds
       recacheTimeoutRef.current = setTimeout(() => setRecacheResult(null), 8000);
+    }
+  };
+
+  // BACKLOG-2856: stop an in-flight run. Nothing is undone — the run stops doing
+  // more work, and a force run's staged rows are discarded without live email
+  // having been touched at any point.
+  const handleCancelRecache = async (): Promise<void> => {
+    setIsCancellingRecache(true);
+    try {
+      await window.api.transactions.cancelPrecacheEmails();
+    } catch (error) {
+      logger.error("[Settings] Email re-cache cancel failed:", error);
+      // Leave the flag set: the run is still going and the button should stay
+      // disabled rather than invite a second click that would do nothing.
     }
   };
 
@@ -622,11 +697,70 @@ export function EmailSettings({
               Force Re-cache
             </button>
           </div>
+          {/* BACKLOG-2856: the progress indicator, shared by the ordinary
+              Re-cache above and the Force Re-cache above it. The founder's
+              report was that the force run shows nothing after its confirmation
+              dialog — for an operation that can take minutes, is destructive,
+              and is indistinguishable from a hung app while it runs.
+
+              Cancel lives here rather than in either button's row because it
+              belongs to the RUN, not to whichever button started it, and it is
+              reachable in every phase the bar covers — including the derivation
+              repair pass, which on a large mailbox is the first and longest
+              stretch of the ordinary run and shows no mail arriving while it
+              works. */}
+          {recacheProgress && (
+            <div className="mt-3" data-testid="recache-progress">
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-xs text-gray-700" data-testid="recache-progress-label">
+                  {recacheProgress.phase === "repairing"
+                    ? `Repairing stored emails${
+                        recacheProgress.current > 0
+                          ? ` (${recacheProgress.current.toLocaleString()} checked)`
+                          : ""
+                      }...`
+                    : recacheProgress.phase === "swapping"
+                      ? "Replacing your cached emails..."
+                      : `Downloading emails${
+                          recacheProgress.current > 0
+                            ? ` (${recacheProgress.current.toLocaleString()} so far)`
+                            : ""
+                        }...`}
+                </p>
+                <button
+                  onClick={() => void handleCancelRecache()}
+                  disabled={isCancellingRecache}
+                  data-testid="cancel-recache"
+                  className="ml-4 px-3 py-1 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 text-xs font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {isCancellingRecache ? "Cancelling..." : "Cancel"}
+                </button>
+              </div>
+              <div
+                className="w-full h-1.5 bg-gray-200 rounded-full overflow-hidden"
+                role="progressbar"
+                aria-valuenow={recacheProgress.percent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-label="Email re-cache progress"
+              >
+                <div
+                  className="h-full bg-blue-500 transition-all duration-300"
+                  style={{ width: `${recacheProgress.percent}%` }}
+                />
+              </div>
+            </div>
+          )}
           {recacheResult && (
             <p
               className={`text-xs mt-2 ${
-                recacheResult.success ? "text-green-600" : "text-red-600"
+                recacheResult.cancelled
+                  ? "text-gray-600"
+                  : recacheResult.success
+                    ? "text-green-600"
+                    : "text-red-600"
               }`}
+              data-testid="recache-result"
             >
               {typeof recacheResult.message === 'string' ? recacheResult.message : String(recacheResult.message)}
             </p>
