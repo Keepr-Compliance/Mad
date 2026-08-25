@@ -33,6 +33,10 @@ import {
   sanitizeObject,
 } from "../utils/validation";
 import { rateLimiters } from "../utils/rateLimit";
+import {
+  EMAIL_PRECACHE_PROGRESS_CHANNEL,
+  type EmailPrecacheProgressCallback,
+} from "../services/emailPrecacheProgress";
 
 interface ScanOptions {
   onProgress?: (progress: unknown) => void;
@@ -424,9 +428,38 @@ export function registerEmailSyncHandlers(
         };
       }
 
-      const result = await emailSyncService.precacheEmails(validatedUserId, undefined, {
+      // BACKLOG-2856: forward progress to the renderer, the same shape and the
+      // same transport the macOS Messages import uses (messageImportHandlers).
+      // Until this callback existed, `precacheEmails` emitted progress into
+      // `undefined` from every caller in the tree — the marks have been in the
+      // service since BACKLOG-1362 and nothing has ever listened, which is why a
+      // re-cache looked hung rather than slow.
+      const onProgress: EmailPrecacheProgressCallback = (progress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(EMAIL_PRECACHE_PROGRESS_CHANNEL, progress);
+        }
+      };
+
+      const result = await emailSyncService.precacheEmails(validatedUserId, onProgress, {
         force: forceRecache,
       });
+
+      // BACKLOG-2856: a cancelled run is neither a success nor an error.
+      //
+      // Checked BEFORE `result.error` because the two can never both be set and
+      // the ordering makes that explicit: a cancel returns no error, precisely so
+      // this branch cannot paint the user's own decision red. `success: false`
+      // keeps it off the green path — nothing was re-cached — while `cancelled`
+      // lets the panel say so in neutral terms.
+      if (result.cancelled) {
+        return {
+          success: false,
+          cancelled: true,
+          error: "Re-cache cancelled. Your emails were left unchanged.",
+          emailsFetched: result.fetched,
+          emailsStored: result.stored,
+        };
+      }
 
       // BACKLOG-2856: a run that changed NOTHING must not report success.
       //
@@ -474,6 +507,34 @@ export function registerEmailSyncHandlers(
         // is how the UI knows a connected mailbox was skipped.
         ...(result.forceSwap ? { forceSwap: result.forceSwap } : {}),
       };
+    }, { module: "Transactions" }),
+  );
+
+  // ============================================
+  // BACKLOG-2856: cancel an in-flight email pre-cache / re-cache.
+  //
+  // Parity with the macOS Messages import, which has had a cancel since
+  // BACKLOG-2775. The email path already handled cancellation safely — staging
+  // is dropped on every exit and live is untouched until the swap — but nothing
+  // could TRIGGER one, so the safety net existed with no control attached to it.
+  //
+  // Deliberately NOT rate limited: this is the button a user reaches for when
+  // they think the app is stuck, and refusing it for 30 seconds would be the
+  // worst possible moment to say no.
+  // ============================================
+  ipcMain.handle(
+    "emails:cancel-precache",
+    wrapHandler(async (
+      _event: IpcMainInvokeEvent,
+    ): Promise<TransactionResponse> => {
+      const cancelling = emailSyncService.requestPrecacheCancellation();
+      logService.info("Email pre-cache cancellation requested via IPC", "Transactions", {
+        cancelling,
+      });
+      // `success` reports whether a run was actually asked to stop. False is not
+      // an error — it means the run had already finished, which from the user's
+      // point of view is the same outcome they wanted.
+      return { success: cancelling };
     }, { module: "Transactions" }),
   );
 }

@@ -426,7 +426,13 @@ describe("BACKLOG-2856 — force re-cache re-fetches the whole window", () => {
     expect(mockReprocess).not.toHaveBeenCalled();
 
     await emailSyncService.precacheEmails(USER);
-    expect(mockReprocess).toHaveBeenCalledWith({ userId: USER });
+    // BACKLOG-2856 (progress/cancel round): the pass is now also handed a
+    // `shouldCancel` and an `onProgress` hook, so the options object is matched
+    // on the field this test is actually about. The claim here is unchanged and
+    // undiminished — WHETHER the pass runs on each path — and the two hooks have
+    // their own controls in `emailSyncService.precacheProgress-2856`.
+    expect(mockReprocess).toHaveBeenCalledTimes(1);
+    expect(mockReprocess).toHaveBeenCalledWith(expect.objectContaining({ userId: USER }));
   });
 });
 
