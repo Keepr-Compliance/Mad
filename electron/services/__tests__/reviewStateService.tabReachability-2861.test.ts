@@ -89,7 +89,7 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 }));
 
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
-import { getReviewState } from "../reviewStateService";
+import { getReviewState, queueEmailForReview } from "../reviewStateService";
 import { linkEmailToTransaction } from "../autoLinkService";
 import { getCommunicationsWithMessages } from "../db/communicationDbService";
 import {
@@ -284,7 +284,7 @@ describe("BACKLOG-2861 — the tab's needs-review set is reachable from the butt
   });
 
   describe("C5 — regression guard for the trigger (force re-cache)", () => {
-    it("survives delete-and-reinsert with NEW email ids and NO pending rows", async () => {
+    it("cascades BOTH link tables, then survives reinsert under NEW email ids", async () => {
       // TRANSCRIBED from emailForceStaging.ts, not invented:
       //   `deleteLiveForceSet` is a plain `DELETE FROM emails WHERE <forceSet>`,
       //   and its own comment names the consequence — "every ON DELETE CASCADE
@@ -299,14 +299,46 @@ describe("BACKLOG-2861 — the tab's needs-review set is reachable from the butt
       // re-attaches them afterwards as address_missing — which is the state he
       // was looking at when he filed this.
       const first = await attachAllAsAddressMissing(db);
-      expect(getReviewState(TXN).items).toHaveLength(9);
+
+      // A PENDING row as well, and this is load-bearing rather than decoration.
+      //
+      // BACKLOG-2861 SR review: the first cut of this guard asserted that
+      // `pending_review_communications` was empty after the delete, over a table
+      // that NO line in the fixture ever wrote to. It read as proof that the
+      // pending-review cascade fires; it was a count that was already zero, and
+      // it could not have gone red for any reason. The `communications` half was
+      // genuinely discriminating; this half was not, and the summary claimed
+      // both. Written through the real `queueEmailForReview`, not a hand-rolled
+      // INSERT, so the row is the row production queues.
+      //
+      // A TENTH email, deliberately NOT linked: that is what a pending item IS
+      // (queued without a `communications` row), and it keeps the pending row
+      // out of getReviewState's email_id dedup, where the pending twin would win
+      // and mask the legacy row this file is really about.
+      addEmail(db, "e-pending", "th-pending", "Queued, never linked", "2026-06-20T00:00:00.000Z");
+      expect(await queueEmailForReview(TXN, "e-pending", USER)).toBe(true);
+
+      // PRECONDITION, asserted before the mutation rather than after it. Without
+      // this line the post-delete assertion below is indistinguishable from a
+      // table that was empty all along — which is exactly the defect being fixed.
+      const pendingBefore = db
+        .prepare("SELECT COUNT(*) AS n FROM pending_review_communications WHERE transaction_id = ?")
+        .get(TXN) as { n: number };
+      expect(pendingBefore.n).toBe(1);
+
+      // 9 linked + 1 pending. The pending one is NOT on the tab and correctly
+      // never was — the converse implication this suite deliberately does not
+      // assert.
+      expect(getReviewState(TXN).items).toHaveLength(10);
+      expect(tabNeedsReviewEmailIds(await loadTabEmails())).toEqual(new Set(first));
 
       db.pragma("foreign_keys = ON");
       const deleted = db.prepare("DELETE FROM emails WHERE user_id = ?").run(USER).changes;
-      expect(deleted).toBe(9);
+      expect(deleted).toBe(10);
 
-      // The cascade really fired — asserted, not assumed. This is the step the
-      // original incident report attributed the disappearance to.
+      // Both cascades really fired — asserted, not assumed, and both halves can
+      // now go red. This is the step the incident report attributed the
+      // disappearance to.
       const linksLeft = db
         .prepare("SELECT COUNT(*) AS n FROM communications WHERE transaction_id = ?")
         .get(TXN) as { n: number };
@@ -321,7 +353,10 @@ describe("BACKLOG-2861 — the tab's needs-review set is reachable from the butt
       const second = await attachAllAsAddressMissing(db, "-v2");
       expect(second.some((id) => first.includes(id))).toBe(false);
 
-      // No pending rows exist — this is purely the legacy population's work.
+      // No pending rows came BACK — the cascade took the queued one and nothing
+      // rebuilt it, so everything asserted below is purely the legacy
+      // population's work. Meaningful now that a pending row demonstrably
+      // existed a few lines above.
       const stillNoPending = db
         .prepare("SELECT COUNT(*) AS n FROM pending_review_communications WHERE transaction_id = ?")
         .get(TXN) as { n: number };
