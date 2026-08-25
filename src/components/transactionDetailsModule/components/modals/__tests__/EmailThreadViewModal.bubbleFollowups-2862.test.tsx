@@ -1,6 +1,8 @@
 /**
- * BACKLOG-2862 follow-ups — the two founder refinements shipped on top of the
- * bubble redesign he tested and passed (int/ui-polish-e @ 4951bef3a).
+ * BACKLOG-2862 follow-ups — the five founder refinements shipped on top of the
+ * bubble redesign he tested and passed (int/ui-polish-e @ 4951bef3a), across
+ * two rounds. Items 2 and 3 came first; item 1 was reported BLOCKED, ruled on
+ * by the founder, and then shipped in round 2 alongside items 4 and 5.
  *
  *   ITEM 2. "View formatted email" was a blue text link. His words: "maybe make
  *           more obvious and turn it into a button in gray." It becomes a grey
