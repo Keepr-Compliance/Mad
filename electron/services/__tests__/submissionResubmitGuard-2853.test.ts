@@ -134,6 +134,16 @@ class FakeSupabase {
   errorLogs: Row[] = [];
   deletePolicy: DeletePolicy = "LIVE_RLS";
 
+  /**
+   * BACKLOG-2868 — every `.maybeSingle()` this client served, and how many rows
+   * it matched. `matched > 1` is the PGRST116 branch: PostgREST returns no data
+   * and an error, and `submitTransactionInternal` does not destructure that
+   * error, so `existingSubmission` becomes null and the status guard behind
+   * `if (existingSubmission)` is skipped without anything logging that it was.
+   * This is the only way to SEE that from outside. See BACKLOG-2867.
+   */
+  maybeSingleLookups: { table: string; matched: number }[] = [];
+
   private table(name: string): Row[] {
     switch (name) {
       case "transaction_submissions":
@@ -288,8 +298,22 @@ class FakeSupabase {
         filters.push((r) => vals.includes(r[col]));
         return builder;
       },
-      maybeSingle() {
+      maybeSingle: () => {
         const found = matched();
+        /**
+         * BACKLOG-2868 — RECORD EVERY SINGLE-ROW LOOKUP, SO "THE GUARD WAS
+         * NEVER CONSULTED" CAN BE OBSERVED RATHER THAN INFERRED.
+         *
+         * Needed because the RESULT of `submitTransaction` cannot separate the
+         * two cases. Measured: a `needs_changes` deal (one row — the guard runs
+         * and the list declines to block it) and a `resubmitted` deal (two rows
+         * — the guard is skipped entirely) BOTH end in the identical late
+         * duplicate-key error after a full attachment upload. Same outcome,
+         * different mechanism. A bucket derived from the outcome would be
+         * reporting a mechanism it never measured, which is the failure this
+         * whole correction is about. This records the branch actually taken.
+         */
+        this.maybeSingleLookups.push({ table: tableName, matched: found.length });
         if (found.length > 1) {
           // PostgREST: "JSON object requested, multiple (or no) rows returned"
           return Promise.resolve({ data: null, error: { code: "PGRST116", message: "multiple rows" } });
@@ -393,7 +417,24 @@ beforeEach(() => {
       created_at: "2026-08-01T10:00:00Z",
     },
   ]);
-  (databaseService.updateTransaction as jest.Mock).mockResolvedValue(undefined);
+  /**
+   * BACKLOG-2868 — THE LOCAL ROW IS NOW A REAL DOWNSTREAM OF THE PRODUCER.
+   *
+   * This used to be `mockResolvedValue(undefined)`, so a successful submit left
+   * `localTransaction` describing the state BEFORE it ran. That is fine while
+   * every fixture is hand-seeded, and wrong the moment a test wants to reach a
+   * machine state by EXECUTING the app — `updateLocalSubmissionStatus` is how
+   * production writes `submission_status` and `submission_id` back, and
+   * `resubmitTransaction` refuses outright without the latter. Applying the
+   * update here is what lets `arriveAtResubmitted()` below produce a genuine
+   * two-row deal instead of a seeded impression of one.
+   */
+  (databaseService.updateTransaction as jest.Mock).mockImplementation(
+    async (_id: string, updates: Record<string, unknown>) => {
+      Object.assign(localTransaction, updates);
+      return undefined;
+    }
+  );
 
   (getContactNames as jest.Mock).mockResolvedValue({
     status: { success: true },
@@ -448,26 +489,240 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
     expect(supabaseStorageService.uploadAttachments).not.toHaveBeenCalled();
   });
 
-  test("the blocked SET, derived by executing every status rather than by reading the list", async () => {
-    const blocked: string[] = [];
-    const allowed: string[] = [];
+  /**
+   * BACKLOG-2868 — REACH `resubmitted` BY RUNNING THE PRODUCER, NOT BY SEEDING.
+   *
+   * WHAT WAS WRONG. This suite reached `resubmitted` via `seedSubmission(status)`,
+   * which defaults to `version = 1`. Traced through the code that emits it:
+   *
+   *   submissionService.ts — `finalStatus = options?.version ? "resubmitted" : "submitted"`
+   *   submissionService.ts — `newVersion = (existingSubmission?.version || 1) + 1`
+   *
+   * `options.version` is set ONLY by `resubmitTransaction`, and it is always
+   * `current + 1`, i.e. always >= 2. So a row at status `resubmitted` ALWAYS
+   * carries version >= 2, and — since BACKLOG-2853 stopped the versioning path
+   * deleting its own parent — always has a retained version-1 sibling. A
+   * version-1 `resubmitted` row is a state no code path in this app can emit.
+   *
+   * That is the first failure shape in CLAUDE.md: a fixture standing in for a
+   * producer rather than transcribed from it. It reached the right verdict
+   * ("`resubmitted` is not blocked") through a mechanism that does not exist —
+   * it demonstrated the status guard declining to list a status, when in
+   * reality the guard is never consulted at all. Green carrying no information.
+   *
+   * WHY NOT JUST SEED (v1 parent + v2 `resubmitted`). Because that swaps one
+   * invention for a better-informed invention, and the version arithmetic and
+   * the parent-retention are precisely the parts under test. Running
+   * `resubmitTransaction` makes the fixture literally the producer's own
+   * output: whatever the app really writes is what the guard is then asked
+   * about. If the version rule ever changes, this helper changes with it for
+   * free, and a hand-seeded pair would not.
+   */
+  async function arriveAtResubmitted(): Promise<{
+    parentId: string;
+    resubmittedId: string;
+  }> {
+    // A broker-returned deal — the only legitimate way into a resubmit.
+    const parent = seedSubmission("needs_changes", 1);
 
-    for (const status of ["submitted", "under_review", "needs_changes", "resubmitted", "approved", "rejected"]) {
-      fake = new FakeSupabase();
-      (supabaseService.getClient as jest.Mock).mockImplementation(() => fake);
-      seedSubmission(status);
-      const result = await submissionService.submitTransaction(TX);
-      const refused = !result.success && /Cannot resubmit|already been (submitted|approved)|has been rejected/i.test(result.error ?? "");
-      (refused ? blocked : allowed).push(status);
+    const produced = await submissionService.resubmitTransaction(TX);
+    expect(produced.success).toBe(true);
+
+    // The producer's own output, asserted rather than assumed: the app is now
+    // in the state this test needs, and says so.
+    const fresh = fake.submissions.find((s) => s.id === produced.submissionId);
+    expect(fresh?.status).toBe("resubmitted");
+    expect(fresh?.version).toBe(2);
+    expect(localTransaction.submission_status).toBe("resubmitted");
+    expect(fake.submissions).toHaveLength(2);
+
+    // Narrowed, not asserted away: `submissionId` is `string | null` on the
+    // producer's result type, and a null here would mean the resubmit did not
+    // actually create a row — which every caller below assumes it did.
+    const resubmittedId = produced.submissionId;
+    if (typeof resubmittedId !== "string") {
+      throw new Error(
+        `resubmitTransaction returned no submissionId: ${JSON.stringify(produced)}`
+      );
     }
 
-    expect(new Set(blocked)).toEqual(
+    return { parentId: parent.id, resubmittedId };
+  }
+
+  test("a 'resubmitted' row can only exist at version >= 2 — the fixture the app can actually produce", async () => {
+    const { parentId, resubmittedId } = await arriveAtResubmitted();
+
+    const versions = fake.submissions
+      .map((r) => r.version as number)
+      .sort((a, b) => a - b);
+    expect(versions).toEqual([1, 2]);
+
+    // Version 1 is the retained parent, and it is NOT the resubmitted row.
+    const v1 = fake.submissions.find((r) => r.version === 1);
+    const v2 = fake.submissions.find((r) => r.version === 2);
+    expect(v1?.id).toBe(parentId);
+    expect(v2?.id).toBe(resubmittedId);
+    expect(v2?.status).toBe("resubmitted");
+    expect(v2?.parent_submission_id).toBe(parentId);
+
+    // The claim stated as the invariant it is: nothing in this store is a
+    // version-1 `resubmitted` row, which is what the old fixture asserted on.
+    expect(
+      fake.submissions.filter((r) => r.status === "resubmitted" && r.version === 1)
+    ).toEqual([]);
+  });
+
+  /**
+   * BACKLOG-2867, CONFIRMED BY EXECUTION — A FINDING, NOT A FAILURE.
+   *
+   * Once the deal really has two rows, the guard BACKLOG-2853 installed does
+   * not decline to block `resubmitted`. It never runs. The lookup ahead of it
+   * is `.eq(org).eq(local_transaction_id).maybeSingle()` with no version filter
+   * and no ordering, and its `error` is not destructured at all — so two rows
+   * yield PGRST116, `existingSubmission` is null, `if (existingSubmission)` is
+   * false, and the whole `blockedStatuses` block is skipped.
+   *
+   * The observable consequence is the one that matters to a user: execution
+   * falls through to the FULL attachment upload and only then dies on the
+   * unique key. So this asserts `uploadAttachments` WAS called — the exact
+   * inverse of the assertion that proves the guard working at `submitted`.
+   *
+   * This is BACKLOG-2867's subject. It is NOT fixed here: fixing it is a
+   * redesign of that lookup, and this change is a copy fix. Recorded so the
+   * behaviour is measured rather than believed.
+   */
+  test("at 'resubmitted' the guard is never REACHED — upload runs, unique key fails (BACKLOG-2867)", async () => {
+    await arriveAtResubmitted();
+
+    const before = idSet(fake.submissions);
+    (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+
+    const result = await submissionService.submitTransaction(TX);
+
+    expect(result.success).toBe(false);
+
+    // NOT a guard refusal. If any of these matched, the guard had run.
+    expect(result.error).not.toMatch(/Cannot resubmit/i);
+    expect(result.error).not.toMatch(/already been (submitted|approved)/i);
+    expect(result.error).not.toMatch(/has been rejected/i);
+
+    // What it IS: the late duplicate-key failure, after the longest stage.
+    expect(supabaseStorageService.uploadAttachments).toHaveBeenCalled();
+    expect(result.error).toMatch(/duplicate key/i);
+    expect(result.error).toMatch(
+      /transaction_submissions_org_txn_version_user_key/
+    );
+
+    // Both original rows survive by id — the damage here is a wasted upload and
+    // a confusing error, not destruction.
+    expect(idSet(fake.submissions)).toEqual(before);
+  });
+
+
+  test("the blocked SET, derived by executing every status rather than by reading the list", async () => {
+    /**
+     * BACKLOG-2868 — CLASSIFIED BY "DID THE UPLOAD RUN", NOT BY "DID IT
+     * SUCCEED", AND THE CHANGE CAME FROM A MEASUREMENT THAT CONTRADICTED THE
+     * FIRST DRAFT OF THIS TEST.
+     *
+     * BACKLOG-2853 had two buckets, `blocked` and `allowed`, where `allowed`
+     * meant only "not refused by the guard". Measured across all six statuses,
+     * that name was wrong: a plain `submitTransaction` on a `needs_changes`
+     * deal does NOT succeed under the desktop's real authority. It runs the
+     * full attachment upload and then dies on the unique key — because the
+     * delete of its existing row no-ops under LIVE_RLS and the re-insert
+     * collides at version 1. Nothing in the old suite said so, because "not
+     * refused" was being read as "allowed".
+     *
+     * (No user reaches that: `TransactionDetails` and `useBulkSubmit` both
+     * route `needs_changes` to `resubmitTransaction`, which versions properly
+     * and is covered by the next test. It is the classification that was
+     * misleading, not the product.)
+     *
+     * So the bucket boundary is the observable the guard actually exists to
+     * change: WHETHER EXECUTION REACHED THE UPLOAD. That is the difference
+     * between an immediate, accurate refusal and a multi-minute walk to a
+     * duplicate-key error with files already pushed to Storage.
+     */
+    const refusedBeforeUpload: string[] = [];
+    const fellThroughToUpload: string[] = [];
+    /** status → how many rows the guard's own lookup could name. */
+    const lookupMatched: Record<string, number> = {};
+
+    for (const status of [
+      "submitted",
+      "under_review",
+      "needs_changes",
+      "resubmitted",
+      "approved",
+      "rejected",
+    ]) {
+      fake = new FakeSupabase();
+      (supabaseService.getClient as jest.Mock).mockImplementation(() => fake);
+      localTransaction.submission_id = null;
+      localTransaction.submission_status = "not_submitted";
+
+      if (status === "resubmitted") {
+        // Produced by running the app, not seeded. See `arriveAtResubmitted`.
+        await arriveAtResubmitted();
+      } else {
+        seedSubmission(status);
+      }
+
+      (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+      fake.maybeSingleLookups = [];
+
+      const result = await submissionService.submitTransaction(TX);
+
+      const uploaded = (supabaseStorageService.uploadAttachments as jest.Mock)
+        .mock.calls.length;
+      (uploaded === 0 ? refusedBeforeUpload : fellThroughToUpload).push(status);
+
+      const guardLookup = fake.maybeSingleLookups.find(
+        (l) => l.table === "transaction_submissions"
+      );
+      lookupMatched[status] = guardLookup?.matched ?? -1;
+
+      // Every refusal is a REAL refusal, named by the message the service
+      // throws — not merely an absence of an upload.
+      if (uploaded === 0) {
+        expect(result.error).toMatch(
+          /Cannot resubmit|already been (submitted|approved)|has been rejected/i
+        );
+      }
+    }
+
+    expect(new Set(refusedBeforeUpload)).toEqual(
       new Set(["submitted", "under_review", "approved", "rejected"])
     );
-    // `resubmitted` is knowingly still permitted — raised as a question on
-    // BACKLOG-2853, not taken silently. This pins it so the answer, whichever
-    // way it goes, has to come through this expectation.
-    expect(new Set(allowed)).toEqual(new Set(["needs_changes", "resubmitted"]));
+    expect(new Set(fellThroughToUpload)).toEqual(
+      new Set(["needs_changes", "resubmitted"])
+    );
+
+    /**
+     * AND THE TWO IN THAT SECOND BUCKET ARE THERE FOR DIFFERENT REASONS —
+     * which the outcome alone cannot show, since both end in the same
+     * duplicate-key error.
+     *
+     * `needs_changes`: the lookup named ONE row, so the guard ran and the list
+     * legitimately declined to block it.
+     *
+     * `resubmitted`: the lookup matched TWO rows, so PostgREST returned
+     * PGRST116, the undestructured error was dropped, `existingSubmission`
+     * became null, and the guard was never consulted at all. That is
+     * BACKLOG-2867, confirmed here by execution — a finding, not a failure, and
+     * deliberately NOT fixed in this change, which is a copy fix.
+     *
+     * The consequence worth stating plainly: adding "resubmitted" to
+     * `blockedStatuses` would change NOTHING while this holds. BACKLOG-2853
+     * reported that status as "knowingly still permitted"; that reading was
+     * wrong and is withdrawn here.
+     */
+    expect(lookupMatched.needs_changes).toBe(1);
+    expect(lookupMatched.resubmitted).toBe(2);
+    for (const status of ["submitted", "under_review", "approved", "rejected"]) {
+      expect(lookupMatched[status]).toBe(1);
+    }
   });
 
   test("'needs_changes' still resubmits, reaches the VERSIONING path, and the previous version survives by id", async () => {

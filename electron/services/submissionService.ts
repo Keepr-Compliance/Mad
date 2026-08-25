@@ -19,6 +19,17 @@ import * as crypto from "crypto";
 import * as os from "os";
 import { app, net } from "electron";
 import supabaseService from "./supabaseService";
+/**
+ * BACKLOG-2868 — the refusal copy is CANONICAL in its own module because the
+ * renderer needs the same words and cannot import this file. See that module's
+ * header for why a plain shared import is impossible across the boundary, and
+ * for the parity test that keeps the renderer's mirror honest.
+ */
+import {
+  BLOCKED_SUBMISSION_STATUSES,
+  BLOCKED_SUBMISSION_MESSAGES,
+  type BlockedSubmissionStatus,
+} from "./submissionStatusMessages";
 import supabaseStorageService, {
   LocalAttachment,
   AttachmentUploadResult,
@@ -369,29 +380,31 @@ class SubmissionService {
          * that ever reaches this code is not covered by the RLS that covers
          * the desktop today.
          *
-         * `resubmitted` is deliberately NOT added. It carries the identical
-         * hazard one broker round trip later and the founder's ruling named
-         * one word; it is raised on BACKLOG-2853 as a question rather than
-         * taken silently here.
+         * `resubmitted` is deliberately NOT in the list. BACKLOG-2853 justified
+         * that with "it carries the identical hazard one broker round trip
+         * later" — WRONG, and withdrawn: a `resubmitted` row only exists at
+         * version >= 2, so two rows share `(organization_id,
+         * local_transaction_id)` and the `.maybeSingle()` lookup above has
+         * already returned PGRST116 with `existingSubmission` null. Execution
+         * never arrives here at all. See BACKLOG-2867, and the
+         * guard-never-reached bucket in `submissionResubmitGuard-2853.test.ts`
+         * which measures it rather than asserting it.
+         *
+         * BACKLOG-2868 — THE LIST AND THE MESSAGES NOW LIVE IN THEIR OWN
+         * MODULE. Not for tidiness: the renderer must tell the user the same
+         * thing this throw does, cannot import this file, and drifted the
+         * moment it had to write the words a second time. The modal's mirror
+         * is pinned to these strings by a parity test.
          */
-        const blockedStatuses = [
-          "submitted",
-          "under_review",
-          "approved",
-          "rejected",
-        ];
-        if (blockedStatuses.includes(existingSubmission.status)) {
-          const statusMessages: Record<string, string> = {
-            submitted:
-              "This transaction has already been submitted and is waiting for your broker to review it. If your broker asks for changes you will be able to resubmit.",
-            under_review:
-              "Cannot resubmit while broker is reviewing. Please wait for their decision.",
-            approved: "This submission has already been approved.",
-            rejected: "This submission has been rejected.",
-          };
+        if (
+          (BLOCKED_SUBMISSION_STATUSES as readonly string[]).includes(
+            existingSubmission.status
+          )
+        ) {
           throw new Error(
-            statusMessages[existingSubmission.status] ||
-              `Cannot resubmit with status: ${existingSubmission.status}`
+            BLOCKED_SUBMISSION_MESSAGES[
+              existingSubmission.status as BlockedSubmissionStatus
+            ] || `Cannot resubmit with status: ${existingSubmission.status}`
           );
         }
 

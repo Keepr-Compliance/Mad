@@ -118,26 +118,99 @@ export function SubmitForReviewModal({
    * THE LIST IS DUPLICATED, NOT SHARED, AND THAT IS DELIBERATE. The renderer
    * cannot value-import from `electron/` (Vite parses it as JavaScript) and
    * `electron/` cannot import from `src/` (`rootDir`), so a single shared
-   * constant would need a mirrored module plus a parity test — out of
-   * proportion to four string literals. Both ends are pinned by tests that
-   * assert the SET, so a change to one shows up as a red on the other's
-   * expectation rather than as silent drift.
+   * constant would need a mirrored module plus a parity test. BACKLOG-2853
+   * judged that "out of proportion to four string literals" and pinned only
+   * the SET on each end. BACKLOG-2868 is what that judgement cost: the SET was
+   * pinned, THE WORDS WERE NOT, and the words are what the user reads.
    *
-   * `resubmitted` is NOT here: the service still permits a submit in that
-   * state, and a disabled button whose service would have accepted the click
-   * is a dead control. It is labelled honestly below instead, and the
-   * question of whether the service should refuse it too is raised on
-   * BACKLOG-2853 rather than answered here.
+   * `resubmitted` is NOT here, and the reason BACKLOG-2853 gave — "the service
+   * still permits a submit in that state" — is WRONG and withdrawn. The
+   * service does not permit it; the service never gets asked. A `resubmitted`
+   * row only exists at version >= 2, so its deal has two submission rows, the
+   * service's `.maybeSingle()` lookup returns PGRST116, and the whole guard is
+   * skipped (BACKLOG-2867). Pressing the button there runs a plain submit that
+   * always dies on the unique key after a full attachment upload. Leaving it
+   * enabled is therefore NOT the "honest label" that comment claimed — it is
+   * an inviting control that cannot work. Not widened here because the fix is
+   * the lookup, not the list; raised on BACKLOG-2868 rather than taken.
    */
-  const WITH_BROKER_STATUSES: readonly string[] = [
-    "submitted",
-    "under_review",
-    "approved",
-    "rejected",
-  ];
-  const submissionIsWithBroker = WITH_BROKER_STATUSES.includes(
-    transaction.submission_status ?? ""
-  );
+  /**
+   * BACKLOG-2868 — ONE MESSAGE FOR FOUR DIFFERENT STATES IS THREE WRONG
+   * MESSAGES.
+   *
+   * ===========================================================================
+   * THIS IS A MIRROR. THE CANONICAL COPY IS
+   * `electron/services/submissionStatusMessages.ts`.
+   * ===========================================================================
+   *
+   * Walk the case that filed this. Madison submits a deal; her broker REJECTS
+   * it. `TransactionHeader` keeps Complete visible in every state and its
+   * `isSubmitted` badge set covers only `submitted | under_review | approved`,
+   * so a rejected deal shows no badge and a live Complete button — one click to
+   * here. BACKLOG-2853 then told her, in the only lead paragraph it wrote:
+   *
+   *   "...is with your broker for review. It cannot be submitted again — if
+   *    your broker asks for changes, you will be able to resubmit it here."
+   *
+   * It is not with her broker for review; he rejected it. He is not going to
+   * ask for changes. She waits for a message that is never coming.
+   *
+   * And it compounds. The accurate line already existed in the service, and
+   * before BACKLOG-2853 she reached it by pressing the (enabled) button and
+   * reading the thrown error. That change disabled the button. So the wrong
+   * explanation was shown AND the right one was made unreachable — which is
+   * why the fix is copy that renders BEFORE any press, not a better error.
+   *
+   * EACH LEAD CONTAINS ITS CANONICAL SERVICE MESSAGE VERBATIM. The parity test
+   * asserts containment rather than equality, so this mirror may add a
+   * next-step sentence the service has no room for (see `rejected`) without
+   * being able to drift from what the service would have said. Edit
+   * `submissionStatusMessages.ts` without editing here and that test goes red.
+   *
+   * `submitted` keeps BACKLOG-2853's own phrasing rather than being harmonised
+   * to the service's. It is accurate, the founder has tested this screen, and
+   * rewording an accurate string for symmetry is the same unrequested widening
+   * that produced this defect.
+   */
+  const BLOCKED_STATUS_COPY: Record<string, { title: string; lead: string }> = {
+    submitted: {
+      title: "Already Submitted",
+      lead: "This transaction has already been submitted and is with your broker for review. It cannot be submitted again — if your broker asks for changes, you will be able to resubmit it here.",
+    },
+    under_review: {
+      title: "Under Review",
+      lead: "Cannot resubmit while broker is reviewing. Please wait for their decision.",
+    },
+    approved: {
+      title: "Already Approved",
+      lead: "This submission has already been approved. There is nothing further to send.",
+    },
+    rejected: {
+      title: "Submission Rejected",
+      /**
+       * The canonical string is exactly "This submission has been rejected." —
+       * four words with no next step. The filing for BACKLOG-2868 quoted it as
+       * "This submission was rejected. Please contact your broker." and that
+       * sentence exists nowhere in this repo (swept case-insensitively). So the
+       * canonical half here is the REAL string, transcribed, and the broker
+       * instruction is added by this mirror — which is the whole reason the
+       * parity test asserts containment. Whether the service's own error should
+       * carry the instruction too is raised on BACKLOG-2868, not taken here.
+       */
+      lead: "This submission has been rejected. Please contact your broker.",
+    },
+  };
+  const blockedCopy = BLOCKED_STATUS_COPY[transaction.submission_status ?? ""];
+
+  /**
+   * DERIVED FROM THE COPY MAP, NOT FROM A SECOND LIST. BACKLOG-2853 kept a
+   * separate `WITH_BROKER_STATUSES` array here; once the copy is per-status,
+   * carrying both means a status can be disabled with no copy written for it,
+   * or given copy while staying enabled — the same two-lists-one-rule shape
+   * that caused this item, reproduced inside a single file. The map's keys ARE
+   * the set, so a status cannot be added to one and missed by the other.
+   */
+  const submissionIsWithBroker = blockedCopy !== undefined;
 
   /**
    * Label-only. Routing lives in TransactionDetails.tsx, which computes its
@@ -258,9 +331,13 @@ export function SubmitForReviewModal({
                    Review?", a question about an act the service will refuse.
                    Success still wins the branch, so a submit that has just
                    completed reads "Successfully Submitted" exactly as before —
-                   this only changes the state the user ARRIVES in. */
-              submissionIsWithBroker
-              ? "Already Submitted"
+                   this only changes the state the user ARRIVES in.
+
+                   BACKLOG-2868 — and it is now the status's own title, not one
+                   title for four states. "Already Submitted" over a REJECTED
+                   deal describes a submission that is still in play. */
+              blockedCopy
+              ? blockedCopy.title
               : isResubmit
               ? "Resubmit for Review"
               : "Submit for Review"}
@@ -294,16 +371,22 @@ export function SubmitForReviewModal({
         {/* Content - not submitting, not yet submitted */}
         {!isSubmitting && !error && !isSuccess && (
           <>
-            <p className="text-sm text-gray-600 mb-4">
+            <p className="text-sm text-gray-600 mb-4" data-testid="submit-review-lead">
               {/* BACKLOG-2853 — "The following data will be sent to your
                   broker" is a promise the service will not keep in these
                   states. What replaces it names the two things the user needs:
                   that nothing is going to be sent, and what the way forward is
                   (the broker asking for changes), so the dialog is not a dead
                   end with an unexplained disabled button. Export PDF stays on
-                  screen beside it, which is the one action still available. */}
-              {submissionIsWithBroker
-                ? "This transaction has already been submitted and is with your broker for review. It cannot be submitted again — if your broker asks for changes, you will be able to resubmit it here."
+                  screen beside it, which is the one action still available.
+
+                  BACKLOG-2868 — "the way forward is the broker asking for
+                  changes" is true of ONE of the four statuses this branch
+                  covers. At `rejected` there is no such way forward, and at
+                  `approved` there is nothing to wait for. Each status now
+                  carries the line that is true of it. */}
+              {blockedCopy
+                ? blockedCopy.lead
                 : isResubmit
                 ? "You are about to resubmit this transaction for broker review. Your broker will be notified of the changes."
                 : "You are about to submit this transaction for broker review. The following data will be sent to your broker:"}
