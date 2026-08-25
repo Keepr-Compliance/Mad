@@ -100,7 +100,55 @@ export function SubmitForReviewModal({
   onSubmit,
   onExport,
 }: SubmitForReviewModalProps): React.ReactElement {
-  const isResubmit = transaction.submission_status === "needs_changes";
+  /**
+   * BACKLOG-2853 — THE DEAL ALREADY HAS A SUBMISSION SITTING WITH THE BROKER.
+   *
+   * These four statuses are exactly the ones `submissionService`'s
+   * `blockedStatuses` refuses (electron/services/submissionService.ts), so
+   * pressing the action in any of them produces a thrown error, never a
+   * submission. Until this change the modal rendered a live, ENABLED button
+   * reading "Submit" for every one of them — `isResubmit` was true only for
+   * `needs_changes` — with nothing on screen saying a submission already
+   * existed. Measured on the re-entry state the founder's report names
+   * (`submission_status: "submitted"`, `progress: null`, which is what
+   * `resetSubmit()` leaves behind):
+   *   {"submitButtonLive":true,"submitDisabled":false,
+   *    "readsResubmit":false,"warnsAboutExisting":false}
+   *
+   * THE LIST IS DUPLICATED, NOT SHARED, AND THAT IS DELIBERATE. The renderer
+   * cannot value-import from `electron/` (Vite parses it as JavaScript) and
+   * `electron/` cannot import from `src/` (`rootDir`), so a single shared
+   * constant would need a mirrored module plus a parity test — out of
+   * proportion to four string literals. Both ends are pinned by tests that
+   * assert the SET, so a change to one shows up as a red on the other's
+   * expectation rather than as silent drift.
+   *
+   * `resubmitted` is NOT here: the service still permits a submit in that
+   * state, and a disabled button whose service would have accepted the click
+   * is a dead control. It is labelled honestly below instead, and the
+   * question of whether the service should refuse it too is raised on
+   * BACKLOG-2853 rather than answered here.
+   */
+  const WITH_BROKER_STATUSES: readonly string[] = [
+    "submitted",
+    "under_review",
+    "approved",
+    "rejected",
+  ];
+  const submissionIsWithBroker = WITH_BROKER_STATUSES.includes(
+    transaction.submission_status ?? ""
+  );
+
+  /**
+   * Label-only. Routing lives in TransactionDetails.tsx, which computes its
+   * own `isResubmit` and is untouched by this change — so widening this to
+   * `resubmitted` changes what the button SAYS and nothing about which IPC
+   * call it makes. Saying "Resubmit" on a deal that has already been
+   * submitted twice is the accurate word for the act either way.
+   */
+  const isResubmit =
+    transaction.submission_status === "needs_changes" ||
+    transaction.submission_status === "resubmitted";
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const isActivelySubmitting = isSubmitting && progress?.stage !== "complete" && progress?.stage !== "failed";
@@ -205,6 +253,14 @@ export function SubmitForReviewModal({
           <h3 className="text-lg font-bold text-gray-900">
             {isSuccess
               ? "Successfully Submitted"
+              : /* BACKLOG-2853 — the title carried the same lie as the button:
+                   a deal already sitting with the broker was asked "Submit for
+                   Review?", a question about an act the service will refuse.
+                   Success still wins the branch, so a submit that has just
+                   completed reads "Successfully Submitted" exactly as before —
+                   this only changes the state the user ARRIVES in. */
+              submissionIsWithBroker
+              ? "Already Submitted"
               : isResubmit
               ? "Resubmit for Review"
               : "Submit for Review"}
@@ -239,7 +295,16 @@ export function SubmitForReviewModal({
         {!isSubmitting && !error && !isSuccess && (
           <>
             <p className="text-sm text-gray-600 mb-4">
-              {isResubmit
+              {/* BACKLOG-2853 — "The following data will be sent to your
+                  broker" is a promise the service will not keep in these
+                  states. What replaces it names the two things the user needs:
+                  that nothing is going to be sent, and what the way forward is
+                  (the broker asking for changes), so the dialog is not a dead
+                  end with an unexplained disabled button. Export PDF stays on
+                  screen beside it, which is the one action still available. */}
+              {submissionIsWithBroker
+                ? "This transaction has already been submitted and is with your broker for review. It cannot be submitted again — if your broker asks for changes, you will be able to resubmit it here."
+                : isResubmit
                 ? "You are about to resubmit this transaction for broker review. Your broker will be notified of the changes."
                 : "You are about to submit this transaction for broker review. The following data will be sent to your broker:"}
             </p>
@@ -575,7 +640,14 @@ export function SubmitForReviewModal({
           {!progress?.stage || progress.stage === "failed" ? (
             <button
               onClick={onSubmit}
-              disabled={isSubmitting}
+              /* BACKLOG-2853 — disabled in the four states the service
+                 refuses. The click could be left live and allowed to surface
+                 the service's error, but that spends a multi-minute attachment
+                 upload before the refusal in the shape this code had, and it
+                 asks the user to discover by failure what the screen can just
+                 say. */
+              disabled={isSubmitting || submissionIsWithBroker}
+              data-testid="submit-review-submit"
               className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {isSubmitting ? (
@@ -601,6 +673,12 @@ export function SubmitForReviewModal({
                   </svg>
                   Submitting...
                 </>
+              ) : submissionIsWithBroker ? (
+                /* BACKLOG-2853 — never a bare "Submit" on a deal that already
+                   has a submission with the broker. The label states the state
+                   the deal is in, which is also the reason the control is
+                   dead. */
+                "Already Submitted"
               ) : isResubmit ? (
                 "Resubmit"
               ) : (

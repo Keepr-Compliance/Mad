@@ -324,10 +324,66 @@ class SubmissionService {
         .maybeSingle();
 
       if (existingSubmission) {
-        // Check if resubmission is allowed based on status
-        const blockedStatuses = ["under_review", "approved", "rejected"];
+        /**
+         * BACKLOG-2853 — `submitted` IS BLOCKED. This list is the whole item.
+         *
+         * Until this change the list was
+         * ["under_review", "approved", "rejected"], so a deal sitting at
+         * `submitted` — awaiting the broker, nothing wrong with it — fell
+         * through to the delete below, whose own comment advertises that it
+         * "cascades to messages and attachments". The renderer offered that
+         * path an unqualified, enabled "Submit" button (SubmitForReviewModal
+         * computed `isResubmit` from `needs_changes` alone), so one mis-click
+         * on Complete → Submit aimed a cascading delete at a live submission.
+         *
+         * WHAT THE DATABASE ACTUALLY DOES TODAY — measured against the live
+         * Keepr project (`pg_policies`, `pg_class`), not read off the
+         * migration files, because it changes what this guard is FOR:
+         *
+         *   transaction_submissions: relrowsecurity = true,
+         *                            relforcerowsecurity = true
+         *   the only agent-facing DELETE policy is
+         *     agents_can_delete_stale_uploads
+         *     USING ((submitted_by = auth.uid())
+         *            AND (status::text = 'uploading'::text))
+         *
+         * The desktop client holds the ANON key plus the user session
+         * (supabaseService.ts — "never fall back to service_role key"), so
+         * that policy governs it. A DELETE aimed at a `submitted` row matches
+         * no row, PostgREST returns 204, and the result below is not checked
+         * anyway. The cascade never fires. The destruction is real in THIS
+         * FILE and is prevented by the database.
+         *
+         * So what a user hit instead was a LATE failure: the delete no-ops,
+         * then the attachment upload runs — the longest stage — and only then
+         * does the insert violate the live unique key
+         *   UNIQUE (organization_id, local_transaction_id, version,
+         *           submitted_by)
+         * with a duplicate-key error, having already pushed files to Storage
+         * under a submission id that will never exist. This check runs BEFORE
+         * that upload, so blocking here replaces a multi-minute walk to a
+         * confusing error with an immediate, accurate refusal.
+         *
+         * And it is the ONLY application-layer guard: `service_role_full_access_submissions`
+         * grants ALL on this table and is live, so any service-role caller
+         * that ever reaches this code is not covered by the RLS that covers
+         * the desktop today.
+         *
+         * `resubmitted` is deliberately NOT added. It carries the identical
+         * hazard one broker round trip later and the founder's ruling named
+         * one word; it is raised on BACKLOG-2853 as a question rather than
+         * taken silently here.
+         */
+        const blockedStatuses = [
+          "submitted",
+          "under_review",
+          "approved",
+          "rejected",
+        ];
         if (blockedStatuses.includes(existingSubmission.status)) {
           const statusMessages: Record<string, string> = {
+            submitted:
+              "This transaction has already been submitted and is waiting for your broker to review it. If your broker asks for changes you will be able to resubmit.",
             under_review:
               "Cannot resubmit while broker is reviewing. Please wait for their decision.",
             approved: "This submission has already been approved.",
@@ -339,16 +395,51 @@ class SubmissionService {
           );
         }
 
-        // Allowed to resubmit (status is 'submitted', 'resubmitted', or 'needs_changes')
-        logService.info(
-          `[Submission] Replacing existing submission ${existingSubmission.id} (status: ${existingSubmission.status})`,
-          "SubmissionService"
-        );
-        // Delete old submission (cascades to messages and attachments)
-        await client
-          .from("transaction_submissions")
-          .delete()
-          .eq("id", existingSubmission.id);
+        /**
+         * BACKLOG-2853 — THE VERSIONING PATH NEVER DELETES ITS OWN PARENT.
+         *
+         * `resubmitTransaction` reads the current version, adds one, and calls
+         * this method with `parentSubmissionId` set to the row it is
+         * versioning FROM — the same row `existingSubmission` names here. The
+         * delete below would therefore have destroyed the parent, and the
+         * insert that follows carries
+         *   parent_submission_id -> that id
+         * against a foreign key that is plain
+         *   FOREIGN KEY (parent_submission_id)
+         *   REFERENCES transaction_submissions(id)
+         * with NO ON DELETE clause (verified live via pg_constraint). Had the
+         * delete ever succeeded, the resubmit would have destroyed the
+         * original AND then failed its own insert on that FK — losing the
+         * broker's review round trip outright.
+         *
+         * It has not fired in production only because the RLS policy quoted
+         * above no-ops the delete; the broker round trip works today by
+         * accident of the database, not by intent of this code. Skipping the
+         * delete when a version is being created makes the intent explicit and
+         * is what "needs_changes reaches the versioning path, never the delete
+         * branch" means. The unique key includes `version`, so the old and new
+         * rows coexist legally — nothing forces the delete.
+         *
+         * Production behaviour is unchanged by this branch: the delete it
+         * skips was already a no-op for every status that reaches it.
+         */
+        if (options?.parentSubmissionId) {
+          logService.info(
+            `[Submission] Versioning from submission ${existingSubmission.id} (status: ${existingSubmission.status}) — previous version retained`,
+            "SubmissionService"
+          );
+        } else {
+          // Allowed to replace (status is 'resubmitted' or 'needs_changes')
+          logService.info(
+            `[Submission] Replacing existing submission ${existingSubmission.id} (status: ${existingSubmission.status})`,
+            "SubmissionService"
+          );
+          // Delete old submission (cascades to messages and attachments)
+          await client
+            .from("transaction_submissions")
+            .delete()
+            .eq("id", existingSubmission.id);
+        }
       }
 
       const totalMessageCount = messages.length + emails.length;
