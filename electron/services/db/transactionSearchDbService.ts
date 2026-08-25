@@ -418,6 +418,13 @@ const MARK = {
   // BACKLOG-2816: thread-level (group-name) text hits. Substring routing stays
   // collision-free — "mad:search:textthreads" does not contain "mad:search:texts".
   textThreads: "/* mad:search:textthreads */",
+  // BACKLOG-2863: the per-row attribution lookup that replaced the `link` join.
+  // Routing stays collision-free — "mad:search:textthreads:attribution" contains
+  // "mad:search:textthreads", so a test double that routes the group-chat rows
+  // and nothing else would answer this query too; every such double in the repo
+  // therefore routes this marker EXPLICITLY, and it is listed FIRST wherever
+  // routes are matched by substring.
+  textThreadsAttribution: "/* mad:search:textthreads:attribution */",
   unattachedTextThreads: "/* mad:search:unattached:textthreads */",
   transactions: "/* mad:search:transactions */",
   transactionsCount: "/* mad:search:transactions:count */",
@@ -701,8 +708,82 @@ export function buildTextThreadNameQuery(
 }
 
 /**
- * Global analogue of `buildTextThreadNameQuery`: named threads linked to ANY
- * transaction, with the attribution of the primary (earliest-linked) one.
+ * BACKLOG-2863: the linkage test for a global group-chat row — "this message
+ * belongs to SOME transaction" — as a pair of EXISTS predicates.
+ *
+ * ===========================================================================
+ * WHY THIS IS NOT A JOIN ANY MORE
+ * ===========================================================================
+ * `buildGlobalTextThreadNameQuery` used to JOIN a materialized `link` table:
+ * every transaction-linked message in the database, ROW_NUMBER-ranked to its
+ * primary transaction. SQLite chose to DRIVE the query through that table, and
+ * the plan read:
+ *
+ *     SCAN tn
+ *     SEARCH rankedLink USING AUTOMATIC PARTIAL COVERING INDEX (rn=?)
+ *     SEARCH m USING INDEX sqlite_autoindex_messages_1 (id=?)
+ *
+ * — a probe per message inside every matching named thread. At ONE character
+ * nearly every named group chat matches, so a single keystroke fanned out across
+ * every message in every named conversation. Measured on a synthetic 150k-message
+ * corpus built from the real `schema.sql`: 6,185 ms for `"a"`, while the founder
+ * typed the second letter of a word.
+ *
+ * An EXISTS is a SCALAR test, so it cannot be a join driver, and the planner is
+ * free to drive `tn -> messages` through `idx_messages_thread_id`. That is
+ * exactly what `buildUnattachedTextThreadNameQuery` — the same query shape minus
+ * the join — has always done, and it is why the BACKLOG-2863 investigation
+ * measured that sibling at 211 ms where this one cost 11,884.
+ *
+ * ===========================================================================
+ * BOTH BRANCHES JOIN `transactions`, AND THAT IS LOAD-BEARING
+ * ===========================================================================
+ * The derived table this replaces INNER JOINed `transactions` before ranking, so
+ * a `communications` row pointing at a transaction that no longer exists never
+ * produced a link, and its message never surfaced as a thread row. An EXISTS
+ * without that join would admit rows the old query excluded — a behaviour change
+ * wearing a performance change's clothes. The identity test in
+ * `transactionSearchDbService.threadJoinPlan-2863.test.ts` mutates exactly this
+ * join out and watches the id sets diverge.
+ *
+ * The remaining differences from the old `ml` sub-select are all implied rather
+ * than dropped: `comm.message_id = m.id` implies `message_id IS NOT NULL`, the
+ * `JOIN transactions` implies `transaction_id IS NOT NULL`, and
+ * `comm3.thread_id = m.thread_id` implies `thread_id IS NOT NULL` (a NULL
+ * `thread_id` matches nothing, exactly as the old `JOIN ... ON comm3.thread_id =
+ * m3.thread_id` matched nothing).
+ */
+const GLOBAL_THREAD_LINKAGE_EXISTS = `(
+        EXISTS (
+          SELECT 1
+          FROM communications comm
+          JOIN transactions t ON t.id = comm.transaction_id
+          WHERE comm.message_id = m.id
+        )
+        OR EXISTS (
+          SELECT 1
+          FROM communications comm3
+          JOIN transactions t ON t.id = comm3.transaction_id
+          WHERE comm3.thread_id = m.thread_id
+            AND comm3.message_id IS NULL
+            AND comm3.email_id IS NULL
+        )
+      )`;
+
+/**
+ * Global analogue of `buildTextThreadNameQuery`: named GROUP threads linked to
+ * ANY transaction, one row per thread.
+ *
+ * BACKLOG-2863 SPLIT THE ATTRIBUTION OUT OF THIS QUERY. It no longer projects
+ * `attrTxnId` / `attrAddress`; `buildThreadNameAttributionQuery` resolves those
+ * one row at a time, and `searchGlobalContent` runs it only for the rows that
+ * survive the sibling collapse and the caller's limit — at most `limit` of them,
+ * against a join that previously ranked every linked message in the database.
+ *
+ * That relocation is invisible to the result: attribution is read by neither
+ * `threadCollapseKey` nor `compareThreadRows`, so it cannot influence which row
+ * survives a merge, and the surviving row carries its own message id to look it
+ * up with.
  */
 export function buildGlobalTextThreadNameQuery(
   userId: string,
@@ -712,7 +793,6 @@ export function buildGlobalTextThreadNameQuery(
   const ranked = `
     SELECT m.id AS id, m.participants AS participants, m.sent_at AS sentAt,
            tn.display_name AS threadDisplayName,
-           link.attrTxnId AS attrTxnId, link.attrAddress AS attrAddress,
            ROW_NUMBER() OVER (
              PARTITION BY m.thread_id
              ORDER BY m.sent_at DESC, m.id ASC
@@ -720,47 +800,73 @@ export function buildGlobalTextThreadNameQuery(
     FROM messages m
     JOIN message_thread_names tn
       ON tn.thread_id = m.thread_id AND tn.user_id = m.user_id
-    JOIN (
-      SELECT msg_id, transaction_id AS attrTxnId, property_address AS attrAddress
-      FROM (
-        SELECT ml.msg_id AS msg_id, ml.transaction_id AS transaction_id,
-               t.property_address AS property_address,
-               ROW_NUMBER() OVER (
-                 PARTITION BY ml.msg_id
-                 ORDER BY ml.linked_at ASC, ml.comm_id ASC
-               ) AS rn
-        FROM (
-          SELECT comm.message_id AS msg_id, comm.transaction_id AS transaction_id,
-                 comm.linked_at AS linked_at, comm.id AS comm_id
-          FROM communications comm
-          WHERE comm.message_id IS NOT NULL AND comm.transaction_id IS NOT NULL
-          UNION ALL
-          SELECT m3.id AS msg_id, comm3.transaction_id AS transaction_id,
-                 comm3.linked_at AS linked_at, comm3.id AS comm_id
-          FROM messages m3
-          JOIN communications comm3 ON comm3.thread_id = m3.thread_id
-          WHERE comm3.message_id IS NULL
-            AND comm3.email_id IS NULL
-            AND comm3.thread_id IS NOT NULL
-            AND comm3.transaction_id IS NOT NULL
-        ) ml
-        JOIN transactions t ON t.id = ml.transaction_id
-      ) rankedLink
-      WHERE rankedLink.rn = 1
-    ) link ON link.msg_id = m.id
     WHERE m.user_id = ?
       AND m.channel IN ('sms', 'imessage')
       AND ${reactionExclusion("m")}
       AND ${GROUP_THREAD_PREDICATE}
-      AND tn.display_name LIKE ? ESCAPE '\\'`;
+      AND tn.display_name LIKE ? ESCAPE '\\'
+      AND ${GLOBAL_THREAD_LINKAGE_EXISTS}`;
 
   return {
     sql: `${MARK.textThreads}
-    SELECT id, participants, sentAt, threadDisplayName, attrTxnId, attrAddress
+    SELECT id, participants, sentAt, threadDisplayName
     FROM (${ranked})
     WHERE rn = 1
     ORDER BY sentAt DESC`,
     params: [userId, pat],
+  };
+}
+
+/**
+ * BACKLOG-2863: the transaction ONE message is attributed to — the primary,
+ * meaning earliest-linked, one.
+ *
+ * This is the old `link` derived table with its PARTITION restricted to a single
+ * message: the same `UNION ALL` of direct (`communications.message_id`) and
+ * thread-batch (`communications.thread_id`) links, the same `JOIN transactions`,
+ * and the same `ROW_NUMBER() ... ORDER BY linked_at ASC, comm_id ASC` tie-break,
+ * kept as a window function rather than an `ORDER BY ... LIMIT 1` so the ranking
+ * is transcribed from the original rather than restated in a second dialect.
+ *
+ * `comm_id` breaks every tie because `communications.id` is a primary key and
+ * the two UNION branches are disjoint (one takes `message_id IS NOT NULL`, the
+ * other `message_id IS NULL`), so no `communications` row can appear twice for
+ * one message.
+ *
+ * The SQL is INVARIANT — only the bound message id changes — so callers prepare
+ * it once and step it per row.
+ */
+export function buildThreadNameAttributionQuery(
+  messageId: string,
+): ThreadNameBuiltQuery {
+  return {
+    sql: `${MARK.textThreadsAttribution}
+    SELECT attrTxnId, attrAddress
+    FROM (
+      SELECT ml.transaction_id AS attrTxnId, t.property_address AS attrAddress,
+             ROW_NUMBER() OVER (
+               ORDER BY ml.linked_at ASC, ml.comm_id ASC
+             ) AS rn
+      FROM (
+        SELECT comm.transaction_id AS transaction_id, comm.linked_at AS linked_at,
+               comm.id AS comm_id
+        FROM communications comm
+        WHERE comm.message_id = ? AND comm.transaction_id IS NOT NULL
+        UNION ALL
+        SELECT comm3.transaction_id AS transaction_id, comm3.linked_at AS linked_at,
+               comm3.id AS comm_id
+        FROM messages m3
+        JOIN communications comm3 ON comm3.thread_id = m3.thread_id
+        WHERE m3.id = ?
+          AND comm3.message_id IS NULL
+          AND comm3.email_id IS NULL
+          AND comm3.thread_id IS NOT NULL
+          AND comm3.transaction_id IS NOT NULL
+      ) ml
+      JOIN transactions t ON t.id = ml.transaction_id
+    )
+    WHERE rn = 1`,
+    params: [messageId, messageId],
   };
 }
 
@@ -1208,6 +1314,31 @@ function shapeAttribution(row: RawAttribution): TransactionAttribution | null {
   return row.attrTxnId
     ? { transactionId: row.attrTxnId, propertyAddress: row.attrAddress ?? "" }
     : null;
+}
+
+/**
+ * BACKLOG-2863: a per-message attribution lookup that prepares its statement
+ * ONCE and steps it per row.
+ *
+ * The statement is cached rather than re-prepared because `db.prepare` compiles
+ * SQL and better-sqlite3 does not cache it for us; the SQL here is invariant
+ * (only the bound id changes), so one compile serves the whole result set.
+ *
+ * A row that resolves to nothing yields `null`, the same shape the old LEFT-less
+ * join produced for a message with no surviving link. In practice the row query's
+ * linkage EXISTS has already guaranteed a link exists — the two use the same
+ * `JOIN transactions` rule — so this is a guard, not a path the data takes.
+ */
+function threadAttributionResolver(
+  db: SearchableDb,
+): (messageId: string) => TransactionAttribution | null {
+  let stmt: ReturnType<SearchableDb["prepare"]> | null = null;
+  return (messageId: string) => {
+    const built = buildThreadNameAttributionQuery(messageId);
+    stmt ??= db.prepare(built.sql);
+    const row = stmt.get(...built.params) as RawAttribution | undefined;
+    return row ? shapeAttribution(row) : null;
+  };
 }
 
 /**
@@ -1735,11 +1866,25 @@ export function searchGlobalContent(
     buildGlobalTextQuery(userId, query, limit),
     shapeGlobalText,
   );
-  const groupChats = runThreadNameGroup<RawThreadNameRow & RawAttribution, GlobalTextHit>(
+  // BACKLOG-2863: attribution is resolved ROW BY ROW, and only for the rows a
+  // user will actually see. `runThreadNameGroup` applies `shape` AFTER the
+  // sibling collapse and after `limit`, so this runs at most `limit` times (20 by
+  // default) against a prepared statement — where the query it replaced ranked
+  // every transaction-linked message in the database on every keystroke.
+  //
+  // Resolving it here rather than in the row query cannot change a result:
+  // neither `threadCollapseKey` nor `compareThreadRows` reads attribution, so it
+  // cannot decide which sibling survives, and the survivor carries the message id
+  // its attribution is looked up by.
+  const resolveThreadAttribution = threadAttributionResolver(db);
+  const groupChats = runThreadNameGroup<RawThreadNameRow, GlobalTextHit>(
     db,
     buildGlobalTextThreadNameQuery(userId, query),
     limit,
-    (row) => ({ ...shapeThreadName(row), attribution: shapeAttribution(row) }),
+    (row) => ({
+      ...shapeThreadName(row),
+      attribution: resolveThreadAttribution(row.id),
+    }),
   );
 
   // Unattached bucket = emails + texts with no communications row. Two queries,
