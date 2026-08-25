@@ -1,4 +1,9 @@
 import axios, { AxiosRequestConfig } from "axios";
+import {
+  FetchCancelledError,
+  isFetchCancelledError,
+  throwIfCancelled,
+} from "../utils/fetchCancellation";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
@@ -237,6 +242,12 @@ interface EmailSearchOptions {
   skip?: number;
   contactEmails?: string[];
   onProgress?: (progress: FetchProgress) => void;
+  /**
+   * BACKLOG-2856: cancellation signal. When it fires, paging stops at the next
+   * page boundary and the in-flight HTTP request is aborted; the call RETURNS
+   * WHAT IT HAS rather than throwing (see `utils/fetchCancellation.ts` for why).
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -416,9 +427,18 @@ class OutlookFetchService {
     data: any = null,
     isRetry: boolean = false,
     extraHeaders?: Record<string, string>,
+    // BACKLOG-2856: the caller's cancellation signal. Optional, and every
+    // existing caller omits it — only the pre-cache paths thread one through.
+    signal?: AbortSignal,
   ): Promise<T> {
+    // BACKLOG-2856: checked BEFORE the throttler and again after it. The
+    // throttler can hold a request for hundreds of milliseconds, so a cancel
+    // arriving during that wait would otherwise be spent issuing a request the
+    // user has already asked us not to make.
+    throwIfCancelled(signal, `graphRequest:${endpoint}`);
     // Throttle requests to avoid rate limiting (BACKLOG-497)
     await apiThrottlers.microsoftGraph.throttle();
+    throwIfCancelled(signal, `graphRequest:${endpoint}`);
 
     const retryOptions: RetryOptions = {
       maxRetries: 5,
@@ -445,6 +465,10 @@ class OutlookFetchService {
           },
           // TASK-2056: 15-second timeout to prevent hanging when offline
           timeout: 15000,
+          // BACKLOG-2856: aborts the request IN FLIGHT. Without this the signal
+          // could only ever be honoured between requests, so a cancel during a
+          // slow page still paid for that page in full.
+          signal,
         };
 
         if (data) {
@@ -454,6 +478,17 @@ class OutlookFetchService {
         const response = await axios(config);
         return response.data;
       } catch (error: unknown) {
+        // BACKLOG-2856 — FIRST, ahead of every other classification.
+        //
+        // axios rejects an aborted request with `CanceledError`, but the branches
+        // below (and `isRetryableError`, and `isNetworkError`) read status codes
+        // and error codes, and `ECONNABORTED` — a plain axios TIMEOUT — is in
+        // NETWORK_ERROR_CODES. Letting a cancel fall into those would turn the
+        // user's Cancel into a retry storm. Asking the signal we passed is the
+        // one test that cannot drift with a library version.
+        if (signal?.aborted) {
+          throw new FetchCancelledError(`graphRequest:${endpoint}`);
+        }
         // TASK-2273: Sentry breadcrumbs for Graph API errors
         const axiosErr = error as {
           response?: { status?: number; headers?: Record<string, string>; data?: { error?: { code?: string; message?: string } } };
@@ -524,7 +559,7 @@ class OutlookFetchService {
 
               logService.info("Token refreshed successfully", "OutlookFetch");
               // Retry the request with new token (mark as retry to avoid infinite loop)
-              return this._graphRequest<T>(endpoint, method, data, true);
+              return this._graphRequest<T>(endpoint, method, data, true, extraHeaders, signal);
             } catch (refreshError) {
               logService.error("Token refresh failed", "OutlookFetch", {
                 error: refreshError,
@@ -564,6 +599,7 @@ class OutlookFetchService {
     skip: initialSkip = 0,
     contactEmails,
     onProgress,
+    signal,
   }: EmailSearchOptions = {}): Promise<ParsedEmail[]> {
     try {
       if (!this.accessToken) {
@@ -633,7 +669,7 @@ class OutlookFetchService {
             .join("&");
           const countData = await this._graphRequest<
             GraphApiResponse<GraphMessage>
-          >(`/me/messages?${countParams}`);
+          >(`/me/messages?${countParams}`, "GET", null, false, undefined, signal);
           estimatedTotal = countData["@odata.count"] || 0;
           logService.info(
             `Estimated total emails: ${estimatedTotal}`,
@@ -674,6 +710,7 @@ class OutlookFetchService {
           `/me/messages?${initialParams}`,
           `searchEmails $search`,
           maxResults,
+          signal,
           onProgress
             ? (accumulated) => {
                 const currentTotal = hasEstimate ? targetTotal : accumulated;
@@ -699,9 +736,29 @@ class OutlookFetchService {
             .filter(Boolean)
             .join("&");
 
-          const data = await this._graphRequest<GraphApiResponse<GraphMessage>>(
-            `/me/messages?${queryParams}`,
-          );
+          let data: GraphApiResponse<GraphMessage>;
+          try {
+            data = await this._graphRequest<GraphApiResponse<GraphMessage>>(
+              `/me/messages?${queryParams}`,
+              "GET",
+              null,
+              false,
+              undefined,
+              signal,
+            );
+          } catch (error) {
+            // BACKLOG-2856 — the cancel boundary for this loop.
+            //
+            // `_graphRequest` throws `FetchCancelledError` the moment it sees an
+            // aborted signal (before AND after the throttler, and again if axios
+            // rejects an in-flight request), so this catch is where every page
+            // loop stops. Keeping the pages already accumulated is deliberate: a
+            // cancel means "stop doing more work", not "discard the work already
+            // paid for", and the caller reads the shortfall as the proof the
+            // cancel did something.
+            if (isFetchCancelledError(error)) break;
+            throw error;
+          }
           const messages = data.value || [];
           allMessages.push(...messages);
           skip += pageSize;
@@ -757,7 +814,13 @@ class OutlookFetchService {
       // BACKLOG-1802 (design §3/§4): a KQL $search can surface stale index hits.
       // Existence-validate server-side and drop anything the server no longer has,
       // so a $search-sourced row is never stored as a ghost.
-      if (searchParam && parsed.length > 0) {
+      // BACKLOG-2856: a cancelled run skips the extra existence round-trip. It
+      // exists to drop stale $search hits; spending more requests to polish a
+      // result the user has just asked us to stop building is the opposite of
+      // what Cancel means. (The pre-cache path never reaches here — it passes no
+      // `query`, so `searchParam` is empty — but the guard belongs with the loop
+      // checks rather than resting on that.)
+      if (searchParam && parsed.length > 0 && !signal?.aborted) {
         const live = await this.validateMessageIdsExist(parsed.map((e) => e.id));
         const before = parsed.length;
         parsed = parsed.filter((e) => live.has(e.id));
@@ -938,6 +1001,8 @@ class OutlookFetchService {
     initialEndpoint: string,
     context: string,
     maxResults?: number,
+    // BACKLOG-2856: stop following @odata.nextLink once the user cancels.
+    signal?: AbortSignal,
     onPage?: (accumulated: number) => void,
   ): Promise<GraphMessage[]> {
     const all: GraphMessage[] = [];
@@ -948,8 +1013,21 @@ class OutlookFetchService {
     while (endpoint) {
       pageCount++;
       const currentEndpoint: string = endpoint;
-      const data: GraphApiResponse<GraphMessage> =
-        await this._graphRequest<GraphApiResponse<GraphMessage>>(currentEndpoint);
+      let data: GraphApiResponse<GraphMessage>;
+      try {
+        data = await this._graphRequest<GraphApiResponse<GraphMessage>>(
+          currentEndpoint,
+          "GET",
+          null,
+          false,
+          undefined,
+          signal,
+        );
+      } catch (error) {
+        // Cancelled mid-page: keep the pages already accumulated and stop.
+        if (isFetchCancelledError(error)) break;
+        throw error;
+      }
       const messages = data.value || [];
       all.push(...messages);
       onPage?.(all.length);
@@ -1531,7 +1609,11 @@ class OutlookFetchService {
    */
   async discoverFolders(
     parentId?: string,
-    maxDepth: number = 5
+    maxDepth: number = 5,
+    // BACKLOG-2856: folder discovery is the FIRST thing a multi-folder fetch
+    // does and it recurses; a cancel arriving here must not have to wait for the
+    // whole tree to be walked before anything notices.
+    signal?: AbortSignal
   ): Promise<Array<{ id: string; displayName: string; parentFolderId?: string }>> {
     try {
       if (!this.accessToken) {
@@ -1547,12 +1629,29 @@ class OutlookFetchService {
         ? `/me/mailFolders/${parentId}/childFolders?$select=id,displayName,parentFolderId,childFolderCount`
         : `/me/mailFolders?$select=id,displayName,parentFolderId,childFolderCount&$top=100`;
 
-      const data = await this._graphRequest<GraphApiResponse<{
+      let data: GraphApiResponse<{
         id: string;
         displayName: string;
         parentFolderId?: string;
         childFolderCount?: number;
-      }>>(endpoint);
+      }>;
+      try {
+        data = await this._graphRequest<GraphApiResponse<{
+          id: string;
+          displayName: string;
+          parentFolderId?: string;
+          childFolderCount?: number;
+        }>>(endpoint, "GET", null, false, undefined, signal);
+      } catch (error) {
+        // BACKLOG-2856: returns EMPTY rather than rethrowing, so
+        // `searchAllFolders` sees "no folders to walk" and finishes normally.
+        // Rethrowing would escape through `searchAllFolders`'s catch into
+        // `precacheEmails`, where a cancel would be logged as an Outlook
+        // FAILURE — telling the user their re-cache broke when in fact they
+        // stopped it.
+        if (isFetchCancelledError(error)) return [];
+        throw error;
+      }
 
       const folders = data.value || [];
       const allFolders: Array<{ id: string; displayName: string; parentFolderId?: string }> = [];
@@ -1584,12 +1683,17 @@ class OutlookFetchService {
           parentFolderId: folder.parentFolderId,
         });
 
+        // BACKLOG-2856: stop descending once cancelled. Without this the tree
+        // walk continues to the bottom before anyone looks at the signal.
+        if (signal?.aborted) break;
+
         // Recurse into child folders if any
         if (folder.childFolderCount && folder.childFolderCount > 0) {
           try {
             const childFolders = await this.discoverFolders(
               folder.id,
-              maxDepth - 1
+              maxDepth - 1,
+              signal
             );
             allFolders.push(...childFolders);
           } catch (childError) {
@@ -1642,6 +1746,8 @@ class OutlookFetchService {
       before?: Date | null;
       maxResults?: number;
       onProgress?: (progress: FetchProgress & { folder?: string }) => void;
+      /** BACKLOG-2856: stop paging this folder when the user cancels. */
+      signal?: AbortSignal;
     } = {}
   ): Promise<ParsedEmail[]> {
     try {
@@ -1649,7 +1755,7 @@ class OutlookFetchService {
         throw new Error("Outlook API not initialized. Call initialize() first.");
       }
 
-      const { after = null, before = null, maxResults = 200, onProgress } = options;
+      const { after = null, before = null, maxResults = 200, onProgress, signal } = options;
 
       const selectFields =
         "$select=id,subject,from,toRecipients,ccRecipients,bccRecipients,receivedDateTime,sentDateTime,hasAttachments,body,bodyPreview,conversationId,inferenceClassification,parentFolderId,internetMessageId,internetMessageHeaders,categories";
@@ -1679,9 +1785,24 @@ class OutlookFetchService {
           .filter(Boolean)
           .join("&");
 
-        const data = await this._graphRequest<GraphApiResponse<GraphMessage>>(
-          `/me/mailFolders/${folderId}/messages?${queryParams}`
-        );
+        let data: GraphApiResponse<GraphMessage>;
+        try {
+          data = await this._graphRequest<GraphApiResponse<GraphMessage>>(
+            `/me/mailFolders/${folderId}/messages?${queryParams}`,
+            "GET",
+            null,
+            false,
+            undefined,
+            signal,
+          );
+        } catch (error) {
+          // Cancelled mid-page. Returning the partial accumulation rather than
+          // rethrowing matters MORE here than anywhere else: the caller's
+          // per-folder `try/catch` logs and moves to the NEXT folder, so a throw
+          // would be swallowed and the walk would carry on regardless.
+          if (isFetchCancelledError(error)) break;
+          throw error;
+        }
         const messages = data.value || [];
 
         allMessages.push(...messages);
@@ -1735,6 +1856,8 @@ class OutlookFetchService {
       before?: Date | null;
       maxResults?: number;
       onProgress?: (progress: FetchProgress & { folder?: string; currentFolder?: string }) => void;
+      /** BACKLOG-2856: stop between folders, and inside each folder's paging. */
+      signal?: AbortSignal;
     } = {}
   ): Promise<ParsedEmail[]> {
     try {
@@ -1742,7 +1865,7 @@ class OutlookFetchService {
         throw new Error("Outlook API not initialized. Call initialize() first.");
       }
 
-      const folders = await this.discoverFolders();
+      const folders = await this.discoverFolders(undefined, 5, options.signal);
       logService.info(
         `Starting multi-folder fetch across ${folders.length} folders`,
         "OutlookFetch"
@@ -1752,11 +1875,25 @@ class OutlookFetchService {
       const allEmails: ParsedEmail[] = [];
 
       for (const folder of folders) {
+        // BACKLOG-2856 — THE BETWEEN-FOLDER CHECK.
+        //
+        // This is the boundary the founder's 28.3-second cancel was waiting on.
+        // `precacheEmails` consults its signal between the inbox round and the
+        // all-folders round, but ONE all-folders call walks every folder, so a
+        // cancel during it was not seen until the last folder had finished.
+        if (options.signal?.aborted) {
+          logService.info(
+            `Multi-folder fetch cancelled after ${allEmails.length} email(s)`,
+            "OutlookFetch"
+          );
+          break;
+        }
         try {
           const emails = await this.searchEmailsByFolder(folder.id, {
             after: options.after,
             before: options.before,
             maxResults: options.maxResults,
+            signal: options.signal,
             onProgress: options.onProgress
               ? (progress) => {
                   options.onProgress!({

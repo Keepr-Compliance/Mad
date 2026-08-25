@@ -210,7 +210,7 @@ describe("GmailFetchService", () => {
         userId: "me",
         q: "test",
         maxResults: 100,
-      });
+      }, { signal: undefined });
       expect(results).toHaveLength(2);
     });
 
@@ -226,7 +226,7 @@ describe("GmailFetchService", () => {
         userId: "me",
         q: expect.stringContaining(`after:${expectedAfter}`),
         maxResults: 100,
-      });
+      }, { signal: undefined });
     });
 
     // BACKLOG-2252 (SR fast-follow to BACKLOG-2247): the Attach Emails date range
@@ -257,7 +257,7 @@ describe("GmailFetchService", () => {
         userId: "me",
         q: expect.stringContaining(`before:${expectedBefore}`),
         maxResults: 100,
-      });
+      }, { signal: undefined });
 
       // ...and must NOT collapse to the day-granular midnight epoch (the bug 2247 fixed).
       const actualQuery = mockMessagesList.mock.calls[0][0].q as string;
@@ -271,7 +271,7 @@ describe("GmailFetchService", () => {
         userId: "me",
         q: "",
         maxResults: 50,
-      });
+      }, { signal: undefined });
     });
 
     it("should handle empty search results", async () => {
@@ -364,7 +364,7 @@ describe("GmailFetchService", () => {
         userId: "me",
         id: "msg-123",
         format: "full",
-      });
+      }, { signal: undefined });
       expect(result.id).toBe("msg-123");
       expect(result.subject).toBe("Test Email");
     });

@@ -236,7 +236,8 @@ describe("GmailFetchService - Label Discovery (TASK-2046)", () => {
         expect.objectContaining({
           userId: "me",
           labelIds: ["Label_1"],
-        })
+        }),
+        { signal: undefined },
       );
       expect(emails).toHaveLength(1);
       expect(emails[0].id).toBe("msg-1");
@@ -253,7 +254,8 @@ describe("GmailFetchService - Label Discovery (TASK-2046)", () => {
       expect(mockMessagesList).toHaveBeenCalledWith(
         expect.objectContaining({
           q: expect.stringContaining("after:"),
-        })
+        }),
+        { signal: undefined },
       );
     });
 
@@ -296,7 +298,8 @@ describe("GmailFetchService - Label Discovery (TASK-2046)", () => {
       expect(mockMessagesList).toHaveBeenCalledWith(
         expect.objectContaining({
           maxResults: 50,
-        })
+        }),
+        { signal: undefined },
       );
     });
 
@@ -502,7 +505,8 @@ describe("GmailFetchService - Label Discovery (TASK-2046)", () => {
       expect(mockMessagesList).toHaveBeenCalledWith(
         expect.objectContaining({
           q: expect.stringContaining("after:"),
-        })
+        }),
+        { signal: undefined },
       );
     });
 
