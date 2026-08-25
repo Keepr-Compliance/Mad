@@ -596,8 +596,32 @@ describe("BACKLOG-2853 · LIVE_RLS disposition (anon key + user session, the des
 
     const before = idSet(fake.submissions);
     (supabaseStorageService.uploadAttachments as jest.Mock).mockClear();
+    fake.maybeSingleLookups = [];
 
     const result = await submissionService.submitTransaction(TX);
+
+    /**
+     * THE MECHANISM THIS TEST IS NAMED AFTER, ASSERTED FIRST — because none of
+     * the outcome assertions below can prove it.
+     *
+     * MEASURED, control F2 (BACKLOG-2868): swapping the producer-derived
+     * fixture for the invented single version-1 `resubmitted` row left every
+     * assertion below GREEN. With one row the guard IS reached — `resubmitted`
+     * simply is not on the list — so execution falls through to the same upload
+     * and the same duplicate-key error. Identical outcome, opposite mechanism: a
+     * test whose title promised "never REACHED" while its assertions could not
+     * tell reached from not-reached. That is the same shape of uninformative
+     * green this whole correction is about, one level up.
+     *
+     * So the load-bearing claim is the lookup itself: it matched TWO rows, which
+     * is the PGRST116 branch, which is why `existingSubmission` is null and the
+     * `if (existingSubmission)` block never executes.
+     */
+    const guardLookup = fake.maybeSingleLookups.find(
+      (l) => l.table === "transaction_submissions"
+    );
+    expect(guardLookup).toBeDefined();
+    expect(guardLookup?.matched).toBe(2);
 
     expect(result.success).toBe(false);
 
