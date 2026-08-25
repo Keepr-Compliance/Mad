@@ -10,10 +10,6 @@
  *    from a hung app, for an operation that deletes the email cache.
  * 2. "i don't see the cancel button" — the service handled cancellation safely
  *    but nothing could trigger one.
- * 3. "did you put it on a different branch that doesn't have the need review?"
- *    The force re-cache emptied the Needs Review queue and the confirmation
- *    never said it would, so the founder concluded the app was broken.
- *
  * The bar and the Cancel control are asserted for BOTH buttons, because the
  * ordinary Re-cache is equally silent and now has the BACKLOG-2857 repair pass
  * in front of it.
@@ -24,7 +20,6 @@ import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { EmailSettings } from "../EmailSettings";
-import { FORCE_RECACHE_LOSSES } from "../forceRecacheWarning";
 
 jest.mock("../../../contexts/NetworkContext", () => ({
   useNetwork: () => ({ isOnline: true }),
@@ -257,37 +252,14 @@ describe("BACKLOG-2856 — the Cancel control", () => {
   });
 });
 
-describe("BACKLOG-2856 — the confirmation enumerates what is destroyed", () => {
+describe("BACKLOG-2856 — the confirmation dialog is unchanged and still gates the run", () => {
   /**
-   * THE FOUNDER'S THIRD REPORT.
-   *
-   * The old copy named the transaction links and stopped. He read it, accepted
-   * it, ran the re-cache, lost his Needs Review queue and reported the section
-   * as broken. Every category the blast-radius suite proves is destroyed must
-   * appear here — and vaguely gesturing at "some data" would fail the same way
-   * the original text did.
-   *
-   * MUTATION: remove any entry from FORCE_RECACHE_LOSSES -> RED here and in
-   * `emailSyncService.forceRecacheBlastRadius-2856`.
+   * The dialog itself is deliberately untouched by this PR (founder ruling: a
+   * force operation is meant to be destructive, and the review items rebuild
+   * themselves). This is regression cover only — the progress and Cancel work
+   * edits the same component, so the back-out path is pinned to prove it still
+   * starts nothing.
    */
-  it("shows every declared loss in the dialog the user actually reads", async () => {
-    const user = userEvent.setup();
-    renderPanel();
-    await waitFor(() => expect(screen.getByTestId("force-recache-emails")).toBeInTheDocument());
-
-    await user.click(screen.getByTestId("force-recache-emails"));
-
-    const list = screen.getByTestId("force-recache-losses");
-    expect(FORCE_RECACHE_LOSSES.length).toBe(3);
-    for (const loss of FORCE_RECACHE_LOSSES) {
-      expect(list).toHaveTextContent(loss.text);
-    }
-    // The three losses named in the founder's own terms.
-    expect(list).toHaveTextContent(/unlinked from their transactions/i);
-    expect(list).toHaveTextContent(/Needs Review queue will be emptied/i);
-    expect(list).toHaveTextContent(/decisions you already made/i);
-  });
-
   it("still lets the user back out, and does not run anything on cancel", async () => {
     const user = userEvent.setup();
     renderPanel();

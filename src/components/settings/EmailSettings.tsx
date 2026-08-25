@@ -8,11 +8,6 @@ import { settingsService, authService } from '../../services';
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { ResponsiveModal } from "../common/ResponsiveModal";
-import {
-  FORCE_RECACHE_LOSSES,
-  FORCE_RECACHE_WARNING_LEAD,
-  FORCE_RECACHE_WARNING_TAIL,
-} from "./forceRecacheWarning";
 import type { Connections, ConnectionResult, PreferencesResult } from './types';
 
 // Refresh interval for connection status (60 seconds)
@@ -808,23 +803,13 @@ export function EmailSettings({
               Re-cache all emails?
             </h3>
           </div>
-          {/* BACKLOG-2856: the losses are ENUMERATED, not summarised.
-              The previous copy named only the transaction links, so the founder
-              ran it, lost his Needs Review queue, and reported the section as
-              broken — the warning had been read and accepted, and was simply
-              incomplete. A vague "some data may be affected" would fail the same
-              way; each category the swap measurably destroys is listed, and the
-              blast-radius suite holds this list to what the swap actually does. */}
-          <p className="text-sm text-gray-600 mb-3">{FORCE_RECACHE_WARNING_LEAD}</p>
-          <ul
-            className="text-sm text-gray-600 mb-4 list-disc pl-5 space-y-1.5"
-            data-testid="force-recache-losses"
-          >
-            {FORCE_RECACHE_LOSSES.map((loss) => (
-              <li key={loss.key}>{loss.text}</li>
-            ))}
-          </ul>
-          <p className="text-sm text-gray-600 mb-6">{FORCE_RECACHE_WARNING_TAIL}</p>
+          <p className="text-sm text-gray-600 mb-6">
+            This re-downloads every email in your cache window from scratch and
+            will <strong>unlink your emails from their transactions</strong> —
+            you&rsquo;ll need to re-attach them afterward. Any review decisions on
+            those emails are lost, and attachments are re-downloaded when you next
+            open or export them. This can take a while.
+          </p>
           <div className="flex items-center gap-3 justify-end">
             <button
               onClick={() => {
