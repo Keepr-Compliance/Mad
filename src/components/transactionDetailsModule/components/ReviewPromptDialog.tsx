@@ -13,24 +13,32 @@
  *                  (founder walk, 2026-08-23) — with nothing queued there is
  *                  nothing to review now and nothing to defer.
  *
- *   P3 "blocked" — the Complete gate:
- *                  "You have N communications that need to be reviewed before
- *                   completing the transaction" [Review] [Cancel]
+ *   P3 "blocked" — the gate on Complete AND on every export route (2866):
+ *                  "You have N communications that need to be reviewed first."
+ *                  [Review] [Cancel]
+ *                  The sentence names no action, by founder ruling (2881), so
+ *                  one wording can serve routes that are not all completions.
  *                  There is NO bypass. The only affirmative action opens the
  *                  review screen.
  */
 import React from "react";
-// BACKLOG-2866: the blocked copy moved to the gate module BYTE-IDENTICAL, so the
-// bulk-export refusal says the same thing as this dialog. One condition, one
-// wording.
+// BACKLOG-2866: the blocked copy lives in the gate module, so the bulk-export
+// refusal says the same thing as this dialog. One condition, one wording.
 //
-// PROOF THE EXTRACTION DID NOT DRIFT: the "blocked" variant had NO pre-existing
-// test — reviewFounderFeedback-2791 covers only variant="found" — so "the old
-// tests still pass" would have proved nothing here. Instead the rendered
-// textContent of variant="blocked" was captured at counts 1, 3 and -1 both
-// before and after the extraction and diffed: identical, to the byte. It is
-// pinned going forward by the transcription test in
-// `src/services/__tests__/exportReviewGate-2866.test.ts`.
+// BACKLOG-2881 THEN CHANGED THAT WORDING DELIBERATELY. The 2866 extraction was
+// byte-identical; the founder's later ruling dropped the action from the
+// sentence ("...before completing the transaction" → "...reviewed first"),
+// because export from the brokerage-only header completes nothing. The full
+// reasoning is in the gate module. Do not reinstate the old sentence here or
+// anywhere else — `exportReviewGateCopy-2881.test.tsx` asserts that no string
+// these builders return names the action.
+//
+// WHY THE PIN IS A TEST AND NEVER "the old suites still pass": the "blocked"
+// variant had NO pre-existing test — reviewFounderFeedback-2791 covers only
+// variant="found" — so a green run proved nothing about this copy on either
+// change. It is pinned by the transcription tests in
+// `src/services/__tests__/exportReviewGate-2866.test.ts` and
+// `src/services/__tests__/exportReviewGateCopy-2881.test.tsx`.
 import { reviewBlockedBody, reviewBlockedTitle } from "@/services/exportReviewGate";
 
 export type ReviewPromptVariant = "found" | "blocked";
