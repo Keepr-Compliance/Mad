@@ -105,7 +105,6 @@ jest.mock("../networkResilience", () => ({
   networkResilienceService: {},
 }));
 
-const CACHE_SINCE = new Date("2026-01-01T00:00:00Z");
 jest.mock("../../utils/preferenceHelper", () => ({
   getEmailCacheDurationMonths: jest.fn().mockResolvedValue(12),
   computeEmailCacheSinceDate: jest.fn(() => new Date("2026-01-01T00:00:00Z")),
@@ -134,13 +133,7 @@ jest.mock("../logService", () => ({
 }));
 
 import emailSyncService from "../emailSyncService";
-import { CURRENT_DERIVATION_VERSION } from "../../utils/derivationVersion";
-import {
-  EMAIL_STAGING_TABLE_PREFIX,
-  emailForceSwapSteps,
-  sweepStaleEmailStaging,
-} from "../emailForceStaging";
-import { sweepStaleStaging } from "../macOSMessagesImportService/forceStaging";
+import { EMAIL_STAGING_TABLE_PREFIX } from "../emailForceStaging";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "database", "schema.sql");
 const USER = "user-force";
@@ -259,17 +252,7 @@ function seedEmail(args: {
   );
 }
 
-const emailIdSet = (userId = USER): string[] =>
-  (db.prepare(`SELECT id FROM emails WHERE user_id = ? ORDER BY id`).all(userId) as Array<{
-    id: string;
-  }>).map((r) => r.id);
 
-const externalIdSet = (userId = USER): string[] =>
-  (
-    db
-      .prepare(`SELECT external_id FROM emails WHERE user_id = ? ORDER BY external_id`)
-      .all(userId) as Array<{ external_id: string | null }>
-  ).map((r) => r.external_id ?? "(null)");
 
 const externalIds = (userId = USER): string[] =>
   (
