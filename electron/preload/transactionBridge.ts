@@ -11,7 +11,10 @@ import type {
   ExportContentType,
   ExportEmailMode,
 } from "../types/ipc/window-api-transactions";
-import type { EmailPrecacheProgress } from "../services/emailPrecacheProgress";
+import {
+  EMAIL_PRECACHE_PROGRESS_CHANNEL,
+  type EmailPrecacheProgress,
+} from "../services/emailPrecacheProgress";
 
 /**
  * Options for scanning emails for transactions
@@ -546,9 +549,9 @@ export const transactionBridge = {
     const handler = (_event: Electron.IpcRendererEvent, progress: EmailPrecacheProgress) => {
       callback(progress);
     };
-    ipcRenderer.on("emails:precache-progress", handler);
+    ipcRenderer.on(EMAIL_PRECACHE_PROGRESS_CHANNEL, handler);
     return () => {
-      ipcRenderer.removeListener("emails:precache-progress", handler);
+      ipcRenderer.removeListener(EMAIL_PRECACHE_PROGRESS_CHANNEL, handler);
     };
   },
 
