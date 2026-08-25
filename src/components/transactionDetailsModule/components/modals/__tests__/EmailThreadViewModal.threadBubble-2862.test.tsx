@@ -203,6 +203,38 @@ describe("BACKLOG-2862 — the quoted chain is stripped", () => {
     expect(text.endsWith("PROSE-TAIL-SURVIVES")).toBe(true);
   });
 
+  it("fires on the founder's real Outlook path: HTML -> htmlToPlainText -> body_plain", () => {
+    // THE PATH THAT MATTERS, and it is not the one the fixtures above take.
+    // Post-BACKLOG-2855 Outlook mail has no text/plain part, so `body_plain` is
+    // DERIVED from the HTML by electron/utils/htmlToPlainText.ts. This matcher
+    // is line-based, so it only fires if that derivation puts `From:`/`Date:`
+    // on separate lines — if it flattened them, the strip would never run on
+    // the founder's own mail and the whole fix would be inert for him.
+    //
+    // The fixture below is TRANSCRIBED, not invented: it is the verbatim stdout
+    // of htmlToPlainText() run on an Outlook `divRplyFwdMsg` reply whose headers
+    // are `<b>From:</b> ... <br>` markup. Captured once and pasted here rather
+    // than imported, because electron/ must not be value-imported from a
+    // renderer-side module.
+    const derivedFromHtml = [
+      "Thanks Sam - Thursday at 9am suits us. NEWEST-SIGNOFF",
+      "From: Sam Fielding <sam@example.test>",
+      "Date: Saturday, June 1, 2026 at 9:12 AM",
+      "To: Dana Whitfield <dana@example.test>",
+      "Subject: Inspection scheduling",
+      "",
+      "The inspection is booked for Thursday. QUOTED-LEVEL-1",
+    ].join("\n");
+
+    // body_plain, NOT body_text — that is the column this path populates, and
+    // the bubble reads `body_text || body_plain`.
+    const { text } = renderBubble({ body_text: undefined, body_plain: derivedFromHtml });
+
+    expect(text).toContain("NEWEST-SIGNOFF");
+    expect(text).not.toContain("QUOTED-LEVEL-1");
+    expect(text).not.toContain("Subject: Inspection scheduling");
+  });
+
   it("keeps a bare forward rather than emptying the bubble", () => {
     // A forward with no words of the sender's own strips to nothing. The
     // forwarded message IS the content there, so "No content" would be a
