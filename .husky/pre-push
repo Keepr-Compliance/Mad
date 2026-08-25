@@ -159,6 +159,7 @@ fi
 # correct for a first push AND survives a force-push after a rebase, which
 # `remote_sha..local_sha` does not.
 all_files=""
+push_tips=""
 total_commits=0
 saw_ref=""
 
@@ -180,6 +181,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
 
   echo "[pre-push] $local_ref: $n commit(s) to push (base: $base_desc)"
+  push_tips="$push_tips $local_sha"
   f=$(git log --name-only --pretty=format: "$local_sha" --not $not_arg 2>/dev/null || true)
   all_files="$all_files
 $f"
@@ -197,6 +199,7 @@ if [ -z "$saw_ref" ]; then
   total_commits=$(git rev-list --count "$head_sha" --not $not_arg 2>/dev/null || echo 0)
   echo "[pre-push] No refs on stdin -- falling back to HEAD ($total_commits commit(s), base: $base_desc)"
   if [ "$total_commits" -gt 0 ]; then
+    push_tips="$head_sha"
     all_files=$(git log --name-only --pretty=format: "$head_sha" --not $not_arg 2>/dev/null || true)
   fi
 fi
@@ -226,15 +229,30 @@ fi
 #
 # THREE LIMITS, written down because a guard whose gaps are unstated gets
 # trusted past them:
-#   1. INTERMEDIATE COMMITS. This scans the WORKING TREE, not each commit in
-#      the pushed range. Fixing a finding in a NEW commit and pushing both
-#      still publishes the offending one. That is why the message below says
-#      amend/rebase -- do not soften it. It is PR #2314's exact shape.
+#   1. INTERMEDIATE COMMITS -- CLOSED FOR BARE UUIDS ONLY (BACKLOG-2871). The
+#      email / phone / name rules still scan the WORKING TREE, not each commit
+#      in the pushed range, so for those, fixing a finding in a NEW commit and
+#      pushing both still publishes the offending one. That is why the message
+#      below says amend/rebase -- do not soften it. It is PR #2314's exact
+#      shape. `--diff-range` below adds a second pass that reads EVERY commit
+#      being pushed, so the bare-uuid rule does not have this hole.
 #   2. UNTRACKED FILES are scanned, so a stray scratch file can block an
 #      unrelated push. PREPUSH_SKIP_PII exists for that, and announces itself.
 #   3. NUL BYTES. A file containing a raw NUL reads as binary and is skipped
 #      SILENTLY (BACKLOG-2657; how contactManualLink.ts hid for weeks,
 #      BACKLOG-2637). CI has the same hole, so this does not widen it.
+#
+# THE RANGE, and why this call is `node ...` and not `npm run check:pii`: the
+# scan needs the commits being pushed, and `npm run` cannot forward an argument
+# containing spaces without a second layer of quoting. `$push_tips --not
+# $not_arg` is the SAME exclusion spec the file collection above uses, so the
+# two can never disagree about what "being pushed" means.
+#
+# FAIL CLOSED. The script exits 2 -- not 0 -- when it cannot resolve the range,
+# and any non-zero blocks the push. This is the pre-publication gate, so "could
+# not check" must block; CI, which is post-publication, is allowed to degrade
+# loudly instead. The bare-uuid rule needs no network and no credentials, so
+# nothing here depends on being online.
 #
 # TIME: 1.24-1.31s user, 1.26-1.82s wall, constant regardless of diff size.
 # BACKLOG-2573 rewrote this hook because the old one made --no-verify routine
@@ -246,7 +264,8 @@ if [ "$total_commits" -gt 0 ] 2>/dev/null; then
            "This repository is PUBLIC and a pushed commit cannot be unpublished." \
            "Only for untracked scratch files unrelated to what you are pushing." \
            "Unset it and re-run before pushing anything you have not read."
-  elif ! npm run check:pii --silent; then
+  elif ! (cd "$repo_root" && node scripts/ci/check-fixture-pii.mjs \
+            --diff-range "$push_tips --not $not_arg"); then
     echo ""
     echo "[pre-push] PII scan failed. Push blocked."
     echo "[pre-push] This repository is PUBLIC -- a pushed commit cannot be unpublished."
@@ -262,6 +281,9 @@ if [ "$total_commits" -gt 0 ] 2>/dev/null; then
     echo "[pre-push]   phones  -> +1 <area> 555-01xx    (555-0100..555-0199)"
     echo "[pre-push] If the value IS invented, add it to FICTIONAL_NAMES in"
     echo "[pre-push] scripts/ci/check-fixture-pii.mjs -- never to the baseline."
+    echo "[pre-push]   UUIDs  -> replace it, or waive it ON THE LINE with"
+    echo "[pre-push]             // pii-allow-uuid: <why it is invented>"
+    echo "[pre-push]             (bare-uuid is NOT baselineable -- BACKLOG-2871)"
     exit 1
   fi
 fi
