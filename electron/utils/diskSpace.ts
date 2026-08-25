@@ -250,3 +250,167 @@ export function evaluateAttachmentSpace(
     headroomBytes,
   };
 }
+
+/* ==========================================================================
+ * BACKLOG-2870 — the DB-write half of the guard, and the words it says
+ * ==========================================================================
+ *
+ * Everything above this line guards the ATTACHMENT COPY. That is not what
+ * failed. The founder's force re-import died on a message INSERT with SQLite's
+ * `database or disk is full`, and nothing on the DB-write path looked at free
+ * space at all.
+ *
+ * The attachment guard could not have caught it, and must not be changed to try.
+ * `evaluateAttachmentSpace` returns `fits: true` at `estimatedBytes <= 0`, which
+ * is exactly what a force re-import of an already-imported library looks like —
+ * every attachment is content-deduped, so the estimate is zero and the guard is
+ * a no-op — but that early return is load-bearing for the re-sync case it
+ * documents, and weakening it would block routine imports forever. The DB-write
+ * path needs its own floor, which is what `DISK_SPACE_THRESHOLDS.messagesImport`
+ * and the two functions below provide.
+ */
+
+/** Bytes in a gibibyte / mebibyte, for the human-facing formatter below. */
+const BYTES_PER_GIB = 1024 * 1024 * 1024;
+const BYTES_PER_MIB = 1024 * 1024;
+
+/**
+ * Render a byte count the way a person reading a disk-space warning needs it:
+ * two significant places near the boundary, none of the false precision of
+ * "1.23456 GB", and MB rather than "0.1 GB" once the number gets small.
+ */
+export function formatSpace(bytes: number): string {
+  if (bytes >= BYTES_PER_GIB) {
+    const gb = bytes / BYTES_PER_GIB;
+    // 1.4 GB, but 14 GB — a tenth of a GB is noise once past ten.
+    return `${gb >= 10 ? Math.round(gb) : Math.round(gb * 10) / 10} GB`;
+  }
+  return `${Math.max(1, Math.round(bytes / BYTES_PER_MIB))} MB`;
+}
+
+/** Inputs to the ONE user-facing disk-space sentence. */
+export interface DiskShortfallCopy {
+  /** Bytes the operation needs free. */
+  requiredBytes: number;
+  /**
+   * Bytes actually available (`bavail`), or null when unreadable. A null drops
+   * the comparison rather than printing a placeholder.
+   */
+  availableBytes: number | null;
+  /**
+   * Local Time Machine snapshots on this volume, or null when unreadable.
+   * See `utils/localSnapshots.ts` for why this is a COUNT and never bytes.
+   */
+  snapshotCount: number | null;
+  /**
+   * `"before"` — refused up front, nothing was written.
+   * `"during"` — the disk filled mid-run, after the pre-flight had passed.
+   */
+  phase: "before" | "during";
+}
+
+/**
+ * The single builder for every disk-space sentence this feature shows.
+ *
+ * ONE function on purpose. The pre-flight refusal and the mid-run ENOSPC
+ * translation are two different moments telling the user the same fact, and if
+ * each wrote its own copy they would drift — one would carry the snapshot
+ * explanation and the other would not, and the one that did not is the one the
+ * founder would hit at 1am and disbelieve.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE SNAPSHOT CLAUSE CARRIES NO BYTE FIGURE
+ * ---------------------------------------------------------------------------
+ * Because the byte figure is not readable. Every macOS interface that could
+ * report snapshot-held bytes was enumerated (see `utils/localSnapshots.ts`) and
+ * none does. The only way to produce one is to subtract `bavail` from Finder's
+ * purgeable-inclusive capacity — a derived number, which also silently folds in
+ * caches and trash, presented to the user as a measurement. Quoting an invented
+ * "about 159 GB" to a person who is already doubting the app's numbers is the
+ * failure mode this whole item exists to fix, so the clause names the snapshot
+ * COUNT, which was genuinely read, and stops there.
+ *
+ * It also does NOT tell him to delete anything. The fact is his to act on.
+ */
+export function describeDiskShortfall(copy: DiskShortfallCopy): string {
+  const { requiredBytes, availableBytes, snapshotCount, phase } = copy;
+
+  const need = formatSpace(requiredBytes);
+  const opening =
+    phase === "before"
+      ? `Keepr needs about ${need} of free disk space to import your messages`
+      : `Keepr ran out of disk space while importing your messages, and stopped`;
+
+  const sentences: string[] = [];
+
+  if (phase === "before") {
+    sentences.push(
+      availableBytes === null
+        ? `${opening}.`
+        : `${opening}, but only ${formatSpace(availableBytes)} is actually available.`
+    );
+  } else {
+    sentences.push(
+      availableBytes === null
+        ? `${opening}. Nothing was changed — your existing messages are as they were.`
+        : `${opening} — only ${formatSpace(availableBytes)} is actually available. ` +
+            `Nothing was changed — your existing messages are as they were.`
+    );
+  }
+
+  // The clause that stops the true number reading as a lie. Omitted entirely
+  // when the count is unreadable (null) or when this Mac genuinely holds no
+  // snapshots (0) — in both cases there is nothing truthful to say here.
+  if (snapshotCount !== null && snapshotCount > 0) {
+    sentences.push(
+      `Your Mac may show more free space than this: ${snapshotCount} local Time Machine ` +
+        `${snapshotCount === 1 ? "snapshot is" : "snapshots are"} holding space that macOS ` +
+        `reports as free but apps cannot use until it reclaims them.`
+    );
+  }
+
+  return sentences.join(" ");
+}
+
+/**
+ * Does this error mean the volume is full?
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS EXISTS RATHER THAN REUSING THE ONE IN deviceSyncOrchestrator
+ * ---------------------------------------------------------------------------
+ * `deviceSyncOrchestrator.ts` already tests `/disk space|no space|ENOSPC|not
+ * enough space/i`. That pattern DOES NOT MATCH the error the founder actually
+ * saw. SQLite's message is `database or disk is full`: it contains no "disk
+ * space", no "no space", no "ENOSPC" and no "not enough space". The substring
+ * that matters — `disk is full` — is in none of the four alternatives.
+ *
+ * That is precisely how a raw driver error reached his screen untranslated, and
+ * it is why the exact string is pinned by test rather than trusted to a reading
+ * of the regex.
+ *
+ * Both spellings are matched because both occur: `SQLITE_FULL` /
+ * `database or disk is full` from the SQLite driver on a write, and
+ * `ENOSPC` / `no space left on device` from Node's fs on an attachment copy.
+ */
+export function isDiskFullError(error: unknown): boolean {
+  const haystack = [
+    error instanceof Error ? error.message : String(error ?? ""),
+    // better-sqlite3 carries the symbolic name on `.code` (SQLITE_FULL), and
+    // Node's fs errors carry ENOSPC there. The message alone is not always
+    // enough — a driver upgrade may reword the sentence but will not rename the
+    // result code.
+    typeof (error as { code?: unknown } | null)?.code === "string"
+      ? (error as { code: string }).code
+      : "",
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    haystack.includes("sqlite_full") ||
+    haystack.includes("disk is full") ||
+    haystack.includes("enospc") ||
+    haystack.includes("no space left on device") ||
+    haystack.includes("disk full")
+  );
+}
