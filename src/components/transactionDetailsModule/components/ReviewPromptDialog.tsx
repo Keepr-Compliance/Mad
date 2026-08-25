@@ -22,8 +22,15 @@
 import React from "react";
 // BACKLOG-2866: the blocked copy moved to the gate module BYTE-IDENTICAL, so the
 // bulk-export refusal says the same thing as this dialog. One condition, one
-// wording. The BACKLOG-2792 copy tests pass unmodified — that is the proof the
-// extraction did not drift.
+// wording.
+//
+// PROOF THE EXTRACTION DID NOT DRIFT: the "blocked" variant had NO pre-existing
+// test — reviewFounderFeedback-2791 covers only variant="found" — so "the old
+// tests still pass" would have proved nothing here. Instead the rendered
+// textContent of variant="blocked" was captured at counts 1, 3 and -1 both
+// before and after the extraction and diffed: identical, to the byte. It is
+// pinned going forward by the transcription test in
+// `src/services/__tests__/exportReviewGate-2866.test.ts`.
 import { reviewBlockedBody, reviewBlockedTitle } from "@/services/exportReviewGate";
 
 export type ReviewPromptVariant = "found" | "blocked";

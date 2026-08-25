@@ -132,9 +132,16 @@ describe("evaluateExportGate — both directions", () => {
 
 describe("copy — ONE wording for one condition", () => {
   it("keeps the BACKLOG-2792 P3 sentence byte-identical after extraction", () => {
-    // Transcribed from ReviewPromptDialog as it stood before the extraction.
-    // If either string drifts, the details dialog and the bulk refusal start
-    // telling the user two different things about the same queue.
+    // Transcribed from ReviewPromptDialog as it stood before the extraction,
+    // and VERIFIED against it: the dialog's rendered textContent for
+    // variant="blocked" at counts 1, 3 and -1 was captured on the base commit
+    // and on this one and diffed — identical, to the byte. That check was
+    // needed because the "blocked" variant had no pre-existing test of its own
+    // (reviewFounderFeedback-2791 covers only variant="found"), so passing the
+    // old suites would have proved nothing about this copy.
+    //
+    // If either string drifts from here, the details dialog and the bulk
+    // refusal start telling the user two different things about one queue.
     expect(reviewBlockedTitle(3)).toBe("Review needed before completing");
     expect(reviewBlockedBody(3)).toBe(
       "You have 3 communications that need to be reviewed before completing the transaction.",

@@ -7,13 +7,19 @@ red. A green check carries no information until it has been made to fail.
 Restores from an in-memory backup (never `git checkout --`, which stages the
 file and hides the revert).
 """
+import os
 import re
+import shutil
 import subprocess
 import sys
 
-ROOT = "/Users/daniel/Developer/Mad-task-2866"
-NPX = '/opt/homebrew/bin/npx'
-import os
+# Repo root, derived from this file's location — the worktree this was written
+# in is deleted after merge, so a hardcoded path would make the harness
+# unrunnable for anyone reproducing the controls.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NPX = shutil.which("npx")
+if NPX is None:
+    sys.exit("npx not found on PATH")
 ENV = dict(os.environ, ELECTRON_RUN_AS_NODE="1")
 
 SUITES = {
