@@ -34,7 +34,8 @@ import path from "path";
 import React from "react";
 import { render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import { TransactionHeader, SUBMISSION_STATUS_BADGE } from "../TransactionHeader";
+import { TransactionHeader, SUBMISSION_STATUS_TONE } from "../TransactionHeader";
+import { HEADER_BADGE_ROWS } from "./founderLabelTable-2869";
 import type { Transaction } from "@/types";
 
 jest.mock("@/contexts/LicenseContext", () => ({ useLicense: jest.fn() }));
@@ -96,21 +97,22 @@ function renderHeader(submissionStatus: string | undefined) {
 
 const badges = () => screen.queryAllByTestId("submission-status-badge");
 
-/** Every label the header can draw. Rival labels are derived from this. */
-const ALL_LABELS = ["Under Review", "Changes Requested", "Approved", "Rejected"] as const;
-
 /**
- * The founder's table, transcribed from BACKLOG-2869. Hand-written HERE on
- * purpose: asserting the map against itself would pass no matter what it said.
+ * The founder's table, from the ONE hand-typed copy in `founderLabelTable-2869`
+ * — the same fixture the cross-surface parity suite reads.
+ *
+ * Hand-typed at source on purpose, and imported rather than re-typed here: a
+ * table derived from the shipped map would assert the map against itself and
+ * pass no matter what it said, while a second transcription could be
+ * half-updated. `SUBMISSION_STATUS_LABEL` is deliberately NOT imported by this
+ * file.
  */
-const EXPECTED: Array<[status: string, label: string]> = [
-  ["submitted", "Under Review"],
-  ["under_review", "Under Review"],
-  ["resubmitted", "Under Review"],
-  ["needs_changes", "Changes Requested"],
-  ["approved", "Approved"],
-  ["rejected", "Rejected"],
-];
+const EXPECTED: Array<[status: string, label: string]> = HEADER_BADGE_ROWS.map(
+  (row) => [row.status, row.label],
+);
+
+/** Every label the header can draw. Rival labels are derived from this. */
+const ALL_LABELS = Array.from(new Set(HEADER_BADGE_ROWS.map((row) => row.label)));
 
 describe("BACKLOG-2869 — one badge per status, by exact string", () => {
   it.each(EXPECTED)("%s reads \"%s\", and reads nothing else", (status, label) => {
@@ -186,7 +188,7 @@ describe("BACKLOG-2869 — states the header must stay silent about", () => {
   });
 });
 
-describe("BACKLOG-2869 — the map covers the schema, not a copy of it", () => {
+describe("BACKLOG-2869 — the tone map covers the schema, not a copy of it", () => {
   it("has an entry for exactly the statuses the CHECK constraint admits", () => {
     /**
      * Derived from the schema by execution, not from a second hand-typed list:
@@ -207,13 +209,13 @@ describe("BACKLOG-2869 — the map covers the schema, not a copy of it", () => {
     expect(schemaStatuses).toHaveLength(7);
     expect(schemaStatuses).toContain("resubmitted");
 
-    expect(Object.keys(SUBMISSION_STATUS_BADGE).sort()).toEqual([...schemaStatuses].sort());
+    expect(Object.keys(SUBMISSION_STATUS_TONE).sort()).toEqual([...schemaStatuses].sort());
   });
 
-  it("gives not_submitted no badge and every other status one", () => {
-    expect(SUBMISSION_STATUS_BADGE.not_submitted).toBeNull();
+  it("gives not_submitted no tone (so no badge) and every other status one", () => {
+    expect(SUBMISSION_STATUS_TONE.not_submitted).toBeNull();
     for (const [status] of EXPECTED) {
-      expect(SUBMISSION_STATUS_BADGE[status as keyof typeof SUBMISSION_STATUS_BADGE]).not.toBeNull();
+      expect(SUBMISSION_STATUS_TONE[status as keyof typeof SUBMISSION_STATUS_TONE]).not.toBeNull();
     }
   });
 });

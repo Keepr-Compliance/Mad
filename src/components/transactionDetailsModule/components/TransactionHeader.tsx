@@ -6,6 +6,7 @@ import React from "react";
 import type { SubmissionStatus, Transaction } from "@/types";
 import { formatAddress } from "@/utils/formatUtils";
 import { useNetwork } from "@/contexts/NetworkContext";
+import { SUBMISSION_STATUS_LABEL } from "./submissionStatusLabels";
 
 interface TransactionHeaderProps {
   transaction: Transaction;
@@ -372,17 +373,29 @@ function RejectedActions({
  * `underReviewOwnership-2869.test.ts` which fails if anything here starts
  * originating that value.
  *
- * SCOPE — HEADER ONLY. `SubmissionStatusBadge` (the list-card chip) keeps its
- * own labels and still says "Submitted"/"Resubmitted" for those two statuses.
- * Both are accurate for their status, this item names the header, and there is
- * no ruling that the list rows should be reworded. The divergence is recorded
- * on BACKLOG-2869 as a follow-up rather than fixed here by assumption.
+ * ONE WORD PER STATE, EVERY SURFACE. The words are NOT here — they are in
+ * `submissionStatusLabels.ts`, which the list-row chip (`SubmissionStatusBadge`)
+ * reads too. Fixing the header alone would have traded one wrong label for a
+ * worse problem: the same deal reading "Under Review" in this chip and
+ * "Submitted" in the row behind it, which is a question the user has to
+ * resolve rather than an answer. What stays here is TONE — how a status looks
+ * in a header chip, which need not match how it looks in a dense list row.
  */
-interface SubmissionBadge {
-  label: string;
+/**
+ * HOW a status looks here. NOT what it is called — the words come from
+ * `SUBMISSION_STATUS_LABEL`, which the list-row chip reads too, so the header
+ * and the row behind it cannot disagree about a deal. Styling is allowed to
+ * differ (a header chip and a dense list row are not the same object); the
+ * label is not.
+ */
+interface SubmissionTone {
   /** Tone classes only; the shared pill geometry is applied at the call site. */
   className: string;
   icon: React.ReactElement;
+}
+
+interface SubmissionBadge extends SubmissionTone {
+  label: string;
 }
 
 /**
@@ -395,8 +408,7 @@ interface SubmissionBadge {
  * and the header's own gradient is already green — a green-on-green chip is
  * exactly the thing he keeps rejecting.
  */
-const BADGE_UNDER_REVIEW: SubmissionBadge = {
-  label: "Under Review",
+const TONE_UNDER_REVIEW: SubmissionTone = {
   className: "bg-white text-indigo-700 font-medium",
   icon: (
     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -414,8 +426,7 @@ const BADGE_UNDER_REVIEW: SubmissionBadge = {
  * is the one blocked-looking status a user CAN act on, and it routes through
  * `resubmitTransaction`.
  */
-const BADGE_CHANGES_REQUESTED: SubmissionBadge = {
-  label: "Changes Requested",
+const TONE_CHANGES_REQUESTED: SubmissionTone = {
   className: "bg-white text-amber-700 font-medium",
   icon: (
     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -430,8 +441,7 @@ const BADGE_CHANGES_REQUESTED: SubmissionBadge = {
  * an answer reads as loud as an action and an in-flight state does not. That
  * contrast IS the distinction; the colour only says which answer it was.
  */
-const BADGE_APPROVED: SubmissionBadge = {
-  label: "Approved",
+const TONE_APPROVED: SubmissionTone = {
   className: "bg-white text-green-700 font-semibold shadow-md",
   icon: (
     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -441,8 +451,7 @@ const BADGE_APPROVED: SubmissionBadge = {
 };
 
 /** TERMINAL. `text-red-600` on white is the Delete button's pair in this file. */
-const BADGE_REJECTED: SubmissionBadge = {
-  label: "Rejected",
+const TONE_REJECTED: SubmissionTone = {
   className: "bg-white text-red-600 font-semibold shadow-md",
   icon: (
     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -452,7 +461,10 @@ const BADGE_REJECTED: SubmissionBadge = {
 };
 
 /**
- * Every status the schema admits, mapped to what the header shows for it.
+ * Every status the schema admits, mapped to how the header DRAWS it. What each
+ * one is CALLED is `SUBMISSION_STATUS_LABEL`; a status that shares a label with
+ * another (three of them do) shares its tone object here too, so the collision
+ * is visible in one place instead of being spelled out four times.
  *
  * `Record<SubmissionStatus, …>` is load-bearing: `SubmissionStatus` is the
  * renderer's re-export of the union in `electron/types/models.ts`, which is
@@ -463,20 +475,21 @@ const BADGE_REJECTED: SubmissionBadge = {
  *
  * `not_submitted` maps to `null` on purpose: nothing has been sent, so there
  * is no status to report, and the Complete button beside it already says what
- * the deal is waiting for. (The list-card chip does render "Not Submitted" —
- * a row with no badge at all would be a hole in a column.)
+ * the deal is waiting for. The list cards reach the same answer their own way,
+ * by guarding on `submission_status !== "not_submitted"` before they render at
+ * all — visibility is a surface decision, unlike the word.
  *
  * Exported for tests, which assert this map against the schema's CHECK list
  * rather than against a second hand-typed copy of the same seven words.
  */
-export const SUBMISSION_STATUS_BADGE: Record<SubmissionStatus, SubmissionBadge | null> = {
+export const SUBMISSION_STATUS_TONE: Record<SubmissionStatus, SubmissionTone | null> = {
   not_submitted: null,
-  submitted: BADGE_UNDER_REVIEW,
-  under_review: BADGE_UNDER_REVIEW,
-  resubmitted: BADGE_UNDER_REVIEW,
-  needs_changes: BADGE_CHANGES_REQUESTED,
-  approved: BADGE_APPROVED,
-  rejected: BADGE_REJECTED,
+  submitted: TONE_UNDER_REVIEW,
+  under_review: TONE_UNDER_REVIEW,
+  resubmitted: TONE_UNDER_REVIEW,
+  needs_changes: TONE_CHANGES_REQUESTED,
+  approved: TONE_APPROVED,
+  rejected: TONE_REJECTED,
 };
 
 /**
@@ -489,7 +502,9 @@ export const SUBMISSION_STATUS_BADGE: Record<SubmissionStatus, SubmissionBadge |
  */
 function resolveSubmissionBadge(status: string | undefined | null): SubmissionBadge | null {
   if (!status) return null;
-  return SUBMISSION_STATUS_BADGE[status as SubmissionStatus] ?? null;
+  const tone = SUBMISSION_STATUS_TONE[status as SubmissionStatus] ?? null;
+  if (!tone) return null;
+  return { ...tone, label: SUBMISSION_STATUS_LABEL[status as SubmissionStatus] };
 }
 
 function ActiveActions({
