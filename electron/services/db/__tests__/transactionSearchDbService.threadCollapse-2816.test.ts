@@ -118,8 +118,10 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
   afterEach(() => { db.close(); });
 
   const sdb = (): SearchableDb => db as unknown as SearchableDb;
-  const scoped = (q: string) => searchLinkedContent(sdb(), TXN, q);
-  const global = (q: string) => searchGlobalContent(sdb(), USER, q);
+  const scoped = (q: string, limit?: number) =>
+    searchLinkedContent(sdb(), TXN, q, limit ? { limit } : {});
+  const global = (q: string, limit?: number) =>
+    searchGlobalContent(sdb(), USER, q, limit ? { limit } : {});
 
   describe("transaction-scoped search", () => {
     it("returns exactly ONE row for a named group of many messages", () => {
@@ -164,17 +166,18 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
      * Both numbers are asserted here, on ONE fixture where they DIFFER (1 vs 25).
      * Equal numbers would let a badge wired to the wrong source pass.
      */
-    it("counts CONVERSATIONS under Group chats and MESSAGES under Texts", () => {
+    it("puts ONE CONVERSATION under Group chats and the MESSAGES under Texts", () => {
+      // BACKLOG-2863 removed the badges these assertions used to read, so the
+      // claim is now made against the ROWS. It is the same claim: before
+      // BACKLOG-2858 this fixture put 25 message rows and a 25 badge under a
+      // heading whose list held one conversation.
       const res = scoped(NAME_QUERY);
       expect(res.groupChats.items).toHaveLength(1);
-      expect(res.groupChats.total).toBe(1);
-      // Nothing in any of the 25 bodies matched "kingfisher", so Texts is empty
-      // AND its badge says so. Before BACKLOG-2858 it said 25 — a heading over
-      // an empty list, which is the dead control of BACKLOG-2791.
+      // Nothing in any of the 25 bodies matched "kingfisher", so Texts is empty.
       expect(res.texts.items).toEqual([]);
-      expect(res.texts.total).toBe(0);
-      // The 25 messages are real and still findable; only the ROUTE changed.
-      expect(scoped("routine message").texts.total).toBe(N);
+      // The 25 messages are real and still findable; only the ROUTE changed. The
+      // limit is raised past 25 so this names all of them rather than a page.
+      expect(scoped("routine message", 50).texts.items).toHaveLength(N);
     });
 
     it("does not leave the conversation row in Texts as well", () => {
@@ -198,11 +201,11 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
       });
     });
 
-    it("carries no body text, and counts conversations not messages", () => {
+    it("carries no body text, and yields conversations rather than messages", () => {
       const res = global(NAME_QUERY);
       expect(res.groupChats.items[0].snippet).toBeNull();
-      expect(res.groupChats.total).toBe(1);
-      expect(res.texts.total).toBe(0);
+      expect(res.groupChats.items).toHaveLength(1);
+      expect(res.texts.items).toEqual([]);
       expect(res.texts.items.map((t) => t.id)).not.toContain("m-named-24");
     });
 
@@ -222,18 +225,18 @@ describe("BACKLOG-2816 — a group-name match collapses to one conversation", ()
 
   it("a query matching nothing still returns nothing", () => {
     expect(scoped("nothingmatchesthis").texts.items).toEqual([]);
-    expect(scoped("nothingmatchesthis").texts.total).toBe(0);
+    expect(scoped("nothingmatchesthis").texts.hasMore).toBe(false);
     expect(scoped("nothingmatchesthis").groupChats.items).toEqual([]);
-    expect(scoped("nothingmatchesthis").groupChats.total).toBe(0);
+    expect(scoped("nothingmatchesthis").groupChats.hasMore).toBe(false);
   });
 
   it("leaves Group chats EMPTY for a body-only match, so its heading never renders", () => {
     // The other half of the empty-state rule: a section that has nothing to show
-    // must report nothing, not an inherited number. "walkthrough" appears in
-    // three BODIES and in no group name.
+    // must report nothing, and BACKLOG-2863 gates the heading on exactly this —
+    // the rows. "walkthrough" appears in three BODIES and in no group name.
     const res = scoped("walkthrough");
     expect(res.groupChats.items).toEqual([]);
-    expect(res.groupChats.total).toBe(0);
-    expect(res.texts.total).toBe(3);
+    expect(res.groupChats.hasMore).toBe(false);
+    expect(res.texts.items).toHaveLength(3);
   });
 });

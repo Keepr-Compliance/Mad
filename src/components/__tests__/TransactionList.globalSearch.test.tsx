@@ -124,14 +124,14 @@ function globalResultsWith(overrides: Record<string, unknown>) {
   return {
     success: true,
     results: {
-      transactions: { items: [], total: 0 },
-      contacts: { items: [], total: 0 },
-      emails: { items: [], total: 0 },
-      texts: { items: [], total: 0 },
+      transactions: { items: [], hasMore: false },
+      contacts: { items: [], hasMore: false },
+      emails: { items: [], hasMore: false },
+      texts: { items: [], hasMore: false },
       // BACKLOG-2858: Group chats is its own group, and the panel reads its
       // total unconditionally. A fixture missing it renders nothing at all.
-      groupChats: { items: [], total: 0 },
-      unattached: { items: [], total: 0 },
+      groupChats: { items: [], hasMore: false },
+      unattached: { items: [], hasMore: false },
       ...overrides,
     },
   };
@@ -191,7 +191,7 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
               attribution: ATTR,
             },
           ],
-          total: 1,
+          hasMore: false,
         },
       }),
     );
@@ -212,7 +212,7 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
   it("opens a transaction hit on the overview tab with no highlight", async () => {
     jest.mocked(window.api.transactions.searchGlobalContent).mockResolvedValue(
       globalResultsWith({
-        transactions: { items: [{ id: "txn-1", propertyAddress: "1 Main Street" }], total: 1 },
+        transactions: { items: [{ id: "txn-1", propertyAddress: "1 Main Street" }], hasMore: false },
       }),
     );
     await renderAndSearch("main");
@@ -239,7 +239,7 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
               attribution: ATTR,
             },
           ],
-          total: 1,
+          hasMore: false,
         },
       }),
     );
@@ -291,7 +291,7 @@ describe("TransactionList — global search mount (BACKLOG-1876)", () => {
               attribution: ATTR2,
             },
           ],
-          total: 2,
+          hasMore: false,
         },
       }),
     );

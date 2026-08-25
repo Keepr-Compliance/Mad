@@ -81,12 +81,12 @@ export interface UseLinkedContentSearchResult {
 function emptyNormalized(scope: SearchScope): NormalizedSearchResults {
   const global = scope.type === "global";
   return {
-    transactions: global ? { items: [], total: 0 } : null,
-    contacts: { items: [], total: 0 },
-    emails: { items: [], total: 0 },
-    texts: { items: [], total: 0 },
-    groupChats: { items: [], total: 0 },
-    unattached: global ? { items: [], total: 0 } : null,
+    transactions: global ? { items: [], hasMore: false } : null,
+    contacts: { items: [], hasMore: false },
+    emails: { items: [], hasMore: false },
+    texts: { items: [], hasMore: false },
+    groupChats: { items: [], hasMore: false },
+    unattached: global ? { items: [], hasMore: false } : null,
   };
 }
 
@@ -139,21 +139,21 @@ export function useLinkedContentSearch(
                     ...c,
                     attribution: null,
                   })),
-                  total: r.contacts.total,
+                  hasMore: r.contacts.hasMore,
                 },
                 emails: {
                   items: r.emails.items.map((e) => ({
                     ...e,
                     attribution: null,
                   })),
-                  total: r.emails.total,
+                  hasMore: r.emails.hasMore,
                 },
                 texts: {
                   items: r.texts.items.map((t) => ({
                     ...t,
                     attribution: null,
                   })),
-                  total: r.texts.total,
+                  hasMore: r.texts.hasMore,
                 },
                 // BACKLOG-2858: scoped hits carry no attribution, exactly like
                 // the other groups — the badge would say the transaction the
@@ -163,7 +163,7 @@ export function useLinkedContentSearch(
                     ...t,
                     attribution: null,
                   })),
-                  total: r.groupChats.total,
+                  hasMore: r.groupChats.hasMore,
                 },
                 unattached: null,
               } as NormalizedSearchResults;

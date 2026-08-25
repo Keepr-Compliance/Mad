@@ -237,13 +237,14 @@ describe("BACKLOG-2816 — group chat names are a search match target", () => {
       expect(scopedTextIds("15550177")).toEqual(["m-linked-solo"]);
     });
 
-    it("counts the conversation under Group chats and NOT under Texts", () => {
-      // SUPERSEDED BY BACKLOG-2858: this used to assert `texts.total === 1`,
-      // the message inside the name-matching thread. That message's row is no
-      // longer in Texts, so counting it there would head an empty list.
+    it("puts the conversation under Group chats and NOT under Texts", () => {
+      // SUPERSEDED BY BACKLOG-2858: this used to assert one Texts hit, the
+      // message inside the name-matching thread. That row moved to Group chats.
+      // BACKLOG-2863 removed the badges, so the claim is made by IDENTITY on the
+      // rows — which is stronger than the two numbers it replaces.
       const res = searchLinkedContent(asSearchable(), TXN, NAME_QUERY);
-      expect(res.groupChats.total).toBe(1);
-      expect(res.texts.total).toBe(0);
+      expect(res.groupChats.items.map((t) => t.id)).toEqual(["m-linked-named"]);
+      expect(res.texts.items).toEqual([]);
     });
   });
 
@@ -276,11 +277,11 @@ describe("BACKLOG-2816 — group chat names are a search match target", () => {
       expect(globalTextIds("15550177")).toEqual(["m-linked-solo"]);
     });
 
-    it("counts the conversation under Group chats and NOT under Texts", () => {
+    it("puts the conversation under Group chats and NOT under Texts", () => {
       // SUPERSEDED BY BACKLOG-2858 — see the scoped surface above.
       const res = searchGlobalContent(asSearchable(), USER, NAME_QUERY);
-      expect(res.groupChats.total).toBe(1);
-      expect(res.texts.total).toBe(0);
+      expect(res.groupChats.items.map((t) => t.id)).toEqual(["m-linked-named"]);
+      expect(res.texts.items).toEqual([]);
     });
   });
 

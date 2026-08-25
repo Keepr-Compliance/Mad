@@ -346,7 +346,7 @@ describe("BACKLOG-2854 — one conversation split across Apple chat rows is ONE 
     it("returns NO row for a named 1:1 — it is not a group chat", () => {
       const res = scoped("weekly check in");
       expect(threadRows(res.groupChats.items)).toEqual([]);
-      expect(res.groupChats.total).toBe(0);
+      expect(res.groupChats.hasMore).toBe(false);
       // And it did not fall back into Texts either: assert the ABSENCE in both
       // buckets by identity, because "not in Group chats" alone would also pass
       // if the row had simply moved back where it came from.
