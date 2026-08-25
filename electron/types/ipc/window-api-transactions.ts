@@ -755,8 +755,15 @@ export interface WindowApiTransactions {
     message?: string;
     rateLimited?: boolean;
   }>;
-  /** BACKLOG-1362: Pre-cache emails from connected providers */
-  precacheEmails: (userId: string) => Promise<{
+  /**
+   * BACKLOG-1362: Pre-cache emails from connected providers.
+   *
+   * BACKLOG-2856: `force` re-downloads the whole cache window and REPLACES what
+   * is stored, instead of fetching only mail newer than the newest cached row.
+   * Parity with the macOS messages Force Re-import: it cascade-deletes every
+   * email↔transaction link, so the caller must confirm that with the user first.
+   */
+  precacheEmails: (userId: string, force?: boolean) => Promise<{
     success: boolean;
     emailsFetched?: number;
     emailsStored?: number;
@@ -772,6 +779,18 @@ export interface WindowApiTransactions {
       provider: "microsoft" | "google";
       message: string;
       tokenExpired: boolean;
+    };
+    /**
+     * BACKLOG-2856: set only when a force run reached the swap. `emailsInserted`
+     * is what actually landed in the live table — `emailsStored` counts staging
+     * writes and so overstates a force run — and `providers` names the mailboxes
+     * that were rebuilt, so a caller can tell that a connected one was skipped.
+     */
+    forceSwap?: {
+      emailsDeleted: number;
+      emailsInserted: number;
+      participantsInserted: number;
+      providers: Array<"gmail" | "outlook">;
     };
   }>;
   /** Export transaction to organized folder structure */

@@ -512,10 +512,14 @@ export const transactionBridge = {
    * into the local database. Incremental -- only fetches newer than
    * what is already cached.
    * @param userId - User ID to pre-cache emails for
+   * @param force - BACKLOG-2856: re-download the ENTIRE cache window and replace
+   *   what is stored, rather than only fetching newer mail. Cascade-deletes every
+   *   email<->transaction link (parity with the messages Force Re-import), so it
+   *   must never be passed without an explicit user confirmation.
    * @returns Results with counts of fetched and stored emails
    */
-  precacheEmails: (userId: string) =>
-    ipcRenderer.invoke("emails:precache", userId),
+  precacheEmails: (userId: string, force = false) =>
+    ipcRenderer.invoke("emails:precache", userId, force),
 
   /**
    * Link emails to a transaction
