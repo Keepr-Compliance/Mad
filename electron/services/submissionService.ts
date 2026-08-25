@@ -327,12 +327,77 @@ class SubmissionService {
 
       // Check for existing submission
       const client = supabaseService.getClient();
-      const { data: existingSubmission } = await client
-        .from("transaction_submissions")
-        .select("id, status")
-        .eq("organization_id", orgId)
-        .eq("local_transaction_id", transactionId)
-        .maybeSingle();
+
+      /**
+       * The version this attempt will INSERT. Mirrors `mapToSubmission`, which
+       * writes `version: options?.version || 1` — the two must agree, because
+       * the delete below is keyed off the comparison.
+       */
+      const pendingVersion = options?.version || 1;
+
+      /**
+       * BACKLOG-2867 — NAME ONE ROW, AND READ THE ERROR.
+       *
+       * This lookup used to be
+       *
+       *   const { data: existingSubmission } = await client
+       *     .from("transaction_submissions")
+       *     .select("id, status")
+       *     .eq("organization_id", orgId)
+       *     .eq("local_transaction_id", transactionId)
+       *     .maybeSingle();
+       *
+       * — no ordering, no limit, and the `error` not destructured at all.
+       *
+       * A deal that has been round-tripped once has TWO rows here: the unique
+       * key is (organization_id, local_transaction_id, version, submitted_by),
+       * so versions coexist legally, and the versioning path deliberately
+       * retains its parent. `.maybeSingle()` against two rows makes PostgREST
+       * answer PGRST116 with `data: null` — and with the error discarded, that
+       * is indistinguishable from "this deal has never been submitted".
+       * `if (existingSubmission)` was false and the entire status guard below
+       * was skipped, on exactly the deals furthest along: measured live on
+       * 2026-08-25, one transaction sat at versions [1, 2] / statuses
+       * [rejected, under_review] and was unguarded.
+       *
+       * Both halves are needed, and each is proved by its own control:
+       *
+       *   ORDER BY version DESC LIMIT 1 — decide against the CURRENT version.
+       *     Secondary order on created_at because the unique key permits a
+       *     version tie between two submitters in one org; without it the row
+       *     the database happens to return first would decide the guard.
+       *
+       *   The ERROR, read and refused on. With `limit(1)` a multi-row PGRST116
+       *     can no longer occur, so there is no "no rows" case left to
+       *     tolerate: `data: null` means no submission exists, and an `error`
+       *     means the question could not be answered. Failing closed is the
+       *     point — the alternative is what this item is about, a failed check
+       *     read as a clean bill of health.
+       */
+      const { data: existingSubmission, error: existingSubmissionError } =
+        await client
+          .from("transaction_submissions")
+          .select("id, status, version")
+          .eq("organization_id", orgId)
+          .eq("local_transaction_id", transactionId)
+          .order("version", { ascending: false })
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+      if (existingSubmissionError) {
+        logService.error(
+          `[Submission] Existing-submission check failed for ${transactionId} — refusing to submit`,
+          "SubmissionService",
+          {
+            code: existingSubmissionError.code ?? null,
+            message: existingSubmissionError.message,
+          }
+        );
+        throw new Error(
+          `Could not check whether this transaction has already been submitted, so nothing was submitted. Please try again. (${existingSubmissionError.message})`
+        );
+      }
 
       if (existingSubmission) {
         /**
@@ -382,13 +447,19 @@ class SubmissionService {
          *
          * `resubmitted` is deliberately NOT in the list. BACKLOG-2853 justified
          * that with "it carries the identical hazard one broker round trip
-         * later" — WRONG, and withdrawn: a `resubmitted` row only exists at
-         * version >= 2, so two rows share `(organization_id,
-         * local_transaction_id)` and the `.maybeSingle()` lookup above has
-         * already returned PGRST116 with `existingSubmission` null. Execution
-         * never arrives here at all. See BACKLOG-2867, and the
-         * guard-never-reached bucket in `submissionResubmitGuard-2853.test.ts`
-         * which measures it rather than asserting it.
+         * later" — WRONG, and withdrawn. It was then argued that adding the
+         * word would change nothing, because a `resubmitted` row only exists
+         * at version >= 2, two rows share `(organization_id,
+         * local_transaction_id)`, and the old single-row lookup returned
+         * PGRST116 so execution never arrived here at all.
+         *
+         * BACKLOG-2867 FIXED THAT LOOKUP, so that argument is now spent too:
+         * a `resubmitted` deal DOES reach this check. It is still not on the
+         * list, and it still must not fall into a delete — which is why the
+         * branch below now refuses to delete a row at a version this attempt
+         * is not replacing. Whether `resubmitted` belongs on the list is a
+         * separate decision, deliberately not taken here; see
+         * `submissionStatusMessages.ts`.
          *
          * BACKLOG-2868 — THE LIST AND THE MESSAGES NOW LIVE IN THEIR OWN
          * MODULE. Not for tidiness: the renderer must tell the user the same
@@ -436,15 +507,49 @@ class SubmissionService {
          * Production behaviour is unchanged by this branch: the delete it
          * skips was already a no-op for every status that reaches it.
          */
+        const existingVersion: number = existingSubmission.version ?? 1;
+
         if (options?.parentSubmissionId) {
           logService.info(
             `[Submission] Versioning from submission ${existingSubmission.id} (status: ${existingSubmission.status}) — previous version retained`,
             "SubmissionService"
           );
+        } else if (existingVersion !== pendingVersion) {
+          /**
+           * BACKLOG-2867 — THE DELETE MAY ONLY REMOVE THE ROW THIS INSERT
+           * WOULD COLLIDE WITH.
+           *
+           * This condition exists because of the fix above, not despite it.
+           * Before it, the lookup could not name a row on a multi-version
+           * deal, so this branch was unreachable there. Now that the lookup
+           * names the CURRENT version, a plain `submitTransaction` on a
+           * round-tripped deal arrives here holding version 2 while about to
+           * insert version 1 — and would have deleted the live submission.
+           * Under the desktop's RLS that delete no-ops, but
+           * `service_role_full_access_submissions` is live on this table and
+           * grants ALL, and under it the row and its cascaded messages and
+           * attachments are gone and the version-1 insert then fails on the
+           * unique key anyway. Destruction with nothing to show for it, newly
+           * reachable, caused by a fix. Closed here rather than shipped.
+           *
+           * What the delete is FOR is clearing
+           *   UNIQUE (organization_id, local_transaction_id, version,
+           *           submitted_by)
+           * for the row about to be inserted at `pendingVersion`. A row at any
+           * OTHER version does not block that insert, so deleting it buys
+           * nothing and costs a submission.
+           *
+           * Every path that reached the delete before BACKLOG-2867 reached it
+           * at equal versions, so production behaviour is unchanged.
+           */
+          logService.warn(
+            `[Submission] Existing submission ${existingSubmission.id} is at version ${existingVersion} but this submit inserts version ${pendingVersion} — leaving it in place`,
+            "SubmissionService"
+          );
         } else {
           // Allowed to replace (status is 'resubmitted' or 'needs_changes')
           logService.info(
-            `[Submission] Replacing existing submission ${existingSubmission.id} (status: ${existingSubmission.status})`,
+            `[Submission] Replacing existing submission ${existingSubmission.id} (status: ${existingSubmission.status}) at version ${existingVersion}`,
             "SubmissionService"
           );
           // Delete old submission (cascades to messages and attachments)
