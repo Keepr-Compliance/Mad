@@ -577,6 +577,14 @@ function EmailBubble({
             full view falls back to the same plain text the bubble already
             shows, so the control would change nothing visible and must not
             render — that gate is the whole reason the label is honest.
+
+            BACKLOG-2862 FOLLOW-UP: a grey BUTTON, not a blue text link. The
+            founder asked for it to be "more obvious" — the element was already
+            a <button>, so only the treatment changed. Grey tokens are the ones
+            this repo already uses (ConversationViewModal:701/:710,
+            AttachMessagesModal:1035, and the thread footer deleted below);
+            scaled to text-xs/px-3 because this one sits inside a bubble rather
+            than in a modal footer. The gate above is UNCHANGED.
           */}
           {hasFormattedVersion && onViewFull && (
             <div className="mt-2 pt-2 border-t border-gray-100">
@@ -586,7 +594,7 @@ function EmailBubble({
                   e.stopPropagation();
                   onViewFull();
                 }}
-                className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                className="inline-flex items-center px-3 py-1.5 bg-gray-200 hover:bg-gray-300 rounded-full text-xs font-medium text-gray-700 transition-all"
                 data-testid={`thread-bubble-formatted-${email.id}`}
               >
                 View formatted email
@@ -810,15 +818,21 @@ export function EmailThreadViewModal({
           ))}
         </div>
 
-        {/* Footer */}
-        <div className="flex-shrink-0 bg-white border-t px-5 py-3 flex justify-center">
-          <button
-            onClick={onClose}
-            className="px-6 py-2 bg-gray-200 hover:bg-gray-300 rounded-full text-sm font-medium text-gray-700 transition-all"
-          >
-            Close
-          </button>
-        </div>
+        {/*
+          BACKLOG-2862 FOLLOW-UP: the footer strip that used to sit here —
+          `flex-shrink-0 bg-white border-t px-5 py-3 flex justify-center` around
+          a single grey "Close" — was REMOVED at the founder's request. The whole
+          strip went, not just the button: the strip existed only to hold it, and
+          leaving it would draw a stray rule across the bottom of the modal.
+
+          Dismissal is unaffected. Three routes remain: the desktop header X and
+          the mobile header "Back" (both `aria-label="Close"`, both calling
+          `onClose`), and a backdrop click via ResponsiveModal's overlay handler.
+          There is NO Escape handler on this modal — AttachmentPreviewModal's is
+          its own. `EmailThreadViewModal.bubbleFollowups-2862.test.tsx` fires the
+          header control and asserts `onClose` ran, so an edit that removes or
+          unwires the last remaining exit fails rather than trapping the reader.
+        */}
 
       {/* TASK-1782: Attachment Preview Modal */}
       {previewAttachment && (
