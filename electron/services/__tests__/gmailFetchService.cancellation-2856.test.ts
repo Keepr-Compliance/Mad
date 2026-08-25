@@ -71,7 +71,7 @@ const TOKEN = {
   access_token: "at",
   refresh_token: "rt",
   token_expires_at: new Date(Date.now() + 3600000).toISOString(),
-  connected_email_address: "me@gmail.com",
+  connected_email_address: "me@example.com",
   is_active: true,
   created_at: new Date().toISOString(),
   updated_at: new Date().toISOString(),
@@ -89,7 +89,7 @@ const fullMessage = (id: string) => ({
       headers: [
         { name: "Subject", value: `Subject ${id}` },
         { name: "From", value: "sender@example.com" },
-        { name: "To", value: "me@gmail.com" },
+        { name: "To", value: "me@example.com" },
       ],
       mimeType: "text/plain",
       body: { data: Buffer.from("Body text").toString("base64") },
