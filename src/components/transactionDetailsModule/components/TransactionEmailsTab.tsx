@@ -619,8 +619,39 @@ export function TransactionEmailsTab({
     );
   }
 
-  // Calculate total email count
-  const totalEmailCount = emailThreads.reduce(
+  // BACKLOG-2861: the header counts ONLY what the list beneath it renders.
+  //
+  // This reduced over `emailThreads` — EVERY attached conversation — while the
+  // list at the bottom of this component maps `linkedThreads`, which excludes
+  // every needs-review thread. A count over one array above a list over a
+  // filtered subset, with nothing reconciling them. Whenever any thread was in
+  // review the header over-reported; when ALL of them were, the founder got
+  // "6 conversations (9 emails)" over a verifiably empty container and read it
+  // as a broken app.
+  //
+  // Founder decision 2026-08-25, Option A: BOTH numbers describe the linked set
+  // only. He was shown the consequence and accepted it — on the transaction that
+  // produced this report the header now reads "0 conversations (0 emails)" over
+  // an empty list, because all six conversations are legitimately in review.
+  //
+  // Option B (labelling both sets, e.g. "0 linked · 6 in review") was rejected,
+  // so do NOT reintroduce a review count here.
+  //
+  // WHAT MAKES THIS A DISPLAY FIX RATHER THAN A SILENT DROP: the needs-review
+  // threads stay reachable through the Needs Review button (TransactionHeader),
+  // whose visibility is driven by getReviewState. Scoping this count while those
+  // threads were unreachable would convert a visible-but-confusing state into
+  // nine emails counted by nothing, listed by nothing and openable by nothing.
+  //
+  // That reachability is not assumed — it holds by construction, and the proof
+  // is pinned by TransactionEmailsTab-2861 and reviewStateService.tabReachability-2861:
+  // a thread is needs-review here only when EVERY email in it carries
+  // match_reason='address_missing', and such a row can only reach this tab with a
+  // non-NULL email_id (getCommunicationsWithMessages derives channel='email' from
+  // the emails join), which is exactly the row getReviewState's legacy population
+  // selects. Tab needs-review is therefore a SUBSET of the review queue, and the
+  // button cannot be hidden while this tab holds one.
+  const totalEmailCount = linkedThreads.reduce(
     (sum, thread) => sum + thread.emailCount,
     0
   );
@@ -630,7 +661,10 @@ export function TransactionEmailsTab({
       {/* Action buttons and summary */}
       <div className="flex justify-between items-center mb-4">
         <h3 className="text-lg font-medium text-gray-900">
-          {emailThreads.length} conversation{emailThreads.length !== 1 ? "s" : ""}<span className="hidden sm:inline"> ({totalEmailCount} email{totalEmailCount !== 1 ? "s" : ""})</span>
+          {/* BACKLOG-2861: `linkedThreads`, NOT `emailThreads` — the conversation
+              count scopes identically to the email count beside it and to the
+              list below. Both numbers describe the linked set only. */}
+          {linkedThreads.length} conversation{linkedThreads.length !== 1 ? "s" : ""}<span className="hidden sm:inline"> ({totalEmailCount} email{totalEmailCount !== 1 ? "s" : ""})</span>
         </h3>
 
         <div className="flex gap-2">
