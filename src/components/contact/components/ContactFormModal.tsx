@@ -514,31 +514,40 @@ function ContactFormModal({
             >
               <option value="">None</option>
               {/*
-                BACKLOG-2804: this is the one picker built from the WHOLE role
-                map, so it is the one place where renaming `seller_agent` to
-                "Listing Agent" would offer two options reading the same word.
-                `seller_agent` is the survivor — it is the only seller-side
-                agent role the audit wizard assigns — and `listing_agent` is
-                dropped from the list.
+                THE ONE PICKER BUILT FROM THE WHOLE ROLE MAP, so it is the one
+                that has to distinguish roles that are OFFERED from roles that
+                merely still RENDER.
 
-                DISPLAY ONLY, and it does not hide a stored value: a contact
-                already saved as `listing_agent` keeps its option, because a
-                <select> whose value has no matching <option> renders BLANK —
-                the form would show that contact as having no default role at
-                all, and the user could not tell what it actually is.
+                It sets a contact's `default_role`, which has no transaction and
+                therefore no side — so every option here is a static label.
 
-                The stored value is NOT at risk. Corrected after SR review of
-                PR #2351, which measured the hatch removed: the save reads
-                `formData.defaultRole` (React state), never the DOM, so an
-                untouched form still writes `listing_agent`. The earlier note
-                here claimed the next save would rewrite the role. It would
-                not. The defect is the blank field, which is reason enough.
+                BACKLOG-2859: ROLE_DISPLAY_NAMES deliberately retains entries for
+                the collapsed legacy values (`buyer_agent`, `seller_agent`,
+                `listing_agent`) and the removed principals (`buyer`, `seller`)
+                so a straggler row still humanizes. Those must NOT be offered
+                here, or this picker would quietly put the very values the
+                collapse removed back into the database. `SPECIFIC_ROLES` is the
+                offered set; the display map is not.
+
+                THE EXCEPTION IS LOAD-BEARING, and is the BACKLOG-2804 rule
+                generalised: whatever value this contact currently holds keeps
+                its option even when it is no longer offered. A <select> whose
+                value matches no <option> renders BLANK — the form would show a
+                contact as having no default role at all and the user could not
+                tell what it actually is. Previously this was hardcoded for
+                `listing_agent`; it now covers every retired value, which is what
+                the collapse needs.
+
+                The stored value is not at risk either way. Measured under SR
+                review of PR #2351: the save reads `formData.defaultRole` (React
+                state), never the DOM, so an untouched form rewrites nothing.
+                The defect being prevented is the blank field.
               */}
               {Object.entries(ROLE_DISPLAY_NAMES)
                 .filter(
                   ([value]) =>
-                    value !== SPECIFIC_ROLES.LISTING_AGENT ||
-                    formData.defaultRole === SPECIFIC_ROLES.LISTING_AGENT,
+                    OFFERED_DEFAULT_ROLES.has(value) ||
+                    formData.defaultRole === value,
                 )
                 .map(([value, label]) => (
                   <option key={value} value={value}>
@@ -582,5 +591,17 @@ function ContactFormModal({
     </ResponsiveModal>
   );
 }
+
+
+/**
+ * The `default_role` values this form OFFERS — the live role vocabulary
+ * (BACKLOG-2859).
+ *
+ * Derived from SPECIFIC_ROLES rather than from ROLE_DISPLAY_NAMES, because the
+ * display map intentionally holds retired values so old rows still humanize.
+ * Offering is a narrower question than rendering, and this is the difference.
+ */
+const OFFERED_DEFAULT_ROLES = new Set<string>(Object.values(SPECIFIC_ROLES));
+
 
 export default ContactFormModal;

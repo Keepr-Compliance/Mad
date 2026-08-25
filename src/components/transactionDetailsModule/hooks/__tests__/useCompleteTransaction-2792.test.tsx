@@ -38,7 +38,13 @@ function setup(count: number, license: { canSubmit: boolean; org: string | null 
     count,
   });
   const hook = renderHook(() =>
-    useCompleteTransaction({ refreshReviewState, openExport, openSubmit, openNeedsReview }),
+    useCompleteTransaction({
+      transactionId: "tx-2792",
+      refreshReviewState,
+      openExport,
+      openSubmit,
+      openNeedsReview,
+    }),
   );
   return { hook, openExport, openSubmit, openNeedsReview, refreshReviewState };
 }
@@ -92,6 +98,7 @@ describe("CONTROL 2 — the completeness gate", () => {
 
     const hook = renderHook(() =>
       useCompleteTransaction({
+        transactionId: "tx-2792",
         refreshReviewState,
         openExport,
         openSubmit: jest.fn(),
@@ -149,6 +156,7 @@ describe("CONTROL 2 — the completeness gate", () => {
 
     const hook = renderHook(() =>
       useCompleteTransaction({
+        transactionId: "tx-2792",
         refreshReviewState,
         openExport,
         openSubmit,

@@ -262,7 +262,10 @@ function TransactionDetails({
   const refreshMessages = useCallback(async () => {
     await loadCommunications("text");
     refreshAttachments();
-  }, [loadCommunications, refreshAttachments]);
+    // BACKLOG-2838: the text counter on the card behind this modal counts the
+    // linked set that just moved. See notifyCardCounters below.
+    onTransactionUpdated?.();
+  }, [loadCommunications, refreshAttachments, onTransactionUpdated]);
 
   // Accurate attachment counts from database (TASK-1781)
   // PERF: Lazy-loaded — only fetched when Submit modal opens (takes ~1.3s)
@@ -393,6 +396,7 @@ function TransactionDetails({
   );
 
   const complete = useCompleteTransaction({
+    transactionId: transaction.id,
     refreshReviewState: reviewQueue.refresh,
     openExport: () => setShowExportModal(true),
     openSubmit: () => { void openSubmitFlow(); },
@@ -714,6 +718,10 @@ function TransactionDetails({
           setShowUnlinkThread(null);
           // BACKLOG-1780: signal RemovedEmailsSection to refresh its count.
           setRemovedRefreshKey((k) => k + 1);
+          // BACKLOG-2838: the emails just left the deal, so the card's counter
+          // behind this modal is now one revision old. This path writes through
+          // plain IPC and broadcasts nothing, so nothing else would tell it.
+          onTransactionUpdated?.();
 
           // BACKLOG-1778: in-place list update — drop exactly the unlinked rows.
           if (allUnlinkedIds.length > 0) {
@@ -726,7 +734,7 @@ function TransactionDetails({
         showError
       );
     },
-    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError, undoRestoreEmails]
+    [showUnlinkThread, handleUnlinkCommunication, removeCommunicationsByIds, loadCommunications, showSuccess, showError, undoRestoreEmails, onTransactionUpdated]
   );
 
   // BACKLOG-1781: handler for thread-aware unlink confirmation. Stores the full
@@ -753,13 +761,37 @@ function TransactionDetails({
     }
   }, [loading]);
 
+  /**
+   * BACKLOG-2838 — TELL THE LIST BEHIND THIS MODAL.
+   *
+   * Half A of 2838 subscribed the transaction list to the two broadcasts that
+   * already exist (review:queue-changed, transactions:auto-sync-complete), which
+   * covers approve, reject, restore, the on-open sweep and background syncs.
+   * Manual ATTACH and UNLINK broadcast nothing at all — they are plain IPC
+   * writes — so Half A alone left exactly those two stale, and they are the
+   * actions a user takes while staring at the card.
+   *
+   * `onTransactionUpdated` is the EXISTING wire for this: it already refetches
+   * the list (TransactionList.tsx:262-265) and is already called by eight other
+   * actions in this file (save, delete, export, deal approve/reject/restore,
+   * contact restore). Adding a main-process broadcast channel for attach/unlink
+   * would be a second mechanism for a job this one already does, and it would
+   * touch handler files sitting under two live branches.
+   *
+   * Renderer-side is sufficient here BECAUSE attach and unlink are reachable
+   * only FROM this modal — there is no background path that links or unlinks
+   * behind a closed details screen (those go through the sweep, which
+   * broadcasts). If that ever changes, the broadcast becomes the right answer.
+   */
   const handleEmailsChangedPreserveScroll = useCallback(async () => {
     pendingScrollTop.current = scrollContainerRef.current?.scrollTop ?? null;
     await loadDetails();
     // BACKLOG-322: refetch the unified attachments so the Attachments tab
     // reflects a just-attached (or unlinked) email without a manual reload.
     refreshAttachments();
-  }, [loadDetails, refreshAttachments]);
+    // BACKLOG-2838: an attached or unlinked email changes email_count.
+    onTransactionUpdated?.();
+  }, [loadDetails, refreshAttachments, onTransactionUpdated]);
 
   /**
    * Undo an Edit Contacts save that took parties off this deal (BACKLOG-2501).
@@ -823,7 +855,10 @@ function TransactionDetails({
     await refreshCommunicationsSilently("email");
     // BACKLOG-322: a restored email brings its attachments back — refetch them.
     refreshAttachments();
-  }, [refreshCommunicationsSilently, refreshAttachments]);
+    // BACKLOG-2838: a restore puts an email back on the deal; a Needs-review
+    // Confirm moves one into the linked set. Both change email_count.
+    onTransactionUpdated?.();
+  }, [refreshCommunicationsSilently, refreshAttachments, onTransactionUpdated]);
 
   // BACKLOG-1793: silent text-communications refresh for the restore-removed
   // path on the Messages tab — mirrors handleRefreshEmailsSilently so a restored
@@ -832,7 +867,9 @@ function TransactionDetails({
     await refreshCommunicationsSilently("text");
     // BACKLOG-322: a restored conversation brings its attachments back — refetch.
     refreshAttachments();
-  }, [refreshCommunicationsSilently, refreshAttachments]);
+    // BACKLOG-2838: a restored conversation is back in the text thread count.
+    onTransactionUpdated?.();
+  }, [refreshCommunicationsSilently, refreshAttachments, onTransactionUpdated]);
 
   // BACKLOG-2791 — THE LINKED LIST HEARS THE REVIEW NOTIFICATION TOO.
   //
@@ -1056,11 +1093,23 @@ function TransactionDetails({
           onShowEditModal={() => setShowEditModal(true)}
           onApprove={handleApprove}
           onRestore={handleRestore}
-          onShowExportModal={() => setShowExportModal(true)}
+          /* BACKLOG-2866 — was `() => setShowExportModal(true)`, which opened the
+             export modal without ever consulting review state. The one class of
+             user with a separate export route (brokerage, whose Complete leads
+             to Submit) was the one class that could skip the gate and produce an
+             audit package containing emails nobody reviewed. Same gate as
+             Complete, same P3 dialog. */
+          onShowExportModal={() => { void complete.requestExport(); }}
           onShowDeleteConfirm={() => setShowDeleteConfirm(true)}
           reviewCount={reviewQueue.threadCount}
           onShowNeedsReview={() => setShowNeedsReview(true)}
           onComplete={() => { void complete.requestComplete(); }}
+          /* BACKLOG-2849 — the standalone Export button, for brokerage users
+             only. Derived from the SAME branch that decides where Complete
+             goes, so the button appears exactly when Complete does NOT already
+             lead to the export flow. An individual keeps the single merged
+             Complete that BACKLOG-2792 gave them. */
+          showExport={complete.resolveTarget() === "submit"}
         />
 
         {/* Tabs */}
@@ -1418,7 +1467,7 @@ function TransactionDetails({
       {showSubmitModal && (
         <SubmitForReviewModal
           transaction={transaction}
-          emailThreadCount={transaction.email_count || 0}
+          emailCount={transaction.email_count || 0}
           textThreadCount={transaction.text_thread_count || 0}
           attachmentCount={dbAttachmentCounts.total}
           emailAttachmentCount={dbAttachmentCounts.emailAttachments}
@@ -1431,13 +1480,22 @@ function TransactionDetails({
             resetSubmit();
           }}
           onSubmit={handleSubmitForReview}
-          // BACKLOG-2792: S4's Export option. The prop already existed and had
-          // ZERO call sites; this is the founder's "the confirmation window
-          // includes an Export option that triggers the same S3 export flow an
-          // individual gets" — literally the same modal, not a parallel path.
-          onExportFirst={() => {
+          // BACKLOG-2792: S4's Export option — the founder's "the confirmation
+          // window includes an Export option that triggers the same S3 export
+          // flow an individual gets", literally the same modal, not a parallel
+          // path.
+          //
+          // BACKLOG-2849 renamed the prop from `onExportFirst`. The callback is
+          // unchanged and now backs BOTH offers in that modal: the button
+          // beside Submit, and the post-submit "Want to keep a local copy?"
+          // ask. Same action either way, which is why it is one prop.
+          // BACKLOG-2866: re-gated. This offer sits downstream of Complete's
+          // gate, but the modal can stay open while a background sync queues
+          // new items, so the queue it was cleared against is not the queue at
+          // click time. Same gate, re-read now.
+          onExport={() => {
             setShowSubmitModal(false);
-            setShowExportModal(true);
+            void complete.requestExport();
           }}
         />
       )}

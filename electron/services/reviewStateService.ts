@@ -76,6 +76,10 @@ import {
 } from "./db/communicationDbService";
 import { linkEmailToTransaction } from "./autoLinkService";
 import logService from "./logService";
+// BACKLOG-2818: the published lifecycle definition. The discriminator is a
+// persisted-data contract, so it is named here rather than spelled out at each
+// of the three sites (a read, a SQL predicate and a write) that have to agree.
+import { REVIEW_REJECTION_REASON } from "../types/ipc/communicationLifecycle";
 
 const MODULE = "ReviewStateService";
 
@@ -140,6 +144,38 @@ export interface ReviewItemDisplay {
   cc: string | null;
   /** Sender address (emails) — the raw value, unlike `subtitle`. */
   sender: string | null;
+  /**
+   * The email's HTML body (BACKLOG-2831), named `body` to match the LINKED
+   * loader's projection (`COALESCE(m.body_html, e.body_html) AS body`) so the
+   * reading modal's existing `body_html || body` fallback finds it.
+   *
+   * `snippet` alone was not enough: it is `firstLine(body_plain)`, and Outlook
+   * puts Graph's `bodyPreview` in `body_plain` for every HTML message. An HTML
+   * message with an empty preview therefore gave the modal nothing, and it
+   * rendered "No content" for an email whose body was in `emails.body_html` all
+   * along — while the same email, once linked, rendered fine.
+   */
+  body: string | null;
+  /**
+   * The email's FULL plain-text body (BACKLOG-2844), matching what the LINKED
+   * loader projects (`COALESCE(m.body_text, e.body_plain) AS body_text` — the
+   * whole column, uncapped).
+   *
+   * `snippet` cannot serve this purpose and is deliberately left alone: it is
+   * capped at 200 characters and whitespace-collapsed because it feeds the
+   * CARD's one-line preview. Feeding that same 200-char string to the reading
+   * modal is what the founder hit — the message stopped mid-word with no
+   * indication, because the modal only appends "..." past ITS own 300-character
+   * limit, and a 200-character string never reaches it. So the truncation was
+   * not merely early, it was SILENT.
+   *
+   * Trimmed at the ends, newlines preserved: the modal renders
+   * `whitespace-pre-wrap`, so paragraphs matter, while leading blank lines would
+   * eat the card's preview window.
+   *
+   * NULL for texts and for emails with no plain-text part.
+   */
+  bodyText: string | null;
   /** Whether the underlying record carries attachments. */
   hasAttachments: boolean;
   /** Every distinct handle on a TEXT thread, for participant display. */
@@ -155,8 +191,16 @@ export interface ReviewItemDisplay {
     body_text: string | null;
     sent_at: string | null;
     direction: string | null;
+    /**
+     * BACKLOG-2814: the participants JSON. MessageThreadCard derives group-ness
+     * from THIS field, not from participants_flat, so its absence used to make
+     * every review card render as a 1:1.
+     */
+    participants: string | null;
     participants_flat: string | null;
     channel: string | null;
+    /** BACKLOG-2814: Apple's group name; null for 1:1s and unnamed groups. */
+    thread_display_name: string | null;
   }>;
 }
 
@@ -303,7 +347,44 @@ export function getReviewState(transactionId: string): ReviewState {
     display: emailDisplay(r.email_id),
   }));
 
-  const items = [...pending, ...legacy].sort((a, b) =>
+  // DEDUP ACROSS THE TWO STORES (BACKLOG-2831).
+  //
+  // The stores are NOT disjoint, and only one direction is guarded.
+  // `findCandidateEmailsWithMatch` excludes an email that already has a
+  // `communications` row for the deal, so a LEGACY email is never queued. There
+  // is no equivalent exclusion for a PENDING row, so any sweep that LINKS rather
+  // than queues — the Texts tab's "Sync Messages" button, and every
+  // `autoLinkNewMessagesForUser` run after a message import — writes a second,
+  // `address_missing` row for an email already sitting in the queue.
+  //
+  // Both rows carry the SAME `email_id` but different ids (the `pending:` /
+  // `legacy:` prefixes), so nothing keyed on the item id noticed: the card read
+  // "(2 emails)", the thread rendered the same email row twice, and React warned
+  // about two children with the same key. The badge and the Complete gate
+  // counted it twice as well.
+  //
+  // THE PENDING ROW WINS. It is the one carrying the review lifecycle — approve
+  // links it, reject suppresses it — whereas the legacy row is already linked,
+  // so surfacing the legacy twin would offer a Confirm for a decision the
+  // pending row still owns. Approve and reject then resolve BOTH stores (see
+  // resolveLegacyTwins), so the loser cannot outlive the winner.
+  //
+  // KEYED ON `email_id`, NEVER ON `thread_id`. Texts cannot twin at all — the
+  // legacy population is email-only — and two genuinely different emails in one
+  // conversation share a thread_id, so collapsing on that would silently hide a
+  // real needs-review email. Items with no `email_id` (every text) are never
+  // deduped.
+  const seenEmailIds = new Set<string>();
+  const deduped: ReviewItem[] = [];
+  for (const item of [...pending, ...legacy]) {
+    if (item.email_id) {
+      if (seenEmailIds.has(item.email_id)) continue;
+      seenEmailIds.add(item.email_id);
+    }
+    deduped.push(item);
+  }
+
+  const items = deduped.sort((a, b) =>
     (b.display.occurredAt ?? b.found_at).localeCompare(a.display.occurredAt ?? a.found_at),
   );
   return { items, count: items.length };
@@ -319,6 +400,8 @@ const EMPTY_DISPLAY: ReviewItemDisplay = {
   recipients: null,
   cc: null,
   sender: null,
+  body: null,
+  bodyText: null,
   hasAttachments: false,
   threadParticipants: [],
   threadMessages: [],
@@ -340,11 +423,12 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
     recipients: string | null;
     cc: string | null;
     body_plain: string | null;
+    body_html: string | null;
     sent_at: string | null;
     has_attachments: number | null;
     thread_id: string | null;
   }>(
-    `SELECT subject, sender, recipients, cc, body_plain, sent_at, has_attachments, thread_id
+    `SELECT subject, sender, recipients, cc, body_plain, body_html, sent_at, has_attachments, thread_id
        FROM emails WHERE id = ?`,
     [emailId],
   );
@@ -360,6 +444,10 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
     recipients: row.recipients,
     cc: row.cc,
     sender: row.sender,
+    // BACKLOG-2831: the HTML the modal falls back to when there is no plain text.
+    body: row.body_html,
+    // BACKLOG-2844: the WHOLE plain body, not the card's 200-char preview.
+    bodyText: row.body_plain?.trim() || null,
     hasAttachments: !!row.has_attachments,
     threadParticipants: [],
     threadMessages: [],
@@ -384,19 +472,36 @@ function threadDisplay(threadId: string | null): ReviewItemDisplay {
   );
   if (!row) return EMPTY_DISPLAY;
   // The real messages, so the card renders a real conversation.
+  // BACKLOG-2814: `participants` (the JSON) joins this projection, and it is a
+  // FIX, not an addition. MessageThreadCard derives group-ness from
+  // `msg.participants` alone — `participants_flat` is a search string it never
+  // reads — so review cards saw zero participants and could never render as a
+  // group no matter what the data said. Without this column a group name would
+  // be joined in below and then never displayed on either review surface.
+  //
+  // Consequence, intended: review cards for genuine group threads now render as
+  // groups (avatar + participant line), which they always should have.
   const threadMessages = dbAll<{
     id: string;
     thread_id: string | null;
     body_text: string | null;
     sent_at: string | null;
     direction: string | null;
+    participants: string | null;
     participants_flat: string | null;
     channel: string | null;
+    thread_display_name: string | null;
   }>(
-    `SELECT id, thread_id, body_text, sent_at, direction, participants_flat, channel
-       FROM messages
-      WHERE thread_id = ? AND duplicate_of IS NULL
-      ORDER BY sent_at ASC`,
+    `SELECT m.id, m.thread_id, m.body_text, m.sent_at, m.direction,
+            m.participants, m.participants_flat, m.channel,
+            tn.display_name AS thread_display_name
+       FROM messages m
+       -- (user_id, thread_id) is the PK; thread_id alone would cross users.
+       LEFT JOIN message_thread_names tn ON (
+         tn.thread_id = m.thread_id AND tn.user_id = m.user_id
+       )
+      WHERE m.thread_id = ? AND m.duplicate_of IS NULL
+      ORDER BY m.sent_at ASC`,
     [threadId],
   );
   const handles = (row.participants ?? "")
@@ -415,6 +520,9 @@ function threadDisplay(threadId: string | null): ReviewItemDisplay {
     recipients: null,
     cc: null,
     sender: handles[0] ?? null,
+    // Texts have no HTML part; the thread's messages carry their own body_text.
+    body: null,
+    bodyText: null,
     hasAttachments: false,
     threadParticipants: handles,
     threadMessages,
@@ -685,10 +793,11 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<num
   );
   if (!row) return 0;
 
-  // `reason` is the discriminator: only this service writes 'rejected_in_review'.
-  // match_reason alone would also match a legacy 2319 removal, whose restore
-  // must keep its existing link-recreating behaviour.
-  if (row.reason !== "rejected_in_review") return 0;
+  // `reason` is the discriminator: only this service writes
+  // REVIEW_REJECTION_REASON (BACKLOG-2818). match_reason alone would also match
+  // a legacy 2319 removal, whose restore must keep its existing link-recreating
+  // behaviour.
+  if (row.reason !== REVIEW_REJECTION_REASON) return 0;
 
   // THREAD-AWARE, matching restoreRemovedEmailThread.
   //
@@ -707,10 +816,14 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<num
            FROM ignored_communications ic
            JOIN emails e ON e.id = ic.email_id
           WHERE ic.transaction_id = ?
-            AND ic.reason = 'rejected_in_review'
+            AND ic.reason = ?
             AND e.thread_id IS NOT NULL
             AND e.thread_id = (SELECT thread_id FROM emails WHERE id = ?)`,
-        [row.transaction_id, row.email_id],
+        // BACKLOG-2818: BOUND, not interpolated. The sibling sweep has to agree
+        // with the single-row check four lines up; when both were spelled out as
+        // literals they could disagree, and a card would restore one email and
+        // leave its thread-mate behind.
+        [row.transaction_id, REVIEW_REJECTION_REASON, row.email_id],
       )
     : [];
 
@@ -797,6 +910,48 @@ function loadItem(id: string): ReviewItem | undefined {
 }
 
 /**
+ * Clear the LEGACY twin of a pending item that has just been decided
+ * (BACKLOG-2831).
+ *
+ * The dedup in getReviewState hides the twin; it does not resolve it. Acting on
+ * the surviving item has to leave BOTH stores settled, or the decided email
+ * simply reappears as its other self on the next read — and, because the count
+ * is what the Complete gate reads, an already-reviewed email keeps the deal
+ * un-completable. That ghost is the reason this is not a cosmetic fix.
+ *
+ * Why each verb needs its own handling, rather than one shared "delete":
+ *
+ *  APPROVE — the legacy row is a real, wanted LINK. `linkEmailToTransaction`
+ *    returns "already_linked" and deliberately leaves `match_reason` alone
+ *    (2319 idempotency, so a re-sync cannot clobber a user_confirmed link back
+ *    to address_missing). Correct in general, wrong here: nothing then promotes
+ *    the row, so it stays `address_missing` and stays in review. Promoting it is
+ *    exactly the existing 2319 confirm.
+ *
+ *  REJECT — "not part of this deal", so the link must GO. The suppression row
+ *    is written once by the caller against `email_id`; deleting the legacy row
+ *    here keeps that to ONE row rather than two, which matters because the
+ *    Removed section renders these and a duplicate would be a second card with
+ *    a second Restore for one email.
+ */
+function resolveLegacyTwins(
+  emailId: string | null,
+  transactionId: string,
+  verb: "approve" | "reject",
+): void {
+  if (!emailId) return;
+  if (verb === "approve") {
+    confirmEmailLinksByEmailIds([emailId], transactionId);
+    return;
+  }
+  dbRun(
+    `DELETE FROM communications
+      WHERE transaction_id = ? AND email_id = ? AND match_reason = 'address_missing'`,
+    [transactionId, emailId],
+  );
+}
+
+/**
  * Approve. For a PENDING item this is what LINKS it, per the normal rules. For a
  * LEGACY item the row is already linked, so approval is the existing 2319
  * confirm (match_reason → user_confirmed). Both leave the item out of
@@ -825,6 +980,11 @@ export async function approveReviewItems(itemIds: string[]): Promise<{ approved:
         0.95,
         "user_confirmed",
       );
+      // BACKLOG-2831: and settle the legacy twin, if this email has one. When it
+      // does, the call above returned "already_linked" without promoting the
+      // existing row, so without this the approved email stays address_missing —
+      // i.e. still in review, still gating Complete.
+      resolveLegacyTwins(item.email_id, item.transaction_id, "approve");
     } else if (item.thread_id) {
       const txn = getTransactionRow(item.transaction_id);
       if (!txn) continue;
@@ -867,7 +1027,7 @@ export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: 
       email_id: item.email_id ?? undefined,
       thread_id: item.thread_id ?? undefined,
       original_communication_id: item.origin === "legacy" ? item.rowId : undefined,
-      reason: "rejected_in_review",
+      reason: REVIEW_REJECTION_REASON,
       // ALWAYS address_missing, including for a never-linked pending item.
       //
       // The suppression row is also what the Removed section renders and what
@@ -885,6 +1045,12 @@ export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: 
       dbRun("DELETE FROM communications WHERE id = ?", [item.rowId]);
     } else {
       dbRun("DELETE FROM pending_review_communications WHERE id = ?", [item.rowId]);
+      // BACKLOG-2831: a rejected pending email may ALSO hold an address_missing
+      // link row, written by a sweep that linked instead of queueing. Rejecting
+      // means "not part of this deal", so that link goes too — otherwise the
+      // rejected email came straight back as its legacy self, still in review
+      // and still in the audit.
+      resolveLegacyTwins(item.email_id, item.transaction_id, "reject");
     }
     rejected++;
   }

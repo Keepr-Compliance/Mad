@@ -42,6 +42,25 @@ interface TransactionHeaderProps {
   onShowNeedsReview?: () => void;
   /** BACKLOG-2792: the merged Complete action (gate, then license branch). */
   onComplete?: () => void;
+  /**
+   * BACKLOG-2849 — does this user need a standalone Export button?
+   *
+   * TRUE for a brokerage user only. BACKLOG-2792 merged Export and Submit into
+   * Complete, which was right for an INDIVIDUAL — their Complete goes straight
+   * to the export flow, so the button would be a duplicate — but it left a
+   * brokerage user with no way to export at all: their Complete opens the
+   * submit confirmation, and reaching a PDF meant re-entering a submit
+   * confirmation for a deal they had already submitted. The founder ruled the
+   * affordance back for them.
+   *
+   * The caller derives this from `useCompleteTransaction.resolveTarget()`, the
+   * SAME branch that chooses the destination — so the button appears exactly
+   * when Complete does NOT already lead to export, and the two can never
+   * disagree. That branch fails closed to "export", so a user whose
+   * entitlements are still loading is treated as an individual and simply sees
+   * no extra button.
+   */
+  showExport?: boolean;
 }
 
 export function TransactionHeader({
@@ -62,6 +81,7 @@ export function TransactionHeader({
   reviewCount = 0,
   onShowNeedsReview,
   onComplete,
+  showExport = false,
 }: TransactionHeaderProps): React.ReactElement {
   // Determine header style based on state
   const getHeaderStyle = () => {
@@ -153,6 +173,8 @@ export function TransactionHeader({
         reviewCount={reviewCount}
         onShowNeedsReview={onShowNeedsReview ?? (() => undefined)}
         onComplete={onComplete ?? onShowExportModal}
+        showExport={showExport}
+        onShowExportModal={onShowExportModal}
       />
     );
   };
@@ -325,6 +347,8 @@ function ActiveActions({
   reviewCount,
   onShowNeedsReview,
   onComplete,
+  showExport,
+  onShowExportModal,
 }: {
   transaction: Transaction;
   isSubmitting: boolean;
@@ -332,6 +356,9 @@ function ActiveActions({
   reviewCount: number;
   onShowNeedsReview: () => void;
   onComplete: () => void;
+  /** BACKLOG-2849 — brokerage users only. See TransactionHeaderProps. */
+  showExport: boolean;
+  onShowExportModal: () => void;
 }) {
   const { isOnline } = useNetwork();
   const isSubmitted = transaction.submission_status === "submitted" ||
@@ -389,6 +416,36 @@ function ActiveActions({
         )}
         Complete
       </button>
+
+      {/* B3 · Export (BACKLOG-2849) — RESTORED for brokerage users.
+          Class-for-class the button BACKLOG-2792 removed (BACKLOG-459's
+          "Available for ALL license types"; white on green, download glyph,
+          the word "Export"), in the same position it held then: after the
+          primary action, before the Submitted badge.
+
+          What changed is only WHO sees it. Before 2792 it was unconditional;
+          now an individual's Complete already IS the export flow, so showing
+          it to them would be two controls for one action.
+
+          No offline gating, exactly as before — the export writes a local
+          file and does not need the network. Complete carries the offline
+          title because IT may need to reach the broker.
+
+          The label is "Export", not "Export PDF": this opens a format chooser
+          (combined PDF by default, folder and summary PDF also offered), and
+          it is the same destination the modal's Export button reaches. */}
+      {showExport && (
+        <button
+          onClick={onShowExportModal}
+          data-testid="header-export-button"
+          className="px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-white text-green-600 hover:bg-opacity-90 shadow-md hover:shadow-lg text-sm flex-shrink-0"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          Export
+        </button>
+      )}
 
       {/* Submitted badge stays — it is status, not an action. */}
       {isSubmitted && (

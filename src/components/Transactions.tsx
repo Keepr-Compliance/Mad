@@ -177,6 +177,12 @@ function Transactions({
     exitSelectionMode,
     closeBulkDeleteModal: closeBulkDeleteConfirm,
     closeBulkExportModal,
+    // BACKLOG-2866: this component is currently unrendered (nothing imports
+    // `<Transactions>`), but it shares `useBulkActions` with the live
+    // `TransactionList`, so the gate already covers it. The label is wired so a
+    // refusal names the deal rather than its id if it is ever mounted.
+    labelForTransaction: (id: string) =>
+      transactions.find((t) => t.id === id)?.property_address,
   });
 
   // Bulk submit state (BACKLOG-392)

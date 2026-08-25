@@ -2,7 +2,8 @@
  * BACKLOG-2805 (support ticket 112) — the transaction-type badge on the
  * details header.
  *
- * Same ruling as the Step 1 toggle: "Purchase" -> "Listing/Purchase" (exact,
+ * Same ruling as the Step 1 toggle: "Purchase" -> "Listing/Purchase"
+ * (BACKLOG-2805) -> "Listing" (BACKLOG-2850) (exact,
  * with the slash), "Sale" unchanged, enum values untouched.
  *
  * The badge carries a COLOUR as well as a label, keyed off the same field, so
@@ -52,12 +53,16 @@ function renderTab(transactionType: string) {
 }
 
 describe("BACKLOG-2805: transaction type badge", () => {
-  it('reads "Listing/Purchase" on a purchase', () => {
+  it('reads "Listing" on a purchase', () => {
     renderTab("purchase");
 
-    const badge = screen.getByText("Listing/Purchase");
+    // Exact-text (getByText's default for a string), so the retired
+    // "Listing/Purchase" does NOT satisfy this query — a prefix would.
+    const badge = screen.getByText("Listing");
     expect(badge).toBeInTheDocument();
     expect(badge).toHaveClass("bg-blue-100");
+    // BACKLOG-2850: and the old string is nowhere on the surface.
+    expect(screen.queryByText("Listing/Purchase")).not.toBeInTheDocument();
   });
 
   it('still reads "Sale" on a sale', () => {
@@ -66,7 +71,7 @@ describe("BACKLOG-2805: transaction type badge", () => {
     const badge = screen.getByText("Sale");
     expect(badge).toBeInTheDocument();
     expect(badge).toHaveClass("bg-green-100");
-    expect(screen.queryByText("Listing/Purchase")).not.toBeInTheDocument();
+    expect(screen.queryByText("Listing")).not.toBeInTheDocument();
   });
 
   it('still reads "Other" for an unmapped type', () => {

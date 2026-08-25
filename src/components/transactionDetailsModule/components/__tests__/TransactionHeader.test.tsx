@@ -122,12 +122,25 @@ describe("TransactionHeader", () => {
   });
 
   /**
-   * BACKLOG-2792 — Export and Submit for Review are MERGED into one "Complete"
-   * button, so the old per-license button matrix no longer applies at the
-   * header: the header shows the SAME two buttons to everyone (Needs Review,
-   * Complete) and the license branch happens inside Complete's handler, after
-   * the completeness gate. The branch itself is covered by
-   * useCompleteTransaction.licenseBranch-2792.test.ts.
+   * BACKLOG-2792 — Export and Submit for Review were MERGED into one "Complete"
+   * button, so the old per-license button matrix stopped applying: the PRIMARY
+   * actions (Needs Review, Complete) are the same for everyone and the license
+   * branch happens inside Complete's handler, after the completeness gate. The
+   * branch itself is covered by useCompleteTransaction.licenseBranch-2792.test.ts.
+   *
+   * AMENDED BY BACKLOG-2849. "The header no longer branches" is no longer true
+   * as a flat statement: a standalone Export button is back for BROKERAGE users
+   * only, driven by the `showExport` prop the caller derives from the same
+   * `resolveTarget()` branch. What survives from 2792 is narrower and is what
+   * these tests now say — the PRIMARY actions do not branch; the Export
+   * affordance does.
+   *
+   * Both cases pass `showExport` EXPLICITLY rather than leaning on its `false`
+   * default. Before this amendment the team case rendered without Export and
+   * passed, while the live app showed one — a green that could not distinguish
+   * the two licences because it never exercised the prop the branch had moved
+   * to. Stating the value at each call site is what makes these assertions
+   * about the branch rather than about a default.
    *
    * Note both layouts render the action set (mobile `sm:hidden` + desktop), so
    * every query here uses getAllBy*()[0] — asserting a single match would fail
@@ -138,12 +151,16 @@ describe("TransactionHeader", () => {
       setFeatureGateForLicense("individual");
       // reviewCount > 0 so Needs Review is on screen at all — it is hidden when
       // the queue is empty (founder ruling). What this test is about is that
-      // Export and Submit are GONE, replaced by Complete.
+      // the old bare Export and Submit buttons are GONE, replaced by Complete.
       render(
         <TransactionHeader
           {...defaultProps}
           transaction={createMockTransaction()}
           reviewCount={2}
+          // BACKLOG-2849: an individual's Complete already goes to the export
+          // flow, so the caller passes false and a second control would be a
+          // duplicate. Stated, not defaulted.
+          showExport={false}
         />,
       );
 
@@ -153,22 +170,30 @@ describe("TransactionHeader", () => {
       expect(screen.queryByRole("button", { name: /submit for review/i })).not.toBeInTheDocument();
     });
 
-    it("shows the SAME two buttons for a team license — the header no longer branches", () => {
+    it("shows a team license the SAME primary actions, PLUS the Export button (BACKLOG-2849)", () => {
       setFeatureGateForLicense("team");
-      // reviewCount > 0 so Needs Review is on screen at all — it is hidden when
-      // the queue is empty (founder ruling). What this test is about is that
-      // Export and Submit are GONE, replaced by Complete.
+      // BACKLOG-2849 amended this case. It used to assert a team licence saw
+      // NO Export — true only because it never passed `showExport`, so it
+      // rendered the individual configuration under a team fixture and pinned
+      // the opposite of what the app does. It now exercises the branch.
       render(
         <TransactionHeader
           {...defaultProps}
           transaction={createMockTransaction()}
           reviewCount={2}
+          showExport={true}
         />,
       );
 
+      // What 2792 established, and what is still true: the PRIMARY actions do
+      // not branch by licence.
       expect(screen.getAllByTestId("complete-button")[0]).toBeInTheDocument();
       expect(screen.getAllByTestId("needs-review-button")[0]).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /^export$/i })).not.toBeInTheDocument();
+      // What 2849 changed: Export IS offered here, and it is the only
+      // difference from the individual case above.
+      expect(screen.getAllByTestId("header-export-button")[0]).toBeInTheDocument();
+      // The old per-license "Submit for Review" button stays gone — that half
+      // of 2792 is untouched, and the merged Complete is still the submit route.
       expect(screen.queryByRole("button", { name: /submit for review/i })).not.toBeInTheDocument();
     });
 

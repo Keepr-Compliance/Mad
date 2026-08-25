@@ -52,18 +52,24 @@ const EmailsIcon = (): React.ReactElement => (
  * Formats email and text counts into a human-readable string.
  * Handles singular/plural grammar. Always shows both counts for design consistency.
  *
+ * BACKLOG-2865: the email figure is a count of EMAILS, so the word is "email".
+ * It said "email thread" over `transaction.email_count`, which is the same
+ * mislabel BACKLOG-2838 corrected on the submit summary. The text figure keeps
+ * "Text" because `text_thread_count` genuinely counts threads — the asymmetry
+ * is deliberate and 2838 ruled on it.
+ *
  * @example
- * formatCommunicationCounts(5, 0) // "5 email threads, 0 Texts"
- * formatCommunicationCounts(0, 3) // "0 email threads, 3 Texts"
- * formatCommunicationCounts(8, 4) // "8 email threads, 4 Texts"
- * formatCommunicationCounts(1, 1) // "1 email thread, 1 Text"
- * formatCommunicationCounts(0, 0) // "0 email threads, 0 Texts"
+ * formatCommunicationCounts(5, 0) // "5 emails, 0 Texts"
+ * formatCommunicationCounts(0, 3) // "0 emails, 3 Texts"
+ * formatCommunicationCounts(8, 4) // "8 emails, 4 Texts"
+ * formatCommunicationCounts(1, 1) // "1 email, 1 Text"
+ * formatCommunicationCounts(0, 0) // "0 emails, 0 Texts"
  */
 export function formatCommunicationCounts(
   emailCount: number,
   textCount: number
 ): string {
-  const emailPart = `${emailCount} ${emailCount === 1 ? "email thread" : "email threads"}`;
+  const emailPart = `${emailCount} ${emailCount === 1 ? "email" : "emails"}`;
   const textPart = `${textCount} ${textCount === 1 ? "Text" : "Texts"}`;
 
   return `${emailPart}, ${textPart}`;
@@ -236,7 +242,11 @@ function TransactionCard({
               title="View emails"
             >
               <EmailsIcon />
-              <span>{emailCount} {emailCount === 1 ? "Email thread" : "Email threads"}</span>
+              {/* BACKLOG-2865: "Email", not "Email thread". `transaction.email_count`
+                  counts EMAILS (see emailThreadScope.ts); BACKLOG-2838 fixed this same
+                  mislabel on the submit summary by moving the WORD to fit the VALUE,
+                  and left this component because nothing renders it. */}
+              <span>{emailCount} {emailCount === 1 ? "Email" : "Emails"}</span>
             </button>
             {transaction.extraction_confidence && (
               <span className="flex items-center gap-1">
