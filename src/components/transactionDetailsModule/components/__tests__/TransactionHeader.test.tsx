@@ -207,7 +207,12 @@ describe("TransactionHeader", () => {
       );
 
       expect(screen.getAllByTestId("complete-button")[0]).toBeInTheDocument();
-      expect(screen.getAllByText(/submitted/i)[0]).toBeInTheDocument();
+      // BACKLOG-2869: the badge for `submitted` now reads "Under Review" — the
+      // word "Submitted" was dropped because it also stood for `under_review`
+      // and `approved`. The claim here is unchanged: a submitted deal still
+      // shows both Complete and its status badge.
+      expect(screen.getAllByTestId("submission-status-badge")[0]).toBeInTheDocument();
+      expect(screen.getAllByText("Under Review")[0]).toBeInTheDocument();
     });
 
     it("clicking Complete calls onComplete, NOT onShowExportModal — the gate must run first", () => {

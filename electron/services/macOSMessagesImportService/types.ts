@@ -46,6 +46,31 @@ export interface AttachmentsRefusedForSpace {
 }
 
 /**
+ * BACKLOG-2870: why an import refused to start, or stopped, for disk space.
+ *
+ * Distinct from `AttachmentsRefusedForSpace`, which is a PARTIAL outcome — the
+ * messages imported and only the attachment copy stood down. This one means the
+ * import produced NOTHING, either because the pre-flight refused it before the
+ * first write or because the volume filled underneath it mid-run.
+ */
+export interface ImportRefusedForDiskSpace {
+  /** Bytes the import needed free (`DISK_SPACE_THRESHOLDS.messagesImport`). */
+  requiredBytes: number;
+  /** Bytes actually available (`bavail`), or null when it could not be read. */
+  availableBytes: number | null;
+  /**
+   * Local Time Machine snapshots holding purgeable space, or null when the count
+   * could not be read. NEVER a byte figure — see `utils/localSnapshots.ts`.
+   */
+  snapshotCount: number | null;
+  /**
+   * `"before"` — refused up front; nothing was written, not even a staging table.
+   * `"during"` — the pre-flight passed and the disk filled mid-run anyway.
+   */
+  phase: "before" | "during";
+}
+
+/**
  * Result of importing macOS messages
  */
 export interface MacOSImportResult {
@@ -102,6 +127,15 @@ export interface MacOSImportResult {
    * result still reports success) — only the attachment files were skipped.
    */
   attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
+  /**
+   * BACKLOG-2870: the whole import was refused or stopped for disk space.
+   *
+   * Carried as structured data rather than left to `error` text so the renderer
+   * can present it as a capacity refusal — the founder's run surfaced SQLite's
+   * raw `database or disk is full`, which told him nothing he could act on and
+   * which he did not believe.
+   */
+  refusedForDiskSpace?: ImportRefusedForDiskSpace;
   /** BACKLOG-2743: True when the user chose to import without attachments. */
   attachmentsSkippedByChoice?: boolean;
   /**

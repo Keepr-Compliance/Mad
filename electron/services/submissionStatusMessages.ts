@@ -58,10 +58,18 @@
  * `resubmitted` at version >= 2 (`submissionService.ts` — `finalStatus` is
  * `resubmitted` only when `options.version` is set, and `resubmitTransaction`
  * always sets it to `current + 1`), by which point two rows share
- * `(organization_id, local_transaction_id)`, the `.maybeSingle()` lookup ahead
- * of this check returns PGRST116, and the check is never reached at all.
- * Adding the word here would change nothing until BACKLOG-2867 fixes that
- * lookup. Proven by execution in `submissionResubmitGuard-2853.test.ts`.
+ * `(organization_id, local_transaction_id)`.
+ *
+ * BACKLOG-2853 added that the check was therefore never reached on such a
+ * deal, so adding the word here would change nothing. THAT IS NO LONGER TRUE:
+ * BACKLOG-2867 made the lookup order by version and take one row, so a
+ * `resubmitted` deal now reaches the check and is declined by it. Adding the
+ * word WOULD change behaviour — it would refuse a plain submit on a
+ * round-tripped deal instead of letting it walk to a duplicate-key error. That
+ * is a live product decision and it is still not taken here; what BACKLOG-2867
+ * did instead was stop the fall-through from destroying anything, by refusing
+ * to delete a row at a version the pending insert is not replacing.
+ * Both states proven by execution in `submissionResubmitGuard-2853.test.ts`.
  */
 export const BLOCKED_SUBMISSION_STATUSES = [
   "submitted",

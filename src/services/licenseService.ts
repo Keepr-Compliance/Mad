@@ -26,6 +26,15 @@ export interface LicenseInfo {
   ai_detection_enabled: boolean;
   organization_id?: string;
   organization_name?: string;
+  /**
+   * BACKLOG-2885 — did this answer come from a loaded session?
+   *
+   * `false` means the main process had no session yet and returned its
+   * "individual, no organization" default. By value that is identical to a real
+   * individual, which is how a brokerage user's Complete came to perform a local
+   * export. Anything branching on license CLASS must treat `false` as unknown.
+   */
+  sessionBacked: boolean;
 }
 
 /**
@@ -96,6 +105,10 @@ export const licenseService = {
           ai_detection_enabled: result.license.ai_detection_enabled,
           organization_id: result.license.organization_id,
           organization_name: result.license.organization_name,
+          // BACKLOG-2885: absent means an older main process that cannot report
+          // it. Default TRUE — treating every answer as unknown would disable
+          // Complete outright, which is worse than the bug being fixed.
+          sessionBacked: result.sessionBacked !== false,
         });
       }
       return errorResult(result.error || "Failed to get license");
@@ -119,6 +132,8 @@ export const licenseService = {
           ai_detection_enabled: result.license.ai_detection_enabled,
           organization_id: result.license.organization_id,
           organization_name: result.license.organization_name,
+          // BACKLOG-2885 — see `get`.
+          sessionBacked: result.sessionBacked !== false,
         });
       }
       return errorResult(result.error || "Failed to refresh license");

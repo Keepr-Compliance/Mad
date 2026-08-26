@@ -1,55 +1,76 @@
 /**
  * Submission Status Badge Component
  *
- * Displays the current submission status with appropriate styling.
- * Part of BACKLOG-391: Submit for Review UI.
+ * The submission chip on a transaction LIST row (`TransactionListCard`,
+ * `TransactionMobileCard`). Part of BACKLOG-391: Submit for Review UI.
+ *
+ * ---------------------------------------------------------------------------
+ * THE WORDS ARE NOT DEFINED HERE (BACKLOG-2869)
+ * ---------------------------------------------------------------------------
+ * They come from `SUBMISSION_STATUS_LABEL`, the one map both this chip and the
+ * transaction header read. Before BACKLOG-2869 each surface carried its own
+ * table, and the header's said "Submitted" for `submitted`, `under_review` AND
+ * `approved` — so an approved deal never learned its outcome. Fixing only the
+ * header would have left the same deal reading "Under Review" at the top of
+ * the detail screen and "Submitted" on the row behind it: one state, two
+ * words, a translation table the user has to build for himself.
+ *
+ * What this file still owns is TONE — background, text colour and glyph. A
+ * dense list row and a header chip are not the same object and are allowed to
+ * look different; they are not allowed to disagree about what a deal IS.
+ *
+ * `submitted`, `under_review` and `resubmitted` therefore share one tone as
+ * well as one word. Three colours for one label would reintroduce the question
+ * the shared label removes ("is the blue one different from the yellow one?").
+ * The tone they share is the one `submitted` already had — blue with a clock —
+ * because `submitted` is the status the vast majority of rows sit in, so the
+ * common row is unchanged in colour and changes only in wording. Blue also
+ * stays clearly apart from the orange of `needs_changes`, which is the one
+ * in-flight state that asks the user to DO something.
  */
 import React from "react";
 import type { SubmissionStatus } from "@/types";
+import { SUBMISSION_STATUS_LABEL } from "./submissionStatusLabels";
 
 interface SubmissionStatusBadgeProps {
   status: SubmissionStatus;
   className?: string;
 }
 
-const STATUS_CONFIG: Record<
-  SubmissionStatus,
-  {
-    label: string;
-    bgColor: string;
-    textColor: string;
-    icon?: React.ReactNode;
-  }
-> = {
+interface SubmissionStatusTone {
+  bgColor: string;
+  textColor: string;
+  icon?: React.ReactNode;
+}
+
+/** Waiting on the broker, however many times it has been sent. */
+const TONE_IN_FLIGHT: SubmissionStatusTone = {
+  bgColor: "bg-blue-100",
+  textColor: "text-blue-700",
+  icon: (
+    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  ),
+};
+
+/**
+ * Tone per status. No labels — see the file header.
+ *
+ * `Record<SubmissionStatus, …>` for the same reason the label map is one: a
+ * status added to the schema union stops this file compiling until someone
+ * decides how it looks, rather than falling through to a default nobody chose.
+ */
+const STATUS_TONE: Record<SubmissionStatus, SubmissionStatusTone> = {
   not_submitted: {
-    label: "Not Submitted",
     bgColor: "bg-gray-100",
     textColor: "text-gray-600",
     icon: null,
   },
-  submitted: {
-    label: "Submitted",
-    bgColor: "bg-blue-100",
-    textColor: "text-blue-700",
-    icon: (
-      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-      </svg>
-    ),
-  },
-  under_review: {
-    label: "Under Review",
-    bgColor: "bg-yellow-100",
-    textColor: "text-yellow-700",
-    icon: (
-      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-      </svg>
-    ),
-  },
+  submitted: TONE_IN_FLIGHT,
+  under_review: TONE_IN_FLIGHT,
+  resubmitted: TONE_IN_FLIGHT,
   needs_changes: {
-    label: "Changes Requested",
     bgColor: "bg-orange-100",
     textColor: "text-orange-700",
     icon: (
@@ -58,18 +79,7 @@ const STATUS_CONFIG: Record<
       </svg>
     ),
   },
-  resubmitted: {
-    label: "Resubmitted",
-    bgColor: "bg-purple-100",
-    textColor: "text-purple-700",
-    icon: (
-      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-      </svg>
-    ),
-  },
   approved: {
-    label: "Approved",
     bgColor: "bg-green-100",
     textColor: "text-green-700",
     icon: (
@@ -79,7 +89,6 @@ const STATUS_CONFIG: Record<
     ),
   },
   rejected: {
-    label: "Rejected",
     bgColor: "bg-red-100",
     textColor: "text-red-700",
     icon: (
@@ -94,14 +103,19 @@ export function SubmissionStatusBadge({
   status,
   className = "",
 }: SubmissionStatusBadgeProps): React.ReactElement {
-  const config = STATUS_CONFIG[status] || STATUS_CONFIG.not_submitted;
+  // A row written by an older build or a future portal can hold a string
+  // neither map has heard of; it falls back to the never-sent treatment rather
+  // than rendering an empty chip.
+  const tone = STATUS_TONE[status] || STATUS_TONE.not_submitted;
+  const label = SUBMISSION_STATUS_LABEL[status] || SUBMISSION_STATUS_LABEL.not_submitted;
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${config.bgColor} ${config.textColor} ${className}`}
+      data-testid="submission-status-chip"
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${tone.bgColor} ${tone.textColor} ${className}`}
     >
-      {config.icon}
-      {config.label}
+      {tone.icon}
+      {label}
     </span>
   );
 }

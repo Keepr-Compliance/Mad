@@ -119,35 +119,52 @@ export async function evaluateExportGate(
 }
 
 // ===========================================================================
-// COPY — ONE wording for one condition.
+// COPY — ONE wording for one condition, and it names no action.
 //
-// These two strings are the P3 gate copy, moved here BYTE-IDENTICAL from
-// `ReviewPromptDialog`, which now imports them. The bulk route builds its
-// message from the same sentence rather than inventing a second one for the
-// same condition, so the details screen and the transactions list can never
-// tell the user two different things about the same queue.
+// These strings are the P3 gate copy. `ReviewPromptDialog` imports them and the
+// bulk route builds its refusal from the same sentence rather than inventing a
+// second one, so the details screen and the transactions list can never tell
+// the user two different things about the same queue.
 //
-// NOTE FOR THE FOUNDER (BACKLOG-2866): the sentence ends "...before completing
-// the transaction". On the brokerage-only header Export button, export is a
-// local-copy action rather than completion, so "completing" reads slightly off
-// there. Changing it would mean a second wording, so it is left alone pending a
-// copy ruling.
+// FOUNDER RULING, 2026-08-25 (BACKLOG-2881) — the copy question BACKLOG-2866
+// deferred to him is now CLOSED. He pressed Export on a deal with 9 in review
+// and was told they had to be reviewed "before completing the transaction",
+// while completing nothing: export from the brokerage-only header is a
+// local-copy action. Offered (1) leave it, (2) a second wording per action,
+// (3) drop the action from the sentence, HE CHOSE 3.
+//
+// Option 2 would have bought accuracy by giving up the no-drift guarantee
+// above. Option 3 keeps it and stops being wrong everywhere at once, because a
+// sentence that never names the action cannot name the wrong one.
+//
+// THE RULE THAT FOLLOWS: nothing these builders return may name the action.
+// `exportReviewGateCopy-2881.test.tsx` asserts "complet" is absent from every
+// string they produce — pinning only the new sentence would still pass if
+// someone reintroduced the old one alongside it.
 // ===========================================================================
 
 /** P3 heading. `count < 0` is the unreadable-queue case. */
 export function reviewBlockedTitle(count: number): string {
-  return count < 0
-    ? "Couldn't check Needs Review"
-    : "Review needed before completing";
+  return count < 0 ? "Couldn't check Needs Review" : "Review needed";
 }
 
-/** P3 body. `count < 0` is the unreadable-queue case. */
+/**
+ * P3 body.
+ *
+ * `count < 0` is the UNREADABLE-queue case, which is not an empty queue and
+ * must never read as one — see rule 2 at the top of this file. It says the
+ * queue could not be read and sends the user to Needs Review, without naming
+ * the action it is refusing.
+ */
 export function reviewBlockedBody(count: number): string {
   if (count < 0) {
-    return "The transaction can't be completed until the review queue can be read. Open Needs Review to try again.";
+    return "The review queue can't be read right now, so this can't go ahead. Open Needs Review to try again.";
   }
-  const plural = count === 1 ? "communication" : "communications";
-  return `You have ${count} ${plural} that need to be reviewed before completing the transaction.`;
+  // The VERB agrees with the noun. Before BACKLOG-2881 only the noun was
+  // swapped, so the singular read "1 communication that need to be reviewed".
+  const [noun, verb] =
+    count === 1 ? ["communication", "needs"] : ["communications", "need"];
+  return `You have ${count} ${noun} that ${verb} to be reviewed first.`;
 }
 
 /**

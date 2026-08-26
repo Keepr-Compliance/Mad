@@ -60,6 +60,7 @@ import type {
   ChatAccountRow,
   RawMacAttachment,
   AttachmentsRefusedForSpace,
+  ImportRefusedForDiskSpace,
 } from "./types";
 
 import {
@@ -98,7 +99,14 @@ import type { AttachmentSizeRow, ChatDisplayNameRow } from "./importHelpers";
 import type { ImportPlan } from "../importPlan";
 import { normalizeAssociatedGuid } from "../../utils/reactionUtils";
 // BACKLOG-2743: df-equivalent free space + the single space verdict helper.
-import { getAvailableDiskBytes, evaluateAttachmentSpace } from "../../utils/diskSpace";
+import {
+  getAvailableDiskBytes,
+  evaluateAttachmentSpace,
+  describeDiskShortfall,
+  isDiskFullError,
+} from "../../utils/diskSpace";
+import { readLocalSnapshotCount } from "../../utils/localSnapshots";
+import { DISK_SPACE_THRESHOLDS } from "../diagnostics/diskSpaceDiagnostics";
 
 /**
  * macOS Messages Import Service
@@ -364,6 +372,90 @@ class MacOSMessagesImportService {
         error:
           permissionCheck.userMessage ||
           "Full Disk Access permission is required to read iMessages",
+      };
+    }
+
+    /**
+     * BACKLOG-2870 — THE DB-WRITE SPACE PRE-FLIGHT.
+     *
+     * Placed HERE, and the placement IS the assertion: above the staging-table
+     * creation below, above `storeMessages`, above every INSERT. A refusal at
+     * this line cannot have written a row or created a table, which is what
+     * "refuses before any write" has to mean to be worth anything. The founder
+     * did not get a refusal — he got a partial import that died on a write with
+     * SQLite's raw `database or disk is full`.
+     *
+     * WHY THIS IS NOT THE BACKLOG-2743 GUARD. That one sizes the ATTACHMENT COPY
+     * and lives inside `storeAttachments`, and it could not have caught this: a
+     * force re-import of an already-imported library content-dedups every
+     * attachment, so its estimate is 0, and `evaluateAttachmentSpace`
+     * short-circuits to `fits: true` at `estimatedBytes <= 0`. That early return
+     * is correct and stays — routine re-syncs depend on it — but it means the run
+     * he made passed the only space check on the path without measuring anything.
+     *
+     * WHY A FIXED FLOOR AND NOT A PER-RUN ESTIMATE. The peak is dominated by the
+     * stage-and-swap SHAPE rather than by the row count: live rows, staged rows
+     * and the swap's WAL coexist, measured at 3x the settled size. A floor sized
+     * on the largest real library (the founder's, 707,828 messages) is honest
+     * about being a floor; a per-run prediction would invite trusting a number
+     * this path cannot compute until after it has read chat.db — which is after
+     * the point where refusing is still free. The arithmetic is recorded at
+     * `DISK_SPACE_THRESHOLDS.messagesImport`.
+     *
+     * FAILS OPEN on an unreadable sensor, matching `getAvailableDiskBytes`'s
+     * documented contract: blocking every import because `statfs` is unavailable
+     * is worse than the risk it guards against, and the ENOSPC translation in
+     * this method's `catch` remains the backstop.
+     */
+    const preflightRequiredBytes =
+      DISK_SPACE_THRESHOLDS.messagesImport * 1024 * 1024;
+    const preflightAvailableBytes = await getAvailableDiskBytes(
+      app.getPath("userData")
+    );
+    if (
+      preflightAvailableBytes !== null &&
+      preflightAvailableBytes < preflightRequiredBytes
+    ) {
+      // Read ONLY on the refusal path — an import that fits must not pay for a
+      // `tmutil` subprocess.
+      const snapshotCount = await readLocalSnapshotCount();
+      const message = describeDiskShortfall({
+        requiredBytes: preflightRequiredBytes,
+        availableBytes: preflightAvailableBytes,
+        snapshotCount,
+        phase: "before",
+      });
+
+      logService.warn(
+        `Refusing macOS Messages import for disk space: needs ${preflightRequiredBytes} bytes, ` +
+          `${preflightAvailableBytes} available. Nothing was written.`,
+        MacOSMessagesImportService.SERVICE_NAME,
+        {
+          requiredBytes: preflightRequiredBytes,
+          availableBytes: preflightAvailableBytes,
+          snapshotCount,
+          forceReimport,
+        }
+      );
+
+      return {
+        success: false,
+        messagesImported: 0,
+        messagesSkipped: 0,
+        attachmentsImported: 0,
+        attachmentsUpdated: 0,
+        attachmentsSkipped: 0,
+        duration: Date.now() - startTime,
+        error: message,
+        refusedForDiskSpace: {
+          requiredBytes: preflightRequiredBytes,
+          availableBytes: preflightAvailableBytes,
+          snapshotCount,
+          phase: "before",
+        },
+        // Nothing was touched. A force run has to say so explicitly or the
+        // failure card leaves the user believing their messages are gone.
+        rolledBack: forceReimport ? true : undefined,
       };
     }
 
@@ -1077,14 +1169,73 @@ class MacOSMessagesImportService {
       }
     } catch (error) {
       const duration = Date.now() - startTime;
-      const errorMessage =
+      const rawErrorMessage =
         error instanceof Error ? error.message : "Unknown error";
 
-      logService.error(
-        `Import failed: ${errorMessage}`,
-        MacOSMessagesImportService.SERVICE_NAME,
-        { duration }
-      );
+      /**
+       * BACKLOG-2870 — the disk filled AFTER the pre-flight passed.
+       *
+       * The pre-flight above is a reading taken at t0; it does not reserve
+       * anything and it does not bind the volume at t+5min. Another process, a
+       * Time Machine snapshot, or simply an import larger than the floor can
+       * consume the margin while this run is writing. So the mid-run failure has
+       * its own handler, and BOTH paths are required — a guard that only checks
+       * up front just moves the raw error later.
+       *
+       * The translation is the entire point. What reached the founder was
+       * SQLite's `database or disk is full`, verbatim, which named no number, no
+       * cause and no action, and which he did not believe because Finder was
+       * showing him 176 GB. Note that `deviceSyncOrchestrator`'s existing
+       * `/disk space|no space|ENOSPC|not enough space/i` does NOT match that
+       * string — see `isDiskFullError`.
+       *
+       * `availableBytes` is re-read HERE rather than reusing the pre-flight's
+       * value: the useful number is what the disk holds NOW, at the failure, not
+       * what it held before the run started.
+       */
+      let errorMessage = rawErrorMessage;
+      let refusedForDiskSpace: ImportRefusedForDiskSpace | undefined;
+      if (isDiskFullError(error)) {
+        const availableBytes = await getAvailableDiskBytes(
+          app.getPath("userData")
+        );
+        const snapshotCount = await readLocalSnapshotCount();
+        errorMessage = describeDiskShortfall({
+          requiredBytes: DISK_SPACE_THRESHOLDS.messagesImport * 1024 * 1024,
+          availableBytes,
+          snapshotCount,
+          phase: "during",
+          /**
+           * The reassurance is offered ONLY where it is true, and
+           * `nothingChangedYet()` is already the authority on that: it is `true`
+           * only for a force run that has not reached its swap — the one case
+           * where stage-and-swap guarantees the store is untouched.
+           *
+           * A DELTA import is deliberately excluded. `storeMessages` commits per
+           * BATCH, so a mid-run throw keeps every earlier batch's rows; telling
+           * that user "nothing was changed" would be a sentence the app cannot
+           * back up, which is the exact failure this item exists to remove.
+           */
+          liveStoreUnchanged: nothingChangedYet() === true,
+        });
+        refusedForDiskSpace = {
+          requiredBytes: DISK_SPACE_THRESHOLDS.messagesImport * 1024 * 1024,
+          availableBytes,
+          snapshotCount,
+          phase: "during",
+        };
+        logService.error(
+          `macOS Messages import ran out of disk space mid-run (raw driver error: ${rawErrorMessage})`,
+          MacOSMessagesImportService.SERVICE_NAME,
+          { availableBytes, snapshotCount, duration, forceReimport }
+        );
+      } else {
+        logService.error(
+          `Import failed: ${rawErrorMessage}`,
+          MacOSMessagesImportService.SERVICE_NAME,
+          { duration }
+        );
+      }
 
       return {
         success: false,
@@ -1095,6 +1246,7 @@ class MacOSMessagesImportService {
         attachmentsSkipped: 0,
         duration,
         error: errorMessage,
+        refusedForDiskSpace,
         // BACKLOG-2775 / BACKLOG-2790: a force run that threw before its swap
         // changed nothing, so the failure card must not leave the user believing
         // their messages are gone. A throw from INSIDE the swap lands here too,
@@ -1589,6 +1741,32 @@ class MacOSMessagesImportService {
               messageIdMap.set(msg.guid, messageId);
             }
           } catch (insertError) {
+            /**
+             * BACKLOG-2870: a full disk is not a bad message, and must not be
+             * counted as one.
+             *
+             * This catch exists so one malformed row cannot kill an import, and
+             * for that it is right. `SQLITE_FULL` is a different kind of thing:
+             * it is not a property of THIS message, it will be true of every
+             * message after it, and SQLite has ALREADY rolled the batch
+             * transaction back by the time we get here.
+             *
+             * Swallowing it produced the delta path's real behaviour, observed
+             * on the real driver: every remaining insert failed and was counted
+             * as "skipped", then better-sqlite3's wrapper tried to COMMIT a
+             * transaction SQLite had already discarded and the user was shown
+             * `cannot commit - no transaction is active` — an error even less
+             * actionable than the `database or disk is full` this item was filed
+             * about, and one no disk-full matcher would ever recognise.
+             *
+             * So a disk-full stops the run and reaches the translation in
+             * `doImport`'s catch, which is the only place that can say something
+             * useful about it.
+             */
+            if (isDiskFullError(insertError)) {
+              throw insertError;
+            }
+
             const errMsg =
               insertError instanceof Error
                 ? insertError.message

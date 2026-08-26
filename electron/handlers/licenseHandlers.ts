@@ -35,6 +35,22 @@ interface LicenseResponse {
   success: boolean;
   error?: string;
   license?: UserLicense;
+  /**
+   * BACKLOG-2885 — was this answer computed from a LOADED SESSION, or from the
+   * no-session fallback below?
+   *
+   * Both return `success: true` with a license, and from the renderer they are
+   * byte-identical: "individual, no organization". That ambiguity is the whole
+   * defect — a brokerage user read as an individual and Complete performed a
+   * local export instead of Submit for Review.
+   *
+   * Only this function knows which one it produced, so only this function can
+   * say. The renderer cannot infer it: `userId` being set does NOT imply the
+   * main process has a session (on the deferred-DB deep-link path the renderer
+   * is told about the login before `persistSessionForUser` runs), and there is
+   * no event announcing the persist.
+   */
+  sessionBacked?: boolean;
 }
 
 /**
@@ -50,6 +66,9 @@ async function getLicenseData(): Promise<LicenseResponse> {
       logService.debug("[License] No active session", "License");
       return {
         success: true,
+        // BACKLOG-2885: a DEFAULT, not an answer about this user. Flagged so the
+        // renderer holds it as unknown rather than recording it as "individual".
+        sessionBacked: false,
         license: {
           license_type: "individual" as LicenseType,
           ai_detection_enabled: false,
@@ -76,6 +95,7 @@ async function getLicenseData(): Promise<LicenseResponse> {
 
       return {
         success: true,
+        sessionBacked: true,
         license: {
           license_type: "team" as LicenseType,
           ai_detection_enabled: aiEnabled,
@@ -101,6 +121,7 @@ async function getLicenseData(): Promise<LicenseResponse> {
 
       return {
         success: true,
+        sessionBacked: true,
         license: {
           license_type: dbUser.license_type || "individual",
           ai_detection_enabled: dbUser.ai_detection_enabled || false,
@@ -117,6 +138,9 @@ async function getLicenseData(): Promise<LicenseResponse> {
 
     return {
       success: true,
+      // A session exists and it genuinely has no license row: a real answer
+      // about a real user, unlike the no-session fallback above.
+      sessionBacked: true,
       license: {
         license_type: "individual",
         ai_detection_enabled: false,
