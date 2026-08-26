@@ -131,29 +131,28 @@ describe("evaluateExportGate — both directions", () => {
 });
 
 describe("copy — ONE wording for one condition", () => {
-  it("keeps the BACKLOG-2792 P3 sentence byte-identical after extraction", () => {
-    // Transcribed from ReviewPromptDialog as it stood before the extraction,
-    // and VERIFIED against it: the dialog's rendered textContent for
-    // variant="blocked" at counts 1, 3 and -1 was captured on the base commit
-    // and on this one and diffed — identical, to the byte. That check was
-    // needed because the "blocked" variant had no pre-existing test of its own
-    // (reviewFounderFeedback-2791 covers only variant="found"), so passing the
-    // old suites would have proved nothing about this copy.
+  it("says the ONE sentence the founder ruled on (BACKLOG-2881)", () => {
+    // BACKLOG-2866 moved this copy here byte-identical; BACKLOG-2881 then
+    // changed the wording on the founder's ruling — the sentence no longer
+    // names the action, so it cannot name the wrong one on a route that
+    // completes nothing. Full rationale in the gate module.
     //
     // If either string drifts from here, the details dialog and the bulk
     // refusal start telling the user two different things about one queue.
-    expect(reviewBlockedTitle(3)).toBe("Review needed before completing");
+    // The "no action word" rule itself is asserted in
+    // `exportReviewGateCopy-2881.test.tsx`.
+    expect(reviewBlockedTitle(3)).toBe("Review needed");
     expect(reviewBlockedBody(3)).toBe(
-      "You have 3 communications that need to be reviewed before completing the transaction.",
+      "You have 3 communications that need to be reviewed first.",
     );
     expect(reviewBlockedBody(1)).toBe(
-      "You have 1 communication that need to be reviewed before completing the transaction.",
+      "You have 1 communication that needs to be reviewed first.",
     );
     expect(reviewBlockedTitle(UNREADABLE_REVIEW_COUNT)).toBe(
       "Couldn't check Needs Review",
     );
     expect(reviewBlockedBody(UNREADABLE_REVIEW_COUNT)).toBe(
-      "The transaction can't be completed until the review queue can be read. Open Needs Review to try again.",
+      "The review queue can't be read right now, so this can't go ahead. Open Needs Review to try again.",
     );
   });
 

@@ -96,9 +96,11 @@ describe("bulk export — blocked direction", () => {
     // The clean deals are not blamed.
     expect(message).not.toContain("123 Main St");
     expect(message).not.toContain("9 Elm Rd");
-    // Same sentence the details-screen P3 dialog shows.
+    // The SAME sentence the details-screen P3 dialog shows, as a full literal
+    // rather than a fragment — the guarantee BACKLOG-2881 protects is that this
+    // route and the details screen describe one queue identically.
     expect(message).toContain(
-      "that need to be reviewed before completing the transaction",
+      "You have 2 communications that need to be reviewed first.",
     );
   });
 
@@ -150,9 +152,12 @@ describe("bulk export — blocked direction", () => {
     const message = cb.showError.mock.calls[0][0] as string;
     // The unreadable BODY, reused verbatim from the P3 dialog — it reports that
     // the queue could not be read rather than asserting a count it does not
-    // have. (The dialog's "Couldn't check Needs Review" is its TITLE; the bulk
-    // route has no dialog, only this one sentence.)
-    expect(message).toContain("until the review queue can be read");
+    // have, and after BACKLOG-2881 it no longer names an action either. (The
+    // dialog's "Couldn't check Needs Review" is its TITLE; the bulk route has
+    // no dialog, only this one sentence.)
+    expect(message).toContain(
+      "The review queue can't be read right now, so this can't go ahead. Open Needs Review to try again.",
+    );
     expect(message).toContain("123 Main St (couldn't check)");
     expect(message).not.toMatch(/You have -\d/);
   });

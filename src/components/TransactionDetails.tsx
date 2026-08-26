@@ -402,6 +402,12 @@ function TransactionDetails({
     openSubmit: () => { void openSubmitFlow(); },
     openNeedsReview: () => setShowNeedsReview(true),
   });
+  /**
+   * BACKLOG-2885 — the license branch, read ONCE per render so the header's two
+   * license-dependent props cannot disagree with each other or with the branch
+   * Complete will actually take.
+   */
+  const completeTarget = complete.resolveTarget();
   // BACKLOG-1832: true while the background create-trigger sync is in flight for THIS transaction.
   // Drives the "fetching emails…" indicator on the empty emails tab.
   const [autoSyncRunning, setAutoSyncRunning] = useState<boolean>(false);
@@ -1108,8 +1114,14 @@ function TransactionDetails({
              only. Derived from the SAME branch that decides where Complete
              goes, so the button appears exactly when Complete does NOT already
              lead to the export flow. An individual keeps the single merged
-             Complete that BACKLOG-2792 gave them. */
-          showExport={complete.resolveTarget() === "submit"}
+             Complete that BACKLOG-2792 gave them.
+
+             BACKLOG-2885 — `!== "export"` rather than `=== "submit"`, so the
+             button also renders (disabled) while the license class is unknown.
+             `=== "submit"` hid it until the license landed and then popped it
+             into the row — the founder saw it appear on the click itself. */
+          showExport={completeTarget !== "export"}
+          licensePending={completeTarget === "unknown"}
         />
 
         {/* Tabs */}
