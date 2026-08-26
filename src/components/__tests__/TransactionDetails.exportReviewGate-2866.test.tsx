@@ -207,8 +207,10 @@ describe("ROUTE 2 — the brokerage header Export button consults the gate", () 
 
     // The block FIRED — the user is shown the refusal, not a silent no-op.
     await waitFor(() => expect(blockDialog()).toBeInTheDocument());
+    // Full literal, not a fragment: this route is the one that made the founder
+    // rule on the wording (BACKLOG-2881) — export here completes nothing.
     expect(blockDialog()).toHaveTextContent(
-      "You have 3 communications that need to be reviewed before completing the transaction.",
+      "You have 3 communications that need to be reviewed first.",
     );
     // And no export was ever started.
     expect(screen.queryByTestId("export-destination")).not.toBeInTheDocument();
@@ -279,6 +281,10 @@ describe("ROUTE 3 — the submit modal's Export offer re-consults the gate", () 
     fireEvent.click(screen.getByTestId("modal-export"));
 
     await waitFor(() => expect(blockDialog()).toBeInTheDocument());
+    // Same sentence as routes 1 and 2 for the same queue — BACKLOG-2881.
+    expect(blockDialog()).toHaveTextContent(
+      "You have 4 communications that need to be reviewed first.",
+    );
     expect(screen.queryByTestId("export-destination")).not.toBeInTheDocument();
     expect(exportMounts).toHaveLength(0);
   });
@@ -308,6 +314,10 @@ describe("ROUTE 1 — Complete is still gated, by the same read", () => {
     fireEvent.click(screen.getByTestId("hdr-complete"));
 
     await waitFor(() => expect(blockDialog()).toBeInTheDocument());
+    // Same sentence as routes 2 and 3 for the same queue — BACKLOG-2881.
+    expect(blockDialog()).toHaveTextContent(
+      "You have 2 communications that need to be reviewed first.",
+    );
     expect(screen.queryByTestId("submit-modal")).not.toBeInTheDocument();
     expect(screen.queryByTestId("export-destination")).not.toBeInTheDocument();
   });
