@@ -57,11 +57,39 @@ interface TransactionHeaderProps {
    * The caller derives this from `useCompleteTransaction.resolveTarget()`, the
    * SAME branch that chooses the destination — so the button appears exactly
    * when Complete does NOT already lead to export, and the two can never
-   * disagree. That branch fails closed to "export", so a user whose
-   * entitlements are still loading is treated as an individual and simply sees
-   * no extra button.
+   * disagree.
+   *
+   * BACKLOG-2885 — this doc used to end "that branch fails closed to 'export',
+   * so a user whose entitlements are still loading is treated as an individual
+   * and simply sees no extra button." That was the founder's bug, written down
+   * as if it were the design. It is now true for `"submit"` AND for
+   * `"unknown"`: the caller passes `resolveTarget() !== "export"`, and pairs it
+   * with `licensePending` below.
    */
   showExport?: boolean;
+  /**
+   * BACKLOG-2885 — the license class is not known yet, so no action here may be
+   * taken and none may be silently withheld.
+   *
+   * WHY DISABLED RATHER THAN HIDDEN, which was the deliberate choice:
+   *
+   * The founder's report was "after clicking complete i suddenly saw the export
+   * button appear". Hiding the button until the license resolves keeps exactly
+   * that: the control set changes shape under the cursor, at the moment of a
+   * click, which is how a click lands on a button the user did not mean to
+   * press. Rendering it disabled makes a brokerage user's row of controls
+   * IDENTICAL before and after the license lands — only the enabled state
+   * changes, and an enabled state changing cannot move anything under a cursor.
+   *
+   * The cost is a genuinely-individual user briefly seeing a disabled Export
+   * that then disappears. That is the smaller harm, and it is bounded: the
+   * unknown window is one IPC round-trip after login (BACKLOG-2885 made the
+   * license re-read on sign-in rather than waiting for a window focus), long
+   * before any deal can be open. A disabled control also cannot be clicked, so
+   * it can never produce a wrong action — which is precisely what the hidden
+   * variant did.
+   */
+  licensePending?: boolean;
 }
 
 export function TransactionHeader({
@@ -83,6 +111,7 @@ export function TransactionHeader({
   onShowNeedsReview,
   onComplete,
   showExport = false,
+  licensePending = false,
 }: TransactionHeaderProps): React.ReactElement {
   // Determine header style based on state
   const getHeaderStyle = () => {
@@ -175,6 +204,7 @@ export function TransactionHeader({
         onShowNeedsReview={onShowNeedsReview ?? (() => undefined)}
         onComplete={onComplete ?? onShowExportModal}
         showExport={showExport}
+        licensePending={licensePending}
         onShowExportModal={onShowExportModal}
       />
     );
@@ -514,6 +544,7 @@ function ActiveActions({
   onShowNeedsReview,
   onComplete,
   showExport,
+  licensePending,
   onShowExportModal,
 }: {
   transaction: Transaction;
@@ -524,6 +555,8 @@ function ActiveActions({
   onComplete: () => void;
   /** BACKLOG-2849 — brokerage users only. See TransactionHeaderProps. */
   showExport: boolean;
+  /** BACKLOG-2885 — license class not yet known. See TransactionHeaderProps. */
+  licensePending: boolean;
   onShowExportModal: () => void;
 }) {
   const { isOnline } = useNetwork();
@@ -564,11 +597,24 @@ function ActiveActions({
       {/* B2 · Complete (BACKLOG-2792) — always visible beside B1. Export and
           Submit for Review are GONE, merged here; the branch by license happens
           inside the handler, after the completeness gate. */}
+      {/* BACKLOG-2885 — disabled while the license class is unknown. Complete
+          branches on that class (submit for a brokerage user, export for an
+          individual), and with no answer yet the only correct behaviour is to
+          take neither. It previously took the export branch by default, which
+          handed a brokerage user a local file while they believed the deal had
+          gone to their broker. The hook refuses the same click independently;
+          this is the affordance, that is the lock. */}
       <button
         onClick={onComplete}
-        disabled={isSubmitting}
+        disabled={isSubmitting || licensePending}
         data-testid="complete-button"
-        title={!isOnline ? "You are offline — export is still available" : undefined}
+        title={
+          licensePending
+            ? "Checking your license…"
+            : !isOnline
+              ? "You are offline — export is still available"
+              : undefined
+        }
         className="px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg disabled:opacity-50 text-sm flex-shrink-0"
       >
         {isSubmitting ? (
@@ -598,11 +644,19 @@ function ActiveActions({
           The label is "Export", not "Export PDF": this opens a format chooser
           (combined PDF by default, folder and summary PDF also offered), and
           it is the same destination the modal's Export button reaches. */}
+      {/* BACKLOG-2885 — `showExport` is now true for a brokerage user AND while
+          the license class is unknown, with the unknown case rendered disabled.
+          A brokerage user therefore sees the same controls throughout, instead
+          of watching Export appear the instant the license lands — which is what
+          the founder hit, mid-click. See TransactionHeaderProps.licensePending
+          for why disabled beat hidden. */}
       {showExport && (
         <button
           onClick={onShowExportModal}
+          disabled={licensePending}
           data-testid="header-export-button"
-          className="px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-white text-green-600 hover:bg-opacity-90 shadow-md hover:shadow-lg text-sm flex-shrink-0"
+          title={licensePending ? "Checking your license…" : undefined}
+          className="px-2 sm:px-4 py-2 rounded-lg font-semibold transition-all flex items-center gap-1 sm:gap-2 bg-white text-green-600 hover:bg-opacity-90 shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed text-sm flex-shrink-0"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
