@@ -74,6 +74,10 @@ const PRE_SESSION_ANSWER = {
     license_type: "individual" as const,
     ai_detection_enabled: false,
     organization_id: undefined,
+    // BACKLOG-2885: the handler now says so explicitly. Without this field the
+    // fixture describes a state the app cannot emit — an answer whose origin is
+    // unknowable, which is the ambiguity the field exists to remove.
+    sessionBacked: false,
   },
 };
 
@@ -85,6 +89,7 @@ const BROKERAGE_ANSWER = {
     ai_detection_enabled: false,
     organization_id: "org-2885",
     organization_name: "Bellweather Realty",
+    sessionBacked: true,
   },
 };
 

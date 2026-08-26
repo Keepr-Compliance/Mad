@@ -74,11 +74,22 @@ interface LicenseContextValue {
    * false as UNKNOWN and refuse to choose, rather than taking the default
    * branch.
    *
-   * It always settles: every fetch path — success, no-license, and throw —
-   * clears `isLoading` and stamps the user it answered for, and the fetch
-   * re-runs whenever `userId` changes. A license that FAILS to load resolves to
-   * the individual/export default; only the no-session success answer is held
-   * as unknown.
+   * THREE CONDITIONS, each for a window that produced the bug:
+   *   1. a fetch has completed for the CURRENT user (`answeredForUserId`) —
+   *      the license used to be read once, at mount, above auth;
+   *   2. that answer was session-backed (`answerIsUsable`) — the main process
+   *      returns a positive "individual, no organization" when it has no
+   *      session yet, and on the deferred-DB deep-link path `userId` is set
+   *      before the session is written;
+   *   3. `validateLicense` has also landed (`validatedForUserId`) — it is a
+   *      second writer of `licenseType`, so until it speaks `canSubmit` is
+   *      still moving.
+   *
+   * It always settles. Every fetch and validate path — success, no-license,
+   * and throw — clears `isLoading` and stamps its user; a load that FAILS
+   * resolves to the individual/export default; and the wait for a session is
+   * bounded, after which the answer is accepted as-is. Nothing here can leave
+   * a caller waiting on a state that will not arrive.
    */
   isLicenseResolved: boolean;
 
@@ -117,6 +128,40 @@ interface LicenseState {
    * "never answered" distinct from "answered for the signed-out state".
    */
   answeredForUserId: string | null | undefined;
+  /**
+   * BACKLOG-2885 — is the last completed answer one we may act on?
+   *
+   * False for exactly one case: a signed-in user whose answer came back
+   * `sessionBacked: false`, meaning the main process had no session yet and
+   * returned its "individual, no organization" default. Stamping that as this
+   * user's license is what left a brokerage user reading as an individual.
+   *
+   * A FAILED load sets this true — "could not read" resolves to the
+   * individual/export default rather than waiting forever.
+   */
+  answerIsUsable: boolean;
+  /**
+   * BACKLOG-2885 — how many times we have re-asked while the main process
+   * reported no session.
+   *
+   * This is STATE and not a ref on purpose. The retry is an effect, and an
+   * effect only re-runs when its dependencies change; a ref counter leaves them
+   * identical between attempts, so exactly ONE retry ever fires and
+   * `answerIsUsable` never reaches the give-up branch — leaving Complete
+   * disabled forever, which is worse than the defect being fixed. Caught by the
+   * bounded-wait control.
+   */
+  sessionWaitAttempt: number;
+  /**
+   * BACKLOG-2885 — the userId `validateLicense` last completed for.
+   *
+   * `validateLicense` overwrites `licenseType`, which drives `canSubmit`, and it
+   * runs on a different network call from `fetchLicense`. Until BOTH have landed
+   * the pair (licenseType, organizationId) is still moving, so declaring the
+   * license "known" after only one of them lets a user act on a value that is
+   * about to change — the same defect this item exists to remove.
+   */
+  validatedForUserId: string | null | undefined;
   // SPRINT-062: Validation status
   validationStatus: LicenseValidationResult | null;
 }
@@ -129,6 +174,9 @@ const defaultLicenseState: LicenseState = {
   isLoading: true,
   hasInitialized: false,
   answeredForUserId: undefined,
+  answerIsUsable: false,
+  sessionWaitAttempt: 0,
+  validatedForUserId: undefined,
   validationStatus: null,
 };
 
@@ -173,6 +221,26 @@ export function LicenseProvider({
   const latestUserIdRef = useRef<string | null>(currentUserId);
 
   /**
+   * BACKLOG-2885 — how long to keep asking while the main process reports it has
+   * no session yet.
+   *
+   * Needed because NOTHING announces the persist. On the deferred-DB deep-link
+   * path (`electron/handlers/systemHandlers.ts:596-608`, BACKLOG-2173b) the
+   * renderer is told about the login by the deep-link callback, while the
+   * session is saved later by `persistSessionForUser` — which logs and emits no
+   * renderer event. Until one exists, the only honest option is to re-ask.
+   *
+   * Asking is cheap in precisely the state that triggers it: with no session
+   * `getLicenseData` returns before any network call.
+   *
+   * The cap is what keeps Complete from being dead forever if the session never
+   * arrives: on exhaustion the answer is accepted as-is, which is the behaviour
+   * before this fix, but bounded and deterministic.
+   */
+  const SESSION_WAIT_RETRY_MS = 300;
+  const SESSION_WAIT_MAX_RETRIES = 20;
+
+  /**
    * Fetch license from main process (original method for backward compatibility)
    * Note: This is a silent fetch that doesn't set isLoading to true,
    * so it won't trigger the loading screen on background refreshes.
@@ -189,6 +257,10 @@ export function LicenseProvider({
       if (isStale()) return;
       if (result.success && result.data) {
         const license = result.data;
+        // BACKLOG-2885: signed out, the no-session default IS the right answer.
+        // Signed in, it is a placeholder and must not be recorded as this
+        // user's license class.
+        const usable = answeringFor === null || license.sessionBacked;
         setState((prev) => ({
           ...prev,
           licenseType: license.license_type || "individual",
@@ -197,6 +269,7 @@ export function LicenseProvider({
           isLoading: false,
           hasInitialized: true,
           answeredForUserId: answeringFor,
+          answerIsUsable: usable,
         }));
       } else {
         // No license found - use defaults
@@ -205,6 +278,7 @@ export function LicenseProvider({
           isLoading: false,
           hasInitialized: true,
           answeredForUserId: answeringFor,
+          answerIsUsable: true,
         }));
       }
     } catch {
@@ -218,6 +292,7 @@ export function LicenseProvider({
         isLoading: false,
         hasInitialized: true,
         answeredForUserId: answeringFor,
+        answerIsUsable: true,
       }));
     }
   }, [currentUserId]);
@@ -230,8 +305,18 @@ export function LicenseProvider({
    * screen on background refreshes. Only shows loading UI before first successful load.
    */
   const validateLicense = useCallback(async () => {
+    // BACKLOG-2885: the user this run answers for, and the guard that drops it
+    // if a newer user arrives mid-flight — same contract as fetchLicense.
+    const validatingFor = currentUserId;
+    const isStale = () => latestUserIdRef.current !== validatingFor;
+
     if (!userId) {
-      setState((prev) => ({ ...prev, validationStatus: null, isLoading: false }));
+      setState((prev) => ({
+        ...prev,
+        validationStatus: null,
+        isLoading: false,
+        validatedForUserId: validatingFor,
+      }));
       return;
     }
 
@@ -256,6 +341,7 @@ export function LicenseProvider({
       }
 
       // Update state with validation result
+      if (isStale()) return;
       if (validationResult) {
         setState((prev) => ({
           ...prev,
@@ -265,10 +351,16 @@ export function LicenseProvider({
           hasAIAddon: validationResult.aiEnabled,
           isLoading: false,
           hasInitialized: true, // Mark as initialized after first successful load
+          validatedForUserId: validatingFor,
         }));
       } else {
         // Fallback if both validate and create failed
-        setState((prev) => ({ ...prev, isLoading: false, hasInitialized: true }));
+        setState((prev) => ({
+          ...prev,
+          isLoading: false,
+          hasInitialized: true,
+          validatedForUserId: validatingFor,
+        }));
       }
     } catch (error) {
       logger.error("Failed to validate license:", error);
@@ -295,14 +387,18 @@ export function LicenseProvider({
         aiEnabled: false,
         blockReason: "load_error",
       };
+      if (isStale()) return;
       setState((prev) => ({
         ...prev,
         validationStatus: fallbackStatus,
         isLoading: false,
         hasInitialized: true, // Mark as initialized even on error to prevent loading loop
+        // BACKLOG-2885: a validation that FAILED still counts as landed, for the
+        // same reason a failed fetch does — it must not hold the UI unresolved.
+        validatedForUserId: validatingFor,
       }));
     }
-  }, [userId]);
+  }, [userId, currentUserId]);
 
   /**
    * Fetch the license on mount AND whenever the signed-in user changes.
@@ -323,16 +419,79 @@ export function LicenseProvider({
    */
   useEffect(() => {
     latestUserIdRef.current = currentUserId;
+    // A new user gets a fresh wait budget.
+    setState((prev) =>
+      prev.sessionWaitAttempt === 0 ? prev : { ...prev, sessionWaitAttempt: 0 },
+    );
     void fetchLicense();
   }, [fetchLicense, currentUserId]);
+
+  /**
+   * BACKLOG-2885 — keep asking while the answer is a no-session placeholder.
+   *
+   * THE PATH THIS EXISTS FOR: a cold launch driven by a `keepr://` deep link
+   * with the database still down. `electron/main.ts` skips its session-save
+   * block and only stores a pending user, then tells the renderer the login
+   * succeeded. `AuthContext` sets `userId`, our fetch fires, and the main
+   * process still has no session — so it answers "individual, no organization".
+   * The session is written later, by `persistSessionForUser` after DB init,
+   * which logs and sends nothing.
+   *
+   * A push event from that function would let this go away; until one exists,
+   * re-asking is the only mechanism, and `sessionBacked` is what makes the
+   * re-ask conditional on the real fact rather than on a timer.
+   */
+  useEffect(() => {
+    if (currentUserId === null) return;
+    // No answer for this user yet — the fetch is still in flight, not stalled.
+    if (state.answeredForUserId !== currentUserId) return;
+    if (state.answerIsUsable) return;
+
+    if (state.sessionWaitAttempt >= SESSION_WAIT_MAX_RETRIES) {
+      // Give up and accept the answer. This is the pre-fix behaviour, but
+      // bounded and deterministic: Complete becomes usable rather than staying
+      // disabled on a session that is never going to arrive.
+      setState((prev) =>
+        prev.answerIsUsable ? prev : { ...prev, answerIsUsable: true },
+      );
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      // Bumping the attempt count is what re-arms this effect for the NEXT
+      // attempt; see the field's comment.
+      setState((prev) => ({
+        ...prev,
+        sessionWaitAttempt: prev.sessionWaitAttempt + 1,
+      }));
+      void fetchLicense();
+    }, SESSION_WAIT_RETRY_MS);
+    return () => clearTimeout(timer);
+  }, [
+    currentUserId,
+    state.answeredForUserId,
+    state.answerIsUsable,
+    state.sessionWaitAttempt,
+    fetchLicense,
+    SESSION_WAIT_MAX_RETRIES,
+    SESSION_WAIT_RETRY_MS,
+  ]);
 
   // SPRINT-062: Validate license when userId changes
   useEffect(() => {
     if (userId) {
       validateLicense();
     } else {
-      // Clear validation status when user logs out
-      setState((prev) => ({ ...prev, validationStatus: null }));
+      // Clear validation status when user logs out.
+      // BACKLOG-2885: stamp the signed-out state as validated too. Validation is
+      // vacuously complete with no user, and leaving the stamp unset would hold
+      // `isLicenseResolved` false forever for a signed-out session — a state no
+      // consumer could ever leave.
+      setState((prev) => ({
+        ...prev,
+        validationStatus: null,
+        validatedForUserId: null,
+      }));
     }
   }, [userId, validateLicense]);
 
@@ -387,7 +546,10 @@ export function LicenseProvider({
    * should not act on the previous one.
    */
   const isLicenseResolved =
-    !state.isLoading && state.answeredForUserId === currentUserId;
+    !state.isLoading &&
+    state.answeredForUserId === currentUserId &&
+    state.answerIsUsable &&
+    state.validatedForUserId === currentUserId;
 
   // Compute convenience flags
   const canExport = state.licenseType === "individual";
