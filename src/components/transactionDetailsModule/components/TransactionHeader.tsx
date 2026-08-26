@@ -3,9 +3,10 @@
  * Header for transaction details modal with dynamic styling and action buttons
  */
 import React from "react";
-import type { Transaction } from "@/types";
+import type { SubmissionStatus, Transaction } from "@/types";
 import { formatAddress } from "@/utils/formatUtils";
 import { useNetwork } from "@/contexts/NetworkContext";
+import { SUBMISSION_STATUS_LABEL } from "./submissionStatusLabels";
 
 interface TransactionHeaderProps {
   transaction: Transaction;
@@ -341,6 +342,171 @@ function RejectedActions({
   );
 }
 
+/**
+ * BACKLOG-2869 — ONE BOOLEAN FOR THREE STATES IS TWO STATES NOT TOLD.
+ *
+ * What stood here was:
+ *
+ *   const isSubmitted = submission_status === "submitted" ||
+ *     submission_status === "under_review" || submission_status === "approved";
+ *
+ * driving a single green chip reading "Submitted". Three consequences, all of
+ * them the user's:
+ *
+ *   - An APPROVED deal said "Submitted". The outcome she had been waiting for
+ *     was on the row and the screen would not say it.
+ *   - A REJECTED deal and one asked back for CHANGES fell outside the boolean
+ *     entirely, so they rendered NO badge — pixel-identical to a deal nobody
+ *     had ever sent.
+ *   - `resubmitted` was outside it too: sending a deal a second time made its
+ *     badge disappear.
+ *
+ * The founder's model (2026-08-25), which is sharper than the code was: from
+ * his side "submitted" and "under review" are one experience — sent, waiting.
+ * The states worth distinguishing are the ones carrying an ANSWER.
+ *
+ * THE LABEL MOVES, THE RECORD DOES NOT. `submitted` READS "Under Review"; it
+ * is not transitioned to `under_review`. That transition belongs to the broker
+ * portal and means something specific there (a human opened the file), and the
+ * desktop app only ever mirrors it inbound — see
+ * `submissionSyncService.applyCloudStatus`, and the ownership guard in
+ * `underReviewOwnership-2869.test.ts` which fails if anything here starts
+ * originating that value.
+ *
+ * ONE WORD PER STATE, EVERY SURFACE. The words are NOT here — they are in
+ * `submissionStatusLabels.ts`, which the list-row chip (`SubmissionStatusBadge`)
+ * reads too. Fixing the header alone would have traded one wrong label for a
+ * worse problem: the same deal reading "Under Review" in this chip and
+ * "Submitted" in the row behind it, which is a question the user has to
+ * resolve rather than an answer. What stays here is TONE — how a status looks
+ * in a header chip, which need not match how it looks in a dense list row.
+ */
+/**
+ * HOW a status looks here. NOT what it is called — the words come from
+ * `SUBMISSION_STATUS_LABEL`, which the list-row chip reads too, so the header
+ * and the row behind it cannot disagree about a deal. Styling is allowed to
+ * differ (a header chip and a dense list row are not the same object); the
+ * label is not.
+ */
+interface SubmissionTone {
+  /** Tone classes only; the shared pill geometry is applied at the call site. */
+  className: string;
+  icon: React.ReactElement;
+}
+
+interface SubmissionBadge extends SubmissionTone {
+  label: string;
+}
+
+/**
+ * IN-FLIGHT — the deal is with the broker and no answer exists yet.
+ *
+ * Flat white pill, indigo text, clock glyph. Deliberately quieter than the
+ * action buttons beside it and than the two outcome badges below: nothing has
+ * happened yet, so nothing should read as an announcement. Indigo rather than
+ * green because the founder has ruled repeatedly against green on this header,
+ * and the header's own gradient is already green — a green-on-green chip is
+ * exactly the thing he keeps rejecting.
+ */
+const TONE_UNDER_REVIEW: SubmissionTone = {
+  className: "bg-white text-indigo-700 font-medium",
+  icon: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  ),
+};
+
+/**
+ * IN-FLIGHT, BALL IN THE USER'S COURT — the broker sent it back for changes.
+ *
+ * Amber on white is the pair the Needs Review badge in this same file already
+ * uses for "you have something to do" (`text-amber-700` on `bg-white`), so the
+ * colour means here what it means eight lines up. Not terminal: `needs_changes`
+ * is the one blocked-looking status a user CAN act on, and it routes through
+ * `resubmitTransaction`.
+ */
+const TONE_CHANGES_REQUESTED: SubmissionTone = {
+  className: "bg-white text-amber-700 font-medium",
+  icon: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M5 19h14a2 2 0 001.84-2.75L13.74 4a2 2 0 00-3.48 0L3.16 16.25A2 2 0 005 19z" />
+    </svg>
+  ),
+};
+
+/**
+ * TERMINAL — the broker answered. Both outcome badges carry `font-semibold`
+ * and `shadow-md`, the weight and elevation of the header's action buttons, so
+ * an answer reads as loud as an action and an in-flight state does not. That
+ * contrast IS the distinction; the colour only says which answer it was.
+ */
+const TONE_APPROVED: SubmissionTone = {
+  className: "bg-white text-green-700 font-semibold shadow-md",
+  icon: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    </svg>
+  ),
+};
+
+/** TERMINAL. `text-red-600` on white is the Delete button's pair in this file. */
+const TONE_REJECTED: SubmissionTone = {
+  className: "bg-white text-red-600 font-semibold shadow-md",
+  icon: (
+    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+    </svg>
+  ),
+};
+
+/**
+ * Every status the schema admits, mapped to how the header DRAWS it. What each
+ * one is CALLED is `SUBMISSION_STATUS_LABEL`; a status that shares a label with
+ * another (three of them do) shares its tone object here too, so the collision
+ * is visible in one place instead of being spelled out four times.
+ *
+ * `Record<SubmissionStatus, …>` is load-bearing: `SubmissionStatus` is the
+ * renderer's re-export of the union in `electron/types/models.ts`, which is
+ * itself the CHECK list on `transactions.submission_status`. Add a status to
+ * the schema and this file stops compiling until someone decides what it
+ * SHOWS — which is the failure mode that produced this item, where three
+ * statuses were quietly absent from a hand-written boolean.
+ *
+ * `not_submitted` maps to `null` on purpose: nothing has been sent, so there
+ * is no status to report, and the Complete button beside it already says what
+ * the deal is waiting for. The list cards reach the same answer their own way,
+ * by guarding on `submission_status !== "not_submitted"` before they render at
+ * all — visibility is a surface decision, unlike the word.
+ *
+ * Exported for tests, which assert this map against the schema's CHECK list
+ * rather than against a second hand-typed copy of the same seven words.
+ */
+export const SUBMISSION_STATUS_TONE: Record<SubmissionStatus, SubmissionTone | null> = {
+  not_submitted: null,
+  submitted: TONE_UNDER_REVIEW,
+  under_review: TONE_UNDER_REVIEW,
+  resubmitted: TONE_UNDER_REVIEW,
+  needs_changes: TONE_CHANGES_REQUESTED,
+  approved: TONE_APPROVED,
+  rejected: TONE_REJECTED,
+};
+
+/**
+ * The status a row actually holds, resolved to a badge or to nothing.
+ *
+ * Two runtime cases the type does not cover: the column is nullable, and a row
+ * written by an older build (or by a future portal) can hold a string this map
+ * has never heard of. Both resolve to no badge — the header stays silent about
+ * a state it cannot describe rather than guessing at one.
+ */
+function resolveSubmissionBadge(status: string | undefined | null): SubmissionBadge | null {
+  if (!status) return null;
+  const tone = SUBMISSION_STATUS_TONE[status as SubmissionStatus] ?? null;
+  if (!tone) return null;
+  return { ...tone, label: SUBMISSION_STATUS_LABEL[status as SubmissionStatus] };
+}
+
 function ActiveActions({
   transaction,
   isSubmitting,
@@ -361,9 +527,7 @@ function ActiveActions({
   onShowExportModal: () => void;
 }) {
   const { isOnline } = useNetwork();
-  const isSubmitted = transaction.submission_status === "submitted" ||
-    transaction.submission_status === "under_review" ||
-    transaction.submission_status === "approved";
+  const submissionBadge = resolveSubmissionBadge(transaction.submission_status);
 
   return (
     <>
@@ -447,13 +611,16 @@ function ActiveActions({
         </button>
       )}
 
-      {/* Submitted badge stays — it is status, not an action. */}
-      {isSubmitted && (
-        <span className="px-2 sm:px-4 py-2 rounded-lg font-medium flex items-center gap-1 sm:gap-2 bg-green-100 text-green-700 text-sm flex-shrink-0">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-          Submitted
+      {/* The submission badge stays where the Submitted chip was — it is
+          status, not an action — but now says WHICH status. See
+          SUBMISSION_STATUS_BADGE above for why each one reads as it does. */}
+      {submissionBadge && (
+        <span
+          data-testid="submission-status-badge"
+          className={`px-2 sm:px-4 py-2 rounded-lg flex items-center gap-1 sm:gap-2 text-sm flex-shrink-0 ${submissionBadge.className}`}
+        >
+          {submissionBadge.icon}
+          {submissionBadge.label}
         </span>
       )}
     </>

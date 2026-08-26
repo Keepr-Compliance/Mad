@@ -157,40 +157,68 @@ describe("BACKLOG-2849 §1 — the header Export button is back, for brokerage",
   });
 });
 
+/**
+ * EDITED BY BACKLOG-2869, AND WHY.
+ *
+ * The three cases below asserted the literal word "Submitted" on screen. That
+ * word is gone: BACKLOG-2869 replaced the single chip with a badge per status,
+ * because one label for `submitted | under_review | approved` meant an
+ * APPROVED deal was told it was "Submitted" and never learned its outcome.
+ *
+ * 2849's claim is untouched and is what these cases still assert — a
+ * submitted deal never looks unsubmitted, an unsubmitted one never looks
+ * submitted, and export stays reachable through all of it. Only the string the
+ * claim is measured by has changed. The per-status labels themselves are pinned
+ * in TransactionHeader.submissionBadge-2869.test.tsx.
+ */
 describe("BACKLOG-2849 §2 — an unsubmitted deal never looks submitted", () => {
-  it.each(["not_submitted", "needs_changes"])(
-    "shows Complete and NO Submitted badge for %s",
-    (status) => {
-      renderHeader({ submissionStatus: status });
+  it("shows Complete and NO badge at all for not_submitted", () => {
+    // The direction that matters after a failed submit or a dismissal
+    // mid-upload: nothing was written, so nothing may claim it was.
+    renderHeader({ submissionStatus: "not_submitted" });
 
-      expect(countByTestId("complete-button")).toBeGreaterThan(0);
-      // The specific word, absent. This is the direction that matters after a
-      // failed submit or a dismissal mid-upload: nothing was written, so
-      // nothing may claim it was.
-      expect(screen.queryByText("Submitted")).not.toBeInTheDocument();
-    },
-  );
+    expect(countByTestId("complete-button")).toBeGreaterThan(0);
+    expect(countByTestId("submission-status-badge")).toBe(0);
+    expect(screen.queryByText("Submitted")).not.toBeInTheDocument();
+    expect(screen.queryByText("Under Review")).not.toBeInTheDocument();
+  });
+
+  it("shows Complete for needs_changes, and a badge that does not claim it is with the broker", () => {
+    // 2849 included `needs_changes` to prove a rejected-back deal still offers
+    // Complete. 2869 added the badge it was missing entirely — so the check
+    // is no longer "no badge" but "the RIGHT badge".
+    renderHeader({ submissionStatus: "needs_changes" });
+
+    expect(countByTestId("complete-button")).toBeGreaterThan(0);
+    expect(screen.getAllByText("Changes Requested").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Submitted")).not.toBeInTheDocument();
+    expect(screen.queryByText("Under Review")).not.toBeInTheDocument();
+  });
 });
 
 describe("BACKLOG-2849 §2 — a submitted deal never looks unsubmitted", () => {
-  it.each(["submitted", "under_review", "approved"])(
-    "shows the Submitted badge for %s",
-    (status) => {
-      // Boundary swept, not sampled: all three statuses the header counts as
-      // submitted. One sample could not catch a condition that dropped
-      // `under_review` or `approved`.
-      renderHeader({ submissionStatus: status });
+  it.each([
+    ["submitted", "Under Review"],
+    ["under_review", "Under Review"],
+    ["resubmitted", "Under Review"],
+    ["approved", "Approved"],
+  ])("shows a submission badge for %s", (status, label) => {
+    // Boundary swept, not sampled. `resubmitted` is new here: it was outside
+    // the old boolean, so sending a deal a second time made its badge vanish
+    // — the deal looked unsubmitted, which is exactly what this describe
+    // block forbids.
+    renderHeader({ submissionStatus: status });
 
-      expect(screen.getAllByText("Submitted").length).toBeGreaterThan(0);
-    },
-  );
+    expect(countByTestId("submission-status-badge")).toBeGreaterThan(0);
+    expect(screen.getAllByText(label).length).toBeGreaterThan(0);
+  });
 
   it("shows the badge AND keeps export reachable, together", () => {
     // The full post-success state the founder described, in one assertion
     // pair — this is what a user sees after dismissing the modal on success.
     renderHeader({ submissionStatus: "submitted", showExport: true });
 
-    expect(screen.getAllByText("Submitted").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Under Review").length).toBeGreaterThan(0);
     expect(countByTestId("header-export-button")).toBeGreaterThan(0);
   });
 });
