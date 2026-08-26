@@ -55,6 +55,32 @@ interface LicenseContextValue {
   isLoading: boolean;
   /** True after first successful license load - used to prevent loading UI on refresh */
   hasInitialized: boolean;
+  /**
+   * BACKLOG-2885 — is the license CLASS actually known for the user who is
+   * signed in right now?
+   *
+   * `isLoading` cannot answer that, and callers that used it as a proxy were
+   * wrong. `electron/handlers/licenseHandlers.ts` answers `success: true,
+   * license_type: "individual", organization_id: undefined` when NO SESSION has
+   * loaded yet — a positive "you are an individual" that is indistinguishable,
+   * from here, from a real one. This provider mounts above auth, so its first
+   * fetch routinely gets that pre-session answer and records it with
+   * `isLoading: false`. A brokerage user then reads as an individual, with no
+   * loading flag raised, until something re-fetches.
+   *
+   * So this flag tracks WHO the last completed fetch answered for, not merely
+   * that a fetch finished. A caller whose decision differs by license class
+   * (`useCompleteTransaction` routes Complete to submit-vs-export) must treat
+   * false as UNKNOWN and refuse to choose, rather than taking the default
+   * branch.
+   *
+   * It always settles: every fetch path — success, no-license, and throw —
+   * clears `isLoading` and stamps the user it answered for, and the fetch
+   * re-runs whenever `userId` changes. A license that FAILS to load resolves to
+   * the individual/export default; only the no-session success answer is held
+   * as unknown.
+   */
+  isLicenseResolved: boolean;
 
   // Actions
   refresh: () => Promise<void>;
@@ -84,6 +110,13 @@ interface LicenseState {
   isLoading: boolean;
   /** True after first successful load - prevents loading screen on refresh */
   hasInitialized: boolean;
+  /**
+   * BACKLOG-2885 — the userId the last COMPLETED fetchLicense answered for.
+   * `undefined` means no answer has ever landed. Compared against the live
+   * userId to derive `isLicenseResolved`; `undefined !== null` is what keeps
+   * "never answered" distinct from "answered for the signed-out state".
+   */
+  answeredForUserId: string | null | undefined;
   // SPRINT-062: Validation status
   validationStatus: LicenseValidationResult | null;
 }
@@ -95,6 +128,7 @@ const defaultLicenseState: LicenseState = {
   organizationId: null,
   isLoading: true,
   hasInitialized: false,
+  answeredForUserId: undefined,
   validationStatus: null,
 };
 
@@ -127,14 +161,32 @@ export function LicenseProvider({
   const lastCheckRef = useRef<number>(0);
   const FOCUS_THROTTLE_MS = 60000; // 60 seconds
 
+  // BACKLOG-2885: the prop is optional; normalise so "signed out" is one value.
+  const currentUserId = userId ?? null;
+
+  /**
+   * BACKLOG-2885 — the user a fetch must still be relevant to when it lands.
+   * Set synchronously by the effect that triggers each fetch, so a response for
+   * a previous user cannot overwrite a newer user's license (or stamp the wrong
+   * owner and strand `isLicenseResolved` at false).
+   */
+  const latestUserIdRef = useRef<string | null>(currentUserId);
+
   /**
    * Fetch license from main process (original method for backward compatibility)
    * Note: This is a silent fetch that doesn't set isLoading to true,
    * so it won't trigger the loading screen on background refreshes.
    */
   const fetchLicense = useCallback(async () => {
+    // BACKLOG-2885: the license this call is answering FOR. Captured before the
+    // await so the answer can be attributed, and discarded if the user changed
+    // underneath it.
+    const answeringFor = currentUserId;
+    const isStale = () => latestUserIdRef.current !== answeringFor;
+
     try {
       const result = await licenseService.get();
+      if (isStale()) return;
       if (result.success && result.data) {
         const license = result.data;
         setState((prev) => ({
@@ -144,16 +196,31 @@ export function LicenseProvider({
           organizationId: license.organization_id || null,
           isLoading: false,
           hasInitialized: true,
+          answeredForUserId: answeringFor,
         }));
       } else {
         // No license found - use defaults
-        setState((prev) => ({ ...prev, isLoading: false, hasInitialized: true }));
+        setState((prev) => ({
+          ...prev,
+          isLoading: false,
+          hasInitialized: true,
+          answeredForUserId: answeringFor,
+        }));
       }
     } catch {
-      // License fetch failed silently - use defaults
-      setState((prev) => ({ ...prev, isLoading: false, hasInitialized: true }));
+      // License fetch failed silently - use defaults.
+      // BACKLOG-2885: a FAILED load still counts as answered. "Could not load"
+      // must resolve to the individual/export default, never leave the caller
+      // waiting on a state that will not arrive.
+      if (isStale()) return;
+      setState((prev) => ({
+        ...prev,
+        isLoading: false,
+        hasInitialized: true,
+        answeredForUserId: answeringFor,
+      }));
     }
-  }, []);
+  }, [currentUserId]);
 
   /**
    * SPRINT-062: Validate license for a specific user
@@ -237,10 +304,27 @@ export function LicenseProvider({
     }
   }, [userId]);
 
-  // Fetch license on mount (original behavior)
+  /**
+   * Fetch the license on mount AND whenever the signed-in user changes.
+   *
+   * BACKLOG-2885 — this used to be mount-only (`fetchLicense` had `[]` deps),
+   * which is how a brokerage user ended up reading as an individual for minutes
+   * at a time. This provider mounts above `AuthProvider`'s session check, so the
+   * mount fetch runs with no session and gets the "individual, no organization"
+   * default; `validateLicense` then runs on login but sets only `licenseType`,
+   * never `organizationId`. Nothing re-read the license after login, so the
+   * organization arrived only when a window `focus` happened to fire the silent
+   * background fetch — which is exactly what made the Export button appear
+   * mid-click for the founder.
+   *
+   * The ref is assigned here, synchronously, before the fetch is dispatched, so
+   * an in-flight answer for the previous user is discarded rather than
+   * clobbering this one.
+   */
   useEffect(() => {
-    fetchLicense();
-  }, [fetchLicense]);
+    latestUserIdRef.current = currentUserId;
+    void fetchLicense();
+  }, [fetchLicense, currentUserId]);
 
   // SPRINT-062: Validate license when userId changes
   useEffect(() => {
@@ -292,6 +376,19 @@ export function LicenseProvider({
     features: planFeatures,
   } = useFeatureGate();
 
+  /**
+   * BACKLOG-2885 — the license class is known only when a fetch has completed
+   * FOR THIS USER and no newer fetch is in flight.
+   *
+   * `answeredForUserId` starts `undefined`, which never equals `currentUserId`
+   * (`null` included), so the very first render is correctly unknown. Including
+   * `!isLoading` folds in the `refresh()` window: while an explicit refresh is
+   * running the answer may still change, and a caller that must not guess
+   * should not act on the previous one.
+   */
+  const isLicenseResolved =
+    !state.isLoading && state.answeredForUserId === currentUserId;
+
   // Compute convenience flags
   const canExport = state.licenseType === "individual";
   const canSubmit =
@@ -330,6 +427,7 @@ export function LicenseProvider({
       canAutoDetect,
       isLoading: state.isLoading,
       hasInitialized: state.hasInitialized,
+      isLicenseResolved,
       refresh,
       // SPRINT-062: Validation status fields
       validationStatus,
@@ -342,6 +440,7 @@ export function LicenseProvider({
     }),
     [
       state,
+      isLicenseResolved,
       hasAIAddon,
       canExport,
       canSubmit,

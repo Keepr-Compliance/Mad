@@ -47,6 +47,12 @@ const mockLicense = {
     canSubmit: true,
     canAutoDetect: false,
     isLoading: false,
+    // BACKLOG-2885 — the provider ALWAYS sets this, so a fixture without it
+    // describes a state the app cannot emit: it would read as "license not yet
+    // known", where Complete refuses to act and the header renders a disabled
+    // Export. Every scenario in this file is a license that HAS been read.
+    // The unknown state has its own suite, TransactionDetails.licensePending-2885.
+    isLicenseResolved: true,
     refresh: jest.fn(),
   },
 };

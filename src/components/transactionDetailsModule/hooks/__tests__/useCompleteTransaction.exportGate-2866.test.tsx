@@ -36,6 +36,12 @@ function setLicense(canSubmit: boolean, organizationId: string | null): void {
   mockUseLicense.mockReturnValue({
     canSubmit,
     organizationId,
+    // BACKLOG-2885 — the provider ALWAYS sets this, so a fixture that omits it
+    // describes a state the app cannot emit. Every case in this file is a
+    // license that has been read: `true`. The unread state is its own suite
+    // (useCompleteTransaction.licenseUnknown-2885), because it reaches neither
+    // flow and would make these assertions pass for the wrong reason.
+    isLicenseResolved: true,
   } as unknown as ReturnType<typeof useLicense>);
 }
 

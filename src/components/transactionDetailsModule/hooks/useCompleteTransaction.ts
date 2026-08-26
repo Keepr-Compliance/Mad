@@ -33,18 +33,45 @@
  *    the export modal for a queue that filled a moment ago, and no test that
  *    renders with a fixed prop would ever catch it.
  *
- * 2. THE LICENSE BRANCH FAILS CLOSED, TO EXPORT. It uses useLicense()
- *    (`canSubmit && !!organizationId`), NOT useFeatureGate().isAllowed, which
- *    returns `?? true` while entitlements are loading. Failing open there would
- *    route an INDIVIDUAL whose feature rows had not loaded into the broker
- *    submit flow — taking away the export that is their only completion path.
+ * 2. THE LICENSE BRANCH HAS THREE STATES, NOT TWO (BACKLOG-2885).
+ *
+ *    It uses useLicense(), NOT useFeatureGate().isAllowed, which returns
+ *    `?? true` while entitlements are loading — failing open there would route
+ *    an INDIVIDUAL whose feature rows had not loaded into the broker submit
+ *    flow, taking away the export that is their only completion path.
+ *
+ *    But the original two-outcome form,
+ *
+ *        (canSubmit && !!organizationId) ? "submit" : "export"
+ *
+ *    called itself "fails closed", and that reasoning was wrong. Failing closed
+ *    means REFUSING an action under uncertainty. This SUBSTITUTED one: a
+ *    brokerage user whose license had not been read yet pressed Complete and
+ *    got a local file, believing they had sent the deal to their broker, who
+ *    received nothing. Export is not a safer submit; it is a different outcome.
+ *
+ *    So "we do not know yet" is now its own target, `"unknown"`, and it is the
+ *    one target that performs no action at all. Only a license answer that has
+ *    actually arrived for the signed-in user is allowed to pick a branch —
+ *    `isLicenseResolved`, NOT `isLoading`, because the reachable unknown window
+ *    (a pre-session "you are an individual" answer recorded before auth
+ *    resolves) carries `isLoading: false`. See LicenseContext for that trace.
+ *
+ *    THE DEFAULT MUST NOT SIMPLY FLIP TO SUBMIT. A resolved answer of
+ *    "canSubmit, but no organization" is still export — the genuinely
+ *    individual user has no other way to complete.
  */
 import { useCallback, useState } from "react";
 import { useLicense } from "@/contexts/LicenseContext";
 import { evaluateExportGate } from "@/services/exportReviewGate";
 import type { ReviewStateResult } from "../../../../electron/types/ipc/window-api-transactions";
 
-export type CompleteTarget = "export" | "submit";
+/**
+ * BACKLOG-2885 — `"unknown"` is the license answer not having arrived yet. It
+ * is not a destination: it is the absence of one, and every consumer has to
+ * decide what it does about that rather than falling into a branch.
+ */
+export type CompleteTarget = "export" | "submit" | "unknown";
 
 export interface UseCompleteTransactionArgs {
   /** The deal being gated. Carried so a refusal can name it. */
@@ -85,15 +112,23 @@ export function useCompleteTransaction({
   openSubmit,
   openNeedsReview,
 }: UseCompleteTransactionArgs): UseCompleteTransactionResult {
-  const { canSubmit, organizationId } = useLicense();
+  const { canSubmit, organizationId, isLicenseResolved } = useLicense();
   const [blockedCount, setBlockedCount] = useState<number | null>(null);
 
-  // Broker-org member → submit. Anything else, including "still loading" and
-  // "no organization", → export. Fails closed.
-  const resolveTarget = useCallback(
-    (): CompleteTarget => (canSubmit && !!organizationId ? "submit" : "export"),
-    [canSubmit, organizationId],
-  );
+  /**
+   * License not yet answered for this user → "unknown"; broker-org member →
+   * submit; anything else → export.
+   *
+   * The order is load-bearing. `isLicenseResolved` is checked FIRST because the
+   * unresolved state is indistinguishable, by value, from a genuine individual:
+   * both are `canSubmit: false, organizationId: null` on a cold start, and the
+   * founder's case was `canSubmit: true, organizationId: null` with the
+   * organization simply not read yet.
+   */
+  const resolveTarget = useCallback((): CompleteTarget => {
+    if (!isLicenseResolved) return "unknown";
+    return canSubmit && !!organizationId ? "submit" : "export";
+  }, [isLicenseResolved, canSubmit, organizationId]);
 
   /**
    * Run THE gate. Returns true when an export/complete may proceed.
@@ -116,8 +151,23 @@ export function useCompleteTransaction({
   }, [transactionId, refreshReviewState]);
 
   const requestComplete = useCallback(async () => {
+    // BACKLOG-2885 — read the branch BEFORE the gate, and refuse outright if it
+    // is unknown.
+    //
+    // Before the gate, because a refusal that ran the gate first would flash
+    // "N communications need to be reviewed" at a user whose click is not being
+    // acted on at all — a message about the wrong problem. Nothing is mutated
+    // and no dialog is raised; the button is disabled in this state, so this is
+    // the second lock, not the visible one.
+    //
+    // Read once, because the gate awaits an IPC round-trip: re-reading after it
+    // could route on a license that changed mid-click, which is the class of
+    // bug this is fixing.
+    const target = resolveTarget();
+    if (target === "unknown") return;
+
     if (!(await runGate())) return;
-    if (resolveTarget() === "submit") {
+    if (target === "submit") {
       openSubmit();
     } else {
       openExport();
