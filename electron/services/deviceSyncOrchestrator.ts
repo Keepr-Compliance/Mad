@@ -131,6 +131,29 @@ function snapshotStateForMark(status: BackupStatusReport): MarkSnapshotState {
   }
 }
 
+/**
+ * BACKLOG-2938: THE definition of "the prior backup on disk is any good".
+ *
+ * There is exactly one, and every site that needs the answer calls this. Before this
+ * item there were two derivations of `isComplete && !isInterrupted` — one inside the
+ * BACKLOG-2925 estimate gate, one absent entirely from the UI-facing mapping, which
+ * keyed on EXISTENCE instead. That is how the founder's install came to be told
+ * "Previous backup can't be used. Starting a fresh backup..." and, in the same run,
+ * NOT told that the replacement is a multi-hour full transfer. One fact, two answers.
+ *
+ * The predicate is the item's, unchanged: `isComplete && !isInterrupted`. Deliberately
+ * NOT also `snapshotState === "finished"` — see the note at the estimate gate, which
+ * explains why demoting a manifest-present / Status.plist-absent backup would trade a
+ * measured number for a discredited one.
+ *
+ * `state !== "present"` is `false` rather than a thrown narrow: `absent` and `unknown`
+ * have no usable prior backup to speak of, and each caller decides separately what
+ * that means for the state it reports.
+ */
+function isUsablePriorBackup(status: BackupStatusReport): boolean {
+  return status.state === "present" && status.isComplete && !status.isInterrupted;
+}
+
 function estimateSourceFor(basis: PriorBackupBasis): EstimateSource {
   switch (basis.kind) {
     case "measured":
@@ -572,18 +595,55 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // the entire reason this branch exists, and `backupStatus?.exists` no longer
       // compiles against the union, so this mapping could not be skipped at merge time.
       //
-      // `present` maps to `"exists"` for COMPLETE AND PARTIAL ALIKE. That is the
-      // documented contract of `PriorBackupState` ("Complete or partial (see
-      // BACKLOG-2925); for 'is this a first sync?' both mean no"), and it is a
-      // different question from the one BACKLOG-2925 answers three lines below.
-      // 2925 asks "may this size a disk guard?" — a partial may not, because it is a
-      // lower bound by construction. 2907 asks "is the user on their first sync?" — a
-      // partial means no, because a prior transfer already happened. Both are correct
-      // in their own domain, and deliberately NOT unified here: see the note filed on
-      // 2907 about the case this leaves open.
+      // BACKLOG-2938 — THIS MAPPING FOLLOWS USABILITY, NOT EXISTENCE.
+      //
+      // What it used to do, and the argument for it, kept here so the next reader
+      // does not re-derive the old rule and revert this:
+      //
+      //   > `present` maps to `"exists"` for COMPLETE AND PARTIAL ALIKE. 2925 asks
+      //   > "may this size a disk guard?" — a partial may not, because it is a lower
+      //   > bound by construction. 2907 asks "is the user on their first sync?" — a
+      //   > partial means no, because a prior transfer already happened. Both are
+      //   > correct in their own domain, and deliberately NOT unified here.
+      //
+      // That reasoning is SOUND for a genuine partial — a torn multi-GB transfer
+      // where data really moved. It is FALSE for the state MEASURED on the founder's
+      // production install: a device directory holding a 6.3 MB `Info.plist` and no
+      // manifest, where nothing usable was ever transferred and the next sync is a
+      // full one. Both land in `kind: "partial"` below; only one of them means "a
+      // prior transfer already happened".
+      //
+      // In that state the app told him two things about one fact: the switch below
+      // emits "Previous backup can't be used. Starting a fresh backup..." while
+      // `"exists"` withheld "First sync may take up to two hours...". Founder ruling,
+      // 2026-08-27: "if the sync isn't useable show the this may take two hours msg."
+      // The banner is not a description of what is on disk — it is a warning that a
+      // full transfer is coming — so it must be driven by the SAME determination that
+      // produces the "can't be used" message.
+      //
+      //   present AND usable      -> "exists"   incremental; no banner
+      //   present AND NOT usable  -> "none"     full transfer; SHOW the banner
+      //   absent                  -> "none"     full transfer; SHOW the banner
+      //   unknown                 -> "unknown"  establishes nothing; claim neither
+      //
+      // `usableAsPriorBackup` is hoisted here and consumed TWICE — by this mapping and
+      // by the BACKLOG-2925 estimate basis below — because the defect this item fixes
+      // was two sites answering "is the prior backup any good?" separately. Deriving
+      // the condition again at either site is how it returns in a new form;
+      // `deviceSyncOrchestrator.usabilityParity-2938.test.ts` pins the two together
+      // through their observable outputs rather than through the predicate itself.
+      //
+      // This changes nothing about which number sizes the disk guard. 2925's question
+      // still gets 2925's answer — the two questions simply turn out to share one:
+      // a directory that cannot be restored from neither sizes a guard nor spares the
+      // user a full transfer.
+      const usableAsPriorBackup = isUsablePriorBackup(backupStatus);
+
       this.priorBackup =
         backupStatus.state === "present"
-          ? "exists"
+          ? usableAsPriorBackup
+            ? "exists"
+            : "none"
           : backupStatus.state === "absent"
             ? "none"
             : "unknown";
@@ -632,7 +692,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // BACKLOG-2918 documents as untrustworthy and BACKLOG-2910 removed the
         // justification for. Trading a measured number for a discredited one is a
         // downgrade, not a tightening. Ruled on by SR review.
-        const usableAsPriorBackup = backupStatus.isComplete && !backupStatus.isInterrupted;
+        //
+        // BACKLOG-2938: this gate used to derive `isComplete && !isInterrupted` here,
+        // a second time, independently of the UI-facing mapping above. That is exactly
+        // how the founder came to be told "previous backup can't be used" and NOT told
+        // his sync would take hours: one fact, two derivations. The predicate is now
+        // hoisted above the mapping and read here — one evaluation, two consumers.
+        // Do not re-inline it.
         priorBackup = !backupStatus.size.measured
           ? { kind: "unknown", reason: `size-unmeasured: ${backupStatus.size.reason}` }
           : usableAsPriorBackup
@@ -1752,7 +1818,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       }
 
       // BACKLOG-2907: this path only proceeds on a backup that is on disk.
-      this.priorBackup = "exists";
+      // BACKLOG-2938: `PriorBackupState` now reports USABILITY, not existence, so this
+      // asks the one predicate rather than assuming the directory's presence answers
+      // it. `isComplete && isInterrupted` is reachable — a backup that was complete
+      // before its latest snapshot tore — and the guard below only checks `isComplete`,
+      // so without this the two entry points would disagree about the same directory.
+      // That divergence is the defect this item exists to remove.
+      this.priorBackup = isUsablePriorBackup(backupStatus) ? "exists" : "none";
 
       if (!backupStatus.isComplete) {
         this.isRunning = false;
