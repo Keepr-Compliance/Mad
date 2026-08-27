@@ -4,6 +4,24 @@
  */
 
 /**
+ * BACKLOG-2907: what the host knows about a prior backup for this device.
+ *
+ * Three states, not two. The renderer uses this to decide whether to claim a
+ * first sync, and a two-state boolean would force "I could not tell" to be
+ * reported as one of the two real answers — which is the defect this replaces.
+ *
+ * - `"exists"`  a prior backup directory is on disk. Complete or partial (see
+ *               BACKLOG-2925); for "is this a first sync?" both mean no.
+ * - `"none"`    the host established there is no prior backup. NOT PRODUCED YET:
+ *               `checkBackupStatus` currently returns `null` both for ENOENT and
+ *               for a thrown check (`backupService.ts:1489`), so this value
+ *               cannot be established until BACKLOG-2917 splits them.
+ * - `"unknown"` the answer could not be established, or the payload predates
+ *               this field. Consumers must render nothing rather than guess.
+ */
+export type PriorBackupState = "exists" | "none" | "unknown";
+
+/**
  * Device detection methods (Windows)
  */
 export interface WindowApiDevice {
@@ -223,6 +241,8 @@ export interface WindowApiSync {
       phaseProgress: number;
       overallProgress: number;
       message: string;
+      /** BACKLOG-2907: prior-backup state for this device. See `PriorBackupState`. */
+      priorBackup?: PriorBackupState;
     }) => void,
   ) => () => void;
   onPhase: (callback: (phase: string) => void) => () => void;

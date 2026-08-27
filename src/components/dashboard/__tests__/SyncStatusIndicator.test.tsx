@@ -1095,7 +1095,12 @@ describe("SyncStatusIndicator", () => {
       expect(screen.queryByText("45%")).not.toBeInTheDocument();
     });
 
-    it("should show spinner for external running pills", () => {
+    // BACKLOG-2907: this test asserted the OPPOSITE until 2026-08-27 — it required a
+    // spinner inside the pill. The founder asked for that spinner to go ("remove this
+    // too — the spinner from the iphone - exporting pill"), so the assertion is
+    // inverted rather than deleted: an absence nobody asserts is an absence that
+    // creeps back.
+    it("should NOT show a spinner inside an external running pill", () => {
       const queue = [
         createSyncItem('iphone', 'running', 30, undefined, true, 'Importing'),
       ];
@@ -1104,9 +1109,41 @@ describe("SyncStatusIndicator", () => {
       render(<SyncStatusIndicator />);
 
       const pill = screen.getByTestId("sync-pill-iphone");
-      // Should contain a spinner div
-      const spinner = pill.querySelector('.animate-spin');
-      expect(spinner).toBeInTheDocument();
+      expect(pill.querySelector('.animate-spin')).toBeNull();
+      expect(pill.querySelector('.border-blue-300')).toBeNull();
+      expect(pill.querySelector('.border-t-blue-600')).toBeNull();
+    });
+
+    it("keeps the external running pill's label and layout after the spinner removal", () => {
+      const queue = [
+        createSyncItem('iphone', 'running', 30, undefined, true, 'Importing'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(queue, true, 30));
+
+      render(<SyncStatusIndicator />);
+
+      const pill = screen.getByTestId("sync-pill-iphone");
+      // The pill still names itself and its phase — the label was the spinner's
+      // sibling, and `gap-1` applies between children, so with one child left the
+      // pill narrows without anything shifting.
+      expect(pill).toHaveTextContent("iPhone");
+      expect(pill.className).toContain("inline-flex");
+      expect(pill.className).toContain("items-center");
+      // The label is now the pill's only content node.
+      expect(pill.querySelectorAll("div")).toHaveLength(0);
+    });
+
+    it("still spins the header icon while a sync is running", () => {
+      // The removal must be surgical: the pill spinner goes, the header's rotating
+      // sync icon stays. Both matched `.animate-spin`.
+      const queue = [
+        createSyncItem('iphone', 'running', 30, undefined, true, 'Importing'),
+      ];
+      mockUseSyncOrchestrator.mockReturnValue(createOrchestratorState(queue, true, 30));
+
+      const { container } = render(<SyncStatusIndicator />);
+
+      expect(container.querySelector('.animate-spin')).not.toBeNull();
     });
   });
 });

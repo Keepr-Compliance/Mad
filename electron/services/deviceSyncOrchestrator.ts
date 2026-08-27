@@ -25,6 +25,7 @@ import {
   deviceDetectionService,
 } from "./deviceDetectionService";
 import { BackupService } from "./backupService";
+import type { PriorBackupState } from "../types/ipc/window-api-platform";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { iOSContactsParser } from "./iosContactsParser";
@@ -311,6 +312,11 @@ export interface SyncProgress {
   backupProgress?: BackupProgress;
   /** Estimated total backup size in bytes (for progress calculation) */
   estimatedTotalBytes?: number;
+  /**
+   * BACKLOG-2907: prior-backup state for this device, attached centrally by
+   * `emitProgress`. Call sites do not set it.
+   */
+  priorBackup?: PriorBackupState;
 }
 
 /**
@@ -355,6 +361,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private abortController: AbortController | null = null;
   private currentPhase: SyncPhase = "idle";
   private estimatedBackupSize: number = 0;
+  /**
+   * BACKLOG-2907: what we know about a prior backup for the device being synced.
+   * Set once per run from `checkBackupStatus`, attached to every progress event by
+   * `emitProgress`. Defaults to `"unknown"` so a run that fails before the check
+   * reports uncertainty rather than inheriting the previous run's answer.
+   */
+  private priorBackup: PriorBackupState = "unknown";
   private startTime: number = 0;
 
   /** BACKLOG-2899: mid-transfer free-space monitor */
@@ -443,6 +456,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     }
 
     this.isRunning = true;
+    // BACKLOG-2907: a new run must establish its own answer. Without this reset the
+    // early progress events of run 2 would carry run 1's prior-backup state.
+    this.priorBackup = "unknown";
     this.abortController = new AbortController();
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
@@ -542,6 +558,36 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // Check if there's an existing backup (could be complete or interrupted)
       const backupStatus = await this.backupService.checkBackupStatus(options.udid);
+      // BACKLOG-2907 + BACKLOG-2917: record what this check actually established.
+      //
+      // #2413 wrote `backupStatus?.exists === true ? "exists" : "unknown"` and
+      // documented `"none"` as NOT PRODUCED YET, naming the reason: `checkBackupStatus`
+      // returned `null` both for ENOENT and for a thrown check, so "there is no prior
+      // backup" could not be established. The banner gates on `priorBackup === "none"`,
+      // so it rendered in NO reachable state — it went from always-on (2907's original
+      // defect) to never-on.
+      //
+      // BACKLOG-2917 is what makes `"none"` producible. `absent` is a proven ENOENT;
+      // `unknown` is a check that failed and establishes nothing. That distinction is
+      // the entire reason this branch exists, and `backupStatus?.exists` no longer
+      // compiles against the union, so this mapping could not be skipped at merge time.
+      //
+      // `present` maps to `"exists"` for COMPLETE AND PARTIAL ALIKE. That is the
+      // documented contract of `PriorBackupState` ("Complete or partial (see
+      // BACKLOG-2925); for 'is this a first sync?' both mean no"), and it is a
+      // different question from the one BACKLOG-2925 answers three lines below.
+      // 2925 asks "may this size a disk guard?" — a partial may not, because it is a
+      // lower bound by construction. 2907 asks "is the user on their first sync?" — a
+      // partial means no, because a prior transfer already happened. Both are correct
+      // in their own domain, and deliberately NOT unified here: see the note filed on
+      // 2907 about the case this leaves open.
+      this.priorBackup =
+        backupStatus.state === "present"
+          ? "exists"
+          : backupStatus.state === "absent"
+            ? "none"
+            : "unknown";
+
 
       // BACKLOG-2917: `let existingBackupSize = 0` used to live here, and it was the
       // same defect wearing a second costume — `0` meant BOTH "no prior backup" and
@@ -1437,7 +1483,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * Emit a progress event
    */
   private emitProgress(progress: SyncProgress): void {
-    this.emit("progress", progress);
+    // BACKLOG-2907: attached here rather than at each of the ~18 call sites, so
+    // no emit can forget it and silently report `undefined` (which the renderer
+    // reads as "unknown" — safe, but it would hide the signal for a whole run).
+    this.emit("progress", { ...progress, priorBackup: this.priorBackup });
   }
 
   /**
@@ -1658,6 +1707,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     }
 
     this.isRunning = true;
+    // BACKLOG-2907: a new run must establish its own answer. Without this reset the
+    // early progress events of run 2 would carry run 1's prior-backup state.
+    this.priorBackup = "unknown";
     this.abortController = new AbortController();
     this.startTime = Date.now();
 
@@ -1698,6 +1750,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         this.isRunning = false;
         return this.errorResult("No existing backup found for this device");
       }
+
+      // BACKLOG-2907: this path only proceeds on a backup that is on disk.
+      this.priorBackup = "exists";
 
       if (!backupStatus.isComplete) {
         this.isRunning = false;

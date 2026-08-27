@@ -3,6 +3,13 @@
  * Used for USB-based device detection and backup sync
  */
 
+// BACKLOG-2907: the prior-backup signal is produced in the main process and
+// crosses IPC, so its type lives with the other IPC surface types. Type-only
+// import — erased at build, same pattern as `src/window.d.ts`.
+import type { PriorBackupState } from "../../electron/types/ipc/window-api-platform";
+
+export type { PriorBackupState };
+
 // ============================================
 // iOS DEVICE TYPES
 // ============================================
@@ -37,6 +44,14 @@ export interface BackupProgress {
   message?: string;
   /** Estimated total backup size in bytes (based on device storage) */
   estimatedTotalBytes?: number;
+  /**
+   * BACKLOG-2907: what the host established about a prior backup for this device.
+   *
+   * Absent when the payload comes from a main process that predates this field —
+   * consumers must treat absent as `"unknown"` and render nothing, never as
+   * "first sync".
+   */
+  priorBackup?: PriorBackupState;
 }
 
 export interface BackupResult {

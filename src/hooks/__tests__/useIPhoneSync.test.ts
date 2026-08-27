@@ -412,6 +412,53 @@ describe("useIPhoneSync", () => {
       });
     });
 
+    // BACKLOG-2907: the prior-backup signal is produced in the main process and
+    // consumed by SyncProgress.tsx to decide whether to claim a first sync. This
+    // hook is the only link in that chain, and dropping the mapping here would be
+    // INVISIBLE today — "exists" and "unknown" render identically while `"none"`
+    // is unproducible (see BACKLOG-2917). It would only surface after 2917 lands,
+    // as a banner that never appears, which is indistinguishable from the
+    // documented pre-2917 behaviour. Hence an explicit control now.
+    it("carries priorBackup through from the IPC payload into progress state", () => {
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi };
+
+      const { result } = renderHook(() => useIPhoneSync());
+      syncStateRef.isActive = true;
+
+      act(() => {
+        syncProgressCallback?.({
+          phase: "backup",
+          overallProgress: 25,
+          message: "Backing up...",
+          priorBackup: "exists",
+        });
+      });
+
+      expect(result.current.progress?.priorBackup).toBe("exists");
+    });
+
+    it("leaves priorBackup undefined when the payload carries no signal", () => {
+      // A main process predating the field. The component reads undefined as
+      // "unknown" and renders nothing — it must never be defaulted to a real
+      // answer here, where the default would be invisible to the component.
+      const syncApi = setupSyncApiMock();
+      (window as any).api = { sync: syncApi };
+
+      const { result } = renderHook(() => useIPhoneSync());
+      syncStateRef.isActive = true;
+
+      act(() => {
+        syncProgressCallback?.({
+          phase: "backup",
+          overallProgress: 25,
+          message: "Backing up...",
+        });
+      });
+
+      expect(result.current.progress?.priorBackup).toBeUndefined();
+    });
+
     it("should map decrypting phase to extracting", () => {
       const syncApi = setupSyncApiMock();
       (window as any).api = { sync: syncApi };
