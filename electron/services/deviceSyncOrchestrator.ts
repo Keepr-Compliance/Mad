@@ -15,6 +15,7 @@
 import { EventEmitter } from "events";
 import crypto from "crypto";
 import log from "electron-log";
+import { syncTimeline } from "./syncTimeline";
 import * as Sentry from "@sentry/electron/main";
 import checkDiskSpace from "check-disk-space";
 import { app } from "electron";
@@ -27,7 +28,10 @@ import { BackupService } from "./backupService";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { iOSContactsParser } from "./iosContactsParser";
-import { checkDiskSpaceForOperation } from "./diagnostics/diskSpaceDiagnostics";
+import {
+  checkDiskSpaceForOperation,
+  DISK_SPACE_THRESHOLDS,
+} from "./diagnostics/diskSpaceDiagnostics";
 import {
   formatDiskSpaceError,
   formatMissingDriversError,
@@ -38,7 +42,95 @@ import { canUseLibimobiledevice } from "./libimobiledeviceService";
 import type { iOSDevice } from "../types/device";
 import type { iOSMessage, iOSConversation } from "../types/iosMessages";
 import type { iOSContact } from "../types/iosContacts";
-import type { BackupProgress } from "../types/backup";
+import type { BackupProgress, BackupResult } from "../types/backup";
+
+/**
+ * BACKLOG-2899: how often free space is re-measured while the backup runs.
+ *
+ * The up-front check is not, on its own, a safety property. It multiplies
+ * `storageInfo.estimatedBackupSize` — a figure the code's own comment calls
+ * "less accurate", derived from the phone's used space — by a fixed headroom and
+ * then, before this change, did not refuse on the result at all: it logged
+ * "Proceeding anyway" and continued.
+ *
+ * A first sync is the exposed case. There is no prior backup to measure, so the
+ * check runs on that derived figure, while a first full backup lands on the
+ * order of tens of GB — ~59 GB on the founder's Windows machine. A single
+ * up-front number cannot carry that alone, so the guard also measures as it goes.
+ *
+ * NOTE ON PROVENANCE: an earlier version of this comment claimed a 15.9x
+ * underestimate on a specific run. That figure was derived from a
+ * `bytesTransferred` progress value mistaken for an estimate; the real line was
+ * `Using existing backup size for estimate: 55 GB` against a ~59 GB backup —
+ * about 7% under, on the branch that HAS a prior backup to measure. Corrected
+ * here rather than quietly deleted, because that number had already propagated
+ * into four backlog items. Accuracy of the estimate itself is BACKLOG-2896.
+ */
+export const SYNC_DISK_POLL_INTERVAL_MS = 5000;
+
+/**
+ * BACKLOG-2899: free space the sync will not consume, in bytes.
+ *
+ * DERIVED, not picked:
+ *
+ *   DISK_SPACE_THRESHOLDS.sync   2048 MB   what the rest of the sync pipeline
+ *                                          (decrypt, parse, store) already
+ *                                          declares it needs to run at all
+ *   one poll of drift             256 MB   a BOUND, not a measurement: local
+ *                                          iPhone backups run at roughly
+ *                                          30-40 MB/s, so a 5 s poll can miss
+ *                                          ~200 MB at the top of that range;
+ *                                          rounded up
+ *   ------------------------------------
+ *   reserve                      2304 MB
+ *
+ * The drift term is deliberately an upper bound rather than an observed rate —
+ * it is only ever wrong in the safe direction, and no transfer-rate measurement
+ * from this codebase is currently trustworthy enough to derive it from. (An
+ * earlier version cited ~40 MB/s as measured, computed from a directory
+ * footprint over a wall-clock duration; the footprint is not bytes transferred,
+ * and run-to-run growth on that machine was ~150 MB.)
+ *
+ * This is a FLOOR the sync defends, not a prediction of backup size — the same
+ * stance as `DISK_SPACE_THRESHOLDS.messagesImport`. It deliberately says nothing
+ * about how large the backup will be, because nothing available up front does.
+ */
+export const SYNC_DISK_RESERVE_BYTES =
+  (DISK_SPACE_THRESHOLDS.sync + 256) * 1024 * 1024;
+
+/**
+ * BACKLOG-2899 x BACKLOG-2898: how far free space must move before a poll earns
+ * a log line.
+ *
+ * The monitor measures every 5 s — across a 24.4-minute backup that is ~293
+ * readings. Writing all of them reintroduces exactly what BACKLOG-2898 removed:
+ * the founder's log went from 4,023 lines to ~100 for this workload, and 293
+ * identical "64 GB free" lines would nearly triple it again. Free space that has
+ * not moved is not news.
+ *
+ * 5 GB is sized against the largest backup footprint observed, ~59 GB: a 5 GB
+ * step emits ~12 lines at that extreme and one line for an ordinary incremental
+ * sync — a small fraction of 2898's ~100-line budget.
+ *
+ * The measurement interval is NOT the lever here. SYNC_DISK_RESERVE_BYTES bounds
+ * its 256 MB drift term at one poll; polling less often widens the window in
+ * which the disk can fill undetected. Change what is written, never how often it
+ * is measured.
+ */
+export const SYNC_DISK_LOG_DELTA_BYTES = 5 * 1024 * 1024 * 1024;
+
+/**
+ * BACKLOG-2899: within this multiple of the reserve, the sync is approaching the
+ * event the guard exists for, and every step gets louder rather than quieter.
+ */
+export const SYNC_DISK_NEAR_RESERVE_MULTIPLIER = 2;
+
+/**
+ * BACKLOG-2899: inside the near-reserve band, 5 GB is coarser than the reserve
+ * itself (2304 MB) and would hide the entire run-up. Step down to the reserve's
+ * own drift term so the approach is visible.
+ */
+export const SYNC_DISK_NEAR_RESERVE_LOG_DELTA_BYTES = 256 * 1024 * 1024;
 
 /**
  * Metadata about the last successfully synced backup (TASK-908)
@@ -157,6 +249,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private estimatedBackupSize: number = 0;
   private startTime: number = 0;
 
+  /** BACKLOG-2899: mid-transfer free-space monitor */
+  private diskSpaceMonitor: NodeJS.Timeout | null = null;
+  private diskSpaceAborted: boolean = false;
+  private diskSpaceAtAbort: number = 0;
+
   /**
    * Tracks the last successfully synced backup for skip detection (TASK-908)
    * Note: This is in-memory only; cross-session persistence is a future enhancement
@@ -241,6 +338,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.abortController = new AbortController();
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
+
+    // BACKLOG-2898: open the phase timeline for this run.
+    syncTimeline.beginSync({ platform: process.platform });
 
     // TASK-2110: Generate session ID for ACID rollback on cancel
     const sessionId = crypto.randomUUID();
@@ -340,13 +440,26 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         existingBackupSize = backupStatus.sizeBytes;
         const sizeGB = (backupStatus.sizeBytes / 1024 / 1024 / 1024).toFixed(1);
 
-        if (backupStatus.isCorrupted) {
-          log.warn("[DeviceSyncOrchestrator] Previous backup was interrupted, will attempt to resume");
+        if (backupStatus.isInterrupted) {
+          // BACKLOG-2911: this branch used to say "Resuming..." and then issue a
+          // byte-identical backup request. There is no resume to perform: the host
+          // cannot ask for one. `idevicebackup2` never reads `Status.plist` on the
+          // backup path, and `ForceFullBackup` is the only option the mobilebackup2
+          // protocol accepts on a backup request — the device decides what to re-send.
+          //
+          // So the message says what actually happens. What is on disk is kept (the
+          // partial directory is never deleted, and `--full` is never injected), but
+          // no reuse is promised: the failed run never updated `Manifest.db`, and
+          // whether the device credits its partially-transferred files cannot be
+          // established from the host.
+          log.warn(
+            `[DeviceSyncOrchestrator] Previous backup did not finish (${sizeGB} GB on disk); starting a new backup. No host-side resume exists — see BACKLOG-2911.`,
+          );
           this.emitProgress({
             phase: "backup",
             phaseProgress: 0,
             overallProgress: 0,
-            message: `Found interrupted backup (${sizeGB} GB). Resuming...`,
+            message: `Previous sync didn't finish (${sizeGB} GB saved). Starting over...`,
           });
         } else if (backupStatus.isComplete) {
           const lastSync = backupStatus.lastModified;
@@ -392,6 +505,46 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         });
       }
 
+      // BACKLOG-2899: Refuse up front when free space is ALREADY below the
+      // reserve the mid-transfer monitor defends. Same constant, same semantic:
+      // if the first poll would abort the backup, do not start it.
+      //
+      // Deliberately NOT a refusal on `estimate x headroom`: the reserve is the
+      // only number here that does not depend on the estimate at all, and a
+      // refusal on the FIRST-sync branch would rest on `0.25 x used space`,
+      // which no measurement in this codebase currently validates (BACKLOG-2896;
+      // the ratio's stated basis is itself disputed by BACKLOG-2910).
+      //
+      // This is narrower than it should be. On the `existingBackupSize > 0`
+      // branch the estimate is a PRIOR BACKUP'S MEASURED SIZE and was ~7% under
+      // on the founder's run, so refusing up front there would cost a user
+      // nothing while a mid-transfer abort costs a full 20-25 minute run. That
+      // is filed separately; this change does not make it.
+      const reserveCheck = await this.checkAvailableDiskSpace(
+        SYNC_DISK_RESERVE_BYTES,
+      );
+      if (!reserveCheck.hasEnoughSpace) {
+        const userError = formatDiskSpaceError(
+          Math.round(reserveCheck.availableSpace / 1024 / 1024),
+          Math.round(SYNC_DISK_RESERVE_BYTES / 1024 / 1024),
+        );
+        log.warn("[DeviceSyncOrchestrator] Sync refused: free space below reserve", {
+          availableBytes: reserveCheck.availableSpace,
+          reserveBytes: SYNC_DISK_RESERVE_BYTES,
+        });
+        Sentry.captureMessage("Sync refused: free space below reserve", {
+          level: "warning",
+          tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
+          extra: {
+            availableBytes: reserveCheck.availableSpace,
+            reserveBytes: SYNC_DISK_RESERVE_BYTES,
+          },
+        });
+        this.isRunning = false;
+        this.emit("error", { message: userError.description, userError });
+        return this.errorResult(userError.description);
+      }
+
       // Step 1: Get device storage info to estimate backup size
       const storageInfo = await this.deviceService.getDeviceStorageInfo(options.udid);
       if (storageInfo) {
@@ -404,6 +557,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           this.estimatedBackupSize = storageInfo.estimatedBackupSize;
           log.info(`[DeviceSyncOrchestrator] Estimated backup size from storage: ${Math.round(this.estimatedBackupSize / 1024 / 1024)} MB (used space: ${Math.round(storageInfo.usedSpace / 1024 / 1024 / 1024)} GB)`);
         }
+
+        // BACKLOG-2898/2896: the estimate BRANCH, on one greppable line. Which
+        // branch ran is what says whether a previous backup was reused — the
+        // question 2896 could not answer because both `log.info` lines above
+        // had rotated out of main.log AND main.old.log before anyone looked.
+        syncTimeline.mark("backup-estimate", {
+          source: existingBackupSize > 0 ? "existing-backup" : "device-storage",
+          bytes: this.estimatedBackupSize,
+          reusedPreviousBackup: existingBackupSize > 0,
+        });
 
         this.emitProgress({
           phase: "backup",
@@ -465,11 +628,53 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // Step 1: Create backup
       this.setPhase("backup");
-      const backupResult = await this.backupService.startBackup({
-        udid: options.udid,
-        password: options.password,
-        forceFullBackup: options.forceFullBackup,
-      });
+
+      // BACKLOG-2899: re-measure free space WHILE the transfer runs.
+      let backupResult: BackupResult;
+      this.startDiskSpaceMonitor();
+      try {
+        backupResult = await this.backupService.startBackup({
+          udid: options.udid,
+          password: options.password,
+          forceFullBackup: options.forceFullBackup,
+        });
+      } finally {
+        this.stopDiskSpaceMonitor();
+      }
+
+      // BACKLOG-2899: the monitor cancelled the backup to protect the volume.
+      //
+      // The partial backup is deliberately left on disk — nothing on this path
+      // deletes `Backups/<udid>`, so the next run's checkBackupStatus still
+      // finds it. It does NOT follow that the next run continues from it:
+      // BACKLOG-2911 measured the next sync starting from zero. Do not promise
+      // resume in the message below until 2911 lands.
+      if (this.diskSpaceAborted) {
+        const freeGB = (this.diskSpaceAtAbort / 1024 / 1024 / 1024).toFixed(1);
+        const reserveGB = (SYNC_DISK_RESERVE_BYTES / 1024 / 1024 / 1024).toFixed(1);
+        const message =
+          `Sync stopped to protect your computer: free disk space fell to ${freeGB} GB ` +
+          `(below the ${reserveGB} GB this sync keeps in reserve) while the iPhone backup was running. ` +
+          `The partial backup was kept on disk. Free up space and sync again — the next sync currently starts over rather than continuing from it.`;
+        log.warn("[DeviceSyncOrchestrator] Sync aborted mid-transfer: disk space", {
+          availableBytes: this.diskSpaceAtAbort,
+          reserveBytes: SYNC_DISK_RESERVE_BYTES,
+          estimatedBackupSize: this.estimatedBackupSize,
+        });
+        Sentry.captureMessage("Sync aborted mid-transfer to protect disk space", {
+          level: "error",
+          tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
+          extra: {
+            availableBytes: this.diskSpaceAtAbort,
+            reserveBytes: SYNC_DISK_RESERVE_BYTES,
+            estimatedBackupSize: this.estimatedBackupSize,
+          },
+        });
+        this.isRunning = false;
+        this.setPhase("error");
+        this.emit("error", { message });
+        return this.errorResult(message);
+      }
 
       if (this.abortController?.signal.aborted) {
         this.isRunning = false;
@@ -492,6 +697,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         this.isRunning = false;
         return this.errorResult(error);
       }
+
+      // BACKLOG-2898/2894: what the backup phase produced. `incremental` is
+      // the fact BACKLOG-2896 could not settle — the lines that would have
+      // answered it had already rotated out of the founder's log.
+      syncTimeline.annotate("backup", {
+        bytes: backupResult.backupSize,
+        incremental: backupResult.isIncremental,
+        encrypted: !!backupResult.isEncrypted,
+      });
 
       let backupPath = backupResult.backupPath;
 
@@ -547,6 +761,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         overallProgress: this.calculateOverallProgress("parsing-contacts", 100),
         message: `Found ${contacts.length} contacts`,
       });
+
+      // BACKLOG-2898/2894: what this phase produced.
+      syncTimeline.annotate("parsing-contacts", { contacts: contacts.length });
 
       if (this.abortController?.signal.aborted) {
         this.isRunning = false;
@@ -612,6 +829,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         this.contactsParser.close();
         return this.errorResult("Sync cancelled by user");
       }
+
+      // BACKLOG-2898/2894: what the parsing phase produced.
+      syncTimeline.annotate("parsing-messages", {
+        conversations: conversations.length,
+        messages: conversations.reduce((sum, c) => sum + c.messages.length, 0),
+      });
 
       // Step 5: Resolve contact names
       this.setPhase("resolving");
@@ -905,6 +1128,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    */
   private setPhase(phase: SyncPhase): void {
     this.currentPhase = phase;
+
+    // BACKLOG-2898: one timeline record per back-end step, with its duration
+    // and the counts it produced. Terminal states are not phases — "complete"
+    // hands off to persistence in syncHandlers, which opens the storing:*
+    // phases and ends the sync; the open phase is closed by that next enter().
+    if (phase !== "idle" && phase !== "complete" && phase !== "error") {
+      syncTimeline.enter(phase);
+    }
+
     this.emit("phase", phase);
   }
 
@@ -975,20 +1207,123 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   }
 
   /**
+   * BACKLOG-2899: watch free space for as long as the backup runs.
+   *
+   * Cancels the backup when free space falls below SYNC_DISK_RESERVE_BYTES.
+   * This is the guard's actual safety property — on a FIRST sync the up-front
+   * check has no prior backup to measure and consults a derived figure instead
+   * (BACKLOG-2896), and idevicebackup2 cannot be relied on to report the
+   * resulting full disk: transcribed from
+   * tools/idevicebackup2.c mb2_handle_receive_files(), the host-side write is
+   * `fwrite(buf, 1, r, f);` with the return value never checked and `fclose(f)`
+   * likewise unchecked, so a full volume is silently absorbed and the tool can
+   * still print "Backup Successful." Prevention, not detection.
+   *
+   * Touches neither `lastProgress` nor the zombie-process watchdog
+   * (BACKLOG-1582/1628) — it only reads the local filesystem and, on abort,
+   * calls the existing cancel path.
+   */
+  private startDiskSpaceMonitor(): void {
+    this.stopDiskSpaceMonitor();
+    this.diskSpaceAborted = false;
+    this.diskSpaceAtAbort = 0;
+
+    let pollInFlight = false;
+    let lastLoggedFree: number | null = null;
+
+    // BACKLOG-2899 x BACKLOG-2898: a reading is written only when it has MOVED.
+    // Unchanged free space is not news; the ~293 readings a 24.4-minute backup
+    // produces would otherwise nearly triple the log 2898 just cut to ~100 lines.
+    // Nothing here changes how often the disk is measured — only what is written.
+    const logReadingIfMaterial = (freeBytes: number): void => {
+      const nearReserve =
+        freeBytes < SYNC_DISK_RESERVE_BYTES * SYNC_DISK_NEAR_RESERVE_MULTIPLIER;
+      const threshold = nearReserve
+        ? SYNC_DISK_NEAR_RESERVE_LOG_DELTA_BYTES
+        : SYNC_DISK_LOG_DELTA_BYTES;
+
+      if (
+        lastLoggedFree !== null &&
+        Math.abs(freeBytes - lastLoggedFree) < threshold
+      ) {
+        return;
+      }
+      lastLoggedFree = freeBytes;
+
+      const freeGB = (freeBytes / 1024 / 1024 / 1024).toFixed(1);
+      if (nearReserve) {
+        const reserveGB = (SYNC_DISK_RESERVE_BYTES / 1024 / 1024 / 1024).toFixed(1);
+        log.warn(
+          `[DeviceSyncOrchestrator] Backup disk space: ${freeGB} GB free — approaching the ${reserveGB} GB reserve`,
+        );
+      } else {
+        log.info(`[DeviceSyncOrchestrator] Backup disk space: ${freeGB} GB free`);
+      }
+    };
+
+    this.diskSpaceMonitor = setInterval(() => {
+      if (pollInFlight || this.diskSpaceAborted) return;
+      pollInFlight = true;
+
+      void this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES, { quiet: true })
+        .then((check) => {
+          // A fail-open default is not a reading — do not log 0 GB free.
+          if (!check.unavailable) {
+            logReadingIfMaterial(check.availableSpace);
+          }
+
+          // Fail-open by construction: checkAvailableDiskSpace returns
+          // hasEnoughSpace=true when the check itself throws, so one transient
+          // stat failure never kills a 20-minute backup. Act on the boolean,
+          // never on availableSpace (which is 0 on that error path).
+          if (check.hasEnoughSpace) return;
+
+          this.diskSpaceAborted = true;
+          this.diskSpaceAtAbort = check.availableSpace;
+          log.error(
+            `[DeviceSyncOrchestrator] Free space fell below reserve (${Math.round(check.availableSpace / 1024 / 1024)} MB) — cancelling backup`,
+          );
+          this.stopDiskSpaceMonitor();
+          this.backupService.cancelBackup();
+        })
+        .finally(() => {
+          pollInFlight = false;
+        });
+    }, SYNC_DISK_POLL_INTERVAL_MS);
+  }
+
+  /** BACKLOG-2899: stop the mid-transfer free-space monitor. */
+  private stopDiskSpaceMonitor(): void {
+    if (this.diskSpaceMonitor) {
+      clearInterval(this.diskSpaceMonitor);
+      this.diskSpaceMonitor = null;
+    }
+  }
+
+  /**
    * Check if computer has enough disk space for backup
    * @param requiredBytes Minimum bytes needed
    * @returns Object with hasEnoughSpace and availableSpace
    */
-  private async checkAvailableDiskSpace(requiredBytes: number): Promise<{
+  private async checkAvailableDiskSpace(
+    requiredBytes: number,
+    options?: { quiet?: boolean },
+  ): Promise<{
     hasEnoughSpace: boolean;
     availableSpace: number;
+    /** BACKLOG-2899: true when the check itself failed and the result is a fail-open default. */
+    unavailable?: boolean;
   }> {
     try {
       // Check disk space on the drive where app data is stored
       const appDataPath = app.getPath("userData");
       const diskInfo = await checkDiskSpace(path.parse(appDataPath).root);
 
-      log.info(`[DeviceSyncOrchestrator] Disk space: ${Math.round(diskInfo.free / 1024 / 1024 / 1024)} GB free on ${diskInfo.diskPath}`);
+      // BACKLOG-2899: the mid-transfer monitor calls this ~293 times per backup
+      // and logs its own readings only when they move (see startDiskSpaceMonitor).
+      if (!options?.quiet) {
+        log.info(`[DeviceSyncOrchestrator] Disk space: ${Math.round(diskInfo.free / 1024 / 1024 / 1024)} GB free on ${diskInfo.diskPath}`);
+      }
 
       return {
         hasEnoughSpace: diskInfo.free >= requiredBytes,
@@ -1003,6 +1338,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       return {
         hasEnoughSpace: true,
         availableSpace: 0,
+        unavailable: true,
       };
     }
   }
@@ -1283,6 +1619,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * Create an error result
    */
   private errorResult(error: string): SyncResult {
+    // BACKLOG-2898: close the timeline on every failure and cancel path.
+    // The guard distinguishes the ONE reentrant caller ("Sync already in
+    // progress", reached while isRunning is still true for the OTHER sync)
+    // from genuine terminations, which all clear isRunning first.
+    if (!this.isRunning) {
+      syncTimeline.endSync(/cancelled/i.test(error) ? "cancelled" : "error");
+    }
+
     return {
       success: false,
       messages: [],

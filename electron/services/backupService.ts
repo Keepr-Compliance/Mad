@@ -35,6 +35,59 @@ import {
 import { validateDeviceUdid, ValidationError } from "../utils/validation";
 
 /**
+ * BACKLOG-2899: how idevicebackup2 reports that the HOST disk is full.
+ *
+ * TRANSCRIBED, in two steps, because BACKLOG-2870 is the precedent for a
+ * detector written against an invented string (SQLite's real
+ * "database or disk is full" matched none of the patterns hunting for it).
+ *
+ * 1. The format string, `strings`-ed out of the binary this app actually ships,
+ *    resources/win/libimobiledevice/idevicebackup2.exe:
+ *
+ *        Error opening '%s' for writing: %s
+ *
+ *    and from libimobiledevice tools/idevicebackup2.c, mb2_handle_receive_files(),
+ *    which is where that line is produced:
+ *
+ *        errcode = errno_to_device_error(errno);
+ *        errdesc = strerror(errno);
+ *        progress_printf("Error opening '%s' for writing: %s\n", bname, errdesc);
+ *
+ * 2. The `%s` tail is `strerror(errno)`, supplied by the C runtime rather than
+ *    embedded in the executable — so it is NOT in the binary's strings, and this
+ *    step is INFERRED, not transcribed from an observed failure: Windows maps
+ *    ERROR_DISK_FULL to ENOSPC via _dosmaperr, and UCRT, glibc and BSD all
+ *    render ENOSPC as "No space left on device". The Win32-phrasing and ENOSPC
+ *    alternates below are belt-and-braces for a build that formats it
+ *    differently.
+ *
+ * Note what this detector CANNOT see, which is why BACKLOG-2899 does not rely on
+ * it: in the same function the host-side write is `fwrite(buf, 1, r, f);` with
+ * the return value never checked, and `fclose(f)` unchecked too. A full disk is
+ * therefore usually absorbed in silence — truncated files, exit code 0, and
+ * "Backup Successful." on stdout. The mid-transfer free-space monitor in
+ * deviceSyncOrchestrator is the actual guard; this is the backstop.
+ */
+export const IDEVICEBACKUP2_DISK_FULL_PATTERNS: readonly RegExp[] = [
+  /no space left on device/i,
+  /not enough space on the disk/i,
+  /there is not enough space on the disk/i,
+  /\bENOSPC\b/,
+  /disk (?:is )?full/i,
+];
+
+/**
+ * BACKLOG-2899: true when idevicebackup2 output reports a full host disk.
+ *
+ * Reads STDOUT, not stderr: progress_printf() is `vprintf()`, so every one of
+ * these lines goes to stdout. backupService only ever fed `stderrBuffer` to
+ * getErrorMessage(), so before this the message could not reach any detector.
+ */
+export function isIdevicebackup2DiskFullOutput(output: string): boolean {
+  return IDEVICEBACKUP2_DISK_FULL_PATTERNS.some((p) => p.test(output));
+}
+
+/**
  * Service for managing iPhone backups via idevicebackup2
  *
  * Emits events:
@@ -78,6 +131,43 @@ export class BackupService extends EventEmitter {
 
   // BACKLOG-1628: Stderr debug parsing state
   private stderrLineBuffer: string = "";
+
+  /**
+   * BACKLOG-2898: stderr words that indicate a real fault. Unchanged from
+   * BACKLOG-1628 — what changed is that they are now tested per LINE, with
+   * libimobiledevice's mutex trace removed first.
+   */
+  private static readonly STDERR_ERROR_WORDS = [
+    "trust",
+    "pair",
+    "password",
+    "incorrect",
+    "locked",
+    "passcode",
+    "no device",
+    "not found",
+    "disk",
+    "space",
+    "storage",
+  ];
+
+  /**
+   * `np_lock(): Locked` / `np_unlock(): Unlocked` / `afc_lock(): Locked` — a
+   * pthread mutex trace. The `<name>():` shape is what makes this safe: a real
+   * message ("Device is locked", "please unlock your iPhone") can never match.
+   */
+  private static readonly LIBIMOBILEDEVICE_MUTEX_TRACE =
+    /\b\w*_(?:un)?lock\(\):\s*(?:Locked|Unlocked)\b/gi;
+
+  /** libimobiledevice's -d trace format: `16:06:22 D:\...\idevice.c:652 func(): msg`. */
+  private static readonly LIBIMOBILEDEVICE_TRACE_FORMAT =
+    /^\d{2}:\d{2}:\d{2}\s+\S+[\\/][^\s]+:\d+\s+\w+\(\):/;
+
+  /** Cap on distinct unrecognised stderr lines breadcrumbed per backup run. */
+  private static readonly MAX_STDERR_BREADCRUMBS = 50;
+
+  /** Fingerprints of stderr lines already sent to Sentry this run. */
+  private breadcrumbedStderrLines: Set<string> = new Set();
   private manifestUploadPhase: boolean = false;
   private manifestUploadSize: string | null = null;
 
@@ -320,6 +410,8 @@ export class BackupService extends EventEmitter {
 
       // BACKLOG-1628: Reset stderr parsing state
       this.stderrLineBuffer = "";
+      // BACKLOG-2898: breadcrumb dedupe is per backup run
+      this.breadcrumbedStderrLines.clear();
       this.manifestUploadPhase = false;
       this.manifestUploadSize = null;
 
@@ -342,10 +434,28 @@ export class BackupService extends EventEmitter {
 
       let stdoutBuffer = "";
       let stderrBuffer = "";
+      // BACKLOG-2899: set when idevicebackup2 reports it could not write to the
+      // local disk. See isIdevicebackup2DiskFullOutput for the transcription.
+      let diskFullDetected = false;
 
       this.currentProcess.stdout?.on("data", (data: Buffer) => {
         const output = data.toString();
         stdoutBuffer += output;
+        // BACKLOG-2899: stdoutBuffer accumulated for the whole run and was never
+        // read — 24 minutes of progress-bar output held in memory. Capped the
+        // way stderrBuffer already is.
+        if (stdoutBuffer.length > 65536) {
+          stdoutBuffer = stdoutBuffer.slice(-65536);
+        }
+
+        // BACKLOG-2899: host-side write failures are printed HERE, on stdout.
+        if (!diskFullDetected && isIdevicebackup2DiskFullOutput(output)) {
+          diskFullDetected = true;
+          log.error(
+            "[BackupService] idevicebackup2 reported a full disk:",
+            output.trim().substring(0, 300),
+          );
+        }
 
         // BACKLOG-1582: Track last stdout activity for watchdog
         this.lastStdoutTimestamp = Date.now();
@@ -405,51 +515,27 @@ export class BackupService extends EventEmitter {
           this.parseStderrLine(line, options.udid);
         }
 
-        // Original: log non-progress, non-debug lines for error detection
-        // With -d flag, only log lines that match known error patterns
-        // (the debug output is far too verbose to log in full)
-        const outputLower = output.toLowerCase();
-        const isErrorPattern =
-          outputLower.includes("trust") ||
-          outputLower.includes("pair") ||
-          outputLower.includes("password") ||
-          outputLower.includes("incorrect") ||
-          outputLower.includes("locked") ||
-          outputLower.includes("passcode") ||
-          outputLower.includes("no device") ||
-          outputLower.includes("not found") ||
-          outputLower.includes("disk") ||
-          outputLower.includes("space") ||
-          outputLower.includes("storage");
-
-        if (isErrorPattern) {
-          log.warn("[BackupService] stderr (error pattern):", output.trim().substring(0, 500));
-        } else {
-          // BACKLOG-1628: Restore Sentry breadcrumbs for unrecognized non-debug patterns.
-          // With -d flag, known debug prefixes (SSL_write, service_send, etc.) are very
-          // frequent and should be silently skipped. But genuinely unrecognized lines
-          // may indicate new error patterns we haven't categorized yet.
-          const isDebugLine =
-            output.includes("SSL_write") ||
-            output.includes("service_send") ||
-            output.includes("internal_plist") ||
-            output.includes("idevice_connection") ||
-            output.includes("Sending '") ||
-            output.includes("Negotiated Protocol") ||
-            output.includes("backup mode") ||
-            output.includes("Starting backup") ||
-            output.includes("Requesting backup") ||
-            output.includes("Status.plist") ||
-            output.includes("Manifest.plist") ||
-            output.includes("Manifest.db");
-
-          if (!isDebugLine && output.trim().length > 0) {
-            Sentry.addBreadcrumb({
-              category: "backup",
-              message: output.trim().substring(0, 200),
-              level: "info",
-            });
-          }
+        // BACKLOG-2898: classify PER LINE, not per chunk.
+        //
+        // This block used to test the whole stderr CHUNK for a trigger word and,
+        // on a hit, dump a 500-char window of that chunk at `warn`. Measured on
+        // the founder's real 21-minute log: 336 such records, 123,299 bytes,
+        // 17.5% of the whole file — and a trigger histogram over all 336 shows
+        // exactly ONE word ever fired, "locked", every single time from
+        // libimobiledevice's own MUTEX trace (`notification_proxy.c:52
+        // np_lock(): Locked`). Zero records contained a non-mutex trigger. The
+        // rest of each record — idevice_connection_receive_timeout,
+        // internal_plist_receive_timeout, np_get_notification — carries no
+        // trigger word at all and was pure collateral of the 500-char window.
+        // 13 of the 336 were truncated so hard that the word that caused them
+        // to be logged is not even in the logged text.
+        //
+        // The backup that produced all of this COMPLETED SUCCESSFULLY. Per-line
+        // classification plus demoting the mutex trace removes all 336 without
+        // silencing a single line that carries a genuine trigger — a real
+        // "Device is locked, enter your passcode" still warns.
+        for (const line of lines) {
+          this.classifyStderrLine(line);
         }
       });
 
@@ -491,7 +577,12 @@ export class BackupService extends EventEmitter {
           return;
         }
 
-        const success = code === 0;
+        // BACKLOG-2899: exit code 0 is not sufficient. idevicebackup2 never
+        // checks its own fwrite/fclose, so a run that could not write files can
+        // still exit 0 and print "Backup Successful." If it told us the disk was
+        // full, the backup on disk is truncated and must not be handed to the
+        // parsers as a success.
+        const success = code === 0 && !diskFullDetected;
         let backupSize = 0;
         let finalBackupPath = deviceBackupPath;
 
@@ -602,14 +693,24 @@ export class BackupService extends EventEmitter {
 
         // Convert error code to user-friendly message
         let errorMessage: string | null = null;
+        let errorCode: BackupErrorCode | undefined;
         if (!success) {
-          errorMessage = this.getErrorMessage(code, stderrBuffer);
+          if (diskFullDetected) {
+            // BACKLOG-2899: phrased so deviceSyncOrchestrator's existing
+            // /disk space|no space|ENOSPC|not enough space/i matcher recognises it.
+            errorMessage =
+              "Not enough disk space to complete the backup. Please free up space and try again.";
+            errorCode = "INSUFFICIENT_SPACE";
+          } else {
+            errorMessage = this.getErrorMessage(code, stderrBuffer);
+          }
         }
 
         const result: BackupResult = {
           success,
           backupPath: success ? finalBackupPath : null,
           error: errorMessage,
+          ...(errorCode ? { errorCode } : {}),
           duration: Date.now() - this.startTime,
           deviceUdid: options.udid,
           isIncremental: previousBackupExists && !options.forceFullBackup,
@@ -748,6 +849,84 @@ export class BackupService extends EventEmitter {
         }));
       }
     }, 10_000);
+  }
+
+  /**
+   * BACKLOG-2898: classify ONE stderr line as a real error signal, benign
+   * libimobiledevice debug chatter, or something unrecognised.
+   *
+   * Called for every stderr line on a hot path (30K+ lines in 20s during
+   * manifest upload), so every test is a cheap substring or a single anchored
+   * regex.
+   */
+  private classifyStderrLine(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    // A libimobiledevice MUTEX trace: `np_lock(): Locked`, `np_unlock():
+    // Unlocked`, `afc_lock(): Locked`. The word "Locked" here is a pthread
+    // mutex state inside notification_proxy.c — it says nothing about the
+    // DEVICE being locked, and it is emitted continuously during a healthy
+    // backup. Strip the trace before testing for trigger words, so a line that
+    // ALSO carries a genuine signal is still caught.
+    const withoutMutexTrace = trimmed.replace(
+      BackupService.LIBIMOBILEDEVICE_MUTEX_TRACE,
+      "",
+    );
+
+    const lower = withoutMutexTrace.toLowerCase();
+    const isErrorPattern = BackupService.STDERR_ERROR_WORDS.some((word) =>
+      lower.includes(word),
+    );
+
+    if (isErrorPattern) {
+      log.warn("[BackupService] stderr (error pattern):", trimmed.substring(0, 500));
+      return;
+    }
+
+    // BACKLOG-1628: Sentry breadcrumbs for unrecognised non-debug lines, which
+    // may indicate error patterns we have not categorised yet.
+    //
+    // BACKLOG-2898: this is now per LINE where it used to be per chunk, so it
+    // is bounded two ways — libimobiledevice's own debug-trace format counts as
+    // a known debug line, and identical lines (ignoring numbers) breadcrumb
+    // once per backup. Without both, a chunk that produced one breadcrumb could
+    // produce dozens and push the useful ones out of Sentry's ring buffer.
+    if (this.isKnownDebugLine(trimmed)) return;
+
+    const fingerprint = trimmed.replace(/\d+/g, "#").substring(0, 200);
+    if (this.breadcrumbedStderrLines.has(fingerprint)) return;
+    if (this.breadcrumbedStderrLines.size >= BackupService.MAX_STDERR_BREADCRUMBS) return;
+    this.breadcrumbedStderrLines.add(fingerprint);
+
+    Sentry.addBreadcrumb({
+      category: "backup",
+      message: trimmed.substring(0, 200),
+      level: "info",
+    });
+  }
+
+  /**
+   * Known-benign debug output from the `-d` flag. The first test is
+   * libimobiledevice's own trace FORMAT (`HH:MM:SS <src path>:<line>
+   * <function>(): ...`), which by construction only exists because we pass -d.
+   */
+  private isKnownDebugLine(line: string): boolean {
+    if (BackupService.LIBIMOBILEDEVICE_TRACE_FORMAT.test(line)) return true;
+    return (
+      line.includes("SSL_write") ||
+      line.includes("service_send") ||
+      line.includes("internal_plist") ||
+      line.includes("idevice_connection") ||
+      line.includes("Sending '") ||
+      line.includes("Negotiated Protocol") ||
+      line.includes("backup mode") ||
+      line.includes("Starting backup") ||
+      line.includes("Requesting backup") ||
+      line.includes("Status.plist") ||
+      line.includes("Manifest.plist") ||
+      line.includes("Manifest.db")
+    );
   }
 
   /**
@@ -1232,6 +1411,17 @@ export class BackupService extends EventEmitter {
   async checkBackupStatus(udid: string): Promise<{
     exists: boolean;
     isComplete: boolean;
+    /**
+     * BACKLOG-2911: the device did not report this snapshot as finished, so what is
+     * on disk is a partial backup. See `readSnapshotState` for what that covers.
+     */
+    isInterrupted: boolean;
+    /**
+     * @deprecated BACKLOG-2911 — now an alias of `isInterrupted`, kept so existing
+     * callers keep compiling. The name conflates "interrupted" (snapshot unfinished,
+     * bytes on disk intact and reusable) with "corrupt", which are different states.
+     * Remove once PR #2409 and BACKLOG-2910 have landed.
+     */
     isCorrupted: boolean;
     lastModified: Date | null;
     sizeBytes: number;
@@ -1273,27 +1463,15 @@ export class BackupService extends EventEmitter {
       // A complete backup should have Manifest.db and Info.plist
       const isComplete = hasManifest && hasInfoPlist;
 
-      // Check for corruption indicators: read directly, handle ENOENT
-      let isCorrupted = false;
-      try {
-        const statusContent = await fs.readFile(statusPlistPath, "utf8");
-        // If Status.plist indicates backup was in progress, it was interrupted
-        if (statusContent.includes("BackupState") && statusContent.includes("InProgress")) {
-          isCorrupted = true;
-        }
-      } catch (statusErr: unknown) {
-        if (statusErr && typeof statusErr === "object" && "code" in statusErr && (statusErr as { code: string }).code === "ENOENT") {
-          // Status.plist doesn't exist — not corrupted by this metric
-        } else {
-          // Can't read status, assume potentially corrupted
-          isCorrupted = !isComplete;
-        }
-      }
+      // BACKLOG-2911: did the device report this snapshot as finished?
+      const snapshotState = await this.readSnapshotState(statusPlistPath);
+      const isInterrupted = snapshotState === "unfinished";
 
       log.info(`[BackupService] Backup status for ${udid}:`, {
         exists: true,
         isComplete,
-        isCorrupted,
+        isInterrupted,
+        snapshotState,
         hasManifest,
         hasInfoPlist,
         sizeBytes: size,
@@ -1302,13 +1480,80 @@ export class BackupService extends EventEmitter {
       return {
         exists: true,
         isComplete,
-        isCorrupted,
+        isInterrupted,
+        // Deprecated alias — see the doc comment on the return type.
+        isCorrupted: isInterrupted,
         lastModified: stats.mtime,
         sizeBytes: size,
       };
     } catch (error) {
       log.error("[BackupService] Error checking backup status:", error);
       return null;
+    }
+  }
+
+  /**
+   * BACKLOG-2911: read the device's own verdict on the last backup from `Status.plist`.
+   *
+   * `Status.plist` is written by BackupAgent2 on the device and uploaded to the host.
+   * The values it actually carries are `SnapshotState: "uploading" | "finished"` and
+   * `BackupState: "empty" | "new"`.
+   *
+   * The predicate this replaced looked for the substring `"InProgress"`, which iOS
+   * never writes, so it could not return true for any readable `Status.plist`. Verified
+   * against a real torn backup (`SnapshotState: "uploading"`, 41,097 orphaned blobs,
+   * no `Manifest.db`) — see `backupService.interruptedDetection-2911.test.ts` for the
+   * bytes and their provenance. The old code also read a binary plist as UTF-8, which
+   * mangles every non-ASCII byte.
+   *
+   * This matches the ONE known-good value rather than enumerating in-progress ones, so
+   * any state not seen before — an older iOS variant, a truncated write, a format
+   * change — counts as unfinished rather than silently passing as complete.
+   *
+   * `"absent"` is reported separately from `"unfinished"` because a missing
+   * `Status.plist` carries no evidence either way: it is also the state before a
+   * device has ever completed a backup into this directory.
+   *
+   * Note this is only a *report*. It never deletes the partial backup and never
+   * changes the backup invocation — `idevicebackup2` does not read `Status.plist` on
+   * the backup path at all (`mb2_status_check_snapshot_state` is called only from
+   * `CMD_RESTORE`), and the only option the protocol accepts on a backup request is
+   * `ForceFullBackup`. Continuation across a failed run is device-driven.
+   */
+  private async readSnapshotState(
+    statusPlistPath: string,
+  ): Promise<"finished" | "unfinished" | "absent"> {
+    let raw: Buffer;
+    try {
+      raw = await fs.readFile(statusPlistPath);
+    } catch (readErr: unknown) {
+      if (readErr && typeof readErr === "object" && "code" in readErr && (readErr as { code: string }).code === "ENOENT") {
+        return "absent";
+      }
+      // Present but unreadable: we cannot prove the snapshot finished, so it did not.
+      log.warn("[BackupService] Status.plist unreadable, treating snapshot as unfinished:", readErr);
+      return "unfinished";
+    }
+
+    try {
+      // Required lazily rather than imported at the top of the file: `Status.plist` may
+      // be binary or XML, and `simple-plist` handles both, but keeping the require here
+      // keeps this change clear of the import block that PR #2409 and BACKLOG-2910 both
+      // edit. Same pattern as electron/utils/messageParser.ts.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const simplePlist = require("simple-plist") as { parse: (data: Buffer) => unknown };
+      const parsed = simplePlist.parse(raw);
+      const snapshotState =
+        parsed && typeof parsed === "object"
+          ? (parsed as Record<string, unknown>)["SnapshotState"]
+          : undefined;
+
+      // The only value that means "the device finished this snapshot".
+      const SNAPSHOT_STATE_FINISHED = "finished";
+      return snapshotState === SNAPSHOT_STATE_FINISHED ? "finished" : "unfinished";
+    } catch (parseErr: unknown) {
+      log.warn("[BackupService] Status.plist unparseable, treating snapshot as unfinished:", parseErr);
+      return "unfinished";
     }
   }
 
