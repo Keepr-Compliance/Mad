@@ -102,6 +102,8 @@ export function registerBackupHandlers(mainWindow: BrowserWindow): void {
         success: true,
         exists: status.exists,
         isComplete: status.isComplete,
+        // BACKLOG-2911: `isCorrupted` is a deprecated alias of `isInterrupted`.
+        isInterrupted: status.isInterrupted,
         isCorrupted: status.isCorrupted,
         lastSyncTime: status.lastModified?.toISOString() || null,
         sizeBytes: status.sizeBytes,

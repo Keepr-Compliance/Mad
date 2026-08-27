@@ -1326,6 +1326,17 @@ export class BackupService extends EventEmitter {
   async checkBackupStatus(udid: string): Promise<{
     exists: boolean;
     isComplete: boolean;
+    /**
+     * BACKLOG-2911: the device did not report this snapshot as finished, so what is
+     * on disk is a partial backup. See `readSnapshotState` for what that covers.
+     */
+    isInterrupted: boolean;
+    /**
+     * @deprecated BACKLOG-2911 — now an alias of `isInterrupted`, kept so existing
+     * callers keep compiling. The name conflates "interrupted" (snapshot unfinished,
+     * bytes on disk intact and reusable) with "corrupt", which are different states.
+     * Remove once PR #2409 and BACKLOG-2910 have landed.
+     */
     isCorrupted: boolean;
     lastModified: Date | null;
     sizeBytes: number;
@@ -1367,27 +1378,15 @@ export class BackupService extends EventEmitter {
       // A complete backup should have Manifest.db and Info.plist
       const isComplete = hasManifest && hasInfoPlist;
 
-      // Check for corruption indicators: read directly, handle ENOENT
-      let isCorrupted = false;
-      try {
-        const statusContent = await fs.readFile(statusPlistPath, "utf8");
-        // If Status.plist indicates backup was in progress, it was interrupted
-        if (statusContent.includes("BackupState") && statusContent.includes("InProgress")) {
-          isCorrupted = true;
-        }
-      } catch (statusErr: unknown) {
-        if (statusErr && typeof statusErr === "object" && "code" in statusErr && (statusErr as { code: string }).code === "ENOENT") {
-          // Status.plist doesn't exist — not corrupted by this metric
-        } else {
-          // Can't read status, assume potentially corrupted
-          isCorrupted = !isComplete;
-        }
-      }
+      // BACKLOG-2911: did the device report this snapshot as finished?
+      const snapshotState = await this.readSnapshotState(statusPlistPath);
+      const isInterrupted = snapshotState === "unfinished";
 
       log.info(`[BackupService] Backup status for ${udid}:`, {
         exists: true,
         isComplete,
-        isCorrupted,
+        isInterrupted,
+        snapshotState,
         hasManifest,
         hasInfoPlist,
         sizeBytes: size,
@@ -1396,13 +1395,80 @@ export class BackupService extends EventEmitter {
       return {
         exists: true,
         isComplete,
-        isCorrupted,
+        isInterrupted,
+        // Deprecated alias — see the doc comment on the return type.
+        isCorrupted: isInterrupted,
         lastModified: stats.mtime,
         sizeBytes: size,
       };
     } catch (error) {
       log.error("[BackupService] Error checking backup status:", error);
       return null;
+    }
+  }
+
+  /**
+   * BACKLOG-2911: read the device's own verdict on the last backup from `Status.plist`.
+   *
+   * `Status.plist` is written by BackupAgent2 on the device and uploaded to the host.
+   * The values it actually carries are `SnapshotState: "uploading" | "finished"` and
+   * `BackupState: "empty" | "new"`.
+   *
+   * The predicate this replaced looked for the substring `"InProgress"`, which iOS
+   * never writes, so it could not return true for any readable `Status.plist`. Verified
+   * against a real torn backup (`SnapshotState: "uploading"`, 41,097 orphaned blobs,
+   * no `Manifest.db`) — see `backupService.interruptedDetection-2911.test.ts` for the
+   * bytes and their provenance. The old code also read a binary plist as UTF-8, which
+   * mangles every non-ASCII byte.
+   *
+   * This matches the ONE known-good value rather than enumerating in-progress ones, so
+   * any state not seen before — an older iOS variant, a truncated write, a format
+   * change — counts as unfinished rather than silently passing as complete.
+   *
+   * `"absent"` is reported separately from `"unfinished"` because a missing
+   * `Status.plist` carries no evidence either way: it is also the state before a
+   * device has ever completed a backup into this directory.
+   *
+   * Note this is only a *report*. It never deletes the partial backup and never
+   * changes the backup invocation — `idevicebackup2` does not read `Status.plist` on
+   * the backup path at all (`mb2_status_check_snapshot_state` is called only from
+   * `CMD_RESTORE`), and the only option the protocol accepts on a backup request is
+   * `ForceFullBackup`. Continuation across a failed run is device-driven.
+   */
+  private async readSnapshotState(
+    statusPlistPath: string,
+  ): Promise<"finished" | "unfinished" | "absent"> {
+    let raw: Buffer;
+    try {
+      raw = await fs.readFile(statusPlistPath);
+    } catch (readErr: unknown) {
+      if (readErr && typeof readErr === "object" && "code" in readErr && (readErr as { code: string }).code === "ENOENT") {
+        return "absent";
+      }
+      // Present but unreadable: we cannot prove the snapshot finished, so it did not.
+      log.warn("[BackupService] Status.plist unreadable, treating snapshot as unfinished:", readErr);
+      return "unfinished";
+    }
+
+    try {
+      // Required lazily rather than imported at the top of the file: `Status.plist` may
+      // be binary or XML, and `simple-plist` handles both, but keeping the require here
+      // keeps this change clear of the import block that PR #2409 and BACKLOG-2910 both
+      // edit. Same pattern as electron/utils/messageParser.ts.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const simplePlist = require("simple-plist") as { parse: (data: Buffer) => unknown };
+      const parsed = simplePlist.parse(raw);
+      const snapshotState =
+        parsed && typeof parsed === "object"
+          ? (parsed as Record<string, unknown>)["SnapshotState"]
+          : undefined;
+
+      // The only value that means "the device finished this snapshot".
+      const SNAPSHOT_STATE_FINISHED = "finished";
+      return snapshotState === SNAPSHOT_STATE_FINISHED ? "finished" : "unfinished";
+    } catch (parseErr: unknown) {
+      log.warn("[BackupService] Status.plist unparseable, treating snapshot as unfinished:", parseErr);
+      return "unfinished";
     }
   }
 
