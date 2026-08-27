@@ -80,72 +80,103 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   // Show passcode waiting warning (special state with detailed instructions)
   const showPasscodeWarning = isWaitingForPasscode;
 
-  // Show first sync time warning once transfer has started
-  const showFirstSyncHint = !isComplete && !isError && isBackingUp && hasStartedTransfer;
+  /**
+   * BACKLOG-2907: the prior-backup signal has THREE states, and only one of them
+   * may claim a first sync.
+   *
+   * | state       | meaning                                   | banner |
+   * |-------------|-------------------------------------------|--------|
+   * | `"none"`    | host established there is no prior backup | shown  |
+   * | `"exists"`  | a prior backup is on disk (whole or part) | hidden |
+   * | `"unknown"` | could not be established, or field absent | hidden |
+   *
+   * Absent field reads as `"unknown"`: a payload from a main process that
+   * predates this field must not be read as "first sync".
+   *
+   * NOTE: `"none"` is not produced by anything yet. `checkBackupStatus` returns
+   * `null` both for ENOENT and for a check that threw, so the orchestrator maps
+   * `null` to `"unknown"` on purpose (see BACKLOG-2917). Until 2917 lands this
+   * banner therefore stays hidden in every reachable state — deliberately.
+   * Claiming a two-hour first sync on a guess is the bug this replaces, and the
+   * founder's rule for the unknown case is to render nothing.
+   */
+  const priorBackup = progress.priorBackup ?? "unknown";
+  const isEstablishedFirstSync = priorBackup === "none";
+
+  // Show first sync time warning once transfer has started — and only when the
+  // host actually established that this IS a first sync.
+  const showFirstSyncHint =
+    !isComplete && !isError && isBackingUp && hasStartedTransfer && isEstablishedFirstSync;
 
   return (
     <div className="p-6">
-      {/* Progress Icon */}
-      <div className="flex justify-center mb-4">
-        {isComplete ? (
-          <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
-            <svg
-              className="w-8 h-8 text-green-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M5 13l4 4L19 7"
-              />
-            </svg>
-          </div>
-        ) : isError ? (
-          <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
-            <svg
-              className="w-8 h-8 text-red-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
-          </div>
-        ) : isWaitingForPasscode ? (
-          // Special icon for passcode waiting - phone with keypad
-          <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center animate-pulse">
-            <svg
-              className="w-8 h-8 text-amber-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              {/* Phone outline */}
-              <rect x="7" y="2" width="10" height="20" rx="2" strokeWidth={2} />
-              {/* Keypad dots */}
-              <circle cx="10" cy="10" r="1" fill="currentColor" />
-              <circle cx="12" cy="10" r="1" fill="currentColor" />
-              <circle cx="14" cy="10" r="1" fill="currentColor" />
-              <circle cx="10" cy="13" r="1" fill="currentColor" />
-              <circle cx="12" cy="13" r="1" fill="currentColor" />
-              <circle cx="14" cy="13" r="1" fill="currentColor" />
-              <circle cx="12" cy="16" r="1" fill="currentColor" />
-            </svg>
-          </div>
-        ) : (
-          <div className="w-16 h-16 rounded-full bg-purple-100 flex items-center justify-center">
-            <div className="w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
-      </div>
+      {/*
+        Progress Icon
+
+        BACKLOG-2907: the default (in-progress) state has NO icon. The purple
+        spinner that used to fill it was removed at the founder's request. The
+        wrapper is kept — it centres the complete / error / passcode icons — but
+        renders only when one of those exists, so the default state does not
+        leave an empty `mb-4` box pushing the title down.
+      */}
+      {(isComplete || isError || isWaitingForPasscode) && (
+        <div className="flex justify-center mb-4">
+          {isComplete ? (
+            <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
+              <svg
+                className="w-8 h-8 text-green-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            </div>
+          ) : isError ? (
+            <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
+              <svg
+                className="w-8 h-8 text-red-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </div>
+          ) : (
+            // Special icon for passcode waiting - phone with keypad
+            <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center animate-pulse">
+              <svg
+                className="w-8 h-8 text-amber-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                {/* Phone outline */}
+                <rect x="7" y="2" width="10" height="20" rx="2" strokeWidth={2} />
+                {/* Keypad dots */}
+                <circle cx="10" cy="10" r="1" fill="currentColor" />
+                <circle cx="12" cy="10" r="1" fill="currentColor" />
+                <circle cx="14" cy="10" r="1" fill="currentColor" />
+                <circle cx="10" cy="13" r="1" fill="currentColor" />
+                <circle cx="12" cy="13" r="1" fill="currentColor" />
+                <circle cx="14" cy="13" r="1" fill="currentColor" />
+                <circle cx="12" cy="16" r="1" fill="currentColor" />
+              </svg>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Level 1: Phase Title (combined title + context) */}
       <h3 className="text-lg font-semibold text-gray-800 text-center mb-1">

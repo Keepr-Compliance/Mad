@@ -25,6 +25,7 @@ import {
   deviceDetectionService,
 } from "./deviceDetectionService";
 import { BackupService } from "./backupService";
+import type { PriorBackupState } from "../types/ipc/window-api-platform";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { iOSContactsParser } from "./iosContactsParser";
@@ -203,6 +204,11 @@ export interface SyncProgress {
   backupProgress?: BackupProgress;
   /** Estimated total backup size in bytes (for progress calculation) */
   estimatedTotalBytes?: number;
+  /**
+   * BACKLOG-2907: prior-backup state for this device, attached centrally by
+   * `emitProgress`. Call sites do not set it.
+   */
+  priorBackup?: PriorBackupState;
 }
 
 /**
@@ -247,6 +253,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private abortController: AbortController | null = null;
   private currentPhase: SyncPhase = "idle";
   private estimatedBackupSize: number = 0;
+  /**
+   * BACKLOG-2907: what we know about a prior backup for the device being synced.
+   * Set once per run from `checkBackupStatus`, attached to every progress event by
+   * `emitProgress`. Defaults to `"unknown"` so a run that fails before the check
+   * reports uncertainty rather than inheriting the previous run's answer.
+   */
+  private priorBackup: PriorBackupState = "unknown";
   private startTime: number = 0;
 
   /** BACKLOG-2899: mid-transfer free-space monitor */
@@ -335,6 +348,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     }
 
     this.isRunning = true;
+    // BACKLOG-2907: a new run must establish its own answer. Without this reset the
+    // early progress events of run 2 would carry run 1's prior-backup state.
+    this.priorBackup = "unknown";
     this.abortController = new AbortController();
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
@@ -434,6 +450,23 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // Check if there's an existing backup (could be complete or interrupted)
       const backupStatus = await this.backupService.checkBackupStatus(options.udid);
+
+      // BACKLOG-2907: record what this check actually established, for the UI.
+      //
+      // `exists: true` is the only value here that cannot be produced by a
+      // failure — it is reached only after `fs.stat` on `Backups/<udid>`
+      // succeeded. It is sound to consume today, and it is all the banner needs:
+      // complete or partial (BACKLOG-2925), a prior backup means "not a first
+      // sync".
+      //
+      // `null` is NOT mapped to `"none"`. `checkBackupStatus` returns `null`
+      // both for ENOENT and for a check that threw (`backupService.ts:1489`),
+      // so "there is no prior backup" cannot be established from it. Until
+      // BACKLOG-2917 splits those, uncertainty is reported as uncertainty and
+      // the renderer shows nothing rather than claiming a two-hour first sync
+      // on a guess.
+      this.priorBackup = backupStatus?.exists === true ? "exists" : "unknown";
+
       let existingBackupSize = 0;
 
       if (backupStatus) {
@@ -1144,7 +1177,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * Emit a progress event
    */
   private emitProgress(progress: SyncProgress): void {
-    this.emit("progress", progress);
+    // BACKLOG-2907: attached here rather than at each of the ~18 call sites, so
+    // no emit can forget it and silently report `undefined` (which the renderer
+    // reads as "unknown" — safe, but it would hide the signal for a whole run).
+    this.emit("progress", { ...progress, priorBackup: this.priorBackup });
   }
 
   /**
@@ -1365,6 +1401,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     }
 
     this.isRunning = true;
+    // BACKLOG-2907: a new run must establish its own answer. Without this reset the
+    // early progress events of run 2 would carry run 1's prior-backup state.
+    this.priorBackup = "unknown";
     this.abortController = new AbortController();
     this.startTime = Date.now();
 
@@ -1394,6 +1433,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         this.isRunning = false;
         return this.errorResult("No existing backup found for this device");
       }
+
+      // BACKLOG-2907: this path only proceeds on a backup that is on disk.
+      this.priorBackup = "exists";
 
       if (!backupStatus.isComplete) {
         this.isRunning = false;
