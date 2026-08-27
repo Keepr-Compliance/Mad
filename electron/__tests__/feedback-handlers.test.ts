@@ -202,7 +202,12 @@ describe("Feedback Handlers", () => {
      * a real database in `db/__tests__/writerColumnParity-2560.test.ts`.
      */
     it("does not reject on field_name — no such column exists to validate", async () => {
-      mockDatabaseService.saveFeedback.mockResolvedValue({ id: "feedback-123" });
+      // Only `id` is read by the handler; asserted to UserFeedback rather than
+      // padded with fields the assertions never look at, matching the sibling
+      // cases above.
+      mockDatabaseService.saveFeedback.mockResolvedValue({
+        id: "feedback-123",
+      } as unknown as UserFeedback);
 
       const feedbackWithLongFieldName = {
         ...validFeedbackData,
