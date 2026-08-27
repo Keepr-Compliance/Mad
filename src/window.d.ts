@@ -115,6 +115,9 @@ interface ElectronAPI {
       success: boolean;
       exists?: boolean;
       isComplete?: boolean;
+      /** BACKLOG-2911: the device never reported the last snapshot as finished. */
+      isInterrupted?: boolean;
+      /** @deprecated BACKLOG-2911 — alias of `isInterrupted`. */
       isCorrupted?: boolean;
       lastSyncTime?: string | null;
       sizeBytes?: number;

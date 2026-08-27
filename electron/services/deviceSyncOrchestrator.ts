@@ -340,13 +340,26 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         existingBackupSize = backupStatus.sizeBytes;
         const sizeGB = (backupStatus.sizeBytes / 1024 / 1024 / 1024).toFixed(1);
 
-        if (backupStatus.isCorrupted) {
-          log.warn("[DeviceSyncOrchestrator] Previous backup was interrupted, will attempt to resume");
+        if (backupStatus.isInterrupted) {
+          // BACKLOG-2911: this branch used to say "Resuming..." and then issue a
+          // byte-identical backup request. There is no resume to perform: the host
+          // cannot ask for one. `idevicebackup2` never reads `Status.plist` on the
+          // backup path, and `ForceFullBackup` is the only option the mobilebackup2
+          // protocol accepts on a backup request — the device decides what to re-send.
+          //
+          // So the message says what actually happens. What is on disk is kept (the
+          // partial directory is never deleted, and `--full` is never injected), but
+          // no reuse is promised: the failed run never updated `Manifest.db`, and
+          // whether the device credits its partially-transferred files cannot be
+          // established from the host.
+          log.warn(
+            `[DeviceSyncOrchestrator] Previous backup did not finish (${sizeGB} GB on disk); starting a new backup. No host-side resume exists — see BACKLOG-2911.`,
+          );
           this.emitProgress({
             phase: "backup",
             phaseProgress: 0,
             overallProgress: 0,
-            message: `Found interrupted backup (${sizeGB} GB). Resuming...`,
+            message: `Previous sync didn't finish (${sizeGB} GB saved). Starting over...`,
           });
         } else if (backupStatus.isComplete) {
           const lastSync = backupStatus.lastModified;
