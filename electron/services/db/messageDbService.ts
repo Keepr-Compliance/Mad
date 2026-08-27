@@ -311,40 +311,6 @@ export function getMessagesByContact(userId: string, contact: string): Message[]
 // ============================================
 
 /**
- * Update a message in the messages table
- */
-export function updateMessage(messageId: string, updates: Partial<Message>): void {
-  const db = ensureDb();
-  const allowedFields = [
-    "transaction_id",
-    "transaction_link_confidence",
-    "transaction_link_source",
-    "is_transaction_related",
-    "classification_confidence",
-    "classification_method",
-    "classified_at",
-    "is_false_positive",
-    "false_positive_reason",
-    "stage_hint",
-    "stage_hint_source",
-    "stage_hint_confidence",
-    "llm_analysis",
-  ];
-
-  const entries = Object.entries(updates).filter(([key]) =>
-    allowedFields.includes(key)
-  );
-
-  if (entries.length === 0) return;
-
-  const setClause = entries.map(([key]) => `${key} = ?`).join(", ");
-  const values = entries.map(([, value]) => value);
-  values.push(messageId);
-
-  db.prepare(`UPDATE messages SET ${setClause} WHERE id = ?`).run(...values);
-}
-
-/**
  * Link a message to a transaction
  */
 export function linkMessageToTransaction(messageId: string, transactionId: string): void {

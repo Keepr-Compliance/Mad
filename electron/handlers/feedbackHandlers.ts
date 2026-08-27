@@ -78,16 +78,12 @@ export const registerFeedbackHandlers = (): void => {
           );
         }
 
-        if ((sanitizedData as any).field_name) {
-          (sanitizedData as any).field_name = validateString(
-            (sanitizedData as any).field_name,
-            "field_name",
-            {
-              required: false,
-              maxLength: 100,
-            },
-          );
-        }
+        // BACKLOG-2560: a `field_name` validation used to sit here. There is no
+        // `field_name` column on `classification_feedback` (schema.sql:950) —
+        // the only one in the schema belongs to `extracted_transaction_data`.
+        // The value was validated, spread into `saveFeedback`, and dropped by
+        // its explicit INSERT column list. Validating a phantom reads as
+        // coverage while proving nothing about the row that lands.
 
         const feedback = await databaseService.saveFeedback({
           user_id: validatedUserId,

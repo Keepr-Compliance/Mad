@@ -4906,10 +4906,6 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return messageDb.getMessagesByContact(userId, contact);
   }
 
-  async updateMessage(messageId: string, updates: Partial<Message>): Promise<void> {
-    return messageDb.updateMessage(messageId, updates);
-  }
-
   async linkMessageToTransaction(messageId: string, transactionId: string): Promise<void> {
     return messageDb.linkMessageToTransaction(messageId, transactionId);
   }
