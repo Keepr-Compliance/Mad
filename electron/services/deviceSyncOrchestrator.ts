@@ -43,7 +43,115 @@ import { canUseLibimobiledevice } from "./libimobiledeviceService";
 import type { iOSDevice } from "../types/device";
 import type { iOSMessage, iOSConversation } from "../types/iosMessages";
 import type { iOSContact } from "../types/iosContacts";
-import type { BackupProgress, BackupResult } from "../types/backup";
+import type {
+  BackupProgress,
+  BackupResult,
+  BackupSnapshotState,
+  BackupStatusReport,
+} from "../types/backup";
+
+/**
+ * BACKLOG-2917: what we actually know about a previous backup before sizing this one.
+ *
+ * This replaces `let existingBackupSize = 0`, whose `0` meant both "there is no
+ * previous backup" and "the check failed". Every consumer keyed off `> 0`, so an
+ * unknown silently became a first sync — in the estimate, in the headroom branch and,
+ * once BACKLOG-2898 added the mark, in the telemetry that was built to settle exactly
+ * this question.
+ *
+ * `unknown` carries no `bytes` on purpose. A caller cannot accidentally size a disk
+ * guard against a number it was never given.
+ */
+type PriorBackupBasis =
+  /** A COMPLETE, uninterrupted previous backup was found and its size measured. */
+  | { kind: "measured"; bytes: number }
+  /**
+   * BACKLOG-2925: a previous backup is on disk and its size was measured, but the run
+   * that produced it did not finish. The bytes are real; as an ESTIMATE they are a
+   * lower bound BY CONSTRUCTION, because the run stopped early. Carried so telemetry
+   * can report what was ignored — never used to size the estimate or the disk guard.
+   */
+  | { kind: "partial"; bytes: number }
+  /** `fs.stat` returned ENOENT: proven first sync. */
+  | { kind: "none" }
+  /** The check threw, or the size walk failed. Proven: nothing. */
+  | { kind: "unknown"; reason: string };
+
+/**
+ * The `source` field of the `backup-estimate` mark.
+ *
+ * BACKLOG-2898 built `source` to name WHICH BRANCH RAN, so BACKLOG-2894 can aggregate
+ * over it. Two branches sharing one label would defeat that, which is why the
+ * device-storage-unavailable case below gets its own value rather than reusing
+ * `"unknown"` — device storage being unreadable says nothing about whether a prior
+ * backup exists, and the two unknowns are independent.
+ */
+type EstimateSource =
+  | "existing-backup"
+  | "device-storage"
+  | "unknown"
+  | "device-storage-unavailable";
+
+/**
+ * What the `backup-estimate` mark records for the snapshot dimension.
+ *
+ * BACKLOG-2926: this is a NAMED union, not `string`. The first version of this field
+ * was `let snapshotStateForTelemetry: string = "no-backup"`, overwritten only on the
+ * `present` arm — which reproduced the BACKLOG-2917 defect inside the very field added
+ * to make that defect measurable: a run where the CHECK FAILED recorded
+ * `snapshotState=no-backup`, identical to a proven ENOENT. The orchestrator logged
+ * "NOT treating this as a first sync" ten lines above, and the telemetry then asserted
+ * exactly that. `GROUP BY snapshotState` could not separate "we know there is none"
+ * from "we could not find out".
+ *
+ * `"check-failed"` and `"no-backup"` are therefore distinct tokens, and the default is
+ * gone: the value is derived from the report rather than initialised and overwritten.
+ */
+type MarkSnapshotState = BackupSnapshotState | "no-backup" | "check-failed";
+
+/**
+ * Exhaustive over the OUTER union. The `never` arm on the snapshot switch elsewhere
+ * guards only the three snapshot states; this one guards the three report states, so a
+ * fourth `BackupStatusReport` arm cannot silently inherit a neighbour's telemetry.
+ */
+function snapshotStateForMark(status: BackupStatusReport): MarkSnapshotState {
+  switch (status.state) {
+    case "present":
+      return status.snapshotState;
+    case "absent":
+      // Proven ENOENT. There genuinely is no backup.
+      return "no-backup";
+    case "unknown":
+      // The check itself failed. We established nothing — and must not say otherwise.
+      return "check-failed";
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
+
+function estimateSourceFor(basis: PriorBackupBasis): EstimateSource {
+  switch (basis.kind) {
+    case "measured":
+      return "existing-backup";
+    case "partial":
+      // The estimate does NOT come from the partial — it comes from device storage,
+      // exactly as on a first sync. Reporting `existing-backup` here would be the
+      // instrument lying, the same class as BACKLOG-2917: it would claim a measured
+      // prior backup drove a number that it did not.
+      return "device-storage";
+    case "none":
+      return "device-storage";
+    case "unknown":
+      return "unknown";
+    default: {
+      // Adding a basis without deciding what it reports fails to compile here.
+      const exhaustive: never = basis;
+      return exhaustive;
+    }
+  }
+}
 
 /**
  * BACKLOG-2899: how often free space is re-measured while the backup runs.
@@ -450,30 +558,121 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // Check if there's an existing backup (could be complete or interrupted)
       const backupStatus = await this.backupService.checkBackupStatus(options.udid);
-
-      // BACKLOG-2907: record what this check actually established, for the UI.
+      // BACKLOG-2907 + BACKLOG-2917: record what this check actually established.
       //
-      // `exists: true` is the only value here that cannot be produced by a
-      // failure — it is reached only after `fs.stat` on `Backups/<udid>`
-      // succeeded. It is sound to consume today, and it is all the banner needs:
-      // complete or partial (BACKLOG-2925), a prior backup means "not a first
-      // sync".
+      // #2413 wrote `backupStatus?.exists === true ? "exists" : "unknown"` and
+      // documented `"none"` as NOT PRODUCED YET, naming the reason: `checkBackupStatus`
+      // returned `null` both for ENOENT and for a thrown check, so "there is no prior
+      // backup" could not be established. The banner gates on `priorBackup === "none"`,
+      // so it rendered in NO reachable state — it went from always-on (2907's original
+      // defect) to never-on.
       //
-      // `null` is NOT mapped to `"none"`. `checkBackupStatus` returns `null`
-      // both for ENOENT and for a check that threw (`backupService.ts:1489`),
-      // so "there is no prior backup" cannot be established from it. Until
-      // BACKLOG-2917 splits those, uncertainty is reported as uncertainty and
-      // the renderer shows nothing rather than claiming a two-hour first sync
-      // on a guess.
-      this.priorBackup = backupStatus?.exists === true ? "exists" : "unknown";
+      // BACKLOG-2917 is what makes `"none"` producible. `absent` is a proven ENOENT;
+      // `unknown` is a check that failed and establishes nothing. That distinction is
+      // the entire reason this branch exists, and `backupStatus?.exists` no longer
+      // compiles against the union, so this mapping could not be skipped at merge time.
+      //
+      // `present` maps to `"exists"` for COMPLETE AND PARTIAL ALIKE. That is the
+      // documented contract of `PriorBackupState` ("Complete or partial (see
+      // BACKLOG-2925); for 'is this a first sync?' both mean no"), and it is a
+      // different question from the one BACKLOG-2925 answers three lines below.
+      // 2925 asks "may this size a disk guard?" — a partial may not, because it is a
+      // lower bound by construction. 2907 asks "is the user on their first sync?" — a
+      // partial means no, because a prior transfer already happened. Both are correct
+      // in their own domain, and deliberately NOT unified here: see the note filed on
+      // 2907 about the case this leaves open.
+      this.priorBackup =
+        backupStatus.state === "present"
+          ? "exists"
+          : backupStatus.state === "absent"
+            ? "none"
+            : "unknown";
 
-      let existingBackupSize = 0;
 
-      if (backupStatus) {
-        existingBackupSize = backupStatus.sizeBytes;
-        const sizeGB = (backupStatus.sizeBytes / 1024 / 1024 / 1024).toFixed(1);
+      // BACKLOG-2917: `let existingBackupSize = 0` used to live here, and it was the
+      // same defect wearing a second costume — `0` meant BOTH "no prior backup" and
+      // "we could not find out". Every decision below then keyed off `> 0`, so an
+      // unknown silently selected the first-sync path and the telemetry recorded it
+      // as fact. The basis is now named, so "we do not know" is a value the estimate,
+      // the headroom and the mark all have to handle explicitly.
+      let priorBackup: PriorBackupBasis;
 
-        if (backupStatus.isInterrupted) {
+      if (backupStatus.state === "unknown") {
+        // Proven: nothing. Do NOT say "first sync" — that is the 2917 defect, and
+        // BACKLOG-2886's rule is that uncertainty must refuse, never substitute.
+        priorBackup = { kind: "unknown", reason: backupStatus.reason };
+        log.error(
+          `[DeviceSyncOrchestrator] Could not establish whether a previous backup exists (${backupStatus.reason}); NOT treating this as a first sync.`,
+        );
+        this.emitProgress({
+          phase: "backup",
+          phaseProgress: 0,
+          overallProgress: 0,
+          message: "Checking your iPhone...",
+        });
+      } else if (backupStatus.state === "present") {
+        // The directory is there. Its SIZE is a separate three-state reading: a walk
+        // that threw must not be reported as a measured prior backup.
+        // BACKLOG-2925: `deviceSyncOrchestrator.ts:440` used to assign the prior
+        // backup's size UNCONDITIONALLY. BACKLOG-2911 made `isInterrupted` available
+        // three lines later and nothing downstream consulted it, so an interrupted run
+        // fed the estimate (a lower bound by construction), took the TIGHTER 1.1x
+        // headroom commented "for existing backups (accurate size)", and reported
+        // `reusedPreviousBackup: true` on a run where reuse is impossible.
+        //
+        // BACKLOG-2899's own mid-transfer abort MANUFACTURES this state: it
+        // deliberately leaves the partial on disk, so the next run dropped its headroom
+        // against a number that abort guaranteed was too small. The guard made its own
+        // next invocation weaker.
+        //
+        // The gate is the item's: `isComplete && !isInterrupted`. Deliberately NOT also
+        // `snapshotState === "finished"` — that would demote STATE D (a manifest
+        // present, Status.plist absent: a real backup predating this device writing
+        // one) from a MEASURED size to the `0.25 x used space` estimate that
+        // BACKLOG-2918 documents as untrustworthy and BACKLOG-2910 removed the
+        // justification for. Trading a measured number for a discredited one is a
+        // downgrade, not a tightening. Ruled on by SR review.
+        const usableAsPriorBackup = backupStatus.isComplete && !backupStatus.isInterrupted;
+        priorBackup = !backupStatus.size.measured
+          ? { kind: "unknown", reason: `size-unmeasured: ${backupStatus.size.reason}` }
+          : usableAsPriorBackup
+            ? { kind: "measured", bytes: backupStatus.size.bytes }
+            : { kind: "partial", bytes: backupStatus.size.bytes };
+
+        if (priorBackup.kind === "partial") {
+          log.warn(
+            `[DeviceSyncOrchestrator] Previous backup is on disk (${priorBackup.bytes} bytes) but is NOT usable as an estimate (isComplete=${backupStatus.isComplete}, isInterrupted=${backupStatus.isInterrupted}); estimating from device storage instead. See BACKLOG-2925.`,
+          );
+        }
+
+        if (!backupStatus.size.measured) {
+          log.error(
+            `[DeviceSyncOrchestrator] A previous backup exists but its size could not be measured (${backupStatus.size.reason}); estimating as if unknown, not as a first sync.`,
+          );
+        }
+
+        const sizeGB = backupStatus.size.measured
+          ? (backupStatus.size.bytes / 1024 / 1024 / 1024).toFixed(1)
+          : null;
+
+        // BACKLOG-2926: an EXHAUSTIVE switch over the device's own verdict, replacing
+        // `if (isInterrupted) ... else if (isComplete)`. That pair had no third arm, so
+        // a directory which is neither interrupted nor complete fired NOTHING and the
+        // user was told nothing at all — the defect BACKLOG-2911 was filed to fix,
+        // closed for `uploading` and still open for `absent`.
+        //
+        // Two on-disk states reached that silence, not one:
+        //   snapshotState "absent"   + no Manifest.db  <- MEASURED on the founder's
+        //                                                 production install
+        //   snapshotState "finished" + no Manifest.db  <- a finished snapshot that
+        //                                                 never produced a manifest
+        // The item names only the first. Both are handled below.
+        //
+        // The `never` arm is the reintroduction guard: adding a fourth snapshot state,
+        // or deleting a case, fails to compile rather than silently falling through to
+        // the same silence this replaces.
+        switch (backupStatus.snapshotState) {
+          case "unfinished": {
           // BACKLOG-2911: this branch used to say "Resuming..." and then issue a
           // byte-identical backup request. There is no resume to perform: the host
           // cannot ask for one. `idevicebackup2` never reads `Status.plist` on the
@@ -485,19 +684,64 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           // no reuse is promised: the failed run never updated `Manifest.db`, and
           // whether the device credits its partially-transferred files cannot be
           // established from the host.
+          // BACKLOG-2917: the size is reported only when it was measured. Printing
+          // "null GB" or silently substituting "0.0 GB" would be the same class of
+          // lie this item exists to remove, in the user-facing half of the app.
           log.warn(
-            `[DeviceSyncOrchestrator] Previous backup did not finish (${sizeGB} GB on disk); starting a new backup. No host-side resume exists — see BACKLOG-2911.`,
+            `[DeviceSyncOrchestrator] Previous backup did not finish (${sizeGB === null ? "size unmeasured" : `${sizeGB} GB on disk`}); starting a new backup. No host-side resume exists — see BACKLOG-2911.`,
           );
           this.emitProgress({
             phase: "backup",
             phaseProgress: 0,
             overallProgress: 0,
-            message: `Previous sync didn't finish (${sizeGB} GB saved). Starting over...`,
+            message:
+              sizeGB === null
+                ? "Previous sync didn't finish. Starting over..."
+                : `Previous sync didn't finish (${sizeGB} GB saved). Starting over...`,
           });
-        } else if (backupStatus.isComplete) {
+          break;
+          }
+
+          case "finished":
+          case "absent": {
+          // Nothing claims this snapshot tore. Whether it is USABLE is a separate
+          // question, answered by `isComplete` (Manifest.db + Info.plist), and the two
+          // must not be conflated: `absent` + a manifest is a real backup from before
+          // this device wrote a Status.plist, while `absent` + no manifest is a
+          // directory holding nothing anyone can restore from.
+          if (!backupStatus.isComplete) {
+            // THE 2926 STATE. Measured on the founder's production install: a device
+            // directory holding a 6.3 MB `Info.plist` and nothing else — no
+            // Status.plist, no Manifest.db, no blob directories. Today he is told
+            // nothing whatsoever here and the sync simply appears to stall.
+            //
+            // The message deliberately does NOT say "didn't finish": there is no
+            // evidence the transfer ever started, and claiming otherwise would be
+            // inventing a cause. It says only what is established — this cannot be
+            // used, and a fresh backup is starting.
+            // The precise size belongs in the log, where it is diagnostic. It does NOT
+            // belong in the message: this branch is by construction the sub-GB case
+            // ("Info.plist and nothing else" is its canonical shape), so `toFixed(1)`
+            // on GB renders the founder's real 6,343,173-byte directory as
+            // "0.0 GB on disk" — which reads as a rendering bug and tells him nothing
+            // he can act on. The size of a directory he cannot use is not decision
+            // -relevant; that it cannot be used is.
+            log.warn(
+              `[DeviceSyncOrchestrator] Previous backup directory is not usable (snapshotState=${backupStatus.snapshotState}, isComplete=false, ${backupStatus.size.measured ? `${backupStatus.size.bytes} bytes on disk` : "size unmeasured"}); starting a fresh backup. See BACKLOG-2926.`,
+            );
+            this.emitProgress({
+              phase: "backup",
+              phaseProgress: 0,
+              overallProgress: 0,
+              message: "Previous backup can't be used. Starting a fresh backup...",
+            });
+            break;
+          }
+
+          {
           const lastSync = backupStatus.lastModified;
           const timeSinceLastSync = lastSync ? Math.round((Date.now() - lastSync.getTime()) / 1000 / 60) : null;
-          log.info(`[DeviceSyncOrchestrator] Previous backup exists (${sizeGB} GB), last modified ${timeSinceLastSync} minutes ago`);
+          log.info(`[DeviceSyncOrchestrator] Previous backup exists (${sizeGB === null ? "size unmeasured" : `${sizeGB} GB`}), last modified ${timeSinceLastSync} minutes ago`);
 
           // Format time since last sync for user
           let timeAgoStr = "";
@@ -515,7 +759,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             phase: "backup",
             phaseProgress: 0,
             overallProgress: 0,
-            message: `Found previous backup (${sizeGB} GB, synced ${timeAgoStr})`,
+            message:
+              sizeGB === null
+                ? `Found previous backup (synced ${timeAgoStr})`
+                : `Found previous backup (${sizeGB} GB, synced ${timeAgoStr})`,
           });
 
           // Brief pause to let user see this message
@@ -527,9 +774,26 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             overallProgress: 0,
             message: "Comparing with iPhone to find new data...",
           });
+          }
+          break;
+          }
+
+          default: {
+            // Unreachable by construction. If a fourth snapshot state is ever added,
+            // this line stops compiling — which is the point. The previous shape
+            // absorbed a new state into silence with no signal at all.
+            const exhaustive: never = backupStatus.snapshotState;
+            log.error(
+              `[DeviceSyncOrchestrator] Unhandled snapshot state: ${String(exhaustive)}`,
+            );
+            break;
+          }
         }
       } else {
-        // No previous backup - first sync
+        // BACKLOG-2917: reached ONLY on a proven ENOENT. Before this item the same
+        // branch also absorbed every failed check, which is how a thrown check came
+        // to announce a first sync to the user and to the telemetry.
+        priorBackup = { kind: "none" };
         this.emitProgress({
           phase: "backup",
           phaseProgress: 0,
@@ -581,10 +845,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // Step 1: Get device storage info to estimate backup size
       const storageInfo = await this.deviceService.getDeviceStorageInfo(options.udid);
       if (storageInfo) {
-        // If we have an existing backup, use its size (most accurate)
-        // Otherwise fall back to the storage-based estimate (less accurate)
-        if (existingBackupSize > 0) {
-          this.estimatedBackupSize = existingBackupSize;
+        // BACKLOG-2917: the estimate now branches on the NAMED basis, not on
+        // `existingBackupSize > 0`. The old predicate could not tell a measured
+        // prior backup from an unknown one, so uncertainty took the first-sync path
+        // and was recorded as a fact.
+        if (priorBackup.kind === "measured") {
+          this.estimatedBackupSize = priorBackup.bytes;
           log.info(`[DeviceSyncOrchestrator] Using existing backup size for estimate: ${Math.round(this.estimatedBackupSize / 1024 / 1024 / 1024)} GB`);
         } else {
           this.estimatedBackupSize = storageInfo.estimatedBackupSize;
@@ -595,10 +861,21 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // branch ran is what says whether a previous backup was reused — the
         // question 2896 could not answer because both `log.info` lines above
         // had rotated out of main.log AND main.old.log before anyone looked.
+        //
+        // BACKLOG-2917: `source` has THREE values because the underlying question
+        // has three answers. The instrument built to settle "did incremental run?"
+        // previously printed the reassuring answer in the one case where the true
+        // answer would be alarming.
         syncTimeline.mark("backup-estimate", {
-          source: existingBackupSize > 0 ? "existing-backup" : "device-storage",
+          source: estimateSourceFor(priorBackup),
           bytes: this.estimatedBackupSize,
-          reusedPreviousBackup: existingBackupSize > 0,
+          reusedPreviousBackup: priorBackup.kind === "measured",
+          snapshotState: snapshotStateForMark(backupStatus),
+          // BACKLOG-2925: recorded, never used. The partial's size is real and worth
+          // knowing when reading a timeline; it is not a number anything may size a
+          // disk guard against.
+          ...(priorBackup.kind === "partial" ? { ignoredPartialBytes: priorBackup.bytes } : {}),
+          ...(priorBackup.kind === "unknown" ? { priorBackupUnknownReason: priorBackup.reason } : {}),
         });
 
         this.emitProgress({
@@ -612,7 +889,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // Check if computer has enough disk space
         // For existing backups (accurate size), use 1.1x since the old backup is already on disk
         // For estimates (first-time), use 1.5x to account for estimation variance
-        const headroom = existingBackupSize > 0 ? 1.1 : 1.5;
+        //
+        // BACKLOG-2917: an UNKNOWN basis takes the 1.5x branch, not the 1.1x one.
+        // 1.1x is justified by "the number is a prior backup's measured size on
+        // disk"; when that has not been established, the justification is absent and
+        // the estimate is the device-storage figure that 1.5x was sized for. The
+        // multiplier matches the first-sync case, but the BRANCH is distinct and the
+        // mark above records which one ran — uncertainty is never recorded as a
+        // first sync.
+        const headroom = priorBackup.kind === "measured" ? 1.1 : 1.5;
         const requiredSpace = this.estimatedBackupSize * headroom;
         const diskSpaceCheck = await this.checkAvailableDiskSpace(requiredSpace);
 
@@ -641,6 +926,19 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         });
       } else {
         log.warn("[DeviceSyncOrchestrator] Could not get storage info, progress will be estimated");
+
+        // BACKLOG-2917: this branch emitted NO mark at all, so every sync that took
+        // it was invisible in the aggregate BACKLOG-2894 is being built on — an
+        // absence that reads as "this never happens" rather than "this was not
+        // recorded". `source` is its own value, not `"unknown"`: device storage being
+        // unreadable is a different fact from the prior-backup basis being unknown,
+        // and the prior-backup basis is carried alongside so the two stay separable.
+        syncTimeline.mark("backup-estimate", {
+          source: "device-storage-unavailable" satisfies EstimateSource,
+          priorBackup: priorBackup.kind,
+          reusedPreviousBackup: false,
+          snapshotState: snapshotStateForMark(backupStatus),
+        });
 
         // Even without device storage info, check we have at least 10GB free
         const minRequiredSpace = 10 * 1024 * 1024 * 1024; // 10 GB minimum
@@ -734,8 +1032,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // BACKLOG-2898/2894: what the backup phase produced. `incremental` is
       // the fact BACKLOG-2896 could not settle — the lines that would have
       // answered it had already rotated out of the founder's log.
+      //
+      // BACKLOG-2917: `bytes` is omitted rather than zeroed when the size could not
+      // be measured. This is the same instrument, one function away from the defect
+      // 2917 describes: a backup that COMPLETED and then failed its size walk used to
+      // be annotated `bytes: 0`, which reads in the timeline — and in the aggregate
+      // BACKLOG-2894 will build — as a run that transferred nothing.
       syncTimeline.annotate("backup", {
-        bytes: backupResult.backupSize,
+        ...(backupResult.backupSize === null
+          ? { bytesUnmeasured: true }
+          : { bytes: backupResult.backupSize }),
         incremental: backupResult.isIncremental,
         encrypted: !!backupResult.isEncrypted,
       });
@@ -1429,7 +1735,18 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const backupStatus = await this.backupService.checkBackupStatus(
         options.udid
       );
-      if (!backupStatus || !backupStatus.exists) {
+      // BACKLOG-2917: "no backup found" and "we could not find out" are different
+      // answers and now produce different errors. The old predicate reported a failed
+      // check to the user as a confident "No existing backup found for this device",
+      // which sends them looking for a backup that may well be sitting on disk.
+      if (backupStatus.state === "unknown") {
+        this.isRunning = false;
+        return this.errorResult(
+          `Could not read the backup for this device (${backupStatus.reason}). The backup may still be there — this check failed, which is not the same as finding nothing.`,
+        );
+      }
+
+      if (backupStatus.state === "absent") {
         this.isRunning = false;
         return this.errorResult("No existing backup found for this device");
       }
@@ -1443,9 +1760,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       }
 
       log.info("[DeviceSyncOrchestrator] Backup status", {
-        exists: backupStatus.exists,
+        state: backupStatus.state,
         isComplete: backupStatus.isComplete,
-        sizeBytes: backupStatus.sizeBytes,
+        sizeBytes: backupStatus.size.measured ? backupStatus.size.bytes : "unmeasured",
       });
 
       // TASK-908: Check if backup should be processed or skipped

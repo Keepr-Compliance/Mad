@@ -12,10 +12,18 @@
  * So the orchestrator MUST NOT map `null` to "no prior backup". It maps it to
  * `"unknown"`, and the renderer shows nothing.
  *
- * That means `"none"` is currently unproducible, on purpose. The test below asserts
- * that directly: it is the guard that stops a future edit from "simplifying" the
- * mapping into the two-state guess this item exists to remove. When BACKLOG-2917
- * lands and `null` becomes decomposable, that test is the one that should be updated.
+ * UPDATED — BACKLOG-2917 HAS LANDED, and this file's own instruction was to update
+ * these tests when it did.
+ *
+ * `checkBackupStatus` no longer returns `{...} | null`. It returns a discriminated
+ * union: `absent` (proven ENOENT) | `unknown` (the check threw) | `present`. So
+ * `"none"` is now PRODUCIBLE, from `absent` and only from `absent`, and the banner
+ * finally has a reachable path — before this, `priorBackup` was only ever `"exists"`
+ * or `"unknown"`, so a banner gated on `"none"` rendered in NO state at all.
+ *
+ * What has NOT changed, and is still asserted below: a check that FAILED is reported
+ * as `"unknown"`, never as `"none"`. That was the whole point of refusing to map
+ * `null` to `"none"`, and splitting the union preserves it rather than relaxing it.
  */
 
 import { EventEmitter } from "events";
@@ -153,23 +161,32 @@ import type { PriorBackupState } from "../../types/ipc/window-api-platform";
  */
 const SIX_POINT_FIVE_GB = 6.5 * 1024 * 1024 * 1024;
 
+// BACKLOG-2917: the three-state shape `checkBackupStatus` now returns. `sizeBytes`
+// became a `size` reading whose unmeasured arm carries no bytes, and the deprecated
+// `isCorrupted` alias is gone.
 const founderInterruptedStatus = {
-  exists: true,
+  state: "present" as const,
   isComplete: false,
   isInterrupted: true,
-  isCorrupted: true,
-  sizeBytes: SIX_POINT_FIVE_GB,
+  snapshotState: "unfinished" as const,
+  size: { measured: true as const, bytes: SIX_POINT_FIVE_GB },
   lastModified: new Date("2026-08-26T22:22:41Z"),
 };
 
 const completePriorBackupStatus = {
-  exists: true,
+  state: "present" as const,
   isComplete: true,
   isInterrupted: false,
-  isCorrupted: false,
-  sizeBytes: 54.7 * 1024 * 1024 * 1024,
+  snapshotState: "finished" as const,
+  size: { measured: true as const, bytes: 54.7 * 1024 * 1024 * 1024 },
   lastModified: new Date("2026-08-26T16:08:00Z"),
 };
+
+/** Proven ENOENT. BACKLOG-2917 makes this distinguishable from a failed check. */
+const noBackupStatus = { state: "absent" as const };
+
+/** The check itself failed. Establishes nothing — must never read as "no backup". */
+const checkFailedStatus = { state: "unknown" as const, reason: "EACCES" };
 
 /**
  * Run one sync and collect the `priorBackup` value carried by every progress event.
@@ -177,7 +194,7 @@ const completePriorBackupStatus = {
  * check rather than walking the whole parse pipeline.
  */
 async function collectPriorBackupStates(
-  status: Record<string, unknown> | null,
+  status: Record<string, unknown>,
   orchestrator = new DeviceSyncOrchestrator(),
 ): Promise<Array<PriorBackupState | undefined>> {
   mockCheckBackupStatus.mockReset().mockResolvedValue(status);
@@ -225,24 +242,35 @@ describe("BACKLOG-2907: a prior backup on disk is reported as `exists`", () => {
 });
 
 describe("BACKLOG-2907: an unestablished answer is reported as `unknown`, never as `none`", () => {
-  it("reports `unknown` — NOT `none` — when the check returns null", async () => {
-    const states = await collectPriorBackupStates(null);
+  it("reports `unknown` — NOT `none` — when the CHECK FAILED", async () => {
+    const states = await collectPriorBackupStates(checkFailedStatus);
 
-    // `null` is ENOENT *or* a thrown check. Reporting it as "no prior backup" would
-    // claim a two-hour first sync every time the check throws, which is the original
-    // defect in a new hat. Until BACKLOG-2917 splits those two cases, uncertainty is
-    // reported as uncertainty.
+    // Reporting a failed check as "no prior backup" would claim a two-hour first sync
+    // every time the check throws — the original defect in a new hat. BACKLOG-2917
+    // split this from ENOENT precisely so that uncertainty stays uncertainty while a
+    // PROVEN absence becomes usable.
     expect(states.every((s) => s === "unknown")).toBe(true);
     expect(states).not.toContain("none");
+  });
+
+  it("reports `none` — the value 2917 makes producible — for a PROVEN absence", async () => {
+    // This is the assertion that unblocks the banner. Before BACKLOG-2917 nothing in
+    // the orchestrator could produce `"none"`, so `SyncProgress.tsx`'s
+    // `isEstablishedFirstSync = priorBackup === "none"` was false in every reachable
+    // state and the banner rendered nowhere.
+    const states = await collectPriorBackupStates(noBackupStatus);
+
+    expect(statesAfterCheck(states).every((s) => s === "none")).toBe(true);
+    expect(states).not.toContain("exists");
   });
 
   it("reports `unknown` when the check rejects outright", async () => {
     // A rejection is a REAL state, not an invented one: `checkBackupStatus` catches
     // everything inside its `try`, but `validateDeviceUdid` runs BEFORE that block
     // (`backupService.ts:1430`), so a malformed UDID rejects rather than returning
-    // null. Note this is the one failure mode 2917 does NOT collapse — every other
-    // throw has already been converted to `null` by the time we see it, which is
-    // exactly why the `null` case above cannot be read as "no prior backup".
+    // null. BACKLOG-2917 deliberately left `validateDeviceUdid` outside the `try`:
+    // a malformed UDID is a bad call, not an unknown backup state, and laundering it
+    // into a soft value would hide a programming error.
     mockCheckBackupStatus.mockReset().mockRejectedValue(new Error("Invalid device UDID"));
     mockStartBackup
       .mockReset()
@@ -274,8 +302,13 @@ describe("BACKLOG-2907: each run establishes its own answer", () => {
     // stale `"exists"` here would be harmless today (it only ever hides the banner),
     // but once BACKLOG-2917 makes `"none"` producible, a stale value becomes a wrong
     // answer carried across runs.
-    const secondRun = await collectPriorBackupStates(null, orchestrator);
+    // BACKLOG-2917: run 2 finding nothing is now a PROVEN absence, so the correct
+    // answer is `"none"` — not `"unknown"`. The comment above anticipated exactly
+    // this: a stale `"exists"` was harmless while `"none"` was unproducible, and
+    // becomes a wrong answer carried across runs the moment it is not.
+    const secondRun = await collectPriorBackupStates(noBackupStatus, orchestrator);
     expect(secondRun).not.toContain("exists");
+    expect(statesAfterCheck(secondRun).every((s) => s === "none")).toBe(true);
   });
 });
 
