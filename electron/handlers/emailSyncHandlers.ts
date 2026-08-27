@@ -381,6 +381,20 @@ export function registerEmailSyncHandlers(
         contactEmails,
         transactionDetails,
         ingestSourceOverride: "manual",
+        // BACKLOG-2880: THE SYNC BUTTON IS A DISCOVERY PATH, NOT A LINK COMMAND.
+        //
+        // Omitted, this parameter defaults to false, and the button silently
+        // LINKED mail the deal surface had queued for review 25 seconds earlier
+        // — observed on the founder's machine, nine emails, written as
+        // address_missing with no approval. The button says "Sync"; the
+        // founder's standing rule is that nothing is ever silently linked.
+        //
+        // It now behaves exactly like the other two deal-surface triggers
+        // (contact save, transaction open): confident mail links, ambiguous mail
+        // queues. Stated at the CALL SITE rather than by moving the parameter's
+        // default, because the default also serves callers outside the deal
+        // surface and changing it would move them too.
+        queueForReviewInsteadOfLinking: true,
       });
     }, { module: "Transactions" }),
   );

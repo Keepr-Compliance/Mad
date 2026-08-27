@@ -639,6 +639,38 @@ export async function queueEmailForReview(
 }
 
 /**
+ * Is this email awaiting a human decision on this transaction? (BACKLOG-2880)
+ *
+ * The one question a WRITER needs to ask the review store, and it lives here
+ * for the reason the whole service exists: `reviewStateService.singleReadPath`
+ * pins that nothing else queries `pending_review_communications`, and a
+ * write-time interlock is not an exception to that — it is exactly the kind of
+ * second SELECT the rule was written to stop.
+ *
+ * Deliberately NOT `getReviewState(...).items.some(...)`: that builds the full
+ * display projection for every queued item, and this is called once per
+ * candidate email inside a sweep that runs for every live contact-transaction
+ * pair. One indexed lookup, no projection.
+ *
+ * Scoped to the transaction on purpose. Review is a per-deal decision — the same
+ * email may be pending on one deal and legitimately linkable to another.
+ */
+export function isEmailAwaitingReview(transactionId: string, emailId: string): boolean {
+  // Truthiness, NOT `!== undefined`. "No row" arrives as `undefined` from
+  // better-sqlite3 and as `null` from several of the wrappers and test doubles
+  // in this tree, and `null !== undefined` is true — which would have made this
+  // predicate answer "awaiting review" for every email that is not, blocking all
+  // auto-linking everywhere. Caught by three mock-driven autoLink suites going
+  // red at once.
+  return Boolean(
+    dbGet<{ id: string }>(
+      "SELECT id FROM pending_review_communications WHERE transaction_id = ? AND email_id = ?",
+      [transactionId, emailId],
+    ),
+  );
+}
+
+/**
  * THE sync. Adds newly-found communications to the queue as PENDING — it never
  * links. Returns how many were added (P2 shows only when > 0) and the
  * outstanding total (B1 badge).

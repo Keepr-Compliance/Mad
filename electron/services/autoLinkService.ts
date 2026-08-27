@@ -103,6 +103,17 @@ export interface AutoLinkResult {
    * renders `emailsLinked` must never see a queued item counted as a link.
    */
   queuedForReview?: number;
+  /**
+   * BACKLOG-2880: how many links this pass REFUSED to write because the email
+   * already holds a live pending-review row.
+   *
+   * Reported rather than swallowed on purpose. A guard that silently declines is
+   * its own kind of surprise — the caller asked for a link and got nothing, and
+   * with no counter the difference between "there was nothing to link" and "I
+   * declined to link nine things" is invisible. That exact blindness is what
+   * made this defect take a full log trace to find.
+   */
+  blockedPendingReview?: number;
 }
 
 /**
@@ -539,7 +550,7 @@ export async function linkEmailToTransaction(
   linkSource: "auto" | "manual" | "scan" = "auto",
   linkConfidence: number = 0.85,
   matchReason: MatchReason = "address_found"
-): Promise<"linked" | "already_linked" | "error"> {
+): Promise<"linked" | "already_linked" | "pending_review" | "error"> {
   // Check if this email is already linked to this transaction via communications table
   const checkSql = `
     SELECT id, transaction_id FROM communications
@@ -553,6 +564,49 @@ export async function linkEmailToTransaction(
     // user_confirmed link back to address_missing (idempotent + preserves the
     // user's decision).
     return "already_linked";
+  }
+
+  // BACKLOG-2880: AN AUTOMATIC PASS MAY NOT LINK WHAT REVIEW ALREADY OWNS.
+  //
+  // Observed on the founder's machine: the deal surface queued nine emails at
+  // 15:28:46, and the "Sync Emails" button linked the same nine at 15:29:11 —
+  // 25 seconds later, as address_missing, with no approval. The founder's
+  // standing rule is that nothing is ever silently linked; it is why
+  // BACKLOG-2791 exists. A pending row means a human has been asked to decide,
+  // and a background classifier does not get to decide it for them.
+  //
+  // It ALSO closes the BACKLOG-2831 twin at its source: this function never
+  // deleted the pending row, so the linked email landed in both stores and the
+  // union had to dedup it. Nothing writes that twin any more.
+  //
+  // SCOPED TO "auto" DELIBERATELY. `approveReviewItems` links with "manual" and
+  // deletes the pending row AFTERWARDS, so an unscoped guard would make approval
+  // itself a silent no-op — the guard would break the feature it defends. A
+  // manual link is a human's explicit act and is exactly what is allowed to
+  // resolve a pending item.
+  //
+  // The flag at each deal-surface trigger is still the primary fix; this is the
+  // backstop for callers nobody enumerated — `autoLinkNewMessagesForUser` above
+  // all, which sweeps every live contact-transaction pair after any message
+  // import and, by the founder's scope decision, never carries the flag.
+  //
+  // The lookup is delegated to reviewStateService rather than run here.
+  // BACKLOG-2791 made that service the ONLY reader of the pending store, and
+  // `reviewStateService.singleReadPath` fails on a second SELECT anywhere —
+  // correctly, because a write-time interlock is exactly the sort of "I just
+  // need one quick count" query the rule exists to stop. Dynamically imported
+  // for the same reason the queue call below is: reviewStateService imports this
+  // module for `linkEmailToTransaction`.
+  if (linkSource === "auto") {
+    const { isEmailAwaitingReview } = await import("./reviewStateService");
+    if (isEmailAwaitingReview(transactionId, emailId)) {
+      await logService.debug(
+        `BACKLOG-2880: refused to auto-link email ${emailId} — it is awaiting review on this transaction`,
+        "AutoLinkService",
+        { transactionId, emailId, linkSource, matchReason }
+      );
+      return "pending_review";
+    }
   }
 
   // Get the email's user_id and thread_id to create a proper communication record.
@@ -948,6 +1002,10 @@ export async function autoLinkCommunicationsForContact(
           result.emailsLinked++;
         } else if (linkResult === "already_linked") {
           result.alreadyLinked++;
+        } else if (linkResult === "pending_review") {
+          // BACKLOG-2880: refused, not failed. Counting it as an error would
+          // send the next investigation looking for a broken write.
+          result.blockedPendingReview = (result.blockedPendingReview ?? 0) + 1;
         } else {
           result.errors++;
         }
@@ -1041,6 +1099,8 @@ export async function autoLinkCommunicationsForContact(
         emailsLinked: result.emailsLinked,
         messagesLinked: result.messagesLinked,
         alreadyLinked: result.alreadyLinked,
+        queuedForReview: result.queuedForReview ?? 0,
+        blockedPendingReview: result.blockedPendingReview ?? 0,
         errors: result.errors,
         durationMs: duration,
       },
@@ -1048,10 +1108,17 @@ export async function autoLinkCommunicationsForContact(
 
     // BACKLOG-1340: Capture warning when auto-link finds 0 results despite having contacts with emails.
     // This is the key diagnostic for the silent failure scenario.
+    //
+    // BACKLOG-2880: queued and refused communications count as RESULTS. A pass
+    // that queues nine emails for review found nine emails; reporting it as
+    // "0 results" is the same blind spot as the completion log below, and it
+    // sends the next investigation looking for a matcher that never ran.
     if (
       result.emailsLinked === 0 &&
       result.messagesLinked === 0 &&
       result.alreadyLinked === 0 &&
+      (result.queuedForReview ?? 0) === 0 &&
+      (result.blockedPendingReview ?? 0) === 0 &&
       (contactInfo.emails.length > 0 || contactInfo.phoneNumbers.length > 0)
     ) {
       Sentry.captureMessage(
@@ -1076,6 +1143,12 @@ export async function autoLinkCommunicationsForContact(
       );
     }
 
+    // BACKLOG-2880: `queuedForReview` and `blockedPendingReview` are reported
+    // HERE, not just in the result object. Their absence is why the founder's
+    // three-pass collision took a full log trace to find: the pass that queued
+    // nine emails logged `emailsLinked: 0, alreadyLinked: 0` and read as a
+    // no-op, so the pass that linked them 25 seconds later looked like the only
+    // thing that had ever happened.
     await logService.info(
       `Auto-link complete for contact ${contactId}`,
       "AutoLinkService",
@@ -1083,6 +1156,8 @@ export async function autoLinkCommunicationsForContact(
         emailsLinked: result.emailsLinked,
         messagesLinked: result.messagesLinked,
         alreadyLinked: result.alreadyLinked,
+        queuedForReview: result.queuedForReview ?? 0,
+        blockedPendingReview: result.blockedPendingReview ?? 0,
         errors: result.errors,
         durationMs: duration,
       }
@@ -1106,6 +1181,8 @@ export async function autoLinkCommunicationsForContact(
       emails_linked: result.emailsLinked,
       threads_linked: result.messagesLinked,
       already_linked: result.alreadyLinked,
+      queued_for_review: result.queuedForReview ?? 0,
+      blocked_pending_review: result.blockedPendingReview ?? 0,
       sent_to_review: needsReviewCount,
       disambiguated_to_other_deal: disambiguatedAway,
       thread_ids_examined: threadIds.size,
