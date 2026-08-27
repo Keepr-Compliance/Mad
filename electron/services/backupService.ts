@@ -32,6 +32,59 @@ import {
 import { validateDeviceUdid, ValidationError } from "../utils/validation";
 
 /**
+ * BACKLOG-2899: how idevicebackup2 reports that the HOST disk is full.
+ *
+ * TRANSCRIBED, in two steps, because BACKLOG-2870 is the precedent for a
+ * detector written against an invented string (SQLite's real
+ * "database or disk is full" matched none of the patterns hunting for it).
+ *
+ * 1. The format string, `strings`-ed out of the binary this app actually ships,
+ *    resources/win/libimobiledevice/idevicebackup2.exe:
+ *
+ *        Error opening '%s' for writing: %s
+ *
+ *    and from libimobiledevice tools/idevicebackup2.c, mb2_handle_receive_files(),
+ *    which is where that line is produced:
+ *
+ *        errcode = errno_to_device_error(errno);
+ *        errdesc = strerror(errno);
+ *        progress_printf("Error opening '%s' for writing: %s\n", bname, errdesc);
+ *
+ * 2. The `%s` tail is `strerror(errno)`, supplied by the C runtime rather than
+ *    embedded in the executable — so it is NOT in the binary's strings, and this
+ *    step is INFERRED, not transcribed from an observed failure: Windows maps
+ *    ERROR_DISK_FULL to ENOSPC via _dosmaperr, and UCRT, glibc and BSD all
+ *    render ENOSPC as "No space left on device". The Win32-phrasing and ENOSPC
+ *    alternates below are belt-and-braces for a build that formats it
+ *    differently.
+ *
+ * Note what this detector CANNOT see, which is why BACKLOG-2899 does not rely on
+ * it: in the same function the host-side write is `fwrite(buf, 1, r, f);` with
+ * the return value never checked, and `fclose(f)` unchecked too. A full disk is
+ * therefore usually absorbed in silence — truncated files, exit code 0, and
+ * "Backup Successful." on stdout. The mid-transfer free-space monitor in
+ * deviceSyncOrchestrator is the actual guard; this is the backstop.
+ */
+export const IDEVICEBACKUP2_DISK_FULL_PATTERNS: readonly RegExp[] = [
+  /no space left on device/i,
+  /not enough space on the disk/i,
+  /there is not enough space on the disk/i,
+  /\bENOSPC\b/,
+  /disk (?:is )?full/i,
+];
+
+/**
+ * BACKLOG-2899: true when idevicebackup2 output reports a full host disk.
+ *
+ * Reads STDOUT, not stderr: progress_printf() is `vprintf()`, so every one of
+ * these lines goes to stdout. backupService only ever fed `stderrBuffer` to
+ * getErrorMessage(), so before this the message could not reach any detector.
+ */
+export function isIdevicebackup2DiskFullOutput(output: string): boolean {
+  return IDEVICEBACKUP2_DISK_FULL_PATTERNS.some((p) => p.test(output));
+}
+
+/**
  * Service for managing iPhone backups via idevicebackup2
  *
  * Emits events:
@@ -378,10 +431,28 @@ export class BackupService extends EventEmitter {
 
       let stdoutBuffer = "";
       let stderrBuffer = "";
+      // BACKLOG-2899: set when idevicebackup2 reports it could not write to the
+      // local disk. See isIdevicebackup2DiskFullOutput for the transcription.
+      let diskFullDetected = false;
 
       this.currentProcess.stdout?.on("data", (data: Buffer) => {
         const output = data.toString();
         stdoutBuffer += output;
+        // BACKLOG-2899: stdoutBuffer accumulated for the whole run and was never
+        // read — 24 minutes of progress-bar output held in memory. Capped the
+        // way stderrBuffer already is.
+        if (stdoutBuffer.length > 65536) {
+          stdoutBuffer = stdoutBuffer.slice(-65536);
+        }
+
+        // BACKLOG-2899: host-side write failures are printed HERE, on stdout.
+        if (!diskFullDetected && isIdevicebackup2DiskFullOutput(output)) {
+          diskFullDetected = true;
+          log.error(
+            "[BackupService] idevicebackup2 reported a full disk:",
+            output.trim().substring(0, 300),
+          );
+        }
 
         // BACKLOG-1582: Track last stdout activity for watchdog
         this.lastStdoutTimestamp = Date.now();
@@ -503,7 +574,12 @@ export class BackupService extends EventEmitter {
           return;
         }
 
-        const success = code === 0;
+        // BACKLOG-2899: exit code 0 is not sufficient. idevicebackup2 never
+        // checks its own fwrite/fclose, so a run that could not write files can
+        // still exit 0 and print "Backup Successful." If it told us the disk was
+        // full, the backup on disk is truncated and must not be handed to the
+        // parsers as a success.
+        const success = code === 0 && !diskFullDetected;
         let backupSize = 0;
         let finalBackupPath = deviceBackupPath;
 
@@ -614,14 +690,24 @@ export class BackupService extends EventEmitter {
 
         // Convert error code to user-friendly message
         let errorMessage: string | null = null;
+        let errorCode: BackupErrorCode | undefined;
         if (!success) {
-          errorMessage = this.getErrorMessage(code, stderrBuffer);
+          if (diskFullDetected) {
+            // BACKLOG-2899: phrased so deviceSyncOrchestrator's existing
+            // /disk space|no space|ENOSPC|not enough space/i matcher recognises it.
+            errorMessage =
+              "Not enough disk space to complete the backup. Please free up space and try again.";
+            errorCode = "INSUFFICIENT_SPACE";
+          } else {
+            errorMessage = this.getErrorMessage(code, stderrBuffer);
+          }
         }
 
         const result: BackupResult = {
           success,
           backupPath: success ? finalBackupPath : null,
           error: errorMessage,
+          ...(errorCode ? { errorCode } : {}),
           duration: Date.now() - this.startTime,
           deviceUdid: options.udid,
           isIncremental: previousBackupExists && !options.forceFullBackup,
