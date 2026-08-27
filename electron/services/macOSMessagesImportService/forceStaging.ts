@@ -275,7 +275,7 @@ export function deriveStagingTableDdl(
 }
 
 /** Mirror one index definition onto the staging table, under a unique name. */
-function deriveStagingIndexDdl(
+export function deriveStagingIndexDdl(
   liveDdl: string,
   liveIndexName: string,
   liveTable: string,

@@ -172,8 +172,15 @@ beforeEach(() => {
  * fixture check needs a table it can collide with deliberately, and inserting
  * the same pair twice from a shared setup would collide before the test ran.
  *
- * Jane is the listing agent on deal A and the buyer's agent on deal B.
- * Omar is the lender on deal A. Nobody starts removed.
+ * Jane is the other side's agent on both deals; Omar is the lender on deal A.
+ * Nobody starts removed.
+ *
+ * BACKLOG-2859: the seeds below deliberately pass the RETIRED values
+ * `listing_agent` and `buyer_agent`. `assignContactToTransaction` normalizes
+ * them to the single `agent` role on write — that normalizer is the ongoing
+ * guarantee behind migration v68's one-time collapse, and seeding through it
+ * rather than around it is what proves it runs on this path. The assertions
+ * below therefore expect `agent`, not what was passed in.
  */
 async function seedAssignments(): Promise<void> {
   await assignContactToTransaction(TXN_A, {
@@ -422,7 +429,8 @@ describe("getRemovedTransactionContacts carries what the card renders", () => {
       contact_name: "Jane Example",
       contact_email: "jane@example.com",
       contact_phone: "+15550101",
-      specific_role: "listing_agent",
+      // Seeded as `listing_agent`; normalized to `agent` on write (BACKLOG-2859).
+      specific_role: "agent",
       removed_reason: "Taken off the deal",
     });
     expect(rows[0].removed_at).toEqual(expect.any(String));

@@ -166,7 +166,8 @@ describe("BACKLOG-2804: seller-side agent chip reads 'Listing Agent'", () => {
     ]);
 
     const card = screen.getByTestId("contact-summary-card-contact-dana");
-    expect(card).toHaveTextContent("Buyer Agent");
+    // BACKLOG-2859 moved this label to the possessive form.
+    expect(card).toHaveTextContent("Buyer's Agent");
     expect(card).not.toHaveTextContent("Listing Agent");
   });
 
@@ -191,9 +192,123 @@ describe("BACKLOG-2804: seller-side agent chip reads 'Listing Agent'", () => {
     ).toHaveTextContent("Listing Agent");
     expect(
       screen.getByTestId("contact-summary-card-contact-dana"),
-    ).toHaveTextContent("Buyer Agent");
+    ).toHaveTextContent("Buyer's Agent");
 
     // And the retired term is nowhere on the tab.
     expect(screen.queryByText("Seller Agent")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * BACKLOG-2859 — the SAME chip, now resolving from the transaction type.
+ *
+ * Founder: "the chip / the role in the dropdown should vary based on the
+ * transaction type just like the client does." These pin that on the live
+ * surface, which is where the founder sees it.
+ *
+ * The 2804 ruling is preserved, not overturned: the agent representing the
+ * seller still reads "Listing Agent". It is now a LABEL RULE on a Sale rather
+ * than a stored enum value.
+ */
+describe("BACKLOG-2859: the agent chip resolves from the transaction type", () => {
+  it("reads \"Buyer's Agent\" on a Listing — the other side of a deal the user listed", () => {
+    renderTab(
+      [
+        makeAssignment({
+          contact_id: "contact-ava",
+          contact_name: "Ava Example",
+          specific_role: "agent",
+        }),
+      ],
+      "purchase",
+    );
+
+    const card = screen.getByTestId("contact-summary-card-contact-ava");
+    expect(card).toHaveTextContent("Buyer's Agent");
+    // The user's OWN role must never appear as a contact's chip on a Listing.
+    expect(card).not.toHaveTextContent("Listing Agent");
+  });
+
+  it('reads "Listing Agent" on a Sale — preserving the founder\'s 2804 ruling', () => {
+    renderTab(
+      [
+        makeAssignment({
+          contact_id: "contact-ava",
+          contact_name: "Ava Example",
+          specific_role: "agent",
+        }),
+      ],
+      "sale",
+    );
+
+    const card = screen.getByTestId("contact-summary-card-contact-ava");
+    expect(card).toHaveTextContent("Listing Agent");
+    expect(card).not.toHaveTextContent("Buyer's Agent");
+    expect(card).not.toHaveTextContent("Seller Agent");
+  });
+
+  it("renders the SAME co_agent label on both types — it is not dynamic", () => {
+    const { unmount } = renderTab(
+      [
+        makeAssignment({
+          contact_id: "contact-cody",
+          contact_name: "Cody Example",
+          specific_role: "co_agent",
+        }),
+      ],
+      "purchase",
+    );
+    const onListing = screen
+      .getByTestId("contact-summary-card-contact-cody")
+      .textContent?.includes("Co-Agent");
+    unmount();
+
+    renderTab(
+      [
+        makeAssignment({
+          contact_id: "contact-cody",
+          contact_name: "Cody Example",
+          specific_role: "co_agent",
+        }),
+      ],
+      "sale",
+    );
+    const onSale = screen
+      .getByTestId("contact-summary-card-contact-cody")
+      .textContent?.includes("Co-Agent");
+
+    expect(onListing).toBe(true);
+    expect(onSale).toBe(onListing);
+  });
+
+  it("resolves the CLIENT chip by type, the pattern agent now follows", () => {
+    const { unmount } = renderTab(
+      [
+        makeAssignment({
+          contact_id: "contact-cleo",
+          contact_name: "Cleo Example",
+          specific_role: "client",
+        }),
+      ],
+      "purchase",
+    );
+    expect(screen.getByTestId("contact-summary-card-contact-cleo")).toHaveTextContent(
+      "Seller (Client)",
+    );
+    unmount();
+
+    renderTab(
+      [
+        makeAssignment({
+          contact_id: "contact-cleo",
+          contact_name: "Cleo Example",
+          specific_role: "client",
+        }),
+      ],
+      "sale",
+    );
+    expect(screen.getByTestId("contact-summary-card-contact-cleo")).toHaveTextContent(
+      "Buyer (Client)",
+    );
   });
 });

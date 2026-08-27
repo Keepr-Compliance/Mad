@@ -48,13 +48,43 @@ export const EXPECTED_SHIPPED_VERSION = 55;
 
 export const USER_ID = "u-2700-rehearsal";
 
-/** Every seeded contact id, with the `source` it was created under. */
-export const CONTACTS: ReadonlyArray<{ id: string; source: string }> = [
+/**
+ * Every seeded contact id, with the `source` it was created under and — for the
+ * BACKLOG-2859 rows — the `default_role` it carries.
+ *
+ * FAY / GUS / HAL / IVY EXIST TO MAKE MIGRATION v68 NON-VACUOUS. (BACKLOG-2859's
+ * migration is 66 on its own branch, PR #2381, and was renumbered to 68 when it
+ * landed on int/ui-polish-e behind 2814's 66 and 2857's 67.) Before they
+ * were added, the shipped v2.27.0 corpus contained exactly two role values in
+ * `transaction_contacts` (`buyer_agent` and `seller_agent`) and nothing else —
+ * so four of v68's six operations matched ZERO ROWS and the rehearsal passed
+ * while proving almost nothing about them. An UPDATE that matches nothing
+ * succeeds; so does a DELETE. Each of the four covers a branch that had no
+ * input:
+ *
+ *   fay  `listing_agent`                 the third legacy agent value
+ *   gus  `buyer`  on the LISTING          a counterparty principal to delete
+ *   hal  `seller` on the SALE             the other counterparty principal
+ *   ivy  non-NULL `specific_role`         the second collapsed column — every
+ *                                         pre-existing row has specific_role NULL
+ *
+ * fay also carries `default_role = 'seller_agent'`, the only input to the
+ * `contacts.default_role` collapse. Sweep the branches, do not sample them.
+ */
+export const CONTACTS: ReadonlyArray<{
+  id: string;
+  source: string;
+  default_role?: string;
+}> = [
   { id: "c-2700-outlook-ann", source: "outlook" },
   { id: "c-2700-iphone-ben", source: "iphone" },
   { id: "c-2700-google-cara", source: "google_contacts" },
   { id: "c-2700-manual-dan", source: "manual" },
   { id: "c-2700-inferred-eve", source: "inferred" },
+  { id: "c-2700-legacy-fay", source: "manual", default_role: "seller_agent" },
+  { id: "c-2700-principal-gus", source: "manual", default_role: "buyer" },
+  { id: "c-2700-principal-hal", source: "manual", default_role: "inspector" },
+  { id: "c-2700-specific-ivy", source: "manual", default_role: "buyer_agent" },
 ];
 
 export const CONTACT_IDS: readonly string[] = CONTACTS.map((c) => c.id);
@@ -68,9 +98,43 @@ export const TRANSACTION_IDS: readonly string[] = [TRANSACTION_OPEN, TRANSACTION
  * cross-joined parties onto the wrong transaction would show up here and
  * nowhere else.
  */
+/**
+ * The party set per transaction AS SEEDED — before the chain runs.
+ *
+ * Distinct from PARTIES_BY_TRANSACTION below because migration v68 removes two
+ * of these. The precondition test reads the fixture BEFORE the chain and must
+ * assert what is actually on disk; post-chain assertions read the survivor set.
+ * Collapsing the two would make the precondition tautological with the outcome.
+ */
+export const PARTIES_BY_TRANSACTION_SEEDED: Readonly<Record<string, readonly string[]>> = {
+  [TRANSACTION_OPEN]: [
+    "c-2700-outlook-ann",
+    "c-2700-iphone-ben",
+    "c-2700-legacy-fay",
+    "c-2700-principal-gus",
+  ],
+  [TRANSACTION_FROZEN]: [
+    "c-2700-google-cara",
+    "c-2700-manual-dan",
+    "c-2700-inferred-eve",
+    "c-2700-principal-hal",
+    "c-2700-specific-ivy",
+  ],
+};
+
 export const PARTIES_BY_TRANSACTION: Readonly<Record<string, readonly string[]>> = {
-  [TRANSACTION_OPEN]: ["c-2700-outlook-ann", "c-2700-iphone-ben"],
-  [TRANSACTION_FROZEN]: ["c-2700-google-cara", "c-2700-manual-dan", "c-2700-inferred-eve"],
+  // gus and hal are ABSENT BY DESIGN, not by omission: migration v68 deletes
+  // their assignments (see TRANSACTION_CONTACTS_REMOVED_BY_V68). This set is
+  // what the chain leaves behind, and it is still an exact set — the assertion
+  // was narrowed to name the two removals individually, never relaxed to a
+  // count.
+  [TRANSACTION_OPEN]: ["c-2700-outlook-ann", "c-2700-iphone-ben", "c-2700-legacy-fay"],
+  [TRANSACTION_FROZEN]: [
+    "c-2700-google-cara",
+    "c-2700-manual-dan",
+    "c-2700-inferred-eve",
+    "c-2700-specific-ivy",
+  ],
 };
 
 /** The freeze stamps on the exported transaction. Write-once (BACKLOG-2013). */
@@ -108,13 +172,73 @@ export const CONTACT_PHONE_IDS: readonly string[] = [
   "cp-2700-eve",
 ];
 
-export const TRANSACTION_CONTACT_IDS: readonly string[] = [
+/**
+ * The transaction_contacts rows migration v68 DELETES — the counterparty
+ * principals (BACKLOG-2859, founder-approved silent drop).
+ *
+ * Named individually and asserted as their own set. That is the point: the
+ * survivor set below could have been made green by deleting the assertion or by
+ * swapping it for a row count, and either would have hidden a migration that
+ * deleted the wrong rows. Two exact sets that partition the seed cannot.
+ */
+export const TRANSACTION_CONTACTS_REMOVED_BY_V68: readonly string[] = [
+  "tc-2700-open-gus",
+  "tc-2700-frozen-hal",
+];
+
+/** Every transaction_contacts row SEEDED, before the chain runs. */
+export const TRANSACTION_CONTACT_IDS_SEEDED: readonly string[] = [
   "tc-2700-open-ann",
   "tc-2700-open-ben",
+  "tc-2700-open-fay",
+  "tc-2700-open-gus",
   "tc-2700-frozen-cara",
   "tc-2700-frozen-dan",
   "tc-2700-frozen-eve",
+  "tc-2700-frozen-hal",
+  "tc-2700-frozen-ivy",
 ];
+
+/** The rows that SURVIVE the chain: everything seeded, minus the v68 deletions. */
+export const TRANSACTION_CONTACT_IDS: readonly string[] =
+  TRANSACTION_CONTACT_IDS_SEEDED.filter(
+    (id) => !TRANSACTION_CONTACTS_REMOVED_BY_V68.includes(id),
+  );
+
+/**
+ * The exact role each surviving row holds AFTER the chain — the structural
+ * probe for migration v68, in the style of the existing `v56 applied:` /
+ * `v62 applied:` tests.
+ *
+ * Asserted by id so it cannot be satisfied by the right number of rows carrying
+ * the wrong roles. Drop v68 from the chain and all four collapsed rows go red
+ * at once.
+ */
+export const TRANSACTION_CONTACT_ROLES_AFTER_V68: Readonly<Record<string, string>> = {
+  "tc-2700-open-ann": "agent", // was buyer_agent
+  "tc-2700-open-ben": "inspector", // untouched — proves the collapse is narrow
+  "tc-2700-open-fay": "agent", // was listing_agent
+  "tc-2700-frozen-cara": "agent", // was seller_agent
+  "tc-2700-frozen-dan": "escrow_officer", // untouched
+  "tc-2700-frozen-eve": "other", // untouched
+  "tc-2700-frozen-ivy": "agent", // was buyer_agent, in BOTH columns
+};
+
+/** `contacts.default_role` after the chain, by contact id (BACKLOG-2859). */
+export const CONTACT_DEFAULT_ROLES_AFTER_V68: Readonly<Record<string, string | null>> = {
+  "c-2700-outlook-ann": null,
+  "c-2700-iphone-ben": null,
+  "c-2700-google-cara": null,
+  "c-2700-manual-dan": null,
+  "c-2700-inferred-eve": null,
+  "c-2700-legacy-fay": "agent", // was seller_agent — collapsed
+  // `buyer`/`seller` default_roles are deliberately NOT migrated: unlike an
+  // assignment row, a default_role that is no longer offered degrades safely to
+  // the `client` baseline. Pinned so "left alone" is a tested decision.
+  "c-2700-principal-gus": "buyer",
+  "c-2700-principal-hal": "inspector",
+  "c-2700-specific-ivy": "agent", // was buyer_agent — collapsed
+};
 
 /**
  * Per-table row counts, asserted ALONGSIDE the id sets (never instead of them).
@@ -122,11 +246,13 @@ export const TRANSACTION_CONTACT_IDS: readonly string[] = [
  */
 export const EXPECTED_ROW_COUNTS: Readonly<Record<string, number>> = {
   users_local: 1,
-  contacts: 5,
+  contacts: 9,
   contact_emails: 4,
   contact_phones: 3,
   transactions: 2,
-  transaction_contacts: 5,
+  // 9 seeded minus the 2 counterparty-principal assignments v68 removes.
+  // Asserted ALONGSIDE the id sets, never instead of them.
+  transaction_contacts: 7,
   emails: 3,
   messages: 3,
   external_contacts: 2,
@@ -148,8 +274,8 @@ export const SEED_STATEMENTS: readonly string[] = [
   // --- contacts, five distinct sources -------------------------------------
   ...CONTACTS.map(
     (c, i) =>
-      `INSERT INTO contacts (id, user_id, display_name, company, source, is_imported, total_messages, created_at, updated_at)
-       VALUES (${q(c.id)}, ${q(USER_ID)}, ${q(`Contact ${c.id.split("-").pop()}`)}, ${q(`Firm ${i + 1}`)}, ${q(c.source)}, ${c.source === "manual" ? 0 : 1}, ${i * 3}, '2026-01-1${i} 08:00:00', '2026-02-1${i} 08:00:00')`,
+      `INSERT INTO contacts (id, user_id, display_name, company, source, default_role, is_imported, total_messages, created_at, updated_at)
+       VALUES (${q(c.id)}, ${q(USER_ID)}, ${q(`Contact ${c.id.split("-").pop()}`)}, ${q(`Firm ${i + 1}`)}, ${q(c.source)}, ${q(c.default_role ?? null)}, ${c.source === "manual" ? 0 : 1}, ${i * 3}, '2026-01-1${i} 08:00:00', '2026-02-1${i} 08:00:00')`,
   ),
 
   // --- contact_emails: ann, cara, dan (dan has two) ------------------------
@@ -180,6 +306,16 @@ export const SEED_STATEMENTS: readonly string[] = [
   `INSERT INTO transaction_contacts (id, transaction_id, contact_id, role, is_primary, created_at, updated_at) VALUES ('tc-2700-frozen-cara', 't-2700-frozen', 'c-2700-google-cara', 'seller_agent', 1, '2026-01-22 08:00:00', '2026-01-22 08:00:00')`,
   `INSERT INTO transaction_contacts (id, transaction_id, contact_id, role, is_primary, created_at, updated_at) VALUES ('tc-2700-frozen-dan', 't-2700-frozen', 'c-2700-manual-dan', 'escrow_officer', 0, '2026-01-22 08:00:00', '2026-01-22 08:00:00')`,
   `INSERT INTO transaction_contacts (id, transaction_id, contact_id, role, is_primary, created_at, updated_at) VALUES ('tc-2700-frozen-eve', 't-2700-frozen', 'c-2700-inferred-eve', 'other', 0, '2026-01-22 08:00:00', '2026-01-22 08:00:00')`,
+
+  // --- BACKLOG-2859 inputs: the branches the shipped corpus never covered ---
+  // t-2700-open is a `purchase` (a Listing), t-2700-frozen is a `sale`, so gus
+  // and hal are the counterparty principal on each side respectively.
+  `INSERT INTO transaction_contacts (id, transaction_id, contact_id, role, is_primary, created_at, updated_at) VALUES ('tc-2700-open-fay', 't-2700-open', 'c-2700-legacy-fay', 'listing_agent', 0, '2026-01-22 08:00:00', '2026-01-22 08:00:00')`,
+  `INSERT INTO transaction_contacts (id, transaction_id, contact_id, role, is_primary, created_at, updated_at) VALUES ('tc-2700-open-gus', 't-2700-open', 'c-2700-principal-gus', 'buyer', 0, '2026-01-22 08:00:00', '2026-01-22 08:00:00')`,
+  `INSERT INTO transaction_contacts (id, transaction_id, contact_id, role, is_primary, created_at, updated_at) VALUES ('tc-2700-frozen-hal', 't-2700-frozen', 'c-2700-principal-hal', 'seller', 0, '2026-01-22 08:00:00', '2026-01-22 08:00:00')`,
+  // specific_role is the canonical column when present, and is NULL on every
+  // pre-existing row — so without ivy the specific_role UPDATE never runs.
+  `INSERT INTO transaction_contacts (id, transaction_id, contact_id, role, specific_role, is_primary, created_at, updated_at) VALUES ('tc-2700-frozen-ivy', 't-2700-frozen', 'c-2700-specific-ivy', 'buyer_agent', 'buyer_agent', 0, '2026-01-22 08:00:00', '2026-01-22 08:00:00')`,
 
   // --- emails, both providers ----------------------------------------------
   `INSERT INTO emails (id, user_id, external_id, source, account_id, direction, subject, body_plain, sender, recipients, thread_id, sent_at, message_id_header, ingest_source, created_at, updated_at)

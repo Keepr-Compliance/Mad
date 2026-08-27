@@ -348,14 +348,14 @@ export const successfulContactExtractionResponse: {
       {
         name: 'John Smith',
         email: 'john.smith@abcrealty.com',
-        role: 'buyer_agent',
+        role: 'agent',
         confidence: 0.95,
         evidence: ['Signs off as ABC Realty', 'Represents buyer in offer email'],
       },
       {
         name: 'Sarah Jones',
         email: 'sarah.jones@sellerrealty.com',
-        role: 'seller_agent',
+        role: 'agent',
         confidence: 0.92,
         evidence: ['Email domain sellerrealty.com', 'Receives offer on behalf of seller'],
       },

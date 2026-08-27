@@ -155,7 +155,21 @@ const SCHEMA = `
   CREATE TABLE communications (
     id TEXT PRIMARY KEY,
     transaction_id TEXT,
-    email_id TEXT
+    email_id TEXT,
+    -- BACKLOG-2865: the linked-email count reads this to decide which
+    -- conversations the card counts.
+    match_reason TEXT
+  );
+  -- BACKLOG-2865: getTransactionByIdSync (called by createTransactionSync to
+  -- read the row back) now joins emails to scope the card's count to linked
+  -- conversations. This table is present in every real database; leaving it out
+  -- of this reduced schema described a state the app never has, and the read-back
+  -- failed with "no such table: emails".
+  CREATE TABLE emails (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT,
+    subject TEXT,
+    sent_at TEXT
   );
 `;
 

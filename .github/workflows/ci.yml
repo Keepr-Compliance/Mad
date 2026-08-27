@@ -243,14 +243,66 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # BACKLOG-2871: the bare-uuid rule reads the ADDED LINES of the commits
+          # under review, so this job needs history. The default depth-1 checkout
+          # has no base commit to diff against and the rule would silently check
+          # nothing.
+          fetch-depth: 0
 
       - name: Setup Node.js 20.x
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20.x
 
+      # The tree rules (email / phone / name) always run. The bare-uuid rule needs
+      # a commit range, which is derived here.
+      #
+      # THIS JOB IS ALLOWED TO DEGRADE; THE PRE-PUSH HOOK IS NOT. On a PUBLIC repo
+      # CI runs after the object already exists on GitHub, so this job is a
+      # notification and the hook is the gate. When no range can be derived, this
+      # says so loudly and still runs the tree scan, rather than failing a build
+      # for a reason unrelated to the diff. `.husky/pre-push` fails CLOSED on the
+      # same condition, on purpose.
+      - name: Derive the commit range under review
+        id: range
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -u
+          range=""
+          if [ -n "${PR_BASE:-}" ] && [ -n "${PR_HEAD:-}" ]; then
+            range="$PR_HEAD --not $PR_BASE"
+          elif [ -n "${PUSH_BEFORE:-}" ] && [ "$(echo "$PUSH_BEFORE" | tr -d '0')" != "" ]; then
+            # A non-zero `before` means this push had a predecessor on the branch.
+            if git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+              range="$GITHUB_SHA --not $PUSH_BEFORE"
+            fi
+          fi
+          if [ -z "$range" ]; then
+            echo "::warning title=Fixture PII Scan::No commit range could be derived (new branch, force-push, or first push). The bare-uuid rule checked NOTHING on this run; the tree rules still ran. The pre-push hook is the gate for this rule."
+          fi
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+
       - name: Scan fixtures for personal data
-        run: npm run check:pii
+        env:
+          PII_RANGE: ${{ steps.range.outputs.range }}
+        run: |
+          set -u
+          if [ -n "${PII_RANGE:-}" ]; then
+            node scripts/ci/check-fixture-pii.mjs --diff-range "$PII_RANGE"
+          else
+            npm run check:pii
+          fi
+
+      # BACKLOG-2871: the guard's own verification harness. It existed since
+      # BACKLOG-2657 and NOTHING RAN IT -- not CI, not package.json, not the hook.
+      # A verification harness that never executes is indistinguishable from one
+      # that passes, which is the exact failure this repo keeps filing.
+      - name: Verify the guard itself
+        run: npm run verify:pii
 
   # BACKLOG-2678: fail the build when a tracked test file is run by NO CI test config.
   #

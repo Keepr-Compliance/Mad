@@ -19,7 +19,14 @@ import type { AutoLinkResult } from "./autoLinkService";
 import { supportTrace } from "./supportAccess/trace";
 import { countEmailsByUser, getEmailByExternalId } from "./db/emailDbService";
 import type { BulkMailHeaders } from "../utils/bulkMailHeaders";
-import { dbGet, dbAll, getRawDatabase } from "./db/core/dbConnection";
+import { CURRENT_DERIVATION_VERSION } from "../utils/derivationVersion";
+import { reprocessEmailDerivations } from "./emailDerivationReprocessService";
+import {
+  EMAIL_PRECACHE_PERCENT,
+  terminalProgress,
+  type EmailPrecacheProgressCallback,
+} from "./emailPrecacheProgress";
+import { dbGet, dbAll, dbRun, getRawDatabase } from "./db/core/dbConnection";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
 import databaseService from "./databaseService";
@@ -41,6 +48,18 @@ import type { TransactionWithDetails } from "./transactionService/types";
 // BACKLOG-1769: pure resurrection/dedup planner (Message-ID stable identity).
 // BACKLOG-1861: also import legacy-content key helper for the forward guard.
 import { planEmailWrites, computeLegacyContentKey, type ExistingByMessageId } from "./emailWritePlanner";
+// BACKLOG-2856: force re-cache (stage-and-swap). See emailForceStaging.ts for why
+// the rebuild never touches the live table until one final transaction.
+import {
+  buildEmailForceSet,
+  emailForceReadView,
+  emailForceStagingLifecycle,
+  restrictForceSetToRebuiltProviders,
+  sweepStaleEmailStaging,
+  swapEmailStagingIntoLive,
+  type EmailForceProvider,
+  type EmailForceStaging,
+} from "./emailForceStaging";
 
 // TASK-2060: Safety cap for email fetching with date-range filtering.
 // With date filtering, we no longer need the old 200 cap. This higher cap
@@ -373,8 +392,15 @@ async function persistEmailAttachmentMetadata(args: {
   ) => Promise<
     Array<{ id: string; name: string; contentType: string; size: number }>
   >;
+  /**
+   * BACKLOG-2856: during a force re-cache the `emailId` below belongs to a row
+   * that exists only in staging, so writing an `attachments` row for it now
+   * would fail the `REFERENCES emails(id)` foreign key. Buffer instead; the swap
+   * applies these after the emails land in live.
+   */
+  force?: EmailForceStaging;
 }): Promise<void> {
-  const { emailsToInsert, insertedEmailMap, getAttachmentsFn } = args;
+  const { emailsToInsert, insertedEmailMap, getAttachmentsFn, force } = args;
 
   for (const email of emailsToInsert) {
     const internalId = insertedEmailMap.get(email.id);
@@ -393,13 +419,18 @@ async function persistEmailAttachmentMetadata(args: {
       }
 
       for (const m of meta) {
-        databaseService.upsertEmailAttachmentMetadata({
+        const row = {
           emailId: internalId,
           externalEmailId: email.id,
           filename: m.filename,
           mimeType: m.mimeType,
           fileSizeBytes: m.size,
-        });
+        };
+        if (force) {
+          force.attachmentMeta.push(row);
+        } else {
+          databaseService.upsertEmailAttachmentMetadata(row);
+        }
       }
     } catch (err) {
       logService.warn(
@@ -428,16 +459,40 @@ async function fetchStoreAndDedup(params: {
   ingestSourceOverride?: "manual";
   /** For Outlook: function to get Graph API attachments by message ID */
   getAttachmentsFn?: (messageId: string) => Promise<Array<{ id: string; name: string; contentType: string; size: number }>>;
+  /**
+   * BACKLOG-2856: present only during a force re-cache. When set, this batch is
+   * written into the run's STAGING tables and the live `emails` table is neither
+   * written nor read on its own — every dedup read becomes "survivors of the
+   * pending swap ∪ what this run has staged so far" (`emailForceReadView`).
+   *
+   * Absent, every line below behaves exactly as it did before, which is the
+   * property that keeps ordinary delta syncs out of this feature's blast radius.
+   */
+  force?: EmailForceStaging;
   // BACKLOG-1831: cache HITS for this batch = writePlan.duplicates (exact dupes,
   // already cached) + writePlan.resurrections.length (re-deliveries remapped in
   // place, i.e. the message was already cached under a different provider id).
   // `stored` is the cache MISSES. Surfacing these turns the already-computed
   // dedup signal into the experiment's success metric.
 }): Promise<{ fetched: number; stored: number; errors: number; duplicates: number }> {
-  const { provider, fetchFn, userId, seenIds, ingestSourceOverride, getAttachmentsFn } = params;
+  const { provider, fetchFn, userId, seenIds, ingestSourceOverride, getAttachmentsFn, force } = params;
   let fetched = 0;
   let stored = 0;
   let errors = 0;
+
+  // BACKLOG-2856: the three "what do we already have" reads below decide what
+  // gets written. Under a force re-cache they must NOT read live `emails` alone:
+  // live still holds the entire force set (that is the point of staging), so
+  // every re-fetched row would match, be classified an already-cached duplicate,
+  // and never be staged — staging would finish empty and the swap would delete
+  // the user's corpus and put nothing back. `emailForceReadView` substitutes
+  // "rows the swap will keep ∪ rows staged so far" for the table name.
+  const emailsSource = (columns: string): { sql: string; params: readonly string[] } =>
+    force
+      ? emailForceReadView(force, columns)
+      : { sql: "emails", params: [] };
+  const writeEmailsTable = force ? `"${force.emailsTable}"` : "emails";
+  const writeParticipantsTable = force ? `"${force.participantsTable}"` : "email_participants";
 
   // BACKLOG-1549: Look up the user's connected email address to compute direction
   const oauthProvider = provider === "outlook" ? "microsoft" : "google";
@@ -473,9 +528,10 @@ async function fetchStoreAndDedup(params: {
     for (let i = 0; i < newEmails.length; i += CHUNK_SIZE) {
       const chunk = newEmails.slice(i, i + CHUNK_SIZE);
       const placeholders = chunk.map(() => "?").join(",");
+      const src = emailsSource("external_id, user_id");
       const rows = dbAll<{ external_id: string }>(
-        `SELECT external_id FROM emails WHERE user_id = ? AND external_id IN (${placeholders})`,
-        [userId, ...chunk.map((e) => e.id)],
+        `SELECT external_id FROM ${src.sql} WHERE user_id = ? AND external_id IN (${placeholders})`,
+        [...src.params, userId, ...chunk.map((e) => e.id)],
       );
       for (const row of rows) {
         existingExternalIds.add(row.external_id);
@@ -495,9 +551,10 @@ async function fetchStoreAndDedup(params: {
     for (let i = 0; i < headersToCheck.length; i += CHUNK_SIZE) {
       const chunk = headersToCheck.slice(i, i + CHUNK_SIZE);
       const placeholders = chunk.map(() => "?").join(",");
+      const src = emailsSource("id, external_id, message_id_header, user_id");
       const rows = dbAll<{ id: string; external_id: string | null; message_id_header: string }>(
-        `SELECT id, external_id, message_id_header FROM emails WHERE user_id = ? AND message_id_header IN (${placeholders})`,
-        [userId, ...chunk],
+        `SELECT id, external_id, message_id_header FROM ${src.sql} WHERE user_id = ? AND message_id_header IN (${placeholders})`,
+        [...src.params, userId, ...chunk],
       );
       for (const row of rows) {
         existingByMessageId.set(row.message_id_header, { id: row.id, externalId: row.external_id });
@@ -527,6 +584,9 @@ async function fetchStoreAndDedup(params: {
       for (let i = 0; i < subjectsToCheck.length; i += LEGACY_CHUNK) {
         const chunk = subjectsToCheck.slice(i, i + LEGACY_CHUNK);
         const placeholders = chunk.map(() => "?").join(",");
+        const legacySrc = emailsSource(
+          "id, external_id, subject, sender, sent_at, user_id, message_id_header",
+        );
         const legacyRows = dbAll<{
           id: string;
           external_id: string | null;
@@ -535,14 +595,14 @@ async function fetchStoreAndDedup(params: {
           sent_at: string;
         }>(
           `SELECT id, external_id, subject, sender, sent_at
-           FROM emails
+           FROM ${legacySrc.sql}
            WHERE user_id = ?
              AND message_id_header IS NULL
              AND sent_at IS NOT NULL
              AND sender IS NOT NULL
              AND subject IS NOT NULL
              AND LOWER(TRIM(subject)) IN (${placeholders})`,
-          [userId, ...chunk],
+          [...legacySrc.params, userId, ...chunk],
         );
         // Build key → row map and frequency count for ambiguity detection.
         const keyCount = new Map<string, number>();
@@ -599,7 +659,7 @@ async function fetchStoreAndDedup(params: {
       const db = getRawDatabase();
       const crypto = await import("crypto");
       const insertStmt = db.prepare(`
-        INSERT INTO emails (
+        INSERT INTO ${writeEmailsTable} (
           id, user_id, external_id, source, account_id, direction,
           subject, body_plain, body_html,
           sender, recipients, cc, bcc,
@@ -609,13 +669,20 @@ async function fetchStoreAndDedup(params: {
           message_id_header, content_hash, labels,
           bulk_mail_headers,
           ingest_source, validated_at,
+          -- BACKLOG-2857: stamped at write time so a later derivation fix can
+          -- tell this row apart from one produced by superseded logic.
+          -- APPENDED after every other bound parameter on purpose:
+          -- emailSyncService.retainedHeaders.test.ts transcribes positional
+          -- indices into this list, so inserting mid-list would silently
+          -- re-point its assertions at the wrong columns.
+          derived_version,
           created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
       const insertParticipantStmt = db.prepare(`
-        INSERT INTO email_participants
+        INSERT INTO ${writeParticipantsTable}
           (email_id, role, position, participant_hash, email_address, display_name)
         VALUES (?, ?, ?, ?, ?, ?)
       `);
@@ -636,8 +703,24 @@ async function fetchStoreAndDedup(params: {
       const runTransaction = db.transaction(() => {
         // BACKLOG-1769: apply resurrection remaps first (in-place external_id update,
         // no new row) — these are re-deliveries of messages already in the cache.
+        //
+        // BACKLOG-2856: under a force re-cache these are BUFFERED, not applied.
+        // They are UPDATEs against the LIVE table, and the whole safety argument
+        // is that live is untouched until the swap. A force-set row can no longer
+        // reach here at all — the read view hides it, so a re-fetched copy comes
+        // back as a plain staged insert — which means every remaining
+        // resurrection targets a SURVIVOR. Applied as the swap's last step, they
+        // become visible at exactly the same moment they would have before.
         for (const r of writePlan.resurrections) {
-          updateExternalIdStmt.run(r.newExternalId, r.messageIdHeader, r.existingId);
+          if (force) {
+            force.resurrectionRepairs.push({
+              existingId: r.existingId,
+              newExternalId: r.newExternalId,
+              messageIdHeader: r.messageIdHeader ?? null,
+            });
+          } else {
+            updateExternalIdStmt.run(r.newExternalId, r.messageIdHeader, r.existingId);
+          }
         }
 
         for (const email of emailsToInsert) {
@@ -766,6 +849,12 @@ async function fetchStoreAndDedup(params: {
                 : null,
               rowIngestSource, // BACKLOG-1802: ingest_source provenance
               validatedAt, // BACKLOG-1802: set when ingest_source='search_validated'
+              // BACKLOG-2857: this row is being written by the CURRENT derivation,
+              // so it is current by construction. Binding the constant (never a
+              // literal) is what makes a future bump reprocess these rows: the
+              // moment CURRENT_DERIVATION_VERSION moves, everything written under
+              // the old value falls below it and the pass picks it up.
+              CURRENT_DERIVATION_VERSION,
             );
 
             // BACKLOG-1722: write the junction rows atomically alongside the
@@ -820,6 +909,7 @@ async function fetchStoreAndDedup(params: {
         emailsToInsert,
         insertedEmailMap,
         getAttachmentsFn,
+        force,
       });
     } catch (batchError) {
       // If the entire batch transaction fails, log and count all as errors
@@ -884,6 +974,32 @@ export async function storeParsedEmailsForAccount(params: {
  */
 class EmailSyncService {
   private precacheInProgress = false;
+  /**
+   * BACKLOG-2856: the in-flight pre-cache's cancellation handle, mirroring
+   * `MacOSMessagesImportService`'s own `abortController`. Non-null only while a
+   * run is in progress; `requestPrecacheCancellation` aborts it and every loop
+   * boundary in `precacheEmails` consults the signal.
+   *
+   * BACKLOG-2856, SECOND ROUND — the signal now also goes INTO the fetch
+   * services. Checking it here alone was not enough and the founder measured
+   * why: one `searchAllFolders()` call spans folder discovery, every folder and
+   * every Graph page, so the phase boundaries below could not be reached until
+   * the entire download had finished. His cancel took 28.3 seconds, by which
+   * point all 487 messages had been fetched AND staged, and were then thrown
+   * away. Cancel cost exactly as much as not cancelling.
+   *
+   * The fetch services check the signal between pages, between folders/labels
+   * and between Gmail detail batches, and hand it to axios/gaxios so the request
+   * in flight is torn down. On abort they RETURN WHAT THEY HAVE, so fewer rows
+   * reach staging — which is the observable difference between a cancel that
+   * works and the one he reported.
+   *
+   * There is deliberately no compensating rollback attached to this: the force
+   * run writes to staging and the `finally` drops staging on every exit, so a
+   * cancelled run is a no-op against live BY CONSTRUCTION. Cancelling is
+   * "stop doing more work", never "undo what was done".
+   */
+  private precacheAbortController: AbortController | null = null;
   private lastPrecacheCompletedAt: number | null = null;
 
   /**
@@ -1722,14 +1838,70 @@ class EmailSyncService {
    * - Manually via "Re-cache Emails" button in Settings
    *
    * No auto-linking is performed here; that happens per-transaction.
+   *
+   * BACKLOG-2856: `options.force` runs the same fetch as a FORCE RE-CACHE —
+   * every provider row in the cache window is re-downloaded and replaces what is
+   * stored, rather than only mail newer than the newest cached row. Parity with
+   * the macOS messages Force Re-import, link loss included (founder decision,
+   * 2026-08-24). Written through stage-and-swap, so an interrupted force run
+   * leaves the live table exactly as it was.
    */
+  /**
+   * Stop the in-flight email pre-cache at its next loop boundary (BACKLOG-2856).
+   *
+   * Mirrors `macOSMessagesImportService.requestCancellation()` and, like it, is
+   * only ever "stop doing more work". It does NOT undo anything, because there
+   * is nothing to undo: an ordinary run has written only repaired rows that were
+   * already correct to write, and a force run has written only to staging, which
+   * the `finally` drops. Live email is untouched until the swap, so a cancelled
+   * run is a no-op against it by construction rather than by recovery.
+   *
+   * DIVERGENCE FROM THE MESSAGES VERSION, ON PURPOSE: no pending-cancellation
+   * held for a future run. The messages importer stores one because its cancel
+   * can race a not-yet-started import; the email Cancel control only exists
+   * while a run is in flight, so holding an unconsumed abort would let a stray
+   * click kill an unrelated re-cache the user started minutes later.
+   *
+   * @returns true if a run was in flight and has been asked to stop.
+   */
+  requestPrecacheCancellation(): boolean {
+    if (!this.precacheInProgress || !this.precacheAbortController) {
+      logService.info(
+        "Email pre-cache cancellation requested with no run in flight — ignored",
+        "EmailSyncService",
+      );
+      return false;
+    }
+    logService.info("Email pre-cache cancellation requested", "EmailSyncService");
+    this.precacheAbortController.abort();
+    return true;
+  }
+
   async precacheEmails(
     userId: string,
-    onProgress?: (percent: number) => void,
+    onProgress?: EmailPrecacheProgressCallback,
+    options?: { force?: boolean },
   ): Promise<{
     fetched: number;
     stored: number;
     error?: string;
+    /**
+     * BACKLOG-2856: the user stopped the run via `requestPrecacheCancellation`.
+     * Set only when the abort was observed BEFORE the swap committed — a cancel
+     * that lands after the swap is too late to mean anything and the run reports
+     * its real success, because the mail has already been rebuilt.
+     *
+     * Never accompanied by `error`: a cancel is the user getting what they asked
+     * for, and painting it as a failure would be wrong.
+     */
+    cancelled?: boolean;
+    /** BACKLOG-2856: present only on a force run that reached the swap. */
+    forceSwap?: {
+      emailsDeleted: number;
+      emailsInserted: number;
+      participantsInserted: number;
+      providers: EmailForceProvider[];
+    };
     // BACKLOG-2127: set ONLY for auth-class (token expiry) failures so the
     // sync UI can surface a reconnect prompt instead of a green "0 new".
     // Transient/network failures leave this undefined so the sync still
@@ -1742,11 +1914,137 @@ class EmailSyncService {
   }> {
     if (this.precacheInProgress) {
       logService.info("[EmailSync] Precache already in progress, skipping", "EmailSync");
+      // BACKLOG-2856 — DELIBERATELY NO TERMINAL PROGRESS EVENT ON THIS PATH.
+      //
+      // Every other exit emits one so the bar cannot strand. This one must not,
+      // and emitting it here would cause the very defect the others prevent:
+      // the guard means a run IS already live, the progress channel is shared by
+      // every window, so a rejected second invocation's "done" would settle the
+      // RUNNING run's bar and hide a re-cache that is still going.
+      //
+      // The rejected caller is settled by its own invoke response instead — the
+      // `error` below — and the renderer clears its bar on promise resolution
+      // regardless of events, which is the stronger guarantee anyway. Covered at
+      // the handler/renderer boundary, not here.
       return { fetched: 0, stored: 0, error: "Precache already in progress" };
     }
     this.precacheInProgress = true;
+    // BACKLOG-2856: the force run's staging handle, held here so every exit path
+    // — success, thrown error, or the `finally` below — can drop it. Live is
+    // untouched until `swapEmailStagingIntoLive`, so an abandoned run costs two
+    // ephemeral tables and nothing else.
+    const isForce = options?.force === true;
+    // BACKLOG-2856: fresh controller per run; cleared in the `finally` so a
+    // cancel requested between runs can never abort the next one.
+    const abort = new AbortController();
+    this.precacheAbortController = abort;
+    const isCancelled = (): boolean => abort.signal.aborted;
+
+    // Progress bookkeeping. Declared out here because the terminal event is
+    // emitted from the `finally`, which cannot see the counters declared inside
+    // the try. `progressOutcome` defaults to "error" so an exit nobody
+    // anticipated — a throw, a return added later — still settles the bar, and
+    // settles it honestly rather than claiming success.
+    let lastPercent = 0;
+    let progressCurrent = 0;
+    let progressOutcome: "success" | "error" | "cancelled" = "error";
+    const emitProgress: EmailPrecacheProgressCallback = (progress) => {
+      lastPercent = progress.percent;
+      progressCurrent = progress.current;
+      onProgress?.(progress);
+    };
+
+    let forceStaging: EmailForceStaging | null = null;
+    let forceSwap: {
+      emailsDeleted: number;
+      emailsInserted: number;
+      participantsInserted: number;
+      providers: EmailForceProvider[];
+    } | undefined;
     try {
-    logService.info("Starting email pre-cache", "EmailSyncService", { userId });
+    logService.info("Starting email pre-cache", "EmailSyncService", { userId, force: isForce });
+
+    // BACKLOG-2857 — repair rows produced by a superseded derivation, BEFORE any
+    // fetching.
+    //
+    // Placed here, unconditionally, rather than after the fetch loop and rather
+    // than gated on "new messages arrived". A fully-cached mailbox fetches ZERO
+    // new messages, and that is exactly the mailbox most in need of repair — its
+    // rows are the OLD ones. Gating the pass on new mail would mean the users with
+    // the most damage get the least repair, and the founder's own case (test the
+    // truncation fix against an existing mailbox with no re-download) would
+    // silently do nothing.
+    //
+    // It is safe to run every time: when nothing is stale the partial index makes
+    // the first SELECT return no rows immediately. Failures are swallowed — a
+    // repair pass must never be the reason a sync fails, and the rows it did not
+    // reach are still correctly stamped for the next run.
+    //
+    // BACKLOG-2856: SKIPPED on a force run. Every row it would repair is in the
+    // force set and is about to be deleted and re-fetched, and a re-fetched row
+    // is stamped with the current derivation by construction. Running it anyway
+    // would rewrite the whole corpus immediately before discarding it — and it
+    // writes LIVE, which a force run's whole design is to avoid until the swap.
+    if (!isForce) {
+    // BACKLOG-2856: the repair pass is the FIRST thing an ordinary re-cache
+    // waits through and on a large mailbox it is minutes of it, so it reports
+    // before anything fetch-related. `percent` holds at REPAIRING while
+    // `current` climbs — the count moves, the bar does not go backwards when
+    // fetching starts.
+    //
+    // (There is no repairing phase on a force run at all: the pass is skipped
+    // there, because every row it would repair is inside the force set and about
+    // to be deleted and re-fetched. Its sequence starts at `fetching`.)
+    emitProgress({
+      phase: "repairing",
+      current: 0,
+      total: 0,
+      percent: EMAIL_PRECACHE_PERCENT.REPAIRING,
+    });
+    try {
+      const repair = await reprocessEmailDerivations({
+        userId,
+        // Consulted BETWEEN batches by the pass itself, so a cancel takes effect
+        // at a batch boundary with every already-processed row correctly
+        // stamped — never mid-transaction.
+        shouldCancel: isCancelled,
+        onProgress: ({ scanned, rewritten }) => {
+          emitProgress({
+            phase: "repairing",
+            current: scanned,
+            total: scanned,
+            percent: EMAIL_PRECACHE_PERCENT.REPAIRING,
+          });
+          void rewritten;
+        },
+      });
+      if (repair.scanned > 0) {
+        logService.info("Derivation reprocess complete", "EmailSyncService", {
+          userId,
+          scanned: repair.scanned,
+          rewritten: repair.rewritten,
+          unchanged: repair.unchanged,
+          batches: repair.batches,
+        });
+      }
+    } catch (repairError) {
+      logService.warn("Derivation reprocess failed (sync continues)", "EmailSyncService", {
+        userId,
+        error: repairError instanceof Error ? repairError.message : String(repairError),
+      });
+    }
+
+    // Cancelled during the repair pass — the earliest phase, and the one a user
+    // is most likely to reach for the Cancel button in, because it is the part
+    // that shows no mail arriving. Nothing has been fetched and (on this path)
+    // no staging exists, so returning here leaves everything as it was.
+    if (isCancelled()) {
+      logService.info("Email pre-cache cancelled during derivation repair", "EmailSyncService", { userId });
+      progressOutcome = "cancelled";
+      this.lastPrecacheCompletedAt = Date.now();
+      return { fetched: 0, stored: 0, cancelled: true };
+    }
+    }
 
     Sentry.addBreadcrumb({
       category: "email_precache.start",
@@ -1759,11 +2057,34 @@ class EmailSyncService {
     const cacheDurationMonths = await getEmailCacheDurationMonths(userId);
     const cacheSinceDate = computeEmailCacheSinceDate(cacheDurationMonths);
 
-    // Incremental: find the latest cached email timestamp
-    const latestCachedRow = dbGet<{ latest: string | null }>(
-      "SELECT MAX(sent_at) as latest FROM emails WHERE user_id = ?",
-      [userId],
-    );
+    // Incremental: find the latest cached email timestamp.
+    //
+    // ---------------------------------------------------------------------
+    // BACKLOG-2856 — THIS CLAMP IS WHAT A FORCE RE-CACHE HAS TO BYPASS
+    // ---------------------------------------------------------------------
+    // Traced, and worth stating because the item was filed against a different
+    // mechanism: the thing that would make a force re-cache "delete everything
+    // and then fetch almost nothing" is THIS local high-water mark, not a stored
+    // Graph delta cursor. `email_sync_state.cursor` (the `{folderId: deltaLink}`
+    // map) has exactly two readers, both in `shadowDeltaSyncService`, which is
+    // opt-in behind `KEEPR_SHADOW_DELTA_SYNC=1` / `shadowDeltaSync.enabled` and
+    // is not on this path at all — `searchEmails` / `searchAllFolders` /
+    // `searchAllLabels` never consult a deltaLink.
+    //
+    // The failure it would cause is nonetheless exactly as bad as advertised.
+    // Stage-and-swap leaves live `emails` populated for the whole rebuild, so
+    // `MAX(sent_at)` still returns the newest cached row, `fetchSinceDate`
+    // collapses to roughly "now", the rebuild stages next to nothing, and the
+    // swap deletes the corpus and puts that nothing back in its place.
+    //
+    // So a force run reads from `cacheSinceDate` — the user's full configured
+    // window — and the clamp is simply not applied.
+    const latestCachedRow = isForce
+      ? null
+      : dbGet<{ latest: string | null }>(
+          "SELECT MAX(sent_at) as latest FROM emails WHERE user_id = ?",
+          [userId],
+        );
     let fetchSinceDate = cacheSinceDate;
     if (latestCachedRow?.latest) {
       const latestCached = new Date(latestCachedRow.latest);
@@ -1777,6 +2098,7 @@ class EmailSyncService {
       cacheSinceDate: cacheSinceDate.toISOString(),
       fetchSinceDate: fetchSinceDate.toISOString(),
       isIncremental: !!latestCachedRow?.latest,
+      force: isForce,
     });
 
     const seenEmailIds = new Set<string>();
@@ -1798,10 +2120,61 @@ class EmailSyncService {
       return { fetched: 0, stored: 0 };
     }
 
-    onProgress?.(10);
+    // BACKLOG-2856: providers this run COULD rebuild, from the connected tokens.
+    // The force set starts optimistic — every connected provider — so the
+    // rebuild's dedup reads treat those rows as "about to be replaced" and stage
+    // their re-fetched copies. It is narrowed to the providers that actually
+    // finished, immediately before the swap.
+    const connectedProviders: EmailForceProvider[] = [
+      ...(microsoftToken ? (["outlook"] as const) : []),
+      ...(googleToken ? (["gmail"] as const) : []),
+    ];
+    // A provider joins this only when its ENTIRE fetch succeeded — the inbox
+    // round AND the all-folders/all-labels round. A partial fetch must not
+    // delete that provider's live rows; see `restrictForceSetToRebuiltProviders`.
+    const rebuiltProviders: EmailForceProvider[] = [];
+
+    if (isForce) {
+      const db = getRawDatabase();
+      const swept = sweepStaleEmailStaging(db);
+      if (swept.length > 0) {
+        logService.info("Dropped stale email force-recache staging tables", "EmailSyncService", {
+          tables: swept.length,
+        });
+      }
+      forceStaging = emailForceStagingLifecycle.create(db, {
+        userId,
+        forceSet: buildEmailForceSet({
+          userId,
+          providers: connectedProviders,
+          cacheSinceIso: cacheSinceDate.toISOString(),
+        }),
+      });
+      logService.info("Email force re-cache staging created", "EmailSyncService", {
+        userId,
+        providers: connectedProviders,
+        cacheSince: cacheSinceDate.toISOString(),
+      });
+    }
+
+    // Cancelled before any provider was contacted. On a force run the staging
+    // tables exist by now; the `finally` drops them, and live was never touched.
+    if (isCancelled()) {
+      logService.info("Email pre-cache cancelled before fetching", "EmailSyncService", { userId });
+      progressOutcome = "cancelled";
+      this.lastPrecacheCompletedAt = Date.now();
+      return { fetched: 0, stored: 0, cancelled: true };
+    }
+
+    emitProgress({
+      phase: "fetching",
+      current: 0,
+      total: 0,
+      percent: EMAIL_PRECACHE_PERCENT.FETCH_START,
+    });
 
     // Fetch from Outlook (no contact filter = all emails)
-    if (microsoftToken) {
+    if (microsoftToken && !isCancelled()) {
       try {
         await retryOnNetwork(async () => {
           const outlookReady = await outlookFetchService.initialize(userId);
@@ -1812,30 +2185,59 @@ class EmailSyncService {
               fetchFn: () => outlookFetchService.searchEmails({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: fetchSinceDate,
+                // BACKLOG-2856: the signal reaches the paging loop and the HTTP
+                // request, not just the boundary check above.
+                signal: abort.signal,
               }),
               userId,
               seenIds: seenEmailIds,
               getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
+              force: forceStaging ?? undefined,
             });
 
             // Also search all folders (sent, archives, custom folders)
             let allFolderResult = { fetched: 0, stored: 0, errors: 0 };
+            // BACKLOG-2856: a force run may only delete Outlook's live rows if
+            // it re-fetched ALL of them. The all-folders round is most of the
+            // mailbox (sent, archives, custom folders), so a failure here means
+            // this run holds the inbox and little else — deleting the rest would
+            // trim the corpus to whatever arrived before the failure.
+            let allFoldersComplete = true;
+            // BACKLOG-2856: a cancel between the two Outlook rounds skips the
+            // second one AND withholds the rebuilt mark. The pre-swap checkpoint
+            // would stop the swap anyway; withholding the mark means that even
+            // if it were ever removed, a half-fetched Outlook could not license
+            // deleting Outlook's live rows.
+            if (isCancelled()) allFoldersComplete = false;
             try {
+              if (!isCancelled()) {
               allFolderResult = await fetchStoreAndDedup({
                 provider: "outlook",
                 fetchFn: () => outlookFetchService.searchAllFolders({
                   maxResults: EMAIL_FETCH_SAFETY_CAP,
                   after: fetchSinceDate,
+                  // BACKLOG-2856: THE call the founder's 28.3 seconds were spent
+                  // inside. It walks every folder under one await; without the
+                  // signal the next boundary check below is unreachable until it
+                  // has finished.
+                  signal: abort.signal,
                 }),
                 userId,
                 seenIds: seenEmailIds,
                 getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
+                force: forceStaging ?? undefined,
               });
+              }
             } catch (folderError) {
               if (isNetworkError(folderError)) throw folderError;
+              allFoldersComplete = false;
               logService.warn("Pre-cache: all-folders fetch failed, continuing", "EmailSyncService", {
                 error: folderError instanceof Error ? folderError.message : "Unknown",
               });
+            }
+
+            if (allFoldersComplete && !rebuiltProviders.includes("outlook")) {
+              rebuiltProviders.push("outlook");
             }
 
             totalFetched += inboxResult.fetched + allFolderResult.fetched;
@@ -1866,10 +2268,17 @@ class EmailSyncService {
       }
     }
 
-    onProgress?.(50);
+    emitProgress({
+      phase: "fetching",
+      current: totalFetched,
+      total: totalFetched,
+      percent: EMAIL_PRECACHE_PERCENT.FETCH_SECOND_PROVIDER,
+    });
 
-    // Fetch from Gmail (no contact filter = all emails)
-    if (googleToken) {
+    // Fetch from Gmail (no contact filter = all emails).
+    // Skipped outright if the user cancelled during the Outlook round — a cancel
+    // must stop the NEXT unit of work, not merely stop the current one early.
+    if (googleToken && !isCancelled()) {
       try {
         await retryOnNetwork(async () => {
           const gmailReady = await gmailFetchService.initialize(userId);
@@ -1879,28 +2288,44 @@ class EmailSyncService {
               fetchFn: () => gmailFetchService.searchEmails({
                 maxResults: EMAIL_FETCH_SAFETY_CAP,
                 after: fetchSinceDate,
+                signal: abort.signal,
               }),
               userId,
               seenIds: seenEmailIds,
+              force: forceStaging ?? undefined,
             });
 
             // Also search all labels (archives, custom labels)
             let allLabelResult = { fetched: 0, stored: 0, errors: 0 };
+            // BACKLOG-2856: same rule as Outlook's all-folders round — a partial
+            // Gmail fetch must not license deleting Gmail's live rows.
+            let allLabelsComplete = true;
+            // Same rule as Outlook's rounds above.
+            if (isCancelled()) allLabelsComplete = false;
             try {
+              if (!isCancelled()) {
               allLabelResult = await fetchStoreAndDedup({
                 provider: "gmail",
                 fetchFn: () => gmailFetchService.searchAllLabels({
                   maxResults: EMAIL_FETCH_SAFETY_CAP,
                   after: fetchSinceDate,
+                  signal: abort.signal,
                 }),
                 userId,
                 seenIds: seenEmailIds,
+                force: forceStaging ?? undefined,
               });
+              }
             } catch (labelError) {
               if (isNetworkError(labelError)) throw labelError;
+              allLabelsComplete = false;
               logService.warn("Pre-cache: all-labels fetch failed, continuing", "EmailSyncService", {
                 error: labelError instanceof Error ? labelError.message : "Unknown",
               });
+            }
+
+            if (allLabelsComplete && !rebuiltProviders.includes("gmail")) {
+              rebuiltProviders.push("gmail");
             }
 
             totalFetched += gmailResult.fetched + allLabelResult.fetched;
@@ -1928,12 +2353,144 @@ class EmailSyncService {
       }
     }
 
-    onProgress?.(90);
+    emitProgress({
+      phase: "fetching",
+      current: totalFetched,
+      total: totalFetched,
+      percent: EMAIL_PRECACHE_PERCENT.FETCH_DONE,
+    });
 
     // BACKLOG-1369: Attachment backfill removed from precache pipeline.
     // Attachments are now downloaded on-demand when user views email or during export.
 
-    onProgress?.(100);
+    // -------------------------------------------------------------------
+    // BACKLOG-2856 — THE SWAP. Everything above wrote to staging only.
+    // -------------------------------------------------------------------
+    // Reached only when the run got this far without throwing. Cancel, crash,
+    // disk-full or any error above skips it entirely and the `finally` drops the
+    // staging tables, which is why an interrupted force re-cache leaves live
+    // exactly as it was BY CONSTRUCTION rather than by rollback.
+    // THE LAST MOMENT A CANCEL CAN MEAN ANYTHING (BACKLOG-2856).
+    //
+    // Placed here, before the swap block, so it governs BOTH paths: an ordinary
+    // run that was cancelled during the fetch must report `cancelled` too, not
+    // fall through to the success return and tell the user it completed.
+    //
+    // On a force run everything above wrote to staging only, so stopping here
+    // costs nothing but the download. One line further and the swap has begun;
+    // past that point "cancel" would have to mean UNDO, and undoing a committed
+    // swap is precisely the compensating-rollback design that stage-and-swap was
+    // adopted to get rid of. So the signal is consulted here and never again: a
+    // cancel arriving during or after the swap is too late, and the run reports
+    // the success it actually achieved.
+    if (isCancelled()) {
+      logService.info(
+        "Email pre-cache cancelled before the swap — the email store was never touched",
+        "EmailSyncService",
+        { userId, staged: totalStored, force: isForce },
+      );
+      progressOutcome = "cancelled";
+      this.lastPrecacheCompletedAt = Date.now();
+      return { fetched: totalFetched, stored: totalStored, cancelled: true };
+    }
+
+    if (isForce && forceStaging) {
+      emitProgress({
+        phase: "swapping",
+        current: totalFetched,
+        total: totalFetched,
+        percent: EMAIL_PRECACHE_PERCENT.SWAPPING,
+      });
+
+      const db = getRawDatabase();
+      const restricted = restrictForceSetToRebuiltProviders(
+        db,
+        forceStaging,
+        rebuiltProviders,
+        cacheSinceDate.toISOString(),
+      );
+
+      if (!restricted) {
+        // No provider finished a rebuild, so there is nothing to put back and a
+        // swap would be a pure deletion. Reported as an error rather than a
+        // green "0 re-cached", which is the BACKLOG-2127 lesson: a run that
+        // achieved nothing must not look like a run that found nothing to do.
+        logService.warn("Email force re-cache: no provider rebuilt, skipping swap", "EmailSyncService", {
+          userId,
+          connectedProviders,
+        });
+        this.lastPrecacheCompletedAt = Date.now();
+        return {
+          fetched: totalFetched,
+          stored: totalStored,
+          providerError,
+          error: "Re-cache could not complete for any connected mailbox. Nothing was changed.",
+        };
+      }
+
+      // The swap either happens completely or not at all, so a throw here means
+      // the user's mail is exactly as it was. Reported as a structured error
+      // rather than allowed to propagate: the caller cannot distinguish a thrown
+      // precache from a crashed one, and this is the case where the single most
+      // useful thing to tell the user is that NOTHING changed.
+      let counts;
+      try {
+        counts = swapEmailStagingIntoLive(db, forceStaging, {
+          persistAttachmentMeta: (meta) => databaseService.upsertEmailAttachmentMetadata(meta),
+        });
+      } catch (swapError) {
+        logService.error("Email force re-cache swap failed; nothing was changed", "EmailSyncService", {
+          userId,
+          error: swapError instanceof Error ? swapError.message : String(swapError),
+        });
+        Sentry.captureException(swapError);
+        this.lastPrecacheCompletedAt = Date.now();
+        return {
+          fetched: totalFetched,
+          stored: totalStored,
+          providerError,
+          error: "Re-cache could not be applied. Your emails were left unchanged.",
+        };
+      }
+
+      forceSwap = {
+        emailsDeleted: counts.emailsDeleted,
+        emailsInserted: counts.emailsInserted,
+        participantsInserted: counts.participantsInserted,
+        providers: [...rebuiltProviders],
+      };
+
+      // The shadow delta engine's bookmark describes a mailbox state that no
+      // longer exists on this side: every row it had seen has just been replaced
+      // under a new local id. Clearing it makes its next round start over, which
+      // is the honest reading of "re-cache". Best-effort — the shadow engine is
+      // opt-in and comparison-only, so it must never fail a real re-cache.
+      try {
+        this.clearShadowDeltaCursors(userId);
+      } catch (cursorError) {
+        logService.warn("Email force re-cache: could not clear shadow delta cursor", "EmailSyncService", {
+          error: cursorError instanceof Error ? cursorError.message : String(cursorError),
+        });
+      }
+
+      logService.info("Email force re-cache swap complete", "EmailSyncService", {
+        userId,
+        ...forceSwap,
+        resurrectionsRepaired: counts.resurrectionsRepaired,
+        attachmentMetaApplied: counts.attachmentMetaApplied,
+      });
+      Sentry.addBreadcrumb({
+        category: "email_precache.force_swap",
+        message: `Force re-cache swap: ${counts.emailsDeleted} deleted, ${counts.emailsInserted} inserted`,
+        level: "info",
+        data: forceSwap,
+      });
+    }
+
+    // The terminal event is emitted once, from the `finally` — not here — so
+    // that every exit path gets exactly one and no path can be added later that
+    // forgets it. Marking the outcome is all this line has to do.
+    progressOutcome = "success";
 
     logService.info("Email pre-cache complete", "EmailSyncService", {
       totalFetched,
@@ -1949,10 +2506,57 @@ class EmailSyncService {
     });
 
     this.lastPrecacheCompletedAt = Date.now();
-    return { fetched: totalFetched, stored: totalStored, providerError };
+    return { fetched: totalFetched, stored: totalStored, providerError, forceSwap };
     } finally {
       this.precacheInProgress = false;
+      this.precacheAbortController = null;
+
+      // BACKLOG-2856 — THE ONE TERMINAL PROGRESS EVENT, on every exit path.
+      //
+      // Success, a structured error return, a thrown failure, a cancel: all of
+      // them land here, so the bar cannot be stranded at whatever fraction it
+      // last saw. That is the failure the messages importer's explicit final
+      // 100% exists to prevent, arrived at from the other side — instead of one
+      // emission per happy path, one emission for all paths.
+      //
+      // `percent` reaches 100 only when `progressOutcome` is "success"; a cancel
+      // or an error reports the last percent actually reached and settles the UI
+      // by `phase: "done"`.
+      onProgress?.(terminalProgress(progressOutcome, progressCurrent, lastPercent));
+      // BACKLOG-2856: the one cleanup that runs on EVERY exit path — success,
+      // early return, thrown error, cancellation. On the success path the swap
+      // has already consumed these tables; on every other path dropping them is
+      // what makes the interrupted run a no-op against live.
+      if (forceStaging) {
+        try {
+          forceStaging.drop();
+        } catch (dropError) {
+          // Left behind, not fatal: nothing else reads these tables, and the next
+          // force run's `sweepStaleEmailStaging` reclaims them.
+          logService.warn("Could not drop email force-recache staging", "EmailSyncService", {
+            error: dropError instanceof Error ? dropError.message : String(dropError),
+          });
+        }
+      }
     }
+  }
+
+  /**
+   * BACKLOG-2856: reset the shadow delta engine's per-folder bookmarks for this
+   * user, so its next round re-reads the mailbox instead of asking "what changed
+   * since a state that no longer exists".
+   *
+   * Best-effort and deliberately narrow: it writes `email_sync_state.cursor`,
+   * which no other feature reads (`shadowDeltaSyncService` is its only consumer
+   * and is opt-in behind a flag). It is NOT what makes a force re-cache re-fetch
+   * — that is the high-water-mark bypass above — so a failure here is logged and
+   * swallowed rather than allowed to fail the run.
+   */
+  private clearShadowDeltaCursors(userId: string): void {
+    dbRun(
+      `UPDATE email_sync_state SET cursor = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
+      [userId],
+    );
   }
 
   /**

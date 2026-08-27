@@ -231,7 +231,10 @@ const TransactionListCardInner = function TransactionListCard({
               title="View emails"
             >
               <EmailsIcon />
-              <span>{emailCount} {emailCount === 1 ? "Email thread" : "Email threads"}</span>
+              {/* BACKLOG-2865: "Email", not "Email thread" — `transaction.email_count`
+                  counts EMAILS. Same correction as TransactionCard.tsx and, before
+                  it, the submit summary (BACKLOG-2838). */}
+              <span>{emailCount} {emailCount === 1 ? "Email" : "Emails"}</span>
             </button>
             {transaction.extraction_confidence && (
               <span className="flex items-center gap-1">

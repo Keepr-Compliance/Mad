@@ -55,6 +55,8 @@ const emailItem: ReviewItemDto = {
     recipients: "me@example.com",
     cc: null,
     sender: "paul@example.com",
+    body: null,
+    bodyText: null,
     hasAttachments: false,
     threadParticipants: [],
     threadMessages: [],
@@ -80,6 +82,8 @@ const textItem: ReviewItemDto = {
     recipients: null,
     cc: null,
     sender: "+15555550142",
+    body: null,
+    bodyText: null,
     hasAttachments: false,
     threadParticipants: ["+15555550142"],
     threadMessages: [
@@ -89,6 +93,10 @@ const textItem: ReviewItemDto = {
         body_text: "on my way",
         sent_at: "2026-06-01T00:00:00.000Z",
         direction: "inbound",
+        // BACKLOG-2814: the projection returns both; a fixture that omits them
+        // describes a row shape threadDisplay cannot produce.
+        participants: null,
+        thread_display_name: null,
         participants_flat: "+15555550142",
         channel: "sms",
       },

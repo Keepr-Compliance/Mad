@@ -18,10 +18,23 @@ export interface SubmitProgress {
 
 interface SubmitForReviewModalProps {
   transaction: Transaction;
-  /** @deprecated Use emailThreadCount and textThreadCount instead */
+  /** @deprecated Use emailCount and textThreadCount instead */
   messageCount?: number;
-  /** Number of email threads */
-  emailThreadCount: number;
+  /**
+   * Number of EMAILS on the deal — not threads (BACKLOG-2838).
+   *
+   * The caller passes `transaction.email_count`, computed as
+   * COUNT(DISTINCT c.email_id) (transactionDbService.ts). This prop was called
+   * `emailThreadCount` and rendered under the label "Email threads:", so a deal
+   * with 99 emails across 40 conversations read "Email threads: 99". The value
+   * was never wrong; the name and the word around it were, and a prop whose
+   * name contradicts its contents is what produced the mis-labelling in the
+   * first place. Renamed to what it holds.
+   *
+   * `textThreadCount` below genuinely IS threads, so the two labels are
+   * deliberately asymmetric — each says what its number counts.
+   */
+  emailCount: number;
   /** Number of text message threads */
   textThreadCount: number;
   /** Total attachment count (text + email) */
@@ -35,7 +48,22 @@ interface SubmitForReviewModalProps {
   error: string | null;
   onCancel: () => void;
   onSubmit: () => void;
-  onExportFirst?: () => void;
+  /**
+   * Opens the export flow for this deal, closing this modal on the way.
+   *
+   * BACKLOG-2849 renamed it from `onExportFirst`: "first" described a
+   * pre-submit nudge that no longer exists, and the SAME callback now backs
+   * both offers — the action button beside Submit, and the post-submit ask.
+   * One action, one handler. The label here is the founder's "Export PDF";
+   * the header's restored button reaches the same place as "Export".
+   *
+   * The destination is the founder's ruling that "the export flow it brings up
+   * should be just like the individual user export": this opens the SAME
+   * ExportModal that `useCompleteTransaction` gives an individual on Complete,
+   * not a brokerage-specific path. TransactionDetails owns that wiring and a
+   * test pins the two entry points to one component by identity.
+   */
+  onExport?: () => void;
 }
 
 const STAGE_LABELS: Record<string, string> = {
@@ -60,7 +88,7 @@ function formatBytes(bytes: number): string {
 
 export function SubmitForReviewModal({
   transaction,
-  emailThreadCount,
+  emailCount,
   textThreadCount,
   attachmentCount,
   emailAttachmentCount,
@@ -70,12 +98,152 @@ export function SubmitForReviewModal({
   error,
   onCancel,
   onSubmit,
-  onExportFirst,
+  onExport,
 }: SubmitForReviewModalProps): React.ReactElement {
-  const isResubmit = transaction.submission_status === "needs_changes";
+  /**
+   * BACKLOG-2853 — THE DEAL ALREADY HAS A SUBMISSION SITTING WITH THE BROKER.
+   *
+   * These four statuses are exactly the ones `submissionService`'s
+   * `blockedStatuses` refuses (electron/services/submissionService.ts), so
+   * pressing the action in any of them produces a thrown error, never a
+   * submission. Until this change the modal rendered a live, ENABLED button
+   * reading "Submit" for every one of them — `isResubmit` was true only for
+   * `needs_changes` — with nothing on screen saying a submission already
+   * existed. Measured on the re-entry state the founder's report names
+   * (`submission_status: "submitted"`, `progress: null`, which is what
+   * `resetSubmit()` leaves behind):
+   *   {"submitButtonLive":true,"submitDisabled":false,
+   *    "readsResubmit":false,"warnsAboutExisting":false}
+   *
+   * THE LIST IS DUPLICATED, NOT SHARED, AND THAT IS DELIBERATE. The renderer
+   * cannot value-import from `electron/` (Vite parses it as JavaScript) and
+   * `electron/` cannot import from `src/` (`rootDir`), so a single shared
+   * constant would need a mirrored module plus a parity test. BACKLOG-2853
+   * judged that "out of proportion to four string literals" and pinned only
+   * the SET on each end. BACKLOG-2868 is what that judgement cost: the SET was
+   * pinned, THE WORDS WERE NOT, and the words are what the user reads.
+   *
+   * `resubmitted` is NOT here, and the reason BACKLOG-2853 gave — "the service
+   * still permits a submit in that state" — is WRONG and withdrawn. The
+   * service does not permit it; the service never gets asked. A `resubmitted`
+   * row only exists at version >= 2, so its deal has two submission rows, the
+   * service's `.maybeSingle()` lookup returns PGRST116, and the whole guard is
+   * skipped (BACKLOG-2867). Pressing the button there runs a plain submit that
+   * always dies on the unique key after a full attachment upload. Leaving it
+   * enabled is therefore NOT the "honest label" that comment claimed — it is
+   * an inviting control that cannot work. Not widened here because the fix is
+   * the lookup, not the list; raised on BACKLOG-2868 rather than taken.
+   */
+  /**
+   * BACKLOG-2868 — ONE MESSAGE FOR FOUR DIFFERENT STATES IS THREE WRONG
+   * MESSAGES.
+   *
+   * ===========================================================================
+   * THIS IS A MIRROR. THE CANONICAL COPY IS
+   * `electron/services/submissionStatusMessages.ts`.
+   * ===========================================================================
+   *
+   * Walk the case that filed this. An agent submits a deal; her broker REJECTS
+   * it. `TransactionHeader` keeps Complete visible in every state and its
+   * `isSubmitted` badge set covers only `submitted | under_review | approved`,
+   * so a rejected deal shows no badge and a live Complete button — one click to
+   * here. BACKLOG-2853 then told her, in the only lead paragraph it wrote:
+   *
+   *   "...is with your broker for review. It cannot be submitted again — if
+   *    your broker asks for changes, you will be able to resubmit it here."
+   *
+   * It is not with her broker for review; he rejected it. He is not going to
+   * ask for changes. She waits for a message that is never coming.
+   *
+   * (The walkthrough is deliberately unnamed. This repo is PUBLIC and has a
+   * PII-purge history where removing a name after merge means history surgery;
+   * the named version of this case lives on BACKLOG-2868 in Supabase.)
+   *
+   * And it compounds. The accurate line already existed in the service, and
+   * before BACKLOG-2853 she reached it by pressing the (enabled) button and
+   * reading the thrown error. That change disabled the button. So the wrong
+   * explanation was shown AND the right one was made unreachable — which is
+   * why the fix is copy that renders BEFORE any press, not a better error.
+   *
+   * EACH LEAD CONTAINS ITS CANONICAL SERVICE MESSAGE VERBATIM. The parity test
+   * asserts containment rather than equality, so this mirror may add a
+   * next-step sentence the service has no room for (see `rejected`) without
+   * being able to drift from what the service would have said. Edit
+   * `submissionStatusMessages.ts` without editing here and that test goes red.
+   *
+   * `submitted` keeps BACKLOG-2853's own phrasing rather than being harmonised
+   * to the service's. It is accurate, the founder has tested this screen, and
+   * rewording an accurate string for symmetry is the same unrequested widening
+   * that produced this defect.
+   */
+  const BLOCKED_STATUS_COPY: Record<string, { title: string; lead: string }> = {
+    submitted: {
+      title: "Already Submitted",
+      lead: "This transaction has already been submitted and is with your broker for review. It cannot be submitted again — if your broker asks for changes, you will be able to resubmit it here.",
+    },
+    under_review: {
+      title: "Under Review",
+      lead: "Cannot resubmit while broker is reviewing. Please wait for their decision.",
+    },
+    approved: {
+      title: "Already Approved",
+      lead: "This submission has already been approved. There is nothing further to send.",
+    },
+    rejected: {
+      title: "Submission Rejected",
+      /**
+       * The canonical string is exactly "This submission has been rejected." —
+       * four words with no next step. The filing for BACKLOG-2868 quoted it as
+       * "This submission was rejected. Please contact your broker." and that
+       * sentence exists nowhere in this repo (swept case-insensitively). So the
+       * canonical half here is the REAL string, transcribed, and the broker
+       * instruction is added by this mirror — which is the whole reason the
+       * parity test asserts containment. Whether the service's own error should
+       * carry the instruction too is raised on BACKLOG-2868, not taken here.
+       */
+      lead: "This submission has been rejected. Please contact your broker.",
+    },
+  };
+  const blockedCopy = BLOCKED_STATUS_COPY[transaction.submission_status ?? ""];
+
+  /**
+   * DERIVED FROM THE COPY MAP, NOT FROM A SECOND LIST. BACKLOG-2853 kept a
+   * separate `WITH_BROKER_STATUSES` array here; once the copy is per-status,
+   * carrying both means a status can be disabled with no copy written for it,
+   * or given copy while staying enabled — the same two-lists-one-rule shape
+   * that caused this item, reproduced inside a single file. The map's keys ARE
+   * the set, so a status cannot be added to one and missed by the other.
+   */
+  const submissionIsWithBroker = blockedCopy !== undefined;
+
+  /**
+   * Label-only. Routing lives in TransactionDetails.tsx, which computes its
+   * own `isResubmit` and is untouched by this change — so widening this to
+   * `resubmitted` changes what the button SAYS and nothing about which IPC
+   * call it makes. Saying "Resubmit" on a deal that has already been
+   * submitted twice is the accurate word for the act either way.
+   */
+  const isResubmit =
+    transaction.submission_status === "needs_changes" ||
+    transaction.submission_status === "resubmitted";
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const isActivelySubmitting = isSubmitting && progress?.stage !== "complete" && progress?.stage !== "failed";
+
+  /**
+   * BACKLOG-2849 — the submit SUCCEEDED. Load-bearing, and not the same test
+   * as "not submitting": `isSubmitting` flips back to false in the hook's
+   * `finally`, so after a successful run the state is
+   * `!isSubmitting && !error` — indistinguishable from the idle state the
+   * summary block was gated on. Without this flag the post-submit ask would
+   * render UNDERNEATH a re-shown Submission Summary.
+   *
+   * `!error` is part of the condition, not decoration: `stage: "complete"` is
+   * only ever set on the success branch, but pairing the two means a future
+   * producer that leaves a stale "complete" behind a failure cannot offer the
+   * user a keep-a-copy prompt for a submission that did not happen.
+   */
+  const isSuccess = progress?.stage === "complete" && !error;
 
   const handleCancelClick = () => {
     if (isActivelySubmitting) {
@@ -86,12 +254,50 @@ export function SubmitForReviewModal({
   };
 
   return (
-    <ResponsiveModal onClose={onCancel} zIndex="z-[70]" panelClassName="max-w-md p-6">
-        {/* Header */}
+    /*
+      BACKLOG-2849 — the backdrop routes through `handleCancelClick`, the SAME
+      handler as the X. It used to be wired straight to `onCancel`, so the two
+      dismiss affordances disagreed: the X raised the mid-upload "Cancel Anyway
+      / Keep Uploading" confirm and the backdrop dropped a running submission
+      without one. Once the founder's rule is "a deal that did not submit must
+      still look unsubmitted, and one that did must look submitted", an
+      inconsistent dismiss is a correctness question, not polish — the two ways
+      out have to land in the same state.
+    */
+    <ResponsiveModal
+      onClose={handleCancelClick}
+      zIndex="z-[70]"
+      panelClassName="max-w-md p-6"
+      testId="submit-review-modal"
+    >
+        {/*
+          Header. BACKLOG-2849, founder test 2026-08-24 — on SUCCESS the icon
+          and the title both change, because after the success toast
+          auto-dismisses (5000ms) this header is the only thing left on screen,
+          and it was still asking a question the user had already answered.
+
+          THE GREEN IS NOT A NEW GREEN. `bg-green-100 text-green-700` and the
+          check path `M5 13l4 4L19 7` are lifted from the Submitted badge in
+          TransactionHeader.tsx — the same badge this deal now carries on the
+          screen behind this modal. The point of matching it is that the two
+          read as ONE signal: whatever told him "submitted" here is what he
+          sees on the deal afterwards. The colour lives on the disc and the
+          glyph inherits it, exactly as the badge is built.
+
+          Note the token: the badge's green is `text-green-700`. The RETIRED
+          success callout (removed earlier in this ticket) drew its duplicate
+          check in `text-green-600`. They are deliberately different tokens,
+          which is what lets the suite keep asserting `.text-green-600` at zero
+          as a guard against that callout returning.
+        */}
         <div className="flex items-center gap-3 mb-4">
-          <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+          <div
+            className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${
+              isSuccess ? "bg-green-100 text-green-700" : "bg-blue-100"
+            }`}
+          >
             <svg
-              className="w-6 h-6 text-blue-600"
+              className={isSuccess ? "w-6 h-6" : "w-6 h-6 text-blue-600"}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -100,20 +306,92 @@ export function SubmitForReviewModal({
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 strokeWidth={2}
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                d={
+                  isSuccess
+                    ? "M5 13l4 4L19 7"
+                    : "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                }
               />
             </svg>
           </div>
+          {/*
+            TITLE — his words: "the title should say successfully submitted not
+            submit for review". SUCCESS ONLY; idle and mid-upload keep the
+            question they are actually asking.
+
+            ONE literal on both branches, resubmit included. He gave one
+            string; "Successfully Resubmitted" would be a word he did not say,
+            invented to fill a branch he did not mention. The consequence is
+            real and disclosed rather than designed around: after a successful
+            RESUBMIT this header reads "Successfully Submitted", so the success
+            screen no longer distinguishes a first submit from a resubmit. One
+            line if he wants it to.
+          */}
           <h3 className="text-lg font-bold text-gray-900">
-            {isResubmit ? "Resubmit for Review" : "Submit for Review"}
+            {isSuccess
+              ? "Successfully Submitted"
+              : /* BACKLOG-2853 — the title carried the same lie as the button:
+                   a deal already sitting with the broker was asked "Submit for
+                   Review?", a question about an act the service will refuse.
+                   Success still wins the branch, so a submit that has just
+                   completed reads "Successfully Submitted" exactly as before —
+                   this only changes the state the user ARRIVES in.
+
+                   BACKLOG-2868 — and it is now the status's own title, not one
+                   title for four states. "Already Submitted" over a REJECTED
+                   deal describes a submission that is still in play. */
+              blockedCopy
+              ? blockedCopy.title
+              : isResubmit
+              ? "Resubmit for Review"
+              : "Submit for Review"}
           </h3>
+          {/*
+            BACKLOG-2849 — the founder removed the Cancel button and asked for
+            an X at the top right. This is ImportPlanDialog's dismiss, copied
+            class-for-class: same `max-w-md p-6` ResponsiveModal, same
+            icon-circle + h3 header row, and it exists there for the same
+            reason he gave here — the way out of a "what are we asking?" dialog
+            is an unobtrusive close, not a third button competing with the
+            answers.
+
+            It routes through `handleCancelClick`, NOT raw `onCancel`. Mid
+            upload that raises the "Cancel Anyway / Keep Uploading" confirm,
+            which is the whole reason that confirm exists; wiring the X
+            straight to `onCancel` would silently abort a running submission.
+          */}
+          <button
+            onClick={handleCancelClick}
+            data-testid="submit-review-close"
+            aria-label="Close"
+            className="ml-auto -mt-1 -mr-1 p-1 text-gray-400 hover:text-gray-600 rounded transition-all"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
-        {/* Content - not submitting */}
-        {!isSubmitting && !error && (
+        {/* Content - not submitting, not yet submitted */}
+        {!isSubmitting && !error && !isSuccess && (
           <>
-            <p className="text-sm text-gray-600 mb-4">
-              {isResubmit
+            <p className="text-sm text-gray-600 mb-4" data-testid="submit-review-lead">
+              {/* BACKLOG-2853 — "The following data will be sent to your
+                  broker" is a promise the service will not keep in these
+                  states. What replaces it names the two things the user needs:
+                  that nothing is going to be sent, and what the way forward is
+                  (the broker asking for changes), so the dialog is not a dead
+                  end with an unexplained disabled button. Export PDF stays on
+                  screen beside it, which is the one action still available.
+
+                  BACKLOG-2868 — "the way forward is the broker asking for
+                  changes" is true of ONE of the four statuses this branch
+                  covers. At `rejected` there is no such way forward, and at
+                  `approved` there is nothing to wait for. Each status now
+                  carries the line that is true of it. */}
+              {blockedCopy
+                ? blockedCopy.lead
+                : isResubmit
                 ? "You are about to resubmit this transaction for broker review. Your broker will be notified of the changes."
                 : "You are about to submit this transaction for broker review. The following data will be sent to your broker:"}
             </p>
@@ -160,9 +438,9 @@ export function SubmitForReviewModal({
                       d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
                     />
                   </svg>
-                  <span className="text-gray-600">Email threads:</span>
+                  <span className="text-gray-600">Emails:</span>
                   <span className="font-medium text-gray-900">
-                    {emailThreadCount}
+                    {emailCount}
                     {emailAttachmentCount > 0 && (
                       <span className="text-gray-500 font-normal">
                         {" "}({emailAttachmentCount} {emailAttachmentCount === 1 ? "attachment" : "attachments"})
@@ -220,38 +498,52 @@ export function SubmitForReviewModal({
               </div>
             </div>
 
-            {/* Export option */}
-            {onExportFirst && (
-              <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 mb-4">
-                <div className="flex items-start gap-2">
-                  <svg
-                    className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                  </svg>
-                  <div className="flex-1">
-                    <p className="text-sm text-blue-800">
-                      Want to keep a local copy first?
-                    </p>
-                    <button
-                      onClick={onExportFirst}
-                      className="text-sm text-blue-600 hover:text-blue-800 font-medium underline"
-                    >
-                      Export to folder before submitting
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/*
+              BACKLOG-2849 — the pre-submit export SECTION is gone: the blue
+              callout, "Want to keep a local copy first?" and "Export to folder
+              before submitting" with it. The founder moved that ask to AFTER a
+              successful submit (see the success block below), so the offer no
+              longer competes with the decision the user is here to make.
+
+              The export ACTION survives as a plain button beside Submit — his
+              point 2, "two buttons: Submit and Export PDF" — shipped as
+              "Export", see the label note on that button. What moved is the
+              nudge, not the capability.
+            */}
           </>
+        )}
+
+        {/*
+          BACKLOG-2849 — the post-submit ask. Gated on `isSuccess`, so it is
+          reachable ONLY from a submission that actually succeeded: not from
+          the idle screen (no progress), not from a failure (`stage: "failed"`,
+          `error` set), and not mid-upload.
+
+          ONE SENTENCE, NO CARD, NO ICON — the founder's correction of
+          2026-08-24 after testing the success screen: "we don't need the same
+          text and check mark twice, keep the top one, remove this". What he
+          pasted was this block in its earlier shape: a blue callout with its
+          OWN green check-circle and its own "Submitted to your broker." line,
+          sitting directly under the header's check-circle. Two check-circle
+          glyphs in one small dialog, saying the same thing twice.
+
+          So the confirmation is left to whatever renders above this — the
+          header and the success toast — and what survives here is only the
+          part that is this block's job: pointing at the Export PDF button
+          below. His wording, verbatim, lowercase "export pdf" and all.
+
+          DISMISSING LOSES NOTHING — the deal is submitted either way, and the
+          export is still reachable. PROVISIONAL: the founder did not rule on
+          dismissibility, so this takes the conservative reading (the X and the
+          backdrop both close it). See the BACKLOG-2849 report.
+        */}
+        {isSuccess && (
+          <p
+            data-testid="submit-review-success-ask"
+            className="text-sm text-gray-600 mb-4"
+          >
+            Want to keep a local copy, click the export pdf button below
+          </p>
         )}
 
         {/* Progress display */}
@@ -392,20 +684,57 @@ export function SubmitForReviewModal({
           </div>
         )}
 
-        {/* Actions */}
+        {/*
+          Actions. BACKLOG-2849 removed the Cancel/Close row button entirely —
+          dismissal is the X in the header (and the backdrop). What is left is
+          the founder's pair: Export and Submit.
+        */}
         <div className="flex items-center gap-3 justify-end">
-          {!showCancelConfirm && (
+          {/*
+            EXPORT PDF — one button, one label, one handler, in both of the
+            places the founder asked for it: beside Submit before the decision,
+            and as the action on the post-submit ask. Hidden only while an
+            upload is actually running, where leaving the modal would abort it.
+
+            LABEL — "Export PDF", the founder's own wording from point 2 of
+            the dictation. It was briefly shipped as "Export" and reverted: a
+            relabel of his words is his call to make, not one to take on his
+            behalf.
+
+            The open question, raised for him rather than answered here: this
+            opens ExportModal, a FORMAT CHOOSER — `combined-pdf` is
+            preselected, but `folder` and a summary `pdf` are one tile away, so
+            the button names a default rather than a commitment. The header
+            Export button restored beside it reaches the SAME chooser under the
+            shorter label "Export" (its wording since BACKLOG-459), so the two
+            routes to one destination currently read differently. SR review
+            ruled the mismatch acceptable and the label keepable. See the PR
+            body's label proposal.
+          */}
+          {onExport && !isActivelySubmitting && !showCancelConfirm && (
             <button
-              onClick={handleCancelClick}
-              className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all"
+              onClick={onExport}
+              data-testid="submit-review-export"
+              className={`px-4 py-2 rounded-lg font-semibold transition-all ${
+                isSuccess
+                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                  : "border border-gray-300 text-gray-700 hover:bg-gray-100"
+              }`}
             >
-              {progress?.stage === "complete" || error ? "Close" : "Cancel"}
+              Export PDF
             </button>
           )}
           {!progress?.stage || progress.stage === "failed" ? (
             <button
               onClick={onSubmit}
-              disabled={isSubmitting}
+              /* BACKLOG-2853 — disabled in the four states the service
+                 refuses. The click could be left live and allowed to surface
+                 the service's error, but that spends a multi-minute attachment
+                 upload before the refusal in the shape this code had, and it
+                 asks the user to discover by failure what the screen can just
+                 say. */
+              disabled={isSubmitting || submissionIsWithBroker}
+              data-testid="submit-review-submit"
               className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
             >
               {isSubmitting ? (
@@ -431,6 +760,12 @@ export function SubmitForReviewModal({
                   </svg>
                   Submitting...
                 </>
+              ) : submissionIsWithBroker ? (
+                /* BACKLOG-2853 — never a bare "Submit" on a deal that already
+                   has a submission with the broker. The label states the state
+                   the deal is in, which is also the reason the control is
+                   dead. */
+                "Already Submitted"
               ) : isResubmit ? (
                 "Resubmit"
               ) : (
@@ -442,6 +777,40 @@ export function SubmitForReviewModal({
               )}
             </button>
           ) : null}
+          {/*
+            DONE — BACKLOG-2849, founder test 2026-08-24: "can we add a done
+            button next to the export pdf". Success only; it is the action that
+            finishes the flow, so it sits LAST in this `justify-end` row — the
+            same terminal slot Submit occupies on the idle screen, and the same
+            shape as the repo's other success screens (ExportModal step 5 puts
+            Done last beside the optional Open Audit; SupportTicketDialog's
+            success Done is this same filled blue).
+
+            It routes through `handleCancelClick`, the SAME handler as the X
+            and the backdrop, rather than raw `onCancel`. On this screen the
+            two are equivalent — a completed submit is not `isActivelySubmitting`,
+            so no confirm can fire — but keeping ONE dismissal path is the
+            invariant this file already holds, and it is what stops a future
+            change that renders Done in another state from silently aborting a
+            running upload.
+
+            EXPORT PDF ABOVE IS UNTOUCHED — same handler, same classes, same
+            position. That leaves two filled blue buttons side by side, which
+            is this repo's existing success-screen convention rather than an
+            oversight. Whether Export PDF should step back to the outlined
+            secondary now that it is no longer the only action on the screen is
+            a visual-weight preference, raised in the report for the founder,
+            not decided here.
+          */}
+          {isSuccess && (
+            <button
+              onClick={handleCancelClick}
+              data-testid="submit-review-done"
+              className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold transition-all"
+            >
+              Done
+            </button>
+          )}
         </div>
     </ResponsiveModal>
   );

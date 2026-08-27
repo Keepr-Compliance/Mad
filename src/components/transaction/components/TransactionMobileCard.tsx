@@ -182,7 +182,13 @@ function TransactionMobileCardInner({
           {/* Row 3: Communication counts + last activity */}
           <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
             <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1">
+              {/* BACKLOG-2838: test ids so the staleness pin can assert THIS node's
+                  text changes in place. The counters render as bare numbers, which
+                  a text query cannot tell apart from a price or a year. */}
+              <span
+                className="flex items-center gap-1"
+                data-testid="tx-card-email-count"
+              >
                 <svg
                   className="w-3.5 h-3.5"
                   fill="none"
@@ -198,7 +204,10 @@ function TransactionMobileCardInner({
                 </svg>
                 {emailCount}
               </span>
-              <span className="flex items-center gap-1">
+              <span
+                className="flex items-center gap-1"
+                data-testid="tx-card-text-count"
+              >
                 <svg
                   className="w-3.5 h-3.5"
                   fill="none"

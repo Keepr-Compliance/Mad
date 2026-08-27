@@ -87,10 +87,93 @@ export function useTransactionList(
     }
   }, [userId]);
 
+  /**
+   * Background re-read of the same rows: no spinner, and it never blanks the
+   * list the user is looking at.
+   *
+   * A failed background refresh must leave the previous array in place and must
+   * NOT raise the error banner — the visible list is still valid, merely one
+   * revision old, and the loud path already reports a failure the user asked
+   * for. Same rule as useReviewQueue's read failure.
+   */
+  const loadTransactionsSilently = useCallback(async (): Promise<void> => {
+    try {
+      const result = await window.api.transactions.getAll(userId);
+      if (result.success && result.transactions) {
+        setTransactions(result.transactions);
+      }
+    } catch {
+      /* keep the rows already on screen */
+    }
+  }, [userId]);
+
   // Load transactions on mount
   useEffect(() => {
     loadTransactions();
   }, [loadTransactions]);
+
+  /**
+   * BACKLOG-2838: keep the card's counters current while the list stays mounted.
+   *
+   * Founder, 2026-08-23: "closing keepr and reopening it fixed the count." That
+   * is the signature of a snapshot with no subscription, and it was exactly
+   * that. `email_count` and `text_thread_count` ride in on the rows fetched by
+   * the mount effect above, and the details screen is a MODAL rendered by the
+   * list — so the list never unmounts while the user approves, links or unlinks
+   * inside a deal, and the array it is rendering from is never re-read. Only an
+   * app restart remounted it.
+   *
+   * This is the same defect as the linked list that did not update after
+   * approve (PR #2347) one layer out, and it takes the same shape of fix: one
+   * more SUBSCRIBER to a broadcast that already exists, never a callback bolted
+   * onto each action. Wiring it per-action is what leaves the next action to
+   * rediscover the bug.
+   *
+   * BOTH existing signals, because both change what the counters count:
+   *   • review:queue-changed — every review mutation (approve, reject, restore)
+   *     and the discovery sweep, via notifyReviewStateChanged.
+   *   • transactions:auto-sync-complete — a background sync that linked mail.
+   *     The modal already handles this one (TransactionDetails.tsx) but patches
+   *     only its OWN copy of the row; nothing reached the list behind it.
+   * Neither is filtered by transactionId: the list renders every deal, so a
+   * change to any of them changes something on screen.
+   *
+   * Subscribing here rather than in TransactionList means the legacy
+   * Transactions screen, which uses this same hook, is fixed by the same wire.
+   *
+   * Optional-chained for the same reason useReviewQueue is: a partially-mocked
+   * `window.api` in an existing suite must not break the list's mount. It
+   * cannot hide a real wiring break — the pin test asserts both bridges are
+   * subscribed and goes red if either goes missing.
+   */
+  useEffect(() => {
+    const unsubscribes: Array<() => void> = [];
+
+    const subscribeReview = window.api?.transactions?.onReviewQueueChanged;
+    if (typeof subscribeReview === "function") {
+      unsubscribes.push(
+        subscribeReview(() => {
+          void loadTransactionsSilently();
+        })
+      );
+    }
+
+    const subscribeAutoSync = window.api?.onTransactionAutoSyncComplete;
+    if (typeof subscribeAutoSync === "function") {
+      unsubscribes.push(
+        subscribeAutoSync((data) => {
+          // ran=false means throttled/skipped — nothing was fetched, so nothing
+          // it counts can have changed.
+          if (!data.ran) return;
+          void loadTransactionsSilently();
+        })
+      );
+    }
+
+    return () => {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+    };
+  }, [loadTransactionsSilently]);
 
   /**
    * Compute filter counts for status tabs

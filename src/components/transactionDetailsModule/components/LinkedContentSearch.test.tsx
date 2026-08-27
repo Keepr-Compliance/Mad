@@ -18,26 +18,30 @@ import type {
 } from "@electron/types/ipc/window-api-transactions";
 
 const emptyResults: LinkedContentSearchResults = {
-  contacts: { items: [], total: 0 },
-  emails: { items: [], total: 0 },
-  texts: { items: [], total: 0 },
+  contacts: { items: [], hasMore: false },
+  emails: { items: [], hasMore: false },
+  texts: { items: [], hasMore: false },
+  groupChats: { items: [], hasMore: false },
 };
 
 const richResults: LinkedContentSearchResults = {
   contacts: {
     items: [{ contactId: "c1", displayName: "John Doe", role: "Buyer" }],
-    total: 1,
+    hasMore: false,
   },
   emails: {
     items: [
       { id: "e1", subject: "Escrow docs", sender: "agent@x.com", sentAt: null, snippet: "hi" },
     ],
-    total: 3,
+    // BACKLOG-2863: this used to be `total: 3` — three matches, one row. There is
+    // no total any more, only whether the database held more than came back.
+    hasMore: true,
   },
   texts: {
     items: [{ id: "m1", sender: "+15555550112", snippet: "on my way", sentAt: null }],
-    total: 1,
+    hasMore: false,
   },
+  groupChats: { items: [], hasMore: false },
 };
 
 const ATTR_MAIN = { transactionId: "t1", propertyAddress: "123 Main St" };
@@ -46,14 +50,14 @@ const ATTR_OAK = { transactionId: "t2", propertyAddress: "456 Oak Ave" };
 const globalResults: GlobalContentSearchResults = {
   transactions: {
     items: [{ id: "t1", propertyAddress: "123 Main St" }],
-    total: 1,
+    hasMore: false,
   },
   contacts: {
     items: [
       { contactId: "c1", displayName: "John Doe", role: "Buyer", attribution: ATTR_MAIN },
       { contactId: "c2", displayName: "Jane Roe", role: null, attribution: null },
     ],
-    total: 2,
+    hasMore: false,
   },
   emails: {
     items: [
@@ -66,19 +70,20 @@ const globalResults: GlobalContentSearchResults = {
         attribution: ATTR_MAIN,
       },
     ],
-    total: 1,
+    hasMore: false,
   },
   texts: {
     items: [
       { id: "m1", sender: "+15555550112", snippet: "omw", sentAt: null, attribution: ATTR_OAK },
     ],
-    total: 1,
+    hasMore: false,
   },
+  groupChats: { items: [], hasMore: false },
   unattached: {
     items: [
       { kind: "email", id: "u1", title: "Unlinked mail", sender: "b@x.com", snippet: "sn", sentAt: null },
     ],
-    total: 1,
+    hasMore: false,
   },
 };
 
@@ -190,7 +195,14 @@ describe("LinkedContentSearch — transaction scope", () => {
     // BACKLOG-2248: the "escrow" query highlights the subject, splitting it across a
     // <mark>, so assert on the row's full text content rather than a single node.
     expect(screen.getByTestId("email-result")).toHaveTextContent("Escrow docs");
-    expect(screen.getByText(/\+2 more/)).toBeInTheDocument();
+    // BACKLOG-2863: the panel used to say "+2 more" here, a number that cost a
+    // `SELECT COUNT(*)` per section per keystroke. With one row fetched and one
+    // shown there is nothing a "Show more" click could reveal, so the section
+    // says so in words rather than offering a control that does nothing
+    // (BACKLOG-2791).
+    expect(screen.queryByTestId("show-more-emails")).not.toBeInTheDocument();
+    expect(screen.getByTestId("show-more-emails-refine")).toBeInTheDocument();
+    expect(screen.queryByText(/\+2 more/)).not.toBeInTheDocument();
   });
 
   it("shows a clean empty state when there are no matches", async () => {
@@ -328,7 +340,7 @@ describe("LinkedContentSearch — global scope", () => {
 
 describe("LinkedContentSearch — BACKLOG-1870 Phase 1.5 matched-attachment indicator", () => {
   const withMatchedAttachment: LinkedContentSearchResults = {
-    contacts: { items: [], total: 0 },
+    contacts: { items: [], hasMore: false },
     emails: {
       items: [
         {
@@ -340,7 +352,7 @@ describe("LinkedContentSearch — BACKLOG-1870 Phase 1.5 matched-attachment indi
           matchedAttachmentFilenames: ["wire-instructions.pdf"],
         },
       ],
-      total: 1,
+      hasMore: false,
     },
     texts: {
       items: [
@@ -352,8 +364,9 @@ describe("LinkedContentSearch — BACKLOG-1870 Phase 1.5 matched-attachment indi
           matchedAttachmentFilenames: ["IMG_2201.heic"],
         },
       ],
-      total: 1,
+      hasMore: false,
     },
+    groupChats: { items: [], hasMore: false },
   };
 
   it("shows the matched attachment filename under the email and text results", async () => {
@@ -406,7 +419,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
 
   it("highlights the term in BOTH the subject line and the 📎 filename line", async () => {
     const results: LinkedContentSearchResults = {
-      contacts: { items: [], total: 0 },
+      contacts: { items: [], hasMore: false },
       emails: {
         items: [
           {
@@ -418,9 +431,10 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
             matchedAttachmentFilenames: ["final-doc.pdf"],
           },
         ],
-        total: 1,
+        hasMore: false,
       },
-      texts: { items: [], total: 0 },
+      texts: { items: [], hasMore: false },
+      groupChats: { items: [], hasMore: false },
     };
     // "doc" appears in the subject ("docs") and the filename ("final-doc.pdf"),
     // but NOT in the sender or snippet.
@@ -449,14 +463,15 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
 
   it("highlights the sender in a text result's primary line", async () => {
     const results: LinkedContentSearchResults = {
-      contacts: { items: [], total: 0 },
-      emails: { items: [], total: 0 },
+      contacts: { items: [], hasMore: false },
+      emails: { items: [], hasMore: false },
       texts: {
         items: [
           { id: "m1", sender: "Alice Agent", snippet: "on my way", sentAt: null },
         ],
-        total: 1,
+        hasMore: false,
       },
+      groupChats: { items: [], hasMore: false },
     };
     await searchScopedWith(results, "agent");
 
@@ -469,7 +484,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
 
   it("renders NO highlight in a field that does not contain the term", async () => {
     const results: LinkedContentSearchResults = {
-      contacts: { items: [], total: 0 },
+      contacts: { items: [], hasMore: false },
       emails: {
         items: [
           {
@@ -482,9 +497,10 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
             matchedAttachmentFilenames: ["wire-instructions.pdf"],
           },
         ],
-        total: 1,
+        hasMore: false,
       },
-      texts: { items: [], total: 0 },
+      texts: { items: [], hasMore: false },
+      groupChats: { items: [], hasMore: false },
     };
     await searchScopedWith(results, "closing");
 
@@ -502,10 +518,11 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
     const results: LinkedContentSearchResults = {
       contacts: {
         items: [{ contactId: "c1", displayName: "John Doe", role: "Buyer" }],
-        total: 1,
+        hasMore: false,
       },
-      emails: { items: [], total: 0 },
-      texts: { items: [], total: 0 },
+      emails: { items: [], hasMore: false },
+      texts: { items: [], hasMore: false },
+      groupChats: { items: [], hasMore: false },
     };
     // "zzz" matches the (mocked) result set server-side but is not a substring of
     // any displayed field, so nothing should be visually highlighted.
@@ -517,7 +534,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
 
   it("treats regex metacharacters as a literal substring — parentheses", async () => {
     const results: LinkedContentSearchResults = {
-      contacts: { items: [], total: 0 },
+      contacts: { items: [], hasMore: false },
       emails: {
         items: [
           {
@@ -528,9 +545,10 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
             snippet: "n/a",
           },
         ],
-        total: 1,
+        hasMore: false,
       },
-      texts: { items: [], total: 0 },
+      texts: { items: [], hasMore: false },
+      groupChats: { items: [], hasMore: false },
     };
     await searchScopedWith(results, "(x)");
 
@@ -542,7 +560,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
 
   it("escapes '.' so it matches a literal dot, not any character", async () => {
     const results: LinkedContentSearchResults = {
-      contacts: { items: [], total: 0 },
+      contacts: { items: [], hasMore: false },
       emails: {
         items: [
           {
@@ -554,9 +572,10 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
             sentAt: null,
           },
         ],
-        total: 1,
+        hasMore: false,
       },
-      texts: { items: [], total: 0 },
+      texts: { items: [], hasMore: false },
+      groupChats: { items: [], hasMore: false },
     };
     await searchScopedWith(results, "a.b");
 
@@ -568,7 +587,7 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
 
   it("does not throw on an unbalanced-parenthesis query", async () => {
     const results: LinkedContentSearchResults = {
-      contacts: { items: [], total: 0 },
+      contacts: { items: [], hasMore: false },
       emails: {
         items: [
           {
@@ -579,9 +598,10 @@ describe("LinkedContentSearch — BACKLOG-2248 matched-term highlighting", () =>
             snippet: "n/a",
           },
         ],
-        total: 1,
+        hasMore: false,
       },
-      texts: { items: [], total: 0 },
+      texts: { items: [], hasMore: false },
+      groupChats: { items: [], hasMore: false },
     };
     // A raw "(" would make an invalid RegExp if not escaped — rendering must not throw.
     await searchScopedWith(results, "(");
