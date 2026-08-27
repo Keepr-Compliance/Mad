@@ -153,7 +153,7 @@ const FIVE_GB = 5 * 1024 * 1024 * 1024;
  * `startBackup` is stubbed to fail immediately so the run stops at the invocation
  * under test instead of walking the whole parse pipeline.
  */
-async function runToBackupInvocation(status: Record<string, unknown> | null) {
+async function runToBackupInvocation(status: Record<string, unknown>) {
   mockCheckBackupStatus.mockReset().mockResolvedValue(status);
   mockStartBackup
     .mockReset()
@@ -170,16 +170,22 @@ async function runToBackupInvocation(status: Record<string, unknown> | null) {
   return { messages, invocation: mockStartBackup.mock.calls[0]?.[0] };
 }
 
+// BACKLOG-2917: the shape `checkBackupStatus` now returns. `sizeBytes` became a
+// three-state `size` reading and the deprecated `isCorrupted` alias is gone (its own
+// doc gave PR #2409 + BACKLOG-2910 landing as the removal condition; both are in this
+// branch's base).
 const interruptedStatus = {
-  exists: true,
+  state: "present" as const,
   isComplete: false,
-  isCorrupted: true,
   isInterrupted: true,
-  sizeBytes: FIVE_GB,
+  size: { measured: true as const, bytes: FIVE_GB },
   lastModified: new Date("2026-08-26T18:05:04Z"),
 };
 
-const noBackupStatus = null;
+// BACKLOG-2917: `null` used to mean this AND "the check threw". It now means only
+// what it says, and the thrown case is a separate state asserted in
+// deviceSyncOrchestrator.unknownBasis-2917.test.ts.
+const noBackupStatus = { state: "absent" as const };
 
 describe("BACKLOG-2911: the interrupted branch must not promise a resume", () => {
   it("never uses the word 'resume' when it finds an interrupted backup", async () => {

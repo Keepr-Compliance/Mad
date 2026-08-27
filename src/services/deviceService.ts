@@ -89,7 +89,8 @@ export interface BackupResult {
   duration: number;
   deviceUdid: string;
   isIncremental: boolean;
-  backupSize: number;
+  /** BACKLOG-2917: `null` when the backup's size could not be measured, never 0. */
+  backupSize: number | null;
 }
 
 /**

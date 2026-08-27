@@ -163,6 +163,20 @@ async function statusFor(files: Record<string, Buffer | "DIRECTORY">) {
   return service.checkBackupStatus(UDID);
 }
 
+/**
+ * BACKLOG-2917: `checkBackupStatus` now returns a three-state report instead of
+ * `{...} | null`. Every state below is a PRESENT backup directory, so this narrows
+ * once and fails loudly if a case ever stops being present — which is the point of
+ * the union: the narrowing cannot be skipped and cannot be silent.
+ */
+async function presentStatusFor(files: Record<string, Buffer | "DIRECTORY">) {
+  const status = await statusFor(files);
+  if (status.state !== "present") {
+    throw new Error(`expected a present backup, got state="${status.state}"`);
+  }
+  return status;
+}
+
 beforeAll(() => {
   userDataDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "keepr-2911-"));
   process.env.KEEPR_2911_USERDATA = userDataDir;
@@ -212,36 +226,38 @@ describe("BACKLOG-2911: the fixture is the real producer's output", () => {
 });
 
 describe("BACKLOG-2911: on-disk state sweep", () => {
-  it("no directory at all -> null (no backup)", async () => {
+  it("no directory at all -> state 'absent' (proven no backup)", async () => {
     fsSync.rmSync(deviceBackupDir, { recursive: true, force: true });
-    await expect(service.checkBackupStatus(UDID)).resolves.toBeNull();
+    // BACKLOG-2917: this used to be `null`, the same value a THROWN check returned.
+    // `absent` is now the only value that means "there is no backup", and it is
+    // reachable only from an ENOENT.
+    await expect(service.checkBackupStatus(UDID)).resolves.toEqual({ state: "absent" });
   });
 
   it("STATE A — finished snapshot with a manifest is complete and not interrupted", async () => {
-    const status = await statusFor({
+    const status = await presentStatusFor({
       "Status.plist": FINISHED_BYTES,
       "Info.plist": Buffer.from("<plist></plist>"),
       "Manifest.db": Buffer.from(SQLITE_MAGIC),
     });
 
-    expect(status).not.toBeNull();
-    expect(status!.exists).toBe(true);
-    expect(status!.isComplete).toBe(true);
-    expect(status!.isInterrupted).toBe(false);
+    expect(status.state).toBe("present");
+    expect(status.isComplete).toBe(true);
+    expect(status.isInterrupted).toBe(false);
   });
 
   it("STATE B — the REAL torn backup (uploading, no manifest) is reported interrupted", async () => {
     // The exact on-disk shape of the interrupted backup found on this machine.
-    const status = await statusFor({
+    const status = await presentStatusFor({
       "Status.plist": TORN_BYTES,
       "Info.plist": Buffer.from("<plist></plist>"),
     });
 
-    expect(status!.isComplete).toBe(false);
+    expect(status.isComplete).toBe(false);
     // The shipped predicate returned false here. That is the defect: a directory with
     // 41,097 orphaned blobs and no manifest was not flagged as interrupted, so neither
     // orchestrator branch fired and the user was told nothing at all.
-    expect(status!.isInterrupted).toBe(true);
+    expect(status.isInterrupted).toBe(true);
   });
 
   it("STATE C — torn incremental: an old manifest survives, so `isComplete` alone would lie", async () => {
@@ -249,48 +265,48 @@ describe("BACKLOG-2911: on-disk state sweep", () => {
     // when the next run is torn — the device only replaces it at the end. `isComplete`
     // is therefore true while the snapshot is mid-upload. Only `isInterrupted` separates
     // these, which is exactly why `isComplete` cannot carry this signal.
-    const status = await statusFor({
+    const status = await presentStatusFor({
       "Status.plist": TORN_BYTES,
       "Info.plist": Buffer.from("<plist></plist>"),
       "Manifest.db": Buffer.from(SQLITE_MAGIC),
     });
 
-    expect(status!.isComplete).toBe(true);
-    expect(status!.isInterrupted).toBe(true);
+    expect(status.isComplete).toBe(true);
+    expect(status.isInterrupted).toBe(true);
   });
 
   it("STATE D — no Status.plist at all: nothing claims the snapshot finished, nothing claims it tore", async () => {
-    const status = await statusFor({
+    const status = await presentStatusFor({
       "Info.plist": Buffer.from("<plist></plist>"),
       "Manifest.db": Buffer.from(SQLITE_MAGIC),
     });
 
-    expect(status!.isComplete).toBe(true);
+    expect(status.isComplete).toBe(true);
     // ENOENT is the one state carrying no evidence either way, and it is also the
     // pre-first-backup state. It is not asserted to be interrupted.
-    expect(status!.isInterrupted).toBe(false);
+    expect(status.isInterrupted).toBe(false);
   });
 
   it("STATE E — unreadable Status.plist fails CLOSED: unprovable finish counts as interrupted", async () => {
     // A directory where the file should be produces EISDIR, not ENOENT.
-    const status = await statusFor({
+    const status = await presentStatusFor({
       "Status.plist": "DIRECTORY",
       "Info.plist": Buffer.from("<plist></plist>"),
       "Manifest.db": Buffer.from(SQLITE_MAGIC),
     });
 
-    expect(status!.isComplete).toBe(true);
-    expect(status!.isInterrupted).toBe(true);
+    expect(status.isComplete).toBe(true);
+    expect(status.isInterrupted).toBe(true);
   });
 
   it("STATE F — Status.plist present but unparseable fails CLOSED", async () => {
-    const status = await statusFor({
+    const status = await presentStatusFor({
       "Status.plist": Buffer.from("not a plist at all"),
       "Info.plist": Buffer.from("<plist></plist>"),
       "Manifest.db": Buffer.from(SQLITE_MAGIC),
     });
 
-    expect(status!.isInterrupted).toBe(true);
+    expect(status.isInterrupted).toBe(true);
   });
 
   it("STATE G — Status.plist parses but carries no SnapshotState: fails CLOSED", async () => {
@@ -300,7 +316,7 @@ describe("BACKLOG-2911: on-disk state sweep", () => {
     };
     const noSnapshotState = plist.bplistCreator({ BackupState: "new", Version: "3.3" });
 
-    const status = await statusFor({
+    const status = await presentStatusFor({
       "Status.plist": Buffer.isBuffer(noSnapshotState)
         ? noSnapshotState
         : Buffer.from(noSnapshotState as unknown as Uint8Array),
@@ -308,7 +324,7 @@ describe("BACKLOG-2911: on-disk state sweep", () => {
       "Manifest.db": Buffer.from(SQLITE_MAGIC),
     });
 
-    expect(status!.isInterrupted).toBe(true);
+    expect(status.isInterrupted).toBe(true);
   });
 
   it("an XML Status.plist is read too — the format is not guaranteed to be binary", async () => {
@@ -320,13 +336,13 @@ describe("BACKLOG-2911: on-disk state sweep", () => {
 </dict></plist>`,
     );
 
-    const status = await statusFor({
+    const status = await presentStatusFor({
       "Status.plist": xml,
       "Info.plist": Buffer.from("<plist></plist>"),
       "Manifest.db": Buffer.from(SQLITE_MAGIC),
     });
 
-    expect(status!.isInterrupted).toBe(false);
+    expect(status.isInterrupted).toBe(false);
   });
 });
 
@@ -343,11 +359,16 @@ describe("BACKLOG-2911: checking status must never destroy device-side continuat
     fsSync.writeFileSync(path.join(deviceBackupDir, "a1", "a1b2c3"), Buffer.alloc(4096, 7));
 
     const status = await service.checkBackupStatus(UDID);
+    if (status.state !== "present") throw new Error(`expected present, got ${status.state}`);
 
-    expect(status!.isInterrupted).toBe(true);
+    expect(status.isInterrupted).toBe(true);
     expect(fsSync.existsSync(path.join(deviceBackupDir, "a1", "a1b2c3"))).toBe(true);
     expect(fsSync.readFileSync(path.join(deviceBackupDir, "Status.plist"))).toEqual(TORN_BYTES);
     // The already-transferred bytes are counted, so the caller can report them.
-    expect(status!.sizeBytes).toBeGreaterThanOrEqual(4096);
+    // BACKLOG-2917: and they are reported as a MEASURED reading — a walk that threw
+    // would now say `measured: false` rather than handing back a plausible 0.
+    expect(status.size.measured).toBe(true);
+    if (!status.size.measured) throw new Error("unreachable");
+    expect(status.size.bytes).toBeGreaterThanOrEqual(4096);
   });
 });

@@ -336,7 +336,10 @@ describe("BACKLOG-2899 — sync disk guard", () => {
     mockLogError.mockClear();
     jest.useFakeTimers();
 
-    mockCheckBackupStatus.mockResolvedValue(null); // first sync: no prior backup to measure
+    // BACKLOG-2917: `absent` is a PROVEN first sync. This mock used to be `null`,
+    // which was also what a THROWN check returned — so this suite could not have told
+    // the difference between the guard's first-sync path and its failure path.
+    mockCheckBackupStatus.mockResolvedValue({ state: "absent" });
     mockGetDeviceStorageInfo.mockResolvedValue({
       totalCapacity: 128 * GB,
       availableSpace: 113 * GB,

@@ -31,8 +31,27 @@ import {
   BackupStatus,
   BackupEncryptionInfo,
   BackupErrorCode,
+  BackupSizeReading,
+  BackupStatusReport,
 } from "../types/backup";
 import { validateDeviceUdid, ValidationError } from "../utils/validation";
+
+/**
+ * BACKLOG-2917: a short, log-safe description of a caught value.
+ *
+ * The three-state values in this file carry a `reason` so that "we do not know" can
+ * say WHY when it reaches a log or a Sentry event. Without it the new unknown state
+ * would be as mute as the `null` it replaces — distinguishable by the machine but
+ * not diagnosable by a human reading a support log.
+ */
+function describeError(error: unknown): string {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
 
 /**
  * BACKLOG-2899: how idevicebackup2 reports that the HOST disk is full.
@@ -583,14 +602,27 @@ export class BackupService extends EventEmitter {
         // full, the backup on disk is truncated and must not be handed to the
         // parsers as a success.
         const success = code === 0 && !diskFullDetected;
-        let backupSize = 0;
+        // BACKLOG-2917: `null` means "not measured", NOT "zero bytes". On every
+        // failure path below the walk never ran, and reporting 0 there would claim a
+        // torn backup wrote nothing — a claim this code cannot support, since
+        // idevicebackup2 leaves whatever it transferred on disk.
+        let backupSize: number | null = null;
         let finalBackupPath = deviceBackupPath;
 
         if (success) {
-          backupSize = await this.calculateBackupSize(deviceBackupPath);
-          log.info(
-            `[BackupService] Backup completed successfully in ${duration}ms, size: ${backupSize} bytes`,
-          );
+          const sizeReading = await this.measureBackupSize(deviceBackupPath);
+          backupSize = sizeReading.measured ? sizeReading.bytes : null;
+          if (sizeReading.measured) {
+            log.info(
+              `[BackupService] Backup completed successfully in ${duration}ms, size: ${sizeReading.bytes} bytes`,
+            );
+          } else {
+            // Refuse to print a reassuring number we do not have. This is the
+            // `checkAvailableDiskSpace` rule: never log a 0 GB "reading".
+            log.error(
+              `[BackupService] Backup completed successfully in ${duration}ms, but its size could not be measured (${sizeReading.reason})`,
+            );
+          }
 
           // Check ACTUAL encryption status from backup on disk (not just device setting)
           // The device's WillEncrypt flag may not reflect existing backup encryption
@@ -637,7 +669,12 @@ export class BackupService extends EventEmitter {
               currentFile: null,
               filesTransferred: 0,
               totalFiles: null,
-              bytesTransferred: backupSize,
+              // BACKLOG-2917: `totalBytes` is already nullable and carries the
+              // unknown honestly. `bytesTransferred` is a progress-bar input typed
+              // `number`; 0 there means "no bar movement to report", which is the
+              // truth when the size is unmeasured, and it is paired with a null
+              // total so nothing downstream can compute a false percentage from it.
+              bytesTransferred: backupSize ?? 0,
               totalBytes: backupSize,
               estimatedTimeRemaining: 30,
             };
@@ -724,7 +761,8 @@ export class BackupService extends EventEmitter {
           currentFile: null,
           filesTransferred: 0,
           totalFiles: null,
-          bytesTransferred: backupSize,
+          // BACKLOG-2917 — see the decrypting-phase progress above.
+          bytesTransferred: backupSize ?? 0,
           totalBytes: backupSize,
           estimatedTimeRemaining: 0,
         };
@@ -1349,10 +1387,31 @@ export class BackupService extends EventEmitter {
   }
 
   /**
-   * Calculate the total size of a backup directory.
+   * Measure the total size of a backup directory.
    * BACKLOG-1086: Use atomic readdir instead of check-then-read (TOCTOU fix).
+   *
+   * BACKLOG-2917: this returned `number` and answered `0` on any throw, so an
+   * unreadable backup and an empty one were the same value. Two distinct defects
+   * followed from that, and only the first had been reported:
+   *
+   *  1. The whole walk throwing reported a real backup as 0 bytes. Downstream that
+   *     becomes `{ exists: true, sizeBytes: 0 }`, a successful backup annotated
+   *     `bytes: 0`, and a real backup listed to the user at size 0.
+   *  2. **The recursion swallowed subtree failures silently.** Every recursive call
+   *     had its own catch-all, so one unreadable subdirectory returned 0 for that
+   *     subtree and the PARENT added 0 and carried on — returning a short total with
+   *     no error anywhere. A partial sum presented as a measurement is worse than a
+   *     failure, because nothing downstream can tell it apart from a smaller backup.
+   *     Unmeasured now propagates up through the recursion.
+   *
+   * `measureBackupSize` is the name because `calculateBackupSize` returning a
+   * `BackupSizeReading` would leave every existing call site compiling unchanged.
+   *
+   * Note the ENOENT paths are NOT failures and stay `measured`: a directory that does
+   * not exist genuinely holds 0 bytes, and a file that vanished between `readdir` and
+   * `stat` is a normal race in a directory the device is still writing to.
    */
-  private async calculateBackupSize(backupPath: string): Promise<number> {
+  private async measureBackupSize(backupPath: string): Promise<BackupSizeReading> {
     try {
       let totalSize = 0;
       // Atomic: attempt readdir directly, handle ENOENT if path disappeared
@@ -1361,7 +1420,7 @@ export class BackupService extends EventEmitter {
         files = await fs.readdir(backupPath, { withFileTypes: true });
       } catch (err: unknown) {
         if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ENOENT") {
-          return 0;
+          return { measured: true, bytes: 0 };
         }
         throw err;
       }
@@ -1369,7 +1428,13 @@ export class BackupService extends EventEmitter {
       for (const file of files) {
         const filePath = path.join(backupPath, file.name);
         if (file.isDirectory()) {
-          totalSize += await this.calculateBackupSize(filePath);
+          const subtree = await this.measureBackupSize(filePath);
+          // The defect this replaces: an unmeasurable subtree used to contribute 0
+          // and the parent reported a short total as if it were a measurement.
+          if (!subtree.measured) {
+            return subtree;
+          }
+          totalSize += subtree.bytes;
         } else {
           try {
             const stats = await fs.stat(filePath);
@@ -1384,10 +1449,13 @@ export class BackupService extends EventEmitter {
         }
       }
 
-      return totalSize;
+      return { measured: true, bytes: totalSize };
     } catch (error) {
-      log.error("[BackupService] Error calculating backup size:", error);
-      return 0;
+      log.error("[BackupService] Error measuring backup size:", error);
+      Sentry.captureException(error, {
+        tags: { service: "backup", operation: "measureBackupSize" },
+      });
+      return { measured: false, reason: describeError(error) };
     }
   }
 
@@ -1404,28 +1472,28 @@ export class BackupService extends EventEmitter {
   }
 
   /**
-   * Check if a backup for a device exists and its status
+   * Check if a backup for a device exists and its status.
+   *
+   * BACKLOG-2917: returns a three-state report. It used to return `null` for BOTH
+   * "ENOENT, no backup exists" and "the check itself threw", which are opposite
+   * facts. `deviceSyncOrchestrator` read the collapsed value as a first sync, so a
+   * failing check produced a confident first-sync estimate and — after BACKLOG-2898 —
+   * a telemetry mark asserting `reusedPreviousBackup: false`. The epic calls a
+   * `checkBackupStatus` that cannot find a backup which demonstrably exists "a far
+   * larger bug than a bad estimate"; this is the value that has to be able to say so.
+   *
+   * Not hypothetical: the walk behind `size` measures 7.2 s warm over 496k blobs and
+   * runs twice per sync, so a throw is a realistic event.
+   *
+   * `exists` and the deprecated `isCorrupted` alias are gone. `exists: true` was
+   * failure-proof but redundant once `state: "present"` carries it, and
+   * `isCorrupted`'s own doc gave its removal condition as "once PR #2409 and
+   * BACKLOG-2910 have landed" — both are merged into this branch's base.
+   *
    * @param udid Device UDID
-   * @returns Backup status info or null if no backup exists
+   * @returns Which of the three states was established, never a collapsed `null`
    */
-  async checkBackupStatus(udid: string): Promise<{
-    exists: boolean;
-    isComplete: boolean;
-    /**
-     * BACKLOG-2911: the device did not report this snapshot as finished, so what is
-     * on disk is a partial backup. See `readSnapshotState` for what that covers.
-     */
-    isInterrupted: boolean;
-    /**
-     * @deprecated BACKLOG-2911 — now an alias of `isInterrupted`, kept so existing
-     * callers keep compiling. The name conflates "interrupted" (snapshot unfinished,
-     * bytes on disk intact and reusable) with "corrupt", which are different states.
-     * Remove once PR #2409 and BACKLOG-2910 have landed.
-     */
-    isCorrupted: boolean;
-    lastModified: Date | null;
-    sizeBytes: number;
-  } | null> {
+  async checkBackupStatus(udid: string): Promise<BackupStatusReport> {
     // BACKLOG-1123: Validate UDID before using in path operations
     const validatedUdid = validateDeviceUdid(udid);
     const backupPath = this.getDefaultBackupPath();
@@ -1438,12 +1506,14 @@ export class BackupService extends EventEmitter {
         stats = await fs.stat(deviceBackupPath);
       } catch (err: unknown) {
         if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ENOENT") {
-          return null;
+          // The ONE state that proves there is no backup. Everything else that can
+          // go wrong here lands in the catch below as `unknown`.
+          return { state: "absent" };
         }
         throw err;
       }
 
-      const size = await this.calculateBackupSize(deviceBackupPath);
+      const size = await this.measureBackupSize(deviceBackupPath);
 
       // Check for key files atomically by attempting to access them directly
       const manifestPath = path.join(deviceBackupPath, "Manifest.db");
@@ -1468,27 +1538,38 @@ export class BackupService extends EventEmitter {
       const isInterrupted = snapshotState === "unfinished";
 
       log.info(`[BackupService] Backup status for ${udid}:`, {
-        exists: true,
+        state: "present",
         isComplete,
         isInterrupted,
         snapshotState,
         hasManifest,
         hasInfoPlist,
-        sizeBytes: size,
+        // BACKLOG-2917: log what was established, not a number stood in for it.
+        sizeBytes: size.measured ? size.bytes : "unmeasured",
+        sizeUnmeasuredReason: size.measured ? undefined : size.reason,
       });
 
       return {
-        exists: true,
+        state: "present",
         isComplete,
         isInterrupted,
-        // Deprecated alias — see the doc comment on the return type.
-        isCorrupted: isInterrupted,
         lastModified: stats.mtime,
-        sizeBytes: size,
+        size,
       };
     } catch (error) {
-      log.error("[BackupService] Error checking backup status:", error);
-      return null;
+      // BACKLOG-2917: the check FAILED. Saying "no backup" here is the defect —
+      // it converts an unknown into a confident wrong answer, and the caller then
+      // reports a first sync that nobody established.
+      const reason = describeError(error);
+      log.error("[BackupService] Backup status check failed; state is UNKNOWN, not absent:", error);
+      // A backup that demonstrably exists failing its check is the alarming case the
+      // epic names. A timeline mark is only seen when someone pulls the timeline, so
+      // this one is raised without being asked for.
+      Sentry.captureException(error, {
+        tags: { service: "backup", operation: "checkBackupStatus" },
+        extra: { reason },
+      });
+      return { state: "unknown", reason };
     }
   }
 
@@ -1652,7 +1733,16 @@ export class BackupService extends EventEmitter {
   ): Promise<BackupInfo | null> {
     try {
       const stats = await fs.stat(backupPath);
-      const size = await this.calculateBackupSize(backupPath);
+      // BACKLOG-2917: the third caller of the size walk. A real backup whose walk
+      // threw used to be listed to the user at size 0; `null` says "not measured"
+      // and cannot be formatted as "0 B" without the caller deciding to.
+      const sizeReading = await this.measureBackupSize(backupPath);
+      const size = sizeReading.measured ? sizeReading.bytes : null;
+      if (!sizeReading.measured) {
+        log.warn(
+          `[BackupService] Listing a backup whose size could not be measured (${sizeReading.reason})`,
+        );
+      }
 
       // Try to read Info.plist for device info
       let deviceName: string | null = null;

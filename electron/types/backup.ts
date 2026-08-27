@@ -57,13 +57,75 @@ export interface BackupResult {
   deviceUdid: string;
   /** Whether this was an incremental backup (vs full) */
   isIncremental: boolean;
-  /** Size of the backup in bytes */
-  backupSize: number;
+  /**
+   * Size of the backup in bytes, or `null` when the size could not be measured.
+   *
+   * BACKLOG-2917: this was `number`, and the walk that produces it returned `0` on
+   * any throw. A backup that completed successfully could therefore report
+   * `backupSize: 0`, which `deviceSyncOrchestrator` hands straight to
+   * `syncTimeline.annotate("backup", { bytes })` — the instrument BACKLOG-2898 built
+   * to answer "did this run transfer anything?". `null` cannot be added, averaged or
+   * compared by accident, so an unmeasured size can no longer read as an empty one.
+   */
+  backupSize: number | null;
   /** Whether the backup is encrypted (TASK-007) */
   isEncrypted?: boolean;
   /** Error code for specific error handling (TASK-007) */
   errorCode?: BackupErrorCode;
 }
+
+/**
+ * BACKLOG-2917: the result of measuring a backup directory.
+ *
+ * The unmeasured arm deliberately carries NO byte count. `calculateBackupSize`
+ * returned `0` both for "this directory is empty" and for "the walk threw", and the
+ * only thing preventing that from being read as a real size was that every caller
+ * happened to be looking at a directory it believed in. Removing the property means
+ * a caller cannot read bytes it was never given — the collapse stops compiling
+ * rather than stopping occurring.
+ *
+ * Modelled on `checkAvailableDiskSpace`, which names `unavailable: true`, refuses to
+ * log a 0 GB "reading", and acts on the boolean rather than on the number.
+ */
+export type BackupSizeReading =
+  | { measured: true; bytes: number }
+  | { measured: false; reason: string };
+
+/**
+ * BACKLOG-2917: what `checkBackupStatus` found. Three states, never two.
+ *
+ * The previous signature was `{...} | null`, and `null` meant BOTH "ENOENT, this
+ * device has no backup" and "the check itself threw". Those are opposite facts. The
+ * orchestrator read the collapsed value as "first sync", so a failed check produced
+ * a confident first-sync estimate, the 1.5x headroom branch, and — after
+ * BACKLOG-2898 — a telemetry mark stating `reusedPreviousBackup: false` as fact.
+ * A diagnostic that cannot report its own failure is worse than no diagnostic.
+ *
+ * `state` is a discriminant rather than a flag on purpose: `sizeBytes` exists on no
+ * arm, so `if (status) { status.sizeBytes }` — the exact shape that shipped the bug —
+ * does not type-check. That is the reintroduction guard for this item.
+ */
+export type BackupStatusReport =
+  /** `fs.stat` returned ENOENT. Proven: this device has no backup directory. */
+  | { state: "absent" }
+  /**
+   * The check could not complete. Proven: nothing. Never treat as "no backup" —
+   * that is the BACKLOG-2917 defect. `reason` is for logs and telemetry only.
+   */
+  | { state: "unknown"; reason: string }
+  /** The backup directory exists. Its size is a separate three-state reading. */
+  | {
+      state: "present";
+      /** `Manifest.db` and `Info.plist` are both present. */
+      isComplete: boolean;
+      /**
+       * BACKLOG-2911: the device did not report this snapshot as finished, so what is
+       * on disk is a partial backup. See `readSnapshotState`.
+       */
+      isInterrupted: boolean;
+      lastModified: Date;
+      size: BackupSizeReading;
+    };
 
 /**
  * Options for starting a backup
@@ -104,8 +166,12 @@ export interface BackupInfo {
   deviceUdid: string;
   /** When the backup was created */
   createdAt: Date;
-  /** Size of the backup in bytes */
-  size: number;
+  /**
+   * Size of the backup in bytes, or `null` when the size could not be measured.
+   * BACKLOG-2917 — see `BackupResult.backupSize`. A real backup must never be
+   * listed to the user at size 0 because its directory walk threw.
+   */
+  size: number | null;
   /** Whether the backup is encrypted */
   isEncrypted: boolean;
   /** iOS version the backup was created from */
