@@ -76,11 +76,16 @@ jest.mock("electron", () => ({
   },
 }));
 
+const mockLogInfo = jest.fn();
+const mockLogWarn = jest.fn();
+const mockLogError = jest.fn();
+const mockLogDebug = jest.fn();
+
 jest.mock("electron-log", () => ({
-  info: jest.fn(),
-  error: jest.fn(),
-  warn: jest.fn(),
-  debug: jest.fn(),
+  info: (...a: unknown[]) => mockLogInfo(...a),
+  error: (...a: unknown[]) => mockLogError(...a),
+  warn: (...a: unknown[]) => mockLogWarn(...a),
+  debug: (...a: unknown[]) => mockLogDebug(...a),
 }));
 
 jest.mock("@sentry/electron/main", () => ({
@@ -170,7 +175,11 @@ jest.mock("../libimobiledeviceService", () => ({
   isMockMode: jest.fn().mockReturnValue(false),
 }));
 
-import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
+import {
+  DeviceSyncOrchestrator,
+  SYNC_DISK_POLL_INTERVAL_MS,
+  SYNC_DISK_LOG_DELTA_BYTES,
+} from "../deviceSyncOrchestrator";
 
 const TEST_UDID = "a1b2c3d4e5f6789012345678901234567890abcd";
 
@@ -186,8 +195,11 @@ const TEST_UDID = "a1b2c3d4e5f6789012345678901234567890abcd";
  */
 function installDisk(opts: { initialFree: number; drainBytesPerSec: number }) {
   let backupStartedAt: number | null = null;
+  let checksBeforeBackup = 0;
+  let checks = 0;
 
   mockCheckDiskSpace.mockImplementation(async () => {
+    checks += 1;
     const elapsedSec =
       backupStartedAt === null ? 0 : (Date.now() - backupStartedAt) / 1000;
     const free = Math.max(
@@ -200,7 +212,10 @@ function installDisk(opts: { initialFree: number; drainBytesPerSec: number }) {
   return {
     markBackupStarted: () => {
       backupStartedAt = Date.now();
+      checksBeforeBackup = checks;
     },
+    /** Disk measurements taken while the backup was running — i.e. monitor polls. */
+    pollCount: () => checks - checksBeforeBackup,
   };
 }
 
@@ -302,6 +317,9 @@ describe("BACKLOG-2899 — sync disk guard", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockLogInfo.mockClear();
+    mockLogWarn.mockClear();
+    mockLogError.mockClear();
     jest.useFakeTimers();
 
     mockCheckBackupStatus.mockResolvedValue(null); // first sync — the measured run
@@ -438,6 +456,111 @@ describe("BACKLOG-2899 — sync disk guard", () => {
 
       expect(mockCancelBackup).toHaveBeenCalled();
       expect(result.success).toBe(false);
+    });
+  });
+
+  describe("log volume — BACKLOG-2898 must stay bought", () => {
+    /** Lines the mid-transfer monitor writes, at any level. */
+    const monitorLines = () =>
+      [
+        ...mockLogInfo.mock.calls,
+        ...mockLogWarn.mock.calls,
+        ...mockLogError.mock.calls,
+      ]
+        .map((c) => String(c[0]))
+        .filter((l) => /Backup disk space:|fell below reserve/.test(l));
+
+    it("writes ONE reading across a full backup when free space does not move", async () => {
+      // The founder's own log, on the merged tree: 293 identical
+      // "Disk space: 64 GB free on /" lines across one 24.4-minute sync.
+      const disk = installDisk({ initialFree: 64 * GB, drainBytesPerSec: 0 });
+      installBackup({
+        markBackupStarted: disk.markBackupStarted,
+        succeedAfterMs: 1_464_030,
+      });
+
+      await runSync(orchestrator, 1_600_000);
+
+      // The disk was still measured ~293 times — see the interval control below.
+      expect(disk.pollCount()).toBeGreaterThan(250);
+      expect(monitorLines()).toHaveLength(1);
+    });
+
+    it("writes a line when free space moves materially, and only then", async () => {
+      // Drops by just under the material delta, then well past it.
+      let free = 64 * GB;
+      mockCheckDiskSpace.mockImplementation(async () => ({
+        diskPath: "C:",
+        free,
+        size: TOTAL_DISK_BYTES,
+      }));
+      installBackup({ markBackupStarted: () => {}, succeedAfterMs: 300_000 });
+
+      const promise = orchestrator.sync({ udid: TEST_UDID }).then((r) => r);
+
+      await jest.advanceTimersByTimeAsync(60_000);
+      const afterFirstWindow = monitorLines().length;
+
+      free = 64 * GB - (SYNC_DISK_LOG_DELTA_BYTES - 1);
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(monitorLines()).toHaveLength(afterFirstWindow); // not material
+
+      free = 64 * GB - SYNC_DISK_LOG_DELTA_BYTES;
+      await jest.advanceTimersByTimeAsync(60_000);
+      expect(monitorLines()).toHaveLength(afterFirstWindow + 1); // material
+
+      await jest.advanceTimersByTimeAsync(300_000);
+      await promise;
+    });
+
+    it("keeps the refusal loud: the crossing is written at info or louder", async () => {
+      const disk = installDisk({
+        initialFree: 10 * GB,
+        drainBytesPerSec: MEASURED_BYTES_PER_SEC,
+      });
+      installBackup({
+        markBackupStarted: disk.markBackupStarted,
+        succeedAfterMs: 1_464_030,
+      });
+
+      await runSync(orchestrator, 1_600_000);
+
+      // Not swallowed into debug: the crossing itself is at error, and the
+      // approach to it is at warn.
+      const crossing = mockLogError.mock.calls
+        .map((c) => String(c[0]))
+        .filter((l) => /fell below reserve/.test(l));
+      expect(crossing).toHaveLength(1);
+
+      const approach = mockLogWarn.mock.calls
+        .map((c) => String(c[0]))
+        .filter((l) => /Backup disk space:.*approaching the/.test(l));
+      expect(approach.length).toBeGreaterThan(0);
+
+      // And it stays a handful of lines, not one per poll.
+      expect(disk.pollCount()).toBeGreaterThan(40);
+      expect(monitorLines().length).toBeLessThan(30);
+    });
+
+    it("still MEASURES every 5 s — quieting the log must not slow the poll", async () => {
+      // The control that matters: a test counting only log lines would pass if
+      // someone slowed the timer instead, and a slower poll widens the window in
+      // which the disk can fill undetected. SYNC_DISK_RESERVE_BYTES sizes its
+      // 256 MB drift term against ONE poll at the measured ~40 MB/s.
+      expect(SYNC_DISK_POLL_INTERVAL_MS).toBe(5000);
+
+      const disk = installDisk({ initialFree: 64 * GB, drainBytesPerSec: 0 });
+      installBackup({
+        markBackupStarted: disk.markBackupStarted,
+        succeedAfterMs: 600_000, // 10 minutes
+      });
+
+      await runSync(orchestrator, 700_000);
+
+      // 600 s / 5 s = 120 measurements, whatever the log shows.
+      expect(disk.pollCount()).toBeGreaterThanOrEqual(115);
+      expect(disk.pollCount()).toBeLessThanOrEqual(125);
+      expect(monitorLines()).toHaveLength(1);
     });
   });
 

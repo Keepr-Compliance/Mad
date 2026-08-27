@@ -84,6 +84,40 @@ export const SYNC_DISK_RESERVE_BYTES =
   (DISK_SPACE_THRESHOLDS.sync + 256) * 1024 * 1024;
 
 /**
+ * BACKLOG-2899 x BACKLOG-2898: how far free space must move before a poll earns
+ * a log line.
+ *
+ * The monitor measures every 5 s — on the founder's measured 24.4-minute backup
+ * that is ~293 readings. Writing all of them reintroduces exactly what
+ * BACKLOG-2898 removed: his log went from 4,023 lines to ~100 for this workload,
+ * and 293 identical "64 GB free" lines would nearly triple it again. Free space
+ * that has not moved is not news.
+ *
+ * 5 GB is sized against the same measured run: the largest backup observed moved
+ * 58.8 GB, so a 5 GB step emits ~12 lines at that extreme and one line for an
+ * ordinary incremental sync — a small fraction of 2898's ~100-line budget.
+ *
+ * The measurement interval is NOT the lever here. SYNC_DISK_RESERVE_BYTES sizes
+ * its 256 MB drift term against one poll at the measured ~40 MB/s; polling less
+ * often widens the window in which the disk can fill undetected. Change what is
+ * written, never how often it is measured.
+ */
+export const SYNC_DISK_LOG_DELTA_BYTES = 5 * 1024 * 1024 * 1024;
+
+/**
+ * BACKLOG-2899: within this multiple of the reserve, the sync is approaching the
+ * event the guard exists for, and every step gets louder rather than quieter.
+ */
+export const SYNC_DISK_NEAR_RESERVE_MULTIPLIER = 2;
+
+/**
+ * BACKLOG-2899: inside the near-reserve band, 5 GB is coarser than the reserve
+ * itself (2304 MB) and would hide the entire run-up. Step down to the reserve's
+ * own drift term so the approach is visible.
+ */
+export const SYNC_DISK_NEAR_RESERVE_LOG_DELTA_BYTES = 256 * 1024 * 1024;
+
+/**
  * Metadata about the last successfully synced backup (TASK-908)
  */
 interface LastBackupSync {
@@ -1118,13 +1152,49 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.diskSpaceAtAbort = 0;
 
     let pollInFlight = false;
+    let lastLoggedFree: number | null = null;
+
+    // BACKLOG-2899 x BACKLOG-2898: a reading is written only when it has MOVED.
+    // Unchanged free space is not news; the ~293 readings a 24.4-minute backup
+    // produces would otherwise nearly triple the log 2898 just cut to ~100 lines.
+    // Nothing here changes how often the disk is measured — only what is written.
+    const logReadingIfMaterial = (freeBytes: number): void => {
+      const nearReserve =
+        freeBytes < SYNC_DISK_RESERVE_BYTES * SYNC_DISK_NEAR_RESERVE_MULTIPLIER;
+      const threshold = nearReserve
+        ? SYNC_DISK_NEAR_RESERVE_LOG_DELTA_BYTES
+        : SYNC_DISK_LOG_DELTA_BYTES;
+
+      if (
+        lastLoggedFree !== null &&
+        Math.abs(freeBytes - lastLoggedFree) < threshold
+      ) {
+        return;
+      }
+      lastLoggedFree = freeBytes;
+
+      const freeGB = (freeBytes / 1024 / 1024 / 1024).toFixed(1);
+      if (nearReserve) {
+        const reserveGB = (SYNC_DISK_RESERVE_BYTES / 1024 / 1024 / 1024).toFixed(1);
+        log.warn(
+          `[DeviceSyncOrchestrator] Backup disk space: ${freeGB} GB free — approaching the ${reserveGB} GB reserve`,
+        );
+      } else {
+        log.info(`[DeviceSyncOrchestrator] Backup disk space: ${freeGB} GB free`);
+      }
+    };
 
     this.diskSpaceMonitor = setInterval(() => {
       if (pollInFlight || this.diskSpaceAborted) return;
       pollInFlight = true;
 
-      void this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES)
+      void this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES, { quiet: true })
         .then((check) => {
+          // A fail-open default is not a reading — do not log 0 GB free.
+          if (!check.unavailable) {
+            logReadingIfMaterial(check.availableSpace);
+          }
+
           // Fail-open by construction: checkAvailableDiskSpace returns
           // hasEnoughSpace=true when the check itself throws, so one transient
           // stat failure never kills a 20-minute backup. Act on the boolean,
@@ -1158,16 +1228,25 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * @param requiredBytes Minimum bytes needed
    * @returns Object with hasEnoughSpace and availableSpace
    */
-  private async checkAvailableDiskSpace(requiredBytes: number): Promise<{
+  private async checkAvailableDiskSpace(
+    requiredBytes: number,
+    options?: { quiet?: boolean },
+  ): Promise<{
     hasEnoughSpace: boolean;
     availableSpace: number;
+    /** BACKLOG-2899: true when the check itself failed and the result is a fail-open default. */
+    unavailable?: boolean;
   }> {
     try {
       // Check disk space on the drive where app data is stored
       const appDataPath = app.getPath("userData");
       const diskInfo = await checkDiskSpace(path.parse(appDataPath).root);
 
-      log.info(`[DeviceSyncOrchestrator] Disk space: ${Math.round(diskInfo.free / 1024 / 1024 / 1024)} GB free on ${diskInfo.diskPath}`);
+      // BACKLOG-2899: the mid-transfer monitor calls this ~293 times per backup
+      // and logs its own readings only when they move (see startDiskSpaceMonitor).
+      if (!options?.quiet) {
+        log.info(`[DeviceSyncOrchestrator] Disk space: ${Math.round(diskInfo.free / 1024 / 1024 / 1024)} GB free on ${diskInfo.diskPath}`);
+      }
 
       return {
         hasEnoughSpace: diskInfo.free >= requiredBytes,
@@ -1182,6 +1261,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       return {
         hasEnoughSpace: true,
         availableSpace: 0,
+        unavailable: true,
       };
     }
   }
