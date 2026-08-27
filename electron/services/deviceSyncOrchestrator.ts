@@ -62,8 +62,15 @@ import type {
  * guard against a number it was never given.
  */
 type PriorBackupBasis =
-  /** A previous backup was found and its size measured. */
+  /** A COMPLETE, uninterrupted previous backup was found and its size measured. */
   | { kind: "measured"; bytes: number }
+  /**
+   * BACKLOG-2925: a previous backup is on disk and its size was measured, but the run
+   * that produced it did not finish. The bytes are real; as an ESTIMATE they are a
+   * lower bound BY CONSTRUCTION, because the run stopped early. Carried so telemetry
+   * can report what was ignored — never used to size the estimate or the disk guard.
+   */
+  | { kind: "partial"; bytes: number }
   /** `fs.stat` returned ENOENT: proven first sync. */
   | { kind: "none" }
   /** The check threw, or the size walk failed. Proven: nothing. */
@@ -127,6 +134,12 @@ function estimateSourceFor(basis: PriorBackupBasis): EstimateSource {
   switch (basis.kind) {
     case "measured":
       return "existing-backup";
+    case "partial":
+      // The estimate does NOT come from the partial — it comes from device storage,
+      // exactly as on a first sync. Reporting `existing-backup` here would be the
+      // instrument lying, the same class as BACKLOG-2917: it would claim a measured
+      // prior backup drove a number that it did not.
+      return "device-storage";
     case "none":
       return "device-storage";
     case "unknown":
@@ -554,9 +567,37 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       } else if (backupStatus.state === "present") {
         // The directory is there. Its SIZE is a separate three-state reading: a walk
         // that threw must not be reported as a measured prior backup.
-        priorBackup = backupStatus.size.measured
-          ? { kind: "measured", bytes: backupStatus.size.bytes }
-          : { kind: "unknown", reason: `size-unmeasured: ${backupStatus.size.reason}` };
+        // BACKLOG-2925: `deviceSyncOrchestrator.ts:440` used to assign the prior
+        // backup's size UNCONDITIONALLY. BACKLOG-2911 made `isInterrupted` available
+        // three lines later and nothing downstream consulted it, so an interrupted run
+        // fed the estimate (a lower bound by construction), took the TIGHTER 1.1x
+        // headroom commented "for existing backups (accurate size)", and reported
+        // `reusedPreviousBackup: true` on a run where reuse is impossible.
+        //
+        // BACKLOG-2899's own mid-transfer abort MANUFACTURES this state: it
+        // deliberately leaves the partial on disk, so the next run dropped its headroom
+        // against a number that abort guaranteed was too small. The guard made its own
+        // next invocation weaker.
+        //
+        // The gate is the item's: `isComplete && !isInterrupted`. Deliberately NOT also
+        // `snapshotState === "finished"` — that would demote STATE D (a manifest
+        // present, Status.plist absent: a real backup predating this device writing
+        // one) from a MEASURED size to the `0.25 x used space` estimate that
+        // BACKLOG-2918 documents as untrustworthy and BACKLOG-2910 removed the
+        // justification for. Trading a measured number for a discredited one is a
+        // downgrade, not a tightening. Ruled on by SR review.
+        const usableAsPriorBackup = backupStatus.isComplete && !backupStatus.isInterrupted;
+        priorBackup = !backupStatus.size.measured
+          ? { kind: "unknown", reason: `size-unmeasured: ${backupStatus.size.reason}` }
+          : usableAsPriorBackup
+            ? { kind: "measured", bytes: backupStatus.size.bytes }
+            : { kind: "partial", bytes: backupStatus.size.bytes };
+
+        if (priorBackup.kind === "partial") {
+          log.warn(
+            `[DeviceSyncOrchestrator] Previous backup is on disk (${priorBackup.bytes} bytes) but is NOT usable as an estimate (isComplete=${backupStatus.isComplete}, isInterrupted=${backupStatus.isInterrupted}); estimating from device storage instead. See BACKLOG-2925.`,
+          );
+        }
 
         if (!backupStatus.size.measured) {
           log.error(
@@ -784,6 +825,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           bytes: this.estimatedBackupSize,
           reusedPreviousBackup: priorBackup.kind === "measured",
           snapshotState: snapshotStateForMark(backupStatus),
+          // BACKLOG-2925: recorded, never used. The partial's size is real and worth
+          // knowing when reading a timeline; it is not a number anything may size a
+          // disk guard against.
+          ...(priorBackup.kind === "partial" ? { ignoredPartialBytes: priorBackup.bytes } : {}),
           ...(priorBackup.kind === "unknown" ? { priorBackupUnknownReason: priorBackup.reason } : {}),
         });
 
