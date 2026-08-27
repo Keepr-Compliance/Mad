@@ -18,7 +18,7 @@ import {
   type GlobalContentSearchResults,
   type SearchableDb,
 } from "../services/db/transactionSearchDbService";
-import { resolveHandles } from "../services/contactResolutionService";
+import { resolveHandles, nameForHandle } from "../services/contactResolutionService";
 import { wrapHandler } from "../utils/wrapHandler";
 import {
   ValidationError,
@@ -64,14 +64,18 @@ async function attachMemberNames(
   }
   if (all.size === 0) return;
 
-  const names = await resolveHandles([...all], userId);
+  const resolution = await resolveHandles([...all], userId);
 
   for (const hit of hits) {
     const handles = hit.memberHandles;
     if (!handles || handles.length === 0) continue;
     const resolved: string[] = [];
     for (const handle of handles) {
-      const name = names[handle];
+      // BACKLOG-2757: read through `nameForHandle`, never by direct indexing.
+      // `resolvePhoneNames` keys `names` by the NORMALIZED handle
+      // (`legacyDigitKey`, i.e. last-10 digits), so `names["+14155550100"]`
+      // is always undefined and every member line silently went blank.
+      const name = nameForHandle(resolution, handle);
       // Omit rather than fall back to the number — see above.
       if (name && name.trim()) resolved.push(name.trim());
     }
