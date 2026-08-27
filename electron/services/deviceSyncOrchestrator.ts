@@ -27,7 +27,10 @@ import { BackupService } from "./backupService";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import { iOSMessagesParser } from "./iosMessagesParser";
 import { iOSContactsParser } from "./iosContactsParser";
-import { checkDiskSpaceForOperation } from "./diagnostics/diskSpaceDiagnostics";
+import {
+  checkDiskSpaceForOperation,
+  DISK_SPACE_THRESHOLDS,
+} from "./diagnostics/diskSpaceDiagnostics";
 import {
   formatDiskSpaceError,
   formatMissingDriversError,
@@ -38,7 +41,47 @@ import { canUseLibimobiledevice } from "./libimobiledeviceService";
 import type { iOSDevice } from "../types/device";
 import type { iOSMessage, iOSConversation } from "../types/iosMessages";
 import type { iOSContact } from "../types/iosContacts";
-import type { BackupProgress } from "../types/backup";
+import type { BackupProgress, BackupResult } from "../types/backup";
+
+/**
+ * BACKLOG-2899: how often free space is re-measured while the backup runs.
+ *
+ * The up-front check cannot be the safety property here. It multiplies
+ * `storageInfo.estimatedBackupSize` — a figure the code's own comment calls
+ * "less accurate", derived from the phone's used space with apps skipped — and
+ * on the founder's Windows run 2026-08-26 that figure was wrong by 15.9x:
+ *
+ *   [16:11:44] Backup completed successfully in 1464030ms, size: 58761372853 bytes
+ *
+ *   estimate  3.7 GB  ->  guard asked for 5.6 GB  ->  58.8 GB actually written
+ *
+ * No headroom multiplier absorbs an order of magnitude, and tuning one against a
+ * single observation would bake one phone's media profile into everyone's gate.
+ * So the guard stops predicting and starts measuring.
+ */
+export const SYNC_DISK_POLL_INTERVAL_MS = 5000;
+
+/**
+ * BACKLOG-2899: free space the sync will not consume, in bytes.
+ *
+ * DERIVED, not picked:
+ *
+ *   DISK_SPACE_THRESHOLDS.sync   2048 MB   what the rest of the sync pipeline
+ *                                          (decrypt, parse, store) already
+ *                                          declares it needs to run at all
+ *   one poll of drift             256 MB   the measured run moved
+ *                                          58,761,372,853 B in 1,464,030 ms =
+ *                                          ~40 MB/s, so a 5 s poll interval can
+ *                                          miss ~200 MB; rounded up
+ *   ------------------------------------
+ *   reserve                      2304 MB
+ *
+ * This is a FLOOR the sync defends, not a prediction of backup size — the same
+ * stance as `DISK_SPACE_THRESHOLDS.messagesImport`. It deliberately says nothing
+ * about how large the backup will be, because nothing available up front does.
+ */
+export const SYNC_DISK_RESERVE_BYTES =
+  (DISK_SPACE_THRESHOLDS.sync + 256) * 1024 * 1024;
 
 /**
  * Metadata about the last successfully synced backup (TASK-908)
@@ -156,6 +199,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   private currentPhase: SyncPhase = "idle";
   private estimatedBackupSize: number = 0;
   private startTime: number = 0;
+
+  /** BACKLOG-2899: mid-transfer free-space monitor */
+  private diskSpaceMonitor: NodeJS.Timeout | null = null;
+  private diskSpaceAborted: boolean = false;
+  private diskSpaceAtAbort: number = 0;
 
   /**
    * Tracks the last successfully synced backup for skip detection (TASK-908)
@@ -392,6 +440,40 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         });
       }
 
+      // BACKLOG-2899: Refuse up front when free space is ALREADY below the
+      // reserve the mid-transfer monitor defends. Same constant, same semantic:
+      // if the first poll would abort the backup, do not start it.
+      //
+      // Deliberately NOT a refusal on `estimate x headroom` — the estimate is
+      // unreliable in both directions (16x under on the measured run; 0.25 x
+      // used space overshoots app-heavy phones, and apps are skipped), so
+      // blocking on it would refuse syncs that succeed today. The reserve is
+      // the only number here that does not depend on the estimate.
+      const reserveCheck = await this.checkAvailableDiskSpace(
+        SYNC_DISK_RESERVE_BYTES,
+      );
+      if (!reserveCheck.hasEnoughSpace) {
+        const userError = formatDiskSpaceError(
+          Math.round(reserveCheck.availableSpace / 1024 / 1024),
+          Math.round(SYNC_DISK_RESERVE_BYTES / 1024 / 1024),
+        );
+        log.warn("[DeviceSyncOrchestrator] Sync refused: free space below reserve", {
+          availableBytes: reserveCheck.availableSpace,
+          reserveBytes: SYNC_DISK_RESERVE_BYTES,
+        });
+        Sentry.captureMessage("Sync refused: free space below reserve", {
+          level: "warning",
+          tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
+          extra: {
+            availableBytes: reserveCheck.availableSpace,
+            reserveBytes: SYNC_DISK_RESERVE_BYTES,
+          },
+        });
+        this.isRunning = false;
+        this.emit("error", { message: userError.description, userError });
+        return this.errorResult(userError.description);
+      }
+
       // Step 1: Get device storage info to estimate backup size
       const storageInfo = await this.deviceService.getDeviceStorageInfo(options.udid);
       if (storageInfo) {
@@ -465,12 +547,51 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // Step 1: Create backup
       this.setPhase("backup");
-      const backupResult = await this.backupService.startBackup({
-        udid: options.udid,
-        password: options.password,
-        forceFullBackup: options.forceFullBackup,
-        skipApps: true, // Always skip apps to reduce backup size
-      });
+
+      // BACKLOG-2899: re-measure free space WHILE the transfer runs.
+      let backupResult: BackupResult;
+      this.startDiskSpaceMonitor();
+      try {
+        backupResult = await this.backupService.startBackup({
+          udid: options.udid,
+          password: options.password,
+          forceFullBackup: options.forceFullBackup,
+          skipApps: true, // Always skip apps to reduce backup size
+        });
+      } finally {
+        this.stopDiskSpaceMonitor();
+      }
+
+      // BACKLOG-2899: the monitor cancelled the backup to protect the volume.
+      // The partial backup is deliberately left on disk: nothing on this path
+      // deletes `Backups/<udid>`, so the next run's checkBackupStatus finds it
+      // and idevicebackup2 resumes against it.
+      if (this.diskSpaceAborted) {
+        const freeGB = (this.diskSpaceAtAbort / 1024 / 1024 / 1024).toFixed(1);
+        const reserveGB = (SYNC_DISK_RESERVE_BYTES / 1024 / 1024 / 1024).toFixed(1);
+        const message =
+          `Sync stopped to protect your computer: free disk space fell to ${freeGB} GB ` +
+          `(below the ${reserveGB} GB this sync keeps in reserve) while the iPhone backup was running. ` +
+          `The partial backup was kept — free up space and sync again to resume it.`;
+        log.warn("[DeviceSyncOrchestrator] Sync aborted mid-transfer: disk space", {
+          availableBytes: this.diskSpaceAtAbort,
+          reserveBytes: SYNC_DISK_RESERVE_BYTES,
+          estimatedBackupSize: this.estimatedBackupSize,
+        });
+        Sentry.captureMessage("Sync aborted mid-transfer to protect disk space", {
+          level: "error",
+          tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
+          extra: {
+            availableBytes: this.diskSpaceAtAbort,
+            reserveBytes: SYNC_DISK_RESERVE_BYTES,
+            estimatedBackupSize: this.estimatedBackupSize,
+          },
+        });
+        this.isRunning = false;
+        this.setPhase("error");
+        this.emit("error", { message });
+        return this.errorResult(message);
+      }
 
       if (this.abortController?.signal.aborted) {
         this.isRunning = false;
@@ -972,6 +1093,63 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         return "Decrypting backup data...";
       default:
         return "Processing...";
+    }
+  }
+
+  /**
+   * BACKLOG-2899: watch free space for as long as the backup runs.
+   *
+   * Cancels the backup when free space falls below SYNC_DISK_RESERVE_BYTES.
+   * This is the guard's actual safety property — the up-front check consults an
+   * estimate that was 15.9x too low on the measured run, and idevicebackup2
+   * cannot be relied on to report the resulting full disk: transcribed from
+   * tools/idevicebackup2.c mb2_handle_receive_files(), the host-side write is
+   * `fwrite(buf, 1, r, f);` with the return value never checked and `fclose(f)`
+   * likewise unchecked, so a full volume is silently absorbed and the tool can
+   * still print "Backup Successful." Prevention, not detection.
+   *
+   * Touches neither `lastProgress` nor the zombie-process watchdog
+   * (BACKLOG-1582/1628) — it only reads the local filesystem and, on abort,
+   * calls the existing cancel path.
+   */
+  private startDiskSpaceMonitor(): void {
+    this.stopDiskSpaceMonitor();
+    this.diskSpaceAborted = false;
+    this.diskSpaceAtAbort = 0;
+
+    let pollInFlight = false;
+
+    this.diskSpaceMonitor = setInterval(() => {
+      if (pollInFlight || this.diskSpaceAborted) return;
+      pollInFlight = true;
+
+      void this.checkAvailableDiskSpace(SYNC_DISK_RESERVE_BYTES)
+        .then((check) => {
+          // Fail-open by construction: checkAvailableDiskSpace returns
+          // hasEnoughSpace=true when the check itself throws, so one transient
+          // stat failure never kills a 20-minute backup. Act on the boolean,
+          // never on availableSpace (which is 0 on that error path).
+          if (check.hasEnoughSpace) return;
+
+          this.diskSpaceAborted = true;
+          this.diskSpaceAtAbort = check.availableSpace;
+          log.error(
+            `[DeviceSyncOrchestrator] Free space fell below reserve (${Math.round(check.availableSpace / 1024 / 1024)} MB) — cancelling backup`,
+          );
+          this.stopDiskSpaceMonitor();
+          this.backupService.cancelBackup();
+        })
+        .finally(() => {
+          pollInFlight = false;
+        });
+    }, SYNC_DISK_POLL_INTERVAL_MS);
+  }
+
+  /** BACKLOG-2899: stop the mid-transfer free-space monitor. */
+  private stopDiskSpaceMonitor(): void {
+    if (this.diskSpaceMonitor) {
+      clearInterval(this.diskSpaceMonitor);
+      this.diskSpaceMonitor = null;
     }
   }
 
