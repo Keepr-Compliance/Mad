@@ -377,6 +377,101 @@ describe("preferenceHelper", () => {
         expect.objectContaining({ userId: "user-1" }),
       );
     });
+
+    /**
+     * BACKLOG-2565 bullet 1 — the legacy key the UI honours and this reader did not.
+     *
+     * THE BUG: `emailSync.lookbackMonths` is the pre-TASK-2072 name for the email
+     * cache window. `EmailSettings.tsx:40-44` still falls back to it, so a user
+     * who set 12 before the rename sees "12 months" on screen. This reader read
+     * only `emailCache.durationMonths` and returned the default 3, and it is this
+     * reader that `emailSyncService` caches against. The screen and the cache
+     * disagreed about one setting.
+     *
+     * CONTROL: the first case below is RED on the pre-fix reader (returns 3,
+     * expects 12). Reverting either legacy-key branch in
+     * `resolveEmailCacheDurationMonths` turns it red again.
+     *
+     * The fixture shape is the one the bug requires and the only one a legacy
+     * carrier can hold: the legacy key present, the canonical key ABSENT. No
+     * writer has produced `emailSync.lookbackMonths` since TASK-2072 (verified:
+     * `EmailSettings.tsx:249` writes `emailCache` only, and a repo-wide grep for
+     * `emailSync?.lookbackMonths` finds the UI read and the type declaration and
+     * nothing else), so a bag carrying both keys can only come from a user who
+     * predates the rename AND has since touched Settings.
+     */
+    describe("legacy emailSync.lookbackMonths key (BACKLOG-2565)", () => {
+      it("honours the legacy key when the canonical key is absent", async () => {
+        mockGetPreferences.mockResolvedValue({
+          emailSync: { lookbackMonths: 12 },
+        });
+
+        // RED before the fix: the pre-fix reader returned 3 here while
+        // Settings displayed 12.
+        await expect(getEmailCacheDurationMonths("user-1")).resolves.toBe(12);
+      });
+
+      it("lets the canonical key win when BOTH keys are stored", async () => {
+        mockGetPreferences.mockResolvedValue({
+          emailCache: { durationMonths: 6 },
+          emailSync: { lookbackMonths: 12 },
+        });
+
+        // Precedence, not merge: the key the current writer produces wins, so a
+        // later one-time fixup or server backfill silences the legacy branch
+        // rather than fighting it.
+        await expect(getEmailCacheDurationMonths("user-1")).resolves.toBe(6);
+      });
+
+      it("falls back to 3 when the legacy key holds a value the domain rejects", async () => {
+        // Sweep, not sample: every non-positive / non-numeric shape the stored
+        // JSON can hold must land on the default, exactly as the canonical key
+        // already does. A single case here could not catch an off-by-one at 0.
+        const rejected: unknown[] = [0, -2, "12", null, undefined, NaN, true];
+
+        for (const value of rejected) {
+          mockGetPreferences.mockResolvedValue({
+            emailSync: { lookbackMonths: value },
+          });
+          await expect(getEmailCacheDurationMonths("user-1")).resolves.toBe(3);
+        }
+      });
+
+      it("returns the same answer the Settings screen computes, for every shape", async () => {
+        /**
+         * The bug was DISAGREEMENT between two readers, so the assertion is
+         * agreement — not "the backend returns 12".
+         *
+         * `EmailSettings.tsx:40-44` is a renderer module and cannot be imported
+         * here (`electron/` has `rootDir` set, and the renderer cannot
+         * value-import from `electron/` either). Its expression is TRANSCRIBED
+         * below verbatim from that file so a future edit to either side that
+         * breaks agreement trips this test.
+         */
+        const settingsScreenValue = (prefs: Record<string, any>): number => {
+          const val =
+            prefs?.emailCache?.durationMonths ?? prefs?.emailSync?.lookbackMonths;
+          return typeof val === "number" && val > 0 ? val : 3;
+        };
+
+        const bags: Array<Record<string, any>> = [
+          {},
+          { emailCache: { durationMonths: 6 } },
+          { emailSync: { lookbackMonths: 12 } },
+          { emailCache: { durationMonths: 6 }, emailSync: { lookbackMonths: 12 } },
+          { emailCache: { durationMonths: 0 }, emailSync: { lookbackMonths: 12 } },
+          { emailSync: { lookbackMonths: 0 } },
+          { emailSync: { lookbackMonths: "12" } },
+        ];
+
+        for (const bag of bags) {
+          mockGetPreferences.mockResolvedValue(bag);
+          await expect(getEmailCacheDurationMonths("user-1")).resolves.toBe(
+            settingsScreenValue(bag),
+          );
+        }
+      });
+    });
   });
 
   describe("computeEmailCacheSinceDate", () => {

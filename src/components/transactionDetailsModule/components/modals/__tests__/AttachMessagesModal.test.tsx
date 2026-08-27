@@ -147,7 +147,7 @@ describe("AttachMessagesModal", () => {
       render(<AttachMessagesModal {...defaultProps} />);
       await waitFor(() => {
         expect(
-          screen.getByPlaceholderText(/Search by name or phone number/i)
+          screen.getByPlaceholderText(/Search by name, phone number, or group chat name/i)
         ).toBeInTheDocument();
       });
     });
@@ -239,7 +239,7 @@ describe("AttachMessagesModal", () => {
       });
 
       // Type search query (search by name)
-      const searchInput = screen.getByPlaceholderText(/Search by name or phone number/i);
+      const searchInput = screen.getByPlaceholderText(/Search by name, phone number, or group chat name/i);
       fireEvent.change(searchInput, { target: { value: "John" } });
 
       // Should only show matching contact

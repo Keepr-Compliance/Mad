@@ -23,6 +23,7 @@ import {
   getIgnoredCommunicationIdsForTransaction,
 } from "./db/communicationDbService";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
+import { handleToIdentityToken } from "../utils/handleIdentity";
 import {
   normalizeAddress,
   contentContainsAddress,
@@ -1370,41 +1371,18 @@ export interface ExpandAttachedThreadsResult {
 // ---------------------------------------------------------------------------
 // BACKLOG-2287: direction-aware thread identity (cross-thread expansion gate).
 //
-// Self-contained electron mirror of the renderer's getExternalParticipants +
-// getHandleMergeKey (src/utils/threadMergeUtils.ts). Kept local (not imported
-// across the renderer boundary) because that util pulls a renderer component type;
-// the logic here is intentionally identical so post-import expansion buckets a
-// conversation by contact the SAME way the attached-list UI does.
+// `isPhoneLikeHandle` / `handleToIdentityToken` USED TO LIVE HERE. BACKLOG-2854
+// moved them, unchanged, to `electron/utils/handleIdentity.ts`, because search
+// needed the same question answered ("are these two handles the same person?")
+// and a second normalization invented next door is how two callers start
+// disagreeing about who is in a conversation. They are still the self-contained
+// electron mirror of the renderer's getHandleMergeKey
+// (src/utils/threadMergeUtils.ts) and are still NOT imported across the renderer
+// boundary — that file's header carries the reasoning.
+//
+// What remains here is the part that is genuinely autoLink's: reading a
+// message's DIRECTION to decide which end of it names the contact.
 // ---------------------------------------------------------------------------
-
-/** Does this handle look like a phone number? (mirrors threadMergeUtils.isPhoneNumber) */
-function isPhoneLikeHandle(s: string): boolean {
-  return s.startsWith("+") || /^\d[\d\s\-()]{6,}$/.test(s);
-}
-
-/**
- * Reduce a single handle (phone / email / Apple ID) to a stable identity token,
- * or null for the user placeholder / unknown. Phone numbers collapse to their
- * last 10 digits; everything else is lower-cased. Namespaced so a numeric handle
- * and an identically-spelled email can never collide.
- *
- * The returned token is ONLY ever compared for EQUALITY against another token, so
- * a short (<10-digit) handle keeps all its digits and CANNOT substring-match a
- * longer number the way a bare `participants_flat LIKE '%digits%'` would
- * (BACKLOG-2287 short-token risk).
- */
-function handleToIdentityToken(handle: string): string | null {
-  const h = (handle ?? "").trim();
-  if (!h || h === "me" || h === "unknown") return null;
-  if (h.includes("@")) return `handle:${h.toLowerCase()}`;
-  if (isPhoneLikeHandle(h)) {
-    const digits = h.replace(/\D/g, "");
-    if (!digits) return `handle:${h.toLowerCase()}`;
-    const norm = digits.length >= 10 ? digits.slice(-10) : digits;
-    return `phone:${norm}`;
-  }
-  return `handle:${h.toLowerCase()}`;
-}
 
 /**
  * Compute the DIRECTION-AWARE set of external (non-user) identity tokens for a

@@ -3952,6 +3952,283 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 66,
+      // BACKLOG-2814. Apple's group-chat name (`chat.display_name`) was read by
+      // nothing: the importer joined `chat_handle_join` for the participant list
+      // and queried `chat` only for `account_login`, so "Closing Team" was
+      // dropped at the door and every group text thread was identified by its
+      // participants.
+      //
+      // NO BACKFILL RUNS HERE, deliberately. The migration cannot invent names —
+      // they live in the user's chat.db, not in ours. The backfill IS the next
+      // import: `message_thread_names` is upserted from the `chat` table on every
+      // run, independent of message dedup, so an existing user's already-imported
+      // threads gain their names after ONE ordinary re-import. That is the whole
+      // reason this is a thread-keyed table rather than a `messages` column —
+      // `INSERT OR IGNORE` on the Apple GUID skips every row a re-import already
+      // has, so a column would have needed a force reimport to ever populate.
+      //
+      // Objects here are identical to the ones in schema.sql. A fresh install
+      // takes them from schema.sql and never runs this block; an upgrade runs
+      // this block and never reads schema.sql. Drift between the two passes all
+      // of CI and breaks only real upgrades.
+      description:
+        "Add message_thread_names (Apple group-chat display names, thread-keyed) (BACKLOG-2814)",
+      migrate: (d) => {
+        d.exec(
+          `CREATE TABLE IF NOT EXISTS message_thread_names (
+             user_id TEXT NOT NULL,
+             thread_id TEXT NOT NULL,
+             display_name TEXT NOT NULL,
+             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+             PRIMARY KEY (user_id, thread_id),
+             FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+           )`,
+        );
+        d.exec(
+          `CREATE INDEX IF NOT EXISTS idx_message_thread_names_thread
+             ON message_thread_names(thread_id)`,
+        );
+        console.log(
+          "[migration v66] added message_thread_names (BACKLOG-2814)",
+        );
+      },
+    },
+    {
+      version: 67,
+      // BACKLOG-2857 — derivation provenance.
+      //
+      // RENUMBERED 66 -> 67 AT MERGE TIME on int/ui-polish-e, exactly as v65 was
+      // renumbered from 64 after PR #2346. This item was written against develop,
+      // where the chain head is 65, so 66 was correct on its own branch (PR #2379)
+      // and REMAINS 66 there. PR #2368 (BACKLOG-2814, Apple group-chat names)
+      // reached the integration branch first and holds 66 here.
+      //
+      // The two are independent: 66 creates `message_thread_names`, 67 adds a
+      // column plus a partial index to `emails`. Disjoint objects, so the
+      // execution order between them does not matter.
+      //
+      // It could NOT have been written as 67 on its own branch to dodge the
+      // collision: validateNoVersionGaps throws `Missing migration version 66` on
+      // EVERY database init when the chain skips a number, so a branch holding 67
+      // without 66 present will not boot and cannot run its own migration tests.
+      // Renumbering is cheap because the head-version assertions derive through
+      // __tests__/helpers/chainHead.ts rather than re-typing a literal.
+      //
+      // WHAT THIS IS FOR. BACKLOG-2855 fixed how `body_plain` is derived from
+      // Outlook HTML and could not touch a single row already stored. Nothing on
+      // disk recorded that existing rows came from superseded logic, so repairing
+      // history required a human to remember the fix existed — or a destructive
+      // force re-cache (BACKLOG-2856). This column makes it automatic: every row
+      // carries the derivation version that produced it, and the reprocess pass
+      // repairs anything below CURRENT_DERIVATION_VERSION.
+      //
+      // NO BACKFILL, and that is the whole point. DEFAULT 0 leaves every
+      // pre-existing row at version 0, which is precisely true: they were produced
+      // by the pre-2855 derivation. Backfilling to CURRENT would declare all of
+      // them already repaired and permanently strand the truncated bodies this
+      // exists to fix.
+      //
+      // THE INDEX SHIPS HERE, NOT IN schema.sql. The access path is
+      // `WHERE derived_version < ?`, so unlike v62's bulk_mail_headers (no reader,
+      // no index) this column earns one. It is written PARTIAL on
+      // `derived_version < CURRENT` so it stays near-empty in the steady state —
+      // once a mailbox is fully reprocessed the index holds no rows at all, which
+      // is the right cost profile for a hot write table.
+      //
+      // The partial predicate necessarily embeds the literal CURRENT value, so a
+      // future version bump must ship its own migration to REPLACE this index with
+      // one carrying the new literal (SQLite cannot parameterise an index
+      // predicate). That is deliberate: a version bump is already a code change,
+      // and pairing it with the index keeps the scan cheap forever. If a bump ever
+      // lands without that DROP/CREATE, the pass stays CORRECT — the planner just
+      // falls back to a table scan for rows between the old and new literal.
+      //
+      // Standalone CREATE INDEX on a migrated column must NEVER go in schema.sql:
+      // that file is exec'd BEFORE this chain, so it throws "no such column" on
+      // every real upgrade (BACKLOG-2298/2300/2750). Here it runs AFTER the ALTER,
+      // and covers fresh installs too because they seed schema_version at
+      // BASELINE_VERSION and replay the whole chain.
+      //
+      // The table guard mirrors v48/v52..v65 (a real install always has `emails`,
+      // a minimal partial-schema fixture may not); the column guard gives re-run
+      // idempotency.
+      description:
+        "Add emails.derived_version + partial index so a derivation fix can find and repair the rows produced by superseded logic (BACKLOG-2857)",
+      migrate: (d) => {
+        const hasTable = d
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'emails'")
+          .get();
+        if (!hasTable) return;
+
+        const cols = (
+          d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>
+        ).map((c) => c.name);
+
+        if (!cols.includes("derived_version")) {
+          d.exec(
+            "ALTER TABLE emails ADD COLUMN derived_version INTEGER NOT NULL DEFAULT 0",
+          );
+          console.log(
+            "[migration v67] added emails.derived_version column (BACKLOG-2857)",
+          );
+        }
+
+        // Literal, not a binding: SQLite index predicates cannot be parameterised.
+        // Kept equal to CURRENT_DERIVATION_VERSION in
+        // electron/utils/derivationVersion.ts — a bump ships a new migration
+        // replacing this index (see the note above). A test asserts the two agree,
+        // so drift fails CI rather than silently degrading to a table scan.
+        d.exec(
+          `CREATE INDEX IF NOT EXISTS idx_emails_derived_version_stale
+             ON emails(derived_version) WHERE derived_version < 1`,
+        );
+        console.log(
+          "[migration v67] ensured idx_emails_derived_version_stale (BACKLOG-2857)",
+        );
+      },
+    },
+    {
+      version: 68,
+      // BACKLOG-2859. RENUMBERED 66 -> 68 ON int/ui-polish-e, exactly as the
+      // instruction this comment used to carry predicted. 2859 was written on
+      // feat/BACKLOG-2849-submit-screen, whose chain head is 65 — identical to
+      // develop, because 2849 adds no migration — so 66 was the correct number
+      // there and PR #2381 still holds it. Here 66 is BACKLOG-2814
+      // (message_thread_names) and 67 is BACKLOG-2857 (emails.derived_version).
+      // Only the number moved; the body below is byte-for-byte 2859's apart from
+      // the two `[migration v68]` log tags.
+      //
+      // Taking 68 pre-emptively on 2859's own branch would NOT have been the
+      // safe move, it would have been the broken one: validateNoVersionGaps runs
+      // on every _runVersionedMigrations call, so a branch holding 68 without 66
+      // and 67 present throws on every database init. Not one red test —
+      // initialize() fails, so every suite that opens a database goes red,
+      // including the one that would test this migration.
+      //
+      // The three migrations are disjoint: 66 creates a table, 67 adds a column
+      // to `emails`, 68 rewrites values in `transaction_contacts` and
+      // `contacts`. Execution order between them does not matter.
+      //
+      // PURE DML. No ALTER TABLE, no ADD COLUMN, no CREATE INDEX, and no
+      // schema.sql change, so the standalone-index trap (BACKLOG-2298/2300/2750)
+      // structurally cannot arise here — there is no new object for schema.sql
+      // to reference before the chain runs. `transaction_contacts.role`,
+      // `.specific_role` and `contacts.default_role` are all bare TEXT with no
+      // CHECK constraint, verified in schema.sql and in the shipped v2.27.0
+      // fixture, so rewriting their values needs no table rebuild.
+      //
+      // NOT TOUCHED: `transaction_participants.role`, which DOES carry a CHECK
+      // constraint enumerating the old vocabulary. That table is deprecated —
+      // migration v30 already moved transaction_summary off it, and it has zero
+      // read or write sites in electron/ or src/ (measured). Collapsing it would
+      // need a full 12-step table rebuild, because SQLite cannot alter a CHECK
+      // constraint and `CREATE TABLE IF NOT EXISTS` in schema.sql is a no-op on
+      // an existing table — which would give fresh installs the new vocabulary
+      // and leave every upgraded install on the old one forever. Not worth that
+      // for a table nothing reads; recorded so the omission is a decision.
+      description:
+        "Collapse buyer_agent/seller_agent/listing_agent into the single side-neutral 'agent' role, and remove the counterparty-principal assignments (BACKLOG-2859)",
+      migrate: (d) => {
+        const LEGACY_AGENT_ROLES = ["buyer_agent", "seller_agent", "listing_agent"];
+        const legacyList = LEGACY_AGENT_ROLES.map((r) => `'${r}'`).join(", ");
+
+        const tableExists = (name: string): boolean =>
+          !!d
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+            .get(name);
+
+        const hasColumn = (table: string, column: string): boolean =>
+          (d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
+            (c) => c.name === column,
+          );
+
+        // ---- 1. transaction_contacts: collapse the three agent values ----
+        //
+        // `role` and `specific_role` are updated SEPARATELY rather than in one
+        // statement. They are kept in sync on write (specific_role is canonical
+        // and is copied into role), but historical rows do not all honour that:
+        // in the shipped v2.27.0 database every transaction_contacts row carries
+        // a `role` with `specific_role` NULL. A combined UPDATE would have to
+        // pick one column to drive the predicate and would miss the other.
+        //
+        // LOWER() on the comparison because roles reach the database both ways.
+        if (tableExists("transaction_contacts")) {
+          const roleResult = d
+            .prepare(
+              `UPDATE transaction_contacts SET role = 'agent'
+               WHERE LOWER(role) IN (${legacyList})`,
+            )
+            .run();
+
+          const specificResult = hasColumn("transaction_contacts", "specific_role")
+            ? d
+                .prepare(
+                  `UPDATE transaction_contacts SET specific_role = 'agent'
+                   WHERE LOWER(specific_role) IN (${legacyList})`,
+                )
+                .run()
+            : { changes: 0 };
+
+          // ---- 2. Remove the counterparty-principal assignments ----
+          //
+          // Founder: "lets remove the Seller / other side, Buyer / other side
+          // completely. agents normally don't contact them." He then explicitly
+          // approved a SILENT drop — "it's ok to silently drop it" — after the
+          // write-loss concern was raised twice and overruled twice. No prompt,
+          // no preservation, no migration to 'other'.
+          //
+          // BOTH principals are deleted on EVERY transaction type, not just the
+          // counterparty side. The final role model leaves no `buyer`/`seller`
+          // offerable anywhere, so a same-side `seller` surviving on a Listing
+          // would be a stored value that no picker can render — a blank select
+          // over real data, which is the failure the deleted #2374 guard existed
+          // to prevent.
+          //
+          // COALESCE(specific_role, role): specific_role is canonical when
+          // present, role is the fallback — matching how every reader resolves
+          // these two columns.
+          const principalResult = d
+            .prepare(
+              `DELETE FROM transaction_contacts
+               WHERE LOWER(COALESCE(specific_role, role)) IN ('buyer', 'seller')`,
+            )
+            .run();
+
+          console.log(
+            `[migration v68] transaction_contacts: collapsed ${roleResult.changes} role + ` +
+              `${specificResult.changes} specific_role values to 'agent'; ` +
+              `deleted ${principalResult.changes} counterparty-principal assignments (BACKLOG-2859)`,
+          );
+        }
+
+        // ---- 3. contacts.default_role: same collapse ----
+        //
+        // default_role is a convenience ("most-recently-assigned role for
+        // auto-fill"), not an identity, but it feeds the picker's auto-fill and
+        // the contacts filter tree — so a stale `seller_agent` here would keep
+        // proposing a role no transaction offers.
+        //
+        // `buyer`/`seller` default_roles are deliberately LEFT ALONE. Unlike a
+        // transaction_contacts row, a default_role that is no longer offered
+        // degrades gracefully: resolveDefaultContactRole checks it against the
+        // offered set and falls back to the `client` baseline. Deleting data to
+        // fix something that already behaves correctly is not warranted.
+        if (tableExists("contacts") && hasColumn("contacts", "default_role")) {
+          const defaultRoleResult = d
+            .prepare(
+              `UPDATE contacts SET default_role = 'agent'
+               WHERE LOWER(default_role) IN (${legacyList})`,
+            )
+            .run();
+          console.log(
+            `[migration v68] contacts: collapsed ${defaultRoleResult.changes} default_role values to 'agent' (BACKLOG-2859)`,
+          );
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -4621,7 +4898,7 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return messageDb.getUnlinkedEmails(userId, limit);
   }
 
-  async getMessageContacts(userId: string): Promise<{ contact: string; messageCount: number; lastMessageAt: string }[]> {
+  async getMessageContacts(userId: string): Promise<messageDb.MessageContactRow[]> {
     return messageDb.getMessageContacts(userId);
   }
 

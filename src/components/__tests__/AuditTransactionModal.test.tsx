@@ -146,10 +146,16 @@ describe("AuditTransactionModal", () => {
         />,
       );
 
-      expect(
-        screen.getByRole("button", { name: /purchase/i }),
-      ).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /sale/i })).toBeInTheDocument();
+      // BACKLOG-2850: keyed on the TESTID, not on the label text. These three
+      // queries used `/purchase/i` and matched the old "Listing/Purchase"
+      // incidentally; "Listing" contains no "purchase", so they stopped
+      // resolving the moment the founder's label changed — and because this
+      // file never contains the string "Listing", no sweep for the old label
+      // surfaces it. The testid is the stable handle (it is also the e2e
+      // selector) and it is what identifies the RIGHT button independently of
+      // whatever the button is currently called.
+      expect(screen.getByTestId("create-audit-type-purchase")).toBeInTheDocument();
+      expect(screen.getByTestId("create-audit-type-sale")).toBeInTheDocument();
     });
 
     it("should show progress bar with 2 steps", () => {
@@ -263,7 +269,8 @@ describe("AuditTransactionModal", () => {
         />,
       );
 
-      const purchaseButton = screen.getByRole("button", { name: /purchase/i });
+      // BACKLOG-2850: testid, not label text — see the note above.
+      const purchaseButton = screen.getByTestId("create-audit-type-purchase");
       // Purchase button should be highlighted (has specific styling)
       expect(purchaseButton).toHaveClass("bg-indigo-500");
     });
@@ -702,10 +709,16 @@ describe("AuditTransactionModal", () => {
         screen.getByRole("button", { name: /cancel/i }),
       ).toBeInTheDocument();
       // Purchase and Sale are in AddressVerificationStep (single instance)
-      expect(
-        screen.getByRole("button", { name: /purchase/i }),
-      ).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /sale/i })).toBeInTheDocument();
+      // BACKLOG-2850: keyed on the TESTID, not on the label text. These three
+      // queries used `/purchase/i` and matched the old "Listing/Purchase"
+      // incidentally; "Listing" contains no "purchase", so they stopped
+      // resolving the moment the founder's label changed — and because this
+      // file never contains the string "Listing", no sweep for the old label
+      // surfaces it. The testid is the stable handle (it is also the e2e
+      // selector) and it is what identifies the RIGHT button independently of
+      // whatever the button is currently called.
+      expect(screen.getByTestId("create-audit-type-purchase")).toBeInTheDocument();
+      expect(screen.getByTestId("create-audit-type-sale")).toBeInTheDocument();
     });
   });
 

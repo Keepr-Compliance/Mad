@@ -8,10 +8,20 @@
  *    initial count instead of the fresh one → red both times (recorded below).
  *
  *  CONTROL 3 — THE LICENSE BRANCH, both ways. Individual → export. Broker-org
- *    member → submit. And it FAILS CLOSED: anything ambiguous (entitlements
- *    still loading, canSubmit true but no organization) goes to export, because
- *    export is the individual's only completion path and wrongly routing them to
- *    submit removes it. useFeatureGate would have failed OPEN here (`?? true`).
+ *    member → submit. A RESOLVED but odd answer — canSubmit true with no
+ *    organization — still goes to export, because export is the individual's
+ *    only completion path and wrongly routing them to submit removes it.
+ *    useFeatureGate would have failed OPEN here (`?? true`).
+ *
+ *    BACKLOG-2885 CORRECTION. This block used to say the branch "FAILS CLOSED"
+ *    and list "entitlements still loading" among the things that go to export.
+ *    That was wrong, and the wrongness was live: routing an UNREAD license to
+ *    export is not a refusal, it is a different action, and it handed a
+ *    brokerage user a local file while they believed they had submitted to
+ *    their broker. Unread is now `"unknown"` and reaches NEITHER flow — see
+ *    useCompleteTransaction.licenseUnknown-2885. Every fixture here sets
+ *    `isLicenseResolved: true`; the ambiguity this control covers is ambiguity
+ *    in an answer that ARRIVED.
  */
 import { renderHook, act } from "@testing-library/react";
 import { useCompleteTransaction } from "../useCompleteTransaction";
@@ -25,6 +35,12 @@ function setLicense(canSubmit: boolean, organizationId: string | null) {
   mockUseLicense.mockReturnValue({
     canSubmit,
     organizationId,
+    // BACKLOG-2885 — the provider ALWAYS sets this, so a fixture that omits it
+    // describes a state the app cannot emit. Every case in this file is a
+    // license that has been read: `true`. The unread state is its own suite
+    // (useCompleteTransaction.licenseUnknown-2885), because it reaches neither
+    // flow and would make these assertions pass for the wrong reason.
+    isLicenseResolved: true,
   } as unknown as ReturnType<typeof useLicense>);
 }
 
@@ -38,7 +54,13 @@ function setup(count: number, license: { canSubmit: boolean; org: string | null 
     count,
   });
   const hook = renderHook(() =>
-    useCompleteTransaction({ refreshReviewState, openExport, openSubmit, openNeedsReview }),
+    useCompleteTransaction({
+      transactionId: "tx-2792",
+      refreshReviewState,
+      openExport,
+      openSubmit,
+      openNeedsReview,
+    }),
   );
   return { hook, openExport, openSubmit, openNeedsReview, refreshReviewState };
 }
@@ -92,6 +114,7 @@ describe("CONTROL 2 — the completeness gate", () => {
 
     const hook = renderHook(() =>
       useCompleteTransaction({
+        transactionId: "tx-2792",
         refreshReviewState,
         openExport,
         openSubmit: jest.fn(),
@@ -149,6 +172,7 @@ describe("CONTROL 2 — the completeness gate", () => {
 
     const hook = renderHook(() =>
       useCompleteTransaction({
+        transactionId: "tx-2792",
         refreshReviewState,
         openExport,
         openSubmit,
@@ -193,8 +217,11 @@ describe("CONTROL 3 — the license branch, both ways", () => {
     expect(hook.result.current.resolveTarget()).toBe("submit");
   });
 
-  it("FAILS CLOSED: canSubmit without an organization goes to export, not submit", async () => {
-    // The shape entitlements take while still loading. Routing this user to
+  it("RESOLVED canSubmit without an organization goes to export, not submit", async () => {
+    // BACKLOG-2885: this used to be described as "the shape entitlements take
+    // while still loading" — it is not; a license that is still loading now
+    // reaches neither flow. This is a license that HAS been read and reports a
+    // submit-capable type with no organization behind it. Routing that user to
     // submit would take away the export that is their only way to complete.
     const { hook, openExport, openSubmit } = setup(0, { canSubmit: true, org: null });
 
@@ -206,7 +233,7 @@ describe("CONTROL 3 — the license branch, both ways", () => {
     expect(openSubmit).not.toHaveBeenCalled();
   });
 
-  it("FAILS CLOSED: an organization without canSubmit also goes to export", async () => {
+  it("RESOLVED: an organization without canSubmit also goes to export", async () => {
     const { hook, openExport, openSubmit } = setup(0, { canSubmit: false, org: "org-123" });
 
     await act(async () => {

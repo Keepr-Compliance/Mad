@@ -13,13 +13,33 @@
  *                  (founder walk, 2026-08-23) — with nothing queued there is
  *                  nothing to review now and nothing to defer.
  *
- *   P3 "blocked" — the Complete gate:
- *                  "You have N communications that need to be reviewed before
- *                   completing the transaction" [Review] [Cancel]
+ *   P3 "blocked" — the gate on Complete AND on every export route (2866):
+ *                  "You have N communications that need to be reviewed first."
+ *                  [Review] [Cancel]
+ *                  The sentence names no action, by founder ruling (2881), so
+ *                  one wording can serve routes that are not all completions.
  *                  There is NO bypass. The only affirmative action opens the
  *                  review screen.
  */
 import React from "react";
+// BACKLOG-2866: the blocked copy lives in the gate module, so the bulk-export
+// refusal says the same thing as this dialog. One condition, one wording.
+//
+// BACKLOG-2881 THEN CHANGED THAT WORDING DELIBERATELY. The 2866 extraction was
+// byte-identical; the founder's later ruling dropped the action from the
+// sentence ("...before completing the transaction" → "...reviewed first"),
+// because export from the brokerage-only header completes nothing. The full
+// reasoning is in the gate module. Do not reinstate the old sentence here or
+// anywhere else — `exportReviewGateCopy-2881.test.tsx` asserts that no string
+// these builders return names the action.
+//
+// WHY THE PIN IS A TEST AND NEVER "the old suites still pass": the "blocked"
+// variant had NO pre-existing test — reviewFounderFeedback-2791 covers only
+// variant="found" — so a green run proved nothing about this copy on either
+// change. It is pinned by the transcription tests in
+// `src/services/__tests__/exportReviewGate-2866.test.ts` and
+// `src/services/__tests__/exportReviewGateCopy-2881.test.tsx`.
+import { reviewBlockedBody, reviewBlockedTitle } from "@/services/exportReviewGate";
 
 export type ReviewPromptVariant = "found" | "blocked";
 
@@ -50,9 +70,7 @@ export function ReviewPromptDialog({
   const isBlocked = variant === "blocked";
   // BACKLOG-2791: -1 means the queue could not be READ. The gate blocks on that
   // rather than assuming empty, so the message must not claim a count it does
-  // not have.
-  const unreadable = isBlocked && count < 0;
-  const plural = count === 1 ? "communication" : "communications";
+  // not have. `reviewBlockedTitle`/`reviewBlockedBody` carry that branch now.
 
   // FOUNDER-DICTATED COPY (2026-08-22 R-session), transcribed verbatim. The
   // announcement is identical for a brand-new transaction and for an
@@ -77,17 +95,11 @@ export function ReviewPromptDialog({
   // simply closes. R > 0 keeps both, because there the choice is real.
   const acknowledgeOnly = !isBlocked && requiresReview === 0;
 
-  const title = unreadable
-    ? "Couldn't check Needs Review"
-    : isBlocked
-      ? "Review needed before completing"
-      : `${totalFound} total communications found`;
+  const title = isBlocked
+    ? reviewBlockedTitle(count)
+    : `${totalFound} total communications found`;
 
-  const body = unreadable
-    ? "The transaction can't be completed until the review queue can be read. Open Needs Review to try again."
-    : isBlocked
-      ? `You have ${count} ${plural} that need to be reviewed before completing the transaction.`
-      : null;
+  const body = isBlocked ? reviewBlockedBody(count) : null;
 
   return (
     <div
