@@ -1,20 +1,26 @@
 /**
- * BACKLOG-2899 — the iPhone sync disk guard must stop trusting the size estimate
+ * BACKLOG-2899 — the iPhone sync disk guard must not rest on the size estimate
  *
- * MEASURED, from the founder's Windows run 2026-08-26:
+ * PROVENANCE, stated precisely, because an earlier version of this header got it
+ * wrong and that error propagated into four backlog items:
  *
- *   [16:11:44] Backup completed successfully in 1464030ms, size: 58761372853 bytes
+ *   - This fixture is CONSTRUCTED, not transcribed from a run. Do not cite it as
+ *     an observation.
+ *   - Its SHAPE is real. On a first sync there is no prior backup to measure, so
+ *     `estimatedBackupSize` comes from `storageInfo` as `0.25 x device used
+ *     space` — a few GB is a value that branch genuinely emits — while a first
+ *     full backup lands on the order of tens of GB (~59 GB on the founder's
+ *     Windows machine). The fixture puts those two facts in the same run.
+ *   - The retracted claim: a "15.9x underestimate" read off a log line that was
+ *     a `bytesTransferred` progress value, not an estimate. The real line was
+ *     `Using existing backup size for estimate: 55 GB` against a ~59 GB backup —
+ *     ~7% under, and on the OTHER branch, the one with a prior backup to
+ *     measure. Estimate accuracy is BACKLOG-2896, not this item.
  *
- *   estimatedBackupSize .......  3.7 GB   (storageInfo, 0.25 x device used space)
- *   guard required ............  5.6 GB   (estimate x 1.5)
- *   actual backup on disk ..... 58.8 GB
- *   never checked for ......... 53.2 GB   (15.9x underestimate)
- *
- * The fixture below is that run: a 3.7 GB estimate against a machine with 10 GB
- * free, and a disk that then drains at the run's own measured transfer rate
- * (58,761,372,853 B / 1464.03 s = ~40 MB/s). The up-front check passes — that is
- * the defect — so the safety property has to come from re-checking DURING the
- * transfer.
+ * What the fixture exercises: a few-GB first-sync estimate against a machine
+ * with 10 GB free, and a disk that then drains under a running backup. The
+ * up-front check passes — that is the defect — so the safety property has to
+ * come from re-checking DURING the transfer.
  *
  * Why prevention and not detection: transcribed from libimobiledevice
  * tools/idevicebackup2.c mb2_handle_receive_files(), the host-side write is
@@ -32,30 +38,39 @@ import { EventEmitter } from "events";
 import type { BackupResult } from "../../types/backup";
 
 // ---------------------------------------------------------------------------
-// Measured constants — every number below traces to the run above
+// Fixture constants — chosen to reproduce the shape described above.
+// None of these is a transcribed measurement; see the provenance note.
 // ---------------------------------------------------------------------------
 
 const GB = 1024 * 1024 * 1024;
 
-/** The run's own transfer rate: 58,761,372,853 bytes over 1,464,030 ms. */
-const MEASURED_BYTES_PER_SEC = Math.round(58_761_372_853 / (1_464_030 / 1000));
+/**
+ * Rate at which the fixture drains the disk under a running backup. Local iPhone
+ * backups run at roughly 30-40 MB/s; the top of that range is used so the fixture
+ * crosses the reserve within a plausible run length.
+ */
+const FIXTURE_DRAIN_BYTES_PER_SEC = 40 * 1024 * 1024;
 
-/** storageInfo.estimatedBackupSize on the measured run. */
-const MEASURED_ESTIMATE_BYTES = Math.round(3.7 * GB);
+/** A first-sync `storageInfo.estimatedBackupSize` — the branch with nothing to measure. */
+const FIRST_SYNC_ESTIMATE_BYTES = Math.round(3.7 * GB);
 
-/** What actually landed on disk on the measured run. */
-const MEASURED_ACTUAL_BYTES = 58_761_372_853;
+/** A large backup's footprint on disk, of the order the founder's machine holds. */
+const LARGE_BACKUP_FOOTPRINT_BYTES = Math.round(59 * GB);
 
 /**
  * The reserve the guard must defend, in bytes.
  *
  * DISK_SPACE_THRESHOLDS.sync (2048 MB — what the rest of the sync pipeline
- * already declares it needs) + one poll interval of drift at the measured rate
- * (5 s x ~40 MB/s = ~200 MB, rounded up to 256 MB).
+ * already declares it needs) + one poll interval of drift, BOUNDED at ~40 MB/s
+ * (5 s x 40 MB/s = ~200 MB, rounded up to 256 MB). The drift term is an upper
+ * bound, not an observed rate.
  */
 const RESERVE_BYTES = (2048 + 256) * 1024 * 1024;
 
 const TOTAL_DISK_BYTES = 512 * GB;
+
+/** A full first backup's wall-clock length — 24.4 minutes is a realistic order. */
+const BACKUP_DURATION_MS = 1_464_030;
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -220,10 +235,9 @@ function installDisk(opts: { initialFree: number; drainBytesPerSec: number }) {
 }
 
 /**
- * A backup that behaves the way the measured run behaved: it keeps running, and
- * — because idevicebackup2 never checks its own fwrite — it eventually reports
- * SUCCESS whether or not the disk filled underneath it. It resolves early only
- * if something cancels it.
+ * A backup that keeps running and — because idevicebackup2 never checks its own
+ * fwrite — eventually reports SUCCESS whether or not the disk filled underneath
+ * it. It resolves early only if something cancels it.
  */
 function installBackup(opts: {
   markBackupStarted: () => void;
@@ -251,7 +265,7 @@ function installBackup(opts: {
           duration: opts.succeedAfterMs,
           deviceUdid: TEST_UDID,
           isIncremental: false,
-          backupSize: MEASURED_ACTUAL_BYTES,
+          backupSize: LARGE_BACKUP_FOOTPRINT_BYTES,
           isEncrypted: false,
         });
       }, opts.succeedAfterMs);
@@ -322,12 +336,12 @@ describe("BACKLOG-2899 — sync disk guard", () => {
     mockLogError.mockClear();
     jest.useFakeTimers();
 
-    mockCheckBackupStatus.mockResolvedValue(null); // first sync — the measured run
+    mockCheckBackupStatus.mockResolvedValue(null); // first sync: no prior backup to measure
     mockGetDeviceStorageInfo.mockResolvedValue({
       totalCapacity: 128 * GB,
       availableSpace: 113 * GB,
       usedSpace: 14.8 * GB,
-      estimatedBackupSize: MEASURED_ESTIMATE_BYTES,
+      estimatedBackupSize: FIRST_SYNC_ESTIMATE_BYTES,
     });
 
     orchestrator = new DeviceSyncOrchestrator();
@@ -340,21 +354,21 @@ describe("BACKLOG-2899 — sync disk guard", () => {
     jest.useRealTimers();
   });
 
-  describe("the measured run", () => {
+  describe("a first sync whose estimate is far under the real backup", () => {
     it("stops the sync when the disk drains under the reserve mid-transfer", async () => {
       const disk = installDisk({
         initialFree: 10 * GB,
-        drainBytesPerSec: MEASURED_BYTES_PER_SEC,
+        drainBytesPerSec: FIXTURE_DRAIN_BYTES_PER_SEC,
       });
       installBackup({
         markBackupStarted: disk.markBackupStarted,
-        succeedAfterMs: 1_464_030, // the measured 24.4-minute run
+        succeedAfterMs: BACKUP_DURATION_MS, // a full first backup
       });
 
       const result = await runSync(orchestrator, 1_600_000);
 
       // The up-front check passes on this fixture. That is the defect: 10 GB
-      // free clears `3.7 GB x 1.5 = 5.6 GB` for an operation that needs 58.8 GB.
+      // free clears `3.7 GB x 1.5` for an operation that will drain far more.
       expect(mockStartBackup).toHaveBeenCalled();
 
       // ...so the guard has to act during the transfer.
@@ -366,19 +380,19 @@ describe("BACKLOG-2899 — sync disk guard", () => {
     it("leaves the partial backup resumable rather than deleting it", async () => {
       const disk = installDisk({
         initialFree: 10 * GB,
-        drainBytesPerSec: MEASURED_BYTES_PER_SEC,
+        drainBytesPerSec: FIXTURE_DRAIN_BYTES_PER_SEC,
       });
       installBackup({
         markBackupStarted: disk.markBackupStarted,
-        succeedAfterMs: 1_464_030,
+        succeedAfterMs: BACKUP_DURATION_MS,
       });
 
       await runSync(orchestrator, 1_600_000);
 
       // `Backups/<udid>` must survive: checkBackupStatus reports it on the next
-      // run (exists / isCorrupted), which is this codebase's resume signal
-      // (deviceSyncOrchestrator "Previous backup was interrupted, will attempt
-      // to resume").
+      // run (exists / isCorrupted). Note this asserts the partial is KEPT, not
+      // that the next run continues from it — BACKLOG-2911 measured the next
+      // sync starting from zero despite the "will attempt to resume" log line.
       expect(mockDeleteBackup).not.toHaveBeenCalled();
       expect(mockDecryptionCleanup).not.toHaveBeenCalled();
     });
@@ -386,11 +400,11 @@ describe("BACKLOG-2899 — sync disk guard", () => {
     it("surfaces an error the orchestrator's own disk-space matcher recognises", async () => {
       const disk = installDisk({
         initialFree: 10 * GB,
-        drainBytesPerSec: MEASURED_BYTES_PER_SEC,
+        drainBytesPerSec: FIXTURE_DRAIN_BYTES_PER_SEC,
       });
       installBackup({
         markBackupStarted: disk.markBackupStarted,
-        succeedAfterMs: 1_464_030,
+        succeedAfterMs: BACKUP_DURATION_MS,
       });
 
       const result = await runSync(orchestrator, 1_600_000);
@@ -476,7 +490,7 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       const disk = installDisk({ initialFree: 64 * GB, drainBytesPerSec: 0 });
       installBackup({
         markBackupStarted: disk.markBackupStarted,
-        succeedAfterMs: 1_464_030,
+        succeedAfterMs: BACKUP_DURATION_MS,
       });
 
       await runSync(orchestrator, 1_600_000);
@@ -516,11 +530,11 @@ describe("BACKLOG-2899 — sync disk guard", () => {
     it("keeps the refusal loud: the crossing is written at info or louder", async () => {
       const disk = installDisk({
         initialFree: 10 * GB,
-        drainBytesPerSec: MEASURED_BYTES_PER_SEC,
+        drainBytesPerSec: FIXTURE_DRAIN_BYTES_PER_SEC,
       });
       installBackup({
         markBackupStarted: disk.markBackupStarted,
-        succeedAfterMs: 1_464_030,
+        succeedAfterMs: BACKUP_DURATION_MS,
       });
 
       await runSync(orchestrator, 1_600_000);
@@ -538,7 +552,7 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       expect(approach.length).toBeGreaterThan(0);
 
       // And it stays a handful of lines, not one per poll.
-      expect(disk.pollCount()).toBeGreaterThan(40);
+      expect(disk.pollCount()).toBeGreaterThanOrEqual(35);
       expect(monitorLines().length).toBeLessThan(30);
     });
 
@@ -546,7 +560,7 @@ describe("BACKLOG-2899 — sync disk guard", () => {
       // The control that matters: a test counting only log lines would pass if
       // someone slowed the timer instead, and a slower poll widens the window in
       // which the disk can fill undetected. SYNC_DISK_RESERVE_BYTES sizes its
-      // 256 MB drift term against ONE poll at the measured ~40 MB/s.
+      // 256 MB drift term against ONE poll, bounded at ~40 MB/s.
       expect(SYNC_DISK_POLL_INTERVAL_MS).toBe(5000);
 
       const disk = installDisk({ initialFree: 64 * GB, drainBytesPerSec: 0 });

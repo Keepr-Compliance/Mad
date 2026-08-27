@@ -46,18 +46,24 @@ import type { BackupProgress, BackupResult } from "../types/backup";
 /**
  * BACKLOG-2899: how often free space is re-measured while the backup runs.
  *
- * The up-front check cannot be the safety property here. It multiplies
+ * The up-front check is not, on its own, a safety property. It multiplies
  * `storageInfo.estimatedBackupSize` — a figure the code's own comment calls
- * "less accurate", derived from the phone's used space with apps skipped — and
- * on the founder's Windows run 2026-08-26 that figure was wrong by 15.9x:
+ * "less accurate", derived from the phone's used space — by a fixed headroom and
+ * then, before this change, did not refuse on the result at all: it logged
+ * "Proceeding anyway" and continued.
  *
- *   [16:11:44] Backup completed successfully in 1464030ms, size: 58761372853 bytes
+ * A first sync is the exposed case. There is no prior backup to measure, so the
+ * check runs on that derived figure, while a first full backup lands on the
+ * order of tens of GB — ~59 GB on the founder's Windows machine. A single
+ * up-front number cannot carry that alone, so the guard also measures as it goes.
  *
- *   estimate  3.7 GB  ->  guard asked for 5.6 GB  ->  58.8 GB actually written
- *
- * No headroom multiplier absorbs an order of magnitude, and tuning one against a
- * single observation would bake one phone's media profile into everyone's gate.
- * So the guard stops predicting and starts measuring.
+ * NOTE ON PROVENANCE: an earlier version of this comment claimed a 15.9x
+ * underestimate on a specific run. That figure was derived from a
+ * `bytesTransferred` progress value mistaken for an estimate; the real line was
+ * `Using existing backup size for estimate: 55 GB` against a ~59 GB backup —
+ * about 7% under, on the branch that HAS a prior backup to measure. Corrected
+ * here rather than quietly deleted, because that number had already propagated
+ * into four backlog items. Accuracy of the estimate itself is BACKLOG-2896.
  */
 export const SYNC_DISK_POLL_INTERVAL_MS = 5000;
 
@@ -69,12 +75,20 @@ export const SYNC_DISK_POLL_INTERVAL_MS = 5000;
  *   DISK_SPACE_THRESHOLDS.sync   2048 MB   what the rest of the sync pipeline
  *                                          (decrypt, parse, store) already
  *                                          declares it needs to run at all
- *   one poll of drift             256 MB   the measured run moved
- *                                          58,761,372,853 B in 1,464,030 ms =
- *                                          ~40 MB/s, so a 5 s poll interval can
- *                                          miss ~200 MB; rounded up
+ *   one poll of drift             256 MB   a BOUND, not a measurement: local
+ *                                          iPhone backups run at roughly
+ *                                          30-40 MB/s, so a 5 s poll can miss
+ *                                          ~200 MB at the top of that range;
+ *                                          rounded up
  *   ------------------------------------
  *   reserve                      2304 MB
+ *
+ * The drift term is deliberately an upper bound rather than an observed rate —
+ * it is only ever wrong in the safe direction, and no transfer-rate measurement
+ * from this codebase is currently trustworthy enough to derive it from. (An
+ * earlier version cited ~40 MB/s as measured, computed from a directory
+ * footprint over a wall-clock duration; the footprint is not bytes transferred,
+ * and run-to-run growth on that machine was ~150 MB.)
  *
  * This is a FLOOR the sync defends, not a prediction of backup size — the same
  * stance as `DISK_SPACE_THRESHOLDS.messagesImport`. It deliberately says nothing
@@ -87,20 +101,20 @@ export const SYNC_DISK_RESERVE_BYTES =
  * BACKLOG-2899 x BACKLOG-2898: how far free space must move before a poll earns
  * a log line.
  *
- * The monitor measures every 5 s — on the founder's measured 24.4-minute backup
- * that is ~293 readings. Writing all of them reintroduces exactly what
- * BACKLOG-2898 removed: his log went from 4,023 lines to ~100 for this workload,
- * and 293 identical "64 GB free" lines would nearly triple it again. Free space
- * that has not moved is not news.
+ * The monitor measures every 5 s — across a 24.4-minute backup that is ~293
+ * readings. Writing all of them reintroduces exactly what BACKLOG-2898 removed:
+ * the founder's log went from 4,023 lines to ~100 for this workload, and 293
+ * identical "64 GB free" lines would nearly triple it again. Free space that has
+ * not moved is not news.
  *
- * 5 GB is sized against the same measured run: the largest backup observed moved
- * 58.8 GB, so a 5 GB step emits ~12 lines at that extreme and one line for an
- * ordinary incremental sync — a small fraction of 2898's ~100-line budget.
+ * 5 GB is sized against the largest backup footprint observed, ~59 GB: a 5 GB
+ * step emits ~12 lines at that extreme and one line for an ordinary incremental
+ * sync — a small fraction of 2898's ~100-line budget.
  *
- * The measurement interval is NOT the lever here. SYNC_DISK_RESERVE_BYTES sizes
- * its 256 MB drift term against one poll at the measured ~40 MB/s; polling less
- * often widens the window in which the disk can fill undetected. Change what is
- * written, never how often it is measured.
+ * The measurement interval is NOT the lever here. SYNC_DISK_RESERVE_BYTES bounds
+ * its 256 MB drift term at one poll; polling less often widens the window in
+ * which the disk can fill undetected. Change what is written, never how often it
+ * is measured.
  */
 export const SYNC_DISK_LOG_DELTA_BYTES = 5 * 1024 * 1024 * 1024;
 
@@ -478,11 +492,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // reserve the mid-transfer monitor defends. Same constant, same semantic:
       // if the first poll would abort the backup, do not start it.
       //
-      // Deliberately NOT a refusal on `estimate x headroom` — the estimate is
-      // unreliable in both directions (16x under on the measured run; 0.25 x
-      // used space overshoots app-heavy phones, and apps are skipped), so
-      // blocking on it would refuse syncs that succeed today. The reserve is
-      // the only number here that does not depend on the estimate.
+      // Deliberately NOT a refusal on `estimate x headroom`: the reserve is the
+      // only number here that does not depend on the estimate at all, and a
+      // refusal on the FIRST-sync branch would rest on `0.25 x used space`,
+      // which no measurement in this codebase currently validates (BACKLOG-2896;
+      // the ratio's stated basis is itself disputed by BACKLOG-2910).
+      //
+      // This is narrower than it should be. On the `existingBackupSize > 0`
+      // branch the estimate is a PRIOR BACKUP'S MEASURED SIZE and was ~7% under
+      // on the founder's run, so refusing up front there would cost a user
+      // nothing while a mid-transfer abort costs a full 20-25 minute run. That
+      // is filed separately; this change does not make it.
       const reserveCheck = await this.checkAvailableDiskSpace(
         SYNC_DISK_RESERVE_BYTES,
       );
@@ -597,16 +617,19 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       }
 
       // BACKLOG-2899: the monitor cancelled the backup to protect the volume.
-      // The partial backup is deliberately left on disk: nothing on this path
-      // deletes `Backups/<udid>`, so the next run's checkBackupStatus finds it
-      // and idevicebackup2 resumes against it.
+      //
+      // The partial backup is deliberately left on disk — nothing on this path
+      // deletes `Backups/<udid>`, so the next run's checkBackupStatus still
+      // finds it. It does NOT follow that the next run continues from it:
+      // BACKLOG-2911 measured the next sync starting from zero. Do not promise
+      // resume in the message below until 2911 lands.
       if (this.diskSpaceAborted) {
         const freeGB = (this.diskSpaceAtAbort / 1024 / 1024 / 1024).toFixed(1);
         const reserveGB = (SYNC_DISK_RESERVE_BYTES / 1024 / 1024 / 1024).toFixed(1);
         const message =
           `Sync stopped to protect your computer: free disk space fell to ${freeGB} GB ` +
           `(below the ${reserveGB} GB this sync keeps in reserve) while the iPhone backup was running. ` +
-          `The partial backup was kept — free up space and sync again to resume it.`;
+          `The partial backup was kept on disk. Free up space and sync again — the next sync currently starts over rather than continuing from it.`;
         log.warn("[DeviceSyncOrchestrator] Sync aborted mid-transfer: disk space", {
           availableBytes: this.diskSpaceAtAbort,
           reserveBytes: SYNC_DISK_RESERVE_BYTES,
@@ -1134,9 +1157,10 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * BACKLOG-2899: watch free space for as long as the backup runs.
    *
    * Cancels the backup when free space falls below SYNC_DISK_RESERVE_BYTES.
-   * This is the guard's actual safety property — the up-front check consults an
-   * estimate that was 15.9x too low on the measured run, and idevicebackup2
-   * cannot be relied on to report the resulting full disk: transcribed from
+   * This is the guard's actual safety property — on a FIRST sync the up-front
+   * check has no prior backup to measure and consults a derived figure instead
+   * (BACKLOG-2896), and idevicebackup2 cannot be relied on to report the
+   * resulting full disk: transcribed from
    * tools/idevicebackup2.c mb2_handle_receive_files(), the host-side write is
    * `fwrite(buf, 1, r, f);` with the return value never checked and `fclose(f)`
    * likewise unchecked, so a full volume is silently absorbed and the tool can
