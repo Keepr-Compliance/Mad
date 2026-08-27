@@ -10,14 +10,30 @@
  * first sync, and a two-state boolean would force "I could not tell" to be
  * reported as one of the two real answers — which is the defect this replaces.
  *
- * - `"exists"`  a prior backup directory is on disk. Complete or partial (see
- *               BACKLOG-2925); for "is this a first sync?" both mean no.
- * - `"none"`    the host established there is no prior backup. NOT PRODUCED YET:
- *               `checkBackupStatus` currently returns `null` both for ENOENT and
- *               for a thrown check (`backupService.ts:1489`), so this value
- *               cannot be established until BACKLOG-2917 splits them.
+ * BACKLOG-2938 CHANGED WHAT THESE VALUES MEAN. They report USABILITY, not
+ * existence. The question this answers is "is a full transfer coming?", not
+ * "is there a directory on disk?".
+ *
+ * - `"exists"`  a prior backup is on disk AND is usable — `isComplete &&
+ *               !isInterrupted`, the one predicate, evaluated by
+ *               `isUsablePriorBackup` in `deviceSyncOrchestrator.ts`. The next
+ *               sync is incremental.
+ * - `"none"`    no full transfer can be avoided. EITHER the host established
+ *               there is no prior backup (a proven ENOENT — producible since
+ *               BACKLOG-2917 split it from a thrown check) OR a directory is on
+ *               disk that cannot be restored from, which is the same thing from
+ *               the user's side.
  * - `"unknown"` the answer could not be established, or the payload predates
  *               this field. Consumers must render nothing rather than guess.
+ *
+ * This deliberately reverses the older contract, which read "Complete or partial
+ * (see BACKLOG-2925); for 'is this a first sync?' both mean no". That was sound
+ * for a genuine partial — a torn multi-GB transfer — and false for the state
+ * measured on the founder's install: a 6.3 MB `Info.plist` and no manifest, where
+ * nothing usable was ever transferred. He was told the old backup was worthless
+ * and, in the same breath, not told the replacement would run for hours. Founder
+ * ruling, 2026-08-27: "if the sync isn't useable show the this may take two hours
+ * msg."
  */
 export type PriorBackupState = "exists" | "none" | "unknown";
 

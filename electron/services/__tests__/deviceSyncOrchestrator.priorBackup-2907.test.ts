@@ -217,27 +217,34 @@ function statesAfterCheck(states: Array<PriorBackupState | undefined>) {
   return states.slice(1);
 }
 
-describe("BACKLOG-2907: a prior backup on disk is reported as `exists`", () => {
-  it("reports `exists` for the founder's 6.5 GB interrupted backup", async () => {
+describe("BACKLOG-2907: a USABLE prior backup is reported as `exists`", () => {
+  it("BACKLOG-2938 REVERSED THIS — the founder's 6.5 GB interrupted backup reports `none`", async () => {
     const states = await collectPriorBackupStates(founderInterruptedStatus);
 
     expect(states.length).toBeGreaterThan(1);
-    // Partial or whole, a prior backup means this is not a first sync. The
-    // partial/complete conflation (BACKLOG-2925) is real but does not change THIS
-    // answer, which is why this item did not have to wait for 2925.
-    expect(statesAfterCheck(states).every((s) => s === "exists")).toBe(true);
+    // This assertion used to read `every((s) => s === "exists")`, on the argument that
+    // "partial or whole, a prior backup means this is not a first sync". Founder
+    // ruling, 2026-08-27: "if the sync isn't useable show the this may take two hours
+    // msg." The banner is a warning about a coming wait, not a description of the
+    // disk, so an interrupted backup — which cannot be resumed, per BACKLOG-2911 —
+    // reports `"none"`. See `deviceSyncOrchestrator.usabilityParity-2938.test.ts`.
+    expect(statesAfterCheck(states).every((s) => s === "none")).toBe(true);
   });
 
   it("reports `exists` for a complete prior backup", async () => {
     const states = await collectPriorBackupStates(completePriorBackupStatus);
 
+    // Unchanged by BACKLOG-2938, and the control that keeps the fix from becoming
+    // "always show".
     expect(statesAfterCheck(states).every((s) => s === "exists")).toBe(true);
   });
 
-  it("never reports `none` when a backup is on disk", async () => {
+  it("BACKLOG-2938 REVERSED THIS — an UNUSABLE backup on disk does report `none`", async () => {
     const states = await collectPriorBackupStates(founderInterruptedStatus);
 
-    expect(states).not.toContain("none");
+    // Formerly "never reports `none` when a backup is on disk". Existence is no longer
+    // the question; usability is.
+    expect(statesAfterCheck(states)).not.toContain("exists");
   });
 });
 
@@ -295,7 +302,12 @@ describe("BACKLOG-2907: each run establishes its own answer", () => {
   it("does not carry run 1's `exists` into run 2 when run 2 finds nothing", async () => {
     const orchestrator = new DeviceSyncOrchestrator();
 
-    const firstRun = await collectPriorBackupStates(founderInterruptedStatus, orchestrator);
+    // BACKLOG-2938: the fixture is the COMPLETE backup, not the founder's interrupted
+    // one. This test exists to prove run 1's `"exists"` is not carried into run 2, so
+    // run 1 has to actually produce `"exists"` — and after 2938 only a usable prior
+    // backup does. Using the interrupted fixture here would make run 1 `"none"` and
+    // the test would pass without testing anything.
+    const firstRun = await collectPriorBackupStates(completePriorBackupStatus, orchestrator);
     expect(statesAfterCheck(firstRun).every((s) => s === "exists")).toBe(true);
 
     // Same orchestrator instance — this is the case the per-run reset exists for. A

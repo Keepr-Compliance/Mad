@@ -45,21 +45,34 @@ function transferring(priorBackup?: BackupProgress["priorBackup"]): BackupProgre
   };
 }
 
-describe("BACKLOG-2907: the banner renders only on an established first sync", () => {
-  it("renders when the host established there is no prior backup", () => {
+describe("BACKLOG-2907: the banner renders only on an established full transfer", () => {
+  it("renders when the host established no usable prior backup exists", () => {
     render(<SyncProgress progress={transferring("none")} />);
 
     expect(screen.getByText(BANNER)).toBeInTheDocument();
     expect(screen.getByText(BANNER_BODY, { exact: false })).toBeInTheDocument();
   });
 
-  it("does NOT render on the founder's case — a 6.5 GB interrupted prior backup", () => {
-    // The observed run: `Previous backup did not finish (6.5 GB on disk)`,
-    // `reusedPreviousBackup=true`, 2026-08-26 22:22:41. `checkBackupStatus` reported
-    // `exists: true, isComplete: false, isInterrupted: true` for it, which the
-    // orchestrator maps to `"exists"` (see deviceSyncOrchestrator.priorBackup-2907).
+  it("BACKLOG-2938 — renders on the founder's unusable directory, which now maps to `none`", () => {
+    // His `Backups/<udid>/` holds a 6.3 MB `Info.plist` and no manifest. Under the
+    // OLD contract that directory's mere existence mapped to `"exists"`, so he was
+    // told "Previous backup can't be used. Starting a fresh backup…" and, in the same
+    // run, NOT told the replacement is a multi-hour full transfer.
     //
-    // This is the assertion the old code fails: the banner rendered here.
+    // `PriorBackupState` now reports USABILITY, so that state arrives here as
+    // `"none"`. The orchestrator half of this control — that his exact
+    // `checkBackupStatus` shape produces `"none"` — is in
+    // `deviceSyncOrchestrator.usabilityParity-2938.test.ts`; this is the renderer half.
+    render(<SyncProgress progress={transferring("none")} />);
+
+    expect(screen.getByText(BANNER)).toBeInTheDocument();
+    expect(screen.getByText(BANNER_BODY, { exact: false })).toBeInTheDocument();
+  });
+
+  it("does NOT render when a USABLE prior backup exists — the sync is incremental", () => {
+    // BACKLOG-2938 narrowed what reaches `"exists"`: a complete, uninterrupted prior
+    // backup, and nothing else. The absence asserted here is what stops the fix from
+    // becoming "always show", which was BACKLOG-2907's original defect.
     render(<SyncProgress progress={transferring("exists")} />);
 
     expect(screen.queryByText(BANNER)).not.toBeInTheDocument();

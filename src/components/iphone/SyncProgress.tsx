@@ -82,31 +82,39 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
 
   /**
    * BACKLOG-2907: the prior-backup signal has THREE states, and only one of them
-   * may claim a first sync.
+   * may claim a full transfer is coming.
    *
-   * | state       | meaning                                   | banner |
-   * |-------------|-------------------------------------------|--------|
-   * | `"none"`    | host established there is no prior backup | shown  |
-   * | `"exists"`  | a prior backup is on disk (whole or part) | hidden |
-   * | `"unknown"` | could not be established, or field absent | hidden |
+   * | state       | meaning                                          | banner |
+   * |-------------|--------------------------------------------------|--------|
+   * | `"none"`    | no usable prior backup — a full transfer is next  | shown  |
+   * | `"exists"`  | a USABLE prior backup is on disk; incremental     | hidden |
+   * | `"unknown"` | could not be established, or field absent         | hidden |
    *
    * Absent field reads as `"unknown"`: a payload from a main process that
    * predates this field must not be read as "first sync".
    *
-   * NOTE: `"none"` is not produced by anything yet. `checkBackupStatus` returns
-   * `null` both for ENOENT and for a check that threw, so the orchestrator maps
-   * `null` to `"unknown"` on purpose (see BACKLOG-2917). Until 2917 lands this
-   * banner therefore stays hidden in every reachable state — deliberately.
-   * Claiming a two-hour first sync on a guess is the bug this replaces, and the
-   * founder's rule for the unknown case is to render nothing.
+   * BACKLOG-2917 is what makes `"none"` producible at all. Before it,
+   * `checkBackupStatus` returned `null` for both ENOENT and a thrown check, so
+   * the orchestrator could only say `"unknown"` and this banner was unreachable.
+   *
+   * BACKLOG-2938 then changed WHICH on-disk states produce `"none"`. The host now
+   * reports USABILITY, not existence: a directory that exists but cannot be
+   * restored from maps to `"none"`, because the user is about to wait for a full
+   * transfer either way. That is the founder's ruling of 2026-08-27 — "if the sync
+   * isn't useable show the this may take two hours msg." — after his own install
+   * showed him "Previous backup can't be used. Starting a fresh backup..." while
+   * this banner stayed hidden.
+   *
+   * The unknown case is unchanged and still renders nothing: claiming a two-hour
+   * first sync on a guess is the bug this all replaces.
    */
   const priorBackup = progress.priorBackup ?? "unknown";
-  const isEstablishedFirstSync = priorBackup === "none";
+  const isEstablishedFullTransfer = priorBackup === "none";
 
   // Show first sync time warning once transfer has started — and only when the
-  // host actually established that this IS a first sync.
+  // host actually established that no usable prior backup exists.
   const showFirstSyncHint =
-    !isComplete && !isError && isBackingUp && hasStartedTransfer && isEstablishedFirstSync;
+    !isComplete && !isError && isBackingUp && hasStartedTransfer && isEstablishedFullTransfer;
 
   return (
     <div className="p-6">
