@@ -74,6 +74,15 @@ jest.mock("../../databaseEncryptionService", () => {
 jest.mock("../../contactsService", () => ({
   getContactNames: jest.fn(() => Promise.resolve([])),
 }));
+// safeStorage is unavailable under jest; the end-to-end block below only needs
+// encrypt/decrypt to be total functions, never real crypto.
+jest.mock("../../tokenEncryptionService", () => ({
+  __esModule: true,
+  default: {
+    encrypt: jest.fn((v: string) => `encrypted:${v}`),
+    decrypt: jest.fn((v: string) => String(v).replace(/^encrypted:/, "")),
+  },
+}));
 jest.mock("../../../workers/contactWorkerPool", () => ({
   queryContacts: jest.fn(),
   isPoolReady: jest.fn(() => false),
@@ -352,6 +361,28 @@ describe("BACKLOG-2560 — writers vs the real database", () => {
       expect(getLLMSettingsByUserId(USER_ID)?.anthropic_api_key_encrypted).toBe(
         "encrypted-anthropic-key-fixture",
       );
+    });
+
+    /**
+     * THE CONTROL THAT WOULD HAVE CAUGHT BACKLOG-2932.
+     *
+     * `llmConfigService.test.ts` mocks the whole db module, so reverting
+     * `removeApiKey` to its `{ <col>: undefined }` payload leaves that suite
+     * fully green — measured, 40/40 passing with the bug reinstated. The defect
+     * lives in the gap between the caller and the writer, and only a test that
+     * drives the real caller into a real database can stand in that gap.
+     */
+    it("removeApiKey — the real caller, against the real row", async () => {
+      // Deferred require so the mock factories above are applied first.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const configService = require("../../llm/llmConfigService").default;
+
+      expect(storedKeys().openai).toBe("encrypted-openai-key-fixture");
+
+      await configService.removeApiKey(USER_ID, "openai");
+
+      expect(storedKeys().openai).toBeNull();
+      expect(storedKeys().anthropic).toBe("encrypted-anthropic-key-fixture");
     });
   });
 });

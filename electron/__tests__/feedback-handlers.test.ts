@@ -190,10 +190,23 @@ describe("Feedback Handlers", () => {
       expect(result.error).toContain("Save failed");
     });
 
-    it("should validate field_name length", async () => {
+    /**
+     * BACKLOG-2560 — this test used to assert that an over-long `field_name` was
+     * REJECTED. `classification_feedback` has no `field_name` column
+     * (schema.sql:950); the only one in the schema belongs to
+     * `extracted_transaction_data`. So the handler was rejecting a submission
+     * over the length of a value that could never be stored either way, and the
+     * green test read as coverage of a column that does not exist.
+     *
+     * The validation is gone. What the row actually contains is asserted against
+     * a real database in `db/__tests__/writerColumnParity-2560.test.ts`.
+     */
+    it("does not reject on field_name — no such column exists to validate", async () => {
+      mockDatabaseService.saveFeedback.mockResolvedValue({ id: "feedback-123" });
+
       const feedbackWithLongFieldName = {
         ...validFeedbackData,
-        field_name: "a".repeat(150), // Too long
+        field_name: "a".repeat(150),
       };
 
       const handler = registeredHandlers.get("feedback:submit");
@@ -203,8 +216,8 @@ describe("Feedback Handlers", () => {
         feedbackWithLongFieldName,
       );
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Validation error");
+      expect(result.success).toBe(true);
+      expect(mockDatabaseService.saveFeedback).toHaveBeenCalled();
     });
   });
 
