@@ -3209,6 +3209,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
       _event: IpcMainInvokeEvent,
       handles: string[],
       userId?: string,
+      scope?: { transactionId?: string },
     ): Promise<{ success: boolean; names: Record<string, string>; error?: string }> => {
       try {
         if (!Array.isArray(handles)) {
@@ -3220,7 +3221,30 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // BACKLOG-2757: the IPC contract stays `Record<handle, label>`; the
         // label is now the honest one ("A or B" for a shared line) rather than
         // whichever contact was inserted last.
-        const resolution = await resolveHandles(handles, validatedUserId ?? undefined);
+        //
+        // =====================================================================
+        // BACKLOG-2758 — THE SCOPE IS BUILT HERE, NOT FORWARDED FROM THE WIRE.
+        // =====================================================================
+        // The export path has always passed a scope; this path never could,
+        // because the IPC contract had nowhere to put a transaction id. With
+        // `scope?.transactionId ?? null` therefore always null, nothing was ever
+        // marked `is_transaction_linked`, `namesForHandle`'s
+        // `linked.length > 0 ? linked : matches` always fell through to ALL
+        // matches, and the Texts tab kept printing "A or B" for a shared line
+        // AFTER the user had unlinked one of the two contacts from the deal —
+        // while the export, which did pass a scope, correctly named only the
+        // remaining party. Two surfaces, one thread, two answers.
+        //
+        // Only `transactionId` is taken off the wire. `userId` is the HARD
+        // filter that keeps another user's contacts out of this user's names,
+        // and `resolvePhoneNames` resolves it as `scope?.userId ?? userId` — so
+        // a scope forwarded verbatim would let a renderer-supplied
+        // `scope.userId` OUTRANK the id `getValidUserId` just validated. The
+        // wire type has no `userId` field and this object does not read one.
+        const resolution = await resolveHandles(handles, validatedUserId ?? undefined, {
+          userId: validatedUserId ?? undefined,
+          transactionId: scope?.transactionId ?? null,
+        });
         return { success: true, names: resolution.names };
       } catch (error) {
         logService.error("Resolve handles failed", "Contacts", {
