@@ -75,6 +75,43 @@ export class BackupService extends EventEmitter {
 
   // BACKLOG-1628: Stderr debug parsing state
   private stderrLineBuffer: string = "";
+
+  /**
+   * BACKLOG-2898: stderr words that indicate a real fault. Unchanged from
+   * BACKLOG-1628 — what changed is that they are now tested per LINE, with
+   * libimobiledevice's mutex trace removed first.
+   */
+  private static readonly STDERR_ERROR_WORDS = [
+    "trust",
+    "pair",
+    "password",
+    "incorrect",
+    "locked",
+    "passcode",
+    "no device",
+    "not found",
+    "disk",
+    "space",
+    "storage",
+  ];
+
+  /**
+   * `np_lock(): Locked` / `np_unlock(): Unlocked` / `afc_lock(): Locked` — a
+   * pthread mutex trace. The `<name>():` shape is what makes this safe: a real
+   * message ("Device is locked", "please unlock your iPhone") can never match.
+   */
+  private static readonly LIBIMOBILEDEVICE_MUTEX_TRACE =
+    /\b\w*_(?:un)?lock\(\):\s*(?:Locked|Unlocked)\b/gi;
+
+  /** libimobiledevice's -d trace format: `16:06:22 D:\...\idevice.c:652 func(): msg`. */
+  private static readonly LIBIMOBILEDEVICE_TRACE_FORMAT =
+    /^\d{2}:\d{2}:\d{2}\s+\S+[\\/][^\s]+:\d+\s+\w+\(\):/;
+
+  /** Cap on distinct unrecognised stderr lines breadcrumbed per backup run. */
+  private static readonly MAX_STDERR_BREADCRUMBS = 50;
+
+  /** Fingerprints of stderr lines already sent to Sentry this run. */
+  private breadcrumbedStderrLines: Set<string> = new Set();
   private manifestUploadPhase: boolean = false;
   private manifestUploadSize: string | null = null;
 
@@ -317,6 +354,8 @@ export class BackupService extends EventEmitter {
 
       // BACKLOG-1628: Reset stderr parsing state
       this.stderrLineBuffer = "";
+      // BACKLOG-2898: breadcrumb dedupe is per backup run
+      this.breadcrumbedStderrLines.clear();
       this.manifestUploadPhase = false;
       this.manifestUploadSize = null;
 
@@ -402,51 +441,27 @@ export class BackupService extends EventEmitter {
           this.parseStderrLine(line, options.udid);
         }
 
-        // Original: log non-progress, non-debug lines for error detection
-        // With -d flag, only log lines that match known error patterns
-        // (the debug output is far too verbose to log in full)
-        const outputLower = output.toLowerCase();
-        const isErrorPattern =
-          outputLower.includes("trust") ||
-          outputLower.includes("pair") ||
-          outputLower.includes("password") ||
-          outputLower.includes("incorrect") ||
-          outputLower.includes("locked") ||
-          outputLower.includes("passcode") ||
-          outputLower.includes("no device") ||
-          outputLower.includes("not found") ||
-          outputLower.includes("disk") ||
-          outputLower.includes("space") ||
-          outputLower.includes("storage");
-
-        if (isErrorPattern) {
-          log.warn("[BackupService] stderr (error pattern):", output.trim().substring(0, 500));
-        } else {
-          // BACKLOG-1628: Restore Sentry breadcrumbs for unrecognized non-debug patterns.
-          // With -d flag, known debug prefixes (SSL_write, service_send, etc.) are very
-          // frequent and should be silently skipped. But genuinely unrecognized lines
-          // may indicate new error patterns we haven't categorized yet.
-          const isDebugLine =
-            output.includes("SSL_write") ||
-            output.includes("service_send") ||
-            output.includes("internal_plist") ||
-            output.includes("idevice_connection") ||
-            output.includes("Sending '") ||
-            output.includes("Negotiated Protocol") ||
-            output.includes("backup mode") ||
-            output.includes("Starting backup") ||
-            output.includes("Requesting backup") ||
-            output.includes("Status.plist") ||
-            output.includes("Manifest.plist") ||
-            output.includes("Manifest.db");
-
-          if (!isDebugLine && output.trim().length > 0) {
-            Sentry.addBreadcrumb({
-              category: "backup",
-              message: output.trim().substring(0, 200),
-              level: "info",
-            });
-          }
+        // BACKLOG-2898: classify PER LINE, not per chunk.
+        //
+        // This block used to test the whole stderr CHUNK for a trigger word and,
+        // on a hit, dump a 500-char window of that chunk at `warn`. Measured on
+        // the founder's real 21-minute log: 336 such records, 123,299 bytes,
+        // 17.5% of the whole file — and a trigger histogram over all 336 shows
+        // exactly ONE word ever fired, "locked", every single time from
+        // libimobiledevice's own MUTEX trace (`notification_proxy.c:52
+        // np_lock(): Locked`). Zero records contained a non-mutex trigger. The
+        // rest of each record — idevice_connection_receive_timeout,
+        // internal_plist_receive_timeout, np_get_notification — carries no
+        // trigger word at all and was pure collateral of the 500-char window.
+        // 13 of the 336 were truncated so hard that the word that caused them
+        // to be logged is not even in the logged text.
+        //
+        // The backup that produced all of this COMPLETED SUCCESSFULLY. Per-line
+        // classification plus demoting the mutex trace removes all 336 without
+        // silencing a single line that carries a genuine trigger — a real
+        // "Device is locked, enter your passcode" still warns.
+        for (const line of lines) {
+          this.classifyStderrLine(line);
         }
       });
 
@@ -745,6 +760,84 @@ export class BackupService extends EventEmitter {
         }));
       }
     }, 10_000);
+  }
+
+  /**
+   * BACKLOG-2898: classify ONE stderr line as a real error signal, benign
+   * libimobiledevice debug chatter, or something unrecognised.
+   *
+   * Called for every stderr line on a hot path (30K+ lines in 20s during
+   * manifest upload), so every test is a cheap substring or a single anchored
+   * regex.
+   */
+  private classifyStderrLine(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    // A libimobiledevice MUTEX trace: `np_lock(): Locked`, `np_unlock():
+    // Unlocked`, `afc_lock(): Locked`. The word "Locked" here is a pthread
+    // mutex state inside notification_proxy.c — it says nothing about the
+    // DEVICE being locked, and it is emitted continuously during a healthy
+    // backup. Strip the trace before testing for trigger words, so a line that
+    // ALSO carries a genuine signal is still caught.
+    const withoutMutexTrace = trimmed.replace(
+      BackupService.LIBIMOBILEDEVICE_MUTEX_TRACE,
+      "",
+    );
+
+    const lower = withoutMutexTrace.toLowerCase();
+    const isErrorPattern = BackupService.STDERR_ERROR_WORDS.some((word) =>
+      lower.includes(word),
+    );
+
+    if (isErrorPattern) {
+      log.warn("[BackupService] stderr (error pattern):", trimmed.substring(0, 500));
+      return;
+    }
+
+    // BACKLOG-1628: Sentry breadcrumbs for unrecognised non-debug lines, which
+    // may indicate error patterns we have not categorised yet.
+    //
+    // BACKLOG-2898: this is now per LINE where it used to be per chunk, so it
+    // is bounded two ways — libimobiledevice's own debug-trace format counts as
+    // a known debug line, and identical lines (ignoring numbers) breadcrumb
+    // once per backup. Without both, a chunk that produced one breadcrumb could
+    // produce dozens and push the useful ones out of Sentry's ring buffer.
+    if (this.isKnownDebugLine(trimmed)) return;
+
+    const fingerprint = trimmed.replace(/\d+/g, "#").substring(0, 200);
+    if (this.breadcrumbedStderrLines.has(fingerprint)) return;
+    if (this.breadcrumbedStderrLines.size >= BackupService.MAX_STDERR_BREADCRUMBS) return;
+    this.breadcrumbedStderrLines.add(fingerprint);
+
+    Sentry.addBreadcrumb({
+      category: "backup",
+      message: trimmed.substring(0, 200),
+      level: "info",
+    });
+  }
+
+  /**
+   * Known-benign debug output from the `-d` flag. The first test is
+   * libimobiledevice's own trace FORMAT (`HH:MM:SS <src path>:<line>
+   * <function>(): ...`), which by construction only exists because we pass -d.
+   */
+  private isKnownDebugLine(line: string): boolean {
+    if (BackupService.LIBIMOBILEDEVICE_TRACE_FORMAT.test(line)) return true;
+    return (
+      line.includes("SSL_write") ||
+      line.includes("service_send") ||
+      line.includes("internal_plist") ||
+      line.includes("idevice_connection") ||
+      line.includes("Sending '") ||
+      line.includes("Negotiated Protocol") ||
+      line.includes("backup mode") ||
+      line.includes("Starting backup") ||
+      line.includes("Requesting backup") ||
+      line.includes("Status.plist") ||
+      line.includes("Manifest.plist") ||
+      line.includes("Manifest.db")
+    );
   }
 
   /**
