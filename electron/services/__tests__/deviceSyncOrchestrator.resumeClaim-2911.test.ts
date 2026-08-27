@@ -178,6 +178,10 @@ const interruptedStatus = {
   state: "present" as const,
   isComplete: false,
   isInterrupted: true,
+  // BACKLOG-2926: `isInterrupted` IS `snapshotState === "unfinished"`. The orchestrator
+  // now switches on the snapshot state itself, so a fixture omitting it describes a
+  // state `checkBackupStatus` cannot emit — every arm of the union sets it.
+  snapshotState: "unfinished" as const,
   size: { measured: true as const, bytes: FIVE_GB },
   lastModified: new Date("2026-08-26T18:05:04Z"),
 };

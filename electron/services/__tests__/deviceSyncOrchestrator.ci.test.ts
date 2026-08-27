@@ -54,6 +54,7 @@ jest.mock("../backupService", () => ({
       state: "present",
       isComplete: true,
       isInterrupted: false,
+      snapshotState: "finished",
       size: { measured: true, bytes: 100 * 1024 * 1024 },
       lastModified: new Date(),
     }),

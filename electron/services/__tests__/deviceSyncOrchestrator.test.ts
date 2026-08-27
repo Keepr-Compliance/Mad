@@ -76,6 +76,7 @@ class MockBackupService extends EventEmitter {
       state: "present" as const,
       isComplete: true,
       isInterrupted: false,
+      snapshotState: "finished" as const,
       size: { measured: true as const, bytes: 1024 * 1024 * 100 }, // 100MB
       lastModified: new Date(),
     };

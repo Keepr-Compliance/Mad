@@ -92,6 +92,22 @@ export type BackupSizeReading =
   | { measured: false; reason: string };
 
 /**
+ * BACKLOG-2911: the device's own verdict on the last backup, from `Status.plist`.
+ *
+ * BACKLOG-2926: this is returned to callers now. `readSnapshotState` has computed all
+ * three states correctly since 2911, but `checkBackupStatus` collapsed it to
+ * `isInterrupted = snapshotState === "unfinished"` and never returned the value, so
+ * `"absent"` became `isInterrupted: false` and was indistinguishable from a finished
+ * snapshot. The orchestrator had exactly two branches, and a directory that is neither
+ * interrupted nor complete fired NEITHER — the user was told nothing at all.
+ *
+ * `"absent"` is a real third state, not a missing value: a `Status.plist` that is not
+ * there carries no evidence either way. It is also the state before a device has ever
+ * completed a backup into the directory.
+ */
+export type BackupSnapshotState = "finished" | "unfinished" | "absent";
+
+/**
  * BACKLOG-2917: what `checkBackupStatus` found. Three states, never two.
  *
  * The previous signature was `{...} | null`, and `null` meant BOTH "ENOENT, this
@@ -123,6 +139,12 @@ export type BackupStatusReport =
        * on disk is a partial backup. See `readSnapshotState`.
        */
       isInterrupted: boolean;
+      /**
+       * BACKLOG-2926: the device's own verdict, no longer thrown away. `isInterrupted`
+       * is `snapshotState === "unfinished"` and cannot express the difference between
+       * "the device said it finished" and "nothing said anything".
+       */
+      snapshotState: BackupSnapshotState;
       lastModified: Date;
       size: BackupSizeReading;
     };

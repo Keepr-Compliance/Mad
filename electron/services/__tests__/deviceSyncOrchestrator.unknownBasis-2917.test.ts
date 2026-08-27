@@ -177,6 +177,7 @@ const MEASURED_COMPLETE = {
   state: "present" as const,
   isComplete: true,
   isInterrupted: false,
+  snapshotState: "finished" as const,
   size: { measured: true as const, bytes: DEVICE_STORAGE_ESTIMATE },
   lastModified: new Date("2026-08-26T16:11:44Z"),
 };
@@ -185,6 +186,7 @@ const PRESENT_SIZE_UNMEASURED = {
   state: "present" as const,
   isComplete: true,
   isInterrupted: false,
+  snapshotState: "finished" as const,
   size: { measured: false as const, reason: "EACCES" },
   lastModified: new Date("2026-08-26T16:11:44Z"),
 };

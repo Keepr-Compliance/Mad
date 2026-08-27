@@ -1553,6 +1553,9 @@ export class BackupService extends EventEmitter {
         state: "present",
         isComplete,
         isInterrupted,
+        // BACKLOG-2926: the value was computed and logged here, then dropped on the
+        // floor. Only the wire was missing.
+        snapshotState,
         lastModified: stats.mtime,
         size,
       };
@@ -1612,7 +1615,20 @@ export class BackupService extends EventEmitter {
         return "absent";
       }
       // Present but unreadable: we cannot prove the snapshot finished, so it did not.
+      //
+      // BACKLOG-2926 (§6.4): failing CLOSED is correct — this refuses under uncertainty
+      // rather than substituting a different answer, which is the opposite of the
+      // BACKLOG-2917 defect. But an infrastructure break would present to EVERY user as
+      // "Previous sync didn't finish" with only a `log.warn` to show for it. The
+      // breadcrumb makes "the file could not be read" separable from "the device said
+      // the snapshot was not finished" without changing the safe behaviour.
       log.warn("[BackupService] Status.plist unreadable, treating snapshot as unfinished:", readErr);
+      Sentry.addBreadcrumb({
+        category: "backup.snapshot",
+        message: "Status.plist unreadable; failing closed to unfinished",
+        level: "warning",
+        data: { reason: describeError(readErr) },
+      });
       return "unfinished";
     }
 
@@ -1633,7 +1649,17 @@ export class BackupService extends EventEmitter {
       const SNAPSHOT_STATE_FINISHED = "finished";
       return snapshotState === SNAPSHOT_STATE_FINISHED ? "finished" : "unfinished";
     } catch (parseErr: unknown) {
+      // BACKLOG-2926 (§6.4): as above. This catch cannot separate "the plist says
+      // something else" from "the parser broke", and a broken parser would report every
+      // user's healthy backup as torn. Failing closed stays; the breadcrumb is what
+      // makes a systemic break visible as one.
       log.warn("[BackupService] Status.plist unparseable, treating snapshot as unfinished:", parseErr);
+      Sentry.addBreadcrumb({
+        category: "backup.snapshot",
+        message: "Status.plist unparseable; failing closed to unfinished",
+        level: "warning",
+        data: { reason: describeError(parseErr) },
+      });
       return "unfinished";
     }
   }

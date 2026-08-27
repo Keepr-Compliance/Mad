@@ -493,6 +493,13 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // as fact. The basis is now named, so "we do not know" is a value the estimate,
       // the headroom and the mark all have to handle explicitly.
       let priorBackup: PriorBackupBasis;
+      /**
+       * BACKLOG-2926 (SR recommendation): carried into the `backup-estimate` mark so
+       * "how common is a snapshot state we reason about but have never measured?"
+       * becomes a question BACKLOG-2894's aggregate can answer, instead of a judgement
+       * call made once in a review.
+       */
+      let snapshotStateForTelemetry: string = "no-backup";
 
       if (backupStatus.state === "unknown") {
         // Proven: nothing. Do NOT say "first sync" — that is the 2917 defect, and
@@ -510,6 +517,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       } else if (backupStatus.state === "present") {
         // The directory is there. Its SIZE is a separate three-state reading: a walk
         // that threw must not be reported as a measured prior backup.
+        snapshotStateForTelemetry = backupStatus.snapshotState;
         priorBackup = backupStatus.size.measured
           ? { kind: "measured", bytes: backupStatus.size.bytes }
           : { kind: "unknown", reason: `size-unmeasured: ${backupStatus.size.reason}` };
@@ -524,7 +532,24 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           ? (backupStatus.size.bytes / 1024 / 1024 / 1024).toFixed(1)
           : null;
 
-        if (backupStatus.isInterrupted) {
+        // BACKLOG-2926: an EXHAUSTIVE switch over the device's own verdict, replacing
+        // `if (isInterrupted) ... else if (isComplete)`. That pair had no third arm, so
+        // a directory which is neither interrupted nor complete fired NOTHING and the
+        // user was told nothing at all — the defect BACKLOG-2911 was filed to fix,
+        // closed for `uploading` and still open for `absent`.
+        //
+        // Two on-disk states reached that silence, not one:
+        //   snapshotState "absent"   + no Manifest.db  <- MEASURED on the founder's
+        //                                                 production install
+        //   snapshotState "finished" + no Manifest.db  <- a finished snapshot that
+        //                                                 never produced a manifest
+        // The item names only the first. Both are handled below.
+        //
+        // The `never` arm is the reintroduction guard: adding a fourth snapshot state,
+        // or deleting a case, fails to compile rather than silently falling through to
+        // the same silence this replaces.
+        switch (backupStatus.snapshotState) {
+          case "unfinished": {
           // BACKLOG-2911: this branch used to say "Resuming..." and then issue a
           // byte-identical backup request. There is no resume to perform: the host
           // cannot ask for one. `idevicebackup2` never reads `Status.plist` on the
@@ -551,7 +576,42 @@ export class DeviceSyncOrchestrator extends EventEmitter {
                 ? "Previous sync didn't finish. Starting over..."
                 : `Previous sync didn't finish (${sizeGB} GB saved). Starting over...`,
           });
-        } else if (backupStatus.isComplete) {
+          break;
+          }
+
+          case "finished":
+          case "absent": {
+          // Nothing claims this snapshot tore. Whether it is USABLE is a separate
+          // question, answered by `isComplete` (Manifest.db + Info.plist), and the two
+          // must not be conflated: `absent` + a manifest is a real backup from before
+          // this device wrote a Status.plist, while `absent` + no manifest is a
+          // directory holding nothing anyone can restore from.
+          if (!backupStatus.isComplete) {
+            // THE 2926 STATE. Measured on the founder's production install: a device
+            // directory holding a 6.3 MB `Info.plist` and nothing else — no
+            // Status.plist, no Manifest.db, no blob directories. Today he is told
+            // nothing whatsoever here and the sync simply appears to stall.
+            //
+            // The message deliberately does NOT say "didn't finish": there is no
+            // evidence the transfer ever started, and claiming otherwise would be
+            // inventing a cause. It says only what is established — this cannot be
+            // used, and a fresh backup is starting.
+            log.warn(
+              `[DeviceSyncOrchestrator] Previous backup directory is not usable (snapshotState=${backupStatus.snapshotState}, isComplete=false, ${sizeGB === null ? "size unmeasured" : `${sizeGB} GB on disk`}); starting a fresh backup. See BACKLOG-2926.`,
+            );
+            this.emitProgress({
+              phase: "backup",
+              phaseProgress: 0,
+              overallProgress: 0,
+              message:
+                sizeGB === null
+                  ? "Previous backup can't be used. Starting a fresh backup..."
+                  : `Previous backup can't be used (${sizeGB} GB on disk). Starting a fresh backup...`,
+            });
+            break;
+          }
+
+          {
           const lastSync = backupStatus.lastModified;
           const timeSinceLastSync = lastSync ? Math.round((Date.now() - lastSync.getTime()) / 1000 / 60) : null;
           log.info(`[DeviceSyncOrchestrator] Previous backup exists (${sizeGB === null ? "size unmeasured" : `${sizeGB} GB`}), last modified ${timeSinceLastSync} minutes ago`);
@@ -587,6 +647,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             overallProgress: 0,
             message: "Comparing with iPhone to find new data...",
           });
+          }
+          break;
+          }
+
+          default: {
+            // Unreachable by construction. If a fourth snapshot state is ever added,
+            // this line stops compiling — which is the point. The previous shape
+            // absorbed a new state into silence with no signal at all.
+            const exhaustive: never = backupStatus.snapshotState;
+            log.error(
+              `[DeviceSyncOrchestrator] Unhandled snapshot state: ${String(exhaustive)}`,
+            );
+            break;
+          }
         }
       } else {
         // BACKLOG-2917: reached ONLY on a proven ENOENT. Before this item the same
@@ -669,6 +743,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           source: estimateSourceFor(priorBackup),
           bytes: this.estimatedBackupSize,
           reusedPreviousBackup: priorBackup.kind === "measured",
+          snapshotState: snapshotStateForTelemetry,
           ...(priorBackup.kind === "unknown" ? { priorBackupUnknownReason: priorBackup.reason } : {}),
         });
 
