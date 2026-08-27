@@ -38,7 +38,12 @@ const USER = "22222222-2222-4222-8222-222222222222";
 interface FakeRoute {
   marker: string;
   rows?: unknown[];
-  count?: number;
+  /**
+   * BACKLOG-2863: the row a `.get()` returns for this route. Only the group-chat
+   * ATTRIBUTION query uses `.get()` now — the six count queries that used to are
+   * gone.
+   */
+  getRow?: unknown;
 }
 
 function makeFakeDb(routes: FakeRoute[]) {
@@ -49,11 +54,16 @@ function makeFakeDb(routes: FakeRoute[]) {
       // Match on the short group key (e.g. "mad:search:emails"), a substring of
       // BOTH the SELECT marker (`.../* mad:search:emails */`) and the COUNT
       // marker (`.../* mad:search:emails:count */`), so one route feeds both.
-      const route = routes.find((r) => sql.includes(r.marker));
+      // BACKLOG-2863: LONGEST MARKER WINS. "mad:search:textthreads:attribution"
+      // contains "mad:search:textthreads", so a plain substring search would hand
+      // the attribution lookup the group-chat ROW route and quietly answer it with
+      // thread rows. Matching the most specific marker first keeps the two apart.
+      const route = [...routes]
+        .sort((a, b) => b.marker.length - a.marker.length)
+        .find((r) => sql.includes(r.marker));
       return {
         all: (..._params: unknown[]) => route?.rows ?? [],
-        get: (..._params: unknown[]) =>
-          route ? { total: route.count ?? (route.rows?.length ?? 0) } : { total: 0 },
+        get: (..._params: unknown[]) => route?.getRow,
       };
     },
   };
@@ -133,9 +143,9 @@ describe("searchLinkedContent", () => {
 
     const blank = searchLinkedContent(db, TXN, "   ");
 
-    expect(blank.contacts).toEqual({ items: [], total: 0 });
-    expect(blank.emails).toEqual({ items: [], total: 0 });
-    expect(blank.texts).toEqual({ items: [], total: 0 });
+    expect(blank.contacts).toEqual({ items: [], hasMore: false });
+    expect(blank.emails).toEqual({ items: [], hasMore: false });
+    expect(blank.texts).toEqual({ items: [], hasMore: false });
     expect(spy).not.toHaveBeenCalled();
     expect(preparedSql).toHaveLength(0);
   });
@@ -152,7 +162,7 @@ describe("searchLinkedContent", () => {
       snippet: "escrow details",
     };
     const { db, preparedSql } = makeFakeDb([
-      { marker: "mad:search:emails", rows: [linkedEmail], count: 1 },
+      { marker: "mad:search:emails", rows: [linkedEmail] },
     ]);
 
     const res = searchLinkedContent(db, TXN, "escrow");
@@ -170,12 +180,11 @@ describe("searchLinkedContent", () => {
     expect(emailSelect).toContain("comm.transaction_id = ?");
   });
 
-  it("groups results by type with per-group totals that can exceed returned items", () => {
+  it("groups results by type and shapes each row", () => {
     const { db } = makeFakeDb([
       {
         marker: "mad:search:contacts",
         rows: [{ contactId: "c1", displayName: "John Doe", role: "Buyer" }],
-        count: 1,
       },
       {
         marker: "mad:search:emails",
@@ -183,7 +192,6 @@ describe("searchLinkedContent", () => {
           { id: "e1", subject: "Hi", sender: "a@x.com", sentAt: null, snippet: "b" },
           { id: "e2", subject: "Re: Hi", sender: "b@x.com", sentAt: null, snippet: "c" },
         ],
-        count: 7, // more matches than returned items ⇒ total reflects the count query
       },
       {
         marker: "mad:search:texts",
@@ -195,7 +203,6 @@ describe("searchLinkedContent", () => {
             sentAt: null,
           },
         ],
-        count: 1,
       },
     ]);
 
@@ -204,30 +211,72 @@ describe("searchLinkedContent", () => {
     expect(res.contacts.items).toEqual([
       { contactId: "c1", displayName: "John Doe", role: "Buyer" },
     ]);
-    expect(res.contacts.total).toBe(1);
-
     expect(res.emails.items).toHaveLength(2);
-    expect(res.emails.total).toBe(7);
 
     // Text shaping: sender is the first participant token; snippet from body_text.
     expect(res.texts.items).toEqual([
       { id: "m1", sender: "+15555550112", snippet: "on my way to closing", sentAt: null },
     ]);
-    expect(res.texts.total).toBe(1);
+
+    // Nothing came back full, so nothing claims there is more behind it.
+    expect(res.contacts.hasMore).toBe(false);
+    expect(res.emails.hasMore).toBe(false);
+    expect(res.texts.hasMore).toBe(false);
+  });
+
+  // BACKLOG-2863: what replaced the count queries.
+  it("reports hasMore from the probe row, and does not show it", () => {
+    // The builder is asked for `limit + 1`. Handing back exactly that many rows is
+    // the database saying "there is at least one more" — the only thing the panel
+    // needs in order to offer "Show more", and the whole reason six uncapped
+    // COUNT(*) queries could be deleted.
+    const rows = Array.from({ length: 6 }, (_, i) => ({
+      id: `e${i}`,
+      subject: `Subject ${i}`,
+      sender: "a@x.com",
+      sentAt: null,
+      snippet: "b",
+    }));
+    const { db, preparedSql } = makeFakeDb([{ marker: "mad:search:emails", rows }]);
+
+    const res = searchLinkedContent(db, TXN, "hi", { limit: 5 });
+
+    expect(res.emails.hasMore).toBe(true);
+    // The probe row is EVIDENCE, not a result: five were asked for, five are shown.
+    expect(res.emails.items).toHaveLength(5);
+    expect(res.emails.items.map((e) => e.id)).not.toContain("e5");
+    // And no COUNT query was issued for it.
+    expect(preparedSql.some((sql) => sql.includes("COUNT("))).toBe(false);
+  });
+
+  it("reports hasMore false when the probe row does not come back", () => {
+    // The boundary: exactly `limit` rows means the user is seeing all of them.
+    const rows = Array.from({ length: 5 }, (_, i) => ({
+      id: `e${i}`,
+      subject: `Subject ${i}`,
+      sender: "a@x.com",
+      sentAt: null,
+      snippet: "b",
+    }));
+    const { db } = makeFakeDb([{ marker: "mad:search:emails", rows }]);
+    const res = searchLinkedContent(db, TXN, "hi", { limit: 5 });
+    expect(res.emails.hasMore).toBe(false);
+    expect(res.emails.items).toHaveLength(5);
   });
 
   it("respects a custom per-group limit", () => {
     const { preparedSql, db } = makeFakeDb([
-      { marker: "mad:search:emails", rows: [], count: 0 },
+      { marker: "mad:search:emails", rows: [] },
     ]);
     searchLinkedContent(db, TXN, "x", { limit: 5 });
     const emailSelect = preparedSql.find(
       (s) => s.includes("/* mad:search:emails */") && s.includes("SELECT e.id"),
     );
     expect(emailSelect).toContain("LIMIT ?");
-    // The email SELECT's last bound param is the limit; assert via a fresh build.
-    const built = buildEmailQuery(TXN, "x", 5);
-    expect(built.params[built.params.length - 1]).toBe(5);
+    // BACKLOG-2863: the query is built for limit + 1 — the probe row that decides
+    // `hasMore`. A builder asked for exactly `limit` could never report it.
+    const built = buildEmailQuery(TXN, "x", 6);
+    expect(built.params[built.params.length - 1]).toBe(6);
   });
 
   it("escapes SQL LIKE wildcards (% and _) in the query", () => {
@@ -253,9 +302,6 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
     // 1 projection (Phase 1.5) + subject/body/sender/recipients/filename = six.
     expect(q.params.filter((p) => p === "%wire%")).toHaveLength(6);
-    // The COUNT query has NO projection: subject/body/sender/recipients/filename = five.
-    expect(q.countSql).toContain("a.filename LIKE ? ESCAPE");
-    expect(q.countParams.filter((p) => p === "%wire%")).toHaveLength(5);
   });
 
   it("buildTextQuery matches attachments.filename by message_id or external_message_id", () => {
@@ -263,26 +309,29 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     expect(q.sql).toContain("a.message_id = m.id");
     expect(q.sql).toContain("a.external_message_id = m.external_id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    // 1 projection (Phase 1.5) + body_text/participants_flat/filename = four.
+    // BACKLOG-2816: the ROW query has no group-name clause (a thread-level match
+    // is served by buildTextThreadNameQuery as ONE row), so it binds
+    // 1 projection + body_text/participants_flat/filename = four.
     expect(q.params.filter((p) => p === "%receipt%")).toHaveLength(4);
+    expect(q.sql).not.toContain("message_thread_names");
   });
 
-  it("buildGlobalEmailQuery adds the attachment predicate to both SELECT and COUNT", () => {
+  it("buildGlobalEmailQuery adds the attachment predicate", () => {
     const q = buildGlobalEmailQuery(USER, "disclosure", 20);
     expect(q.sql).toContain("a.email_id = e.id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    expect(q.countSql).toContain("a.filename LIKE ? ESCAPE");
-    // 1 projection + 5 match patterns; the COUNT has no projection (5).
+    // 1 projection + 5 match patterns.
     expect(q.params.filter((p) => p === "%disclosure%")).toHaveLength(6);
-    expect(q.countParams.filter((p) => p === "%disclosure%")).toHaveLength(5);
   });
 
   it("buildGlobalTextQuery adds the attachment predicate", () => {
     const q = buildGlobalTextQuery(USER, "settlement", 20);
     expect(q.sql).toContain("a.message_id = m.id");
     expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
-    // 1 projection + body_text/participants_flat/filename = four.
+    // BACKLOG-2858: the row query drops the group-name clause — see
+    // buildTextQuery above.
     expect(q.params.filter((p) => p === "%settlement%")).toHaveLength(4);
+    expect(q.sql).not.toContain("message_thread_names");
   });
 
   it("buildUnattachedEmailQuery / buildUnattachedTextQuery also match filenames", () => {
@@ -294,7 +343,22 @@ describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
     const t = buildUnattachedTextQuery(USER, "photo", 20);
     expect(t.sql).toContain("a.message_id = m.id");
     expect(t.sql).toContain("a.filename LIKE ? ESCAPE");
+    // BACKLOG-2816: rows drop the group-name clause, the count keeps it. The
+    // unattached text query has no matched-filename projection, so rows bind
+    // body_text/participants_flat/filename = three and the count binds four.
+    //
+    // BACKLOG-2858: this is now the ONLY builder where that asymmetry survives —
+    // the two `texts` builders lost it when group chats became their own
+    // category, while these thread rows still land in this same bucket. Asserted
+    // as a pair with the group predicate: the clause counts messages for rows
+    // that only exist for GROUP threads, so counting a named 1:1's messages here
+    // would badge a section that has nothing to show.
     expect(t.params.filter((p) => p === "%photo%")).toHaveLength(3);
+    // BACKLOG-2863: the group-name clause is gone from this builder ENTIRELY. It
+    // survived only in the count, and the counts are gone — the thread rows it
+    // used to count for are still delivered, by
+    // `buildUnattachedTextThreadNameQuery`, straight into the same bucket.
+    expect(t.sql).not.toContain("message_thread_names");
   });
 
   it("escapes LIKE wildcards in the attachment predicate too", () => {
@@ -311,8 +375,6 @@ describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () =>
     expect(e.sql).toContain("AS matchedAttachments");
     // Projection pattern is the FIRST bound param (SELECT precedes WHERE).
     expect(e.params[0]).toBe("%wire%");
-    // The COUNT query does NOT carry the projection.
-    expect(e.countSql).not.toContain("matchedAttachments");
 
     const t = buildTextQuery(TXN, "receipt", 20);
     expect(t.sql).toContain("group_concat(a.filename, char(10))");
@@ -322,7 +384,6 @@ describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () =>
     const ge = buildGlobalEmailQuery(USER, "wire", 20);
     expect(ge.sql).toContain("AS matchedAttachments");
     expect(ge.params[0]).toBe("%wire%");
-    expect(ge.countSql).not.toContain("matchedAttachments");
 
     const gt = buildGlobalTextQuery(USER, "wire", 20);
     expect(gt.sql).toContain("AS matchedAttachments");
@@ -344,7 +405,6 @@ describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () =>
             matchedAttachments: "wire-instructions.pdf\nwire-instructions.pdf",
           },
         ],
-        count: 1,
       },
     ]);
 
@@ -369,7 +429,6 @@ describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () =>
             matchedAttachments: null, // no attachment matched the term
           },
         ],
-        count: 1,
       },
     ]);
 
@@ -390,7 +449,6 @@ describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () =>
             matchedAttachments: "IMG_2201.heic",
           },
         ],
-        count: 1,
       },
     ]);
 
@@ -416,7 +474,6 @@ describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () =>
             attrAddress: "123 Main St",
           },
         ],
-        count: 1,
       },
       {
         marker: "mad:search:texts",
@@ -431,7 +488,6 @@ describe("BACKLOG-1870 Phase 1.5: matched-attachment filename projection", () =>
             attrAddress: "123 Main St",
           },
         ],
-        count: 1,
       },
     ]);
 
@@ -456,7 +512,7 @@ describe("BACKLOG-1870: attachment filename matching (integration)", () => {
       snippet: "see attached",
     };
     const { db, preparedSql } = makeFakeDb([
-      { marker: "mad:search:emails", rows: [emailHitByFilename], count: 1 },
+      { marker: "mad:search:emails", rows: [emailHitByFilename] },
     ]);
 
     const res = searchLinkedContent(db, TXN, "wire");
@@ -478,7 +534,7 @@ describe("BACKLOG-1870: attachment filename matching (integration)", () => {
       sentAt: "2026-01-03T00:00:00Z",
     };
     const { db, preparedSql } = makeFakeDb([
-      { marker: "mad:search:texts", rows: [textHitByFilename], count: 1 },
+      { marker: "mad:search:texts", rows: [textHitByFilename] },
     ]);
 
     const res = searchLinkedContent(db, TXN, "IMG_2201");
@@ -505,7 +561,6 @@ describe("BACKLOG-1870: attachment filename matching (integration)", () => {
             attrAddress: "123 Main St",
           },
         ],
-        count: 1,
       },
     ]);
 
@@ -528,32 +583,17 @@ describe("scoped builders are byte-unchanged (BACKLOG-1866 non-regression)", () 
   // for BACKLOG-1876 cannot silently regress the single-transaction queries.
   it("buildContactQuery is stable", () => {
     const q = buildContactQuery(TXN, "john", 20);
-    expect({
-      sql: q.sql,
-      countSql: q.countSql,
-      params: q.params,
-      countParams: q.countParams,
-    }).toMatchSnapshot();
+    expect({ sql: q.sql, params: q.params }).toMatchSnapshot();
   });
 
   it("buildEmailQuery is stable", () => {
     const q = buildEmailQuery(TXN, "escrow", 20);
-    expect({
-      sql: q.sql,
-      countSql: q.countSql,
-      params: q.params,
-      countParams: q.countParams,
-    }).toMatchSnapshot();
+    expect({ sql: q.sql, params: q.params }).toMatchSnapshot();
   });
 
   it("buildTextQuery is stable", () => {
     const q = buildTextQuery(TXN, "closing", 20);
-    expect({
-      sql: q.sql,
-      countSql: q.countSql,
-      params: q.params,
-      countParams: q.countParams,
-    }).toMatchSnapshot();
+    expect({ sql: q.sql, params: q.params }).toMatchSnapshot();
   });
 });
 
@@ -572,7 +612,6 @@ describe("buildTransactionsQuery", () => {
     expect(q.sql).toContain("t.user_id = ?");
     expect(q.sql).toContain("t.property_address LIKE ? ESCAPE");
     expect(q.sql).toContain("c.display_name LIKE ? ESCAPE");
-    expect(q.countSql).toContain("COUNT(DISTINCT t.id)");
     // First param is the user scope key; last is the limit.
     expect(q.params[0]).toBe(USER);
     expect(q.params[q.params.length - 1]).toBe(20);
@@ -588,9 +627,12 @@ describe("buildGlobalEmailQuery", () => {
     // Deterministic tie-break: earliest linked_at, then id.
     expect(q.sql).toContain("ORDER BY c2.linked_at ASC, c2.id ASC");
     expect(q.sql).toContain("e.user_id = ?");
-    // Count only over emails linked to some transaction.
-    expect(q.countSql).toContain("COUNT(DISTINCT e.id)");
-    expect(q.countSql).toContain("comm.transaction_id IS NOT NULL");
+    // Only emails linked to some transaction — the unattached ones have their own
+    // builder and their own bucket. The restriction lives in the correlated
+    // subquery that picks the primary link, and an INNER JOIN to it drops any
+    // email that has none.
+    expect(q.sql).toContain("c2.transaction_id IS NOT NULL");
+    expect(q.sql).toContain("JOIN communications comm ON comm.id = (");
     // Phase 1.5: params[0] is the matched-attachment projection pattern; user scope follows.
     expect(q.params[1]).toBe(USER);
     expect(q.params).toContain("%escrow%");
@@ -675,11 +717,11 @@ describe("searchGlobalContent", () => {
 
     const res = searchGlobalContent(db, USER, "   ");
 
-    expect(res.transactions).toEqual({ items: [], total: 0 });
-    expect(res.contacts).toEqual({ items: [], total: 0 });
-    expect(res.emails).toEqual({ items: [], total: 0 });
-    expect(res.texts).toEqual({ items: [], total: 0 });
-    expect(res.unattached).toEqual({ items: [], total: 0 });
+    expect(res.transactions).toEqual({ items: [], hasMore: false });
+    expect(res.contacts).toEqual({ items: [], hasMore: false });
+    expect(res.emails).toEqual({ items: [], hasMore: false });
+    expect(res.texts).toEqual({ items: [], hasMore: false });
+    expect(res.unattached).toEqual({ items: [], hasMore: false });
     expect(spy).not.toHaveBeenCalled();
     expect(preparedSql).toHaveLength(0);
   });
@@ -689,7 +731,6 @@ describe("searchGlobalContent", () => {
       {
         marker: "mad:search:transactions",
         rows: [{ id: "t1", propertyAddress: "123 Main St" }],
-        count: 1,
       },
       {
         marker: "mad:search:contacts",
@@ -709,7 +750,6 @@ describe("searchGlobalContent", () => {
             attrAddress: null,
           },
         ],
-        count: 2,
       },
       {
         marker: "mad:search:emails",
@@ -724,7 +764,6 @@ describe("searchGlobalContent", () => {
             attrAddress: "123 Main St",
           },
         ],
-        count: 4,
       },
       {
         marker: "mad:search:texts",
@@ -738,7 +777,6 @@ describe("searchGlobalContent", () => {
             attrAddress: "456 Oak Ave",
           },
         ],
-        count: 1,
       },
       {
         marker: "mad:search:unattached:emails",
@@ -751,7 +789,6 @@ describe("searchGlobalContent", () => {
             snippet: "sn",
           },
         ],
-        count: 3,
       },
       {
         marker: "mad:search:unattached:texts",
@@ -763,7 +800,6 @@ describe("searchGlobalContent", () => {
             sentAt: "2026-01-01",
           },
         ],
-        count: 2,
       },
     ]);
 
@@ -773,7 +809,6 @@ describe("searchGlobalContent", () => {
     expect(res.transactions.items).toEqual([
       { id: "t1", propertyAddress: "123 Main St" },
     ]);
-    expect(res.transactions.total).toBe(1);
 
     // Contacts: attribution mapped; null attribution ⇒ null (not attached).
     expect(res.contacts.items[0].attribution).toEqual({
@@ -781,14 +816,12 @@ describe("searchGlobalContent", () => {
       propertyAddress: "123 Main St",
     });
     expect(res.contacts.items[1].attribution).toBeNull();
-    expect(res.contacts.total).toBe(2);
 
-    // Emails: attribution + true total > items.
+    // Emails: attribution.
     expect(res.emails.items[0].attribution).toEqual({
       transactionId: "t1",
       propertyAddress: "123 Main St",
     });
-    expect(res.emails.total).toBe(4);
 
     // Texts: sender is first participant token; attribution to the owning txn.
     expect(res.texts.items[0]).toMatchObject({
@@ -798,19 +831,40 @@ describe("searchGlobalContent", () => {
       attribution: { transactionId: "t2", propertyAddress: "456 Oak Ave" },
     });
 
-    // Unattached: merged (email + text), total = 3 + 2 = 5, kinds tagged, sorted
-    // by sentAt desc (2026-03-01 email before 2026-01-01 text).
-    expect(res.unattached.total).toBe(5);
+    // Unattached: merged (email + text), kinds tagged, sorted by sentAt desc
+    // (2026-03-01 email before 2026-01-01 text).
     expect(res.unattached.items.map((u) => `${u.kind}:${u.id}`)).toEqual([
       "email:u-e1",
       "text:u-m1",
     ]);
   });
 
+  // BACKLOG-2863: the counts are gone from the SEARCH PATH, not merely unused.
+  it("issues no COUNT query anywhere in a global search", () => {
+    const { db, preparedSql } = makeFakeDb([]);
+    searchGlobalContent(db, USER, "anything");
+
+    // Six `SELECT COUNT(*)` statements used to be prepared here, one per section,
+    // uncapped. Asserted over EVERY prepared statement rather than over the
+    // builders, because a count reintroduced anywhere in the orchestrator — a
+    // second query for a badge, a total for a log line — costs the same
+    // per-keystroke scan whatever it is called.
+    expect(preparedSql.length).toBeGreaterThan(0); // the fixture is not vacuous
+    expect(preparedSql.filter((sql) => sql.includes("COUNT("))).toEqual([]);
+    expect(preparedSql.filter((sql) => sql.includes(":count"))).toEqual([]);
+  });
+
+  it("issues no COUNT query in a scoped search either", () => {
+    const { db, preparedSql } = makeFakeDb([]);
+    searchLinkedContent(db, TXN, "anything");
+    expect(preparedSql.length).toBeGreaterThan(0);
+    expect(preparedSql.filter((sql) => sql.includes("COUNT("))).toEqual([]);
+  });
+
   it("scopes every group query by the user id", () => {
     const { db, preparedSql } = makeFakeDb([]);
     searchGlobalContent(db, USER, "anything");
-    // Every prepared SELECT/COUNT is user-scoped. Transactions/contacts bind USER
+    // Every prepared SELECT is user-scoped. Transactions/contacts bind USER
     // first; emails/texts bind the Phase-1.5 matched-attachment projection pattern
     // first, then USER — so assert the scope key is bound, not its exact position.
     expect(buildTransactionsQuery(USER, "x", 20).params[0]).toBe(USER);

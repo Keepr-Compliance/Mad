@@ -173,8 +173,12 @@ describe('contactRolesPrompt', () => {
       const prompt = contactRolesPrompt.buildSystemPrompt();
       expect(prompt).toContain('buyer');
       expect(prompt).toContain('seller');
-      expect(prompt).toContain('buyer_agent');
-      expect(prompt).toContain('seller_agent');
+      // BACKLOG-2859: ONE side-neutral agent role. The prompt must NOT teach the
+      // model the retired side-specific vocabulary — this enum is a write path,
+      // and proposals become stored roles when a user accepts a suggestion.
+      expect(prompt).toContain('agent');
+      expect(prompt).not.toContain('buyer_agent');
+      expect(prompt).not.toContain('seller_agent');
       expect(prompt).toContain('escrow');
     });
 

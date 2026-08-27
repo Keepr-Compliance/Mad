@@ -79,6 +79,32 @@ export interface MessageThreadCardProps {
 }
 
 /**
+ * BACKLOG-2814: the group conversation's user-visible name (Apple's
+ * `chat.display_name`), read off whichever message in the thread carries it.
+ *
+ * It rides on the message rows rather than being fetched here: the loaders
+ * LEFT JOIN `message_thread_names`, so every refetch carries the current name
+ * and the card stays a pure function of its props.
+ *
+ * Not every loader joins it, and a message row from a source that has no
+ * concept of a group name simply has none — so this returns null freely and the
+ * caller falls back to the participant list.
+ */
+export function getThreadDisplayName(
+  messages: MessageLike[]
+): string | null {
+  for (const msg of messages) {
+    const raw = (msg as { thread_display_name?: string | null })
+      .thread_display_name;
+    if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      if (trimmed.length > 0) return trimmed;
+    }
+  }
+  return null;
+}
+
+/**
  * Get all unique participants from a thread (excluding the user).
  * Returns an array of phone numbers/identifiers.
  *
@@ -251,6 +277,10 @@ export function MessageThreadCard({
   // Detect group chat (using contactNames to resolve duplicates)
   const participants = getThreadParticipants(messages);
   const isGroup = isGroupChat(messages, contactNames);
+  // BACKLOG-2814: gated on isGroup, NOT on the name's presence. Apple lets a
+  // 1:1 chat carry a display_name too (10 of them in the founder's own chat.db),
+  // and a named 1:1 must keep showing the person, not the label.
+  const groupName = isGroup ? getThreadDisplayName(messages) : null;
   const avatarInitial = getContactAvatarInitial(contactName, phoneNumber);
 
   return (
@@ -326,8 +356,14 @@ export function MessageThreadCard({
                 <div data-testid="thread-contact-name">
                   {/* BACKLOG-1793: no "Removed" pill — removed cards are placed
                       under the "Show removed" section, so the pill is redundant. */}
-                  <span className={`font-semibold block ${isRemoved ? "text-gray-500" : "text-gray-900"}`}>
-                    Group Chat
+                  <span
+                    className={`font-semibold block truncate ${isRemoved ? "text-gray-500" : "text-gray-900"}`}
+                    title={groupName ?? undefined}
+                  >
+                    {/* BACKLOG-2814: the group's own name when Messages has one
+                        ("Closing Team"); otherwise the generic label, with the
+                        participant list beneath it exactly as before. */}
+                    {groupName ?? "Group Chat"}
                   </span>
                   <span
                     className="font-normal text-gray-500 text-sm block truncate"

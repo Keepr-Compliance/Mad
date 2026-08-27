@@ -1,4 +1,8 @@
-import { SPECIFIC_ROLES, ROLE_DISPLAY_NAMES } from "../constants/contactRoles";
+import {
+  SPECIFIC_ROLES,
+  ROLE_DISPLAY_NAMES,
+  AUDIT_WORKFLOW_STEPS,
+} from "../constants/contactRoles";
 
 /**
  * Format a role string as a human-readable label.
@@ -43,7 +47,21 @@ export interface RoleConfig {
 }
 
 /**
- * Transaction type - represents which side of the deal the user represents
+ * Transaction type — which side of the deal the USER represents.
+ *
+ * The premise, stated once here because several functions below derive labels
+ * and role scoping from it (founder's ruling, BACKLOG-2850):
+ *
+ *   `purchase` — displayed "Listing". The user is the LISTING agent, so the
+ *                user's client is the SELLER.
+ *   `sale`     — displayed "Sale". The user is the BUYER's agent, so the
+ *                user's client is the BUYER.
+ *   `other`    — no side; type-dependent labels fall back to their static form.
+ *
+ * The stored enum values are deliberately NOT renamed. `purchase`/`sale` are a
+ * database column, a Zod enum, e2e selectors and a PDF badge class; only the
+ * DISPLAY moved. Reading `purchase` as "buy-side" is the error this comment
+ * exists to stop — it produced the inverted client label fixed in BACKLOG-2850.
  */
 export type TransactionType = "purchase" | "sale" | "other";
 
@@ -55,14 +73,6 @@ export interface ContactAssignments {
 }
 
 /**
- * Context message for transaction type
- */
-export interface TransactionTypeContext {
-  title: string;
-  message: string;
-}
-
-/**
  * Validation result for role assignments
  */
 export interface RoleValidationResult {
@@ -71,112 +81,61 @@ export interface RoleValidationResult {
 }
 
 /**
- * Get filtered roles based on transaction type
- *
- * Logic:
- * - For PURCHASE: User represents buyer, so show seller's agent
- * - For SALE: User represents seller, so show buyer's agent
- * - Always show client role
- * - Professional services roles are not filtered
- *
- * @param roles - Array of role configurations
- * @param transactionType - 'purchase' or 'sale'
- * @param stepTitle - Title of the workflow step
- * @returns Filtered array of role configurations
+ * A selectable role in a picker: the value that gets STORED, and the label a
+ * person reads.
  */
-export function filterRolesByTransactionType(
-  roles: RoleConfig[],
-  transactionType: TransactionType,
-  stepTitle: string,
-): RoleConfig[] {
-  // Only filter roles for Client & Agents step
-  if (stepTitle !== "Client & Agents") {
-    return roles; // Professional services - no filtering
-  }
-
-  return roles.filter((roleConfig) => {
-    // Always show client
-    if (roleConfig.role === SPECIFIC_ROLES.CLIENT) {
-      return true;
-    }
-
-    // For purchase transactions: user is buyer, so show seller + seller's agents
-    if (transactionType === "purchase") {
-      return (
-        roleConfig.role === SPECIFIC_ROLES.SELLER ||
-        roleConfig.role === SPECIFIC_ROLES.SELLER_AGENT ||
-        roleConfig.role === SPECIFIC_ROLES.LISTING_AGENT
-      );
-    }
-
-    // For sale transactions: user is seller, so show buyer + buyer's agent
-    if (transactionType === "sale") {
-      return (
-        roleConfig.role === SPECIFIC_ROLES.BUYER ||
-        roleConfig.role === SPECIFIC_ROLES.BUYER_AGENT
-      );
-    }
-
-    return false;
-  });
+export interface RoleOption {
+  value: string;
+  label: string;
 }
 
 /**
- * Flip a contact's default_role to the equivalent role for the given transaction type.
+ * Build the role options offered for a transaction — THE one definition, used
+ * by every picker in the app (BACKLOG-2859).
  *
- * When a contact's default_role isn't valid for the current transaction type,
- * this function returns the equivalent role on the other side.
+ * WHAT REPLACED WHAT. This function replaces `filterRolesByTransactionType`,
+ * which was deleted rather than kept. Under the collapsed role model the OFFERED
+ * SET IS THE SAME ON EVERY TRANSACTION TYPE — `client`, `agent`, `co_agent` plus
+ * the type-independent service providers — so a filter had nothing left to
+ * remove and had become a pure identity function. A function named
+ * "filterRolesByTransactionType" that filters nothing is worse than no function:
+ * the next reader assumes the type scoping lives there and stops looking.
  *
- * Flip mapping:
- *   seller_agent <-> buyer_agent
- *   listing_agent -> buyer_agent (one-way; listing_agent is seller-side specific)
- *   seller <-> buyer
+ * The scoping now lives in two places that actually do it:
+ *  1. AUDIT_WORKFLOW_STEPS no longer contains the user's own role or the other
+ *     side's principal, so no picker can offer them on any type.
+ *  2. `getRoleDisplayName` resolves `client` and `agent` by transaction type.
  *
- * @param defaultRole - The contact's default_role
- * @param transactionType - The current transaction type ('purchase' | 'sale' | 'other')
- * @returns The flipped role string if a valid flip exists, or null if no flip is possible
+ * Four surfaces called the old helper with four copies of the same fifteen-line
+ * loop: ContactAssignmentStep, EditContactsModal (twice), and RoleAssigner. They
+ * now share this, so "what does the picker offer" is asserted in one place and
+ * each surface only has to prove it uses it.
+ *
+ * @param transactionType - 'purchase' (a Listing) | 'sale' | 'other'
+ * @returns Every offered role, in wizard order, labelled for this type
  */
-export function flipRoleForTransactionType(
-  defaultRole: string,
-  transactionType: TransactionType,
-): string | null {
-  // Build the set of valid other-side roles for this transaction type
-  const purchaseRoles = new Set([
-    SPECIFIC_ROLES.SELLER_AGENT,
-    SPECIFIC_ROLES.LISTING_AGENT,
-    SPECIFIC_ROLES.SELLER,
-  ]);
-  const saleRoles = new Set([
-    SPECIFIC_ROLES.BUYER_AGENT,
-    SPECIFIC_ROLES.BUYER,
-  ]);
-
-  // Determine which roles are valid for this transaction type
-  const validRoles = transactionType === "purchase" ? purchaseRoles : saleRoles;
-
-  // If already valid, return as-is
-  if (validRoles.has(defaultRole)) {
-    return defaultRole;
+export function buildRoleOptions(transactionType: TransactionType): RoleOption[] {
+  const options: RoleOption[] = [];
+  for (const step of AUDIT_WORKFLOW_STEPS) {
+    for (const roleConfig of step.roles as RoleConfig[]) {
+      options.push({
+        value: roleConfig.role,
+        label: getRoleDisplayName(roleConfig.role, transactionType),
+      });
+    }
   }
+  return options;
+}
 
-  // Define the flip map
-  const flipMap: Record<string, string> = {
-    [SPECIFIC_ROLES.SELLER_AGENT]: SPECIFIC_ROLES.BUYER_AGENT,
-    [SPECIFIC_ROLES.BUYER_AGENT]: SPECIFIC_ROLES.SELLER_AGENT,
-    [SPECIFIC_ROLES.LISTING_AGENT]: SPECIFIC_ROLES.BUYER_AGENT,
-    [SPECIFIC_ROLES.SELLER]: SPECIFIC_ROLES.BUYER,
-    [SPECIFIC_ROLES.BUYER]: SPECIFIC_ROLES.SELLER,
-  };
-
-  const flipped = flipMap[defaultRole];
-  if (!flipped) return null;
-
-  // Only return the flipped role if it's valid for this transaction type
-  if (validRoles.has(flipped)) {
-    return flipped;
-  }
-
-  return null;
+/**
+ * The set of role VALUES a picker offers for this transaction type.
+ *
+ * Separate from `buildRoleOptions` because two callers need only the predicate
+ * "would this role be offered?" and building labels to answer it invites the
+ * mistake of comparing a label to a value.
+ */
+export function offeredRoleValues(transactionType: TransactionType): Set<string> {
+  return new Set(buildRoleOptions(transactionType).map((o) => o.value));
 }
 
 /**
@@ -185,11 +144,27 @@ export function flipRoleForTransactionType(
  *
  * Precedence:
  *  1. Smart auto-role (only when `autoRoleEnabled`): the contact's saved
- *     `default_role` — used directly if it's a valid option for this
- *     transaction type, otherwise flipped to the equivalent other-side role.
- *  2. Baseline default (always): `client` — which renders as "Buyer (Client)"
- *     on a purchase and "Seller (Client)" on a sale (see getRoleDisplayName).
- *     This baseline applies regardless of the auto-role setting.
+ *     `default_role`, used when it is an option this transaction offers.
+ *  2. Baseline (always): `client` — which reads "Seller (Client)" on a Listing
+ *     and "Buyer (Client)" on a Sale.
+ *
+ * WHAT WAS REMOVED HERE, AND WHY IT IS NOT A REGRESSION (BACKLOG-2859).
+ * This function used to flip a role to its other-side equivalent via
+ * `flipRoleForTransactionType`, then re-check the flip result against
+ * `isRoleValid` before trusting it. Both are gone.
+ *
+ * The flip existed because a role carried a side: a contact saved as
+ * `seller_agent` was unusable on a deal that only offered `buyer_agent`, so the
+ * role had to be translated. Roles no longer carry a side — there is one `agent`
+ * value, offered on every transaction type — so there is nothing to translate.
+ *
+ * The re-check (added on PR #2374) guarded the window where the flip and the
+ * picker disagreed: the flip would return a role the dropdown could not display,
+ * producing a blank select over a stored value. That disagreement was between
+ * two things that no longer exist. A saved `agent` is valid everywhere, so it
+ * can never be unshowable, so the case the guard was written for cannot arise.
+ * `isRoleValid` is still consulted ONCE, on the saved role itself — that is the
+ * ordinary "is this offered here" question, not the guard.
  *
  * @param autoRoleEnabled - whether the smart default_role override is enabled
  * @param defaultRole - the contact's saved default_role (may be null/empty)
@@ -200,40 +175,13 @@ export function flipRoleForTransactionType(
 export function resolveDefaultContactRole(
   autoRoleEnabled: boolean,
   defaultRole: string | null | undefined,
-  transactionType: TransactionType,
+  _transactionType: TransactionType,
   isRoleValid: (role: string) => boolean,
 ): string {
-  if (autoRoleEnabled && defaultRole) {
-    const effective = isRoleValid(defaultRole)
-      ? defaultRole
-      : flipRoleForTransactionType(defaultRole, transactionType);
-    if (effective) return effective;
+  if (autoRoleEnabled && defaultRole && isRoleValid(defaultRole)) {
+    return defaultRole;
   }
   return SPECIFIC_ROLES.CLIENT;
-}
-
-/**
- * Get context message for transaction type
- *
- * @param transactionType - 'purchase' or 'sale'
- * @returns Object with title and message
- */
-export function getTransactionTypeContext(
-  transactionType: TransactionType,
-): TransactionTypeContext {
-  if (transactionType === "purchase") {
-    return {
-      title: "Transaction Type: Purchase",
-      message:
-        "You're representing the buyer. Assign the seller's agent you're working with.",
-    };
-  }
-
-  return {
-    title: "Transaction Type: Sale",
-    message:
-      "You're representing the seller. Assign the buyer's agent you're working with.",
-  };
 }
 
 /**
@@ -262,29 +210,60 @@ export function validateRoleAssignments(
 }
 
 /**
- * Get role display name based on transaction type
+ * The label a role reads as ON A TRANSACTION — resolved from the transaction
+ * type (BACKLOG-2859).
  *
- * For CLIENT role:
- * - Purchase: "Buyer (Client)" - agent represents the buyer
- * - Sale: "Seller (Client)" - agent represents the seller
+ * TWO roles are type-dependent, and this function is the ONLY place either one
+ * becomes words in the renderer:
+ *
+ *   `client` — the party the user represents.
+ *       purchase (displayed "Listing"): the user is the listing agent, so their
+ *                                       client is the SELLER -> "Seller (Client)"
+ *       sale:                           the user is the buyer's agent, so their
+ *                                       client is the BUYER  -> "Buyer (Client)"
+ *
+ *   `agent`  — the OTHER side's agent, which is the other side FROM the user.
+ *       purchase: the user holds the listing, so the other agent represents the
+ *                 buyer                                      -> "Buyer's Agent"
+ *       sale:     the user represents the buyer, so the other agent holds the
+ *                 listing                                    -> "Listing Agent"
+ *
+ * "Listing Agent" on a Sale is what PRESERVES the founder's support-ticket-111
+ * ruling (BACKLOG-2804) through the enum collapse: the agent representing the
+ * seller must read "Listing Agent", and now does so as a label rule instead of
+ * a stored value. Do not "simplify" it to "Seller's Agent".
+ *
+ * `co_agent` is deliberately absent from this function. It is the same string on
+ * both types — founder: "same as the other, not dynamic co agent" — so it lives
+ * in the static map and falls through below. Adding it here is how it would
+ * become dynamic by accident; a test asserts the two types render it equal.
+ *
+ * `other` names no side, so both type-dependent roles fall through to their
+ * static forms rather than guessing a side.
+ *
+ * DO NOT read `purchase` as "the user is buying". That reading produced the
+ * inverted labels the founder reported on screen (BACKLOG-2850). `purchase` is
+ * the stored value behind the word "Listing".
  *
  * @param role - The specific role constant
- * @param transactionType - 'purchase' or 'sale'
+ * @param transactionType - 'purchase' | 'sale' | 'other'
  * @returns Display name for the role
  */
 export function getRoleDisplayName(
   role: string,
   transactionType: TransactionType,
 ): string {
-  // Special handling for CLIENT role - changes based on transaction type
   if (role === SPECIFIC_ROLES.CLIENT) {
-    if (transactionType === "purchase") {
-      return "Buyer (Client)";
-    } else if (transactionType === "sale") {
-      return "Seller (Client)";
-    }
+    if (transactionType === "purchase") return "Seller (Client)";
+    if (transactionType === "sale") return "Buyer (Client)";
   }
 
-  // For all other roles, use the standard display name or format the role string
+  if (role === SPECIFIC_ROLES.AGENT) {
+    if (transactionType === "purchase") return "Buyer's Agent";
+    if (transactionType === "sale") return "Listing Agent";
+  }
+
+  // Everything else — service providers, co_agent, and any legacy value still
+  // sitting in a database — is type-independent.
   return ROLE_DISPLAY_NAMES[role] || formatRoleLabel(role);
 }

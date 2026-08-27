@@ -414,7 +414,7 @@ describe("BACKLOG-2680: a contact whose role is blanked is not silently dropped"
 
     await user.selectOptions(
       roleSelect("contact-1"),
-      SPECIFIC_ROLES.SELLER_AGENT,
+      SPECIFIC_ROLES.AGENT,
     );
     await user.click(screen.getByTestId("wizard-next"));
 

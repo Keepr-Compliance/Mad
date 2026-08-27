@@ -307,7 +307,7 @@ describe("BACKLOG-2683: a deal with nobody in the Client role saves", () => {
         ]}
         selectedContactIds={["contact-1", "contact-2"]}
         initialAssignments={{
-          [SPECIFIC_ROLES.SELLER_AGENT]: [
+          [SPECIFIC_ROLES.AGENT]: [
             { contactId: "contact-1", isPrimary: false, notes: "" },
           ],
           [SPECIFIC_ROLES.INSPECTOR]: [
@@ -390,11 +390,11 @@ describe("BACKLOG-2683: a deal with nobody in the Client role saves", () => {
       return el;
     });
 
-    await user.selectOptions(benSelect, SPECIFIC_ROLES.SELLER_AGENT);
+    await user.selectOptions(benSelect, SPECIFIC_ROLES.AGENT);
 
     await waitFor(() =>
       expect(screen.getAllByTestId("role-select-contact-2")[0]).toHaveValue(
-        SPECIFIC_ROLES.SELLER_AGENT,
+        SPECIFIC_ROLES.AGENT,
       ),
     );
 
@@ -408,6 +408,6 @@ describe("BACKLOG-2683: a deal with nobody in the Client role saves", () => {
     await user.click(screen.getByTestId("wizard-next"));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     expect(screen.getAllByTestId("role-select-contact-2")[0]).toHaveValue(
-      SPECIFIC_ROLES.SELLER_AGENT,
+      SPECIFIC_ROLES.AGENT,
     );  });
 });

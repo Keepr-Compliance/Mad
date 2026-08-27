@@ -789,6 +789,9 @@ export async function getCommunicationsWithMessages(
       COALESCE(m.thread_id, e.thread_id) as thread_id,
       -- Participants JSON for group chat detection and sender identification
       m.participants as participants,
+      -- BACKLOG-2814: the group's user-visible name, joined in from
+      -- message_thread_names. NULL for 1:1 chats and unnamed groups.
+      tn.display_name as thread_display_name,
       -- Direction from messages table for bubble display
       COALESCE(m.direction, e.direction) as direction,
       -- External ID for attachment lookup fallback
@@ -815,6 +818,13 @@ export async function getCommunicationsWithMessages(
     LEFT JOIN emails e ON (
       -- BACKLOG-506: Email linking - join only when email_id is set and matches
       c.email_id IS NOT NULL AND c.email_id = e.id
+    )
+    -- BACKLOG-2814: user_id is part of the join key, not just thread_id. The
+    -- table's PK is (user_id, thread_id) and thread ids are only unique per
+    -- machine, so joining on thread_id alone would show one user's group name
+    -- on another user's thread in a shared database.
+    LEFT JOIN message_thread_names tn ON (
+      tn.thread_id = m.thread_id AND tn.user_id = m.user_id
     )
     WHERE c.transaction_id = ?
     ${channelFilter === "email" ? "AND c.email_id IS NOT NULL" : ""}

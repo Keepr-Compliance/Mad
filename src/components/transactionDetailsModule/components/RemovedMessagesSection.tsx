@@ -40,6 +40,8 @@ interface RemovedMessageRow {
   participants: string | null;
   participants_flat: string | null;
   direction: string | null;
+  /** BACKLOG-2814: Apple's group name, joined in by the removed-messages query. */
+  thread_display_name?: string | null;
 }
 
 /**
@@ -148,6 +150,11 @@ function mapToMessageLike(rows: RemovedMessageRow[]): MessageLike[] {
     participants: row.participants ?? undefined,
     participants_flat: row.participants_flat ?? undefined,
     thread_id: row.thread_id ?? undefined,
+    // BACKLOG-2814: carried across the row -> MessageLike boundary explicitly.
+    // This mapper builds its result field by field, so a column the query now
+    // selects is DROPPED here unless it is named — a removed group would fall
+    // back to participants while every other surface showed its name.
+    thread_display_name: row.thread_display_name ?? undefined,
     sent_at: row.sent_at ?? undefined,
     received_at: row.received_at ?? undefined,
     has_attachments: false,
