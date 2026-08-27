@@ -118,6 +118,36 @@ branches. Nothing in the shipping product prunes anything.
 - **Encrypted backups also resolve by `fileID`** through `Manifest.db`
   (`backupDecryptionService`), so the same holds.
 
+### What is actually in there (MEASURED, from a real `Manifest.db`)
+
+Read directly out of `Backups/<udid>/Manifest.db` (sizes from the
+NSKeyedArchiver blob in `Files.file`; 0 unparsed blobs of 725,594):
+
+| GB | files | domain |
+|---|---|---|
+| 14.45 | 82,335 | `AppDomainGroup-` |
+| 14.36 | 276,986 | `HomeDomain` |
+| 13.67 | 130,135 | `AppDomain-` (3rd-party apps) |
+| 10.60 | 147,002 | `CameraRollDomain` |
+| **0.81** | **80,798** | **`MediaDomain`** |
+| 0.10 | 7,915 | `SysContainerDomain-`, `AppDomainPlugin-` |
+| **54.06** | **725,594** | **TOTAL** |
+
+All `AppDomain*` = **28.15 GB / 219,712 files** — 52.1% of bytes, 30.3% of
+files. The old comment's guess ("AppDomain which can be 10-30 GB") was accurate;
+only its mechanism was fiction.
+
+**Two things this table settles:**
+
+- **Keeping attachments is nearly free.** `MediaDomain` is 0.81 GB. The
+  attachment-safe filter (`HomeDomain` + `MediaDomain`) costs 0.81 GB more than
+  the naive HomeDomain-only prune, and avoids destroying every attachment.
+- **The disk win and the sync win are different sizes.** A
+  HomeDomain+MediaDomain prune keeps 15.17 GB of 54.06 (**~72% of bytes
+  reclaimed**) but 357,784 of 725,594 files (**~51% of file count**). Since
+  `Manifest.db` scales with *file count*, the manifest — and therefore the
+  per-sync wire cost — shrinks by roughly half, not by 72%.
+
 ### Three hazards that must be answered first
 
 1. **HomeDomain alone is the wrong filter — it would destroy attachments.**
@@ -129,11 +159,11 @@ branches. Nothing in the shipping product prunes anything.
 2. **Pruning silently under-provisions the disk guard.** `checkBackupStatus`
    returns `sizeBytes` from `calculateBackupSize`; the orchestrator uses it as
    `existingBackupSize` and, when non-zero, takes it as the estimate with only
-   **1.1x** headroom (versus 1.5x for a fresh estimate). Prune 58.8 GB down to
-   ~2 GB and the next run asks the disk for ~2.2 GB before an operation that
-   still needs tens of GB — because the device re-sends whatever the manifest
-   says is missing. This directly weakens BACKLOG-2899. *(Mechanism traced in
-   code; the re-send behaviour in the next clause is inferred.)*
+   **1.1x** headroom (versus 1.5x for a fresh estimate). Prune 54 GB down to
+   ~15 GB and the next run asks the disk for ~16.7 GB before an operation whose
+   true footprint is still ~54 GB — because the device re-sends whatever the
+   manifest says is missing. This directly weakens BACKLOG-2899. *(Mechanism
+   traced in code; the re-send behaviour is inferred — see hazard 3.)*
 3. **The effect on the next incremental is UNKNOWN and is the real question.**
    *(INFERRED, not measured.)* An incremental hands the device the existing
    `Manifest.db`. If files are deleted but left listed in the manifest, the
