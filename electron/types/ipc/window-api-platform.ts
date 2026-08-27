@@ -85,7 +85,15 @@ export interface WindowApiBackup {
     duration: number;
     deviceUdid: string;
     isIncremental: boolean;
-    backupSize: number;
+    /**
+     * BACKLOG-2917: `null` when the backup's size could not be measured, never 0.
+     * This file is a hand-written MIRROR of the main-process producer, structurally
+     * independent of it, so `tsc` cannot catch it drifting — it stayed `number` while
+     * `BackupResult.backupSize` became nullable and the build remained green. The
+     * next renderer to write `(size / 1e9).toFixed(1)` would print "0.0" for a backup
+     * whose size walk threw.
+     */
+    backupSize: number | null;
   }>;
   startWithPassword: (options: {
     udid: string;
@@ -103,7 +111,12 @@ export interface WindowApiBackup {
       path: string;
       deviceUdid: string;
       createdAt: Date;
-      size: number;
+      /**
+       * BACKLOG-2917: `null` when the size could not be measured, never 0.
+       * `backup:list` returns `listBackups()` UNSHAPED (backupHandlers.ts), so
+       * `BackupInfo.size` crosses this boundary verbatim.
+       */
+      size: number | null;
       isEncrypted: boolean;
       iosVersion: string | null;
       deviceName: string | null;
@@ -148,7 +161,8 @@ export interface WindowApiBackup {
       duration: number;
       deviceUdid: string;
       isIncremental: boolean;
-      backupSize: number;
+      /** BACKLOG-2917: `null` when the size could not be measured, never 0. */
+      backupSize: number | null;
     }) => void,
   ) => () => void;
   onError: (callback: (error: { message: string }) => void) => () => void;

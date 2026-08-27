@@ -100,7 +100,8 @@ export interface BackupListEntry {
   path: string;
   deviceUdid: string;
   createdAt: Date;
-  size: number;
+  /** BACKLOG-2917: `null` when the size could not be measured, never 0. */
+  size: number | null;
   isEncrypted: boolean;
   iosVersion: string | null;
   deviceName: string | null;

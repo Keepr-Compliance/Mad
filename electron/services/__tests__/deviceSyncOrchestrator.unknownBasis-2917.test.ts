@@ -351,6 +351,66 @@ describe("BACKLOG-2917: device storage being unavailable is its own state", () =
   });
 });
 
+/**
+ * Drive a run where `startBackup` SUCCEEDS, so `syncTimeline.annotate("backup", ...)`
+ * is actually reached. Every other test here stops the run at `startBackup` and
+ * therefore cannot observe this line at all — which is exactly how the `:590`
+ * downstream site came to be fixed with nothing able to see a regression.
+ */
+async function runSyncWithCompletedBackup(backupSize: number | null) {
+  logLines.length = 0;
+  mockCheckBackupStatus.mockReset().mockResolvedValue(ABSENT);
+  mockGetDeviceStorageInfo.mockReset().mockResolvedValue({
+    totalSpace: 256 * GB,
+    usedSpace: 128 * GB,
+    freeSpace: 128 * GB,
+    estimatedBackupSize: DEVICE_STORAGE_ESTIMATE,
+  });
+  mockStartBackup.mockReset().mockResolvedValue({
+    success: true,
+    backupPath: "/tmp/keepr-2917-does-not-exist",
+    error: null,
+    duration: 1_464_030,
+    deviceUdid: UDID,
+    isIncremental: true,
+    // BACKLOG-2917: `null` means the walk failed, NOT that nothing transferred.
+    backupSize,
+    isEncrypted: false,
+  });
+
+  const orchestrator = new DeviceSyncOrchestrator();
+  orchestrator.on("error", () => {
+    /* the run fails later at parsing; the annotate under test already happened */
+  });
+  await orchestrator.sync({ udid: UDID });
+  return [...logLines];
+}
+
+describe("BACKLOG-2917: a completed backup is never annotated as zero bytes", () => {
+  it("omits `bytes` and says so when the size walk failed on a SUCCESSFUL backup", async () => {
+    // The founder's real run measured 58,761,372,853 bytes. If its size walk had
+    // thrown, the timeline used to record `bytes=0` for it — and BACKLOG-2894 will
+    // aggregate over exactly this field.
+    const lines = await runSyncWithCompletedBackup(null);
+
+    const phaseEnd = lines.find((l) => l.includes("phase-end phase=backup"));
+    expect(phaseEnd).toBeDefined();
+    expect(phaseEnd).toContain("bytesUnmeasured=true");
+    // The defect, stated as the assertion that would have caught it.
+    expect(phaseEnd).not.toContain("bytes=0");
+    expect(phaseEnd).not.toMatch(/\bbytes=/);
+  });
+
+  it("records the real byte count when the walk succeeded — the counter-control", async () => {
+    const lines = await runSyncWithCompletedBackup(58_761_372_853);
+
+    const phaseEnd = lines.find((l) => l.includes("phase-end phase=backup"));
+    expect(phaseEnd).toBeDefined();
+    expect(phaseEnd).toContain("bytes=58761372853");
+    expect(phaseEnd).not.toContain("bytesUnmeasured");
+  });
+});
+
 describe("BACKLOG-2917: processExistingBackup separates 'none' from 'could not tell'", () => {
   it("does not claim 'No existing backup found' when the check itself failed", async () => {
     mockCheckBackupStatus.mockReset().mockResolvedValue(UNKNOWN);
