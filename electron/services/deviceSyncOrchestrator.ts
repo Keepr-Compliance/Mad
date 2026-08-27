@@ -15,6 +15,7 @@
 import { EventEmitter } from "events";
 import crypto from "crypto";
 import log from "electron-log";
+import { syncTimeline } from "./syncTimeline";
 import * as Sentry from "@sentry/electron/main";
 import checkDiskSpace from "check-disk-space";
 import { app } from "electron";
@@ -242,6 +243,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
 
+    // BACKLOG-2898: open the phase timeline for this run.
+    syncTimeline.beginSync({ platform: process.platform });
+
     // TASK-2110: Generate session ID for ACID rollback on cancel
     const sessionId = crypto.randomUUID();
 
@@ -405,6 +409,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           log.info(`[DeviceSyncOrchestrator] Estimated backup size from storage: ${Math.round(this.estimatedBackupSize / 1024 / 1024)} MB (used space: ${Math.round(storageInfo.usedSpace / 1024 / 1024 / 1024)} GB)`);
         }
 
+        // BACKLOG-2898/2896: the estimate BRANCH, on one greppable line. Which
+        // branch ran is what says whether a previous backup was reused — the
+        // question 2896 could not answer because both `log.info` lines above
+        // had rotated out of main.log AND main.old.log before anyone looked.
+        syncTimeline.mark("backup-estimate", {
+          source: existingBackupSize > 0 ? "existing-backup" : "device-storage",
+          bytes: this.estimatedBackupSize,
+          reusedPreviousBackup: existingBackupSize > 0,
+        });
+
         this.emitProgress({
           phase: "backup",
           phaseProgress: 0,
@@ -494,6 +508,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         return this.errorResult(error);
       }
 
+      // BACKLOG-2898/2894: what the backup phase produced. `incremental` is
+      // the fact BACKLOG-2896 could not settle — the lines that would have
+      // answered it had already rotated out of the founder's log.
+      syncTimeline.annotate("backup", {
+        bytes: backupResult.backupSize,
+        incremental: backupResult.isIncremental,
+        encrypted: !!backupResult.isEncrypted,
+      });
+
       let backupPath = backupResult.backupPath;
 
       // Step 2: Decrypt if needed
@@ -548,6 +571,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         overallProgress: this.calculateOverallProgress("parsing-contacts", 100),
         message: `Found ${contacts.length} contacts`,
       });
+
+      // BACKLOG-2898/2894: what this phase produced.
+      syncTimeline.annotate("parsing-contacts", { contacts: contacts.length });
 
       if (this.abortController?.signal.aborted) {
         this.isRunning = false;
@@ -613,6 +639,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         this.contactsParser.close();
         return this.errorResult("Sync cancelled by user");
       }
+
+      // BACKLOG-2898/2894: what the parsing phase produced.
+      syncTimeline.annotate("parsing-messages", {
+        conversations: conversations.length,
+        messages: conversations.reduce((sum, c) => sum + c.messages.length, 0),
+      });
 
       // Step 5: Resolve contact names
       this.setPhase("resolving");
@@ -906,6 +938,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    */
   private setPhase(phase: SyncPhase): void {
     this.currentPhase = phase;
+
+    // BACKLOG-2898: one timeline record per back-end step, with its duration
+    // and the counts it produced. Terminal states are not phases — "complete"
+    // hands off to persistence in syncHandlers, which opens the storing:*
+    // phases and ends the sync; the open phase is closed by that next enter().
+    if (phase !== "idle" && phase !== "complete" && phase !== "error") {
+      syncTimeline.enter(phase);
+    }
+
     this.emit("phase", phase);
   }
 
@@ -1284,6 +1325,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * Create an error result
    */
   private errorResult(error: string): SyncResult {
+    // BACKLOG-2898: close the timeline on every failure and cancel path.
+    // The guard distinguishes the ONE reentrant caller ("Sync already in
+    // progress", reached while isRunning is still true for the OTHER sync)
+    // from genuine terminations, which all clear isRunning first.
+    if (!this.isRunning) {
+      syncTimeline.endSync(/cancelled/i.test(error) ? "cancelled" : "error");
+    }
+
     return {
       success: false,
       messages: [],
