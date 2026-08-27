@@ -18,6 +18,8 @@ import {
   getEmailsByContactId,
 } from "../services/db/contactDbService";
 import emailSyncService from "../services/emailSyncService";
+// BACKLOG-2880: the Sync button announces its run on the review channel.
+import { notifyReviewDiscovery } from "../services/reviewStateService";
 // BACKLOG-2313: authoritative auto-detect gate dependencies.
 import featureGateService from "../services/featureGateService";
 import llmConfigService from "../services/llm/llmConfigService";
@@ -374,7 +376,7 @@ export function registerEmailSyncHandlers(
 
       // TASK-2066: Delegate to EmailSyncService for full orchestration
       // BACKLOG-1802: the user explicitly clicked "Sync Emails" → tag ingest_source='manual'.
-      return emailSyncService.syncTransactionEmails({
+      const result = await emailSyncService.syncTransactionEmails({
         transactionId: validatedTransactionId,
         userId,
         contactAssignments,
@@ -396,6 +398,43 @@ export function registerEmailSyncHandlers(
         // surface and changing it would move them too.
         queueForReviewInsteadOfLinking: true,
       });
+
+      // BACKLOG-2880: ANNOUNCE THE RUN, because nothing else on this path does.
+      //
+      // Founder ruling 2026-08-26: the toast goes neutral ("Sync completed") and
+      // "the needs review popup anyway shows up". It did not show up here. The
+      // popup is gated on `reviewQueue.lastFound > 0`, and `lastFound` is only
+      // ever set from a `review:queue-changed` broadcast. Add-contact and
+      // range-change reach it because their sweeps run through
+      // `syncReviewQueueForTransaction`, which broadcasts; this path goes
+      // straight to the classifier and broadcast nothing, so with nine queued
+      // and none linked the user got a neutral toast and no popup — told nothing
+      // at all.
+      //
+      // Emitted unconditionally on success, including a run that found nothing:
+      // the subscriber always re-reads (so the badge and both tab lists refresh,
+      // which a Sync click never did before) and gates only the popup on the
+      // counts. `loadDetails`/`refreshMessages` are deliberately NOT lifted out
+      // of the renderer's linked-count branch to achieve that — `loadDetails` is
+      // the documented on-demand FULL communications fetch with a loading state,
+      // and the existing review-token subscriber already does the targeted,
+      // loading-free refresh.
+      //
+      // Narrowed explicitly: `TransactionResponse` carries an
+      // `[key: string]: unknown` index signature, so these two counts arrive as
+      // `unknown` and would silently become `{}` in an arithmetic position.
+      const counts = result as {
+        totalQueuedForReview?: number;
+        totalEmailsLinked?: number;
+      };
+      if (result?.success) {
+        notifyReviewDiscovery(validatedTransactionId, {
+          added: counts.totalQueuedForReview ?? 0,
+          linked: counts.totalEmailsLinked ?? 0,
+        });
+      }
+
+      return result;
     }, { module: "Transactions" }),
   );
 

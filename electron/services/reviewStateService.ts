@@ -607,6 +607,45 @@ export function notifyReviewStateChanged(transactionId: string): void {
 }
 
 /**
+ * Announce a discovery run that happened OUTSIDE `syncReviewQueueForTransaction`
+ * (BACKLOG-2880).
+ *
+ * The "Sync Emails" button reaches the classifier through
+ * `emailSyncService.syncTransactionEmails`, not through the sweep above, so it
+ * never broadcast. Nothing then set `lastAdded`/`lastLinked` in the renderer,
+ * and the founder's popup — gated on `lastFound > 0` — stayed silent while nine
+ * emails landed in his queue. Add-contact and range-change reach the popup for
+ * exactly the opposite reason: their sweeps run through the function above,
+ * which broadcasts.
+ *
+ * This is the SAME channel and the SAME payload, not a second announcement. A
+ * parallel notification is how two surfaces start disagreeing about one number.
+ *
+ * Emitted on every completed run, including one that found nothing: the hook
+ * always re-reads on the event (which is what makes a Sync click refresh the
+ * badge and the tabs at all) and gates only the POPUP on added/linked being
+ * non-zero. "Refresh regardless" and "announce only when there is something"
+ * are different rules, and the existing contract already draws that line.
+ *
+ * `reason` stays inside the published `PendingSyncReason` vocabulary rather than
+ * gaining a member for this caller: the field is diagnostic in this payload —
+ * only `syncReviewQueueForTransaction` acts on it, for the watermark — and that
+ * vocabulary is under active work elsewhere.
+ */
+export function notifyReviewDiscovery(
+  transactionId: string,
+  found: { added: number; linked: number; reason?: PendingSyncReason },
+): void {
+  broadcastReviewQueueChanged({
+    transactionId,
+    added: found.added,
+    linked: found.linked,
+    outstanding: countReviewItems(transactionId),
+    reason: found.reason ?? "background",
+  });
+}
+
+/**
  * Queue ONE email for review, without linking it.
  *
  * The single write-point for the ambiguous half of develop's classification
