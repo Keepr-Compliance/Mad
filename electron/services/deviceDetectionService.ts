@@ -1206,14 +1206,19 @@ export class DeviceDetectionService extends EventEmitter {
     // device backups, AppDomain included.
     //
     // The value is deliberately LEFT UNCHANGED rather than re-guessed, because
-    // no value of it is defensible from what we currently measure. On the
-    // founder's 2026-08-26 Windows run the app estimated 3.7 GB against a
-    // 58.8 GB backup (15.9x under). IF that 3.7 GB came from this formula, the
-    // usedSpace input behind it was near 14.8 GB, and even a ratio of 1.0 would
-    // still under-predict that backup ~4x — i.e. the INPUT is wrong, not only
-    // the ratio. That "if" is genuinely open: BACKLOG-2900 records that the log
-    // line distinguishing this branch from the existing-backup branch rotated
-    // away before it could be read.
+    // there is no measurement of it to re-guess from. All three of the founder's
+    // 2026-08-26 runs took the OTHER branch: BACKLOG-2906 records
+    // "Using existing backup size for estimate: 55 GB" on every one of them —
+    // the line emitted by deviceSyncOrchestrator when a previous backup already
+    // exists. This formula runs only on a first-ever sync, and no first-ever
+    // sync has been captured. Its accuracy is therefore unknown, not bad.
+    //
+    // RETRACTED: an earlier version of this comment cited a 3.7 GB estimate,
+    // a "15.9x underestimate", and an inference that even a ratio of 1.0 would
+    // under-predict ~4x. That 3.7 GB was bytesTransferred read off a progress
+    // display mid-transfer, never an estimate. The real estimate was 55 GB
+    // against a ~59 GB backup — about 7% under. Any reasoning resting on the
+    // 3.7 GB figure is void; do not reinstate it.
     //
     // Re-deriving the estimate is BACKLOG-2896, sequenced after the
     // BACKLOG-2894 telemetry that would supply numbers to derive it from.

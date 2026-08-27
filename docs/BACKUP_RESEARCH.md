@@ -86,7 +86,21 @@ From the founder's Windows run, 2026-08-26 (BACKLOG-2900):
 | `Manifest.db` | **863 MB** |
 | incremental duration | **20.1–23.5 min**, for a net gain of 1–13 messages |
 | effective throughput | ~5–6 MB/s |
-| app's own size estimate | **3.7 GB** — a 15.9x underestimate |
+| app's own size estimate | **55 GB** against a ~59 GB backup — about **7% under** |
+
+**Provenance of that last row**, because this file's own history is the argument
+for demanding it: the figure is the value logged by
+`deviceSyncOrchestrator.ts:402`,
+`"Using existing backup size for estimate: 55 GB"`, captured on **all three** of
+the founder's 2026-08-26 runs and recorded in BACKLOG-2906. That line is emitted
+only on the `existingBackupSize > 0` branch, so these runs never touched the
+`BACKUP_SIZE_RATIO` formula at all.
+
+> **Retracted.** An earlier revision of this row read *"app's own size estimate
+> 3.7 GB — a 15.9x underestimate"*. **That is wrong and must not be cited.** The
+> 3.7 GB was `bytesTransferred` read off a progress display mid-transfer; it was
+> never an estimate. It was published here with no traceable source — the same
+> failure mode that let `--skip-apps` survive in this file for months.
 
 `Manifest.db` scales with **file count**, not bytes, and on an incremental it
 crosses the wire in **both directions**. Cutting file count is therefore the
