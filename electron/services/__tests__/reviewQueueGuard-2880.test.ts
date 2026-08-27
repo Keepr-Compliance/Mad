@@ -84,6 +84,7 @@ jest.mock("../../workers/contactWorkerPool", () => ({
   isPoolReady: jest.fn(() => false),
 }));
 
+import { BrowserWindow } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import { createMigrationHarness, type MigrationHarness } from "./helpers/migrationTestHarness";
 import {
@@ -93,6 +94,7 @@ import {
 import {
   approveReviewItems,
   getReviewState,
+  notifyReviewDiscovery,
   syncReviewQueueForTransaction,
 } from "../reviewStateService";
 import logService from "../logService";
@@ -304,6 +306,41 @@ describe("BACKLOG-2880 — an auto pass may not link what review already owns", 
         .all(TXN) as Array<{ match_reason: string }>;
       expect(rows.map((r) => r.match_reason)).toEqual(["user_confirmed"]);
       expect(getReviewState(TXN).count).toBe(0);
+    });
+  });
+
+  describe("THE ANNOUNCEMENT — the counts survive the trip to the renderer", () => {
+    it("broadcasts added and linked as DISTINCT numbers on the review channel", async () => {
+      // The middle segment of the popup chain, and the only one no other suite
+      // executes: `emailSyncHandlers.reviewAnnounce-2880` mocks this whole
+      // service, and the renderer suite fabricates the payload. Without this
+      // test, mapping `added` to 0 inside the function below reddens nothing
+      // while the founder's popup silently shows no count.
+      //
+      // added and linked are given DIFFERENT values so a swapped mapping fails
+      // too — equal values would let the two fields be transposed unnoticed.
+      addAmbiguousEmail(db, "e-queued");
+      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+      expect(queuedEmailIds(db)).toEqual(["e-queued"]);
+
+      const send = jest.fn();
+      (BrowserWindow.getAllWindows as jest.Mock).mockReturnValue([
+        { isDestroyed: () => false, webContents: { send } },
+      ]);
+
+      notifyReviewDiscovery(TXN, { added: 9, linked: 2 });
+
+      expect(send).toHaveBeenCalledTimes(1);
+      const [channel, payload] = send.mock.calls[0];
+      expect(channel).toBe("review:queue-changed");
+      expect(payload).toMatchObject({
+        transactionId: TXN,
+        added: 9,
+        linked: 2,
+        // Read from the database, not echoed from the caller: this is the badge's
+        // number, and the one queued email above is what it must reflect.
+        outstanding: 1,
+      });
     });
   });
 
