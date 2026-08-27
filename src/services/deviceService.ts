@@ -36,7 +36,6 @@ export interface Device {
 export interface BackupCapabilities {
   supportsDomainFiltering: boolean;
   supportsIncremental: boolean;
-  supportsSkipApps: boolean;
   supportsEncryption: boolean;
   availableDomains: string[];
 }
@@ -71,7 +70,6 @@ export interface BackupStartOptions {
   udid: string;
   outputDir?: string;
   forceFullBackup?: boolean;
-  skipApps?: boolean;
 }
 
 /**

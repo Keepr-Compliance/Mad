@@ -76,7 +76,6 @@ export interface BackupOptions {
   /** Force a full backup even if incremental is available. Default: false */
   forceFullBackup?: boolean;
   /** Skip application data to reduce backup size. Default: true */
-  skipApps?: boolean;
   /** Password for encrypted backup (TASK-007) */
   password?: string;
 }
@@ -89,8 +88,6 @@ export interface BackupCapabilities {
   supportsDomainFiltering: boolean;
   /** Whether incremental backups are supported */
   supportsIncremental: boolean;
-  /** Whether --skip-apps is supported */
-  supportsSkipApps: boolean;
   /** Whether backup encryption is supported */
   supportsEncryption: boolean;
   /** List of available domains in backups */

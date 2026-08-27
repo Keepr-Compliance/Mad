@@ -124,7 +124,6 @@ describe("BackupService", () => {
       expect(capabilities).toEqual({
         supportsDomainFiltering: false,
         supportsIncremental: true,
-        supportsSkipApps: true,
         supportsEncryption: true,
         availableDomains: expect.arrayContaining([
           "HomeDomain",
@@ -248,17 +247,6 @@ describe("BackupService", () => {
 
       expect(completedResult).not.toBeNull();
       expect(completedResult!.success).toBe(true);
-    });
-
-    it("should use skip-apps by default", async () => {
-      const options: BackupOptions = {
-        udid: TEST_UDID, // Use valid UDID format (TASK-601)
-        // skipApps defaults to true
-      };
-
-      // In mock mode, we just verify the service accepts the option
-      const result = await backupService.startBackup(options);
-      expect(result.success).toBe(true);
     });
 
     it("should support custom output directory", async () => {
@@ -463,7 +451,7 @@ describe("BackupService - buildBackupArgs", () => {
       backupService,
     );
     // Pass validated UDID as third parameter (TASK-601 security change)
-    const args = buildArgs({ udid: TEST_UDID, skipApps: true }, "/backup/path", TEST_UDID);
+    const args = buildArgs({ udid: TEST_UDID }, "/backup/path", TEST_UDID);
 
     expect(args).toContain("-u");
     expect(args).toContain(TEST_UDID);
@@ -476,24 +464,6 @@ describe("BackupService - buildBackupArgs", () => {
     const args = buildArgs({ udid: TEST_UDID }, "/backup/path", TEST_UDID);
 
     expect(args).toContain("backup");
-  });
-
-  it("should include --skip-apps by default", () => {
-    const buildArgs = (backupService as any).buildBackupArgs.bind(
-      backupService,
-    );
-    const args = buildArgs({ udid: TEST_UDID }, "/backup/path", TEST_UDID);
-
-    expect(args).toContain("--skip-apps");
-  });
-
-  it("should not include --skip-apps when disabled", () => {
-    const buildArgs = (backupService as any).buildBackupArgs.bind(
-      backupService,
-    );
-    const args = buildArgs({ udid: TEST_UDID, skipApps: false }, "/backup/path", TEST_UDID);
-
-    expect(args).not.toContain("--skip-apps");
   });
 
   it("should include --full when forceFullBackup is true", () => {
@@ -665,5 +635,73 @@ describe("BackupService - parseStderrLine", () => {
 
     // Neither should emit progress events
     expect(progressEvents.length).toBe(0);
+  });
+});
+
+/**
+ * BACKLOG-2910 — the argv control.
+ *
+ * `--skip-apps` is a RESTORE option. Measured against the binaries this project
+ * uses, on 2026-08-26:
+ *
+ *   $ idevicebackup2 --version                      # 1.4.0 (Homebrew, macOS)
+ *   $ export USBMUXD_SOCKET_ADDRESS=127.0.0.1:1     # forces the connect to fail
+ *                                                   # AFTER argv is fully parsed,
+ *                                                   # so no device is touched
+ *   $ idevicebackup2 -d -u <fake> backup            <dir>   # exit 255
+ *   $ idevicebackup2 -d -u <fake> backup --skip-apps <dir>  # exit 255
+ *
+ *   stdout sha256 dd1bedf5d68aa0358f2abe756ff634cd952b187d2b16d4a0bbb8cd8d89b22db1
+ *   for BOTH; stderr empty (e3b0c442…) for BOTH; exit code equal.
+ *
+ * The discriminating control — proving the flag is a RECOGNISED global option the
+ * backup path never reads, rather than unknown junk the parser happens to ignore:
+ *
+ *   $ idevicebackup2 -d -u <fake> backup --not-a-real-flag <dir>
+ *   idevicebackup2: unrecognized option `--not-a-real-flag'   → exit 2
+ *
+ * The parser DOES reject unknown long options. It does not reject --skip-apps,
+ * and the invocation is byte-identical with and without it.
+ *
+ * Corroborated in the binary this repo actually ships to users —
+ * `strings resources/win/libimobiledevice/idevicebackup2.exe` places --skip-apps
+ * inside the restore CMDOPTIONS group (--no-reboot, --copy, --settings, --remove,
+ * --skip-apps, --password), and its help text lists it under `restore`, never
+ * under `backup`. The `backup` command accepts only `--full`.
+ *
+ * These asserts are exact-array identity, not `not.toContain`, so they pin BOTH
+ * halves of the claim at once: the flag is gone, and nothing else moved.
+ */
+describe("BackupService - buildBackupArgs argv identity (BACKLOG-2910)", () => {
+  let backupService: BackupService;
+
+  const buildArgs = (options: object) => {
+    const fn = (backupService as any).buildBackupArgs.bind(backupService);
+    return fn(options, "/backup/path", TEST_UDID) as string[];
+  };
+
+  beforeEach(() => {
+    backupService = new BackupService();
+  });
+
+  it("builds a default backup invocation with no --skip-apps and nothing else changed", () => {
+    expect(buildArgs({ udid: TEST_UDID })).toEqual([
+      "-d",
+      "-u",
+      TEST_UDID,
+      "backup",
+      "/backup/path",
+    ]);
+  });
+
+  it("builds a forced full backup invocation with no --skip-apps and nothing else changed", () => {
+    expect(buildArgs({ udid: TEST_UDID, forceFullBackup: true })).toEqual([
+      "-d",
+      "-u",
+      TEST_UDID,
+      "backup",
+      "--full",
+      "/backup/path",
+    ]);
   });
 });

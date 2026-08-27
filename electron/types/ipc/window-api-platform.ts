@@ -57,7 +57,6 @@ export interface WindowApiBackup {
   getCapabilities: () => Promise<{
     supportsDomainFiltering: boolean;
     supportsIncremental: boolean;
-    supportsSkipApps: boolean;
     supportsEncryption: boolean;
     availableDomains: string[];
   }>;
@@ -79,7 +78,6 @@ export interface WindowApiBackup {
     udid: string;
     outputDir?: string;
     forceFullBackup?: boolean;
-    skipApps?: boolean;
   }) => Promise<{
     success: boolean;
     backupPath: string | null;

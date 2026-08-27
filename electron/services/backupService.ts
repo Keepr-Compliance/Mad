@@ -5,9 +5,12 @@
  * Extracts messages and contacts from iPhone backups.
  * Supports encrypted backup decryption (TASK-007).
  *
- * IMPORTANT: Domain filtering is NOT supported by idevicebackup2.
- * See docs/BACKUP_RESEARCH.md for full research findings.
- * This service uses --skip-apps to reduce backup size by ~40%.
+ * IMPORTANT: Domain filtering is NOT supported by idevicebackup2, and neither
+ * is excluding app data. The iOS MobileBackup2 protocol offers no way to request
+ * a subset of domains, and the `backup` command takes exactly one option, --full.
+ * Every backup this service takes is therefore a FULL device backup, app data
+ * included, and its size is not something the argv can influence.
+ * See docs/BACKUP_RESEARCH.md for the measurements behind both statements.
  */
 
 import { spawn, ChildProcess } from "child_process";
@@ -92,7 +95,6 @@ export class BackupService extends EventEmitter {
     return {
       supportsDomainFiltering: false,
       supportsIncremental: true,
-      supportsSkipApps: true,
       supportsEncryption: true,
       availableDomains: [
         "HomeDomain",
@@ -187,8 +189,9 @@ export class BackupService extends EventEmitter {
   /**
    * Start a backup operation
    *
-   * Note: Due to iOS backup protocol limitations, this creates a full backup
-   * (minus app data if skipApps is true). Domain-specific backups are not possible.
+   * Note: Due to iOS backup protocol limitations, this creates a FULL device
+   * backup, app data included. Neither domain-specific backups nor app
+   * exclusion are possible with idevicebackup2 (BACKLOG-2910).
    *
    * @param options Backup options
    * @returns Promise resolving to backup result
@@ -850,8 +853,10 @@ export class BackupService extends EventEmitter {
   /**
    * Build backup command arguments
    *
-   * Note: We use --skip-apps to reduce backup size since we only need
-   * messages and contacts which are in HomeDomain.
+   * Note: the `backup` command accepts exactly one option, --full, so the argv
+   * built here is the whole of what we are able to ask the device for. We need
+   * only messages and contacts (HomeDomain); we receive the entire device
+   * regardless. See BACKLOG-2910 and docs/BACKUP_RESEARCH.md.
    *
    * SECURITY (TASK-601): The validatedUdid parameter MUST be pre-validated using
    * validateDeviceUdid() before calling this method. This is a private method,
@@ -878,12 +883,6 @@ export class BackupService extends EventEmitter {
 
     // Command: backup
     args.push("backup");
-
-    // Skip apps to reduce backup size (recommended for our use case)
-    // This removes AppDomain which can be 10-30 GB
-    if (options.skipApps !== false) {
-      args.push("--skip-apps");
-    }
 
     // Force full backup if requested (otherwise incremental)
     if (options.forceFullBackup) {

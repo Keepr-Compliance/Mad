@@ -1197,10 +1197,29 @@ export class DeviceDetectionService extends EventEmitter {
     // - Encrypted backups include much more data than unencrypted
     // - Photos, messages with attachments can be very large
     // - "Used space" from iOS disk_usage may not include all backed-up data
-    // Since skipApps is always true, apps (often 60-70% of used space) are excluded.
-    // Real backups without apps are typically 15-25% of used space.
-    // 25% is conservative enough to avoid underestimates.
-    const BACKUP_SIZE_RATIO = 0.25; // 25% of "used" space (apps are skipped)
+    //
+    // BACKLOG-2910: the premise this constant was chosen under is FALSE. It used
+    // to read "apps are excluded, so real backups are 15-25% of used space".
+    // Apps were never excluded. --skip-apps is a restore-only option of
+    // idevicebackup2 (the `backup` command accepts only --full), so it had no
+    // effect on any backup this product has ever taken: all of them are full
+    // device backups, AppDomain included.
+    //
+    // The value is deliberately LEFT UNCHANGED rather than re-guessed, because
+    // no value of it is defensible from what we currently measure. On the
+    // founder's 2026-08-26 Windows run the app estimated 3.7 GB against a
+    // 58.8 GB backup (15.9x under). IF that 3.7 GB came from this formula, the
+    // usedSpace input behind it was near 14.8 GB, and even a ratio of 1.0 would
+    // still under-predict that backup ~4x — i.e. the INPUT is wrong, not only
+    // the ratio. That "if" is genuinely open: BACKLOG-2900 records that the log
+    // line distinguishing this branch from the existing-backup branch rotated
+    // away before it could be read.
+    //
+    // Re-deriving the estimate is BACKLOG-2896, sequenced after the
+    // BACKLOG-2894 telemetry that would supply numbers to derive it from.
+    // Until then this is an UNVALIDATED figure, and anything that must not
+    // under-provision (the BACKLOG-2899 disk guard) cannot safely lean on it.
+    const BACKUP_SIZE_RATIO = 0.25; // UNVALIDATED — see BACKLOG-2896
     const estimatedBackupSize = Math.round(usedSpace * BACKUP_SIZE_RATIO);
 
     log.info(`[DeviceDetection] Estimated backup size: ${Math.round(estimatedBackupSize / 1024 / 1024)} MB (${BACKUP_SIZE_RATIO * 100}% of used space)`);
