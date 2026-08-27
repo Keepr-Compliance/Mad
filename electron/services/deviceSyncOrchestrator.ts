@@ -42,7 +42,12 @@ import { canUseLibimobiledevice } from "./libimobiledeviceService";
 import type { iOSDevice } from "../types/device";
 import type { iOSMessage, iOSConversation } from "../types/iosMessages";
 import type { iOSContact } from "../types/iosContacts";
-import type { BackupProgress, BackupResult } from "../types/backup";
+import type {
+  BackupProgress,
+  BackupResult,
+  BackupSnapshotState,
+  BackupStatusReport,
+} from "../types/backup";
 
 /**
  * BACKLOG-2917: what we actually know about a previous backup before sizing this one.
@@ -78,6 +83,45 @@ type EstimateSource =
   | "device-storage"
   | "unknown"
   | "device-storage-unavailable";
+
+/**
+ * What the `backup-estimate` mark records for the snapshot dimension.
+ *
+ * BACKLOG-2926: this is a NAMED union, not `string`. The first version of this field
+ * was `let snapshotStateForTelemetry: string = "no-backup"`, overwritten only on the
+ * `present` arm — which reproduced the BACKLOG-2917 defect inside the very field added
+ * to make that defect measurable: a run where the CHECK FAILED recorded
+ * `snapshotState=no-backup`, identical to a proven ENOENT. The orchestrator logged
+ * "NOT treating this as a first sync" ten lines above, and the telemetry then asserted
+ * exactly that. `GROUP BY snapshotState` could not separate "we know there is none"
+ * from "we could not find out".
+ *
+ * `"check-failed"` and `"no-backup"` are therefore distinct tokens, and the default is
+ * gone: the value is derived from the report rather than initialised and overwritten.
+ */
+type MarkSnapshotState = BackupSnapshotState | "no-backup" | "check-failed";
+
+/**
+ * Exhaustive over the OUTER union. The `never` arm on the snapshot switch elsewhere
+ * guards only the three snapshot states; this one guards the three report states, so a
+ * fourth `BackupStatusReport` arm cannot silently inherit a neighbour's telemetry.
+ */
+function snapshotStateForMark(status: BackupStatusReport): MarkSnapshotState {
+  switch (status.state) {
+    case "present":
+      return status.snapshotState;
+    case "absent":
+      // Proven ENOENT. There genuinely is no backup.
+      return "no-backup";
+    case "unknown":
+      // The check itself failed. We established nothing — and must not say otherwise.
+      return "check-failed";
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
 
 function estimateSourceFor(basis: PriorBackupBasis): EstimateSource {
   switch (basis.kind) {
@@ -493,13 +537,6 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // as fact. The basis is now named, so "we do not know" is a value the estimate,
       // the headroom and the mark all have to handle explicitly.
       let priorBackup: PriorBackupBasis;
-      /**
-       * BACKLOG-2926 (SR recommendation): carried into the `backup-estimate` mark so
-       * "how common is a snapshot state we reason about but have never measured?"
-       * becomes a question BACKLOG-2894's aggregate can answer, instead of a judgement
-       * call made once in a review.
-       */
-      let snapshotStateForTelemetry: string = "no-backup";
 
       if (backupStatus.state === "unknown") {
         // Proven: nothing. Do NOT say "first sync" — that is the 2917 defect, and
@@ -517,7 +554,6 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       } else if (backupStatus.state === "present") {
         // The directory is there. Its SIZE is a separate three-state reading: a walk
         // that threw must not be reported as a measured prior backup.
-        snapshotStateForTelemetry = backupStatus.snapshotState;
         priorBackup = backupStatus.size.measured
           ? { kind: "measured", bytes: backupStatus.size.bytes }
           : { kind: "unknown", reason: `size-unmeasured: ${backupStatus.size.reason}` };
@@ -596,17 +632,21 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             // evidence the transfer ever started, and claiming otherwise would be
             // inventing a cause. It says only what is established — this cannot be
             // used, and a fresh backup is starting.
+            // The precise size belongs in the log, where it is diagnostic. It does NOT
+            // belong in the message: this branch is by construction the sub-GB case
+            // ("Info.plist and nothing else" is its canonical shape), so `toFixed(1)`
+            // on GB renders the founder's real 6,343,173-byte directory as
+            // "0.0 GB on disk" — which reads as a rendering bug and tells him nothing
+            // he can act on. The size of a directory he cannot use is not decision
+            // -relevant; that it cannot be used is.
             log.warn(
-              `[DeviceSyncOrchestrator] Previous backup directory is not usable (snapshotState=${backupStatus.snapshotState}, isComplete=false, ${sizeGB === null ? "size unmeasured" : `${sizeGB} GB on disk`}); starting a fresh backup. See BACKLOG-2926.`,
+              `[DeviceSyncOrchestrator] Previous backup directory is not usable (snapshotState=${backupStatus.snapshotState}, isComplete=false, ${backupStatus.size.measured ? `${backupStatus.size.bytes} bytes on disk` : "size unmeasured"}); starting a fresh backup. See BACKLOG-2926.`,
             );
             this.emitProgress({
               phase: "backup",
               phaseProgress: 0,
               overallProgress: 0,
-              message:
-                sizeGB === null
-                  ? "Previous backup can't be used. Starting a fresh backup..."
-                  : `Previous backup can't be used (${sizeGB} GB on disk). Starting a fresh backup...`,
+              message: "Previous backup can't be used. Starting a fresh backup...",
             });
             break;
           }
@@ -743,7 +783,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           source: estimateSourceFor(priorBackup),
           bytes: this.estimatedBackupSize,
           reusedPreviousBackup: priorBackup.kind === "measured",
-          snapshotState: snapshotStateForTelemetry,
+          snapshotState: snapshotStateForMark(backupStatus),
           ...(priorBackup.kind === "unknown" ? { priorBackupUnknownReason: priorBackup.reason } : {}),
         });
 
@@ -806,6 +846,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           source: "device-storage-unavailable" satisfies EstimateSource,
           priorBackup: priorBackup.kind,
           reusedPreviousBackup: false,
+          snapshotState: snapshotStateForMark(backupStatus),
         });
 
         // Even without device storage info, check we have at least 10GB free

@@ -39,6 +39,7 @@ const GB = 1024 * 1024 * 1024;
 
 const mockStartBackup = jest.fn();
 const mockCheckBackupStatus = jest.fn();
+const mockGetStorageInfo = jest.fn();
 const logLines: string[] = [];
 
 jest.mock("electron", () => ({
@@ -124,12 +125,7 @@ jest.mock("../deviceDetectionService", () => {
     start: jest.fn(),
     stop: jest.fn(),
     getConnectedDevices: jest.fn().mockReturnValue([]),
-    getDeviceStorageInfo: jest.fn().mockResolvedValue({
-      totalSpace: 256 * 1024 * 1024 * 1024,
-      usedSpace: 128 * 1024 * 1024 * 1024,
-      freeSpace: 128 * 1024 * 1024 * 1024,
-      estimatedBackupSize: 50 * 1024 * 1024 * 1024,
-    }),
+    getDeviceStorageInfo: (...args: unknown[]) => mockGetStorageInfo(...args),
   });
   return {
     DeviceDetectionService: jest.fn().mockImplementation(() => svc),
@@ -198,6 +194,15 @@ const COMPLETE = {
 async function runSync(status: unknown) {
   logLines.length = 0;
   mockCheckBackupStatus.mockReset().mockResolvedValue(status);
+  if (mockGetStorageInfo.getMockImplementation() === undefined) {
+    // `mockResolvedValueOnce` set by a test survives this default.
+    mockGetStorageInfo.mockResolvedValue({
+      totalSpace: 256 * GB,
+      usedSpace: 128 * GB,
+      freeSpace: 128 * GB,
+      estimatedBackupSize: 50 * GB,
+    });
+  }
   mockStartBackup
     .mockReset()
     .mockResolvedValue({ success: false, backupPath: null, error: "stopped by test" });
@@ -235,8 +240,21 @@ describe("BACKLOG-2926: the silent state now says something", () => {
     // sync went straight to transferring with no explanation.
     expect(said.length).toBeGreaterThan(0);
     expect(said.some((m) => /can't be used/i.test(m))).toBe(true);
-    // The size on disk is worth reporting — it is what the directory actually holds.
-    expect(said.some((m) => m.includes("0.0 GB"))).toBe(true);
+  });
+
+  it("never renders the founder's 6,343,173-byte directory as '0.0 GB'", async () => {
+    // This assertion previously ran INVERTED — it pinned "0.0 GB on disk" as desired
+    // output. That string is what he would actually have seen: this branch is by
+    // construction the sub-GB case, so `toFixed(1)` on GB always yields "0.0" here.
+    // It reads as a rendering bug and tells him nothing actionable, so the size is now
+    // in the log (as exact bytes) and out of the message.
+    const { messages, lines } = await runSync(SILENT_ABSENT);
+
+    for (const message of messages) {
+      expect(message).not.toContain("0.0 GB");
+    }
+    // ...but the diagnostic value is not lost: the log carries the exact byte count.
+    expect(lines.some((l) => l.includes("6343173 bytes on disk"))).toBe(true);
   });
 
   it("does NOT claim the previous sync 'didn't finish' — there is no evidence it started", async () => {
@@ -307,6 +325,35 @@ describe("BACKLOG-2926: the snapshot state reaches the telemetry", () => {
     // BACKLOG-2894's aggregate can answer, instead of a judgement made once in review.
     const { lines } = await runSync(SILENT_ABSENT);
     const mark = lines.find((l) => l.includes("mark name=backup-estimate"));
+    expect(mark).toBeDefined();
+    expect(mark).toContain("snapshotState=absent");
+  });
+
+  it("a FAILED check is not recorded as a proven absence", async () => {
+    // BACKLOG-2917's defect, reproduced inside the field added to measure it: the
+    // first version of this telemetry defaulted to "no-backup" and was overwritten
+    // only on the `present` arm, so a run whose check THREW recorded the same token as
+    // a proven ENOENT — while the log ten lines above said "NOT treating this as a
+    // first sync". `GROUP BY snapshotState` could not separate the two.
+    const failed = (await runSync({ state: "unknown", reason: "EACCES" })).lines.find((l) =>
+      l.includes("mark name=backup-estimate"),
+    );
+    const absent = (await runSync({ state: "absent" })).lines.find((l) =>
+      l.includes("mark name=backup-estimate"),
+    );
+
+    expect(failed).toContain("snapshotState=check-failed");
+    expect(absent).toContain("snapshotState=no-backup");
+    expect(failed).not.toContain("snapshotState=no-backup");
+  });
+
+  it("the device-storage-unavailable mark carries the snapshot dimension too", async () => {
+    // That mark omitted the field entirely, so every sync taking the branch was
+    // invisible to the aggregate on exactly the axis the field exists for.
+    mockGetStorageInfo.mockResolvedValueOnce(null);
+    const { lines } = await runSync(SILENT_ABSENT);
+
+    const mark = lines.find((l) => l.includes("source=device-storage-unavailable"));
     expect(mark).toBeDefined();
     expect(mark).toContain("snapshotState=absent");
   });
