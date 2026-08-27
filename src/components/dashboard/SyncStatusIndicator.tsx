@@ -569,7 +569,7 @@ export function SyncStatusIndicator({
   const activeProgress = runningInternalItem?.progress ?? null;
 
   // Render a status pill for each sync item in queue order
-  const renderPill = (type: SyncType, status: SyncItemStatus, progress: number, error?: string, phase?: string, isExternal?: boolean, cancelRequested?: boolean, coalesced?: boolean) => {
+  const renderPill = (type: SyncType, status: SyncItemStatus, progress: number, error?: string, phase?: string, cancelRequested?: boolean, coalesced?: boolean) => {
     const baseLabel = getLabelForType(type);
     // Show phase for running syncs (e.g., "Messages - querying", "iPhone - Exporting")
     const friendlyPhase = phase ? ({
@@ -661,9 +661,12 @@ export function SyncStatusIndicator({
           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${colorClass}`}
           data-testid={`sync-pill-${type}`}
         >
-          {isExternal && (
-            <div className="w-3 h-3 border-2 border-blue-300 border-t-blue-600 rounded-full animate-spin" />
-          )}
+          {/*
+            BACKLOG-2907: the small blue spinner was removed at the founder's
+            request. `gap-1` on the parent applies BETWEEN children, so with the
+            label as the only child it contributes nothing — the pill narrows,
+            nothing shifts. `isExternal` became unused and went with it.
+          */}
           {label}
         </span>
       );
@@ -717,7 +720,7 @@ export function SyncStatusIndicator({
           {isAnySyncing ? 'Syncing:' : hasError ? 'Sync Error:' : 'Sync:'}
         </span>
         {/* Render all pills in queue order (contacts, emails, messages, iphone) */}
-        {queue.map((item) => renderPill(item.type, item.status, item.progress, item.error, item.phase, item.external, item.cancelRequested, item.coalesced))}
+        {queue.map((item) => renderPill(item.type, item.status, item.progress, item.error, item.phase, item.cancelRequested, item.coalesced))}
         {/* Show progress percentage for internal syncs only */}
         {activeProgress !== null && (
           <span className="text-xs text-blue-600 ml-auto">{Math.round(activeProgress)}%</span>

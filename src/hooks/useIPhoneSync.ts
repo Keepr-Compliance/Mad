@@ -351,6 +351,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             overallProgress: number;
             message?: string;
             estimatedTotalBytes?: number;
+            // BACKLOG-2907: absent on payloads from a main process that predates
+            // the field. Left undefined here; the component reads that as "unknown".
+            priorBackup?: BackupProgress["priorBackup"];
             backupProgress?: {
               bytesTransferred?: number;
               filesTransferred?: number;
@@ -367,6 +370,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             bytesProcessed: progressWithBackup.backupProgress?.bytesTransferred,
             processedFiles: progressWithBackup.backupProgress?.filesTransferred,
             estimatedTotalBytes: progressWithBackup.estimatedTotalBytes,
+            priorBackup: progressWithBackup.priorBackup,
           });
 
           // TASK-2119: Update orchestrator with progress
