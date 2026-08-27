@@ -14,13 +14,25 @@
  *      so a wrong/missing role is a FAIL and a well-formed match is a PASS. Unit-tested without any
  *      app launch (scripts/qa/harness/__tests__/users-roles-core.test.ts).
  *
- * ROLE CHOICE (BACKLOG-1949, SR-reviewed): the fixture transaction is `transaction_type:'purchase'`.
- * The role dropdown options are the INTERSECTION of AUDIT_WORKFLOW_STEPS roles AND the purchase filter
- * (filterRolesByTransactionType): the "Client & Agents" step offers only seller / seller_agent for
- * purchase (buyer/buyer_agent are excluded — the user IS the buyer), and escrow_officer comes from the
- * unfiltered "Professional Services" step. (listing_agent PASSES the filter but is not in any step's
- * role list, so it never renders — do NOT use it.) So the three assignable, deterministic roles are:
- *   seller (category client) · seller_agent (category agent) · escrow_officer (category title_escrow).
+ * ROLE CHOICE — REWRITTEN FOR BACKLOG-2859. The fixture transaction is
+ * `transaction_type:'purchase'` (displayed "Listing").
+ *
+ * The dropdown options are now simply AUDIT_WORKFLOW_STEPS, with no filtering at all:
+ * `filterRolesByTransactionType` was DELETED. Under the collapsed role model every offered role is
+ * valid on every transaction type, so the enum collapse is the scoping and only the LABELS resolve by
+ * type. The "Client & Agents" step offers exactly `client` / `agent` / `co_agent`, and escrow_officer
+ * comes from "Professional Services".
+ *
+ * The previous three roles are all GONE from the picker and must not be used here:
+ *   `seller` — the counterparty principal, removed by founder ruling.
+ *   `seller_agent` / `listing_agent` — collapsed into `agent`; on a Listing the LISTING agent is the
+ *     USER, so it is not an assignable contact role at all.
+ *
+ * The three assignable, deterministic roles are now:
+ *   client (category client) · agent (category agent) · escrow_officer (category title_escrow).
+ *
+ * On this `purchase` fixture they RENDER as "Seller (Client)" and "Buyer's Agent" — the cell selects by
+ * option VALUE, so the labels do not affect it, but they are what a human sees on screen.
  * role_category values mirror ROLE_TO_CATEGORY in src/constants/contactRoles.ts.
  *
  * PURE-NODE: no Playwright/Electron/DOM import here (the reader spawn is Node child_process), so the
@@ -70,8 +82,8 @@ export const QA_SEED_CONTACT_IDS = {
  * semantic name matching.
  */
 export const EXPECTED_ROLE_TRIPLES: readonly RoleTriple[] = [
-  { contactId: QA_SEED_CONTACT_IDS[1], role: 'seller', roleCategory: 'client', specificRole: 'seller' },
-  { contactId: QA_SEED_CONTACT_IDS[2], role: 'seller_agent', roleCategory: 'agent', specificRole: 'seller_agent' },
+  { contactId: QA_SEED_CONTACT_IDS[1], role: 'client', roleCategory: 'client', specificRole: 'client' },
+  { contactId: QA_SEED_CONTACT_IDS[2], role: 'agent', roleCategory: 'agent', specificRole: 'agent' },
   { contactId: QA_SEED_CONTACT_IDS[3], role: 'escrow_officer', roleCategory: 'title_escrow', specificRole: 'escrow_officer' },
 ] as const;
 

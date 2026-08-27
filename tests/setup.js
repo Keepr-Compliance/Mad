@@ -69,6 +69,11 @@ if (typeof window !== 'undefined') {
       assignContact: jest.fn(),
       removeContact: jest.fn(),
       exportEnhanced: jest.fn(),
+      // BACKLOG-2866: the export review gate reads this on every export route.
+      // Default = verified-empty queue, the normal state, so suites that are not
+      // about review state behave as they did before the gate existed. Suites
+      // that ARE about it set their own value.
+      getReviewState: jest.fn().mockResolvedValue({ items: [], count: 0 }),
       bulkDelete: jest.fn(),
       bulkUpdateStatus: jest.fn(),
       batchUpdateContacts: jest.fn(),

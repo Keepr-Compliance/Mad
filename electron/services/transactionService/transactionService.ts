@@ -1941,7 +1941,7 @@ class TransactionService {
   /**
    * Get distinct contacts with unlinked message counts
    */
-  async getMessageContacts(userId: string): Promise<{ contact: string; contactName: string | null; messageCount: number; lastMessageAt: string }[]> {
+  async getMessageContacts(userId: string): Promise<{ contact: string; contactName: string | null; messageCount: number; lastMessageAt: string; threadNames: string[] }[]> {
     const contacts = await databaseService.getMessageContacts(userId);
 
     let contactNameMap: Record<string, string> = {};
@@ -1984,6 +1984,9 @@ class TransactionService {
         (e164 && contactNameMap[e164]) ||
         null;
       return {
+        // BACKLOG-2816: the spread carries `threadNames` (the contact's group
+        // chat names) through to the picker's search box. If this is ever
+        // rewritten as an explicit field list, that field must come with it.
         ...c,
         contactName: name,
       };

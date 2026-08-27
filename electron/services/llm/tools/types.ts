@@ -69,8 +69,13 @@ export interface MessageAnalysis {
 export type ContactRole =
   | 'buyer'
   | 'seller'
-  | 'buyer_agent'
-  | 'seller_agent'
+  // BACKLOG-2859: ONE side-neutral agent role. `buyer_agent` / `seller_agent`
+  // were removed here because this enum is a WRITE path — the extractor's
+  // proposals become stored roles when a user accepts a suggested contact, so
+  // leaving them would re-accumulate the values migration v68 collapsed.
+  // (`buyer`/`seller` stay: the extractor may legitimately identify a principal
+  // in an email even though neither is an assignable contact role.)
+  | 'agent'
   | 'escrow'
   | 'title'
   | 'lender'

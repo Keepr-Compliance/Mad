@@ -59,6 +59,36 @@ export interface ReviewItemDisplayDto {
   recipients: string | null;
   cc: string | null;
   sender: string | null;
+  /**
+   * The email's HTML body (BACKLOG-2831), under the same name the LINKED
+   * loader's projection uses (`COALESCE(m.body_html, e.body_html) AS body`), so
+   * the reading modal's existing `body_html || body` fallback finds it without a
+   * second code path.
+   *
+   * Without it a review item carried NO html at all — only `snippet`, which is
+   * `firstLine(body_plain)`. Outlook stores Graph's `bodyPreview` in
+   * `body_plain` for every HTML message (outlookFetchService `_parseMessage`),
+   * so an HTML message whose preview is empty — a calendar invite, an
+   * attachment-only mail — produced an empty snippet and the modal rendered
+   * "No content" for an email whose body was sitting in `emails.body_html`. The
+   * SAME email renders its content once LINKED, because the linked loader
+   * projects `body`. That asymmetry is the defect.
+   *
+   * NULL for texts and for emails that genuinely have no HTML part.
+   */
+  body: string | null;
+  /**
+   * The email's FULL plain-text body (BACKLOG-2844), matching what the LINKED
+   * loader projects (`COALESCE(m.body_text, e.body_plain) AS body_text`).
+   *
+   * Separate from `snippet`, which stays capped at 200 characters for the card's
+   * one-line preview. Feeding the modal that 200-char string made a message stop
+   * mid-word with NO indication: the modal appends "..." only past its own
+   * 300-character limit, which a 200-char string never reaches.
+   *
+   * NULL for texts and for emails with no plain-text part.
+   */
+  bodyText: string | null;
   hasAttachments: boolean;
   threadParticipants: string[];
   threadMessages: Array<{
@@ -67,8 +97,16 @@ export interface ReviewItemDisplayDto {
     body_text: string | null;
     sent_at: string | null;
     direction: string | null;
+    /**
+     * BACKLOG-2814: the participants JSON. MessageThreadCard derives group-ness
+     * from THIS field, not from participants_flat, so its absence used to make
+     * every review card render as a 1:1.
+     */
+    participants: string | null;
     participants_flat: string | null;
     channel: string | null;
+    /** BACKLOG-2814: Apple's group name; null for 1:1s and unnamed groups. */
+    thread_display_name: string | null;
   }>;
 }
 
@@ -188,17 +226,30 @@ export interface LinkedContentTextHit {
   matchedAttachmentFilenames?: string[];
 }
 
-/** One result group: up to `limit` items plus the true total match count. */
+/**
+ * One result group: up to `limit` items, plus whether more were left behind.
+ *
+ * BACKLOG-2863 replaced the match COUNT with this flag. Six uncapped
+ * `SELECT COUNT(*)` queries ran per keystroke at 190-210 ms each and could not
+ * exit early — proving a total means visiting every match. Founder, choosing
+ * between capped counts reading "200+" and no counts at all: *"i'm also fine with
+ * just show more and not counting it."*
+ *
+ * Mirrors `LinkedGroup` in `electron/services/db/transactionSearchDbService.ts`.
+ */
 export interface LinkedContentGroup<T> {
   items: T[];
-  total: number;
+  hasMore: boolean;
 }
 
 /** Grouped results for a linked-content search, one group per content type. */
 export interface LinkedContentSearchResults {
   contacts: LinkedContentGroup<LinkedContentContactHit>;
   emails: LinkedContentGroup<LinkedContentEmailHit>;
+  /** BACKLOG-2858: MESSAGE-level hits only — one row per message. */
   texts: LinkedContentGroup<LinkedContentTextHit>;
+  /** BACKLOG-2858: group-chat-name hits — one row per CONVERSATION. */
+  groupChats: LinkedContentGroup<LinkedContentTextHit>;
 }
 
 // ============================================
@@ -246,6 +297,17 @@ export interface GlobalTextHit {
   attribution: GlobalTransactionAttribution | null;
   /** BACKLOG-1870 Phase 1.5: attachment filename(s) that matched the query. */
   matchedAttachmentFilenames?: string[];
+  /**
+   * BACKLOG-2816: present ONLY on a thread-level (group chat name) hit. Its
+   * presence makes the row a CONVERSATION: the renderer shows this as the primary
+   * line and shows no body text on that row at all.
+   */
+  threadDisplayName?: string;
+  /**
+   * BACKLOG-2816: resolved contact names of a few group members. Members with no
+   * matching contact are omitted rather than rendered as digits.
+   */
+  memberNames?: string[];
 }
 
 /** An email/text with NO communications row (not attached to any transaction). */
@@ -257,14 +319,34 @@ export interface GlobalUnattachedHit {
   sender: string | null;
   snippet: string | null;
   sentAt: string | null;
+  /**
+   * BACKLOG-2816: present ONLY on a thread-level (group chat name) hit. Its
+   * presence makes the row a CONVERSATION: the renderer shows this as the primary
+   * line and shows no body text on that row at all.
+   */
+  threadDisplayName?: string;
+  /**
+   * BACKLOG-2816: resolved contact names of a few group members. Members with no
+   * matching contact are omitted rather than rendered as digits.
+   */
+  memberNames?: string[];
 }
 
-/** Grouped results for a global search: five groups. */
+/** Grouped results for a global search: six groups. */
 export interface GlobalContentSearchResults {
   transactions: LinkedContentGroup<GlobalTransactionHit>;
   contacts: LinkedContentGroup<GlobalContactHit>;
   emails: LinkedContentGroup<GlobalEmailHit>;
+  /** BACKLOG-2858: MESSAGE-level hits only — one row per message. */
   texts: LinkedContentGroup<GlobalTextHit>;
+  /** BACKLOG-2858: group-chat-name hits — one row per CONVERSATION. */
+  groupChats: LinkedContentGroup<GlobalTextHit>;
+  /**
+   * Emails/texts attached to no transaction. Group-chat rows for UNATTACHED
+   * threads stay here rather than in `groupChats` — these rows are inert (no
+   * standalone viewer), and this bucket is not the Texts bucket the founder
+   * asked group chats to leave.
+   */
   unattached: LinkedContentGroup<GlobalUnattachedHit>;
 }
 
@@ -680,8 +762,15 @@ export interface WindowApiTransactions {
     message?: string;
     rateLimited?: boolean;
   }>;
-  /** BACKLOG-1362: Pre-cache emails from connected providers */
-  precacheEmails: (userId: string) => Promise<{
+  /**
+   * BACKLOG-1362: Pre-cache emails from connected providers.
+   *
+   * BACKLOG-2856: `force` re-downloads the whole cache window and REPLACES what
+   * is stored, instead of fetching only mail newer than the newest cached row.
+   * Parity with the macOS messages Force Re-import: it cascade-deletes every
+   * email↔transaction link, so the caller must confirm that with the user first.
+   */
+  precacheEmails: (userId: string, force?: boolean) => Promise<{
     success: boolean;
     emailsFetched?: number;
     emailsStored?: number;
@@ -698,7 +787,54 @@ export interface WindowApiTransactions {
       message: string;
       tokenExpired: boolean;
     };
+    /**
+     * BACKLOG-2856: set only when a force run reached the swap. `emailsInserted`
+     * is what actually landed in the live table — `emailsStored` counts staging
+     * writes and so overstates a force run — and `providers` names the mailboxes
+     * that were rebuilt, so a caller can tell that a connected one was skipped.
+     */
+    forceSwap?: {
+      emailsDeleted: number;
+      emailsInserted: number;
+      participantsInserted: number;
+      providers: Array<"gmail" | "outlook">;
+    };
+    /**
+     * BACKLOG-2856: the user stopped the run. Arrives with `success: false` and
+     * a plain-language `error`, but must NOT be rendered as a failure — nothing
+     * went wrong, and on a force run nothing was changed either.
+     */
+    cancelled?: boolean;
   }>;
+
+  /**
+   * BACKLOG-2856: stop an in-flight pre-cache / re-cache at its next loop
+   * boundary. Resolves `success: true` if a run was asked to stop, `false` if
+   * none was in flight (already finished — the outcome the user wanted anyway).
+   */
+  cancelPrecacheEmails: () => Promise<{ success: boolean; error?: string }>;
+
+  /**
+   * BACKLOG-2856: subscribe to pre-cache / re-cache progress, mirroring
+   * `window.api.messages.onImportProgress`.
+   *
+   * Sequences differ by path, because the two runs do different work:
+   *   ordinary  repairing -> fetching -> done
+   *   force                  fetching -> swapping -> done
+   *
+   * `percent` never decreases within a run. The final event is always
+   * `phase: "done"` with an `outcome`, on success, failure AND cancel, so the
+   * subscriber can settle on it without tracking which path ran.
+   */
+  onPrecacheProgress: (
+    callback: (progress: {
+      phase: "repairing" | "fetching" | "swapping" | "done";
+      current: number;
+      total: number;
+      percent: number;
+      outcome?: "success" | "error" | "cancelled";
+    }) => void,
+  ) => () => void;
   /** Export transaction to organized folder structure */
   exportFolder: (transactionId: string, options?: {
     contentType?: ExportContentType;

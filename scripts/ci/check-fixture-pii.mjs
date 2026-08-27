@@ -62,6 +62,7 @@
  * "a human has confirmed this value is invented".
  */
 
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -71,6 +72,7 @@ import { fileURLToPath } from "node:url";
 const argv = process.argv.slice(2);
 const args = new Set();
 let rootOverride = null;
+let diffRange = null;
 for (let i = 0; i < argv.length; i++) {
   const arg = argv[i];
   if (arg === "--root") {
@@ -81,6 +83,35 @@ for (let i = 0; i < argv.length; i++) {
     }
   } else if (arg.startsWith("--root=")) {
     rootOverride = arg.slice("--root=".length);
+  } else if (arg === "--diff-range") {
+    // Everything up to the next flag is the range spec, so callers can pass a
+    // multi-token form like `<tip> --not --remotes=origin` without quoting games.
+    const spec = argv[++i];
+    if (spec === undefined) {
+      console.error(
+        "check-fixture-pii: --diff-range needs a git commit range " +
+          '(e.g. "abc..def", or "<tip> --not --remotes=origin").',
+      );
+      process.exit(2);
+    }
+    diffRange = spec.trim().split(/\s+/).filter(Boolean);
+    if (diffRange.length === 0) {
+      // An EMPTY range is the dangerous case, not an error case: it would scan
+      // nothing and print a clean bill of health. Refuse it. A caller with
+      // genuinely nothing to check must not call diff mode at all.
+      console.error("check-fixture-pii: --diff-range was empty.");
+      process.exit(2);
+    }
+  } else if (arg.startsWith("--diff-range=")) {
+    diffRange = arg
+      .slice("--diff-range=".length)
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (diffRange.length === 0) {
+      console.error("check-fixture-pii: --diff-range was empty.");
+      process.exit(2);
+    }
   } else {
     args.add(arg);
   }
@@ -290,6 +321,13 @@ const FICTIONAL_NAMES = new Set([
   "sam hale",
   "lee park",
   "mo park",
+  // BACKLOG-2758 — the portal/PDF party-naming parity suite
+  // (electron/services/__tests__/exportPartyNaming.parity.test.ts). Two
+  // invented people who share a phone line, for the same reason the Alvarez
+  // pair above exists: the rule under test needs one handle held by two
+  // distinct contacts. Neither refers to anyone.
+  "morgan ellery",
+  "riley voss",
   // This repo's established scrub name for the founder's own case. BACKLOG-2731
   // finished the job: an earlier pass replaced the display name and left the
   // address, the surname and the surrounding variable names in place, so the
@@ -587,6 +625,295 @@ function scan() {
 }
 
 // --------------------------------------------------------------------------
+// Bare UUIDs in ADDED LINES (BACKLOG-2871)
+// --------------------------------------------------------------------------
+
+/**
+ * ## What leaked, and why nothing above caught it
+ *
+ * An engineer documenting where a fixture came from — correct practice, required
+ * by CLAUDE.md ("Transcribe fixtures, never invent them ... cite where it came
+ * from") — pasted a live `organization_id` and `local_transaction_id` into a
+ * JSDoc comment in `electron/services/submissionService.ts`. Commit `b0685f4a3`
+ * reached the PUBLIC repo. It was amended and force-pushed within minutes, and
+ * it is STILL fetchable by SHA (verified 2026-08-25: `gh api .../commits/b0685f4a3`
+ * returns 200 with the full patch). A force-push unlinks a commit; it does not
+ * delete the object.
+ *
+ * `electron` is in SCAN_ROOTS and `.ts` is in SCAN_EXTENSIONS, so the guard READ
+ * that file and reported OK. This was never a scope gap. It was a missing rule.
+ *
+ * ## Why this rule cannot work the way the others do
+ *
+ * Every rule above keys on SHAPE. A bare UUID has none: a live organization id is
+ * indistinguishable by pattern from a fixture constant, a migration id or a Sentry
+ * trace id. So the only two honest options are "flag them all and require a
+ * waiver" or "resolve them against the live database", and the choice was settled
+ * by measurement rather than taste.
+ *
+ * ## Why NOT live resolution (measured 2026-08-25, BACKLOG-2871)
+ *
+ *   1. THE CREDENTIALS DO NOT EXIST WHERE THE LEAK HAPPENS. `SUPABASE_SERVICE_KEY`
+ *      lives only in `.env.development`, which is gitignored — so `git worktree
+ *      add` never copies it. Every worktree checked, INCLUDING the one the leak
+ *      came from, has no service key. The pre-push hook sources no env file, and
+ *      the CI "Fixture PII Scan" job declares no secrets. Live resolution runs
+ *      nowhere today, and putting a service-role key in a PUBLIC repo's workflow
+ *      is a decision for the founder, not this file. (Fork PRs never get secrets
+ *      regardless.)
+ *
+ *   2. CI IS AFTER PUBLICATION. For a public repository a CI-only check is a
+ *      notification, not a guard — the object is already on GitHub by then. The
+ *      pre-push hook is the only gate that runs BEFORE the object exists. So the
+ *      layer where credentials would be cheapest is the layer worth least.
+ *
+ *   3. IT WOULD HAVE CAUGHT ONLY ONE OF THE TWO LEAKED IDS. There is no
+ *      `transactions` table in Supabase — transactions are local SQLite.
+ *      `local_transaction_id` is a TEXT column on `transaction_submissions` and
+ *      resolves only for transactions that have actually been submitted.
+ *
+ *   4. IT HAS A NONZERO FALSE-POSITIVE RATE. Of the 136 distinct UUIDs in the
+ *      tree, 2 resolve live — and both are seeded test orgs ("Magic Audit Demo",
+ *      "Test Brokerage 2"). Under live resolution those fire and are wrong.
+ *
+ * That audit had a second result worth recording: NO real customer identifier
+ * exists among those 136 values. The pre-existing tree is clean, which is what
+ * makes it safe for this rule to look only at new lines.
+ *
+ * ## Why ADDED LINES and not the tree
+ *
+ * The tree carries 337 UUID occurrences / 136 distinct values today. A tree-scoped
+ * rule would need all of them baselined on day one — mass-baselining a new rule is
+ * how a guard gets born meaningless. Scoped to added lines the measured cost over
+ * the last 200 commits is 10 firing commits / 16 occurrences: one per twenty
+ * commits, all of them test fixtures. That is a rate an engineer answers rather
+ * than disables.
+ *
+ * Diff mode is also STRICTER than the tree scan in one way that matters: it reads
+ * each commit in the pushed range, so a value introduced in one commit and
+ * removed in a later one is still reported. The tree scan cannot see that, and it
+ * is exactly the shape of PR #2314 (documented in .husky/pre-push, limit 1).
+ *
+ * WHAT IT DOES NOT SEE, measured rather than assumed: `git log -p` emits no patch
+ * for a MERGE commit, so a value that exists only in a conflict RESOLUTION --
+ * present in neither parent -- is invisible to this rule, and the tree rules do
+ * not check UUIDs. `--cc` would surface it and is deliberately not adopted here:
+ * a combined diff prefixes added lines with two columns, so every one of them
+ * would arrive looking like the "++ " case the parser below had to be repaired
+ * for. That is a separate change with its own parser. The gap is pinned as case
+ * D14 in scripts/__tests__/check-fixture-pii.verify.js so it stays visible.
+ *
+ * ## An entropy filter was evaluated and REJECTED
+ *
+ * "Only flag UUIDs that look random" would cut the hit rate, but 64 distinct tree
+ * values carry >= 13 distinct hex digits and every one is invented: the largest
+ * group walks the hex alphabet in order across the groups, and the next largest
+ * is the RFC 4122 example UUID with a counter in its last group. Entropy does not
+ * separate invented from real, so it would buy friction reduction with a
+ * false-negative surface.
+ *
+ * (Those examples are described rather than quoted. This file is inside the scan
+ * roots, and the rule below caught the first draft of this very comment for
+ * pasting one of them in full — which is the rule working on its author.)
+ *
+ * ## The ONLY exemption
+ *
+ * The nil UUID, and nothing else. A real record id can never be nil, so that
+ * exemption is safe BY CONSTRUCTION rather than by judgement. Every other
+ * "obviously fake" shape (`11111111-...`, `aaaaaaaa-...`) is deliberately NOT
+ * exempt: a shape-based hole is a hole an engineer can hand-craft a real-looking
+ * id into, and the measured hit rate does not need one.
+ *
+ * ## Waivers, and why they are NOT baseline entries
+ *
+ * A `bare-uuid` finding can NEVER be silenced by the baseline file, and
+ * `--update-baseline` will not record one. The baseline is a file nobody reads at
+ * review time; a waiver sits on the line, in the diff, where a reviewer sees it
+ * and has to agree with it. Write it as:
+ *
+ *     const ORG = "..."; // pii-allow-uuid: invented, not from any live row
+ *
+ * on the same line or the line immediately above. The reason is REQUIRED — a bare
+ * marker does not waive anything.
+ */
+const UUID_RE =
+  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g;
+
+/** A real record id can never be nil. This is the only exemption, and it is structural. */
+const NIL_UUID = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * `pii-allow-uuid: <reason>`. The reason is REQUIRED — a bare marker waives
+ * nothing, because a magic word nobody has to justify is not a review artifact.
+ *
+ * The pattern deliberately captures everything after the colon rather than
+ * demanding a non-space character itself, so that "a reason is required" is
+ * enforced in exactly ONE place (the emptiness test below) and a control can
+ * therefore kill it. Written the other way round the two halves were redundant:
+ * mutating the emptiness test out left every case green, which meant the harness
+ * was not actually testing the rule it claimed to.
+ */
+const UUID_WAIVER_RE = /pii-allow-uuid:([^\r\n]*)/;
+
+function isWaived(line) {
+  const m = UUID_WAIVER_RE.exec(line ?? "");
+  if (m === null) return false;
+  return m[1].trim().length > 0;
+}
+
+/** Same scope test the tree walk applies, re-applied to a path out of a diff. */
+function isScannablePath(rel) {
+  const parts = rel.split("/");
+  if (parts.some((p) => SKIP_DIRS.has(p))) return false;
+  const base = parts[parts.length - 1];
+  if (SKIP_FILES.has(base)) return false;
+  const dot = base.lastIndexOf(".");
+  if (dot < 0) return false;
+  if (!SCAN_EXTENSIONS.has(base.slice(dot))) return false;
+  return SCAN_ROOTS.includes(parts[0]);
+}
+
+/** `b/path/to/file`, sometimes C-quoted when the path has unusual bytes. */
+function pathFromDiffHeader(raw) {
+  let p = raw.trim();
+  if (p === "/dev/null") return null;
+  if (p.startsWith('"') && p.endsWith('"')) {
+    p = p.slice(1, -1).replace(/\\(.)/g, "$1");
+  }
+  return p.startsWith("b/") ? p.slice(2) : p;
+}
+
+/**
+ * Scan the added lines of every commit in `rangeArgs`.
+ *
+ * `--text` is LOAD-BEARING. Without it git prints "Binary files a/x and b/x
+ * differ" for any file it considers binary — which includes any file carrying a
+ * raw NUL — and every added line in it vanishes from this scan SILENTLY. That is
+ * BACKLOG-2657 / BACKLOG-2637 (contactManualLink.ts) reborn in diff mode, so the
+ * flag stays and the binary-header count below is reported either way.
+ *
+ * `--no-renames` keeps a pure rename from re-reporting every line of a file whose
+ * content did not change.
+ *
+ * @throws if git cannot resolve the range. Callers in the hook MUST fail closed:
+ *         "the guard could not check" and "the guard found nothing" must never
+ *         print the same way.
+ */
+function scanDiff(rangeArgs) {
+  const findings = [];
+  const diff = { commits: 0, files: new Set(), binaryHeaders: 0 };
+
+  const out = execFileSync(
+    "git",
+    [
+      "-C",
+      REPO_ROOT,
+      "log",
+      "--text",
+      "-p",
+      "--no-color",
+      "--no-renames",
+      "--format=%x00%H",
+      ...rangeArgs,
+      "--",
+      ...SCAN_ROOTS,
+    ],
+    { encoding: "utf8", maxBuffer: 512 * 1024 * 1024 },
+  );
+
+  let commit = null;
+  let file = null;
+  let newLine = 0;
+  let prevNewLine = "";
+  // Which half of a file's diff we are in. INSIDE a hunk every line is content
+  // and carries a +/-/space prefix; OUTSIDE one, the lines are headers.
+  //
+  // This distinction is load-bearing and was missing from the first version of
+  // this parser. An ADDED line whose content begins with "++ " arrives here as
+  // "+++ ..." and matched the `+++ ` file-header branch, which set `file` to
+  // something out of scope and then SILENTLY DROPPED EVERY REMAINING ADDED LINE
+  // in that file. Measured against a fixture containing a line "++ note" above a
+  // UUID: `OK — 0 new`, exit 0. That is the BACKLOG-2657 silent-skip class
+  // reproduced inside the rule written to close a leak, so the state machine is
+  // now explicit rather than implied by branch order.
+  //
+  // `diff --git `, `index `, `Binary files ` and `@@` are unambiguous at column
+  // zero, because a content line always carries its prefix. Only `+++ ` and
+  // `--- ` collide with content, so only those two are gated on `inHunk`.
+  let inHunk = false;
+
+  for (const raw of out.split("\n")) {
+    if (raw.startsWith("\0")) {
+      commit = raw.slice(1).trim();
+      diff.commits++;
+      file = null;
+      inHunk = false;
+      prevNewLine = "";
+      continue;
+    }
+    if (raw.startsWith("diff --git ")) {
+      file = null;
+      inHunk = false;
+      prevNewLine = "";
+      continue;
+    }
+    if (raw.startsWith("Binary files ") || raw.startsWith("GIT binary patch")) {
+      diff.binaryHeaders++;
+      inHunk = false;
+      continue;
+    }
+    if (raw.startsWith("@@")) {
+      const m = /^@@+ (?:-\d+(?:,\d+)? )*\+(\d+)(?:,\d+)? /.exec(raw);
+      newLine = m ? Number(m[1]) : 0;
+      inHunk = true;
+      prevNewLine = "";
+      continue;
+    }
+    if (!inHunk) {
+      // Per-file preamble: `index`, mode lines, similarity index, and the two
+      // ambiguous ones, which are only headers HERE.
+      if (raw.startsWith("+++ ")) {
+        file = pathFromDiffHeader(raw.slice(4));
+        if (file !== null && !isScannablePath(file)) file = null;
+        if (file !== null) diff.files.add(file);
+        prevNewLine = "";
+      }
+      continue;
+    }
+    if (file === null) continue;
+    if (raw.startsWith("\\")) continue;
+
+    if (raw.startsWith("+")) {
+      const text = raw.slice(1);
+      UUID_RE.lastIndex = 0;
+      for (const m of text.matchAll(UUID_RE)) {
+        const value = m[0].toLowerCase();
+        if (value === NIL_UUID) continue;
+        if (isWaived(text) || isWaived(prevNewLine)) continue;
+        findings.push({
+          file,
+          line: newLine,
+          rule: "bare-uuid",
+          match: value,
+          commit,
+        });
+      }
+      newLine++;
+      prevNewLine = text;
+      continue;
+    }
+    if (raw.startsWith(" ")) {
+      newLine++;
+      prevNewLine = raw.slice(1);
+      continue;
+    }
+    // a '-' line: present in the old file only, so it advances no new-file number
+  }
+
+  return { findings, diff };
+}
+
+// --------------------------------------------------------------------------
 // Baseline
 // --------------------------------------------------------------------------
 
@@ -705,11 +1032,76 @@ function integrityLines(integrity) {
   return lines;
 }
 
+/**
+ * Printed on every path whenever diff mode ran, zeros included — for the same
+ * reason integrityLines() prints its zeros. "0 commit(s)" is the statement that
+ * the range was empty; its ABSENCE is indistinguishable from diff mode never
+ * having run, and those are very different facts on a public repository.
+ *
+ * `binary hunk(s)` should always read 0: --text is passed precisely so git does
+ * not collapse a NUL-bearing file into a header whose added lines never reach the
+ * scanner. A non-zero count means added lines went unread — say so.
+ */
+function diffLines(diff) {
+  if (!diff) return [];
+  const lines = [
+    `  diff scan: ${diff.commits} commit(s), ${diff.files.size} in-scope file(s), ` +
+      `${diff.binaryHeaders} binary hunk(s).`,
+  ];
+  if (diff.binaryHeaders > 0) {
+    lines.push(
+      `    ${diff.binaryHeaders} hunk(s) arrived as a binary header DESPITE --text,`,
+      `    so their added lines were NOT scanned. Investigate before trusting this run.`,
+    );
+  }
+  return lines;
+}
+
 // --------------------------------------------------------------------------
 // Main
 // --------------------------------------------------------------------------
 
 const { findings, integrity } = scan();
+
+// Diff mode (BACKLOG-2871). Runs IN ADDITION to the tree scan above: the tree
+// rules keep their baseline semantics and the bare-uuid rule looks only at what
+// this push would publish.
+//
+// FAIL CLOSED, deliberately, and this is the asymmetry the pre-push hook depends
+// on: a range git cannot resolve exits 2 rather than reporting a clean scan. "The
+// guard could not check" and "the guard found nothing" must never print the same
+// way -- that conflation is the failure mode this repo keeps filing. The hook is
+// pre-publication and treats exit 2 as a blocked push; CI is post-publication and
+// may degrade, loudly, because by then the object already exists on GitHub.
+let diffFindings = [];
+let diffStats = null;
+if (diffRange !== null) {
+  if (args.has("--update-baseline")) {
+    console.error(
+      "check-fixture-pii: --diff-range and --update-baseline are mutually exclusive.",
+    );
+    console.error(
+      "The bare-uuid rule is NOT baselineable by design -- see UUID_RE's comment.",
+    );
+    process.exit(2);
+  }
+  try {
+    const r = scanDiff(diffRange);
+    diffFindings = r.findings;
+    diffStats = r.diff;
+  } catch (err) {
+    console.error("");
+    console.error("Fixture PII guard: ERROR — diff mode could not read the commit range.");
+    console.error("");
+    console.error(`  range: ${diffRange.join(" ")}`);
+    console.error(`  git:   ${(err?.stderr || err?.message || String(err)).toString().trim()}`);
+    console.error("");
+    console.error("This is an ERROR and not a pass. Nothing was checked for bare UUIDs,");
+    console.error("and this repository is PUBLIC, so a push cannot be taken back.");
+    console.error("");
+    process.exit(2);
+  }
+}
 
 // Before any mode branches, including --update-baseline: a baseline written over
 // a tree the guard could not fully read records the wrong thing, permanently.
@@ -736,13 +1128,23 @@ if (args.has("--list")) {
   for (const f of findings) {
     console.log(`${f.file}:${f.line}  [${f.rule}]  ${f.match}`);
   }
-  console.log(`\n${findings.length} total occurrence(s).`);
+  for (const f of diffFindings) {
+    console.log(`${f.file}:${f.line}  [${f.rule}]  ${f.match}  (${f.commit?.slice(0, 9)})`);
+  }
+  console.log(`\n${findings.length + diffFindings.length} total occurrence(s).`);
   for (const line of integrityLines(integrity)) console.log(line);
+  for (const line of diffLines(diffStats)) console.log(line);
   process.exit(0);
 }
 
 const { set: baseline } = loadBaseline();
-const offenders = findings.filter((f) => !baseline.has(keyOf(f)));
+// The baseline filter applies to the TREE rules only. A bare-uuid finding is
+// never looked up in it and never written to it: the waiver comment is that
+// rule's escape hatch, because it lives in the diff where a reviewer sees it.
+const offenders = [
+  ...findings.filter((f) => !baseline.has(keyOf(f))),
+  ...diffFindings,
+];
 
 if (offenders.length === 0) {
   console.log(
@@ -750,9 +1152,11 @@ if (offenders.length === 0) {
       `${baseline.size} baselined, 0 new.`,
   );
   for (const line of integrityLines(integrity)) console.log(line);
+  for (const line of diffLines(diffStats)) console.log(line);
   process.exit(0);
 }
 
+const uuids = offenders.filter((f) => f.rule === "bare-uuid");
 const emails = offenders.filter((f) => f.rule === "consumer-email");
 const phones = offenders.filter((f) => f.rule === "non-reserved-phone");
 const names = offenders.filter((f) => f.rule === "personal-name");
@@ -765,6 +1169,36 @@ console.error(
 );
 console.error("This repository is public — committed fixture data cannot be un-published.");
 console.error("");
+
+if (uuids.length > 0) {
+  const distinct = [...new Set(uuids.map((f) => f.match))];
+  console.error(
+    `Bare UUID(s) added by the commits being pushed ` +
+      `(${uuids.length} occurrence(s), ${distinct.length} distinct):`,
+  );
+  for (const f of uuids) {
+    console.error(`  ${f.file}:${f.line}  ${f.match}  (${f.commit?.slice(0, 9) ?? "?"})`);
+  }
+  console.error("");
+  console.error("  A UUID has no shape that separates a live customer id from an");
+  console.error("  invented one, so this rule cannot tell them apart and does not try.");
+  console.error("  BACKLOG-2871: a live organization_id and local_transaction_id reached");
+  console.error("  the PUBLIC repo inside a comment documenting where a fixture came");
+  console.error("  from. That commit is still fetchable by SHA today.");
+  console.error("");
+  console.error("  If the value came from a real row — REPLACE IT. Describe the shape,");
+  console.error("  not the value, or generate one at runtime in the test.");
+  console.error("");
+  console.error("  If it is INVENTED, say so on the line or the line above:");
+  console.error("      // pii-allow-uuid: invented, not from any live row");
+  console.error("  The reason is required. This rule is deliberately NOT baselineable —");
+  console.error("  a waiver belongs in the diff where a reviewer reads it.");
+  console.error("");
+  console.error("  AMEND or REBASE the commit that introduced it. Fixing it in a NEW");
+  console.error("  commit does not help: this mode reads every commit in the range, and");
+  console.error("  pushing the pair still publishes the offending one.");
+  console.error("");
+}
 
 if (emails.length > 0) {
   console.error(`Email addresses on real consumer domains (${emails.length}):`);
@@ -801,15 +1235,21 @@ if (names.length > 0) {
   console.error("");
 }
 
-console.error(
-  "If — and only if — a human has confirmed the value is invented, record it with:",
-);
-console.error("  node scripts/ci/check-fixture-pii.mjs --update-baseline");
-console.error("");
+if (offenders.length > uuids.length) {
+  console.error(
+    "If — and only if — a human has confirmed the value is invented, record it with:",
+  );
+  console.error("  node scripts/ci/check-fixture-pii.mjs --update-baseline");
+  console.error(
+    "  (that covers the email / phone / name rules only — NOT bare-uuid.)",
+  );
+  console.error("");
+}
 
 // Same counts as the pass path. A failing run is exactly when it matters most
 // whether the list above is everything or only what survived a silent skip.
 for (const line of integrityLines(integrity)) console.error(line);
+for (const line of diffLines(diffStats)) console.error(line);
 console.error("");
 
 process.exit(1);

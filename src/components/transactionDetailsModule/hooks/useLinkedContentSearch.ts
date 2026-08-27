@@ -49,7 +49,14 @@ export interface NormalizedSearchResults {
   transactions: LinkedContentGroup<GlobalTransactionHit> | null;
   contacts: LinkedContentGroup<GlobalContactHit>;
   emails: LinkedContentGroup<GlobalEmailHit>;
+  /** BACKLOG-2858: message-level text hits only; `total` counts MESSAGES. */
   texts: LinkedContentGroup<GlobalTextHit>;
+  /**
+   * BACKLOG-2858: group-chat-name hits, present in BOTH scopes (unlike
+   * `transactions`/`unattached`, which are global-only and null when scoped).
+   * `total` counts CONVERSATIONS.
+   */
+  groupChats: LinkedContentGroup<GlobalTextHit>;
   unattached: LinkedContentGroup<GlobalUnattachedHit> | null;
 }
 
@@ -74,11 +81,12 @@ export interface UseLinkedContentSearchResult {
 function emptyNormalized(scope: SearchScope): NormalizedSearchResults {
   const global = scope.type === "global";
   return {
-    transactions: global ? { items: [], total: 0 } : null,
-    contacts: { items: [], total: 0 },
-    emails: { items: [], total: 0 },
-    texts: { items: [], total: 0 },
-    unattached: global ? { items: [], total: 0 } : null,
+    transactions: global ? { items: [], hasMore: false } : null,
+    contacts: { items: [], hasMore: false },
+    emails: { items: [], hasMore: false },
+    texts: { items: [], hasMore: false },
+    groupChats: { items: [], hasMore: false },
+    unattached: global ? { items: [], hasMore: false } : null,
   };
 }
 
@@ -131,21 +139,31 @@ export function useLinkedContentSearch(
                     ...c,
                     attribution: null,
                   })),
-                  total: r.contacts.total,
+                  hasMore: r.contacts.hasMore,
                 },
                 emails: {
                   items: r.emails.items.map((e) => ({
                     ...e,
                     attribution: null,
                   })),
-                  total: r.emails.total,
+                  hasMore: r.emails.hasMore,
                 },
                 texts: {
                   items: r.texts.items.map((t) => ({
                     ...t,
                     attribution: null,
                   })),
-                  total: r.texts.total,
+                  hasMore: r.texts.hasMore,
+                },
+                // BACKLOG-2858: scoped hits carry no attribution, exactly like
+                // the other groups — the badge would say the transaction the
+                // user is already looking at.
+                groupChats: {
+                  items: r.groupChats.items.map((t) => ({
+                    ...t,
+                    attribution: null,
+                  })),
+                  hasMore: r.groupChats.hasMore,
                 },
                 unattached: null,
               } as NormalizedSearchResults;

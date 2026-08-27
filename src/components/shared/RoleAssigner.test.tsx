@@ -12,7 +12,7 @@
  */
 
 import React from "react";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { RoleAssigner, RoleAssignments } from "./RoleAssigner";
 import type { ExtendedContact } from "../../types/components";
@@ -156,11 +156,43 @@ describe("RoleAssigner", () => {
       expect(options[0]).toHaveValue("");
       expect(options[0]).toHaveTextContent("Select role...");
 
-      // Should include common roles
+      // BACKLOG-2859 — asserted at the SURFACE, as an EXACT SET.
+      //
+      // The constants being right does not mean the dropdown is right; this is
+      // the defect's visible location, so this is where the set is pinned. A
+      // membership check would pass while the user's own role was still in the
+      // list, which is the failure this item exists to remove.
+      const optionValues = options.map((o) => (o as HTMLOptionElement).value);
+      expect(optionValues).toEqual([
+        "", // placeholder
+        "client",
+        "agent",
+        "co_agent",
+        "title_company",
+        "escrow_officer",
+        "inspector",
+        "appraiser",
+        "surveyor",
+        "mortgage_broker",
+        "real_estate_attorney",
+        "transaction_coordinator",
+        "insurance_agent",
+        "hoa_management",
+        "condo_management",
+        "other",
+      ]);
+
+      // The party labels this Listing renders, and the ones it must NOT.
       const optionTexts = options.map((o) => o.textContent);
-      expect(optionTexts).toContain("Buyer (Client)");
-      // BACKLOG-2804: seller_agent renders under the industry term.
-      expect(optionTexts).toContain("Listing Agent");
+      expect(optionTexts).toContain("Seller (Client)");
+      expect(optionTexts).not.toContain("Buyer (Client)");
+      expect(optionTexts).toContain("Buyer's Agent");
+      // The USER'S OWN role. On a Listing the user IS the listing agent.
+      expect(optionTexts).not.toContain("Listing Agent");
+      expect(optionTexts).toContain("Co-Agent");
+      // The other side's principal, removed by founder ruling.
+      expect(optionTexts).not.toContain("Buyer");
+      expect(optionTexts).not.toContain("Seller");
     });
   });
 
@@ -202,7 +234,7 @@ describe("RoleAssigner", () => {
     it("should show current role as selected in dropdown", () => {
       const assignments: RoleAssignments = {
         client: ["contact-1"],
-        seller_agent: ["contact-2"],
+        agent: ["contact-2"],
       };
 
       render(
@@ -220,14 +252,14 @@ describe("RoleAssigner", () => {
       const select3 = screen.getByTestId("role-select-contact-3") as HTMLSelectElement;
 
       expect(select1.value).toBe("client");
-      expect(select2.value).toBe("seller_agent");
+      expect(select2.value).toBe("agent");
       expect(select3.value).toBe("");
     });
 
     it("should update assignment count when contacts have roles", () => {
       const assignments: RoleAssignments = {
         client: ["contact-1"],
-        seller_agent: ["contact-2"],
+        agent: ["contact-2"],
       };
 
       render(
@@ -258,13 +290,13 @@ describe("RoleAssigner", () => {
         />
       );
 
-      // Change contact-1 from client to seller_agent
+      // Change contact-1 from client to agent (BACKLOG-2859: one agent role)
       const roleSelect = screen.getByTestId("role-select-contact-1");
-      fireEvent.change(roleSelect, { target: { value: "seller_agent" } });
+      fireEvent.change(roleSelect, { target: { value: "agent" } });
 
-      // Should have contact removed from client and added to seller_agent
+      // Should have contact removed from client and added to agent
       expect(mockOnAssignmentsChange).toHaveBeenCalledWith({
-        seller_agent: ["contact-1"],
+        agent: ["contact-1"],
       });
     });
 
@@ -304,90 +336,67 @@ describe("RoleAssigner", () => {
         />
       );
 
-      // Change contact-1 from client to seller_agent
+      // Change contact-1 from client to agent (BACKLOG-2859: one agent role)
       const roleSelect = screen.getByTestId("role-select-contact-1");
-      fireEvent.change(roleSelect, { target: { value: "seller_agent" } });
+      fireEvent.change(roleSelect, { target: { value: "agent" } });
 
       // Should preserve contact-2 in client
       expect(mockOnAssignmentsChange).toHaveBeenCalledWith({
         client: ["contact-2"],
-        seller_agent: ["contact-1"],
+        agent: ["contact-1"],
       });
     });
   });
 
-  describe("Transaction Type Filtering", () => {
-    it("should show seller agent for purchase transactions", () => {
+  describe("Transaction Type Labels (BACKLOG-2859)", () => {
+    /**
+     * The stored option set is IDENTICAL on both types — the collapse is what
+     * scopes the roles, so there is nothing left to filter. What moves is the
+     * LABEL. These two tests assert the same three party roles resolve to
+     * different words per type, and that each type's WRONG label is absent.
+     */
+    const partyLabels = (type: "purchase" | "sale"): string[] => {
       render(
         <RoleAssigner
           selectedContacts={mockContacts}
-          transactionType="purchase"
+          transactionType={type}
           assignments={emptyAssignments}
           onAssignmentsChange={mockOnAssignmentsChange}
         />
       );
-
       const roleSelect = screen.getByTestId("role-select-contact-1");
-      const options = within(roleSelect).getAllByRole("option");
-      const optionTexts = options.map((o) => o.textContent);
+      return within(roleSelect)
+        .getAllByRole("option")
+        .map((o) => o.textContent ?? "");
+    };
 
-      expect(optionTexts).toContain("Listing Agent");
-      expect(optionTexts).not.toContain("Buyer Agent");
+    it("labels a Listing from the seller side, and never offers the user's own role", () => {
+      const texts = partyLabels("purchase");
+      expect(texts).toContain("Seller (Client)");
+      expect(texts).toContain("Buyer's Agent");
+      expect(texts).toContain("Co-Agent");
+      // The user IS the listing agent on a Listing.
+      expect(texts).not.toContain("Listing Agent");
+      expect(texts).not.toContain("Buyer (Client)");
     });
 
-    it("should show buyer agent for sale transactions", () => {
-      render(
-        <RoleAssigner
-          selectedContacts={mockContacts}
-          transactionType="sale"
-          assignments={emptyAssignments}
-          onAssignmentsChange={mockOnAssignmentsChange}
-        />
-      );
-
-      const roleSelect = screen.getByTestId("role-select-contact-1");
-      const options = within(roleSelect).getAllByRole("option");
-      const optionTexts = options.map((o) => o.textContent);
-
-      expect(optionTexts).toContain("Buyer Agent");
-      // BACKLOG-2804: must name the LABEL the picker would now render. Left as
-      // "Seller Agent" this assertion passes whatever the picker offers, because
-      // no picker renders that string any more.
-      expect(optionTexts).not.toContain("Listing Agent");
+    it("labels a Sale from the buyer side, and never offers the user's own role", () => {
+      const texts = partyLabels("sale");
+      expect(texts).toContain("Buyer (Client)");
+      // BACKLOG-2804 survives the collapse as a label rule.
+      expect(texts).toContain("Listing Agent");
+      expect(texts).toContain("Co-Agent");
+      // The user IS the buyer's agent on a Sale.
+      expect(texts).not.toContain("Buyer's Agent");
+      expect(texts).not.toContain("Seller (Client)");
     });
 
-    it("should show correct client label for purchase (Buyer)", () => {
-      render(
-        <RoleAssigner
-          selectedContacts={mockContacts}
-          transactionType="purchase"
-          assignments={emptyAssignments}
-          onAssignmentsChange={mockOnAssignmentsChange}
-        />
-      );
-
-      const roleSelect = screen.getByTestId("role-select-contact-1");
-      const options = within(roleSelect).getAllByRole("option");
-      const optionTexts = options.map((o) => o.textContent);
-
-      expect(optionTexts).toContain("Buyer (Client)");
-    });
-
-    it("should show correct client label for sale (Seller)", () => {
-      render(
-        <RoleAssigner
-          selectedContacts={mockContacts}
-          transactionType="sale"
-          assignments={emptyAssignments}
-          onAssignmentsChange={mockOnAssignmentsChange}
-        />
-      );
-
-      const roleSelect = screen.getByTestId("role-select-contact-1");
-      const options = within(roleSelect).getAllByRole("option");
-      const optionTexts = options.map((o) => o.textContent);
-
-      expect(optionTexts).toContain("Seller (Client)");
+    it("renders Co-Agent IDENTICALLY on both types — it is not dynamic", () => {
+      const onListing = partyLabels("purchase").filter((t) => t.includes("Co-"));
+      cleanup();
+      const onSale = partyLabels("sale").filter((t) => t.includes("Co-"));
+      expect(onListing).toEqual(["Co-Agent"]);
+      expect(onListing).toEqual(onSale);
     });
   });
 
@@ -456,7 +465,7 @@ describe("RoleAssigner", () => {
 
       // Rapid changes
       fireEvent.change(roleSelect, { target: { value: "client" } });
-      fireEvent.change(roleSelect, { target: { value: "seller_agent" } });
+      fireEvent.change(roleSelect, { target: { value: "agent" } });
       fireEvent.change(roleSelect, { target: { value: "title_company" } });
 
       expect(mockOnAssignmentsChange).toHaveBeenCalledTimes(3);
@@ -513,16 +522,16 @@ describe("RoleAssigner", () => {
 
       // Step 2: Assign Jane as seller agent
       const roleSelect2 = screen.getByTestId("role-select-contact-2");
-      fireEvent.change(roleSelect2, { target: { value: "seller_agent" } });
+      fireEvent.change(roleSelect2, { target: { value: "agent" } });
       expect(mockOnAssignmentsChange).toHaveBeenLastCalledWith({
         client: ["contact-1"],
-        seller_agent: ["contact-2"],
+        agent: ["contact-2"],
       });
 
       // Final state
       const finalAssignments: RoleAssignments = {
         client: ["contact-1"],
-        seller_agent: ["contact-2"],
+        agent: ["contact-2"],
       };
       rerender(
         <RoleAssigner

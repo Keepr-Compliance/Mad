@@ -31,13 +31,15 @@ import {
  * its testid) → Screen 2, select the 3 seeded contacts by data-contact-id → "Add Selected" → Screen 1,
  * assign each an explicit PURCHASE-VALID role via its role <select> (by option VALUE) → Save.
  *
- * ROLES (SR-reviewed, purchase-valid — see users-roles-core.ts): the fixture tx is `purchase`, so the
- * role dropdown offers only seller / seller_agent (Client & Agents step, purchase-filtered) and
- * escrow_officer (unfiltered Professional Services step). Assigned (contact IDs are the fixture's fixed,
+ * ROLES (rewritten for BACKLOG-2859 — see users-roles-core.ts): the fixture tx is `purchase`, so the
+ * role dropdown offers client / agent / co_agent (Client & Agents step — no longer filtered by type,
+ * because the enum collapse IS the scoping) and escrow_officer (Professional Services step). The old
+ * seller / seller_agent options no longer exist: the principal was removed by founder ruling, and on a
+ * Listing the listing agent is the USER. Assigned (contact IDs are the fixture's fixed,
  * VALID UUIDs — QA_SEED_CONTACT_IDS in users-roles-core.ts / seed-fixture.js; BACKLOG-1949 replaced the
  * old non-UUID qa-seed-contact-N literals, which the app's Save-path UUID validator rejected):
- *   QA_SEED_CONTACT_IDS[1] (Alice Buyer)  → seller (category client)
- *   QA_SEED_CONTACT_IDS[2] (Bob Seller)   → seller_agent (category agent)
+ *   QA_SEED_CONTACT_IDS[1] (Alice Buyer)  → client (category client; renders "Seller (Client)")
+ *   QA_SEED_CONTACT_IDS[2] (Bob Seller)   → agent  (category agent;  renders "Buyer's Agent")
  *   QA_SEED_CONTACT_IDS[3] (Carol Escrow) → escrow_officer (category title_escrow)
  *
  * TWO independent assertions, both required (verify by OBSERVING — BACKLOG-1875):

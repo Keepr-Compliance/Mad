@@ -184,12 +184,19 @@ describe("matchesSourceFilter — selection semantics", () => {
 describe("matchesRoleFilter — per-leaf mapping (§3)", () => {
   // [leafId, a default_role value that should match]
   const roleRows: Array<[string, string]> = [
-    [ROLE_LEAF.BUYERS, SPECIFIC_ROLES.BUYER],
-    [ROLE_LEAF.BUYERS, SPECIFIC_ROLES.CLIENT], // legacy combined role folds under Buyers
-    [ROLE_LEAF.SELLERS, SPECIFIC_ROLES.SELLER],
-    [ROLE_LEAF.AGENTS, SPECIFIC_ROLES.BUYER_AGENT],
-    [ROLE_LEAF.AGENTS, SPECIFIC_ROLES.SELLER_AGENT],
-    [ROLE_LEAF.AGENTS, SPECIFIC_ROLES.LISTING_AGENT],
+    // BACKLOG-2859: `buyer` / `seller` / the three agent values are RETIRED —
+    // never offered, but still matchable, because a `default_role` written by an
+    // older install or restored from a backup must not vanish from the filter
+    // tree. They are string literals here rather than SPECIFIC_ROLES members
+    // precisely because they are no longer part of the live vocabulary.
+    [ROLE_LEAF.BUYERS, "buyer"],
+    [ROLE_LEAF.BUYERS, SPECIFIC_ROLES.CLIENT], // the party the user represents
+    [ROLE_LEAF.SELLERS, "seller"],
+    [ROLE_LEAF.AGENTS, SPECIFIC_ROLES.AGENT],
+    [ROLE_LEAF.AGENTS, SPECIFIC_ROLES.CO_AGENT],
+    [ROLE_LEAF.AGENTS, "buyer_agent"],
+    [ROLE_LEAF.AGENTS, "seller_agent"],
+    [ROLE_LEAF.AGENTS, "listing_agent"],
     [ROLE_LEAF.TRANSACTION_COORDINATORS, SPECIFIC_ROLES.TRANSACTION_COORDINATOR],
     [ROLE_LEAF.INSPECTORS, SPECIFIC_ROLES.INSPECTOR],
     [ROLE_LEAF.INSPECTORS, SPECIFIC_ROLES.APPRAISER],

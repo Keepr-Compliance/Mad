@@ -300,6 +300,113 @@ describe("EditContactsModal", () => {
       expect(screen.getByTestId("role-select-contact-1")).toHaveValue("client");
     });
 
+    /**
+     * BACKLOG-2859 — the offered set, asserted at THIS SURFACE.
+     *
+     * The other of the two screens the item names. The mocked ContactRoleRow
+     * renders `roleOptions` verbatim, so what is asserted here is exactly what
+     * this modal hands its rows.
+     */
+    const seedOneAssignment = () =>
+      mockGetDetails.mockResolvedValue({
+        success: true,
+        transaction: {
+          contact_assignments: [
+            {
+              id: "assign-1",
+              contact_id: "contact-1",
+              contact_name: "John Smith",
+              role: "client",
+            },
+          ],
+        },
+      });
+
+    const offeredValues = () =>
+      Array.from(
+        (screen.getByTestId("role-select-contact-1") as HTMLSelectElement).options,
+      )
+        .map((o) => o.value)
+        .filter((v) => v !== "");
+
+    it("offers EXACTLY the collapsed role set (BACKLOG-2859)", async () => {
+      seedOneAssignment();
+      render(<EditContactsModal {...createDefaultProps()} />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("role-select-contact-1")).toBeInTheDocument();
+      });
+
+      // Exact set, not membership: a removed role still on offer fails here.
+      expect(offeredValues()).toEqual([
+        "client",
+        "agent",
+        "co_agent",
+        "title_company",
+        "escrow_officer",
+        "inspector",
+        "appraiser",
+        "surveyor",
+        "mortgage_broker",
+        "real_estate_attorney",
+        "transaction_coordinator",
+        "insurance_agent",
+        "hoa_management",
+        "condo_management",
+        "other",
+      ]);
+    });
+
+    it.each(["purchase", "sale"] as const)(
+      "never offers the user's own role or the other side's principal on a %s",
+      async (transactionType) => {
+        seedOneAssignment();
+        render(
+          <EditContactsModal
+            {...createDefaultProps({
+              transaction: createTestTransaction({ transaction_type: transactionType }),
+            })}
+          />,
+        );
+
+        await waitFor(() => {
+          expect(screen.getByTestId("role-select-contact-1")).toBeInTheDocument();
+        });
+
+        const values = offeredValues();
+        expect(values).not.toContain("listing_agent");
+        expect(values).not.toContain("seller_agent");
+        expect(values).not.toContain("buyer_agent");
+        expect(values).not.toContain("buyer");
+        expect(values).not.toContain("seller");
+      },
+    );
+
+    it("labels the party roles from the transaction type", async () => {
+      seedOneAssignment();
+      const { unmount } = render(
+        <EditContactsModal
+          {...createDefaultProps({
+            transaction: createTestTransaction({ transaction_type: "sale" }),
+          })}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId("role-select-contact-1")).toBeInTheDocument();
+      });
+
+      const labels = Array.from(
+        (screen.getByTestId("role-select-contact-1") as HTMLSelectElement).options,
+      ).map((o) => o.textContent);
+
+      expect(labels).toContain("Buyer (Client)");
+      expect(labels).toContain("Listing Agent");
+      expect(labels).not.toContain("Buyer's Agent");
+      expect(labels).not.toContain("Seller (Client)");
+      unmount();
+    });
+
     it("shows count of assigned contacts", async () => {
       mockGetDetails.mockResolvedValue({
         success: true,

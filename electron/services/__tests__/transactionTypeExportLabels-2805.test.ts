@@ -55,15 +55,24 @@ function txtSummary(transactionType: string | undefined): string {
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 describe("BACKLOG-2805 — the audit summary HTML", () => {
-  it('prints "Listing/Purchase" for a purchase', () => {
+  it('prints "Listing" for a purchase', () => {
     const html = generateSummaryHTML(makeTransaction("purchase"), []);
-    expect(html).toContain("Listing/Purchase");
+    expect(html).toContain(">Listing<");
+    // BACKLOG-2850: the string it REPLACED must be gone. "Listing" is a
+    // prefix of "Listing/Purchase", so the presence assertion above passes on
+    // the old label too and cannot stand alone.
+    expect(html).not.toContain("Listing/Purchase");
   });
 
   it('still prints "Sale" for a sale, unchanged', () => {
     const html = generateSummaryHTML(makeTransaction("sale"), []);
     expect(html).toContain(">Sale<");
-    expect(html).not.toContain("Listing/Purchase");
+    // BACKLOG-2850: the negative is scoped to the VALUE cell (`>Listing<`),
+    // not to the bare token. These documents already contain "Listing Price"
+    // (pdfExportService) and "Listing Agent" (summaryHelpers) as unrelated
+    // field labels, so `not.toContain("Listing")` asserts something false —
+    // it passes here only because this fixture has no contacts and no price.
+    expect(html).not.toContain(">Listing<");
   });
 
   it("still prints N/A for a type it cannot name", () => {
@@ -73,24 +82,31 @@ describe("BACKLOG-2805 — the audit summary HTML", () => {
 });
 
 describe("BACKLOG-2805 — the compliance PDF", () => {
-  it('prints "Listing/Purchase" for a purchase', () => {
-    expect(pdfHtml("purchase")).toContain("Listing/Purchase");
+  it('prints "Listing" for a purchase', () => {
+    expect(pdfHtml("purchase")).toContain(">Listing<");
+    expect(pdfHtml("purchase")).not.toContain("Listing/Purchase");
   });
 
   it("keeps the RAW ENUM in the badge CSS class", () => {
     // The label and the class name come from the same field and only one of
-    // them may change. `badge-Listing/Purchase` would be a broken selector
-    // with a slash in it — this is the assertion that separates "renamed the
-    // label" from "renamed the value".
+    // them may change. This is the assertion that separates "renamed the
+    // label" from "renamed the value" — the latter would break the DB.
+    //
+    // BACKLOG-2850: the wrong-selector shape is now `badge-Listing`, which
+    // (unlike the old `badge-Listing/Purchase`) is a SYNTACTICALLY VALID class
+    // name. It would look fine in the markup and simply never match the
+    // stylesheet, so this negative has to name the current label, not the
+    // retired one.
     const html = pdfHtml("purchase");
     expect(html).toContain("badge-purchase");
-    expect(html).not.toContain("badge-Listing/Purchase");
+    expect(html).not.toContain("badge-Listing");
   });
 
   it('still prints "Sale" for a sale', () => {
     const html = pdfHtml("sale");
     expect(html).toContain(">Sale<");
-    expect(html).not.toContain("Listing/Purchase");
+    // Scoped to the value cell — the PDF has a "Listing Price" field label.
+    expect(html).not.toContain(">Listing<");
   });
 
   it("still prints N/A when the type is absent", () => {
@@ -99,12 +115,13 @@ describe("BACKLOG-2805 — the compliance PDF", () => {
 });
 
 describe("BACKLOG-2805 — the .txt export", () => {
-  it('prints "Transaction Type: Listing/Purchase", not the raw enum', () => {
+  it('prints "Transaction Type: Listing", not the raw enum', () => {
     // The pre-existing defect: this line printed `purchase`, lowercase, in a
     // document the user files.
     const txt = txtSummary("purchase");
-    expect(txt).toContain("Transaction Type: Listing/Purchase");
+    expect(txt).toContain("Transaction Type: Listing");
     expect(txt).not.toContain("Transaction Type: purchase");
+    expect(txt).not.toContain("Transaction Type: Listing/Purchase");
   });
 
   it('prints "Transaction Type: Sale", not the raw enum', () => {

@@ -16,11 +16,9 @@
 
 import React, { useMemo, useCallback } from "react";
 import type { ExtendedContact } from "../../types/components";
-import { AUDIT_WORKFLOW_STEPS } from "../../constants/contactRoles";
 import { labelForContact } from "../../utils/contactDisplayLabel";
 import {
-  filterRolesByTransactionType,
-  getRoleDisplayName,
+  buildRoleOptions,
 } from "../../utils/transactionRoleUtils";
 
 /**
@@ -33,12 +31,6 @@ export interface RoleAssignments {
 /**
  * Role configuration from workflow steps
  */
-interface RoleConfig {
-  role: string;
-  required: boolean;
-  multiple: boolean;
-}
-
 export interface RoleAssignerProps {
   /** Contacts that were selected in step 1 */
   selectedContacts: ExtendedContact[];
@@ -125,27 +117,12 @@ export function RoleAssigner({
   onAssignmentsChange,
   className,
 }: RoleAssignerProps): React.ReactElement {
-  // Build flat list of available roles based on transaction type
-  const roleOptions = useMemo(() => {
-    const allRoles: Array<{ value: string; label: string }> = [];
-
-    AUDIT_WORKFLOW_STEPS.forEach((step) => {
-      const filteredRoles = filterRolesByTransactionType(
-        step.roles as RoleConfig[],
-        transactionType,
-        step.title
-      );
-
-      filteredRoles.forEach((roleConfig) => {
-        allRoles.push({
-          value: roleConfig.role,
-          label: getRoleDisplayName(roleConfig.role, transactionType),
-        });
-      });
-    });
-
-    return allRoles;
-  }, [transactionType]);
+  // The roles this picker offers — one shared definition across all pickers
+  // (BACKLOG-2859).
+  const roleOptions = useMemo(
+    () => buildRoleOptions(transactionType),
+    [transactionType]
+  );
 
   // Get the current role for a contact
   const getContactRole = useCallback(

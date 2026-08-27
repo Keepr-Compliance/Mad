@@ -196,6 +196,12 @@ function TransactionList({
     exitSelectionMode: handleExitSelectionMode,
     closeBulkDeleteModal: () => setShowBulkDeleteConfirm(false),
     closeBulkExportModal: () => setShowBulkExportModal(false),
+    // BACKLOG-2866: the review gate names the deals it refuses. Read from the
+    // full `transactions` set, not `filteredTransactions` — a selected deal can
+    // be out of the current filter, and an unnamed blocked deal is worse than
+    // no message.
+    labelForTransaction: (id: string) =>
+      transactions.find((t) => t.id === id)?.property_address,
   });
 
   // Toast notifications. BACKLOG-2447: these used to be lifted here from

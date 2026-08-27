@@ -2,7 +2,8 @@
  * BACKLOG-2805 (support ticket 112) — what the Transaction Type toggle is called.
  *
  * Founder ruling: the seller-side option keeps the word the user already knows
- * and gains the one they asked for — "Purchase" becomes **"Listing/Purchase"**,
+ * and gains the one they asked for — "Purchase" became "Listing/Purchase"
+ * (BACKLOG-2805) and is now **"Listing"** (BACKLOG-2850),
  * exact string, with the slash. **"Sale" is unchanged.**
  *
  * DISPLAY ONLY. The values written to `transaction_type` stay `purchase` and
@@ -49,15 +50,20 @@ function renderStep(
 }
 
 describe("BACKLOG-2805: Transaction Type toggle labels", () => {
-  it('the buy-side button reads exactly "Listing/Purchase"', () => {
+  it('the buy-side button reads exactly "Listing"', () => {
     renderStep("purchase");
 
     // Read off the testid, not the text: the testid is the stable handle (it
     // is also the e2e selector) and reading the label from it is what proves
     // the RIGHT button was renamed.
-    expect(screen.getByTestId("create-audit-type-purchase")).toHaveTextContent(
-      "Listing/Purchase",
-    );
+    //
+    // BACKLOG-2850: `.textContent` compared with `toBe`, NOT
+    // `toHaveTextContent` — the latter is a SUBSTRING match, so it would go
+    // green on the retired "Listing/Purchase" and this rename would be
+    // untested. The absence assertion below is the second half of that.
+    const buyButton = screen.getByTestId("create-audit-type-purchase");
+    expect(buyButton.textContent).toBe("Listing");
+    expect(buyButton.textContent).not.toContain("Listing/Purchase");
   });
 
   it('the sell-side button still reads exactly "Sale"', () => {
@@ -70,9 +76,11 @@ describe("BACKLOG-2805: Transaction Type toggle labels", () => {
   it('no button reads a bare "Purchase" any more', () => {
     renderStep("purchase");
 
-    // Exact-text query: "Listing/Purchase" does not satisfy it, so this goes
-    // red if either button is left on the old string.
+    // Exact-text query: neither "Listing/Purchase" nor "Listing" satisfies
+    // it, so this goes red only if a button is left on the ORIGINAL string.
     expect(screen.queryByText("Purchase")).not.toBeInTheDocument();
+    // BACKLOG-2850: and nothing is left on the interim one either.
+    expect(screen.queryByText("Listing/Purchase")).not.toBeInTheDocument();
   });
 
   it("still emits the enum value `purchase`, not the label", () => {
@@ -82,6 +90,10 @@ describe("BACKLOG-2805: Transaction Type toggle labels", () => {
 
     expect(onTransactionTypeChange).toHaveBeenCalledWith("purchase");
     expect(onTransactionTypeChange).not.toHaveBeenCalledWith("Listing/Purchase");
+    // BACKLOG-2850: the handler emits the ENUM. Renaming the label must never
+    // rename the value — `transactions.transaction_type` is a DB column, and
+    // a text-only assertion would not tell the two apart.
+    expect(onTransactionTypeChange).not.toHaveBeenCalledWith("Listing");
   });
 
   it("still emits the enum value `sale`", () => {

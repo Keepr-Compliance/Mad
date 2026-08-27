@@ -12,11 +12,9 @@
  * between steps 2 and 3.
  */
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
-import { AUDIT_WORKFLOW_STEPS } from "../../constants/contactRoles";
 import {
-  filterRolesByTransactionType,
+  buildRoleOptions,
   resolveDefaultContactRole,
-  getRoleDisplayName,
   type TransactionType,
 } from "../../utils/transactionRoleUtils";
 import { ContactSearchList } from "../shared/ContactSearchList";
@@ -99,12 +97,6 @@ interface ContactAssignmentStepProps {
 /**
  * Role configuration from workflow steps
  */
-interface RoleConfig {
-  role: string;
-  required: boolean;
-  multiple: boolean;
-}
-
 /**
  * BACKLOG-2400: link between an external/address-book contact the user added and
  * the DB contact its import produced. Lets the two-pane hide the external twin
@@ -327,28 +319,14 @@ function ContactAssignmentStep({
     setShowEditModal(true);
   }, []);
 
-  // Build role options from all workflow steps
-  const roleOptions = useMemo((): RoleOption[] => {
-    const allRoles: RoleOption[] = [];
-    const txnType = transactionType as TransactionType;
-
-    AUDIT_WORKFLOW_STEPS.forEach((step) => {
-      const filteredRoles = filterRolesByTransactionType(
-        step.roles as RoleConfig[],
-        txnType,
-        step.title
-      );
-
-      filteredRoles.forEach((roleConfig) => {
-        allRoles.push({
-          value: roleConfig.role,
-          label: getRoleDisplayName(roleConfig.role, txnType),
-        });
-      });
-    });
-
-    return allRoles;
-  }, [transactionType]);
+  // The roles this picker offers. One shared definition (BACKLOG-2859) — the
+  // same three party roles on every transaction type, with `client` and `agent`
+  // labelled for THIS type. Notably absent: the user's own role, and the other
+  // side's principal.
+  const roleOptions = useMemo(
+    (): RoleOption[] => buildRoleOptions(transactionType as TransactionType),
+    [transactionType]
+  );
 
   // Auto-select contacts added via ContactFormModal once they appear in the contacts list
   // Wait for the refresh, then select. (The pattern originated in the picker

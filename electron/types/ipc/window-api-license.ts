@@ -15,12 +15,21 @@ export interface WindowApiLicense {
     success: boolean;
     license?: UserLicense;
     error?: string;
+    /**
+     * BACKLOG-2885 — true when the answer came from a loaded session; false
+     * when it is the no-session default, which is indistinguishable from a
+     * genuine individual by value alone. Callers that branch on license CLASS
+     * must treat false as "not known yet", not as "individual".
+     */
+    sessionBacked?: boolean;
   }>;
   /** Refresh license data from database */
   refresh: () => Promise<{
     success: boolean;
     license?: UserLicense;
     error?: string;
+    /** BACKLOG-2885 — see `get`. */
+    sessionBacked?: boolean;
   }>;
 
   // ============================================

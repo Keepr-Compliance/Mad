@@ -44,6 +44,7 @@ import {
   storeParsedEmailsForAccount,
   type StoreableEmail,
 } from "../emailSyncService";
+import { CURRENT_DERIVATION_VERSION } from "../../utils/derivationVersion";
 
 /**
  * Positional indices into the `INSERT INTO emails (...)` parameter list.
@@ -70,10 +71,16 @@ const COL = {
   LABELS: 22,
   // BACKLOG-2513: appended directly after `labels`.
   BULK_MAIL_HEADERS: 23,
+  INGEST_SOURCE: 24,
+  VALIDATED_AT: 25,
+  // BACKLOG-2857: appended LAST, after every pre-existing bind, precisely so the
+  // indices above keep their meaning. `created_at` is not in this map because it
+  // binds no parameter (it is a CURRENT_TIMESTAMP literal in the VALUES list).
+  DERIVED_VERSION: 26,
 } as const;
 
 /** The emails INSERT binds exactly this many parameters. */
-const INSERT_ARITY = 26;
+const INSERT_ARITY = 27;
 
 /** A fake prepared-statement DB whose INSERTs always succeed and are recorded. */
 function makeFakeDb() {
@@ -513,5 +520,53 @@ describe("BACKLOG-2571: sent_at binds the send time, received_at the receive tim
     });
 
     expect(insertRuns[0][COL.SENT_AT]).toBe(RECEIVE.toISOString());
+  });
+});
+
+/**
+ * BACKLOG-2857 — the sync stamps the derivation version at write time.
+ *
+ * Proved by EXECUTING the write path and reading the bound parameter, not by
+ * grepping the SQL for the column name. A column present in the INSERT list but
+ * bound from the wrong value (or from a literal that never moves) would pass a
+ * text search and fail here.
+ *
+ * Why this matters beyond tidiness: an unstamped row falls to the column DEFAULT
+ * of 0, which the reprocess pass reads as "produced by superseded logic". For a
+ * class-1 version that is merely wasted work — the row gets re-derived to the
+ * same text. For a future class-2 version it would mean re-fetching a row from
+ * the provider that never needed it.
+ */
+describe("BACKLOG-2857: the sync stamps derived_version", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetOAuthToken.mockResolvedValue({
+      id: "acct-1",
+      connected_email_address: "me@example.com",
+    });
+    mockDbAll.mockReturnValue([]);
+  });
+
+  it.each([
+    ["gmail" as const, () => mkGmailEmail({})],
+    ["outlook" as const, () => mkOutlookEmail({})],
+  ])("binds CURRENT_DERIVATION_VERSION for %s", async (provider, mk) => {
+    const { db, insertRuns } = makeFakeDb();
+    mockGetRawDatabase.mockReturnValue(db as never);
+
+    await storeParsedEmailsForAccount({
+      userId: "u-1",
+      provider,
+      emails: [mk()],
+      getAttachmentsFn: jest.fn().mockResolvedValue([]),
+    });
+
+    expect(insertRuns).toHaveLength(1);
+    expect(insertRuns[0]).toHaveLength(INSERT_ARITY);
+    expect(insertRuns[0][COL.DERIVED_VERSION]).toBe(CURRENT_DERIVATION_VERSION);
+
+    // Explicitly NOT 0: a row written by current code must never land in the
+    // reprocess set.
+    expect(insertRuns[0][COL.DERIVED_VERSION]).not.toBe(0);
   });
 });

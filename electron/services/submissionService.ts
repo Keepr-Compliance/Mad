@@ -19,6 +19,17 @@ import * as crypto from "crypto";
 import * as os from "os";
 import { app, net } from "electron";
 import supabaseService from "./supabaseService";
+/**
+ * BACKLOG-2868 — the refusal copy is CANONICAL in its own module because the
+ * renderer needs the same words and cannot import this file. See that module's
+ * header for why a plain shared import is impossible across the boundary, and
+ * for the parity test that keeps the renderer's mirror honest.
+ */
+import {
+  BLOCKED_SUBMISSION_STATUSES,
+  BLOCKED_SUBMISSION_MESSAGES,
+  type BlockedSubmissionStatus,
+} from "./submissionStatusMessages";
 import supabaseStorageService, {
   LocalAttachment,
   AttachmentUploadResult,
@@ -28,7 +39,17 @@ import logService from "./logService";
 import emailAttachmentService from "./emailAttachmentService";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
-import { getContactNames } from "./contactsService";
+// BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
+// PDF uses, not from a second read of the macOS AddressBook. The AddressBook is
+// still consulted — as tier 3 inside that resolver — so no name previously
+// resolved is lost; it simply stops being an independent answer that could
+// disagree with the archived artifact.
+import {
+  resolveHandles,
+  extractParticipantHandles,
+  nameForHandle,
+  type HandleNameResolution,
+} from "./contactResolutionService";
 import type {
   Transaction,
   Message,
@@ -37,7 +58,6 @@ import type {
 } from "../types/models";
 
 /** Contact name map from phone/email to display name */
-type ContactMap = Record<string, string>;
 
 // ============================================
 // TYPES & INTERFACES
@@ -292,20 +312,25 @@ class SubmissionService {
       const orgId = await this.getUserOrganizationId();
       const currentUserId = await this.getCurrentUserId();
 
-      // Load contact names for phone number resolution
-      let contactMap: ContactMap = {};
+      // Load contact names for phone number resolution.
+      // BACKLOG-2757/2758: one resolver, scoped to this user and this
+      // transaction, returning the same honest label the PDF prints — including
+      // "A or B" when a handle names more than one contact. The portal and the
+      // archived PDF now cannot name the same party differently.
+      let partyNames: HandleNameResolution = { names: {}, matches: {} };
       try {
-        const contactResult = await getContactNames();
-        if (contactResult.status.success) {
-          contactMap = contactResult.contactMap;
-          logService.info(
-            `[Submission] Loaded ${Object.keys(contactMap).length} contacts for name resolution`,
-            "SubmissionService"
-          );
-        }
+        partyNames = await resolveHandles(
+          extractParticipantHandles(messages),
+          currentUserId,
+          { userId: currentUserId, transactionId }
+        );
+        logService.info(
+          `[Submission] Resolved ${Object.keys(partyNames.names).length} handle keys for name resolution`,
+          "SubmissionService"
+        );
       } catch (err) {
         logService.warn(
-          `[Submission] Could not load contacts: ${err instanceof Error ? err.message : "Unknown error"}`,
+          `[Submission] Could not resolve party names: ${err instanceof Error ? err.message : "Unknown error"}`,
           "SubmissionService"
         );
       }
@@ -316,39 +341,237 @@ class SubmissionService {
 
       // Check for existing submission
       const client = supabaseService.getClient();
-      const { data: existingSubmission } = await client
-        .from("transaction_submissions")
-        .select("id, status")
-        .eq("organization_id", orgId)
-        .eq("local_transaction_id", transactionId)
-        .maybeSingle();
+
+      /**
+       * The version this attempt will INSERT. Mirrors `mapToSubmission`, which
+       * writes `version: options?.version || 1` — the two must agree, because
+       * the delete below is keyed off the comparison.
+       */
+      const pendingVersion = options?.version || 1;
+
+      /**
+       * BACKLOG-2867 — NAME ONE ROW, AND READ THE ERROR.
+       *
+       * This lookup used to be
+       *
+       *   const { data: existingSubmission } = await client
+       *     .from("transaction_submissions")
+       *     .select("id, status")
+       *     .eq("organization_id", orgId)
+       *     .eq("local_transaction_id", transactionId)
+       *     .maybeSingle();
+       *
+       * — no ordering, no limit, and the `error` not destructured at all.
+       *
+       * A deal that has been round-tripped once has TWO rows here: the unique
+       * key is (organization_id, local_transaction_id, version, submitted_by),
+       * so versions coexist legally, and the versioning path deliberately
+       * retains its parent. `.maybeSingle()` against two rows makes PostgREST
+       * answer PGRST116 with `data: null` — and with the error discarded, that
+       * is indistinguishable from "this deal has never been submitted".
+       * `if (existingSubmission)` was false and the entire status guard below
+       * was skipped, on exactly the deals furthest along: measured live on
+       * 2026-08-25, one transaction sat at versions [1, 2] / statuses
+       * [rejected, under_review] and was unguarded.
+       *
+       * Both halves are needed, and each is proved by its own control:
+       *
+       *   ORDER BY version DESC LIMIT 1 — decide against the CURRENT version.
+       *     Secondary order on created_at because the unique key permits a
+       *     version tie between two submitters in one org; without it the row
+       *     the database happens to return first would decide the guard.
+       *
+       *   The ERROR, read and refused on. With `limit(1)` a multi-row PGRST116
+       *     can no longer occur, so there is no "no rows" case left to
+       *     tolerate: `data: null` means no submission exists, and an `error`
+       *     means the question could not be answered. Failing closed is the
+       *     point — the alternative is what this item is about, a failed check
+       *     read as a clean bill of health.
+       */
+      const { data: existingSubmission, error: existingSubmissionError } =
+        await client
+          .from("transaction_submissions")
+          .select("id, status, version")
+          .eq("organization_id", orgId)
+          .eq("local_transaction_id", transactionId)
+          .order("version", { ascending: false })
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+      if (existingSubmissionError) {
+        logService.error(
+          `[Submission] Existing-submission check failed for ${transactionId} — refusing to submit`,
+          "SubmissionService",
+          {
+            code: existingSubmissionError.code ?? null,
+            message: existingSubmissionError.message,
+          }
+        );
+        throw new Error(
+          `Could not check whether this transaction has already been submitted, so nothing was submitted. Please try again. (${existingSubmissionError.message})`
+        );
+      }
 
       if (existingSubmission) {
-        // Check if resubmission is allowed based on status
-        const blockedStatuses = ["under_review", "approved", "rejected"];
-        if (blockedStatuses.includes(existingSubmission.status)) {
-          const statusMessages: Record<string, string> = {
-            under_review:
-              "Cannot resubmit while broker is reviewing. Please wait for their decision.",
-            approved: "This submission has already been approved.",
-            rejected: "This submission has been rejected.",
-          };
+        /**
+         * BACKLOG-2853 — `submitted` IS BLOCKED. This list is the whole item.
+         *
+         * Until this change the list was
+         * ["under_review", "approved", "rejected"], so a deal sitting at
+         * `submitted` — awaiting the broker, nothing wrong with it — fell
+         * through to the delete below, whose own comment advertises that it
+         * "cascades to messages and attachments". The renderer offered that
+         * path an unqualified, enabled "Submit" button (SubmitForReviewModal
+         * computed `isResubmit` from `needs_changes` alone), so one mis-click
+         * on Complete → Submit aimed a cascading delete at a live submission.
+         *
+         * WHAT THE DATABASE ACTUALLY DOES TODAY — measured against the live
+         * Keepr project (`pg_policies`, `pg_class`), not read off the
+         * migration files, because it changes what this guard is FOR:
+         *
+         *   transaction_submissions: relrowsecurity = true,
+         *                            relforcerowsecurity = true
+         *   the only agent-facing DELETE policy is
+         *     agents_can_delete_stale_uploads
+         *     USING ((submitted_by = auth.uid())
+         *            AND (status::text = 'uploading'::text))
+         *
+         * The desktop client holds the ANON key plus the user session
+         * (supabaseService.ts — "never fall back to service_role key"), so
+         * that policy governs it. A DELETE aimed at a `submitted` row matches
+         * no row, PostgREST returns 204, and the result below is not checked
+         * anyway. The cascade never fires. The destruction is real in THIS
+         * FILE and is prevented by the database.
+         *
+         * So what a user hit instead was a LATE failure: the delete no-ops,
+         * then the attachment upload runs — the longest stage — and only then
+         * does the insert violate the live unique key
+         *   UNIQUE (organization_id, local_transaction_id, version,
+         *           submitted_by)
+         * with a duplicate-key error, having already pushed files to Storage
+         * under a submission id that will never exist. This check runs BEFORE
+         * that upload, so blocking here replaces a multi-minute walk to a
+         * confusing error with an immediate, accurate refusal.
+         *
+         * And it is the ONLY application-layer guard: `service_role_full_access_submissions`
+         * grants ALL on this table and is live, so any service-role caller
+         * that ever reaches this code is not covered by the RLS that covers
+         * the desktop today.
+         *
+         * `resubmitted` is deliberately NOT in the list. BACKLOG-2853 justified
+         * that with "it carries the identical hazard one broker round trip
+         * later" — WRONG, and withdrawn. It was then argued that adding the
+         * word would change nothing, because a `resubmitted` row only exists
+         * at version >= 2, two rows share `(organization_id,
+         * local_transaction_id)`, and the old single-row lookup returned
+         * PGRST116 so execution never arrived here at all.
+         *
+         * BACKLOG-2867 FIXED THAT LOOKUP, so that argument is now spent too:
+         * a `resubmitted` deal DOES reach this check. It is still not on the
+         * list, and it still must not fall into a delete — which is why the
+         * branch below now refuses to delete a row at a version this attempt
+         * is not replacing. Whether `resubmitted` belongs on the list is a
+         * separate decision, deliberately not taken here; see
+         * `submissionStatusMessages.ts`.
+         *
+         * BACKLOG-2868 — THE LIST AND THE MESSAGES NOW LIVE IN THEIR OWN
+         * MODULE. Not for tidiness: the renderer must tell the user the same
+         * thing this throw does, cannot import this file, and drifted the
+         * moment it had to write the words a second time. The modal's mirror
+         * is pinned to these strings by a parity test.
+         */
+        if (
+          (BLOCKED_SUBMISSION_STATUSES as readonly string[]).includes(
+            existingSubmission.status
+          )
+        ) {
           throw new Error(
-            statusMessages[existingSubmission.status] ||
-              `Cannot resubmit with status: ${existingSubmission.status}`
+            BLOCKED_SUBMISSION_MESSAGES[
+              existingSubmission.status as BlockedSubmissionStatus
+            ] || `Cannot resubmit with status: ${existingSubmission.status}`
           );
         }
 
-        // Allowed to resubmit (status is 'submitted', 'resubmitted', or 'needs_changes')
-        logService.info(
-          `[Submission] Replacing existing submission ${existingSubmission.id} (status: ${existingSubmission.status})`,
-          "SubmissionService"
-        );
-        // Delete old submission (cascades to messages and attachments)
-        await client
-          .from("transaction_submissions")
-          .delete()
-          .eq("id", existingSubmission.id);
+        /**
+         * BACKLOG-2853 — THE VERSIONING PATH NEVER DELETES ITS OWN PARENT.
+         *
+         * `resubmitTransaction` reads the current version, adds one, and calls
+         * this method with `parentSubmissionId` set to the row it is
+         * versioning FROM — the same row `existingSubmission` names here. The
+         * delete below would therefore have destroyed the parent, and the
+         * insert that follows carries
+         *   parent_submission_id -> that id
+         * against a foreign key that is plain
+         *   FOREIGN KEY (parent_submission_id)
+         *   REFERENCES transaction_submissions(id)
+         * with NO ON DELETE clause (verified live via pg_constraint). Had the
+         * delete ever succeeded, the resubmit would have destroyed the
+         * original AND then failed its own insert on that FK — losing the
+         * broker's review round trip outright.
+         *
+         * It has not fired in production only because the RLS policy quoted
+         * above no-ops the delete; the broker round trip works today by
+         * accident of the database, not by intent of this code. Skipping the
+         * delete when a version is being created makes the intent explicit and
+         * is what "needs_changes reaches the versioning path, never the delete
+         * branch" means. The unique key includes `version`, so the old and new
+         * rows coexist legally — nothing forces the delete.
+         *
+         * Production behaviour is unchanged by this branch: the delete it
+         * skips was already a no-op for every status that reaches it.
+         */
+        const existingVersion: number = existingSubmission.version ?? 1;
+
+        if (options?.parentSubmissionId) {
+          logService.info(
+            `[Submission] Versioning from submission ${existingSubmission.id} (status: ${existingSubmission.status}) — previous version retained`,
+            "SubmissionService"
+          );
+        } else if (existingVersion !== pendingVersion) {
+          /**
+           * BACKLOG-2867 — THE DELETE MAY ONLY REMOVE THE ROW THIS INSERT
+           * WOULD COLLIDE WITH.
+           *
+           * This condition exists because of the fix above, not despite it.
+           * Before it, the lookup could not name a row on a multi-version
+           * deal, so this branch was unreachable there. Now that the lookup
+           * names the CURRENT version, a plain `submitTransaction` on a
+           * round-tripped deal arrives here holding version 2 while about to
+           * insert version 1 — and would have deleted the live submission.
+           * Under the desktop's RLS that delete no-ops, but
+           * `service_role_full_access_submissions` is live on this table and
+           * grants ALL, and under it the row and its cascaded messages and
+           * attachments are gone and the version-1 insert then fails on the
+           * unique key anyway. Destruction with nothing to show for it, newly
+           * reachable, caused by a fix. Closed here rather than shipped.
+           *
+           * What the delete is FOR is clearing
+           *   UNIQUE (organization_id, local_transaction_id, version,
+           *           submitted_by)
+           * for the row about to be inserted at `pendingVersion`. A row at any
+           * OTHER version does not block that insert, so deleting it buys
+           * nothing and costs a submission.
+           *
+           * Every path that reached the delete before BACKLOG-2867 reached it
+           * at equal versions, so production behaviour is unchanged.
+           */
+          logService.warn(
+            `[Submission] Existing submission ${existingSubmission.id} is at version ${existingVersion} but this submit inserts version ${pendingVersion} — leaving it in place`,
+            "SubmissionService"
+          );
+        } else {
+          // Allowed to replace (status is 'resubmitted' or 'needs_changes')
+          logService.info(
+            `[Submission] Replacing existing submission ${existingSubmission.id} (status: ${existingSubmission.status}) at version ${existingVersion}`,
+            "SubmissionService"
+          );
+          // Delete old submission (cascades to messages and attachments)
+          await client
+            .from("transaction_submissions")
+            .delete()
+            .eq("id", existingSubmission.id);
+        }
       }
 
       const totalMessageCount = messages.length + emails.length;
@@ -474,7 +697,7 @@ class SubmissionService {
 
         // Map text messages
         const textRecords = messages.map((m) =>
-          this.mapToSubmissionMessage(m, submissionId, contactMap)
+          this.mapToSubmissionMessage(m, submissionId, partyNames)
         );
         // Map emails
         const emailRecords = emails.map((e) =>
@@ -928,7 +1151,7 @@ class SubmissionService {
   private mapToSubmissionMessage(
     message: Message,
     submissionId: string,
-    contactMap: ContactMap = {}
+    partyNames: HandleNameResolution = { names: {}, matches: {} }
   ): SubmissionMessageRecord {
     // Parse participants JSON
     let participants: Record<string, unknown> = {};
@@ -943,21 +1166,13 @@ class SubmissionService {
       }
     }
 
-    // Resolve contact names and add to participants
+    // Resolve contact names and add to participants.
+    // BACKLOG-2758: `nameForHandle` is the SAME accessor, over the SAME map,
+    // that the export reads — the hand-rolled last-10-digit scan that used to
+    // live here was a third key derivation and a third chance to disagree.
     const resolvePhone = (phone: string): string | undefined => {
       if (!phone || phone === "me" || phone === "unknown") return undefined;
-      // Try direct lookup
-      if (contactMap[phone]) return contactMap[phone];
-      // Try normalized (last 10 digits)
-      const normalized = phone.replace(/\D/g, "").slice(-10);
-      if (normalized.length >= 7) {
-        for (const [p, name] of Object.entries(contactMap)) {
-          if (p.replace(/\D/g, "").slice(-10) === normalized) {
-            return name;
-          }
-        }
-      }
-      return undefined;
+      return nameForHandle(partyNames, phone);
     };
 
     // Add resolved names to participants

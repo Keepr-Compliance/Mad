@@ -48,28 +48,85 @@ interface LinkedContentSearchProps {
   onNavigateTransaction?: (transactionId: string) => void;
 }
 
-/** Group header with a coloured count badge — mirrors the admin portal section headers. */
-function GroupHeader({
-  label,
-  total,
-  badgeClass,
-}: {
-  label: string;
-  total: number;
-  badgeClass: string;
-}): React.ReactElement {
+/**
+ * BACKLOG-2863: how many rows a section shows before "Show more".
+ *
+ * The founder agreed to this cap in the same breath as dropping the counts, and
+ * it is worth being clear that it buys NO performance: the row queries already
+ * return in ~0 ms under `LIMIT` and an index, and all `limit` rows have been
+ * fetched by the time this component renders. It is a shorter panel, nothing
+ * more.
+ */
+const COLLAPSED_ROWS = 5;
+
+/**
+ * Group header. BACKLOG-2863 REMOVED THE COUNT BADGE that used to sit here.
+ *
+ * The number behind it came from six uncapped `SELECT COUNT(*)` queries, one per
+ * section, ~190-210 ms each on every keystroke — and unlike the row queries they
+ * could not stop early, because proving a total means visiting every match.
+ * Founder, offered capped counts that would read "200+" instead: *"i'm also fine
+ * with just show more and not counting it."*
+ */
+function GroupHeader({ label }: { label: string }): React.ReactElement {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border-b border-gray-100">
       <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
         {label}
       </span>
-      <span
-        className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${badgeClass}`}
-      >
-        {total}
-      </span>
     </div>
   );
+}
+
+/** The rows a section actually renders — capped until the user expands it. */
+function visibleRows<T>(items: T[], expanded: boolean): T[] {
+  return expanded ? items : items.slice(0, COLLAPSED_ROWS);
+}
+
+/**
+ * The control under a section: a "Show more" button, a muted note, or nothing.
+ *
+ * IT IS NEVER A DEAD CONTROL (BACKLOG-2791). The button renders only while there
+ * are fetched rows it can actually reveal. Once the section is showing everything
+ * that was fetched and the database still held more, there is nothing a click
+ * could do — so that case is a sentence, not a disabled button.
+ */
+function SectionFooter({
+  shown,
+  fetched,
+  hasMore,
+  onShowMore,
+  testId,
+}: {
+  shown: number;
+  fetched: number;
+  hasMore: boolean;
+  onShowMore: () => void;
+  testId: string;
+}): React.ReactElement | null {
+  if (fetched > shown) {
+    return (
+      <button
+        type="button"
+        onClick={onShowMore}
+        data-testid={testId}
+        className="w-full text-left text-xs font-medium text-blue-600 hover:text-blue-800 hover:bg-gray-50 px-3 py-1.5 bg-gray-50 border-t border-gray-100"
+      >
+        Show more
+      </button>
+    );
+  }
+  if (hasMore) {
+    return (
+      <p
+        className="text-xs text-gray-400 px-3 py-1.5 bg-gray-50 border-t border-gray-100"
+        data-testid={`${testId}-refine`}
+      >
+        More matches — keep typing to narrow them down.
+      </p>
+    );
+  }
+  return null;
 }
 
 /** Attribution pill: owning transaction address, or a muted "Not attached". */
@@ -132,8 +189,32 @@ function emailPrimaryLine(hit: GlobalEmailHit): string {
   return hit.subject?.trim() || "(no subject)";
 }
 
+/**
+ * BACKLOG-2816 (founder ruling, 2026-08-23): a group-chat-name hit is headed by
+ * the GROUP'S NAME. It is the thing that matched, and it is the name he gave the
+ * conversation — "it should just show the group chat name just like if i lookup a
+ * contact it has a section for the contact".
+ *
+ * Message hits are unchanged: still the sender.
+ */
 function textPrimaryLine(hit: GlobalTextHit): string {
+  const threadName = hit.threadDisplayName?.trim();
+  if (threadName) return threadName;
   return hit.sender?.trim() || "Unknown sender";
+}
+
+/**
+ * BACKLOG-2816: the member line under a group-chat-name hit — "a few of the
+ * members of the group chat (with name not numbers)".
+ *
+ * Returns null when no member resolved to a contact, so the row shows the group
+ * name alone rather than a list of raw digits. The handler has already dropped
+ * unresolved members; this only decides whether there is anything left to show.
+ */
+function textMemberLine(hit: GlobalTextHit): string | null {
+  if (!hit.threadDisplayName) return null;
+  const names = (hit.memberNames ?? []).filter((n) => n.trim());
+  return names.length > 0 ? names.join(", ") : null;
 }
 
 /** Compose the email secondary line (sender + snippet) shown under the subject. */
@@ -152,19 +233,40 @@ export function LinkedContentSearch({
   const { query, setQuery, results, searching, unavailable, clear } =
     useLinkedContentSearch(scope);
 
+  // BACKLOG-2863: which sections the user has expanded past COLLAPSED_ROWS.
+  const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(new Set());
+  const isExpanded = (section: string): boolean => expanded.has(section);
+  const expand = (section: string): void =>
+    { setExpanded((prev) => new Set(prev).add(section)); };
+
   const isGlobal = scope.type === "global";
   // BACKLOG-2248: term to highlight within result rows. Results only render while
   // `!searching`, by which point `query` equals the searched term (debounce settled),
   // so highlighting stays consistent with the displayed hits.
   const term = query.trim();
 
+  // A new search is a new result set, so a section expanded for the previous one
+  // must not stay expanded for this one — the user asked to see more of a
+  // different list. Keyed on the settled term, which is what `results` describes.
+  React.useEffect(() => {
+    setExpanded(new Set());
+  }, [term, scope.type]);
+
+  // BACKLOG-2858: `groupChats` belongs in this test, and its absence would be a
+  // silent regression on the founder's OWN case — a group-chat NAME match puts
+  // rows in `groupChats` and none in `texts`, so a panel that ignored it would
+  // fall through to "No matches" over a section that has rows.
+  //
+  // BACKLOG-2863: asked of the ROWS rather than of a count. Same answer, and it
+  // no longer depends on a number the search stopped computing.
   const hasAnyMatch =
     !!results &&
-    ((results.transactions?.total ?? 0) > 0 ||
-      results.contacts.total > 0 ||
-      results.emails.total > 0 ||
-      results.texts.total > 0 ||
-      (results.unattached?.total ?? 0) > 0);
+    ((results.transactions?.items.length ?? 0) > 0 ||
+      results.contacts.items.length > 0 ||
+      results.emails.items.length > 0 ||
+      results.texts.items.length > 0 ||
+      results.groupChats.items.length > 0 ||
+      (results.unattached?.items.length ?? 0) > 0);
 
   return (
     <div className="mb-6" data-testid="linked-content-search">
@@ -268,15 +370,11 @@ export function LinkedContentSearch({
               data-testid="linked-search-results"
             >
               {/* Transactions group (global only) */}
-              {results.transactions && results.transactions.total > 0 && (
+              {results.transactions && results.transactions.items.length > 0 && (
                 <div data-testid="linked-group-transactions">
-                  <GroupHeader
-                    label="Transactions"
-                    total={results.transactions.total}
-                    badgeClass="bg-indigo-100 text-indigo-700"
-                  />
+                  <GroupHeader label="Transactions" />
                   <ul>
-                    {results.transactions.items.map((t) => (
+                    {visibleRows(results.transactions.items, isExpanded("transactions")).map((t) => (
                       <li key={t.id} className="border-b border-gray-50 last:border-0">
                         <button
                           type="button"
@@ -291,19 +389,22 @@ export function LinkedContentSearch({
                       </li>
                     ))}
                   </ul>
+                  <SectionFooter
+                    shown={visibleRows(results.transactions.items, isExpanded("transactions")).length}
+                    fetched={results.transactions.items.length}
+                    hasMore={results.transactions.hasMore}
+                    onShowMore={() => { expand("transactions"); }}
+                    testId="show-more-transactions"
+                  />
                 </div>
               )}
 
               {/* Contacts group */}
-              {results.contacts.total > 0 && (
+              {results.contacts.items.length > 0 && (
                 <div data-testid="linked-group-contacts">
-                  <GroupHeader
-                    label="Contacts"
-                    total={results.contacts.total}
-                    badgeClass="bg-blue-100 text-blue-700"
-                  />
+                  <GroupHeader label="Contacts" />
                   <ul>
-                    {results.contacts.items.map((c) => (
+                    {visibleRows(results.contacts.items, isExpanded("contacts")).map((c) => (
                       <li key={c.contactId} className="border-b border-gray-50 last:border-0">
                         <button
                           type="button"
@@ -327,19 +428,22 @@ export function LinkedContentSearch({
                       </li>
                     ))}
                   </ul>
+                  <SectionFooter
+                    shown={visibleRows(results.contacts.items, isExpanded("contacts")).length}
+                    fetched={results.contacts.items.length}
+                    hasMore={results.contacts.hasMore}
+                    onShowMore={() => { expand("contacts"); }}
+                    testId="show-more-contacts"
+                  />
                 </div>
               )}
 
               {/* Emails group */}
-              {results.emails.total > 0 && (
+              {results.emails.items.length > 0 && (
                 <div data-testid="linked-group-emails">
-                  <GroupHeader
-                    label="Emails"
-                    total={results.emails.total}
-                    badgeClass="bg-green-100 text-green-700"
-                  />
+                  <GroupHeader label="Emails" />
                   <ul>
-                    {results.emails.items.map((e) => (
+                    {visibleRows(results.emails.items, isExpanded("emails")).map((e) => (
                       <li key={e.id} className="border-b border-gray-50 last:border-0">
                         <button
                           type="button"
@@ -366,24 +470,79 @@ export function LinkedContentSearch({
                       </li>
                     ))}
                   </ul>
-                  {results.emails.total > results.emails.items.length && (
-                    <p className="text-xs text-gray-400 px-3 py-1.5 bg-gray-50 border-t border-gray-100">
-                      +{results.emails.total - results.emails.items.length} more
-                    </p>
-                  )}
+                  <SectionFooter
+                    shown={visibleRows(results.emails.items, isExpanded("emails")).length}
+                    fetched={results.emails.items.length}
+                    hasMore={results.emails.hasMore}
+                    onShowMore={() => { expand("emails"); }}
+                    testId="show-more-emails"
+                  />
+                </div>
+              )}
+
+              {/* Group chats group (BACKLOG-2858).
+                  Founder, verbatim: "group chat in the search should show up as a
+                  separate category called Group chats. (not under texts where it
+                  shows now)".
+
+                  Gated on `total > 0` like every other section, so an empty one
+                  renders NO heading — a heading over nothing is a control that
+                  opens an empty screen (BACKLOG-2791).
+
+                  Placed immediately BEFORE Texts because that is where these rows
+                  already sat: BACKLOG-2816 put thread rows at the head of the
+                  texts list, a named conversation being a more specific answer to
+                  "Kingfisher Lane Closing" than any one message inside it. */}
+              {results.groupChats.items.length > 0 && (
+                <div data-testid="linked-group-groupchats">
+                  <GroupHeader label="Group chats" />
+                  <ul>
+                    {visibleRows(results.groupChats.items, isExpanded("groupChats")).map((t) => (
+                      <li key={t.id} className="border-b border-gray-50 last:border-0">
+                        <button
+                          type="button"
+                          onClick={() => { onNavigateText(t.id, t.attribution); }}
+                          data-testid="group-chat-result"
+                          className="w-full text-left px-3 py-2 hover:bg-teal-50 transition-colors"
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="block text-sm font-medium text-gray-900 truncate flex-1">
+                              {highlightMatch(textPrimaryLine(t), term)}
+                            </span>
+                            {isGlobal && <AttributionBadge attribution={t.attribution} />}
+                          </span>
+                          {/* Members, never body text: nothing in any message's
+                              body caused this hit, and `snippet` is null on these
+                              rows by construction (the query does not project a
+                              body). */}
+                          {textMemberLine(t) && (
+                            <span
+                              className="block text-xs text-gray-400 truncate"
+                              data-testid="group-chat-result-members"
+                            >
+                              {textMemberLine(t)}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <SectionFooter
+                    shown={visibleRows(results.groupChats.items, isExpanded("groupChats")).length}
+                    fetched={results.groupChats.items.length}
+                    hasMore={results.groupChats.hasMore}
+                    onShowMore={() => { expand("groupChats"); }}
+                    testId="show-more-groupchats"
+                  />
                 </div>
               )}
 
               {/* Texts group */}
-              {results.texts.total > 0 && (
+              {results.texts.items.length > 0 && (
                 <div data-testid="linked-group-texts">
-                  <GroupHeader
-                    label="Texts"
-                    total={results.texts.total}
-                    badgeClass="bg-purple-100 text-purple-700"
-                  />
+                  <GroupHeader label="Texts" />
                   <ul>
-                    {results.texts.items.map((t) => (
+                    {visibleRows(results.texts.items, isExpanded("texts")).map((t) => (
                       <li key={t.id} className="border-b border-gray-50 last:border-0">
                         <button
                           type="button"
@@ -397,6 +556,17 @@ export function LinkedContentSearch({
                             </span>
                             {isGlobal && <AttributionBadge attribution={t.attribution} />}
                           </span>
+                          {/* BACKLOG-2816: a group-name row shows members, never
+                              body text — `snippet` is null on those rows by
+                              construction (the query does not project a body). */}
+                          {textMemberLine(t) && (
+                            <span
+                              className="block text-xs text-gray-400 truncate"
+                              data-testid="text-result-members"
+                            >
+                              {textMemberLine(t)}
+                            </span>
+                          )}
                           {t.snippet && (
                             <span className="block text-xs text-gray-400 truncate">
                               {highlightMatch(t.snippet, term)}
@@ -410,24 +580,22 @@ export function LinkedContentSearch({
                       </li>
                     ))}
                   </ul>
-                  {results.texts.total > results.texts.items.length && (
-                    <p className="text-xs text-gray-400 px-3 py-1.5 bg-gray-50 border-t border-gray-100">
-                      +{results.texts.total - results.texts.items.length} more
-                    </p>
-                  )}
+                  <SectionFooter
+                    shown={visibleRows(results.texts.items, isExpanded("texts")).length}
+                    fetched={results.texts.items.length}
+                    hasMore={results.texts.hasMore}
+                    onShowMore={() => { expand("texts"); }}
+                    testId="show-more-texts"
+                  />
                 </div>
               )}
 
               {/* Unattached bucket (global only) — inert rows (P1: no standalone viewer). */}
-              {results.unattached && results.unattached.total > 0 && (
+              {results.unattached && results.unattached.items.length > 0 && (
                 <div data-testid="linked-group-unattached">
-                  <GroupHeader
-                    label="Unattached"
-                    total={results.unattached.total}
-                    badgeClass="bg-gray-200 text-gray-600"
-                  />
+                  <GroupHeader label="Unattached" />
                   <ul>
-                    {results.unattached.items.map((u) => (
+                    {visibleRows(results.unattached.items, isExpanded("unattached")).map((u) => (
                       <li
                         key={`${u.kind}-${u.id}`}
                         className="px-3 py-2 flex items-center gap-2"
@@ -457,11 +625,13 @@ export function LinkedContentSearch({
                       </li>
                     ))}
                   </ul>
-                  {results.unattached.total > results.unattached.items.length && (
-                    <p className="text-xs text-gray-400 px-3 py-1.5 bg-gray-50 border-t border-gray-100">
-                      +{results.unattached.total - results.unattached.items.length} more
-                    </p>
-                  )}
+                  <SectionFooter
+                    shown={visibleRows(results.unattached.items, isExpanded("unattached")).length}
+                    fetched={results.unattached.items.length}
+                    hasMore={results.unattached.hasMore}
+                    onShowMore={() => { expand("unattached"); }}
+                    testId="show-more-unattached"
+                  />
                 </div>
               )}
             </div>

@@ -12,6 +12,7 @@ import { escapeHtml, formatDate, formatLocalDate } from "../../utils/exportUtils
 import { labelForTransactionContact } from "../../utils/contactDisplayLabel";
 import { formatPhoneNumber } from "../../utils/phoneNormalization";
 import { countTextThreads, generateTextIndex, getMessageTypeCounts } from "./textExportHelpers";
+import type { MatchedNamesLookup } from "./textExportHelpers";
 import { groupEmailsForIndex, type EmailIndexThread } from "./emailIndexHelpers";
 import { extractParticipantHandles } from "../contactResolutionService";
 import { getContactNamesByHandles } from "../../utils/exportUtils";
@@ -32,7 +33,10 @@ export function generateSummaryHTML(
   transaction: TransactionWithDetails,
   communications: Communication[],
   phoneNameMap?: Record<string, string>,
-  emailExportMode: "thread" | "individual" = "thread"
+  emailExportMode: "thread" | "individual" = "thread",
+  // BACKLOG-2757: lets the text index reach the same naming decision the
+  // per-thread PDFs and the filenames reach. Absent -> pre-2757 behaviour.
+  matchedNames?: MatchedNamesLookup
 ): string {
   const emails = communications.filter((c) => isEmailMessage(c));
   const texts = communications.filter((c) => isTextMessage(c));
@@ -241,7 +245,7 @@ export function generateSummaryHTML(
     </div>
   </div>
 
-  ${generateContactsSection(transaction.contact_assignments)}
+  ${generateContactsSection(transaction.contact_assignments, transaction.transaction_type)}
 
   ${(messageTypeCounts.voiceMessages > 0 || messageTypeCounts.locationMessages > 0 || messageTypeCounts.attachmentOnlyMessages > 0) ? `
   <div class="section">
@@ -283,7 +287,7 @@ export function generateSummaryHTML(
   <div class="section">
     <h3>Text Threads Index (${countTextThreads(texts)})</h3>
     <div class="email-list">
-      ${generateTextIndex(texts, phoneNameMap, getContactNamesByHandles, extractParticipantHandles)}
+      ${generateTextIndex(texts, phoneNameMap, getContactNamesByHandles, extractParticipantHandles, matchedNames)}
     </div>
     <div class="note">
       Full text conversations are available in the /texts folder as individual PDF files.
@@ -354,7 +358,70 @@ function renderThreadEmailIndex(threads: EmailIndexThread[]): string {
 /**
  * Generate the Contacts section HTML for the summary report.
  */
-function generateContactsSection(contacts?: TransactionContactResult[]): string {
+/**
+ * The words an exported role reads as — the MIRROR of the renderer's
+ * `getRoleDisplayName` (BACKLOG-2859).
+ *
+ * WHY THIS IS DUPLICATED RATHER THAN IMPORTED. `electron/` cannot import from
+ * `src/` (rootDir), so the renderer's ROLE_DISPLAY_NAMES is out of reach, and
+ * this is the second and only other place the role enum becomes words. The
+ * canonical map is `src/constants/contactRoles.ts` + `getRoleDisplayName`; keep
+ * the two in step or the app on screen and the compliance summary the user
+ * actually files name the same person on the same deal two different things —
+ * which is the exact defect BACKLOG-2850 had to fix for the type label.
+ *
+ * `agent` IS TYPE-DEPENDENT, which is the change here. One stored value now
+ * covers the other side's agent on both deal types, so the side comes from the
+ * transaction:
+ *   purchase (a Listing — the user holds the listing) -> "Buyer's Agent"
+ *   sale     (the user represents the buyer)          -> "Listing Agent"
+ *
+ * That keeps the founder's support-ticket-111 ruling (BACKLOG-2804) in force:
+ * the agent representing the seller still files as "Listing Agent".
+ *
+ * The retired values are still handled. An export can run against rows an older
+ * install wrote, and a compliance document is the worst place to print
+ * "Seller Agent" or a raw enum.
+ */
+export function humanizeExportRole(
+  rawRole: string,
+  transactionType?: string | null,
+): string {
+  const normalized = rawRole.toLowerCase();
+
+  if (normalized === "agent") {
+    if (transactionType === "purchase") return "Buyer's Agent";
+    if (transactionType === "sale") return "Listing Agent";
+    // `other` (or an absent type) names no side — stay truthful rather than
+    // guessing one.
+    return "Agent";
+  }
+
+  if (normalized === "client") {
+    if (transactionType === "purchase") return "Seller (Client)";
+    if (transactionType === "sale") return "Buyer (Client)";
+    return "Client (Buyer/Seller)";
+  }
+
+  if (normalized === "co_agent") return "Co-Agent";
+
+  // Retired values (BACKLOG-2859): still rendered, never offered.
+  if (normalized === "seller_agent" || normalized === "listing_agent") {
+    return "Listing Agent";
+  }
+  if (normalized === "buyer_agent") return "Buyer's Agent";
+
+  // Generic: "REAL_ESTATE_ATTORNEY" -> "Real Estate Attorney"
+  return rawRole
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function generateContactsSection(
+  contacts?: TransactionContactResult[],
+  transactionType?: string | null,
+): string {
   if (!contacts || contacts.length === 0) {
     return `
   <div class="section">
@@ -372,26 +439,11 @@ function generateContactsSection(contacts?: TransactionContactResult[]): string 
       // default in the one document meant to prove the audit is complete.
       const name = escapeHtml(labelForTransactionContact(c));
       const rawRole = c.specific_role || c.role || "";
-      // BACKLOG-2804 (support ticket 111): the seller's agent is filed under the
-      // industry term, "Listing Agent". The generic humanizer below would print
-      // "Seller Agent" — so the app on screen and the compliance summary the
-      // user actually files would name the same person on the same deal two
-      // different things.
-      //
-      // Spelled out here rather than imported: `electron/` cannot import from
-      // `src/` (rootDir), so the renderer's ROLE_DISPLAY_NAMES is out of reach
-      // and this is the second and only other place the enum becomes words. The
-      // canonical map is src/constants/contactRoles.ts; keep the two in step.
+      // The role becomes words here; see humanizeExportRole below for why this
+      // logic is spelled out in electron/ rather than imported from src/.
       //
       // Case-insensitive because rows reach this helper both ways.
-      const SELLER_SIDE_AGENT_ROLES = new Set(["seller_agent", "listing_agent"]);
-      const role = SELLER_SIDE_AGENT_ROLES.has(rawRole.toLowerCase())
-        ? "Listing Agent"
-        : // Format role: "REAL_ESTATE_ATTORNEY" -> "Real Estate Attorney"
-          rawRole
-            .split("_")
-            .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-            .join(" ");
+      const role = humanizeExportRole(rawRole, transactionType);
       const roleHtml = role ? `<span class="contact-role">${escapeHtml(role)}</span>` : "";
 
       // BACKLOG-2461: when the label above fell back to the phone or the email,
