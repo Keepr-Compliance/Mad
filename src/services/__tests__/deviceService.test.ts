@@ -188,7 +188,6 @@ const mockDevice: Device = {
 const mockBackupCapabilities: BackupCapabilities = {
   supportsDomainFiltering: true,
   supportsIncremental: true,
-  supportsSkipApps: true,
   supportsEncryption: true,
   availableDomains: ["HomeDomain", "CameraRollDomain", "MediaDomain"],
 };
@@ -606,7 +605,6 @@ describe("deviceService", () => {
           udid: "device-udid-123",
           outputDir: "/custom/path",
           forceFullBackup: true,
-          skipApps: true,
         };
         mockBackupStart.mockResolvedValue({
           success: true,

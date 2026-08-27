@@ -637,7 +637,6 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           udid: options.udid,
           password: options.password,
           forceFullBackup: options.forceFullBackup,
-          skipApps: true, // Always skip apps to reduce backup size
         });
       } finally {
         this.stopDiskSpaceMonitor();

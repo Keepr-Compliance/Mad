@@ -129,7 +129,6 @@ export const backupBridge = {
     udid: string;
     outputDir?: string;
     forceFullBackup?: boolean;
-    skipApps?: boolean;
   }) => ipcRenderer.invoke("backup:start", options),
 
   /**

@@ -62,7 +62,6 @@ export function registerBackupHandlers(mainWindow: BrowserWindow): void {
       return {
         supportsDomainFiltering: false,
         supportsIncremental: true,
-        supportsSkipApps: true,
         supportsEncryption: true,
         availableDomains: [],
       };

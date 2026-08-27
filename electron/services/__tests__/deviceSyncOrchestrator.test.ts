@@ -80,7 +80,7 @@ class MockBackupService extends EventEmitter {
     };
   }
 
-  async startBackup(_options: { udid: string; password?: string; forceFullBackup?: boolean; skipApps?: boolean }) {
+  async startBackup(_options: { udid: string; password?: string; forceFullBackup?: boolean }) {
     // Emit progress events
     this.emit("progress", {
       phase: "preparing",
