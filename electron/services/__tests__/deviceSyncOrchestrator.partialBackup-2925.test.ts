@@ -297,6 +297,46 @@ describe("BACKLOG-2925: the instrument must not report reuse where reuse is impo
   });
 });
 
+/**
+ * The founder's LIVE production directory: `Info.plist` only, 6,343,173 bytes, no
+ * Status.plist and no Manifest.db. This is the BACKLOG-2926 "unusable" state, and it
+ * is ALSO a 2925 case — `isComplete` is false, so it is not a usable prior backup.
+ */
+const FOUNDERS_LIVE_UNUSABLE = {
+  state: "present" as const,
+  isComplete: false,
+  isInterrupted: false,
+  snapshotState: "absent" as const,
+  size: { measured: true as const, bytes: 6_343_173 },
+  lastModified: new Date("2026-07-28T21:42:28Z"),
+};
+
+describe("BACKLOG-2925 + 2926: one run must not contradict itself", () => {
+  it("does not tell the user the backup is unusable while sizing the guard as if it were", async () => {
+    // THIS IS WHY COMMIT 3 IS REQUIRED FOR COMMIT 2 TO BE SHIPPABLE.
+    //
+    // With 2926 alone, this single run told the user "Previous backup can't be used"
+    // and simultaneously recorded `reusedPreviousBackup=true`, `source=existing-backup`
+    // and applied the TIGHT 1.1x headroom to a 6.3 MB partial — a requirement of
+    // 6.6 MB for a backup that measured 58.8 GB on this founder's real hardware.
+    // Shipping 2926 without 2925 would have made that contradiction visible to him
+    // inside one sync.
+    const { messages, lines } = await runSync(FOUNDERS_LIVE_UNUSABLE);
+
+    // What he is told.
+    expect(messages.some((m) => /can't be used/i.test(m))).toBe(true);
+
+    // What the same run does, which must agree with what it says.
+    const mark = estimateMark(lines);
+    expect(mark).toContain("reusedPreviousBackup=false");
+    expect(mark).not.toContain("source=existing-backup");
+    expect(mark).toContain("ignoredPartialBytes=6343173");
+
+    // 50 GB device-storage estimate x 1.5, NOT 6.3 MB x 1.1.
+    expect(recommendedGB(lines)).toBe("75.0");
+  });
+});
+
 describe("BACKLOG-2925: the normal path must not be penalised", () => {
   it("CONTROL 3 — a genuinely complete prior backup still takes the tight 1.1x headroom", async () => {
     const { lines } = await runSync(COMPLETE_PRIOR);
