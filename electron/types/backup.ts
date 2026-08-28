@@ -91,7 +91,62 @@ export interface BackupResult {
   isEncrypted?: boolean;
   /** Error code for specific error handling (TASK-007) */
   errorCode?: BackupErrorCode;
+  /**
+   * BACKLOG-2913: what the DEVICE said went wrong, kept as data.
+   *
+   * Present only on failures. `error` above is a sentence written for the user and
+   * is not safe to parse; this is the machine-readable original it was derived from.
+   * BACKLOG-2950 will carry these fields to Sentry as tags and into the support
+   * portal's diagnostics block, which is why the code and the device's own
+   * description are kept apart rather than pre-joined into a string.
+   */
+  failureCause?: BackupFailureCause;
 }
+
+/**
+ * BACKLOG-2913: the device's own account of a failed backup.
+ *
+ * idevicebackup2 reports failures twice — as a human line on stdout
+ * (`ErrorCode 208: Device locked (MBErrorDomain/208)`) and as a
+ * `DLMessageProcessMessage` plist on stderr. Both were logged and discarded; every
+ * failure was then re-derived by substring-matching the `-d` debug stream, which is
+ * full of `afc_lock(): Locked` mutex traces, so every failure reported "iPhone is
+ * locked". This type is that answer, kept instead of thrown away.
+ */
+export interface BackupFailureCause {
+  /**
+   * The MBErrorDomain code the device reported (105 = host disk full,
+   * 208 = device locked), or `null` when neither stream carried one. `null` means
+   * "not reported", never "no error" — the caller must not treat it as a code.
+   */
+  deviceErrorCode: number | null;
+  /**
+   * The device's own `ErrorDescription`, verbatim, or `null` when absent.
+   *
+   * Note this string names no drive: the device says "Insufficient free disk space
+   * on drive to back up" for a full HOST disk, which is why it must never be shown
+   * to the user unqualified. The founder read it, checked his iPhone's storage
+   * screen, saw 80 GB free and concluded Keepr was broken.
+   */
+  deviceErrorDescription: string | null;
+  /** The process exit code, exactly as the OS reported it. `null` if killed by signal. */
+  exitCode: number | null;
+  /** Which stream the code came from, so a support log can say how much to trust it. */
+  source: BackupFailureCauseSource;
+}
+
+/**
+ * Where a {@link BackupFailureCause} code was read from.
+ *
+ * - `stdout-line` — idevicebackup2's own summary line. Always emitted, and stdout is
+ *   low-volume enough to survive the 64KB tail cap. Preferred.
+ * - `stderr-plist` — the `DLMessageProcessMessage` plist in the `-d` debug stream.
+ *   Only present when `-d` is passed, and can be pushed out of the tail cap by the
+ *   debug flood, so it is the fallback rather than the primary.
+ * - `none` — no code was reported; the failure was classified from exit code and
+ *   idevicebackup2's own stdout, or not at all.
+ */
+export type BackupFailureCauseSource = "stdout-line" | "stderr-plist" | "none";
 
 /**
  * BACKLOG-2917: the result of measuring a backup directory.
@@ -249,6 +304,14 @@ export type BackupErrorCode =
   | "BACKUP_TIMEOUT"
   | "INSUFFICIENT_SPACE"
   | "DECRYPTION_FAILED"
+  // BACKLOG-2913: three causes the founder hit in one evening that had no code of
+  // their own, so all three arrived as "iPhone is locked".
+  /** The USB link dropped mid-backup (`usbmuxd_send returned -32 (Broken pipe)`). */
+  | "CONNECTION_LOST"
+  /** The device's mobilebackup2 service would not negotiate (`version exchange failed`). */
+  | "SERVICE_UNAVAILABLE"
+  /** The device could not find a file the backup needed (MBErrorDomain/4). */
+  | "BACKUP_FILE_MISSING"
   | "UNKNOWN_ERROR";
 
 /**
