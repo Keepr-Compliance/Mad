@@ -100,6 +100,32 @@
  * actually an objection to. A human answering that question links through
  * `contactLinkReview.confirmProposal`, which is manual and therefore ungated —
  * which is the whole shape of the rule.
+ *
+ * ===========================================================================
+ * AND ON THE BASIC TIER IT DOES NOT RUN AT ALL — BACKLOG-2668
+ * ===========================================================================
+ * Everything above argues that this rule is a SAFE guess. The founder's answer,
+ * on 11 Aug, was that safe or not it is still a guess, and the basic tier does
+ * not make them:
+ *
+ *   "`runUniqueNameAutoLink` does not run on the basic tier. The basic tier
+ *    decides nothing about whether two records are the same person, and a
+ *    frequency-gated unique-name match is still a guess."
+ *
+ * He chose that over the two alternatives on the item — keeping it on basic and
+ * amending the tier description, and demoting it to a proposal on basic — and
+ * recorded what it costs: records sharing no email and no phone, whose only
+ * evidence is a unique name, stay "unlinked and UNPROPOSED" on basic.
+ *
+ * On the AI tier a settings toggle then chooses between suggesting and linking
+ * (13 Aug, BACKLOG-2616). The three states live in `contactAutoLinkPolicy.ts`,
+ * which is the only place that decides which one applies; this file consults it
+ * once, in `runUniqueNameAutoLink`, and every branch below reads `mode`.
+ *
+ * NOTHING PRE-EXISTING IS UNWOUND. Links this rule already created keep their
+ * `unique_name` match method and are left exactly where they are — the gate is
+ * forward-only, and silently un-linking contacts the user has been looking at
+ * was explicitly not chosen.
  */
 
 import { dbAll } from "./db/core/dbConnection";
@@ -115,6 +141,14 @@ import { hasCannotLink, type LinkProposalReason } from "./db/contactLinkReviewDb
 import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
 import { sourceFamily } from "./contactLinkEvidence";
 import { applyLinkedSourceValues } from "./contactSourceValues";
+// BACKLOG-2668 — the tier gate. A leaf, like `frozenContactDbService`: it
+// imports `dbGet` and the log service and nothing from the linking services, so
+// consulting it here cannot re-form the `contactSourceLinker` ->
+// `contactSourceValues` cycle.
+import {
+  resolveContactAutoLinkMode,
+  type ContactAutoLinkMode,
+} from "./contactAutoLinkPolicy";
 import logService from "./logService";
 
 // ---------------------------------------------------------------------------
@@ -389,8 +423,26 @@ export interface NameAutoLinkSummary {
    * user never having been asked. Each of these also produces a question, so
    * these rows appear in `asked`/`askPairs` too unless the per-pass cap was
    * already spent.
+   *
+   * BACKLOG-2668: this counts the freeze in `suggest` mode as well as in
+   * `auto`, and the wording above is exact rather than loose about it — the row
+   * says "the freeze would have refused this pair a link", which stays true
+   * when the mode was never going to attempt one. The alternative, suppressing
+   * it in `suggest`, would erase 2666's distinct question from the only mode
+   * production can currently reach.
    */
   barredByFreeze: number;
+  /**
+   * Auto-link candidates turned into questions because automatic linking is not
+   * turned on for this user (BACKLOG-2668, `suggest` mode).
+   *
+   * Counted separately from `asked` for the same reason `barredByFreeze` is:
+   * these are the pairs the rule was SURE about. A support screen that could
+   * not separate "the rule could not tell" from "the rule was not allowed to
+   * act" would report a confident match as an ambiguous one. Always 0 in `auto`
+   * mode, and always 0 in `off` mode because the pass does not run.
+   */
+  withheldByMode: number;
   /** Exact actions taken, for assertions. */
   actions: AutoLinkAction[];
   /** Exact pairs handed to the queue, for assertions. */
@@ -420,6 +472,39 @@ export function runUniqueNameAutoLink(
   userId: string,
   onAsk?: (pair: AskPair, ctx: { reason: LinkProposalReason; holderCount: number; displayName: string }) => void,
 ): NameAutoLinkSummary {
+  return runUniqueNameAutoLinkForMode(resolveContactAutoLinkMode(userId), userId, onAsk);
+}
+
+/**
+ * The pass, with the mode already decided — BACKLOG-2668.
+ *
+ * ===========================================================================
+ * `off` RETURNS BEFORE READING THE DATABASE, NOT AFTER
+ * ===========================================================================
+ * `collectNameGroups` is not called. That is not an optimisation: the founder's
+ * ruling is that the basic tier "decides nothing about whether two records are
+ * the same person", and a pass that gathered the groups, evaluated them and
+ * then discarded the verdicts would have made every one of those decisions —
+ * it would simply have kept them to itself. The summary it returns is the
+ * summary of a pass that did not happen, and `groups: 0` says so honestly.
+ *
+ * ===========================================================================
+ * WHY THE MODE IS A PARAMETER HERE AND RESOLVED IN THE WRAPPER
+ * ===========================================================================
+ * Callers get `runUniqueNameAutoLink`, which resolves the mode itself, so no
+ * call site can forget the gate or pass the wrong value — the single-predicate
+ * shape of BACKLOG-2562, rather than a check bolted onto each caller.
+ *
+ * This function is exported anyway, for the suites: proving the tier/toggle
+ * matrix through the wrapper alone would mean building a user row for every
+ * cell of a matrix that is not about user rows. The tier tests drive the
+ * wrapper with real `users` rows; the mode tests drive this directly.
+ */
+export function runUniqueNameAutoLinkForMode(
+  mode: ContactAutoLinkMode,
+  userId: string,
+  onAsk?: (pair: AskPair, ctx: { reason: LinkProposalReason; holderCount: number; displayName: string }) => void,
+): NameAutoLinkSummary {
   const summary: NameAutoLinkSummary = {
     groups: 0,
     autoLinked: 0,
@@ -429,9 +514,14 @@ export function runUniqueNameAutoLink(
     askOverflow: 0,
     barredByVerdict: 0,
     barredByFreeze: 0,
+    withheldByMode: 0,
     actions: [],
     askPairs: [],
   };
+
+  if (mode === "off") {
+    return summary;
+  }
 
   /**
    * File one question, honouring the per-pass cap.
@@ -484,6 +574,31 @@ export function runUniqueNameAutoLink(
             { contactId, sourceType, sourceRecordId },
             {
               reason: "frozen_audit_contact",
+              holderCount: decision.holderCount,
+              displayName: group.displayName,
+            },
+          );
+          break;
+        }
+        // BACKLOG-2668 — the tier gate, at the one place the link is written.
+        //
+        // AFTER the verdict check and AFTER the freeze check, and the ordering
+        // is load-bearing in both directions:
+        //   - a pair the user has already called different people must not come
+        //     back as a question just because the mode changed;
+        //   - a frozen contact keeps 2666's own reason, `frozen_audit_contact`,
+        //     rather than this one. `suggest` is the only mode production can
+        //     reach today, so putting this branch first would delete 2666's
+        //     distinct question from the shipping tree entirely.
+        //
+        // What is left here is the pair the rule was sure about, on a contact
+        // nothing else objects to — the pair the toggle is actually about.
+        if (mode === "suggest") {
+          summary.withheldByMode++;
+          emitAsk(
+            { contactId, sourceType, sourceRecordId },
+            {
+              reason: "name_unique_suggestion",
               holderCount: decision.holderCount,
               displayName: group.displayName,
             },
