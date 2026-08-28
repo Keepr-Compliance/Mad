@@ -35,12 +35,13 @@ import {
 } from "./diagnostics/diskSpaceDiagnostics";
 import {
   formatDiskSpaceError,
+  formatUnknownBackupSizeError,
   formatMissingDriversError,
   formatDriverServiceStoppedError,
 } from "./diagnostics/userFacingErrors";
 import { checkAppleDrivers } from "./appleDriverService";
 import { canUseLibimobiledevice } from "./libimobiledeviceService";
-import type { iOSDevice } from "../types/device";
+import type { iOSDevice, DeviceStorageInfo } from "../types/device";
 import type { iOSMessage, iOSConversation } from "../types/iosMessages";
 import type { iOSContact } from "../types/iosContacts";
 import type {
@@ -90,7 +91,17 @@ type EstimateSource =
   | "existing-backup"
   | "device-storage"
   | "unknown"
-  | "device-storage-unavailable";
+  | "device-storage-unavailable"
+  /**
+   * BACKLOG-2925 (second pass): the device storage query ANSWERED and what it
+   * answered cannot size anything — the founder's 2026-08-27 run returned
+   * `{totalCapacity:0, availableSpace:0, usedSpace:0, estimatedBackupSize:0}`.
+   * Distinct from `device-storage-unavailable` (the query returned nothing at all)
+   * for the same reason that one exists: two different facts, and BACKLOG-2894 has
+   * to be able to tell them apart when it asks how often the guard cannot size
+   * itself.
+   */
+  | "device-storage-unusable";
 
 /**
  * What the `backup-estimate` mark records for the snapshot dimension.
@@ -152,6 +163,88 @@ function snapshotStateForMark(status: BackupStatusReport): MarkSnapshotState {
  */
 function isUsablePriorBackup(status: BackupStatusReport): boolean {
   return status.state === "present" && status.isComplete && !status.isInterrupted;
+}
+
+/**
+ * BACKLOG-2925 (second pass): HOW MANY BYTES THE BACKUP IS EXPECTED TO NEED — as a
+ * three-state reading, because on 2026-08-27 the answer was "we could not find out"
+ * and the code had no way to say that.
+ *
+ * THE DEFECT, IN ONE LINE: `this.estimatedBackupSize = storageInfo.estimatedBackupSize`
+ * accepted `0`, and `0 x 1.5 = 0`, so `checkAvailableDiskSpace(0)` returned
+ * `hasEnoughSpace: true` and the app logged "Disk space check passed: 15 GB
+ * available" for a backup that had measured 58.8 GB. The guard did not fail — it
+ * reported success, which is worse, because a failure is visible.
+ *
+ * THIS IS THE THIRD FORM OF ONE DEFECT and the shape of the type is the response to
+ * that. BACKLOG-2899: the guard warned and proceeded. BACKLOG-2925 (first pass): the
+ * guard sized itself from a partial, a lower bound by construction. Now: the guard
+ * sized itself from nothing. Each fix moved the failure one step upstream while
+ * leaving `number` as the currency, and `number` cannot represent "unknown" — so
+ * every upstream fix had to invent a stand-in, and every stand-in was spendable.
+ *
+ * `unknown` therefore carries NO `bytes` field. The disk guard cannot multiply what
+ * it was never given: `estimate.bytes` does not compile until the caller has
+ * narrowed the union, and there is nothing to reach for when it has not.
+ */
+type BackupSizeEstimate =
+  | { kind: "known"; bytes: number; source: EstimateSource }
+  | { kind: "unknown"; source: EstimateSource; reason: string };
+
+/**
+ * The single place a byte count becomes an estimate, and the single place it can be
+ * refused. Pure and total: every input state names its own outcome.
+ *
+ * Note the ORDER. A measured prior backup is consulted BEFORE device storage, so a
+ * failed storage query no longer discards a size we already had — before this, the
+ * whole estimate lived inside `if (storageInfo)`, and a device that would not report
+ * its capacity threw away a measured 58.8 GB prior backup along with it.
+ */
+function resolveBackupSizeEstimate(
+  priorBackup: PriorBackupBasis,
+  storageInfo: DeviceStorageInfo | null,
+): BackupSizeEstimate {
+  if (priorBackup.kind === "measured") {
+    // A measured prior backup of zero bytes is not a backup; it is a walk that
+    // returned nothing. Same rule as everything else here: not a size.
+    return priorBackup.bytes > 0
+      ? { kind: "known", bytes: priorBackup.bytes, source: "existing-backup" }
+      : {
+          kind: "unknown",
+          source: "existing-backup",
+          reason: "prior-backup-measured-zero-bytes",
+        };
+  }
+
+  if (storageInfo === null) {
+    // Previously this branch checked a flat 10 GB floor and proceeded regardless of
+    // the outcome. It is the same epistemic state as the zeros below — the size is
+    // not known — so it now reaches the same refusal rather than a sibling hole.
+    return {
+      kind: "unknown",
+      source: "device-storage-unavailable",
+      reason: "device-storage-query-returned-nothing",
+    };
+  }
+
+  if (!(storageInfo.estimatedBackupSize > 0)) {
+    // The founder's case. `!(x > 0)` rather than `x <= 0` so a NaN arriving from any
+    // producer lands here too, instead of sliding through a comparison that is false
+    // in both directions.
+    return {
+      kind: "unknown",
+      source: "device-storage-unusable",
+      reason: `device-storage-reported-no-usable-size (used=${storageInfo.usedSpace} total=${storageInfo.totalCapacity})`,
+    };
+  }
+
+  return {
+    kind: "known",
+    bytes: storageInfo.estimatedBackupSize,
+    // Unchanged for every known case: a partial and a proven-absent backup both
+    // estimate from device storage, and an unknown BASIS is still its own label.
+    source: estimateSourceFor(priorBackup),
+  };
 }
 
 function estimateSourceFor(basis: PriorBackupBasis): EstimateSource {
@@ -910,118 +1003,155 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // Step 1: Get device storage info to estimate backup size
       const storageInfo = await this.deviceService.getDeviceStorageInfo(options.udid);
-      if (storageInfo) {
-        // BACKLOG-2917: the estimate now branches on the NAMED basis, not on
-        // `existingBackupSize > 0`. The old predicate could not tell a measured
-        // prior backup from an unknown one, so uncertainty took the first-sync path
-        // and was recorded as a fact.
-        if (priorBackup.kind === "measured") {
-          this.estimatedBackupSize = priorBackup.bytes;
-          log.info(`[DeviceSyncOrchestrator] Using existing backup size for estimate: ${Math.round(this.estimatedBackupSize / 1024 / 1024 / 1024)} GB`);
-        } else {
-          this.estimatedBackupSize = storageInfo.estimatedBackupSize;
-          log.info(`[DeviceSyncOrchestrator] Estimated backup size from storage: ${Math.round(this.estimatedBackupSize / 1024 / 1024)} MB (used space: ${Math.round(storageInfo.usedSpace / 1024 / 1024 / 1024)} GB)`);
-        }
 
-        // BACKLOG-2898/2896: the estimate BRANCH, on one greppable line. Which
-        // branch ran is what says whether a previous backup was reused — the
-        // question 2896 could not answer because both `log.info` lines above
-        // had rotated out of main.log AND main.old.log before anyone looked.
+      // BACKLOG-2925 (second pass): ONE resolution, ONE mark, ONE decision. This used
+      // to be `if (storageInfo) { ...estimate, mark, guard... } else { ...different
+      // mark, a flat 10 GB floor, proceed anyway... }` — two branches, two ideas of
+      // what an unreadable device means, and neither able to refuse. The estimate is
+      // now resolved first and the branch below is on WHETHER IT IS KNOWN, not on
+      // which query happened to answer.
+      const estimate = resolveBackupSizeEstimate(priorBackup, storageInfo);
+
+      // BACKLOG-2898/2896: the estimate BRANCH, on one greppable line. Which
+      // branch ran is what says whether a previous backup was reused — the
+      // question 2896 could not answer because both `log.info` lines below
+      // had rotated out of main.log AND main.old.log before anyone looked.
+      //
+      // BACKLOG-2917: `source` has FIVE values because the underlying question has
+      // five answers. The instrument built to settle "did incremental run?"
+      // previously printed the reassuring answer in the one case where the true
+      // answer would be alarming.
+      //
+      // BACKLOG-2925 (second pass): emitted BEFORE the refusal below, deliberately. A
+      // refusal that emits no mark is the 2917 invisible-branch defect reborn — the
+      // runs that most need counting would be the ones missing from the aggregate,
+      // and their absence would read as "this never happens".
+      syncTimeline.mark("backup-estimate", {
+        source: estimate.source,
+        // `bytes` is present only when there ARE bytes. Recording `bytes=0` for an
+        // unknown estimate is the exact lie BACKLOG-2917 removed from `annotate`.
+        ...(estimate.kind === "known"
+          ? { bytes: estimate.bytes }
+          : { estimateUnknownReason: estimate.reason, priorBackup: priorBackup.kind }),
+        reusedPreviousBackup: estimate.kind === "known" && priorBackup.kind === "measured",
+        snapshotState: snapshotStateForMark(backupStatus),
+        // BACKLOG-2925: recorded, never used. The partial's size is real and worth
+        // knowing when reading a timeline; it is not a number anything may size a
+        // disk guard against.
+        ...(priorBackup.kind === "partial" ? { ignoredPartialBytes: priorBackup.bytes } : {}),
+        ...(priorBackup.kind === "unknown" ? { priorBackupUnknownReason: priorBackup.reason } : {}),
+      });
+
+      if (estimate.kind === "unknown") {
+        // BACKLOG-2925 (second pass): REFUSE. The founder's run is the argument —
+        // "Disk space check passed: 15 GB available" was printed for a backup that
+        // had measured 58.8 GB, because the estimate was 0 and 0 clears every bar.
         //
-        // BACKLOG-2917: `source` has THREE values because the underlying question
-        // has three answers. The instrument built to settle "did incremental run?"
-        // previously printed the reassuring answer in the one case where the true
-        // answer would be alarming.
-        syncTimeline.mark("backup-estimate", {
-          source: estimateSourceFor(priorBackup),
-          bytes: this.estimatedBackupSize,
-          reusedPreviousBackup: priorBackup.kind === "measured",
-          snapshotState: snapshotStateForMark(backupStatus),
-          // BACKLOG-2925: recorded, never used. The partial's size is real and worth
-          // knowing when reading a timeline; it is not a number anything may size a
-          // disk guard against.
-          ...(priorBackup.kind === "partial" ? { ignoredPartialBytes: priorBackup.bytes } : {}),
-          ...(priorBackup.kind === "unknown" ? { priorBackupUnknownReason: priorBackup.reason } : {}),
-        });
-
-        this.emitProgress({
-          phase: "backup",
-          phaseProgress: 0,
-          overallProgress: 0,
-          message: "Checking available disk space...",
-          estimatedTotalBytes: this.estimatedBackupSize,
-        });
-
-        // Check if computer has enough disk space
-        // For existing backups (accurate size), use 1.1x since the old backup is already on disk
-        // For estimates (first-time), use 1.5x to account for estimation variance
+        // WHY REFUSE RATHER THAN WARN. Warning and proceeding is precisely what
+        // BACKLOG-2899 did ("Proceeding anyway"), and it has now failed the founder
+        // three times in three different costumes. The cost of a wrong refusal is one
+        // sync the user retries; the cost of a wrong pass is a 20-25 minute transfer
+        // that fills the boot volume the app's own database lives on, and then aborts.
+        // For an audit product those are not symmetric.
         //
-        // BACKLOG-2917: an UNKNOWN basis takes the 1.5x branch, not the 1.1x one.
-        // 1.1x is justified by "the number is a prior backup's measured size on
-        // disk"; when that has not been established, the justification is absent and
-        // the estimate is the device-storage figure that 1.5x was sized for. The
-        // multiplier matches the first-sync case, but the BRANCH is distinct and the
-        // mark above records which one ran — uncertainty is never recorded as a
-        // first sync.
-        const headroom = priorBackup.kind === "measured" ? 1.1 : 1.5;
-        const requiredSpace = this.estimatedBackupSize * headroom;
-        const diskSpaceCheck = await this.checkAvailableDiskSpace(requiredSpace);
-
-        if (!diskSpaceCheck.hasEnoughSpace) {
-          const requiredGB = (requiredSpace / 1024 / 1024 / 1024).toFixed(1);
-          const availableGB = (diskSpaceCheck.availableSpace / 1024 / 1024 / 1024).toFixed(1);
-          log.warn(`[DeviceSyncOrchestrator] Low disk space warning: ~${requiredGB} GB recommended, ${availableGB} GB available. Proceeding anyway.`);
-          this.emitProgress({
-            phase: "backup",
-            phaseProgress: 0,
-            overallProgress: 0,
-            message: `Low disk space (${availableGB} GB free). Backup may fail — consider freeing up space.`,
-          });
-          // Brief pause so user can see the warning
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        } else {
-          log.info(`[DeviceSyncOrchestrator] Disk space check passed: ${Math.round(diskSpaceCheck.availableSpace / 1024 / 1024 / 1024)} GB available`);
-        }
-
-        this.emitProgress({
-          phase: "backup",
-          phaseProgress: 0,
-          overallProgress: 0,
-          message: "Estimating backup size...",
-          estimatedTotalBytes: this.estimatedBackupSize,
+        // The message names the remedy rather than a diagnosis, because the CAUSE of
+        // the zeros is not established (see the item). If the leading candidate is
+        // right — the device was locked when the query ran; it exited 0, answered
+        // nothing, and the backup asked for a passcode five seconds later — then
+        // unlocking and retrying clears it, and this refusal is self-curing rather
+        // than a wall.
+        const userError = formatUnknownBackupSizeError();
+        log.warn(
+          "[DeviceSyncOrchestrator] Sync refused: backup size could not be determined",
+          {
+            estimateSource: estimate.source,
+            reason: estimate.reason,
+            priorBackup: priorBackup.kind,
+            storageInfoPresent: storageInfo !== null,
+          },
+        );
+        Sentry.captureMessage("Sync refused: backup size unknown", {
+          level: "warning",
+          tags: {
+            service: "sync-orchestrator",
+            failure_reason: "backup_size_unknown",
+            estimate_source: estimate.source,
+          },
+          extra: {
+            reason: estimate.reason,
+            priorBackup: priorBackup.kind,
+            storageInfoPresent: storageInfo !== null,
+          },
         });
-      } else {
-        log.warn("[DeviceSyncOrchestrator] Could not get storage info, progress will be estimated");
-
-        // BACKLOG-2917: this branch emitted NO mark at all, so every sync that took
-        // it was invisible in the aggregate BACKLOG-2894 is being built on — an
-        // absence that reads as "this never happens" rather than "this was not
-        // recorded". `source` is its own value, not `"unknown"`: device storage being
-        // unreadable is a different fact from the prior-backup basis being unknown,
-        // and the prior-backup basis is carried alongside so the two stay separable.
-        syncTimeline.mark("backup-estimate", {
-          source: "device-storage-unavailable" satisfies EstimateSource,
-          priorBackup: priorBackup.kind,
-          reusedPreviousBackup: false,
-          snapshotState: snapshotStateForMark(backupStatus),
-        });
-
-        // Even without device storage info, check we have at least 10GB free
-        const minRequiredSpace = 10 * 1024 * 1024 * 1024; // 10 GB minimum
-        const diskSpaceCheck = await this.checkAvailableDiskSpace(minRequiredSpace);
-
-        if (!diskSpaceCheck.hasEnoughSpace) {
-          const availableGB = (diskSpaceCheck.availableSpace / 1024 / 1024 / 1024).toFixed(1);
-          log.warn(`[DeviceSyncOrchestrator] Very low disk space: ${availableGB} GB available (10 GB recommended). Proceeding anyway.`);
-          this.emitProgress({
-            phase: "backup",
-            phaseProgress: 0,
-            overallProgress: 0,
-            message: `Very low disk space (${availableGB} GB free). Backup may fail — consider freeing up space.`,
-          });
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
+        this.isRunning = false;
+        this.emit("error", { message: userError.description, userError });
+        return this.errorResult(userError.description);
       }
+
+      // From here the estimate is KNOWN. `estimate.bytes` did not exist a line ago.
+      this.estimatedBackupSize = estimate.bytes;
+      if (estimate.source === "existing-backup") {
+        log.info(`[DeviceSyncOrchestrator] Using existing backup size for estimate: ${Math.round(this.estimatedBackupSize / 1024 / 1024 / 1024)} GB`);
+      } else {
+        log.info(`[DeviceSyncOrchestrator] Estimated backup size from storage: ${Math.round(this.estimatedBackupSize / 1024 / 1024)} MB (used space: ${Math.round((storageInfo?.usedSpace ?? 0) / 1024 / 1024 / 1024)} GB)`);
+      }
+
+      this.emitProgress({
+        phase: "backup",
+        phaseProgress: 0,
+        overallProgress: 0,
+        message: "Checking available disk space...",
+        estimatedTotalBytes: this.estimatedBackupSize,
+      });
+
+      // Check if computer has enough disk space
+      // For existing backups (accurate size), use 1.1x since the old backup is already on disk
+      // For estimates (first-time), use 1.5x to account for estimation variance
+      //
+      // BACKLOG-2917: an UNKNOWN basis takes the 1.5x branch, not the 1.1x one.
+      // 1.1x is justified by "the number is a prior backup's measured size on
+      // disk"; when that has not been established, the justification is absent and
+      // the estimate is the device-storage figure that 1.5x was sized for. The
+      // multiplier matches the first-sync case, but the BRANCH is distinct and the
+      // mark above records which one ran — uncertainty is never recorded as a
+      // first sync.
+      const headroom = estimate.source === "existing-backup" ? 1.1 : 1.5;
+      const requiredSpace = this.estimatedBackupSize * headroom;
+      const diskSpaceCheck = await this.checkAvailableDiskSpace(requiredSpace);
+
+      if (!diskSpaceCheck.hasEnoughSpace) {
+        // THE RESIDUAL, NAMED. A KNOWN estimate that does not fit still only warns and
+        // proceeds. That is BACKLOG-2899's deliberate decision — the first-sync
+        // estimate is `0.25 x used space`, a figure BACKLOG-2896 has not validated and
+        // BACKLOG-2910 removed the stated basis for, so refusing on it would block
+        // real syncs on a number nobody can defend. Turning this into a refusal is
+        // BACKLOG-2918 and needs the founder's ruling, not an engineer's.
+        //
+        // BACKLOG-2925 changes NOTHING here on purpose: this branch is reached only
+        // when a size IS known, which is the case this item is not about. Pinned by
+        // test so the distinction cannot rot into "the guard refuses sometimes".
+        const requiredGB = (requiredSpace / 1024 / 1024 / 1024).toFixed(1);
+        const availableGB = (diskSpaceCheck.availableSpace / 1024 / 1024 / 1024).toFixed(1);
+        log.warn(`[DeviceSyncOrchestrator] Low disk space warning: ~${requiredGB} GB recommended, ${availableGB} GB available. Proceeding anyway.`);
+        this.emitProgress({
+          phase: "backup",
+          phaseProgress: 0,
+          overallProgress: 0,
+          message: `Low disk space (${availableGB} GB free). Backup may fail — consider freeing up space.`,
+        });
+        // Brief pause so user can see the warning
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      } else {
+        log.info(`[DeviceSyncOrchestrator] Disk space check passed: ${Math.round(diskSpaceCheck.availableSpace / 1024 / 1024 / 1024)} GB available`);
+      }
+
+      this.emitProgress({
+        phase: "backup",
+        phaseProgress: 0,
+        overallProgress: 0,
+        message: "Estimating backup size...",
+        estimatedTotalBytes: this.estimatedBackupSize,
+      });
 
       // Step 1: Create backup
       this.setPhase("backup");
