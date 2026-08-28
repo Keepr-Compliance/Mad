@@ -142,6 +142,29 @@ describe("BACKLOG-2914: tags are what make the row filterable", () => {
   });
 
   /**
+   * THE TEST THAT WAS MISSING, and the reason the tag was a silent no-op.
+   *
+   * SR review of PR #2423 found `buildOutcomeTags` looking up the snake_case key
+   * `reason_code` while EVERY field any producer puts on the timeline is camelCase.
+   * There are no producers of a reason code yet (BACKLOG-2909/2952 adds the first), so
+   * nothing was red — and nothing would have gone red later either, because a tag that
+   * was never populated continuing not to be populated fails no assertion. The bug
+   * would have surfaced as a permanently empty filter in Sentry, months from now.
+   *
+   * This is the assertion that can fail on it: a producer following the codebase's
+   * actual convention.
+   */
+  it("carries reason_code from a camelCase producer — the convention every other field uses", () => {
+    const row = realisticRow({ outcome: "error" });
+    row.fields.reasonCode = "device_disconnected";
+    expect(buildOutcomeTags(row).reason_code).toBe("device_disconnected");
+  });
+
+  it("still omits reason_code when no producer set one, under either spelling", () => {
+    expect(buildOutcomeTags(realisticRow())).not.toHaveProperty("reason_code");
+  });
+
+  /**
    * The same rule `setContext` enforces on the row: a dimension that was not
    * established is ABSENT, never the literal string "undefined".
    */

@@ -121,7 +121,10 @@ export function buildSyncOutcomeRow(
     extraction_ms: num(f, "extractionMs"),
 
     app_version: env.appVersion,
-    platform: env.platform ?? (str(f, "platform") as string | undefined),
+    // No `?? str(f, "platform")` fallback: `readEnv()` returns `process.platform` on
+    // BOTH its success and its catch path, so the right-hand side was unreachable.
+    // Removed after SR review rather than left as a fallback that never fires.
+    platform: env.platform,
     is_packaged: env.isPackaged,
   });
 }

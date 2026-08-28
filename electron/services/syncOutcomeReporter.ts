@@ -57,6 +57,11 @@ import type { TimelineMeta } from "./syncTimeline";
  *
  * `name` is in the list because the founder's device name is a personal nickname.
  * No legitimate field on the row today contains any of these substrings.
+ *
+ * MATCHED AS SUBSTRINGS, so a future legitimate `phaseName` or `backupPath` would also
+ * vanish from the payload — silently, with no signal. That direction is deliberate: it
+ * fails SAFE, dropping a harmless field rather than leaking an identifying one. Noted
+ * so the silence is expected rather than mysterious when someone hits it.
  */
 const PII_KEY_PATTERN = /udid|uuid|serial|imei|name|path|email|phone|address|token|secret/i;
 
@@ -130,10 +135,30 @@ export function buildOutcomeTags(row: SyncOutcomeRow): Record<string, string> {
   // Present only when the run established them — an absent dimension must stay
   // absent rather than become the string "undefined", the same rule `setContext`
   // enforces on the row itself.
-  for (const key of ["priorBackup", "backupModeSource", "reason_code", "incremental"] as const) {
+  for (const key of ["priorBackup", "backupModeSource", "incremental"] as const) {
     const v = tagValue(safe[key] as string | number | boolean | undefined);
     if (v !== undefined) tags[key] = v;
   }
+
+  // `reason_code` IS LOOKED UP UNDER BOTH SPELLINGS, ON PURPOSE.
+  //
+  // SR review of PR #2423 caught this as a latent no-op: the tag name the spec asks
+  // for is snake_case, but EVERY field a producer puts on the timeline is camelCase
+  // (`priorBackup`, `backupModeSource`, `deviceModel`, `messagesExtracted`, …). There
+  // are zero producers of a reason code today — BACKLOG-2909/2952 will add the first —
+  // and whoever adds it will follow the convention and call it `reasonCode`.
+  //
+  // A single snake_case lookup would then have stayed silently absent with NOTHING
+  // going red: no test fails when a tag that was never populated continues not to be
+  // populated. That is the same shape of failure as this whole item — data that looks
+  // present and is not — so it is closed here rather than left for the producer to
+  // trip over. The TAG name stays `reason_code` (the name the spec and any saved Sentry
+  // search will use); only the lookup is tolerant.
+  const reason = tagValue(
+    (safe.reasonCode ?? safe.reason_code) as string | number | boolean | undefined,
+  );
+  if (reason !== undefined) tags.reason_code = reason;
+
   return tags;
 }
 
@@ -145,6 +170,11 @@ export function buildOutcomeTags(row: SyncOutcomeRow): Record<string, string> {
  * in failures and a rise in usage are the same shape in the data.
  */
 export function reportOutcomeToSentry(row: SyncOutcomeRow): void {
+  // `buildOutcomeTags` scrubs its own input too, so the fields are scrubbed twice per
+  // event. That is deliberate rather than redundant: `buildOutcomeTags` is exported and
+  // called directly, so it has to be safe standing alone — a PII guard that only works
+  // when a caller remembers to pre-scrub is not a guard. The cost is one pass over a
+  // ~20-key object, once per sync.
   const tags = buildOutcomeTags(row);
   const extra: Record<string, unknown> = {
     ...scrubOutcomeFields(row.fields),
