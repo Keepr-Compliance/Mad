@@ -338,6 +338,27 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
       expect(after.cause.source).toBe("none");
     });
 
+    it("neither message trips the orchestrator's disk-space tag", () => {
+      // deviceSyncOrchestrator.ts:1213 is the ONLY place that matches backup error
+      // TEXT rather than an error code: it tags Sentry `failure_reason:
+      // "disk_space"` from this regex. Connection faults are not tagged by text at
+      // all there, so splitting this message could not lose a tag — but a later copy
+      // tweak could accidentally GAIN one, and mis-tag a cable pull as a full disk.
+      // Hardcoded, not imported: that file is out of scope, and this is what keeps
+      // the coupling honest — the same treatment the disk message already gets.
+      const orchestratorDiskPattern = /disk space|no space|ENOSPC|not enough space/i;
+      expect(orchestratorDiskPattern.test(BACKUP_CONNECTION_LOST_MESSAGE)).toBe(false);
+      expect(
+        orchestratorDiskPattern.test(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE),
+      ).toBe(false);
+
+      // Both variants keep the same opening sentence, so anything that ever keys on
+      // "the connection dropped" sees both.
+      expect(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE.split(". ")[0]).toBe(
+        BACKUP_CONNECTION_LOST_MESSAGE.split(". ")[0],
+      );
+    });
+
     it("defaults to the before-transfer message when the caller cannot say", () => {
       const unknown = classifyBackupFailure(
         255,
