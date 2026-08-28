@@ -215,12 +215,24 @@ export class SyncTimeline {
    */
   endSync(outcome: SyncOutcome, counts: PhaseCounts = {}): void {
     this.closeOpenPhase();
+    const wasOpen = this.syncStartedAt !== null;
     const elapsedMs = this.syncStartedAt === null ? 0 : this.now() - this.syncStartedAt;
     const fields = formatFields(counts);
     this.sink(
       `[SyncTimeline] sync-end outcome=${outcome} elapsedMs=${elapsedMs}${fields ? " " + fields : ""}`,
     );
-    this.emitOutcome(outcome, elapsedMs, counts);
+    // ONE ROW PER SYNC, and `wasOpen` is what enforces the "one".
+    //
+    // Six call sites reach `endSync`, across the orchestrator and `syncHandlers`, and
+    // they are mutually exclusive TODAY — the orchestrator's `errorResult` paths never
+    // emit "complete", so the handler that ends the sync never runs for them. Before
+    // this change a second `endSync` cost a duplicate log line, which is noise. Now it
+    // would cost a duplicate OUTCOME row, which is a corrupted denominator — the exact
+    // number this whole addition exists to produce.
+    //
+    // The `sync-end` line above is deliberately NOT guarded: it is BACKLOG-2898's
+    // contract and a duplicate there is still only noise.
+    if (wasOpen) this.emitOutcome(outcome, elapsedMs, counts);
     this.syncStartedAt = null;
     this.context = {};
   }

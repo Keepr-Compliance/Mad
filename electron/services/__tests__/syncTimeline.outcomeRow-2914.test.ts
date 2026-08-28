@@ -97,6 +97,22 @@ describe("BACKLOG-2914: every sync produces exactly one outcome row", () => {
     expect(theOutcomeRow(lines)).toContain("outcome=cancelled");
   });
 
+  it("THE CONTROL — a second `endSync` does NOT emit a second row", () => {
+    // The six call sites are mutually exclusive today, and this is the guard that keeps
+    // a seventh from silently doubling the denominator. Note what a duplicate would
+    // look like in the data if it were allowed through: `elapsedMs=0` and no
+    // dimensions at all, because the context is cleared on the first call — a row that
+    // reads as a sync which took no time on an unknown device.
+    const { timeline, lines } = makeTimeline();
+
+    timeline.beginSync();
+    timeline.enter("backup");
+    timeline.endSync("complete");
+    timeline.endSync("complete");
+
+    expect(outcomeRows(lines)).toHaveLength(1);
+  });
+
   it("`source` is a first-class field from day one — BACKLOG-2952 extends this row", () => {
     const { timeline, lines } = makeTimeline();
 
