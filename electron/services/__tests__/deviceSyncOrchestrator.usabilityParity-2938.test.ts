@@ -214,8 +214,14 @@ const INTERRUPTED_INCOMPLETE = {
 
 /**
  * A backup that WAS complete and whose latest snapshot then tore. `isComplete` and
- * `isInterrupted` are both true — the combination that makes `isComplete` alone an
- * insufficient usability test, and the one `processExistingBackup`'s own guard misses.
+ * `isInterrupted` are both true.
+ *
+ * BACKLOG-2911 (second pass), 2026-08-28: this fixture MOVED SIDES. It used to be the
+ * combination that made `isComplete` alone an insufficient usability test; the
+ * founder's controlled interruption showed it is the combination that makes
+ * `!isInterrupted` a wrong one. `Manifest.db` was byte-identical before and after the
+ * cable was pulled, the delta was kept, and the device transferred incrementally
+ * against that manifest. It is USABLE, and the parity sweep below says so.
  */
 const INTERRUPTED_BUT_COMPLETE = {
   state: "present" as const,
@@ -447,7 +453,10 @@ describe("BACKLOG-2938 PARITY: the message and the banner answer from one predic
     { name: "founder's Info.plist-only directory", status: SILENT_ABSENT, usable: false, sizeMeasured: true },
     { name: "finished snapshot, no manifest", status: SILENT_FINISHED_NO_MANIFEST, usable: false, sizeMeasured: true },
     { name: "torn transfer, incomplete", status: INTERRUPTED_INCOMPLETE, usable: false, sizeMeasured: true },
-    { name: "complete but torn since", status: INTERRUPTED_BUT_COMPLETE, usable: false, sizeMeasured: true },
+    // BACKLOG-2911 (second pass): `usable` flipped false -> true here, on the measured
+    // evidence above. The sweep is otherwise untouched, which is the point — one
+    // fixture changed side and every consumer followed it without a second edit.
+    { name: "complete but torn since", status: INTERRUPTED_BUT_COMPLETE, usable: true, sizeMeasured: true },
     { name: "complete and finished", status: COMPLETE_FINISHED, usable: true, sizeMeasured: true },
     { name: "complete, snapshot absent (state D)", status: COMPLETE_SNAPSHOT_ABSENT, usable: true, sizeMeasured: true },
     { name: "complete, size unmeasured", status: SIZE_UNMEASURED_COMPLETE, usable: true, sizeMeasured: false },
@@ -513,15 +522,19 @@ describe("BACKLOG-2938: `processExistingBackup` reports usability, not existence
     return states;
   }
 
-  it("a complete-but-torn backup reports `none` here too", async () => {
-    // This entry point's own guard checks `isComplete` ALONE, so before this item it
-    // reported `"exists"` for a directory `sync()` would have called unusable. Two
-    // entry points disagreeing about one directory is the same class of defect.
+  it("a complete-but-torn backup reports `exists` here too", async () => {
+    // This entry point's own guard checks `isComplete`, and since BACKLOG-2911's second
+    // pass so does `isUsablePriorBackup` — so the two now agree BY CONSTRUCTION rather
+    // than by two edits staying in step. The divergence 2938 was filed for is gone in
+    // the strongest available way: there is no second condition left to drift.
+    //
+    // Note which direction the agreement resolved. This path PARSES the backup, so
+    // "none" meant announcing a full transfer while reading the prior one.
     const states = await runProcessExisting(INTERRUPTED_BUT_COMPLETE);
 
     expect(states.length).toBeGreaterThan(0);
-    expect(states).not.toContain("exists");
-    expect(states.every((s) => s === "none")).toBe(true);
+    expect(states).not.toContain("none");
+    expect(states.every((s) => s === "exists")).toBe(true);
   });
 
   it("a complete, finished backup still reports `exists` here", async () => {

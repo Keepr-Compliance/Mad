@@ -251,16 +251,57 @@ describe("BACKLOG-2911: finding an interrupted backup must not change the invoca
 });
 
 describe("BACKLOG-2911: a torn backup is never silently treated as usable", () => {
-  it("says something about an interrupted backup even when a stale manifest makes it look complete", async () => {
-    // The torn-incremental state: the previous run's `Manifest.db` is still on disk, so
-    // `isComplete` is true while the snapshot is mid-upload. Reporting "Found previous
-    // backup, synced N minutes ago" here would describe a backup that does not exist.
+  /**
+   * REVERSED ON EVIDENCE, 2026-08-28 — and the reversal is recorded rather than the
+   * assertion quietly deleted, because the original reasoning was sound on what was
+   * known at the time.
+   *
+   * This case used to forbid "synced N minutes ago" for an interrupted-but-complete
+   * backup, on the argument that a surviving `Manifest.db` is STALE and therefore
+   * "describes a backup that does not exist". The founder's controlled interruption
+   * measured the opposite: the manifest was BYTE-IDENTICAL before and after the cable
+   * was pulled (sha `fa9c84e8768334d3…`), the transferred delta was kept (57.57 ->
+   * 58.47 GB), the device still reported `IsFullBackup: 0`, and the next run
+   * transferred incrementally against that very manifest — growing the folder rather
+   * than restarting it. A manifest the interruption never touched is not stale; it is
+   * the index the device diffs against, which is exactly why the directory is reusable.
+   *
+   * What does NOT change, and is still asserted below: the interruption is still
+   * reported to the user, and nothing anywhere claims a RESUME. There is still no
+   * host-side resume — `idevicebackup2` never reads `Status.plist` on the backup path.
+   * The device continuing on its own is a different fact from Keepr resuming, and this
+   * file's original finding on that stands untouched.
+   */
+  it("reports the interruption, keeps the backup, and still promises no resume", async () => {
     const { messages } = await runToBackupInvocation({
       ...interruptedStatus,
       isComplete: true,
     });
 
+    // The interruption is still surfaced — hiding it would be a different lie.
     expect(messages.some((m) => /interrupt|didn't finish|did not finish/i.test(m))).toBe(true);
+
+    // REVERSED: the prior backup is now reused, so it is described. Before the fix the
+    // founder was told "Previous sync didn't finish (57.9 GB saved). Starting over..."
+    // for a 57.9 GB backup the device went on to continue from.
+    expect(messages.some((m) => /synced .* ago/i.test(m))).toBe(true);
+    expect(messages.some((m) => /Starting over/i.test(m))).toBe(false);
+
+    // UNCHANGED, and the reason this file exists: no message may claim a resume.
+    for (const message of messages) {
+      expect(message).not.toMatch(/resum/i);
+    }
+  });
+
+  it("a torn backup with NO manifest is still treated as unusable", async () => {
+    // The other half of the same rule, and the BACKLOG-2925 guard: without an index
+    // there is nothing to continue from, so this one really does start over.
+    const { messages } = await runToBackupInvocation({
+      ...interruptedStatus,
+      isComplete: false,
+    });
+
+    expect(messages.some((m) => /didn't finish/i.test(m))).toBe(true);
     expect(messages.some((m) => /synced .* ago/i.test(m))).toBe(false);
     for (const message of messages) {
       expect(message).not.toMatch(/resum/i);
