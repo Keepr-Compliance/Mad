@@ -30,6 +30,15 @@ jest.mock('expo-constants', () => ({
   default: { expoConfig: { version: '9.9.9' } },
 }));
 
+// BACKLOG-2956: version identity now resolves from the NATIVE package manifest
+// (expo-application) first. Distinct values from the expo-constants mock above
+// so a regression to reading the JS config is visible rather than silent.
+jest.mock('expo-application', () => ({
+  __esModule: true,
+  nativeApplicationVersion: '7.7.7',
+  nativeBuildVersion: '42',
+}));
+
 import * as Sentry from '@sentry/react-native';
 import {
   SENTRY_DSN,
@@ -68,11 +77,17 @@ describe('sentry init config (BACKLOG-2222)', () => {
   });
 
   it('sets release/dist from the app version for source-map matching', () => {
-    expect(getAppVersion()).toBe('9.9.9');
+    // 7.7.7 is the NATIVE versionName, not the 9.9.9 in the expo-constants mock:
+    // asserts that resolution prefers the installed package over the JS config.
+    expect(getAppVersion()).toBe('7.7.7');
     const options = getSentryInitOptions();
-    // MUST match scripts/build-apk.sh's --release / --dist.
-    expect(options.release).toBe('keepr-companion@9.9.9');
-    expect(options.dist).toBe('9.9.9');
+    // MUST match the --release / --dist passed by scripts/build-apk.sh and
+    // scripts/build-release.sh, or minified frames stop symbolicating.
+    expect(options.release).toBe('keepr-companion@7.7.7');
+    // BACKLOG-2956: dist is the BUILD NUMBER (versionCode), so two builds of one
+    // version are distinguishable in Sentry. It was the version name before,
+    // which made them identical.
+    expect(options.dist).toBe('42');
   });
 
   it('initSentry forwards the options to Sentry.init', () => {

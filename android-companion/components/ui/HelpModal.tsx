@@ -15,7 +15,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Constants from 'expo-constants';
+import { getVersionLabel } from '../../services/appVersion';
 import { getSession } from '../../services/authService';
 import { supabase } from '../../services/supabaseClient';
 import { checkSmsPermissions, checkContactsPermissions } from '../../services/permissions';
@@ -66,10 +66,11 @@ export default function HelpModal({
   const [ticketNumber, setTicketNumber] = useState<number | null>(null);
 
   const collectDiagnostics = useCallback(async (): Promise<void> => {
-    const appVersion =
-      Constants.expoConfig?.version ??
-      Constants.manifest2?.extra?.expoClient?.version ??
-      '1.0.0';
+    // BACKLOG-2956: "1.1.0 (2)" — version name plus build number, read from the
+    // native package manifest. This string is shown in the diagnostics list AND
+    // pasted into the support-report body below, so a ticket now identifies the
+    // exact build it came from instead of always claiming 1.0.0.
+    const appVersion = getVersionLabel();
 
     // Device info from Platform API (no extra dependency needed)
     const deviceModel = `${Platform.OS} ${Platform.Version}`;
