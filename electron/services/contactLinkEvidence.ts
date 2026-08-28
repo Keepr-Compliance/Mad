@@ -341,8 +341,15 @@ export function contactsShareTransaction(contactA: string, contactB: string): bo
   return row !== undefined && row !== null;
 }
 
-/** Every transaction address the two sides share, for the "both appear on" line. */
-function sharedTransactionAddresses(contactA: string, contactB: string): string[] {
+/**
+ * Every transaction address the two sides share, for the "both appear on" line.
+ *
+ * EXPORTED for `contactIdentityEvidence` (BACKLOG-2630 D2 piece 2). The gatherer
+ * reports the COUNT as a relationship fact and renders no sentence of its own, so
+ * the sentence built below and the fact gathered there cannot disagree about
+ * which transactions the two sides share.
+ */
+export function sharedTransactionAddresses(contactA: string, contactB: string): string[] {
   if (!contactA || !contactB || contactA === contactB) return [];
   // BACKLOG-2366: the transaction_contacts branch below is DELIBERATELY NOT
   // filtered by removed_at, unlike the "who is on this deal now" readers. Two
