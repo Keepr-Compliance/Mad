@@ -33,6 +33,7 @@ import {
   BackupErrorCode,
   BackupSizeReading,
   BackupStatusReport,
+  BackupFailureCause,
 } from "../types/backup";
 import { validateDeviceUdid, ValidationError } from "../utils/validation";
 
@@ -104,6 +105,450 @@ export const IDEVICEBACKUP2_DISK_FULL_PATTERNS: readonly RegExp[] = [
  */
 export function isIdevicebackup2DiskFullOutput(output: string): boolean {
   return IDEVICEBACKUP2_DISK_FULL_PATTERNS.some((p) => p.test(output));
+}
+
+// ============================================================================
+// BACKLOG-2913: what actually went wrong, read from the device instead of guessed
+// ============================================================================
+
+/**
+ * MBErrorDomain codes this app has a specific answer for.
+ *
+ * 105 and 208 were both OBSERVED on the founder's machine on 2026-08-27, with the
+ * exit codes noted. 4 is the code `idevicebackup2 info` returns for a missing
+ * `Status.plist` (BACKLOG-2951 uses it as the "service is healthy" probe result);
+ * its device-supplied description has never been captured here, so nothing in this
+ * file asserts a wording for it.
+ *
+ * The exit code appears to be `(-deviceCode) & 0xFF` — 208 exits 48, 105 exits 151,
+ * and both satisfy it. It is NOT used to classify anything: two data points is not a
+ * rule, and exit 255 (seen twice, for two different connection faults) would invert
+ * to a bogus device code 1.
+ */
+export const MB_ERROR_HOST_DISK_FULL = 105;
+export const MB_ERROR_DEVICE_LOCKED = 208;
+export const MB_ERROR_FILE_MISSING = 4;
+
+/**
+ * BACKLOG-2913: the disk-space message, in one place.
+ *
+ * Two code paths report a full host disk — this one, and the BACKLOG-2899
+ * `diskFullDetected` flag set from stdout during the run. They had different
+ * wording, so which sentence the user saw depended on which detector fired first.
+ *
+ * Three things this sentence has to do, each learned the hard way on 2026-08-27:
+ *
+ * 1. **Name the Mac.** The device's own `ErrorDescription` is "Insufficient free
+ *    disk space on drive to back up" and names no drive. The founder read it, opened
+ *    his iPhone's storage screen, saw 80 GB free, and concluded the app was broken.
+ * 2. **Warn that macOS disagrees.** The Storage pane said 283 GB free while `df`,
+ *    `diskutil`, `statfs` and idevicebackup2 all said 23 GB. The gap is local Time
+ *    Machine snapshots. Saying "not enough space" to someone looking at 283 GB reads
+ *    as a bug in Keepr, every time, for every user with Time Machine configured.
+ * 3. **Not say "delete some files".** Measured three times that evening: deleting
+ *    20 GB freed 4 GB, deleting 26 GB freed 0, deleting 25 GB freed 0 — the blocks
+ *    stay pinned in snapshots. Telling a user to free space by deleting can
+ *    accomplish literally nothing.
+ *
+ * It deliberately quotes no required size: the estimate is ~3x low and belongs to
+ * BACKLOG-2918. A wrong number here would be a fourth thing to disbelieve.
+ *
+ * Keeps the literal substring "disk space" so that deviceSyncOrchestrator's
+ * `/disk space|no space|ENOSPC|not enough space/i` Sentry tag still fires. That
+ * coupling is asserted by a test rather than left to be rediscovered.
+ */
+export const BACKUP_HOST_DISK_FULL_MESSAGE =
+  "Not enough free disk space on this Mac to back up your iPhone. " +
+  "Your Mac may report far more space than this: macOS counts space held by local " +
+  "Time Machine snapshots as free, and a backup cannot use it. Deleting files often " +
+  "frees nothing while those snapshots are holding them.";
+
+/** BACKLOG-2913: correct for MBErrorDomain/208, and now shown only for it. */
+export const BACKUP_DEVICE_LOCKED_MESSAGE =
+  "iPhone is locked. Please unlock your iPhone and try again, and leave it unlocked " +
+  "while the sync runs.";
+
+/**
+ * BACKLOG-2913: the USB link dropped BEFORE any file transfer began. Exit 255 with
+ * `usbmuxd_send returned -32 (Broken pipe)`, and no progress line ever seen.
+ *
+ * Hardware-first advice is correct HERE and only here. A link that dies before the
+ * first progress bar died during enumeration, pairing or the passcode wait — the
+ * stage at which a bad cable, a flaky port, a hub or a dock genuinely is the most
+ * likely cause.
+ *
+ * See {@link BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE} for what happens once
+ * bytes have moved, and why the same sentence there was wrong.
+ */
+export const BACKUP_CONNECTION_LOST_MESSAGE =
+  "The connection to your iPhone dropped during the backup. Try a different cable, " +
+  "plug the iPhone straight into this Mac without a hub or dock, then sync again. " +
+  "If it keeps dropping, restart your iPhone.";
+
+/**
+ * BACKLOG-2913: the USB link dropped AFTER file transfer had begun. Same exit code,
+ * same broken-pipe line, different fault — and it needs different advice.
+ *
+ * The founder tested the classifier on real hardware on 2026-08-28: an incremental
+ * sync, `File transfer started after 684.6s` (so: enumerated, paired, passcode
+ * entered), one 616 MB file completed, then he unplugged the cable. The classifier
+ * named the connection correctly — the old code would have said "iPhone is locked" —
+ * but the message told him to try a different cable.
+ *
+ * His objection, and it is right: **a drop eleven minutes in, after a successful
+ * handshake and 616 MB, is almost never a faulty cable.** A bad cable fails at
+ * enumeration or within seconds. The realistic causes of a MID-TRANSFER drop are the
+ * Mac sleeping, the phone sleeping or locking, USB power management suspending the
+ * port, a hub renegotiating, or the user unplugging it. Cable fault is the least
+ * likely of them once bytes have moved, and leading with it sends a user hunting for
+ * a hardware problem they do not have.
+ *
+ * So: the action that actually works comes first, and hardware comes last.
+ */
+export const BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE =
+  "The connection to your iPhone dropped during the backup. This is often " +
+  "temporary — try syncing again. If it keeps happening, plug the iPhone " +
+  "straight into this Mac without a hub, and check that neither device is going " +
+  "to sleep.";
+
+/**
+ * BACKLOG-2913: the device's backup service would not negotiate. Exit 255 with
+ * `version exchange failed, error -5` and NO disconnect events — repeated fast
+ * retries are what produces this state, so the message must not invite another one.
+ */
+export const BACKUP_SERVICE_UNAVAILABLE_MESSAGE =
+  "Your iPhone's backup service did not respond. Unplug the iPhone, wait ten " +
+  "seconds, plug it back in and unlock it, then try once. Repeated quick retries " +
+  "are what causes this, so give it a moment rather than syncing again straight away.";
+
+/** BACKLOG-2913: MBErrorDomain/4 — the device could not find a file it needed. */
+export const BACKUP_FILE_MISSING_MESSAGE =
+  "Part of the existing backup on this Mac is missing or unreadable, so your iPhone " +
+  "could not continue it. Starting a fresh backup should clear this.";
+
+/**
+ * BACKLOG-2913: idevicebackup2's own failure summary, on STDOUT.
+ *
+ * TRANSCRIBED from the founder's dev log, 2026-08-27 22:44:38 — the block logged by
+ * `[BackupService] stdout:` reads, in full:
+ *
+ *     Requesting backup from device...
+ *     Incremental backup mode.
+ *     *** Waiting for passcode to be entered on the device ***
+ *     ErrorCode 208: Device locked (MBErrorDomain/208)
+ *     Received 0 files from device.
+ *     Backup Failed (Error Code 208).
+ *
+ * This is the PREFERRED source. It comes from `progress_printf()`, so it is emitted
+ * whether or not `-d` was passed, and stdout carries a tiny fraction of the volume
+ * of the debug stream, so it survives the 64KB tail cap that can swallow the plist.
+ */
+const IDEVICEBACKUP2_STDOUT_ERROR_LINE = /^[ \t]*ErrorCode[ \t]+(\d+):[ \t]*(.*)$/gm;
+
+/**
+ * BACKLOG-2913: the `DLMessageProcessMessage` response plist, on STDERR.
+ *
+ * TRANSCRIBED from the same run — `property_list_service.c:253` prints it in full:
+ *
+ *     <array>
+ *     	<string>DLMessageProcessMessage</string>
+ *     	<dict>
+ *     		<key>ErrorCode</key>
+ *     		<integer>208</integer>
+ *     		<key>ErrorDescription</key>
+ *     		<string>Device locked (MBErrorDomain/208)</string>
+ *     		<key>MessageName</key>
+ *     		<string>Response</string>
+ *     	</dict>
+ *     </array>
+ *
+ * Note the keys and values are on SEPARATE tab-indented lines; a pattern written
+ * against a one-line `<key>ErrorCode</key><integer>105</integer>` would match a
+ * fixture and never a real device.
+ *
+ * Scoped to the DLMessageProcessMessage envelope on purpose: the same stream carries
+ * other plists (a `Shutdown` command block, lockdown query responses), and an
+ * unscoped `<key>ErrorCode</key>` hunt would eventually read one of those.
+ */
+const DL_PROCESS_MESSAGE_BLOCK =
+  /DLMessageProcessMessage<\/string>([\s\S]{0,4000}?)<\/array>/g;
+const DL_ERROR_CODE = /<key>ErrorCode<\/key>\s*<integer>(-?\d+)<\/integer>/;
+const DL_ERROR_DESCRIPTION = /<key>ErrorDescription<\/key>\s*<string>([\s\S]*?)<\/string>/;
+
+/**
+ * BACKLOG-2913: exit-255 discriminators. Both TRANSCRIBED, and consulted only when
+ * the device reported no code of its own.
+ *
+ * `SSL_read 4, received 0` is deliberately NOT here, though BACKLOG-2951 lists it
+ * under "USB link flapping". The 2026-08-27 log has about thirty of those lines
+ * (22:42:44 through 22:43:20) inside the run that ended in device-locked/208, on a
+ * healthy link — it is routine notification_proxy polling, the same class of chatter
+ * as `np_lock(): Locked`. Treating it as a link-drop signal would rebuild this exact
+ * bug one rung further down.
+ */
+const CONNECTION_DROPPED_PATTERN = /usbmuxd_send returned -\d+ \(Broken pipe\)/i;
+const SERVICE_VERSION_EXCHANGE_PATTERN =
+  /version exchange failed|Could not perform backup protocol version exchange/i;
+
+/** Minimal XML entity decoding for a plist string value. */
+function decodePlistString(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * BACKLOG-2913: read the device's own error code out of a failed run.
+ *
+ * stdout first WHEN IT CARRIES A CODE, then the stderr plist. The LAST occurrence
+ * wins in both: a run can log several DLMessage responses, and the one that ended it
+ * is the last.
+ *
+ * stdout is preferred because idevicebackup2 prints the `ErrorCode N: ...` line via
+ * `progress_printf` (a `vprintf`), so it is emitted whether or not `-d` was passed,
+ * and stdout is low-volume enough to survive the 64KB tail cap that can push the
+ * stderr plist out of the buffer entirely. Measured on the founder's five real
+ * failures of 2026-08-27: stderr hit the cap in 5 of 5 runs, stdout ran 0–475 bytes.
+ *
+ * Preferred is NOT the same as always present: four of those five runs captured ZERO
+ * stdout, because the run never reached the point of printing a summary. Those runs
+ * are carried by the fallback chain below, not by this parse.
+ *
+ * Returns `deviceErrorCode: null` when neither stream carried a code. That is
+ * "the device did not tell us", never "no error".
+ */
+export function parseDeviceBackupError(
+  stdout: string,
+  stderr: string,
+): Pick<
+  BackupFailureCause,
+  "deviceErrorCode" | "deviceErrorDescription" | "source"
+> {
+  let lastStdoutMatch: RegExpExecArray | null = null;
+  IDEVICEBACKUP2_STDOUT_ERROR_LINE.lastIndex = 0;
+  for (
+    let m = IDEVICEBACKUP2_STDOUT_ERROR_LINE.exec(stdout);
+    m !== null;
+    m = IDEVICEBACKUP2_STDOUT_ERROR_LINE.exec(stdout)
+  ) {
+    lastStdoutMatch = m;
+  }
+  if (lastStdoutMatch) {
+    const description = lastStdoutMatch[2].trim();
+    return {
+      deviceErrorCode: Number.parseInt(lastStdoutMatch[1], 10),
+      deviceErrorDescription: description.length > 0 ? description : null,
+      source: "stdout-line",
+    };
+  }
+
+  let lastCode: number | null = null;
+  let lastDescription: string | null = null;
+  DL_PROCESS_MESSAGE_BLOCK.lastIndex = 0;
+  for (
+    let block = DL_PROCESS_MESSAGE_BLOCK.exec(stderr);
+    block !== null;
+    block = DL_PROCESS_MESSAGE_BLOCK.exec(stderr)
+  ) {
+    const codeMatch = DL_ERROR_CODE.exec(block[1]);
+    if (!codeMatch) continue;
+    lastCode = Number.parseInt(codeMatch[1], 10);
+    const descriptionMatch = DL_ERROR_DESCRIPTION.exec(block[1]);
+    const decoded = descriptionMatch
+      ? decodePlistString(descriptionMatch[1]).trim()
+      : "";
+    lastDescription = decoded.length > 0 ? decoded : null;
+  }
+  if (lastCode !== null) {
+    return {
+      deviceErrorCode: lastCode,
+      deviceErrorDescription: lastDescription,
+      source: "stderr-plist",
+    };
+  }
+
+  return {
+    deviceErrorCode: null,
+    deviceErrorDescription: null,
+    source: "none",
+  };
+}
+
+/** BACKLOG-2913: a classified backup failure — the sentence AND the data behind it. */
+export interface BackupFailureClassification {
+  message: string;
+  errorCode: BackupErrorCode;
+  cause: BackupFailureCause;
+}
+
+/**
+ * BACKLOG-2913: an honest message for a device code we have not mapped.
+ *
+ * It must include the number — that is the one thing that makes an unmapped failure
+ * identifiable in a support ticket — and it must not guess. The device's own
+ * description is quoted rather than paraphrased, and explicitly attributed to the
+ * iPhone, because that text names no drive and would otherwise mislead exactly the
+ * way "Insufficient free disk space on drive to back up" already did.
+ */
+function describeUnmappedDeviceError(
+  code: number,
+  description: string | null,
+): string {
+  const quoted = description ? ` Your iPhone reported: "${description}".` : "";
+  return (
+    `The backup stopped with error ${code}.${quoted} ` +
+    "Keepr does not have a specific explanation for this one — please send this " +
+    "message to support."
+  );
+}
+
+/**
+ * BACKLOG-2913: decide what actually failed, in order of how much the evidence is
+ * worth.
+ *
+ * 1. The code the DEVICE reported. Machine-readable, unambiguous, and it was
+ *    already being logged and thrown away.
+ * 2. Anchored signals in idevicebackup2's own output, for the connection faults the
+ *    device never gets to report because the link died first.
+ * 3. An honest "we do not know", carrying the exit code so a support log can still
+ *    identify the run.
+ *
+ * What it never does is match UNANCHORED routine vocabulary against the raw `-d`
+ * debug stream. That stream contains `afc_lock(): Locked` and `np_lock(): Locked`
+ * hundreds of times per run, plus `PasswordProtected`, `TrustedHostAttached` and
+ * `PairRecordProtectionClass` as ordinary plist keys — so the old ladder's `locked`
+ * rung matched on every single failure and the `disk`, `trust` and `password` rungs
+ * below it were unreachable.
+ *
+ * The `-d` stream is not excluded outright, and saying so would mislead a future
+ * reader into breaking the thing that makes reading it safe. TWO anchored patterns
+ * — `SERVICE_VERSION_EXCHANGE_PATTERN` and `CONNECTION_DROPPED_PATTERN` — do run
+ * against stderr, because in the exit-255 class the device never answers and the
+ * debug stream is the only evidence that exists. Both are gated behind
+ * `deviceErrorCode === null`: they are consulted only when the device reported no
+ * code at all, and can never override a code the device did report. That ordering is
+ * load-bearing — `usbmuxd_send returned -32 (Broken pipe)` is teardown chatter that
+ * appears in four of the five real failures of 2026-08-27, INCLUDING the one that
+ * was genuinely a locked phone. Reordering either check above the device-code switch
+ * would tell that user to try a different cable. `backupService.failureCause-2913`
+ * pins it.
+ *
+ * `transferStarted` carries the one thing the streams cannot say: whether any file
+ * transfer had begun when the link died. It changes NO classification — only which
+ * of the two connection-lost sentences is returned. It defaults to false, the
+ * conservative reading, so a caller that genuinely does not know gets the message
+ * written for "we never got going". See
+ * {@link BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE} for why the split exists, and
+ * `backupService.connectionCopy-2913` for the tests that pin the wording and the
+ * branch.
+ */
+export function classifyBackupFailure(
+  exitCode: number | null,
+  stdout: string,
+  stderr: string,
+  transferStarted: boolean = false,
+): BackupFailureClassification {
+  const parsed = parseDeviceBackupError(stdout, stderr);
+  const cause: BackupFailureCause = { ...parsed, exitCode };
+
+  switch (parsed.deviceErrorCode) {
+    case MB_ERROR_HOST_DISK_FULL:
+      return {
+        message: BACKUP_HOST_DISK_FULL_MESSAGE,
+        errorCode: "INSUFFICIENT_SPACE",
+        cause,
+      };
+    case MB_ERROR_DEVICE_LOCKED:
+      return {
+        message: BACKUP_DEVICE_LOCKED_MESSAGE,
+        errorCode: "DEVICE_LOCKED",
+        cause,
+      };
+    case MB_ERROR_FILE_MISSING:
+      return {
+        message: BACKUP_FILE_MISSING_MESSAGE,
+        errorCode: "BACKUP_FILE_MISSING",
+        cause,
+      };
+  }
+
+  // The device reported something we have no specific answer for. Say so, and hand
+  // over its own words and number rather than picking the nearest-looking rung.
+  if (parsed.deviceErrorCode !== null) {
+    return {
+      message: describeUnmappedDeviceError(
+        parsed.deviceErrorCode,
+        parsed.deviceErrorDescription,
+      ),
+      errorCode: "UNKNOWN_ERROR",
+      cause,
+    };
+  }
+
+  // No device code: the link or the service failed before the device could answer.
+  // Anchored patterns only.
+  if (
+    SERVICE_VERSION_EXCHANGE_PATTERN.test(stderr) ||
+    SERVICE_VERSION_EXCHANGE_PATTERN.test(stdout)
+  ) {
+    return {
+      message: BACKUP_SERVICE_UNAVAILABLE_MESSAGE,
+      errorCode: "SERVICE_UNAVAILABLE",
+      cause,
+    };
+  }
+  if (
+    CONNECTION_DROPPED_PATTERN.test(stderr) ||
+    CONNECTION_DROPPED_PATTERN.test(stdout)
+  ) {
+    // BACKLOG-2913 (copy defect, founder 2026-08-28): a link drop before the first
+    // progress bar and a link drop at 616 MB are different faults. Same exit code,
+    // same broken-pipe line, opposite advice. `transferStarted` is the only thing
+    // that separates them, and the caller is the only place that knows it.
+    return {
+      message: transferStarted
+        ? BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE
+        : BACKUP_CONNECTION_LOST_MESSAGE,
+      errorCode: "CONNECTION_LOST",
+      cause,
+    };
+  }
+
+  // Last resort. This is the only UNANCHORED vocabulary match left, and it is why it
+  // reads `stdout` and not `stderr`: idevicebackup2's own human-readable summary
+  // (BACKLOG-2899's detector), never the `-d` debug stream. The two anchored
+  // exit-255 patterns above DO read stderr — see the docblock — but they match a
+  // specific fault string; these patterns match ordinary words like "disk full",
+  // which the debug stream is entitled to contain for reasons that are not a
+  // failure. Passing `stderr` here re-creates the original bug.
+  if (isIdevicebackup2DiskFullOutput(stdout)) {
+    return {
+      message: BACKUP_HOST_DISK_FULL_MESSAGE,
+      errorCode: "INSUFFICIENT_SPACE",
+      cause,
+    };
+  }
+
+  if (exitCode === -1) {
+    return {
+      message: "Backup was cancelled.",
+      errorCode: "BACKUP_CANCELLED",
+      cause,
+    };
+  }
+
+  return {
+    message:
+      "The backup stopped and neither this Mac nor your iPhone reported a reason" +
+      (exitCode === null ? "" : ` (exit code ${exitCode})`) +
+      ". Please try again with your iPhone unlocked and plugged in directly. If it " +
+      "keeps happening, send this message to support.",
+    errorCode: "UNKNOWN_ERROR",
+    cause,
+  };
 }
 
 /**
@@ -731,15 +1176,33 @@ export class BackupService extends EventEmitter {
         // Convert error code to user-friendly message
         let errorMessage: string | null = null;
         let errorCode: BackupErrorCode | undefined;
+        let failureCause: BackupFailureCause | undefined;
         if (!success) {
           if (diskFullDetected) {
-            // BACKLOG-2899: phrased so deviceSyncOrchestrator's existing
-            // /disk space|no space|ENOSPC|not enough space/i matcher recognises it.
-            errorMessage =
-              "Not enough disk space to complete the backup. Please free up space and try again.";
+            // BACKLOG-2899: the host disk filled mid-transfer, which idevicebackup2
+            // absorbs in silence — it never checks its own fwrite/fclose, so this
+            // can arrive alongside exit code 0 and "Backup Successful."
+            //
+            // BACKLOG-2913: this branch used to carry its own, vaguer sentence
+            // ("free up space and try again"), so which of the two disk messages the
+            // user saw depended on which detector happened to fire. Both paths now
+            // share one constant. The cause is still recorded so the support log can
+            // tell a mid-transfer fill from a device-reported 105.
+            errorMessage = BACKUP_HOST_DISK_FULL_MESSAGE;
             errorCode = "INSUFFICIENT_SPACE";
+            failureCause = {
+              ...parseDeviceBackupError(stdoutBuffer, stderrBuffer),
+              exitCode: code,
+            };
           } else {
-            errorMessage = this.getErrorMessage(code, stderrBuffer);
+            const classification = this.classifyFailure(
+              code,
+              stdoutBuffer,
+              stderrBuffer,
+            );
+            errorMessage = classification.message;
+            errorCode = classification.errorCode;
+            failureCause = classification.cause;
           }
         }
 
@@ -748,6 +1211,7 @@ export class BackupService extends EventEmitter {
           backupPath: success ? finalBackupPath : null,
           error: errorMessage,
           ...(errorCode ? { errorCode } : {}),
+          ...(failureCause ? { failureCause } : {}),
           duration: Date.now() - this.startTime,
           deviceUdid: options.udid,
           isIncremental: previousBackupExists && !options.forceFullBackup,
@@ -1249,58 +1713,45 @@ export class BackupService extends EventEmitter {
   }
 
   /**
-   * Convert exit code to user-friendly error message
+   * BACKLOG-2913: classify a failed backup from what the device actually reported.
+   *
+   * This used to be a substring ladder over the raw `-d` debug stream, and every
+   * failure — disk full, cable pulled, service stuck, genuinely locked — came out as
+   * "iPhone is locked. Please unlock your iPhone and try again.", because
+   * libimobiledevice writes `afc_lock(): Locked` hundreds of times per run and the
+   * `locked` rung sat above every other rung. Four causes were observed on the
+   * founder's machine in one evening and all four produced that sentence.
+   *
+   * The work now lives in the exported {@link classifyBackupFailure}, which is a
+   * pure function of the two streams and the exit code, so the real captured output
+   * can be tested against it without spawning anything.
    */
-  private getErrorMessage(code: number | null, stderr: string): string {
-    // Convert unsigned 32-bit to signed (Windows wraps negative codes)
-    const signedCode = code !== null && code > 2147483647 ? code - 4294967296 : code;
-
-    // Check stderr for specific error messages first
-    const stderrLower = stderr.toLowerCase();
-
-    if (stderrLower.includes("password") || stderrLower.includes("incorrect")) {
-      return "Incorrect backup password. Please try again with the correct password.";
-    }
-
-    if (stderrLower.includes("locked") || stderrLower.includes("passcode")) {
-      return "iPhone is locked. Please unlock your iPhone and try again.";
-    }
-
-    if (stderrLower.includes("trust") || stderrLower.includes("pair")) {
-      return "iPhone trust not established. Please disconnect and reconnect your iPhone, then tap 'Trust' when prompted.";
-    }
-
-    if (stderrLower.includes("no device") || stderrLower.includes("not found")) {
-      return "iPhone disconnected. Please reconnect your iPhone and try again.";
-    }
-
-    if (stderrLower.includes("disk") || stderrLower.includes("space") || stderrLower.includes("storage")) {
-      return "Not enough disk space to complete the backup. Please free up space and try again.";
-    }
-
-    // Check by exit code
-    switch (signedCode) {
-      case -208:
-      case -207:
-        // Connection lost / device disconnected
-        return "Connection to iPhone was lost. Please make sure your iPhone stays connected and unlocked during the sync.";
-
-      case -1:
-        return "Backup was cancelled.";
-
-      case 1:
-        return "Backup failed. Please make sure your iPhone is unlocked and connected.";
-
-      case 2:
-        return "Invalid backup configuration. Please try again.";
-
-      default:
-        // Generic error with code
-        if (stderr.trim()) {
-          return `Backup failed: ${stderr.trim().substring(0, 200)}`;
-        }
-        return `Backup failed with error code ${code}. Please try again.`;
-    }
+  private classifyFailure(
+    code: number | null,
+    stdout: string,
+    stderr: string,
+  ): BackupFailureClassification {
+    // BACKLOG-2913 (copy defect): `hasReceivedFileProgress` is the transfer-started
+    // signal, and `bytesTransferred` deliberately is NOT. The latter only advances
+    // when a whole file COMPLETES (the percent-drop heuristic in parseProgress), so
+    // a drop part-way through the first file reads zero bytes while transfer is
+    // demonstrably under way — and the user would get cable advice for a sleep or a
+    // power-management fault. `hasReceivedFileProgress` flips on the first progress
+    // bar, which cannot be emitted before enumeration, pairing and the passcode.
+    const classification = classifyBackupFailure(
+      code,
+      stdout,
+      stderr,
+      this.hasReceivedFileProgress,
+    );
+    log.error("[BackupService] Failure classified", {
+      deviceErrorCode: classification.cause.deviceErrorCode,
+      deviceErrorDescription: classification.cause.deviceErrorDescription,
+      exitCode: classification.cause.exitCode,
+      source: classification.cause.source,
+      errorCode: classification.errorCode,
+    });
+    return classification;
   }
 
   /**
