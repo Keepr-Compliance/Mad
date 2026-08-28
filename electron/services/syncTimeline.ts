@@ -23,6 +23,7 @@
  */
 
 import log from "electron-log";
+import { reportSyncOutcome } from "./syncOutcomeReporter";
 
 /**
  * What a phase produced — e.g. `{ messages: 663000, conversations: 2337 }`.
@@ -95,6 +96,46 @@ export function formatPhaseEnd(record: SyncPhaseRecord): string {
  */
 export type SyncOutcome = "complete" | "cancelled" | "error";
 
+/**
+ * The one dimension that separates BACKLOG-2952's other sources from this one.
+ * Exported so the transport and its tests name the same string the row does.
+ */
+export const SYNC_OUTCOME_SOURCE = "iphone-backup";
+
+/** One phase's contribution to the row, in the order the phases ran. */
+export interface SyncOutcomePhase {
+  phase: string;
+  elapsedMs: number;
+}
+
+/**
+ * BACKLOG-2914 (transport): the outcome row as DATA rather than as a formatted line.
+ *
+ * `emitOutcome` used to build a string and hand it to the logger, which is why the row
+ * never left the machine. It now builds this, hands it to a reporter, AND logs the same
+ * line it always did.
+ *
+ * `phases` is an ORDERED ARRAY, not a `Record<string, number>`. `enter()` deliberately
+ * creates a new record when a phase is re-entered ("a phase that runs twice is two
+ * durations, never one doubled"), and a keyed map would silently collapse the second
+ * into the first. It is also why the durable column for this is jsonb.
+ */
+export interface SyncOutcomeRow {
+  source: string;
+  outcome: SyncOutcome;
+  elapsedMs: number;
+  phases: SyncOutcomePhase[];
+  /** Every dimension established for this run: context + end counts. Scalars only. */
+  fields: TimelineMeta;
+}
+
+/**
+ * Where the outcome row goes BESIDES the log. Synchronous and void-returning on
+ * purpose: `endSync` is on the sync's critical path and must never await a network
+ * call. A reporter that needs I/O fires and forgets.
+ */
+export type SyncOutcomeReporter = (row: SyncOutcomeRow) => void;
+
 export class SyncTimeline {
   private phaseRecords: SyncPhaseRecord[] = [];
   private syncStartedAt: number | null = null;
@@ -108,9 +149,22 @@ export class SyncTimeline {
    */
   private context: TimelineMeta = {};
 
-  constructor(options: { now?: () => number; sink?: TimelineSink } = {}) {
+  /**
+   * BACKLOG-2914 (transport): where the outcome row goes besides the log.
+   *
+   * Defaults to the real Sentry + Supabase reporter, and that default is the whole
+   * point — this item's own first attempt built a complete row and wired it to
+   * nothing, so a seam that has to be opted into would reproduce the defect. Tests
+   * inject; production does not.
+   */
+  private readonly reporter: SyncOutcomeReporter;
+
+  constructor(
+    options: { now?: () => number; sink?: TimelineSink; reporter?: SyncOutcomeReporter } = {},
+  ) {
     this.now = options.now ?? (() => Date.now());
     this.sink = options.sink ?? ((line: string) => log.info(line));
+    this.reporter = options.reporter ?? reportSyncOutcome;
   }
 
   /** Start a sync. Clears any previous run's records AND context. */
@@ -242,22 +296,22 @@ export class SyncTimeline {
    * that was established, plus the per-phase durations so a regression can be
    * attributed to a phase rather than to "syncs got slower".
    *
-   * Emitted through the same sink as everything else. WHERE this ends up being
-   * STORED is deliberately not decided here: `pm_token_metrics` is agent accounting
-   * and would be the wrong home, and inventing a product-telemetry store inside a
-   * bug-fix PR would be a much larger change than the one this belongs to. The row
-   * is greppable and parseable, which is what 2894 and 2952 need to begin.
+   * THREE destinations, and the log line is only the first. PR #2422 shipped the row
+   * to `log.info` alone, which meant it never left the user's machine and the
+   * per-release question stayed unanswerable. It now also goes to Sentry (an event,
+   * for grouping and per-release comparison) and to Supabase (Postgres, for the
+   * duration corpus BACKLOG-2894 will fit a model against). See syncOutcomeReporter.
    */
   private emitOutcome(outcome: SyncOutcome, elapsedMs: number, counts: PhaseCounts): void {
-    const phases = this.phaseRecords
-      .filter((r) => r.elapsedMs !== null)
-      .map((r) => `${r.phase}:${r.elapsedMs}`)
-      .join(",");
+    const closed = this.phaseRecords.filter(
+      (r): r is SyncPhaseRecord & { elapsedMs: number } => r.elapsedMs !== null,
+    );
+    const phases = closed.map((r) => `${r.phase}:${r.elapsedMs}`).join(",");
 
     const fields: TimelineMeta = {
       // 2952 extends this row rather than defining a second one, so the dimension
       // that separates the sources is present even while there is only one.
-      source: "iphone-backup",
+      source: SYNC_OUTCOME_SOURCE,
       outcome,
       elapsedMs,
       ...this.context,
@@ -265,7 +319,29 @@ export class SyncTimeline {
       ...(phases ? { phases } : {}),
     };
 
+    // THE LOG LINE STAYS, AND STAYS FIRST. It is what made the 2026-08-28 diagnosis
+    // possible on a machine with no network, and it is the only sink that works when
+    // the user is signed out. Byte-identical to what BACKLOG-2898's consumers parse.
     this.sink(`[SyncTimeline] sync-outcome ${formatFields(fields)}`);
+
+    // BACKLOG-2914 (transport): and now it also LEAVES THE MACHINE.
+    //
+    // Guarded because a reporter is I/O-adjacent and this is the sync's critical path.
+    // A telemetry sink that can fail a user's 52-minute sync is worse than no telemetry
+    // sink: the reporters are best-effort internally as well, and this catch is the
+    // second wall, not the first.
+    const row: SyncOutcomeRow = {
+      source: SYNC_OUTCOME_SOURCE,
+      outcome,
+      elapsedMs,
+      phases: closed.map((r) => ({ phase: r.phase, elapsedMs: r.elapsedMs })),
+      fields,
+    };
+    try {
+      this.reporter(row);
+    } catch (error) {
+      log.warn("[SyncTimeline] outcome reporter threw; sync unaffected:", error);
+    }
   }
 
   /**
