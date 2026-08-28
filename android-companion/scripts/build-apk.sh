@@ -133,7 +133,7 @@ echo "[build-apk] Embedded drawable assets: $(find "$RES_DIR" -type d -name 'dra
 #    Uploads to the SAME org/project as the runtime DSN (services/sentry.ts):
 #    the `electron` project in org `keeprcompliancecom`. The --release/--dist
 #    below MUST stay in sync with services/sentry.ts (`keepr-companion@<version>`
-#    / `<version>`) or traces won't match. The Debug ID injected by
+#    / `<versionCode>`) or traces won't match. The Debug ID injected by
 #    metro.config.js is the primary matcher; release/dist is the fallback.
 #
 #    Required env for upload:
@@ -148,6 +148,11 @@ SOURCEMAP_FILE="$ASSETS_DIR/index.android.bundle.map"
 
 if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
   APP_VERSION="$(node -p "require('$PROJECT_DIR/app.json').expo.version")"
+  # BACKLOG-2956: dist is the BUILD NUMBER (versionCode), matching the runtime
+  # `dist` set in services/sentry.ts. It used to be the version name on both
+  # sides, which made every build of "1.0.0" the same artifact as far as Sentry
+  # was concerned. These two MUST agree or uploaded maps stop matching events.
+  APP_BUILD="$(node -p "require('$PROJECT_DIR/app.json').expo.android.versionCode")"
   SENTRY_RELEASE="keepr-companion@$APP_VERSION"
   echo "[build-apk] Uploading source map to Sentry (release $SENTRY_RELEASE)..."
   # SENTRY_URL / SENTRY_AUTH_TOKEN are read from the environment by sentry-cli
@@ -158,7 +163,7 @@ if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
     --org "${SENTRY_ORG:-keeprcompliancecom}" \
     --project "${SENTRY_PROJECT:-electron}" \
     --release "$SENTRY_RELEASE" \
-    --dist "$APP_VERSION" \
+    --dist "$APP_BUILD" \
     --strip-prefix "$PROJECT_DIR" \
     "$BUNDLE_FILE" "$SOURCEMAP_FILE"
   echo "[build-apk] Source map uploaded to Sentry."
