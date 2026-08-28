@@ -262,6 +262,14 @@ export class BackupService extends EventEmitter {
     "backup mode",
   ];
 
+  /**
+   * BACKLOG-2914: the backup mode the DEVICE reported, from idevicebackup2's own
+   * stderr. `null` until it says, and reset per run in the same block as the watchdog
+   * state — inheriting run N's mode into run N+1 would be a wrong answer wearing the
+   * clothes of a measured one.
+   */
+  private deviceReportedBackupMode: "incremental" | "full" | null = null;
+
   // BACKLOG-1628: Stderr debug parsing state
   private stderrLineBuffer: string = "";
 
@@ -538,6 +546,7 @@ export class BackupService extends EventEmitter {
       // BACKLOG-2911 (FIX 2): one timestamp, advanced only by meaningful activity.
       this.watchdogFired = false;
       this.lastMeaningfulActivityAt = Date.now();
+      this.deviceReportedBackupMode = null;
       this.clearWatchdog();
 
       // BACKLOG-1628: Reset stderr parsing state
@@ -725,7 +734,8 @@ export class BackupService extends EventEmitter {
             error: "Backup process became unresponsive and was terminated",
             duration,
             deviceUdid: options.udid,
-            isIncremental: previousBackupExists,
+            isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+            deviceReportedBackupMode: this.deviceReportedBackupMode,
             backupSize: 0,
             errorCode: "BACKUP_TIMEOUT",
           };
@@ -790,7 +800,8 @@ export class BackupService extends EventEmitter {
               errorCode: "PASSWORD_REQUIRED" as BackupErrorCode,
               duration: Date.now() - this.startTime,
               deviceUdid: options.udid,
-              isIncremental: previousBackupExists && !options.forceFullBackup,
+              isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+              deviceReportedBackupMode: this.deviceReportedBackupMode,
               backupSize,
               isEncrypted: true,
             };
@@ -835,7 +846,8 @@ export class BackupService extends EventEmitter {
                     : ("DECRYPTION_FAILED" as BackupErrorCode),
                 duration: Date.now() - this.startTime,
                 deviceUdid: options.udid,
-                isIncremental: previousBackupExists && !options.forceFullBackup,
+                isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+              deviceReportedBackupMode: this.deviceReportedBackupMode,
                 backupSize,
                 isEncrypted: true,
               };
@@ -861,7 +873,8 @@ export class BackupService extends EventEmitter {
               stderr: stderrBuffer.trim().substring(0, 500),
               udid: options.udid.substring(0, 8) + "...",
               duration: `${duration}ms`,
-              isIncremental: previousBackupExists && !options.forceFullBackup,
+              isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+              deviceReportedBackupMode: this.deviceReportedBackupMode,
             },
           });
         }
@@ -888,7 +901,8 @@ export class BackupService extends EventEmitter {
           ...(errorCode ? { errorCode } : {}),
           duration: Date.now() - this.startTime,
           deviceUdid: options.udid,
-          isIncremental: previousBackupExists && !options.forceFullBackup,
+          isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+          deviceReportedBackupMode: this.deviceReportedBackupMode,
           backupSize,
           isEncrypted: encryptionInfo.isEncrypted,
         };
@@ -988,6 +1002,28 @@ export class BackupService extends EventEmitter {
    */
   static isStderrActivitySignal(line: string): boolean {
     return BackupService.STDERR_ACTIVITY_SIGNALS.some((signal) => line.includes(signal));
+  }
+
+  /**
+   * BACKLOG-2914: was this run incremental?
+   *
+   * The device's own report wins when it gave one. The old derivation — a directory
+   * exists and nobody forced a full backup — remains as the fallback, because a run
+   * that fails before the mode line is printed still has to answer, but it is a
+   * FALLBACK now and telemetry records which of the two produced the flag.
+   *
+   * The fallback's failure mode is on record: on 2026-08-28 it reported
+   * `incremental=true` for a 61.2 GB / 52-minute transfer against a 4.4 GB partial
+   * with no `Manifest.db`, while `Status.plist` said `IsFullBackup: 1`.
+   */
+  private resolveIsIncremental(
+    previousBackupExists: boolean,
+    options: BackupOptions,
+  ): boolean {
+    if (this.deviceReportedBackupMode !== null) {
+      return this.deviceReportedBackupMode === "incremental";
+    }
+    return previousBackupExists && !options.forceFullBackup;
   }
 
   /**
@@ -1236,6 +1272,16 @@ export class BackupService extends EventEmitter {
     // Pattern 8: Backup mode — "Incremental backup mode" or "Full backup mode"
     if (line.includes("backup mode")) {
       log.info("[BackupService] " + line.trim());
+      // BACKLOG-2914: THE DEVICE'S OWN ANSWER, which until now was logged and thrown
+      // away while `isIncremental` was derived from whether a directory existed. On
+      // 2026-08-28 those two disagreed on a 61.2 GB run. Matched case-insensitively
+      // because the only thing pinned about this string is the two words in it.
+      const lower = line.toLowerCase();
+      if (lower.includes("incremental backup mode")) {
+        this.deviceReportedBackupMode = "incremental";
+      } else if (lower.includes("full backup mode")) {
+        this.deviceReportedBackupMode = "full";
+      }
       return;
     }
   }

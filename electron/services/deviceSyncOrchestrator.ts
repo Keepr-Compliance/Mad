@@ -14,6 +14,7 @@
 
 import { EventEmitter } from "events";
 import crypto from "crypto";
+import os from "os";
 import log from "electron-log";
 import { syncTimeline } from "./syncTimeline";
 import * as Sentry from "@sentry/electron/main";
@@ -526,6 +527,18 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * reports uncertainty rather than inheriting the previous run's answer.
    */
   private priorBackup: PriorBackupState = "unknown";
+
+  /**
+   * BACKLOG-2914 (FIX 4): which timeline phase the backup's counts belong to.
+   *
+   * The backup used to be ONE phase, so `annotate("backup", …)` always found it. It is
+   * now up to three — `backup`, `backup:waiting-for-device`, `backup:transferring` —
+   * and `annotate` matches on the phase NAME. Annotating "backup" after the sub-phases
+   * have opened would attach the bytes to a record that closed minutes earlier, and
+   * `annotate` returns quietly when it matches nothing at all. This field is what the
+   * counts are attached to, and it moves with the phase.
+   */
+  private backupTimelinePhase: string = "backup";
   private startTime: number = 0;
 
   /** BACKLOG-2899: mid-transfer free-space monitor */
@@ -589,12 +602,30 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // causes — see `PASSCODE_WAIT_DETECTION_MS` in backupService.
     this.backupService.on("waiting-for-passcode", () => {
       log.info("[DeviceSyncOrchestrator] Device has not started sending files yet");
+      // BACKLOG-2914 (FIX 4): WAIT-ON-DEVICE IS NOT MACHINE TIME.
+      //
+      // Three runs on 2026-08-28 waited 507 s, 684.6 s and 903.9 s before a single byte
+      // moved, and every one of those waits was INSIDE the `backup` figure — the
+      // 52-minute backup on the complete run was ~16% waiting. Fold that into a machine
+      // phase and the model learns syncs are eight to fifteen minutes slower than they
+      // are, and every duration estimate built on it inherits the error.
+      //
+      // It is its own phase from here. What it is waiting ON is not established — the
+      // device may be indexing, or a person may not have picked up their phone — which
+      // is why the phase is named for the observation (BACKLOG-2911 FIX 3) rather than
+      // for a cause. Root-causing the wait is explicitly not this branch's job.
+      this.enterBackupPhase("backup:waiting-for-device");
       this.emit("waiting-for-passcode");
     });
 
     this.backupService.on("passcode-entered", () => {
       // BACKLOG-2911 (FIX 3): marks the END of the wait, not the entry of a passcode.
       log.info("[DeviceSyncOrchestrator] Device started sending files; the wait is over");
+      // BACKLOG-2914 (FIX 4): the wait is over and the transfer is the next phase.
+      // This event fires only when the wait phase was opened (the backup service gates
+      // it on `hasEmittedPasscodeWaiting`), so a run whose transfer starts inside five
+      // seconds stays a single `backup` phase — correct, because it did not wait.
+      this.enterBackupPhase("backup:transferring");
       this.emit("passcode-entered");
     });
 
@@ -620,12 +651,30 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // BACKLOG-2907: a new run must establish its own answer. Without this reset the
     // early progress events of run 2 would carry run 1's prior-backup state.
     this.priorBackup = "unknown";
+    this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
 
     // BACKLOG-2898: open the phase timeline for this run.
     syncTimeline.beginSync({ platform: process.platform });
+
+    // BACKLOG-2914 (FIX 4): the HOST half of the outcome row's environment.
+    //
+    // A Mac at 98% full — which the founder's was on 2026-08-27 — writes 40 GB very
+    // differently from one at 40%. Without host disk state, "this release got slower"
+    // and "this user's disk filled up" are the same shape in the data. All four values
+    // are free: `os` is already imported and the disk reading is the same
+    // `checkAvailableDiskSpace` the guard runs anyway.
+    syncTimeline.setContext({
+      hostOsRelease: os.release(),
+      hostTotalMemBytes: os.totalmem(),
+    });
+    // Host DISK is recorded further down, at the reserve check that already reads it.
+    // Doing it here would mean a floating promise racing the outcome row — on a fast
+    // failure the row would carry the value or not depending on timing, which is worse
+    // than not carrying it, because the gap would look like a disk that could not be
+    // read rather than a run that ended first.
 
     // TASK-2110: Generate session ID for ACID rollback on cancel
     const sessionId = crypto.randomUUID();
@@ -695,6 +744,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // BACKLOG-1354: Pre-sync summary breadcrumb with all check results
       const libimobiledeviceAvailable = canUseLibimobiledevice();
       const connectedDevices = this.deviceService.getConnectedDevices();
+
+      // BACKLOG-2914 (FIX 4): the DEVICE half of the environment, from data
+      // `deviceDetectionService` already holds for the disk guard and then discards.
+      //
+      // PII: `productType` ("iPhone14,2") and `productVersion` ("17.0") only. NOT
+      // `name` — the founder's is a personal nickname — and NOT `udid` or
+      // `serialNumber`. The repo is public and this row is written to a support log.
+      const syncingDevice = connectedDevices.find((d) => d.udid === options.udid);
+      if (syncingDevice) {
+        syncTimeline.setContext({
+          deviceModel: syncingDevice.productType,
+          deviceIosVersion: syncingDevice.productVersion,
+        });
+      }
       Sentry.addBreadcrumb({
         category: "iphone.sync",
         message: "Pre-sync checks passed",
@@ -785,6 +848,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           : backupStatus.state === "absent"
             ? "none"
             : "unknown";
+
+      // BACKLOG-2914 (FIX 4): RECORDED, NOT INFERRED LATER.
+      //
+      // First and incremental are two different distributions; averaging them gives an
+      // estimate wrong for both. The flag is written from the SAME `isUsablePriorBackup`
+      // that decides everything else about the prior backup — including, since
+      // BACKLOG-2911's second pass, that an interrupted-but-complete backup counts as
+      // usable. Flip that predicate and this value flips with it, which is the control
+      // BACKLOG-2894 asks for.
+      //
+      // Three states, not two: `unknown` means the check itself failed and NOTHING was
+      // established. Collapsing it to `true` or `false` is the BACKLOG-2917 defect, and
+      // it would poison the very split this field exists to make.
+      syncTimeline.setContext({ priorBackup: this.priorBackup });
 
 
       // BACKLOG-2917: `let existingBackupSize = 0` used to live here, and it was the
@@ -1074,6 +1151,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const reserveCheck = await this.checkAvailableDiskSpace(
         SYNC_DISK_RESERVE_BYTES,
       );
+      // BACKLOG-2914 (FIX 4): host disk, from the reading the guard already took.
+      if (!reserveCheck.unavailable) {
+        syncTimeline.setContext({
+          hostDiskFreeBytes: reserveCheck.availableSpace,
+          ...(reserveCheck.totalSpace !== undefined
+            ? { hostDiskTotalBytes: reserveCheck.totalSpace }
+            : {}),
+        });
+      }
       if (!reserveCheck.hasEnoughSpace) {
         const userError = formatDiskSpaceError(
           Math.round(reserveCheck.availableSpace / 1024 / 1024),
@@ -1098,6 +1184,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // Step 1: Get device storage info to estimate backup size
       const storageInfo = await this.deviceService.getDeviceStorageInfo(options.udid);
+      // BACKLOG-2914 (FIX 4): what the phone itself is carrying. Already fetched for
+      // the estimate; recorded rather than discarded.
+      if (storageInfo) {
+        syncTimeline.setContext({
+          deviceUsedBytes: storageInfo.usedSpace,
+          deviceFreeBytes: storageInfo.availableSpace,
+          deviceCapacityBytes: storageInfo.totalCapacity,
+        });
+      }
 
       // BACKLOG-2925 (second pass): ONE resolution, ONE mark, ONE decision. This used
       // to be `if (storageInfo) { ...estimate, mark, guard... } else { ...different
@@ -1303,6 +1398,31 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         return this.errorResult("Sync cancelled by user");
       }
 
+      // BACKLOG-2914 (FIX 4): recorded BEFORE the failure return, so a FAILED run
+      // carries the same dimensions as a successful one. A failure row missing the
+      // incremental flag cannot be compared with the success rows it is a fraction of,
+      // and BACKLOG-2952 reads both halves of that fraction from this one row.
+      //
+      // `backupModeSource=device-reported` means idevicebackup2 printed "Full backup
+      // mode." or "Incremental backup mode." and that is what the flag says.
+      // `inferred` means it never printed one and the flag is the old derivation from
+      // whether a directory existed — the derivation that reported `incremental=true`
+      // for a 61.2 GB, 52-minute transfer on 2026-08-28. Two facts of very different
+      // quality, and an aggregate that cannot separate them is worth less than one that
+      // can.
+      syncTimeline.setContext({
+        incremental: backupResult.isIncremental,
+        backupModeSource:
+          backupResult.deviceReportedBackupMode === null ||
+          backupResult.deviceReportedBackupMode === undefined
+            ? "inferred"
+            : "device-reported",
+        wasEncrypted: !!backupResult.isEncrypted,
+        ...(backupResult.backupSize === null
+          ? { backupBytesUnmeasured: true }
+          : { backupBytes: backupResult.backupSize }),
+      });
+
       if (!backupResult.success || !backupResult.backupPath) {
         const error = backupResult.error || "Backup failed";
         const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
@@ -1329,13 +1449,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // 2917 describes: a backup that COMPLETED and then failed its size walk used to
       // be annotated `bytes: 0`, which reads in the timeline — and in the aggregate
       // BACKLOG-2894 will build — as a run that transferred nothing.
-      syncTimeline.annotate("backup", {
+      syncTimeline.annotate(this.backupTimelinePhase, {
         ...(backupResult.backupSize === null
           ? { bytesUnmeasured: true }
           : { bytes: backupResult.backupSize }),
         incremental: backupResult.isIncremental,
         encrypted: !!backupResult.isEncrypted,
       });
+
 
       let backupPath = backupResult.backupPath;
 
@@ -1502,6 +1623,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const duration = Date.now() - this.startTime;
       this.isRunning = false;
       this.setPhase("complete");
+
+      // BACKLOG-2914 (FIX 4): the counts this run produced, on the outcome row.
+      // Grepping the founder's whole 2026-08-28 session for "Sync completed" / a total
+      // returned NOTHING — the phases ended and the run simply stopped. The row that
+      // says a sync SUCCEEDED is the denominator every consumer of this data needs.
+      syncTimeline.setContext({
+        conversationsExtracted: resolvedConversations.length,
+        messagesExtracted: allMessages.length,
+        contactsExtracted: contacts.length,
+        extractionMs: duration,
+      });
 
       log.info("[DeviceSyncOrchestrator] Sync complete", {
         conversations: resolvedConversations.length,
@@ -1760,14 +1892,39 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.currentPhase = phase;
 
     // BACKLOG-2898: one timeline record per back-end step, with its duration
-    // and the counts it produced. Terminal states are not phases — "complete"
-    // hands off to persistence in syncHandlers, which opens the storing:*
-    // phases and ends the sync; the open phase is closed by that next enter().
-    if (phase !== "idle" && phase !== "complete" && phase !== "error") {
+    // and the counts it produced.
+    //
+    // BACKLOG-2914 (FIX 4): a terminal state now CLOSES the open phase instead of
+    // leaving it running. Terminal states are still not phases — "complete" hands off
+    // to persistence in `syncHandlers` — but the old comment's "the open phase is
+    // closed by that next enter()" was the defect: the next `enter()` happens after the
+    // IPC round trip AND after `persistSyncResult` reaches its first progress callback.
+    // Measured on the founder's 2026-08-28 run: `phase=cleanup elapsedMs=246270`, four
+    // minutes charged to closing two SQLite parsers, almost all of it belonging to the
+    // 663,722-row message write that had not been entered yet.
+    //
+    // Closing here makes the handoff show up as time attributed to NOTHING, which is
+    // what it is. A gap is a question; a wrong attribution is an answer.
+    if (phase === "idle" || phase === "complete" || phase === "error") {
+      syncTimeline.closePhase();
+    } else {
       syncTimeline.enter(phase);
+      if (phase === "backup") this.backupTimelinePhase = phase;
     }
 
     this.emit("phase", phase);
+  }
+
+  /**
+   * BACKLOG-2914 (FIX 4): open a backup SUB-phase and point the annotations at it.
+   *
+   * Not `setPhase`: `SyncPhase` is the UI's vocabulary and the renderer switches on it,
+   * so splitting the backup for measurement must not split it for the user — he is
+   * still "Exporting". The timeline gets the detail; the screen does not change.
+   */
+  private enterBackupPhase(phase: string): void {
+    this.backupTimelinePhase = phase;
+    syncTimeline.enter(phase);
   }
 
   /**
@@ -1944,6 +2101,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   ): Promise<{
     hasEnoughSpace: boolean;
     availableSpace: number;
+    /**
+     * BACKLOG-2914: the volume's capacity, so "5 GB free" can be read as a proportion.
+     * Absent on the failure path for the same reason `availableSpace` is 0 there:
+     * nothing was measured.
+     */
+    totalSpace?: number;
     /** BACKLOG-2899: true when the check itself failed and the result is a fail-open default. */
     unavailable?: boolean;
   }> {
@@ -1961,6 +2124,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       return {
         hasEnoughSpace: diskInfo.free >= requiredBytes,
         availableSpace: diskInfo.free,
+        totalSpace: diskInfo.size,
       };
     } catch (err) {
       log.error("[DeviceSyncOrchestrator] Failed to check disk space:", err);
@@ -2001,6 +2165,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // BACKLOG-2907: a new run must establish its own answer. Without this reset the
     // early progress events of run 2 would carry run 1's prior-backup state.
     this.priorBackup = "unknown";
+    this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
     this.startTime = Date.now();
 
