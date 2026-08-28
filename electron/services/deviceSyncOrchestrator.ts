@@ -584,14 +584,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       this.emit("password-required");
     });
 
-    // Forward passcode waiting events (user needs to enter passcode on iPhone)
+    // BACKLOG-2911 (FIX 3): the event name is historical. It means "the device has not
+    // started sending files yet", and a passcode prompt is one of at least three
+    // causes — see `PASSCODE_WAIT_DETECTION_MS` in backupService.
     this.backupService.on("waiting-for-passcode", () => {
-      log.info("[DeviceSyncOrchestrator] Waiting for user to enter passcode on iPhone");
+      log.info("[DeviceSyncOrchestrator] Device has not started sending files yet");
       this.emit("waiting-for-passcode");
     });
 
     this.backupService.on("passcode-entered", () => {
-      log.info("[DeviceSyncOrchestrator] User entered passcode, backup starting");
+      // BACKLOG-2911 (FIX 3): marks the END of the wait, not the entry of a passcode.
+      log.info("[DeviceSyncOrchestrator] Device started sending files; the wait is over");
       this.emit("passcode-entered");
     });
 

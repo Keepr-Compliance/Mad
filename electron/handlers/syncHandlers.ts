@@ -389,14 +389,16 @@ function setupEventForwarding(): void {
     sendToRenderer("sync:password-required", {});
   });
 
-  // Forward passcode waiting events (user needs to enter passcode on iPhone)
+  // BACKLOG-2911 (FIX 3): both channel names are historical. They mean "the device has
+  // not started sending yet" and "it has now" — a passcode prompt is one possible cause
+  // of the first, and nothing on this path can establish which.
   orchestrator.on("waiting-for-passcode", () => {
-    log.info("[SyncHandlers] Waiting for user to enter passcode on iPhone");
+    log.info("[SyncHandlers] Device has not started sending files yet");
     sendToRenderer("sync:waiting-for-passcode", {});
   });
 
   orchestrator.on("passcode-entered", () => {
-    log.info("[SyncHandlers] User entered passcode, backup starting");
+    log.info("[SyncHandlers] Device started sending files; transfer beginning");
     sendToRenderer("sync:passcode-entered", {});
   });
 

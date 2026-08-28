@@ -114,8 +114,12 @@ export function isIdevicebackup2DiskFullOutput(output: string): boolean {
  * - 'error': Error - Error events
  * - 'complete': BackupResult - When backup completes
  * - 'password-required': { udid: string } - When encrypted backup needs password (TASK-007)
- * - 'waiting-for-passcode': void - When waiting for user to enter passcode on iPhone
- * - 'passcode-entered': void - When passcode was entered and transfer begins
+ * - 'waiting-for-passcode': void - The device has not started sending files yet. The
+ *   name is historical (BACKLOG-2911 FIX 3): a passcode prompt is ONE possible cause,
+ *   alongside device-side indexing and a stalled process, and nothing here can tell
+ *   them apart. Do not phrase user-facing copy as though it could.
+ * - 'passcode-entered': void - The first file started transferring. Again historical:
+ *   it marks the END of the wait, not the entry of a passcode.
  */
 export class BackupService extends EventEmitter {
   private currentProcess: ChildProcess | null = null;
@@ -136,7 +140,29 @@ export class BackupService extends EventEmitter {
   private hasReceivedFileProgress: boolean = false;
   private hasEmittedPasscodeWaiting: boolean = false;
   private backupCommandStartTime: number = 0;
-  private static readonly PASSCODE_WAIT_DETECTION_MS = 5000; // 5 seconds without progress = waiting for passcode
+  /**
+   * BACKLOG-2911 (FIX 3): how long with no file progress before the UI is told the
+   * device has not started sending yet.
+   *
+   * THE NAME IS THE BUG. Five seconds without progress was read as "the user is being
+   * asked for a passcode", and NOTHING on this path reports that. Indexing, a phone
+   * nobody has picked up, and a hung process all produce exactly this. On the founder's
+   * 12:09 run on 2026-08-28 he had already entered his passcode and the screen told him
+   * to enter it for fifteen more minutes, because the first byte did not arrive for
+   * 903.9 s.
+   *
+   * The threshold and the event are unchanged — five seconds of no transfer really is
+   * worth telling the user about, and the renderer needs a signal to say so. What
+   * changed is the CLAIM made from it: the copy now reports the wait and offers the
+   * passcode as a possibility. See `SyncProgress.tsx`.
+   *
+   * The event name `waiting-for-passcode` is deliberately NOT renamed. It crosses
+   * `deviceSyncOrchestrator` -> `syncHandlers` -> preload -> `useIPhoneSync` ->
+   * `SyncProgress`, and renaming an IPC channel on a shared-file branch buys the
+   * founder nothing he can see. The lie was in the words on his screen, and that is
+   * where it is fixed.
+   */
+  private static readonly PASSCODE_WAIT_DETECTION_MS = 5000;
 
   // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes.
   //
@@ -540,7 +566,12 @@ export class BackupService extends EventEmitter {
         if (!this.hasReceivedFileProgress && !this.hasEmittedPasscodeWaiting) {
           this.hasEmittedPasscodeWaiting = true;
           const waitTime = ((Date.now() - this.backupCommandStartTime) / 1000).toFixed(1);
-          log.info(`[BackupService] No file progress after ${waitTime}s - waiting for user passcode`);
+          // BACKLOG-2911 (FIX 3): the log says what was observed. It used to assert
+          // "waiting for user passcode", which is one of at least three causes and is
+          // not the one the founder's 12:09 run had.
+          log.info(
+            `[BackupService] No file transfer ${waitTime}s after requesting the backup; device has not started sending yet (cause unknown: indexing, passcode prompt, or stalled)`,
+          );
           this.emit("waiting-for-passcode");
         }
       }, BackupService.PASSCODE_WAIT_DETECTION_MS);
@@ -596,7 +627,13 @@ export class BackupService extends EventEmitter {
             // If we previously emitted waiting-for-passcode, now emit passcode-entered
             if (this.hasEmittedPasscodeWaiting) {
               const waitTime = ((Date.now() - this.backupCommandStartTime) / 1000).toFixed(1);
-              log.info(`[BackupService] File transfer started after ${waitTime}s - passcode entered`);
+              // BACKLOG-2911 (FIX 3): the transfer starting proves the transfer
+              // started. It does NOT prove a passcode was entered — on 2026-08-28 the
+              // founder's passcode had been entered ~15 minutes before this line
+              // printed. The duration is the useful part and it is now the whole claim.
+              log.info(
+                `[BackupService] File transfer started after ${waitTime}s of waiting for the device`,
+              );
               this.emit("passcode-entered");
             }
           }
