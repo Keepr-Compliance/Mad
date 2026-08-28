@@ -138,15 +138,103 @@ export class BackupService extends EventEmitter {
   private backupCommandStartTime: number = 0;
   private static readonly PASSCODE_WAIT_DETECTION_MS = 5000; // 5 seconds without progress = waiting for passcode
 
-  // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes
-  // BACKLOG-1628: Track both stdout and stderr activity for watchdog
-  private lastStdoutTimestamp: number = 0;
-  private lastStderrTimestamp: number = 0;
+  // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes.
+  //
+  // BACKLOG-2911 (FIX 2): THE WATCHDOG COULD NOT FIRE, AND THIS PAIR OF FIELDS IS WHY.
+  //
+  //   12:09:43.414  Watchdog started (timeout: 180s)
+  //   …904 seconds of silence…
+  //   12:24:42.355  File transfer started after 903.9s
+  //
+  // It was silent through five times its own timeout, and `grep -c "Watchdog
+  // fired|zombie|killed by watchdog"` over the founder's entire 2026-08-28 session
+  // returns 0 across three runs. BACKLOG-1582 was CLOSED on the strength of this
+  // watchdog, so the silence has been read as good news for months.
+  //
+  // The two fields it used were `lastStdoutTimestamp` / `lastStderrTimestamp`, each
+  // bumped by its `data` handler on EVERY chunk, with liveness taken as the newer of
+  // the two. `buildBackupArgs` passes `-d` unconditionally, so libimobiledevice emits
+  // continuous debug chatter on stderr — the BACKLOG-2898 note below measures 336 such
+  // records in one 21-minute log — and the timestamp therefore never aged. The timer
+  // ran, asked "did any bytes arrive on either stream?", and could not get "no" while
+  // the process was alive at all.
+  //
+  // Which of the two possible failures this was is ESTABLISHED, not assumed, in
+  // `backupService.watchdogStall-2911.test.ts`: total silence killed the process even
+  // BEFORE this fix, so the timer and the kill path work. The question was what could
+  // not come back false.
+  //
+  // The replacement is a single timestamp advanced only by MEANINGFUL activity — see
+  // `noteMeaningfulActivity`. Idle polling (`np_get_notification`, `SSL_read 4,
+  // received 0`, mutex traces) no longer counts as a sign of life, because it is not
+  // one.
+  private lastMeaningfulActivityAt: number = 0;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private watchdogFired: boolean = false;
   private static readonly WATCHDOG_CHECK_INTERVAL_MS = 30_000; // Check every 30s
-  private static readonly WATCHDOG_PREPARING_TIMEOUT_MS = 180_000; // 3 min during preparation
-  private static readonly WATCHDOG_TRANSFER_TIMEOUT_MS = 120_000; // 2 min during active transfer
+
+  /**
+   * BACKLOG-2911 (FIX 2): how long with NO meaningful activity before the process is
+   * judged dead. One value for the whole run, and deliberately generous.
+   *
+   * THE OLD VALUES CANNOT BE KEPT ONCE LIVENESS MEANS PROGRESS. They were 180 s
+   * preparing / 120 s transferring against "any output at all", and all three of the
+   * founder's runs on 2026-08-28 waited longer than that before their first byte —
+   * 507 s, 684.6 s and 903.9 s — and then COMPLETED. Measuring progress at 180 s would
+   * have killed three working syncs. A watchdog that aborts healthy runs is worse than
+   * one that never fires.
+   *
+   * 30 minutes is just under 2x the worst measured wait (903.9 s), which is the only
+   * measurement that exists. It is not tuned beyond that, and it deliberately does not
+   * split preparing from transferring: nothing has yet measured how long the device may
+   * legitimately go quiet AFTER the last file while it finalises, so a tighter
+   * transfer-phase value would be a guess, and a wrong guess kills a 52-minute run at
+   * minute 51. FIX 4 on this same branch adds the per-phase durations that would make
+   * that number measurable rather than guessed; tighten it then, on data.
+   *
+   * The root cause of the 8-15 minute pre-transfer wait is NOT addressed here and is
+   * explicitly out of scope — see BACKLOG-2911. This constant accommodates it; it does
+   * not explain it.
+   */
+  private static readonly WATCHDOG_NO_PROGRESS_TIMEOUT_MS = 1_800_000;
+
+  /**
+   * BACKLOG-2911 (FIX 2): stderr lines that mean WORK IS HAPPENING, as opposed to
+   * libimobiledevice polling an idle connection.
+   *
+   * Every one of these is already recognised by `parseStderrLine` or
+   * `isKnownDebugLine`; this is the subset that carries evidence of traffic:
+   *
+   *   SSL_write / service_send   bytes LEAVING the host. BACKLOG-1628 put stderr into
+   *                              the liveness check for exactly this — during a
+   *                              563 MB manifest upload stdout is silent for minutes.
+   *   Sending '                  a named file starting to upload.
+   *   Requesting backup          the protocol advancing.
+   *   Starting backup
+   *   Negotiated Protocol
+   *   backup mode                the device answering full vs incremental.
+   *
+   * NOT here, and this is the point: `idevice_connection_receive_timeout`,
+   * `internal_plist_receive_timeout`, `np_get_notification`, and the `np_lock()` /
+   * `np_unlock()` mutex traces. Those are what a stalled connection sounds like.
+   * `SSL_read` is deliberately excluded too — the founder's log carries
+   * `SSL_read 4, received 0`, a read that returned nothing, on the same line shape as
+   * a read that returned 32 KB.
+   *
+   * Anything unrecognised does NOT count as life. That is the same choice
+   * `readSnapshotState` makes: match the known-good value rather than enumerate the
+   * bad ones, so a format change fails safe. The generous timeout above is what makes
+   * failing safe affordable.
+   */
+  private static readonly STDERR_ACTIVITY_SIGNALS = [
+    "SSL_write",
+    "service_send",
+    "Sending '",
+    "Requesting backup",
+    "Starting backup",
+    "Negotiated Protocol",
+    "backup mode",
+  ];
 
   // BACKLOG-1628: Stderr debug parsing state
   private stderrLineBuffer: string = "";
@@ -421,10 +509,9 @@ export class BackupService extends EventEmitter {
       this.emit("progress", this.lastProgress);
 
       // BACKLOG-1582: Reset watchdog state
-      // BACKLOG-1628: Reset both stdout and stderr timestamps
+      // BACKLOG-2911 (FIX 2): one timestamp, advanced only by meaningful activity.
       this.watchdogFired = false;
-      this.lastStdoutTimestamp = Date.now();
-      this.lastStderrTimestamp = Date.now();
+      this.lastMeaningfulActivityAt = Date.now();
       this.clearWatchdog();
 
       // BACKLOG-1628: Reset stderr parsing state
@@ -438,6 +525,15 @@ export class BackupService extends EventEmitter {
         stdio: ["pipe", "pipe", "pipe"],
       });
 
+      // BACKLOG-2911 (FIX 2): ONE start path, here, covering the whole run.
+      //
+      // It used to be started from inside the 5-second passcode timer and restarted at
+      // the first file, which meant the window before either of those was unwatched and
+      // the two call sites carried two different timeouts. There is one timeout now, so
+      // there is one place to start it.
+      this.lastMeaningfulActivityAt = Date.now();
+      this.startWatchdog();
+
       // Start timer to detect if we're waiting for passcode
       // If no file transfer progress after 5 seconds, assume waiting for user passcode
       this.passcodeWaitingTimer = setTimeout(() => {
@@ -446,8 +542,6 @@ export class BackupService extends EventEmitter {
           const waitTime = ((Date.now() - this.backupCommandStartTime) / 1000).toFixed(1);
           log.info(`[BackupService] No file progress after ${waitTime}s - waiting for user passcode`);
           this.emit("waiting-for-passcode");
-          // BACKLOG-1582: Start watchdog with preparing timeout (longer, user may take time)
-          this.startWatchdog(BackupService.WATCHDOG_PREPARING_TIMEOUT_MS);
         }
       }, BackupService.PASSCODE_WAIT_DETECTION_MS);
 
@@ -476,8 +570,11 @@ export class BackupService extends EventEmitter {
           );
         }
 
-        // BACKLOG-1582: Track last stdout activity for watchdog
-        this.lastStdoutTimestamp = Date.now();
+        // BACKLOG-2911 (FIX 2): stdout from idevicebackup2 is the tool reporting its own
+        // work — progress bars, "Receiving files", "Received N files", "Backup
+        // Successful". Unlike stderr under `-d`, none of it is idle polling, so every
+        // chunk here counts as life.
+        this.noteMeaningfulActivity();
 
         // Only log non-progress-bar output (progress bars are very spammy)
         // Progress bars look like: [====] XX% (X.X MB/Y.Y MB)
@@ -502,8 +599,6 @@ export class BackupService extends EventEmitter {
               log.info(`[BackupService] File transfer started after ${waitTime}s - passcode entered`);
               this.emit("passcode-entered");
             }
-            // BACKLOG-1582: Start watchdog with transfer timeout now that data is flowing
-            this.startWatchdog(BackupService.WATCHDOG_TRANSFER_TIMEOUT_MS);
           }
           this.lastProgress = progress;
           this.emit("progress", progress);
@@ -519,8 +614,10 @@ export class BackupService extends EventEmitter {
           stderrBuffer = stderrBuffer.slice(-65536);
         }
 
-        // BACKLOG-1628: Track stderr activity for watchdog
-        this.lastStderrTimestamp = Date.now();
+        // BACKLOG-2911 (FIX 2): stderr is NOT evidence of life on its own. `-d` makes
+        // libimobiledevice narrate an idle connection indefinitely, which is what kept
+        // the old `lastStderrTimestamp = Date.now()` here from ever ageing. The lines
+        // are classified below and only the ones that carry traffic count.
 
         // BACKLOG-1628: Parse stderr line-by-line for debug signals
         // The -d flag produces very verbose output (30K+ lines in 20s).
@@ -531,6 +628,10 @@ export class BackupService extends EventEmitter {
         this.stderrLineBuffer = lines.pop() || "";
 
         for (const line of lines) {
+          // BACKLOG-2911 (FIX 2): does this line mean anything is happening?
+          if (BackupService.isStderrActivitySignal(line)) {
+            this.noteMeaningfulActivity();
+          }
           this.parseStderrLine(line, options.udid);
         }
 
@@ -802,9 +903,12 @@ export class BackupService extends EventEmitter {
    * BACKLOG-1582: Start the watchdog timer that detects zombie idevicebackup2 processes.
    * If no stdout activity is received within the timeout, kills the process.
    */
-  private startWatchdog(timeoutMs: number): void {
+  private startWatchdog(): void {
     this.clearWatchdog();
-    log.info(`[BackupService] Watchdog started (timeout: ${timeoutMs / 1000}s)`);
+    const timeoutMs = BackupService.WATCHDOG_NO_PROGRESS_TIMEOUT_MS;
+    log.info(
+      `[BackupService] Watchdog started (no-progress timeout: ${timeoutMs / 1000}s)`,
+    );
 
     this.watchdogInterval = setInterval(() => {
       if (!this.currentProcess || !this.isRunning) {
@@ -812,15 +916,41 @@ export class BackupService extends EventEmitter {
         return;
       }
 
-      // BACKLOG-1628: Watchdog fires only when BOTH stdout AND stderr are silent.
-      // During manifest upload, stdout is silent but stderr shows SSL_write activity.
-      const lastActivityTimestamp = Math.max(this.lastStdoutTimestamp, this.lastStderrTimestamp);
-      const elapsed = Date.now() - lastActivityTimestamp;
+      // BACKLOG-2911 (FIX 2): the question is "has anything HAPPENED", not "has
+      // anything been PRINTED". BACKLOG-1628's requirement is preserved through the
+      // signal list rather than through the stream: a silent stdout during a manifest
+      // upload is still kept alive, by the SSL_write lines that upload produces.
+      const elapsed = Date.now() - this.lastMeaningfulActivityAt;
       if (elapsed >= timeoutMs) {
-        log.error(`[BackupService] Watchdog: no stdout/stderr for ${Math.round(elapsed / 1000)}s — killing zombie process`);
+        log.error(
+          `[BackupService] Watchdog: no progress for ${Math.round(elapsed / 1000)}s — killing zombie process`,
+        );
         this.killZombieProcess();
       }
     }, BackupService.WATCHDOG_CHECK_INTERVAL_MS);
+  }
+
+  /**
+   * BACKLOG-2911 (FIX 2): something happened. Restart the clock.
+   *
+   * Every call site is a place where the process demonstrated work: stdout from
+   * idevicebackup2, or an stderr line carrying traffic. Adding a call site is adding
+   * something the watchdog will accept as life, so add one only for output that cannot
+   * be produced by an idle connection.
+   */
+  private noteMeaningfulActivity(): void {
+    this.lastMeaningfulActivityAt = Date.now();
+  }
+
+  /**
+   * BACKLOG-2911 (FIX 2): does this stderr line carry evidence of traffic?
+   *
+   * Static and pure so the classification can be tested directly, without a spawned
+   * process. See `STDERR_ACTIVITY_SIGNALS` for what is in the list and — more
+   * importantly — what is deliberately not.
+   */
+  static isStderrActivitySignal(line: string): boolean {
+    return BackupService.STDERR_ACTIVITY_SIGNALS.some((signal) => line.includes(signal));
   }
 
   /**
@@ -973,8 +1103,12 @@ export class BackupService extends EventEmitter {
    * With the -d flag, idevicebackup2 emits detailed debug output on stderr.
    * We parse for specific patterns to:
    * 1. Detect manifest upload phase and surface progress to UI
-   * 2. Reset watchdog on SSL_write/service_send activity
-   * 3. Log significant phase transitions (protocol version, backup mode)
+   * 2. Log significant phase transitions (protocol version, backup mode)
+   *
+   * BACKLOG-2911 (FIX 2): resetting the watchdog is NO LONGER this method's job. It is
+   * done by `isStderrActivitySignal` in the caller, against an explicit list, so that
+   * the set of lines counting as "alive" is one greppable constant rather than a
+   * side effect spread through a parser.
    *
    * This method is designed to be lightweight — it's called for every stderr line
    * (potentially 30K+ lines in 20 seconds during manifest upload).
@@ -1007,10 +1141,12 @@ export class BackupService extends EventEmitter {
     }
 
     // Pattern 2: SSL_write or service_send — activity signals (hot path)
-    // These repeat thousands of times; do NOT log. Just confirm the process is alive.
-    // The lastStderrTimestamp is already updated by the data handler.
+    // These repeat thousands of times; do NOT log.
+    // BACKLOG-2911 (FIX 2): the watchdog clock is restarted for these by
+    // `isStderrActivitySignal` in the stderr line loop, BEFORE this parser runs. It
+    // used to be restarted by the `data` handler for every chunk regardless of content,
+    // which is why it could never fire.
     if (line.includes("SSL_write") || line.includes("service_send")) {
-      // Already tracked via lastStderrTimestamp in the data handler.
       return;
     }
 
