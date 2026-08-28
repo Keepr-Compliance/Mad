@@ -24,6 +24,14 @@
  *   code and description substituted — stated here rather than passed off as a
  *   verbatim capture.
  * - The `version exchange failed, error -5` line comes from BACKLOG-2951's runbook.
+ *   It appears ZERO times in the 2026-08-27 log — that is a fact about the log,
+ *   which does not receive everything the dev console emits, not about the device:
+ *   the line was observed directly in the dev console at 20:29 and 21:57 that day.
+ *   Treat the message it produces as unverified-in-field until it is captured.
+ * - `No space left on device` is the ONE fixture below that is deliberately NOT
+ *   transcribed. It appears zero times in that log, and is taken from
+ *   IDEVICEBACKUP2_DISK_FULL_PATTERNS — the detector's own vocabulary — then planted
+ *   in the debug stream on purpose, as a negative control. Stated at its use site.
  * - MBErrorDomain/4's device-supplied description was never captured. The fixture
  *   for it therefore carries NO description, which is also the harder case: the
  *   classifier must not need one.
@@ -40,6 +48,14 @@
  * to the old substring ladder` proves the fixture actually contains the words the
  * old ladder keyed on. Restoring the ladder must turn the first test red; a short,
  * clean stderr fixture would pass either way and prove nothing.
+ *
+ * Two further controls pin the ORDERING, which is what makes the surviving stderr
+ * reads safe. `a broken-pipe teardown line does not outrank the device's own code`
+ * pairs a device code with a broken-pipe line, as the real 208 run does, so the
+ * anchored exit-255 patterns cannot be reordered above the device-code switch. `a
+ * disk-full phrase present only in the debug stream decides nothing` pins the last
+ * substring detector to idevicebackup2's own stdout. Both mutations used to leave
+ * this suite entirely green.
  */
 
 import {
@@ -178,6 +194,22 @@ const BROKEN_PIPE_TAIL = `22:35:45.355 idevice.c:1017 internal_ssl_write(): pre-
 22:35:45.355 idevice.c:643 internal_connection_send(): ERROR: usbmuxd_send returned -32 (Broken pipe)
 22:35:45.355 idevice.c:1019 internal_ssl_write(): ERROR: internal_connection_send returned -2
 22:35:45.356 idevice.c:1550 idevice_connection_disable_bypass_ssl(): SSL mode disabled`;
+
+/**
+ * The SAME teardown block, from the 22:44:38 run — the one that ended in
+ * device-locked/208 with the phone genuinely locked. TRANSCRIBED verbatim from
+ * main.log 22:44:38.163, which is 141ms after the 208 plist above it.
+ *
+ * `usbmuxd_send returned -32 (Broken pipe)` appears at teardown in FOUR of the five
+ * failures on 2026-08-27, including this device-locked one. It is emitted as the
+ * connection tears down whatever the cause, so on its own it is not a link-drop
+ * discriminator — the same shape as `SSL_read 4, received 0`, one rung further down.
+ * The classifier survives it only because the device's own code outranks it.
+ */
+const BROKEN_PIPE_TAIL_DEVICE_LOCKED_RUN = `22:44:38.163 idevice.c:1017 internal_ssl_write(): pre-send length = 31 bytes
+22:44:38.163 idevice.c:643 internal_connection_send(): ERROR: usbmuxd_send returned -32 (Broken pipe)
+22:44:38.163 idevice.c:1019 internal_ssl_write(): ERROR: internal_connection_send returned -2
+22:44:38.163 idevice.c:1550 idevice_connection_disable_bypass_ssl(): SSL mode disabled`;
 
 /** TRANSCRIBED from BACKLOG-2951's runbook — the mobilebackup2 service stuck. */
 const VERSION_EXCHANGE_TAIL = `22:54:30.508 mobilebackup2.c:216 mobilebackup2_client_new(): version exchange failed, error -5
@@ -335,6 +367,47 @@ describe("BACKLOG-2913: backup failures report the cause the device gave", () =>
       expect(result.message).not.toBe(BACKUP_CONNECTION_LOST_MESSAGE);
     });
 
+    it("a broken-pipe teardown line does not outrank the device's own code", () => {
+      // The 22:44:38 run replayed whole: the device answered 208 on stdout AND in
+      // the stderr plist, and the link then tore down with `usbmuxd_send returned
+      // -32 (Broken pipe)` 141ms later. That token appears at teardown in four of
+      // the five failures on 2026-08-27, including this device-locked one, so it is
+      // teardown chatter rather than a link-drop signal.
+      //
+      // Until this test no fixture paired a device code WITH a broken-pipe line,
+      // even though the real 208 stderr contains both. Moving
+      // CONNECTION_DROPPED_PATTERN above the device-code switch therefore left the
+      // whole suite green — while telling the founder to try a different cable for a
+      // phone that was simply locked.
+      const stderr =
+        mutexFlood(20) +
+        "\n" +
+        dlProcessMessagePlist(208, DEVICE_LOCKED_DESCRIPTION) +
+        "\n" +
+        afcLockCycle(1) +
+        "\n" +
+        BROKEN_PIPE_TAIL_DEVICE_LOCKED_RUN;
+
+      // The fixture is worth nothing unless it really carries both signals, in the
+      // order the device emitted them.
+      expect(stderr).toContain("usbmuxd_send returned -32 (Broken pipe)");
+      expect(stderr).toContain("<integer>208</integer>");
+      expect(stderr.indexOf("<integer>208</integer>")).toBeLessThan(
+        stderr.indexOf("usbmuxd_send returned -32 (Broken pipe)"),
+      );
+
+      const result = classifyBackupFailure(
+        48,
+        stdoutFailureBlock(208, DEVICE_LOCKED_DESCRIPTION),
+        stderr,
+      );
+
+      expect(result.message).toBe(BACKUP_DEVICE_LOCKED_MESSAGE);
+      expect(result.message).not.toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+      expect(result.errorCode).toBe("DEVICE_LOCKED");
+      expect(result.cause.deviceErrorCode).toBe(208);
+    });
+
     it("`PasswordProtected` and `TrustedHostAttached` plist keys decide nothing", () => {
       // The other three rungs of the old ladder, shadowed by `locked` and equally
       // poisoned: all three words occur as ordinary plist key names.
@@ -347,6 +420,29 @@ describe("BACKLOG-2913: backup failures report the cause the device gave", () =>
 
       const result = classifyBackupFailure(151, STDOUT_NO_ERROR_LINE, stderr);
       expect(result.message).toBe(BACKUP_HOST_DISK_FULL_MESSAGE);
+    });
+
+    it("a disk-full phrase present only in the debug stream decides nothing", () => {
+      // The last substring detector left standing is BACKLOG-2899's, and it reads
+      // idevicebackup2's own stdout. Re-admitting the debug stream to that one call
+      // — `isIdevicebackup2DiskFullOutput(stdout) || isIdevicebackup2DiskFullOutput(stderr)`
+      // — is the exact defect this change exists to prevent, and until this test it
+      // left the whole suite green.
+      //
+      // Fixture provenance, stated because this one is NOT a transcription: `No
+      // space left on device` appears ZERO times in the founder's 2026-08-27 log
+      // (his disk-full run predates it and that log has since rotated away). The
+      // phrase is taken from IDEVICEBACKUP2_DISK_FULL_PATTERNS — the detector's own
+      // vocabulary — and planted in the debug stream deliberately. That is the
+      // point: a phrase the detector DOES recognise must still decide nothing when
+      // it arrives on the stream that is full of routine chatter.
+      const stderr = mutexFlood(5) + "\nNo space left on device";
+
+      const result = classifyBackupFailure(255, STDOUT_NO_ERROR_LINE, stderr);
+
+      expect(result.errorCode).not.toBe("INSUFFICIENT_SPACE");
+      expect(result.message).not.toBe(BACKUP_HOST_DISK_FULL_MESSAGE);
+      expect(result.cause.source).toBe("none");
     });
   });
 

@@ -269,9 +269,19 @@ function decodePlistString(value: string): string {
 /**
  * BACKLOG-2913: read the device's own error code out of a failed run.
  *
- * stdout first (always emitted, survives truncation), then the stderr plist. The
- * LAST occurrence wins in both: a run can log several DLMessage responses, and the
- * one that ended it is the last.
+ * stdout first WHEN IT CARRIES A CODE, then the stderr plist. The LAST occurrence
+ * wins in both: a run can log several DLMessage responses, and the one that ended it
+ * is the last.
+ *
+ * stdout is preferred because idevicebackup2 prints the `ErrorCode N: ...` line via
+ * `progress_printf` (a `vprintf`), so it is emitted whether or not `-d` was passed,
+ * and stdout is low-volume enough to survive the 64KB tail cap that can push the
+ * stderr plist out of the buffer entirely. Measured on the founder's five real
+ * failures of 2026-08-27: stderr hit the cap in 5 of 5 runs, stdout ran 0–475 bytes.
+ *
+ * Preferred is NOT the same as always present: four of those five runs captured ZERO
+ * stdout, because the run never reached the point of printing a summary. Those runs
+ * are carried by the fallback chain below, not by this parse.
  *
  * Returns `deviceErrorCode: null` when neither stream carried a code. That is
  * "the device did not tell us", never "no error".
@@ -372,11 +382,25 @@ function describeUnmappedDeviceError(
  * 3. An honest "we do not know", carrying the exit code so a support log can still
  *    identify the run.
  *
- * What it never does is match keywords against the raw `-d` debug stream. That
- * stream contains `afc_lock(): Locked` and `np_lock(): Locked` hundreds of times per
- * run, plus `PasswordProtected`, `TrustedHostAttached` and `PairRecordProtectionClass`
- * as ordinary plist keys — so the old ladder's `locked` rung matched on every single
- * failure and the `disk`, `trust` and `password` rungs below it were unreachable.
+ * What it never does is match UNANCHORED routine vocabulary against the raw `-d`
+ * debug stream. That stream contains `afc_lock(): Locked` and `np_lock(): Locked`
+ * hundreds of times per run, plus `PasswordProtected`, `TrustedHostAttached` and
+ * `PairRecordProtectionClass` as ordinary plist keys — so the old ladder's `locked`
+ * rung matched on every single failure and the `disk`, `trust` and `password` rungs
+ * below it were unreachable.
+ *
+ * The `-d` stream is not excluded outright, and saying so would mislead a future
+ * reader into breaking the thing that makes reading it safe. TWO anchored patterns
+ * — `SERVICE_VERSION_EXCHANGE_PATTERN` and `CONNECTION_DROPPED_PATTERN` — do run
+ * against stderr, because in the exit-255 class the device never answers and the
+ * debug stream is the only evidence that exists. Both are gated behind
+ * `deviceErrorCode === null`: they are consulted only when the device reported no
+ * code at all, and can never override a code the device did report. That ordering is
+ * load-bearing — `usbmuxd_send returned -32 (Broken pipe)` is teardown chatter that
+ * appears in four of the five real failures of 2026-08-27, INCLUDING the one that
+ * was genuinely a locked phone. Reordering either check above the device-code switch
+ * would tell that user to try a different cable. `backupService.failureCause-2913`
+ * pins it.
  */
 export function classifyBackupFailure(
   exitCode: number | null,
@@ -443,8 +467,13 @@ export function classifyBackupFailure(
     };
   }
 
-  // Last resort, and the ONLY surviving substring match: idevicebackup2's own
-  // human-readable stdout (BACKLOG-2899's detector), never the debug stream.
+  // Last resort. This is the only UNANCHORED vocabulary match left, and it is why it
+  // reads `stdout` and not `stderr`: idevicebackup2's own human-readable summary
+  // (BACKLOG-2899's detector), never the `-d` debug stream. The two anchored
+  // exit-255 patterns above DO read stderr — see the docblock — but they match a
+  // specific fault string; these patterns match ordinary words like "disk full",
+  // which the debug stream is entitled to contain for reasons that are not a
+  // failure. Passing `stderr` here re-creates the original bug.
   if (isIdevicebackup2DiskFullOutput(stdout)) {
     return {
       message: BACKUP_HOST_DISK_FULL_MESSAGE,
