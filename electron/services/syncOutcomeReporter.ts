@@ -179,6 +179,20 @@ export function reportSyncOutcome(row: SyncOutcomeRow): void {
   } catch (error) {
     log.warn("[SyncOutcome] Sentry report failed; sync unaffected:", error);
   }
+
+  // SECOND SINK, isolated from the first. Same row, two destinations, and one being
+  // down must not cost the other: Sentry answers "did this release break something",
+  // Postgres is where the duration model gets fitted. Required lazily so importing
+  // the timeline does not drag supabaseService into every suite that touches a sync.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { recordSyncOutcome } = require("./syncOutcomeSupabase") as {
+      recordSyncOutcome: (r: SyncOutcomeRow) => void;
+    };
+    recordSyncOutcome(row);
+  } catch (error) {
+    log.warn("[SyncOutcome] Supabase report failed; sync unaffected:", error);
+  }
 }
 
 export default { reportSyncOutcome, reportOutcomeToSentry, scrubOutcomeFields, durationBucket };
