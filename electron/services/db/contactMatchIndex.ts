@@ -161,8 +161,13 @@ const LIVE_PHONE_SQL = `SELECT DISTINCT c.id FROM contacts c
  * batch loader reproduces it by lowercasing the stored side IN SQL rather than
  * in JavaScript. (They are not the same function: SQLite's `LOWER` is
  * ASCII-only, `String.prototype.toLowerCase` is Unicode-aware.)
+ *
+ * EXPORTED for `contactIdentityEvidence` (BACKLOG-2630 D2 piece 2) so the
+ * evidence gatherer probes with THIS function rather than a second copy of the
+ * rule. A gatherer that keyed identifiers differently from the linker would
+ * report facts about a match the linker could never make.
  */
-function emailProbeKeys(emails: string[]): string[] {
+export function emailProbeKeys(emails: string[]): string[] {
   return emails.map((e) => e?.trim().toLowerCase()).filter((e): e is string => !!e);
 }
 
@@ -181,8 +186,11 @@ function emailProbeKeys(emails: string[]): string[] {
  * key (they differ in length). Flooring the STORED side as well would mean
  * re-keying `contact_phones` to drop short values, which is the key-layer floor
  * BACKLOG-2754 rejects.
+ *
+ * EXPORTED for `contactIdentityEvidence` (BACKLOG-2630 D2 piece 2), for the same
+ * reason as `emailProbeKeys` above: one digit floor, one place.
  */
-function phoneProbeKeys(phones: string[]): string[] {
+export function phoneProbeKeys(phones: string[]): string[] {
   return phones.map((p) => toMatchingKey(p)).filter((k) => k.length > 0);
 }
 

@@ -67,6 +67,11 @@ const SURROUNDING_TABLES = `
     -- reads that file and asserts the same vocabulary.
     source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
     is_imported INTEGER DEFAULT 1,
+    -- BACKLOG-2630 D2 piece 2: named by contactRecencySql's
+    -- IMPORTED_CONTACT_LAST_COMMUNICATION_SQL, which the evidence gatherer execs
+    -- verbatim rather than re-deriving. Transcribed from schema.sql.
+    last_inbound_at DATETIME,
+    last_outbound_at DATETIME,
     removed_at DATETIME,
     removed_reason TEXT
   );
@@ -156,6 +161,7 @@ const SURROUNDING_TABLES = `
     removed_reason TEXT,
     UNIQUE(transaction_id, contact_id)
   );
+
 `;
 
 /**
