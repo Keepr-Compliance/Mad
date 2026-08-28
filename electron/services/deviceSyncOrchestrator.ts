@@ -14,6 +14,7 @@
 
 import { EventEmitter } from "events";
 import crypto from "crypto";
+import os from "os";
 import log from "electron-log";
 import { syncTimeline } from "./syncTimeline";
 import * as Sentry from "@sentry/electron/main";
@@ -152,17 +153,59 @@ function snapshotStateForMark(status: BackupStatusReport): MarkSnapshotState {
  * "Previous backup can't be used. Starting a fresh backup..." and, in the same run,
  * NOT told that the replacement is a multi-hour full transfer. One fact, two answers.
  *
- * The predicate is the item's, unchanged: `isComplete && !isInterrupted`. Deliberately
- * NOT also `snapshotState === "finished"` — see the note at the estimate gate, which
- * explains why demoting a manifest-present / Status.plist-absent backup would trade a
- * measured number for a discredited one.
+ * BACKLOG-2911 (second pass): `!isInterrupted` IS GONE, and this is the whole of
+ * that fix. The predicate now asks one question — IS THE INDEX INTACT? — because that
+ * is the only thing the next run depends on.
+ *
+ * PROVEN BY A DELIBERATE INTERRUPTION, founder's machine, 2026-08-28. A complete
+ * 57.57 GB backup, an incremental sync underway, the cable pulled mid-transfer, and
+ * the directory measured before and after:
+ *
+ *   | Manifest.db sha | `fa9c84e8768334d3…`  ->  `fa9c84e8768334d3…`  IDENTICAL |
+ *   | folder size     | 57.57 GB             ->  58.47 GB, the delta KEPT       |
+ *   | IsFullBackup    | 0                    ->  0, still incremental           |
+ *   | SnapshotState   | `finished`           ->  `uploading`  <- the ONLY change |
+ *
+ * `isInterrupted` is `snapshotState === "unfinished"`, so the ONE bit that moved was
+ * the bit this predicate refused on. Keepr logged `isComplete=true, isInterrupted=true`
+ * and threw away 57.9 GB it had just measured; the device then transferred
+ * incrementally against that unchanged manifest at ~482 MB/min, growing the folder
+ * from 58 GB rather than restarting at zero. **Keepr was more pessimistic about the
+ * device's data than the device was.**
+ *
+ * There is no host-side resume being added here. There is none to add — see the
+ * `unfinished` arm below, and BACKLOG-2911's original finding that `idevicebackup2`
+ * never reads `Status.plist` on the backup path. The device resumes itself by diffing
+ * a manifest the interruption never touched. All this predicate had to stop doing was
+ * discard the manifest.
+ *
+ * WHY `isComplete` AND NOT `IsFullBackup === 0`, which the item proposed: `isComplete`
+ * is already `Manifest.db && Info.plist` present (`backupService.checkBackupStatus`),
+ * which IS the "the index is intact" test the experiment validated. `IsFullBackup` is
+ * NOT on `BackupStatusReport` at all, and adding it would be wrong: it describes the
+ * LAST RUN, not the directory, so a completed first-ever backup carries
+ * `IsFullBackup: 1` + `SnapshotState: finished` — the most usable state that exists on
+ * disk — and a predicate demanding `0` would refuse it.
+ *
+ * Deliberately NOT also `snapshotState === "finished"` — see the note at the estimate
+ * gate, which explains why demoting a manifest-present / Status.plist-absent backup
+ * would trade a measured number for a discredited one. That reasoning now covers
+ * `"unfinished"` as well.
+ *
+ * THE GUARD THAT KEEPS THIS FROM BECOMING "ALWAYS REUSE": `isComplete` is false when
+ * `Manifest.db` is missing, which is the founder's OTHER real state (2026-08-27:
+ * `BackupState: empty`, `SnapshotState: uploading`, no manifest, 6.3 MB of
+ * `Info.plist`). That directory is still refused, and must stay refused —
+ * `deviceSyncOrchestrator.interruptedIsUsable-2911.test.ts` fails if it is not.
+ * Reintroducing "always reuse" reintroduces BACKLOG-2925, which shipped three days
+ * before this change.
  *
  * `state !== "present"` is `false` rather than a thrown narrow: `absent` and `unknown`
  * have no usable prior backup to speak of, and each caller decides separately what
  * that means for the state it reports.
  */
 function isUsablePriorBackup(status: BackupStatusReport): boolean {
-  return status.state === "present" && status.isComplete && !status.isInterrupted;
+  return status.state === "present" && status.isComplete;
 }
 
 /**
@@ -484,6 +527,18 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * reports uncertainty rather than inheriting the previous run's answer.
    */
   private priorBackup: PriorBackupState = "unknown";
+
+  /**
+   * BACKLOG-2914 (FIX 4): which timeline phase the backup's counts belong to.
+   *
+   * The backup used to be ONE phase, so `annotate("backup", …)` always found it. It is
+   * now up to three — `backup`, `backup:waiting-for-device`, `backup:transferring` —
+   * and `annotate` matches on the phase NAME. Annotating "backup" after the sub-phases
+   * have opened would attach the bytes to a record that closed minutes earlier, and
+   * `annotate` returns quietly when it matches nothing at all. This field is what the
+   * counts are attached to, and it moves with the phase.
+   */
+  private backupTimelinePhase: string = "backup";
   private startTime: number = 0;
 
   /** BACKLOG-2899: mid-transfer free-space monitor */
@@ -542,14 +597,35 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       this.emit("password-required");
     });
 
-    // Forward passcode waiting events (user needs to enter passcode on iPhone)
+    // BACKLOG-2911 (FIX 3): the event name is historical. It means "the device has not
+    // started sending files yet", and a passcode prompt is one of at least three
+    // causes — see `PASSCODE_WAIT_DETECTION_MS` in backupService.
     this.backupService.on("waiting-for-passcode", () => {
-      log.info("[DeviceSyncOrchestrator] Waiting for user to enter passcode on iPhone");
+      log.info("[DeviceSyncOrchestrator] Device has not started sending files yet");
+      // BACKLOG-2914 (FIX 4): WAIT-ON-DEVICE IS NOT MACHINE TIME.
+      //
+      // Three runs on 2026-08-28 waited 507 s, 684.6 s and 903.9 s before a single byte
+      // moved, and every one of those waits was INSIDE the `backup` figure — the
+      // 52-minute backup on the complete run was ~16% waiting. Fold that into a machine
+      // phase and the model learns syncs are eight to fifteen minutes slower than they
+      // are, and every duration estimate built on it inherits the error.
+      //
+      // It is its own phase from here. What it is waiting ON is not established — the
+      // device may be indexing, or a person may not have picked up their phone — which
+      // is why the phase is named for the observation (BACKLOG-2911 FIX 3) rather than
+      // for a cause. Root-causing the wait is explicitly not this branch's job.
+      this.enterBackupPhase("backup:waiting-for-device");
       this.emit("waiting-for-passcode");
     });
 
     this.backupService.on("passcode-entered", () => {
-      log.info("[DeviceSyncOrchestrator] User entered passcode, backup starting");
+      // BACKLOG-2911 (FIX 3): marks the END of the wait, not the entry of a passcode.
+      log.info("[DeviceSyncOrchestrator] Device started sending files; the wait is over");
+      // BACKLOG-2914 (FIX 4): the wait is over and the transfer is the next phase.
+      // This event fires only when the wait phase was opened (the backup service gates
+      // it on `hasEmittedPasscodeWaiting`), so a run whose transfer starts inside five
+      // seconds stays a single `backup` phase — correct, because it did not wait.
+      this.enterBackupPhase("backup:transferring");
       this.emit("passcode-entered");
     });
 
@@ -575,12 +651,30 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // BACKLOG-2907: a new run must establish its own answer. Without this reset the
     // early progress events of run 2 would carry run 1's prior-backup state.
     this.priorBackup = "unknown";
+    this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
 
     // BACKLOG-2898: open the phase timeline for this run.
     syncTimeline.beginSync({ platform: process.platform });
+
+    // BACKLOG-2914 (FIX 4): the HOST half of the outcome row's environment.
+    //
+    // A Mac at 98% full — which the founder's was on 2026-08-27 — writes 40 GB very
+    // differently from one at 40%. Without host disk state, "this release got slower"
+    // and "this user's disk filled up" are the same shape in the data. All four values
+    // are free: `os` is already imported and the disk reading is the same
+    // `checkAvailableDiskSpace` the guard runs anyway.
+    syncTimeline.setContext({
+      hostOsRelease: os.release(),
+      hostTotalMemBytes: os.totalmem(),
+    });
+    // Host DISK is recorded further down, at the reserve check that already reads it.
+    // Doing it here would mean a floating promise racing the outcome row — on a fast
+    // failure the row would carry the value or not depending on timing, which is worse
+    // than not carrying it, because the gap would look like a disk that could not be
+    // read rather than a run that ended first.
 
     // TASK-2110: Generate session ID for ACID rollback on cancel
     const sessionId = crypto.randomUUID();
@@ -650,6 +744,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // BACKLOG-1354: Pre-sync summary breadcrumb with all check results
       const libimobiledeviceAvailable = canUseLibimobiledevice();
       const connectedDevices = this.deviceService.getConnectedDevices();
+
+      // BACKLOG-2914 (FIX 4): the DEVICE half of the environment, from data
+      // `deviceDetectionService` already holds for the disk guard and then discards.
+      //
+      // PII: `productType` ("iPhone14,2") and `productVersion` ("17.0") only. NOT
+      // `name` — the founder's is a personal nickname — and NOT `udid` or
+      // `serialNumber`. The repo is public and this row is written to a support log.
+      const syncingDevice = connectedDevices.find((d) => d.udid === options.udid);
+      if (syncingDevice) {
+        syncTimeline.setContext({
+          deviceModel: syncingDevice.productType,
+          deviceIosVersion: syncingDevice.productVersion,
+        });
+      }
       Sentry.addBreadcrumb({
         category: "iphone.sync",
         message: "Pre-sync checks passed",
@@ -741,6 +849,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             ? "none"
             : "unknown";
 
+      // BACKLOG-2914 (FIX 4): RECORDED, NOT INFERRED LATER.
+      //
+      // First and incremental are two different distributions; averaging them gives an
+      // estimate wrong for both. The flag is written from the SAME `isUsablePriorBackup`
+      // that decides everything else about the prior backup — including, since
+      // BACKLOG-2911's second pass, that an interrupted-but-complete backup counts as
+      // usable. Flip that predicate and this value flips with it, which is the control
+      // BACKLOG-2894 asks for.
+      //
+      // Three states, not two: `unknown` means the check itself failed and NOTHING was
+      // established. Collapsing it to `true` or `false` is the BACKLOG-2917 defect, and
+      // it would poison the very split this field exists to make.
+      syncTimeline.setContext({ priorBackup: this.priorBackup });
+
 
       // BACKLOG-2917: `let existingBackupSize = 0` used to live here, and it was the
       // same defect wearing a second costume — `0` meant BOTH "no prior backup" and
@@ -778,13 +900,22 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // against a number that abort guaranteed was too small. The guard made its own
         // next invocation weaker.
         //
-        // The gate is the item's: `isComplete && !isInterrupted`. Deliberately NOT also
-        // `snapshotState === "finished"` — that would demote STATE D (a manifest
-        // present, Status.plist absent: a real backup predating this device writing
-        // one) from a MEASURED size to the `0.25 x used space` estimate that
-        // BACKLOG-2918 documents as untrustworthy and BACKLOG-2910 removed the
-        // justification for. Trading a measured number for a discredited one is a
-        // downgrade, not a tightening. Ruled on by SR review.
+        // The gate is `isComplete` — see `isUsablePriorBackup`. BACKLOG-2911's second
+        // pass removed `!isInterrupted` from it, and THIS SITE IS THE 11.5 GB NUMBER
+        // the founder saw: on 2026-08-28 an interrupted-but-complete 57.9 GB backup
+        // took the `partial` arm here, so `resolveBackupSizeEstimate` fell through to
+        // `0.25 x used space` and produced "Estimated backup size: 11547 MB" for a
+        // directory that had just been measured at 57.9 GB. The measured size is a
+        // lower bound only when the INDEX is torn; an intact manifest with a torn
+        // snapshot is the size of the backup that is actually on disk.
+        //
+        // Still deliberately NOT also `snapshotState === "finished"` — that would
+        // demote STATE D (a manifest present, Status.plist absent: a real backup
+        // predating this device writing one) from a MEASURED size to the
+        // `0.25 x used space` estimate that BACKLOG-2918 documents as untrustworthy
+        // and BACKLOG-2910 removed the justification for. Trading a measured number
+        // for a discredited one is a downgrade, not a tightening. Ruled on by SR
+        // review, and the 2026-08-28 experiment extends it to `"unfinished"`.
         //
         // BACKLOG-2938: this gate used to derive `isComplete && !isInterrupted` here,
         // a second time, independently of the UI-facing mapping above. That is exactly
@@ -799,8 +930,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             : { kind: "partial", bytes: backupStatus.size.bytes };
 
         if (priorBackup.kind === "partial") {
+          // `isInterrupted` is still LOGGED here — it is a real fact about the last
+          // run and it is what a support reader wants next — it simply no longer
+          // decides anything. Reading this line as "interrupted, therefore refused"
+          // is the misreading that produced BACKLOG-2911's second pass.
           log.warn(
-            `[DeviceSyncOrchestrator] Previous backup is on disk (${priorBackup.bytes} bytes) but is NOT usable as an estimate (isComplete=${backupStatus.isComplete}, isInterrupted=${backupStatus.isInterrupted}); estimating from device storage instead. See BACKLOG-2925.`,
+            `[DeviceSyncOrchestrator] Previous backup is on disk (${priorBackup.bytes} bytes) but has no usable index (isComplete=${backupStatus.isComplete}, isInterrupted=${backupStatus.isInterrupted}); estimating from device storage instead. See BACKLOG-2925.`,
           );
         }
 
@@ -830,24 +965,96 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // The `never` arm is the reintroduction guard: adding a fourth snapshot state,
         // or deleting a case, fails to compile rather than silently falling through to
         // the same silence this replaces.
+        //
+        // BACKLOG-2911 (second pass): the REUSE announcement is now a closure, because
+        // TWO arms reach it. Before this change only `finished`/`absent` could announce
+        // reuse and `unfinished` always announced a restart — which is how the founder,
+        // whose 57.9 GB manifest was byte-identical after the interruption, was told
+        // "Previous sync didn't finish. Starting over..." while the device went on to
+        // transfer incrementally against that very manifest. The predicate and the
+        // sentence have to move together or the fix is invisible to him.
+        const announceUsablePriorBackup = async (interrupted: boolean): Promise<void> => {
+          const lastSync = backupStatus.lastModified;
+          const timeSinceLastSync = lastSync
+            ? Math.round((Date.now() - lastSync.getTime()) / 1000 / 60)
+            : null;
+          log.info(
+            `[DeviceSyncOrchestrator] Previous backup exists (${sizeGB === null ? "size unmeasured" : `${sizeGB} GB`}), last modified ${timeSinceLastSync} minutes ago, lastRunInterrupted=${interrupted}`,
+          );
+
+          // Format time since last sync for user
+          let timeAgoStr = "";
+          if (timeSinceLastSync !== null) {
+            if (timeSinceLastSync < 60) {
+              timeAgoStr = `${timeSinceLastSync} minutes ago`;
+            } else if (timeSinceLastSync < 1440) {
+              timeAgoStr = `${Math.round(timeSinceLastSync / 60)} hours ago`;
+            } else {
+              timeAgoStr = `${Math.round(timeSinceLastSync / 1440)} days ago`;
+            }
+          }
+
+          // The size and "synced X ago" are unchanged. The interrupted variant adds
+          // ONE clause, and it claims only what the experiment established: the data
+          // already on disk is kept. It does NOT promise a host-side resume, and it
+          // does NOT promise the device will credit every partially-transferred file —
+          // neither is knowable from here. What was measured is that the index
+          // survived and the next run continued from it.
+          const found =
+            sizeGB === null
+              ? `Found previous backup (synced ${timeAgoStr})`
+              : `Found previous backup (${sizeGB} GB, synced ${timeAgoStr})`;
+
+          this.emitProgress({
+            phase: "backup",
+            phaseProgress: 0,
+            overallProgress: 0,
+            message: interrupted
+              ? `${found} — last sync was interrupted, but nothing is lost`
+              : found,
+          });
+
+          // Brief pause to let user see this message
+          await new Promise(resolve => setTimeout(resolve, 1500));
+
+          this.emitProgress({
+            phase: "backup",
+            phaseProgress: 0,
+            overallProgress: 0,
+            message: "Comparing with iPhone to find new data...",
+          });
+        };
+
         switch (backupStatus.snapshotState) {
           case "unfinished": {
-          // BACKLOG-2911: this branch used to say "Resuming..." and then issue a
-          // byte-identical backup request. There is no resume to perform: the host
-          // cannot ask for one. `idevicebackup2` never reads `Status.plist` on the
-          // backup path, and `ForceFullBackup` is the only option the mobilebackup2
-          // protocol accepts on a backup request — the device decides what to re-send.
+          // BACKLOG-2911 (first pass): this branch used to say "Resuming..." and then
+          // issue a byte-identical backup request. There is no HOST-SIDE resume to
+          // perform: `idevicebackup2` never reads `Status.plist` on the backup path,
+          // and `ForceFullBackup` is the only option the mobilebackup2 protocol accepts
+          // on a backup request — the device decides what to re-send. That finding
+          // stands, and nothing here asks for a resume.
           //
-          // So the message says what actually happens. What is on disk is kept (the
-          // partial directory is never deleted, and `--full` is never injected), but
-          // no reuse is promised: the failed run never updated `Manifest.db`, and
-          // whether the device credits its partially-transferred files cannot be
-          // established from the host.
+          // BACKLOG-2911 (second pass): what did NOT stand is the conclusion drawn from
+          // it, that the directory was therefore worthless. The 2026-08-28 controlled
+          // interruption showed the device resuming ITSELF against an unchanged
+          // `Manifest.db` — so this arm splits on whether that index is still there.
+          if (backupStatus.isComplete) {
+            // The founder's measured case: complete, `SnapshotState: uploading`,
+            // manifest byte-identical to before the cable was pulled. The next run is
+            // an incremental one and the 57.9 GB on disk is its baseline. Announcing a
+            // restart here is what sent him a two-hour first-sync warning and an
+            // 11.5 GB estimate for a backup he already had.
+            await announceUsablePriorBackup(true);
+            break;
+          }
+
+          // No manifest. The index is what the device diffs against, so without it
+          // there is nothing to continue from and the next run really does start over.
           // BACKLOG-2917: the size is reported only when it was measured. Printing
           // "null GB" or silently substituting "0.0 GB" would be the same class of
           // lie this item exists to remove, in the user-facing half of the app.
           log.warn(
-            `[DeviceSyncOrchestrator] Previous backup did not finish (${sizeGB === null ? "size unmeasured" : `${sizeGB} GB on disk`}); starting a new backup. No host-side resume exists — see BACKLOG-2911.`,
+            `[DeviceSyncOrchestrator] Previous backup did not finish and has no manifest (${sizeGB === null ? "size unmeasured" : `${sizeGB} GB on disk`}); starting a new backup. See BACKLOG-2911.`,
           );
           this.emitProgress({
             phase: "backup",
@@ -897,43 +1104,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             break;
           }
 
-          {
-          const lastSync = backupStatus.lastModified;
-          const timeSinceLastSync = lastSync ? Math.round((Date.now() - lastSync.getTime()) / 1000 / 60) : null;
-          log.info(`[DeviceSyncOrchestrator] Previous backup exists (${sizeGB === null ? "size unmeasured" : `${sizeGB} GB`}), last modified ${timeSinceLastSync} minutes ago`);
-
-          // Format time since last sync for user
-          let timeAgoStr = "";
-          if (timeSinceLastSync !== null) {
-            if (timeSinceLastSync < 60) {
-              timeAgoStr = `${timeSinceLastSync} minutes ago`;
-            } else if (timeSinceLastSync < 1440) {
-              timeAgoStr = `${Math.round(timeSinceLastSync / 60)} hours ago`;
-            } else {
-              timeAgoStr = `${Math.round(timeSinceLastSync / 1440)} days ago`;
-            }
-          }
-
-          this.emitProgress({
-            phase: "backup",
-            phaseProgress: 0,
-            overallProgress: 0,
-            message:
-              sizeGB === null
-                ? `Found previous backup (synced ${timeAgoStr})`
-                : `Found previous backup (${sizeGB} GB, synced ${timeAgoStr})`,
-          });
-
-          // Brief pause to let user see this message
-          await new Promise(resolve => setTimeout(resolve, 1500));
-
-          this.emitProgress({
-            phase: "backup",
-            phaseProgress: 0,
-            overallProgress: 0,
-            message: "Comparing with iPhone to find new data...",
-          });
-          }
+          // Nothing says the last run tore, and the index is intact. Ordinary reuse.
+          await announceUsablePriorBackup(false);
           break;
           }
 
@@ -979,6 +1151,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const reserveCheck = await this.checkAvailableDiskSpace(
         SYNC_DISK_RESERVE_BYTES,
       );
+      // BACKLOG-2914 (FIX 4): host disk, from the reading the guard already took.
+      if (!reserveCheck.unavailable) {
+        syncTimeline.setContext({
+          hostDiskFreeBytes: reserveCheck.availableSpace,
+          ...(reserveCheck.totalSpace !== undefined
+            ? { hostDiskTotalBytes: reserveCheck.totalSpace }
+            : {}),
+        });
+      }
       if (!reserveCheck.hasEnoughSpace) {
         const userError = formatDiskSpaceError(
           Math.round(reserveCheck.availableSpace / 1024 / 1024),
@@ -1003,6 +1184,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // Step 1: Get device storage info to estimate backup size
       const storageInfo = await this.deviceService.getDeviceStorageInfo(options.udid);
+      // BACKLOG-2914 (FIX 4): what the phone itself is carrying. Already fetched for
+      // the estimate; recorded rather than discarded.
+      if (storageInfo) {
+        syncTimeline.setContext({
+          deviceUsedBytes: storageInfo.usedSpace,
+          deviceFreeBytes: storageInfo.availableSpace,
+          deviceCapacityBytes: storageInfo.totalCapacity,
+        });
+      }
 
       // BACKLOG-2925 (second pass): ONE resolution, ONE mark, ONE decision. This used
       // to be `if (storageInfo) { ...estimate, mark, guard... } else { ...different
@@ -1208,6 +1398,31 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         return this.errorResult("Sync cancelled by user");
       }
 
+      // BACKLOG-2914 (FIX 4): recorded BEFORE the failure return, so a FAILED run
+      // carries the same dimensions as a successful one. A failure row missing the
+      // incremental flag cannot be compared with the success rows it is a fraction of,
+      // and BACKLOG-2952 reads both halves of that fraction from this one row.
+      //
+      // `backupModeSource=device-reported` means idevicebackup2 printed "Full backup
+      // mode." or "Incremental backup mode." and that is what the flag says.
+      // `inferred` means it never printed one and the flag is the old derivation from
+      // whether a directory existed — the derivation that reported `incremental=true`
+      // for a 61.2 GB, 52-minute transfer on 2026-08-28. Two facts of very different
+      // quality, and an aggregate that cannot separate them is worth less than one that
+      // can.
+      syncTimeline.setContext({
+        incremental: backupResult.isIncremental,
+        backupModeSource:
+          backupResult.deviceReportedBackupMode === null ||
+          backupResult.deviceReportedBackupMode === undefined
+            ? "inferred"
+            : "device-reported",
+        wasEncrypted: !!backupResult.isEncrypted,
+        ...(backupResult.backupSize === null
+          ? { backupBytesUnmeasured: true }
+          : { backupBytes: backupResult.backupSize }),
+      });
+
       if (!backupResult.success || !backupResult.backupPath) {
         const error = backupResult.error || "Backup failed";
         const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
@@ -1234,13 +1449,14 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // 2917 describes: a backup that COMPLETED and then failed its size walk used to
       // be annotated `bytes: 0`, which reads in the timeline — and in the aggregate
       // BACKLOG-2894 will build — as a run that transferred nothing.
-      syncTimeline.annotate("backup", {
+      syncTimeline.annotate(this.backupTimelinePhase, {
         ...(backupResult.backupSize === null
           ? { bytesUnmeasured: true }
           : { bytes: backupResult.backupSize }),
         incremental: backupResult.isIncremental,
         encrypted: !!backupResult.isEncrypted,
       });
+
 
       let backupPath = backupResult.backupPath;
 
@@ -1407,6 +1623,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       const duration = Date.now() - this.startTime;
       this.isRunning = false;
       this.setPhase("complete");
+
+      // BACKLOG-2914 (FIX 4): the counts this run produced, on the outcome row.
+      // Grepping the founder's whole 2026-08-28 session for "Sync completed" / a total
+      // returned NOTHING — the phases ended and the run simply stopped. The row that
+      // says a sync SUCCEEDED is the denominator every consumer of this data needs.
+      syncTimeline.setContext({
+        conversationsExtracted: resolvedConversations.length,
+        messagesExtracted: allMessages.length,
+        contactsExtracted: contacts.length,
+        extractionMs: duration,
+      });
 
       log.info("[DeviceSyncOrchestrator] Sync complete", {
         conversations: resolvedConversations.length,
@@ -1665,14 +1892,39 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.currentPhase = phase;
 
     // BACKLOG-2898: one timeline record per back-end step, with its duration
-    // and the counts it produced. Terminal states are not phases — "complete"
-    // hands off to persistence in syncHandlers, which opens the storing:*
-    // phases and ends the sync; the open phase is closed by that next enter().
-    if (phase !== "idle" && phase !== "complete" && phase !== "error") {
+    // and the counts it produced.
+    //
+    // BACKLOG-2914 (FIX 4): a terminal state now CLOSES the open phase instead of
+    // leaving it running. Terminal states are still not phases — "complete" hands off
+    // to persistence in `syncHandlers` — but the old comment's "the open phase is
+    // closed by that next enter()" was the defect: the next `enter()` happens after the
+    // IPC round trip AND after `persistSyncResult` reaches its first progress callback.
+    // Measured on the founder's 2026-08-28 run: `phase=cleanup elapsedMs=246270`, four
+    // minutes charged to closing two SQLite parsers, almost all of it belonging to the
+    // 663,722-row message write that had not been entered yet.
+    //
+    // Closing here makes the handoff show up as time attributed to NOTHING, which is
+    // what it is. A gap is a question; a wrong attribution is an answer.
+    if (phase === "idle" || phase === "complete" || phase === "error") {
+      syncTimeline.closePhase();
+    } else {
       syncTimeline.enter(phase);
+      if (phase === "backup") this.backupTimelinePhase = phase;
     }
 
     this.emit("phase", phase);
+  }
+
+  /**
+   * BACKLOG-2914 (FIX 4): open a backup SUB-phase and point the annotations at it.
+   *
+   * Not `setPhase`: `SyncPhase` is the UI's vocabulary and the renderer switches on it,
+   * so splitting the backup for measurement must not split it for the user — he is
+   * still "Exporting". The timeline gets the detail; the screen does not change.
+   */
+  private enterBackupPhase(phase: string): void {
+    this.backupTimelinePhase = phase;
+    syncTimeline.enter(phase);
   }
 
   /**
@@ -1849,6 +2101,12 @@ export class DeviceSyncOrchestrator extends EventEmitter {
   ): Promise<{
     hasEnoughSpace: boolean;
     availableSpace: number;
+    /**
+     * BACKLOG-2914: the volume's capacity, so "5 GB free" can be read as a proportion.
+     * Absent on the failure path for the same reason `availableSpace` is 0 there:
+     * nothing was measured.
+     */
+    totalSpace?: number;
     /** BACKLOG-2899: true when the check itself failed and the result is a fail-open default. */
     unavailable?: boolean;
   }> {
@@ -1866,6 +2124,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       return {
         hasEnoughSpace: diskInfo.free >= requiredBytes,
         availableSpace: diskInfo.free,
+        totalSpace: diskInfo.size,
       };
     } catch (err) {
       log.error("[DeviceSyncOrchestrator] Failed to check disk space:", err);
@@ -1906,6 +2165,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // BACKLOG-2907: a new run must establish its own answer. Without this reset the
     // early progress events of run 2 would carry run 1's prior-backup state.
     this.priorBackup = "unknown";
+    this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
     this.startTime = Date.now();
 
@@ -1949,11 +2209,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       // BACKLOG-2907: this path only proceeds on a backup that is on disk.
       // BACKLOG-2938: `PriorBackupState` now reports USABILITY, not existence, so this
-      // asks the one predicate rather than assuming the directory's presence answers
-      // it. `isComplete && isInterrupted` is reachable — a backup that was complete
-      // before its latest snapshot tore — and the guard below only checks `isComplete`,
-      // so without this the two entry points would disagree about the same directory.
-      // That divergence is the defect this item exists to remove.
+      // asks the one predicate rather than assuming the directory's presence answers it.
+      //
+      // BACKLOG-2911 (second pass): this entry point and the guard three lines below
+      // now agree BY CONSTRUCTION. `isUsablePriorBackup` is `isComplete` here, and the
+      // guard is `!isComplete` — so a directory this path is willing to PARSE is
+      // exactly the one it reports as `"exists"`. Before the predicate lost
+      // `!isInterrupted` they disagreed on precisely one shape, `isComplete &&
+      // isInterrupted`: `processExistingBackup` parsed the backup happily while
+      // reporting `"none"`, i.e. telling the user a full transfer was coming while
+      // reading the prior one. Do not re-add a condition to either side without adding
+      // it to both.
       this.priorBackup = isUsablePriorBackup(backupStatus) ? "exists" : "none";
 
       if (!backupStatus.isComplete) {

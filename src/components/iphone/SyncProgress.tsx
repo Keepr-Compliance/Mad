@@ -46,7 +46,11 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
    * Level 2: Dynamic detail from progress.message (smaller, gray)
    */
   const getPhaseTitle = (): string => {
-    // Special state: waiting for passcode
+    /**
+     * BACKLOG-2911 (FIX 3): this state means "the iPhone has not started sending
+     * yet", which is ALL that is known. See the amber panel below for the evidence.
+     * The title was already honest — it says nothing about a passcode — and is kept.
+     */
     if (isWaitingForPasscode) {
       return "Waiting for iPhone";
     }
@@ -265,8 +269,32 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
             />
           </svg>
           <div className="text-sm text-amber-700">
+            {/*
+              BACKLOG-2911 (FIX 3): SAY WHAT IS KNOWN, THEN THE POSSIBILITY.
+
+              Nothing on this path reports that the device wants a passcode. The
+              signal behind `isWaitingForPasscode` is only that no file has started
+              transferring 5 seconds after the backup was requested — which is
+              produced identically by the device indexing, by a person who has not
+              picked up their phone, and by a hung process.
+
+              On the founder's 12:09 run on 2026-08-28 he had ALREADY ENTERED his
+              passcode and this panel went on telling him to enter it for fifteen
+              more minutes, because the transfer did not begin for 903.9 seconds.
+              The same class of defect as BACKLOG-2913, and the same rule as the
+              three-state ruling in BACKLOG-2886: uncertainty reports itself as
+              uncertainty, it does not substitute a confident cause.
+
+              "Up to 20 minutes" is not a round number chosen for comfort — it is
+              above the longest wait ever measured on his machine (903.9 s = 15.1
+              minutes, with 507 s and 684.6 s on the two runs before it). The first
+              draft of this copy said 15 minutes and
+              `SyncProgress.waitCause-2911.test.tsx` reddened on it: 900 s is BELOW
+              903.9 s, so the reassurance would have run out before his own longest
+              successful sync did.
+            */}
             <p className="text-xs text-amber-600">
-              Enter your passcode on your iPhone if prompted. It may take up to 10 minutes for the iPhone to report back that the passcode was entered as it indexes and prepares the export. This is normal — please don't disconnect or cancel.
+              Your iPhone is preparing the export. This can take up to 20 minutes before the transfer starts, and it&apos;s normal — please don&apos;t disconnect or cancel. If your iPhone is showing a passcode prompt, enter it to continue.
             </p>
           </div>
         </div>

@@ -58,6 +58,25 @@ export interface BackupResult {
   /** Whether this was an incremental backup (vs full) */
   isIncremental: boolean;
   /**
+   * BACKLOG-2914: what the DEVICE said, or `null` when it never said.
+   *
+   * `isIncremental` used to be derived purely from whether a backup directory
+   * existed, and on the founder's 2026-08-28 run that produced `incremental=true` for
+   * a 61.2 GB, 52-minute transfer whose `Status.plist` reported `IsFullBackup: 1` —
+   * the on-disk state at the start was a 4.4 GB partial with no `Manifest.db`, so it
+   * was effectively a first sync.
+   *
+   * That is the single most damaging error possible for the duration model: first and
+   * incremental are the two distributions it must separate, and a 52-minute full run
+   * filed as incremental teaches it that incremental syncs take an hour.
+   *
+   * `idevicebackup2` prints "Full backup mode." or "Incremental backup mode." on
+   * stderr under `-d`, which is the device's own answer. `null` is kept as a real
+   * third state rather than defaulted, so telemetry can say whether the flag was
+   * REPORTED or INFERRED instead of presenting both as the same fact.
+   */
+  deviceReportedBackupMode?: "incremental" | "full" | null;
+  /**
    * Size of the backup in bytes, or `null` when the size could not be measured.
    *
    * BACKLOG-2917: this was `number`, and the walk that produces it returned `0` on

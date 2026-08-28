@@ -258,14 +258,36 @@ describe("BACKLOG-2925: an interrupted prior backup does not take the tight head
     expect(mark).not.toContain(`bytes=${6.5 * GB}`);
   });
 
-  it("a torn incremental with a STALE manifest is also gated out", async () => {
-    // `isComplete` is true here because the previous run's Manifest.db survives, so a
-    // gate on `isComplete` alone would let this through. `!isInterrupted` is what
-    // catches it — which is why the item specifies BOTH conjuncts.
+  /**
+   * REVERSED ON EVIDENCE, 2026-08-28 (BACKLOG-2911 second pass). Kept as a case rather
+   * than deleted, because the number it guards is the one that hurt the founder.
+   *
+   * It used to assert that an interrupted run with a surviving `Manifest.db` must ALSO
+   * be gated out, on the argument that the manifest is stale. The controlled
+   * interruption measured otherwise: the manifest hash was identical before and after,
+   * the transferred bytes were kept, and the device resumed incrementally against it.
+   * The directory really does hold the bytes it measures, so refusing its size does not
+   * make the guard safer — it substitutes `0.25 x used space`, which BACKLOG-2918
+   * documents as untrustworthy and BACKLOG-2910 removed the justification for.
+   *
+   * On the founder's 2026-08-28 run that substitution replaced a measured 57.9 GB with
+   * 11,547 MB. The disk guard was then sized against a number five times too small —
+   * the OPPOSITE of what this file exists to prevent.
+   *
+   * The gate that remains is `isComplete`: no manifest, no reuse. `INTERRUPTED_PRIOR`
+   * above is that case and is unchanged.
+   */
+  it("a torn incremental whose MANIFEST SURVIVED is sized from the measured backup", async () => {
     const { lines } = await runSync(INTERRUPTED_WITH_STALE_MANIFEST);
 
-    expect(recommendedGB(lines)).toBe("75.0");
-    expect(estimateMark(lines)).toContain("reusedPreviousBackup=false");
+    const mark = estimateMark(lines);
+    expect(mark).toContain("reusedPreviousBackup=true");
+    expect(mark).toContain("source=existing-backup");
+    // The measured 6.5 GB, at the 1.1x headroom for a backup whose size is known —
+    // NOT the 50 GB device-storage guess at 1.5x that the old rule produced.
+    expect(mark).toContain(`bytes=${6.5 * GB}`);
+    expect(mark).not.toContain(`bytes=${FIFTY_GB}`);
+    expect(recommendedGB(lines)).not.toBe("75.0");
   });
 });
 

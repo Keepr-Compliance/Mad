@@ -559,8 +559,12 @@ export function classifyBackupFailure(
  * - 'error': Error - Error events
  * - 'complete': BackupResult - When backup completes
  * - 'password-required': { udid: string } - When encrypted backup needs password (TASK-007)
- * - 'waiting-for-passcode': void - When waiting for user to enter passcode on iPhone
- * - 'passcode-entered': void - When passcode was entered and transfer begins
+ * - 'waiting-for-passcode': void - The device has not started sending files yet. The
+ *   name is historical (BACKLOG-2911 FIX 3): a passcode prompt is ONE possible cause,
+ *   alongside device-side indexing and a stalled process, and nothing here can tell
+ *   them apart. Do not phrase user-facing copy as though it could.
+ * - 'passcode-entered': void - The first file started transferring. Again historical:
+ *   it marks the END of the wait, not the entry of a passcode.
  */
 export class BackupService extends EventEmitter {
   private currentProcess: ChildProcess | null = null;
@@ -581,17 +585,135 @@ export class BackupService extends EventEmitter {
   private hasReceivedFileProgress: boolean = false;
   private hasEmittedPasscodeWaiting: boolean = false;
   private backupCommandStartTime: number = 0;
-  private static readonly PASSCODE_WAIT_DETECTION_MS = 5000; // 5 seconds without progress = waiting for passcode
+  /**
+   * BACKLOG-2911 (FIX 3): how long with no file progress before the UI is told the
+   * device has not started sending yet.
+   *
+   * THE NAME IS THE BUG. Five seconds without progress was read as "the user is being
+   * asked for a passcode", and NOTHING on this path reports that. Indexing, a phone
+   * nobody has picked up, and a hung process all produce exactly this. On the founder's
+   * 12:09 run on 2026-08-28 he had already entered his passcode and the screen told him
+   * to enter it for fifteen more minutes, because the first byte did not arrive for
+   * 903.9 s.
+   *
+   * The threshold and the event are unchanged — five seconds of no transfer really is
+   * worth telling the user about, and the renderer needs a signal to say so. What
+   * changed is the CLAIM made from it: the copy now reports the wait and offers the
+   * passcode as a possibility. See `SyncProgress.tsx`.
+   *
+   * The event name `waiting-for-passcode` is deliberately NOT renamed. It crosses
+   * `deviceSyncOrchestrator` -> `syncHandlers` -> preload -> `useIPhoneSync` ->
+   * `SyncProgress`, and renaming an IPC channel on a shared-file branch buys the
+   * founder nothing he can see. The lie was in the words on his screen, and that is
+   * where it is fixed.
+   */
+  private static readonly PASSCODE_WAIT_DETECTION_MS = 5000;
 
-  // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes
-  // BACKLOG-1628: Track both stdout and stderr activity for watchdog
-  private lastStdoutTimestamp: number = 0;
-  private lastStderrTimestamp: number = 0;
+  // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes.
+  //
+  // BACKLOG-2911 (FIX 2): THE WATCHDOG COULD NOT FIRE, AND THIS PAIR OF FIELDS IS WHY.
+  //
+  //   12:09:43.414  Watchdog started (timeout: 180s)
+  //   …904 seconds of silence…
+  //   12:24:42.355  File transfer started after 903.9s
+  //
+  // It was silent through five times its own timeout, and `grep -c "Watchdog
+  // fired|zombie|killed by watchdog"` over the founder's entire 2026-08-28 session
+  // returns 0 across three runs. BACKLOG-1582 was CLOSED on the strength of this
+  // watchdog, so the silence has been read as good news for months.
+  //
+  // The two fields it used were `lastStdoutTimestamp` / `lastStderrTimestamp`, each
+  // bumped by its `data` handler on EVERY chunk, with liveness taken as the newer of
+  // the two. `buildBackupArgs` passes `-d` unconditionally, so libimobiledevice emits
+  // continuous debug chatter on stderr — the BACKLOG-2898 note below measures 336 such
+  // records in one 21-minute log — and the timestamp therefore never aged. The timer
+  // ran, asked "did any bytes arrive on either stream?", and could not get "no" while
+  // the process was alive at all.
+  //
+  // Which of the two possible failures this was is ESTABLISHED, not assumed, in
+  // `backupService.watchdogStall-2911.test.ts`: total silence killed the process even
+  // BEFORE this fix, so the timer and the kill path work. The question was what could
+  // not come back false.
+  //
+  // The replacement is a single timestamp advanced only by MEANINGFUL activity — see
+  // `noteMeaningfulActivity`. Idle polling (`np_get_notification`, `SSL_read 4,
+  // received 0`, mutex traces) no longer counts as a sign of life, because it is not
+  // one.
+  private lastMeaningfulActivityAt: number = 0;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private watchdogFired: boolean = false;
   private static readonly WATCHDOG_CHECK_INTERVAL_MS = 30_000; // Check every 30s
-  private static readonly WATCHDOG_PREPARING_TIMEOUT_MS = 180_000; // 3 min during preparation
-  private static readonly WATCHDOG_TRANSFER_TIMEOUT_MS = 120_000; // 2 min during active transfer
+
+  /**
+   * BACKLOG-2911 (FIX 2): how long with NO meaningful activity before the process is
+   * judged dead. One value for the whole run, and deliberately generous.
+   *
+   * THE OLD VALUES CANNOT BE KEPT ONCE LIVENESS MEANS PROGRESS. They were 180 s
+   * preparing / 120 s transferring against "any output at all", and all three of the
+   * founder's runs on 2026-08-28 waited longer than that before their first byte —
+   * 507 s, 684.6 s and 903.9 s — and then COMPLETED. Measuring progress at 180 s would
+   * have killed three working syncs. A watchdog that aborts healthy runs is worse than
+   * one that never fires.
+   *
+   * 30 minutes is just under 2x the worst measured wait (903.9 s), which is the only
+   * measurement that exists. It is not tuned beyond that, and it deliberately does not
+   * split preparing from transferring: nothing has yet measured how long the device may
+   * legitimately go quiet AFTER the last file while it finalises, so a tighter
+   * transfer-phase value would be a guess, and a wrong guess kills a 52-minute run at
+   * minute 51. FIX 4 on this same branch adds the per-phase durations that would make
+   * that number measurable rather than guessed; tighten it then, on data.
+   *
+   * The root cause of the 8-15 minute pre-transfer wait is NOT addressed here and is
+   * explicitly out of scope — see BACKLOG-2911. This constant accommodates it; it does
+   * not explain it.
+   */
+  private static readonly WATCHDOG_NO_PROGRESS_TIMEOUT_MS = 1_800_000;
+
+  /**
+   * BACKLOG-2911 (FIX 2): stderr lines that mean WORK IS HAPPENING, as opposed to
+   * libimobiledevice polling an idle connection.
+   *
+   * Every one of these is already recognised by `parseStderrLine` or
+   * `isKnownDebugLine`; this is the subset that carries evidence of traffic:
+   *
+   *   SSL_write / service_send   bytes LEAVING the host. BACKLOG-1628 put stderr into
+   *                              the liveness check for exactly this — during a
+   *                              563 MB manifest upload stdout is silent for minutes.
+   *   Sending '                  a named file starting to upload.
+   *   Requesting backup          the protocol advancing.
+   *   Starting backup
+   *   Negotiated Protocol
+   *   backup mode                the device answering full vs incremental.
+   *
+   * NOT here, and this is the point: `idevice_connection_receive_timeout`,
+   * `internal_plist_receive_timeout`, `np_get_notification`, and the `np_lock()` /
+   * `np_unlock()` mutex traces. Those are what a stalled connection sounds like.
+   * `SSL_read` is deliberately excluded too — the founder's log carries
+   * `SSL_read 4, received 0`, a read that returned nothing, on the same line shape as
+   * a read that returned 32 KB.
+   *
+   * Anything unrecognised does NOT count as life. That is the same choice
+   * `readSnapshotState` makes: match the known-good value rather than enumerate the
+   * bad ones, so a format change fails safe. The generous timeout above is what makes
+   * failing safe affordable.
+   */
+  private static readonly STDERR_ACTIVITY_SIGNALS = [
+    "SSL_write",
+    "service_send",
+    "Sending '",
+    "Requesting backup",
+    "Starting backup",
+    "Negotiated Protocol",
+    "backup mode",
+  ];
+
+  /**
+   * BACKLOG-2914: the backup mode the DEVICE reported, from idevicebackup2's own
+   * stderr. `null` until it says, and reset per run in the same block as the watchdog
+   * state — inheriting run N's mode into run N+1 would be a wrong answer wearing the
+   * clothes of a measured one.
+   */
+  private deviceReportedBackupMode: "incremental" | "full" | null = null;
 
   // BACKLOG-1628: Stderr debug parsing state
   private stderrLineBuffer: string = "";
@@ -866,10 +988,10 @@ export class BackupService extends EventEmitter {
       this.emit("progress", this.lastProgress);
 
       // BACKLOG-1582: Reset watchdog state
-      // BACKLOG-1628: Reset both stdout and stderr timestamps
+      // BACKLOG-2911 (FIX 2): one timestamp, advanced only by meaningful activity.
       this.watchdogFired = false;
-      this.lastStdoutTimestamp = Date.now();
-      this.lastStderrTimestamp = Date.now();
+      this.lastMeaningfulActivityAt = Date.now();
+      this.deviceReportedBackupMode = null;
       this.clearWatchdog();
 
       // BACKLOG-1628: Reset stderr parsing state
@@ -883,16 +1005,28 @@ export class BackupService extends EventEmitter {
         stdio: ["pipe", "pipe", "pipe"],
       });
 
+      // BACKLOG-2911 (FIX 2): ONE start path, here, covering the whole run.
+      //
+      // It used to be started from inside the 5-second passcode timer and restarted at
+      // the first file, which meant the window before either of those was unwatched and
+      // the two call sites carried two different timeouts. There is one timeout now, so
+      // there is one place to start it.
+      this.lastMeaningfulActivityAt = Date.now();
+      this.startWatchdog();
+
       // Start timer to detect if we're waiting for passcode
       // If no file transfer progress after 5 seconds, assume waiting for user passcode
       this.passcodeWaitingTimer = setTimeout(() => {
         if (!this.hasReceivedFileProgress && !this.hasEmittedPasscodeWaiting) {
           this.hasEmittedPasscodeWaiting = true;
           const waitTime = ((Date.now() - this.backupCommandStartTime) / 1000).toFixed(1);
-          log.info(`[BackupService] No file progress after ${waitTime}s - waiting for user passcode`);
+          // BACKLOG-2911 (FIX 3): the log says what was observed. It used to assert
+          // "waiting for user passcode", which is one of at least three causes and is
+          // not the one the founder's 12:09 run had.
+          log.info(
+            `[BackupService] No file transfer ${waitTime}s after requesting the backup; device has not started sending yet (cause unknown: indexing, passcode prompt, or stalled)`,
+          );
           this.emit("waiting-for-passcode");
-          // BACKLOG-1582: Start watchdog with preparing timeout (longer, user may take time)
-          this.startWatchdog(BackupService.WATCHDOG_PREPARING_TIMEOUT_MS);
         }
       }, BackupService.PASSCODE_WAIT_DETECTION_MS);
 
@@ -921,8 +1055,11 @@ export class BackupService extends EventEmitter {
           );
         }
 
-        // BACKLOG-1582: Track last stdout activity for watchdog
-        this.lastStdoutTimestamp = Date.now();
+        // BACKLOG-2911 (FIX 2): stdout from idevicebackup2 is the tool reporting its own
+        // work — progress bars, "Receiving files", "Received N files", "Backup
+        // Successful". Unlike stderr under `-d`, none of it is idle polling, so every
+        // chunk here counts as life.
+        this.noteMeaningfulActivity();
 
         // Only log non-progress-bar output (progress bars are very spammy)
         // Progress bars look like: [====] XX% (X.X MB/Y.Y MB)
@@ -944,11 +1081,15 @@ export class BackupService extends EventEmitter {
             // If we previously emitted waiting-for-passcode, now emit passcode-entered
             if (this.hasEmittedPasscodeWaiting) {
               const waitTime = ((Date.now() - this.backupCommandStartTime) / 1000).toFixed(1);
-              log.info(`[BackupService] File transfer started after ${waitTime}s - passcode entered`);
+              // BACKLOG-2911 (FIX 3): the transfer starting proves the transfer
+              // started. It does NOT prove a passcode was entered — on 2026-08-28 the
+              // founder's passcode had been entered ~15 minutes before this line
+              // printed. The duration is the useful part and it is now the whole claim.
+              log.info(
+                `[BackupService] File transfer started after ${waitTime}s of waiting for the device`,
+              );
               this.emit("passcode-entered");
             }
-            // BACKLOG-1582: Start watchdog with transfer timeout now that data is flowing
-            this.startWatchdog(BackupService.WATCHDOG_TRANSFER_TIMEOUT_MS);
           }
           this.lastProgress = progress;
           this.emit("progress", progress);
@@ -964,8 +1105,10 @@ export class BackupService extends EventEmitter {
           stderrBuffer = stderrBuffer.slice(-65536);
         }
 
-        // BACKLOG-1628: Track stderr activity for watchdog
-        this.lastStderrTimestamp = Date.now();
+        // BACKLOG-2911 (FIX 2): stderr is NOT evidence of life on its own. `-d` makes
+        // libimobiledevice narrate an idle connection indefinitely, which is what kept
+        // the old `lastStderrTimestamp = Date.now()` here from ever ageing. The lines
+        // are classified below and only the ones that carry traffic count.
 
         // BACKLOG-1628: Parse stderr line-by-line for debug signals
         // The -d flag produces very verbose output (30K+ lines in 20s).
@@ -976,6 +1119,10 @@ export class BackupService extends EventEmitter {
         this.stderrLineBuffer = lines.pop() || "";
 
         for (const line of lines) {
+          // BACKLOG-2911 (FIX 2): does this line mean anything is happening?
+          if (BackupService.isStderrActivitySignal(line)) {
+            this.noteMeaningfulActivity();
+          }
           this.parseStderrLine(line, options.udid);
         }
 
@@ -1032,7 +1179,8 @@ export class BackupService extends EventEmitter {
             error: "Backup process became unresponsive and was terminated",
             duration,
             deviceUdid: options.udid,
-            isIncremental: previousBackupExists,
+            isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+            deviceReportedBackupMode: this.deviceReportedBackupMode,
             backupSize: 0,
             errorCode: "BACKUP_TIMEOUT",
           };
@@ -1097,7 +1245,8 @@ export class BackupService extends EventEmitter {
               errorCode: "PASSWORD_REQUIRED" as BackupErrorCode,
               duration: Date.now() - this.startTime,
               deviceUdid: options.udid,
-              isIncremental: previousBackupExists && !options.forceFullBackup,
+              isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+              deviceReportedBackupMode: this.deviceReportedBackupMode,
               backupSize,
               isEncrypted: true,
             };
@@ -1142,7 +1291,8 @@ export class BackupService extends EventEmitter {
                     : ("DECRYPTION_FAILED" as BackupErrorCode),
                 duration: Date.now() - this.startTime,
                 deviceUdid: options.udid,
-                isIncremental: previousBackupExists && !options.forceFullBackup,
+                isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+              deviceReportedBackupMode: this.deviceReportedBackupMode,
                 backupSize,
                 isEncrypted: true,
               };
@@ -1168,7 +1318,8 @@ export class BackupService extends EventEmitter {
               stderr: stderrBuffer.trim().substring(0, 500),
               udid: options.udid.substring(0, 8) + "...",
               duration: `${duration}ms`,
-              isIncremental: previousBackupExists && !options.forceFullBackup,
+              isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+              deviceReportedBackupMode: this.deviceReportedBackupMode,
             },
           });
         }
@@ -1214,7 +1365,8 @@ export class BackupService extends EventEmitter {
           ...(failureCause ? { failureCause } : {}),
           duration: Date.now() - this.startTime,
           deviceUdid: options.udid,
-          isIncremental: previousBackupExists && !options.forceFullBackup,
+          isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+          deviceReportedBackupMode: this.deviceReportedBackupMode,
           backupSize,
           isEncrypted: encryptionInfo.isEncrypted,
         };
@@ -1266,9 +1418,12 @@ export class BackupService extends EventEmitter {
    * BACKLOG-1582: Start the watchdog timer that detects zombie idevicebackup2 processes.
    * If no stdout activity is received within the timeout, kills the process.
    */
-  private startWatchdog(timeoutMs: number): void {
+  private startWatchdog(): void {
     this.clearWatchdog();
-    log.info(`[BackupService] Watchdog started (timeout: ${timeoutMs / 1000}s)`);
+    const timeoutMs = BackupService.WATCHDOG_NO_PROGRESS_TIMEOUT_MS;
+    log.info(
+      `[BackupService] Watchdog started (no-progress timeout: ${timeoutMs / 1000}s)`,
+    );
 
     this.watchdogInterval = setInterval(() => {
       if (!this.currentProcess || !this.isRunning) {
@@ -1276,15 +1431,63 @@ export class BackupService extends EventEmitter {
         return;
       }
 
-      // BACKLOG-1628: Watchdog fires only when BOTH stdout AND stderr are silent.
-      // During manifest upload, stdout is silent but stderr shows SSL_write activity.
-      const lastActivityTimestamp = Math.max(this.lastStdoutTimestamp, this.lastStderrTimestamp);
-      const elapsed = Date.now() - lastActivityTimestamp;
+      // BACKLOG-2911 (FIX 2): the question is "has anything HAPPENED", not "has
+      // anything been PRINTED". BACKLOG-1628's requirement is preserved through the
+      // signal list rather than through the stream: a silent stdout during a manifest
+      // upload is still kept alive, by the SSL_write lines that upload produces.
+      const elapsed = Date.now() - this.lastMeaningfulActivityAt;
       if (elapsed >= timeoutMs) {
-        log.error(`[BackupService] Watchdog: no stdout/stderr for ${Math.round(elapsed / 1000)}s — killing zombie process`);
+        log.error(
+          `[BackupService] Watchdog: no progress for ${Math.round(elapsed / 1000)}s — killing zombie process`,
+        );
         this.killZombieProcess();
       }
     }, BackupService.WATCHDOG_CHECK_INTERVAL_MS);
+  }
+
+  /**
+   * BACKLOG-2911 (FIX 2): something happened. Restart the clock.
+   *
+   * Every call site is a place where the process demonstrated work: stdout from
+   * idevicebackup2, or an stderr line carrying traffic. Adding a call site is adding
+   * something the watchdog will accept as life, so add one only for output that cannot
+   * be produced by an idle connection.
+   */
+  private noteMeaningfulActivity(): void {
+    this.lastMeaningfulActivityAt = Date.now();
+  }
+
+  /**
+   * BACKLOG-2911 (FIX 2): does this stderr line carry evidence of traffic?
+   *
+   * Static and pure so the classification can be tested directly, without a spawned
+   * process. See `STDERR_ACTIVITY_SIGNALS` for what is in the list and — more
+   * importantly — what is deliberately not.
+   */
+  static isStderrActivitySignal(line: string): boolean {
+    return BackupService.STDERR_ACTIVITY_SIGNALS.some((signal) => line.includes(signal));
+  }
+
+  /**
+   * BACKLOG-2914: was this run incremental?
+   *
+   * The device's own report wins when it gave one. The old derivation — a directory
+   * exists and nobody forced a full backup — remains as the fallback, because a run
+   * that fails before the mode line is printed still has to answer, but it is a
+   * FALLBACK now and telemetry records which of the two produced the flag.
+   *
+   * The fallback's failure mode is on record: on 2026-08-28 it reported
+   * `incremental=true` for a 61.2 GB / 52-minute transfer against a 4.4 GB partial
+   * with no `Manifest.db`, while `Status.plist` said `IsFullBackup: 1`.
+   */
+  private resolveIsIncremental(
+    previousBackupExists: boolean,
+    options: BackupOptions,
+  ): boolean {
+    if (this.deviceReportedBackupMode !== null) {
+      return this.deviceReportedBackupMode === "incremental";
+    }
+    return previousBackupExists && !options.forceFullBackup;
   }
 
   /**
@@ -1437,8 +1640,12 @@ export class BackupService extends EventEmitter {
    * With the -d flag, idevicebackup2 emits detailed debug output on stderr.
    * We parse for specific patterns to:
    * 1. Detect manifest upload phase and surface progress to UI
-   * 2. Reset watchdog on SSL_write/service_send activity
-   * 3. Log significant phase transitions (protocol version, backup mode)
+   * 2. Log significant phase transitions (protocol version, backup mode)
+   *
+   * BACKLOG-2911 (FIX 2): resetting the watchdog is NO LONGER this method's job. It is
+   * done by `isStderrActivitySignal` in the caller, against an explicit list, so that
+   * the set of lines counting as "alive" is one greppable constant rather than a
+   * side effect spread through a parser.
    *
    * This method is designed to be lightweight — it's called for every stderr line
    * (potentially 30K+ lines in 20 seconds during manifest upload).
@@ -1471,10 +1678,12 @@ export class BackupService extends EventEmitter {
     }
 
     // Pattern 2: SSL_write or service_send — activity signals (hot path)
-    // These repeat thousands of times; do NOT log. Just confirm the process is alive.
-    // The lastStderrTimestamp is already updated by the data handler.
+    // These repeat thousands of times; do NOT log.
+    // BACKLOG-2911 (FIX 2): the watchdog clock is restarted for these by
+    // `isStderrActivitySignal` in the stderr line loop, BEFORE this parser runs. It
+    // used to be restarted by the `data` handler for every chunk regardless of content,
+    // which is why it could never fire.
     if (line.includes("SSL_write") || line.includes("service_send")) {
-      // Already tracked via lastStderrTimestamp in the data handler.
       return;
     }
 
@@ -1527,6 +1736,16 @@ export class BackupService extends EventEmitter {
     // Pattern 8: Backup mode — "Incremental backup mode" or "Full backup mode"
     if (line.includes("backup mode")) {
       log.info("[BackupService] " + line.trim());
+      // BACKLOG-2914: THE DEVICE'S OWN ANSWER, which until now was logged and thrown
+      // away while `isIncremental` was derived from whether a directory existed. On
+      // 2026-08-28 those two disagreed on a 61.2 GB run. Matched case-insensitively
+      // because the only thing pinned about this string is the two words in it.
+      const lower = line.toLowerCase();
+      if (lower.includes("incremental backup mode")) {
+        this.deviceReportedBackupMode = "incremental";
+      } else if (lower.includes("full backup mode")) {
+        this.deviceReportedBackupMode = "full";
+      }
       return;
     }
   }

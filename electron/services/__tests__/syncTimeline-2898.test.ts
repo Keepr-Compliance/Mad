@@ -107,8 +107,24 @@ describe("BACKLOG-2898: SyncTimeline phase boundaries", () => {
     }
     timeline.endSync("complete");
 
-    // sync-start, phase-start, phase-end, sync-end. Nothing per file.
-    expect(lines).toHaveLength(4);
+    // sync-start, phase-start, phase-end, sync-end, sync-outcome. Nothing per file.
+    //
+    // BACKLOG-2914 (built as FIX 4 of BACKLOG-2911): 4 -> 5. The fifth line is the
+    // one outcome row per sync, and it is emitted from `endSync` — once, at the end,
+    // never per item. The property this case guards is unchanged and is now asserted
+    // as a PROPERTY rather than as a constant, so the next line added at a boundary
+    // does not read as a regression while a genuine per-item leak still would.
+    expect(lines).toHaveLength(5);
+    expect(lines.filter((l) => l.includes("sync-outcome"))).toHaveLength(1);
+
+    // The real guard: the line count must not depend on the number of items.
+    const linesForOneFile: string[] = [];
+    const quiet = new SyncTimeline({ now: () => 0, sink: (l) => linesForOneFile.push(l) });
+    quiet.beginSync();
+    quiet.enter("backup");
+    quiet.annotate("backup", { files: 1 });
+    quiet.endSync("complete");
+    expect(linesForOneFile).toHaveLength(lines.length);
   });
 
   it("formats a record with the fields BACKLOG-2894 will read", () => {

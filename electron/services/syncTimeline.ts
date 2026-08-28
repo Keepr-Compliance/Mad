@@ -69,23 +69,104 @@ export function formatPhaseEnd(record: SyncPhaseRecord): string {
   return `[SyncTimeline] phase-end phase=${record.phase} elapsedMs=${record.elapsedMs}${counts ? " " + counts : ""}`;
 }
 
+/**
+ * BACKLOG-2914 (built as FIX 4 of BACKLOG-2911): THE ONE ROW PER SYNC.
+ *
+ * Before this, "grep the founder's whole session for `Sync completed` / `Backup
+ * Successful` / a total" returned NOTHING. The phases ended and the run simply
+ * stopped. A count of failures with no count of successes is not a rate, and every
+ * consumer of this data (2894's duration estimate, 2952's per-source failure
+ * uptick, 2914's own per-release regression) needs the denominator first.
+ *
+ * `source` is first-class from day one and not an afterthought, because 2952
+ * EXTENDS this event rather than defining a second one: macOS Messages, address
+ * books, Outlook, Gmail, Google Contacts, the Android companion and email
+ * attachments all have to fit the same row.
+ *
+ * SCOPE, deliberately: THE DURATION AXIS ONLY. No `reason_code`, no failure
+ * taxonomy. BACKLOG-2909 (a successful sync reporting "Sync Failed" on disconnect)
+ * and BACKLOG-2903 (normal chatter logged as an error pattern) are both open, and
+ * a failure rate computed over them would be confidently wrong. Durations are not
+ * affected by either.
+ *
+ * PRIVACY: scalars only, and the same rule as the phase records — model
+ * identifiers, versions, byte counts and durations. Never a UDID, never a device
+ * NAME (the founder's is a personal nickname), never a path under a user's home.
+ */
+export type SyncOutcome = "complete" | "cancelled" | "error";
+
 export class SyncTimeline {
   private phaseRecords: SyncPhaseRecord[] = [];
   private syncStartedAt: number | null = null;
   private readonly now: () => number;
   private readonly sink: TimelineSink;
+  /**
+   * Facts about THIS run, accumulated as they become known and emitted once with
+   * the outcome row. Cleared by `beginSync` — without that, run N's device model
+   * and first-sync flag would ride along into run N+1's row, which is worse than
+   * having no dimensions at all because it looks like data.
+   */
+  private context: TimelineMeta = {};
 
   constructor(options: { now?: () => number; sink?: TimelineSink } = {}) {
     this.now = options.now ?? (() => Date.now());
     this.sink = options.sink ?? ((line: string) => log.info(line));
   }
 
-  /** Start a sync. Clears any previous run's records. */
+  /** Start a sync. Clears any previous run's records AND context. */
   beginSync(meta: TimelineMeta = {}): void {
     this.phaseRecords = [];
+    this.context = {};
     this.syncStartedAt = this.now();
     const fields = formatFields(meta);
     this.sink(`[SyncTimeline] sync-start${fields ? " " + fields : ""}`);
+  }
+
+  /**
+   * BACKLOG-2914: add facts to the outcome row, from wherever they become known.
+   *
+   * Merges, so the orchestrator can contribute the device and the prior-backup
+   * verdict while the backup service contributes the mode the device reported.
+   * Scalars only — the type is the guard, because an object here would stringify
+   * to "[object Object]" and a path would put a user's home directory in a log.
+   */
+  setContext(fields: TimelineMeta): void {
+    for (const [key, value] of Object.entries(fields)) {
+      // `undefined` renders as the literal string "undefined" through `formatFields`,
+      // and a row reading `deviceCapacityBytes=undefined` is indistinguishable from a
+      // capacity of zero once it is parsed back out. Caught by
+      // `deviceSyncOrchestrator.outcomeDimensions-2914.test.ts` on a producer whose
+      // field names had drifted: the value was absent, the row said it was present.
+      //
+      // Same rule as `BackupSizeReading` and `BackupSizeEstimate` elsewhere in this
+      // sync path: a value that was not established is ABSENT, never a stand-in.
+      if (value === undefined || value === null) continue;
+      if (typeof value === "number" && !Number.isFinite(value)) continue;
+      this.context[key] = value;
+    }
+  }
+
+  /** What the outcome row will carry. Exposed for tests and for support dumps. */
+  contextSnapshot(): TimelineMeta {
+    return { ...this.context };
+  }
+
+  /**
+   * BACKLOG-2914: close the open phase WITHOUT opening another.
+   *
+   * Terminal states are not phases, so `setPhase("complete")` opened nothing — and
+   * that left the last real phase OPEN across the IPC handoff to persistence,
+   * where it was finally closed by the first `storing:*` enter. Measured on the
+   * founder's 2026-08-28 run: `phase=cleanup elapsedMs=246270`, four minutes
+   * attributed to closing two SQLite parsers. Almost all of it belonged to the
+   * message write that had not been entered yet.
+   *
+   * A phase that ends must be closed where it ends. Time between phases is then
+   * visible as unattributed rather than charged to whichever phase happened to
+   * bracket it — the exact warning in this item's spec, observed in production.
+   */
+  closePhase(): void {
+    this.closeOpenPhase();
   }
 
   /**
@@ -122,15 +203,69 @@ export class SyncTimeline {
     }
   }
 
-  /** Close the open phase and end the sync. */
-  endSync(outcome: "complete" | "cancelled" | "error", counts: PhaseCounts = {}): void {
+  /**
+   * Close the open phase and end the sync.
+   *
+   * BACKLOG-2914: THE SINGLE CHOKE POINT. Six call sites across the orchestrator and
+   * `syncHandlers` reach this, and every one of them now produces an outcome row —
+   * success included. That is deliberate: the success row is the denominator, and a
+   * second emit site would be a second thing to forget. If a seventh path is ever
+   * added that ends a sync without calling this, it will be invisible to every
+   * consumer, so end syncs here.
+   */
+  endSync(outcome: SyncOutcome, counts: PhaseCounts = {}): void {
     this.closeOpenPhase();
+    const wasOpen = this.syncStartedAt !== null;
     const elapsedMs = this.syncStartedAt === null ? 0 : this.now() - this.syncStartedAt;
     const fields = formatFields(counts);
     this.sink(
       `[SyncTimeline] sync-end outcome=${outcome} elapsedMs=${elapsedMs}${fields ? " " + fields : ""}`,
     );
+    // ONE ROW PER SYNC, and `wasOpen` is what enforces the "one".
+    //
+    // Six call sites reach `endSync`, across the orchestrator and `syncHandlers`, and
+    // they are mutually exclusive TODAY — the orchestrator's `errorResult` paths never
+    // emit "complete", so the handler that ends the sync never runs for them. Before
+    // this change a second `endSync` cost a duplicate log line, which is noise. Now it
+    // would cost a duplicate OUTCOME row, which is a corrupted denominator — the exact
+    // number this whole addition exists to produce.
+    //
+    // The `sync-end` line above is deliberately NOT guarded: it is BACKLOG-2898's
+    // contract and a duplicate there is still only noise.
+    if (wasOpen) this.emitOutcome(outcome, elapsedMs, counts);
     this.syncStartedAt = null;
+    this.context = {};
+  }
+
+  /**
+   * BACKLOG-2914: the row every consumer reads. One line, one sync, every dimension
+   * that was established, plus the per-phase durations so a regression can be
+   * attributed to a phase rather than to "syncs got slower".
+   *
+   * Emitted through the same sink as everything else. WHERE this ends up being
+   * STORED is deliberately not decided here: `pm_token_metrics` is agent accounting
+   * and would be the wrong home, and inventing a product-telemetry store inside a
+   * bug-fix PR would be a much larger change than the one this belongs to. The row
+   * is greppable and parseable, which is what 2894 and 2952 need to begin.
+   */
+  private emitOutcome(outcome: SyncOutcome, elapsedMs: number, counts: PhaseCounts): void {
+    const phases = this.phaseRecords
+      .filter((r) => r.elapsedMs !== null)
+      .map((r) => `${r.phase}:${r.elapsedMs}`)
+      .join(",");
+
+    const fields: TimelineMeta = {
+      // 2952 extends this row rather than defining a second one, so the dimension
+      // that separates the sources is present even while there is only one.
+      source: "iphone-backup",
+      outcome,
+      elapsedMs,
+      ...this.context,
+      ...counts,
+      ...(phases ? { phases } : {}),
+    };
+
+    this.sink(`[SyncTimeline] sync-outcome ${formatFields(fields)}`);
   }
 
   /**
@@ -158,6 +293,7 @@ export class SyncTimeline {
   reset(): void {
     this.phaseRecords = [];
     this.syncStartedAt = null;
+    this.context = {};
   }
 
   private closeOpenPhase(): void {
