@@ -470,13 +470,48 @@ class DatabaseService implements IDatabaseService {
 
         if (tableInfo?.sql) {
           newDb.exec(tableInfo.sql);
-          const rows = oldDb.prepare(`SELECT * FROM "${tableName}"`).all();
+
+          // BACKLOG-2630: the column list comes from `PRAGMA table_info`, NOT from
+          // `SELECT *` + `Object.keys(rows[0])`.
+          //
+          // WHY, CONCRETELY. `PRAGMA table_info` OMITS stored generated columns;
+          // `SELECT *` RETURNS them. The old code derived the INSERT's column list
+          // from the shape of a returned row, so the moment any table gained a
+          // `GENERATED ALWAYS AS (...) STORED` column the list named it and SQLite
+          // refused the statement at PREPARE time with "cannot INSERT into
+          // generated column". `contact_link_proposals.pair_key` and
+          // `contact_link_verdicts.pair_key` (migration v69) are the first such
+          // columns in this schema. The throw propagates out of the catch below —
+          // which restores the plaintext backup — and out of `runMigrations()` in
+          // `initialize()`, so the app would not start.
+          //
+          // A generated column is exactly what must NOT be copied: the destination
+          // recomputes it from the values that ARE copied. Excluding it is correct,
+          // not a workaround. Use `table_info`, never `table_xinfo` — the latter
+          // includes generated columns and reintroduces the bug.
+          const columns = (
+            oldDb.pragma(`table_info("${tableName}")`) as { name: string }[]
+          ).map((c) => c.name);
+
+          // Empty-table short-circuit, preserved from the original. The column list
+          // no longer depends on a row existing, so this is a cheap skip rather than
+          // a correctness requirement — but keeping it means an empty table behaves
+          // exactly as it did before this change.
+          const rows =
+            columns.length > 0
+              ? oldDb
+                  .prepare(
+                    `SELECT ${columns.map((c) => `"${c}"`).join(", ")} FROM "${tableName}"`
+                  )
+                  .all()
+              : [];
           if (rows.length > 0) {
-            const columns = Object.keys(rows[0] as object);
             const placeholders = columns.map(() => "?").join(", ");
             const insertStmt = newDb.prepare(
               `INSERT INTO "${tableName}" (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${placeholders})`
             );
+            // BY NAME, never positionally: the binder looks each column up on the
+            // row object rather than trusting the order values came back in.
             const insertMany = newDb.transaction((data: unknown[]) => {
               for (const row of data) {
                 insertStmt.run(...columns.map((col) => (row as Record<string, unknown>)[col]));
