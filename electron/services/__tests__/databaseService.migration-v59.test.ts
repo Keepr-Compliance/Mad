@@ -174,6 +174,25 @@ function foreignKeys(db: DatabaseType, table: string): string[] {
   ).map((r) => r.table);
 }
 
+/**
+ * Every foreign key as `<column> -> <table>`, sorted.
+ *
+ * BACKLOG-2630 D2: `foreignKeys` above reports only the TARGET table, so two
+ * cascades to `contacts` are indistinguishable from one on the wrong column.
+ * `PRAGMA foreign_key_list` also returns rows in reverse declaration order, so
+ * this sorts rather than depending on it.
+ */
+function foreignKeyColumns(db: DatabaseType, table: string): string[] {
+  return (
+    db.prepare(`PRAGMA foreign_key_list(${table})`).all() as Array<{
+      table: string;
+      from: string;
+    }>
+  )
+    .map((r) => `${r.from} -> ${r.table}`)
+    .sort();
+}
+
 describe("databaseService migration v59 (BACKLOG-2410 — review queue + verdicts)", () => {
   let harness: MigrationHarness;
 
@@ -326,7 +345,21 @@ describe("databaseService migration v59 (BACKLOG-2410 — review queue + verdict
       await runV59();
       expect(foreignKeys(harness.db, "contact_link_verdicts")).toEqual([]);
       // The proposals table DOES have one, which is the contrast being drawn.
-      expect(foreignKeys(harness.db, "contact_link_proposals")).toEqual(["contacts"]);
+      //
+      // BACKLOG-2630 D2 (v69): there are now TWO cascades on proposals, one per
+      // CONTACT ENDPOINT — `contact_id` and the `target_contact_id` that a
+      // contact-to-contact question names. Both exist for the reason the first
+      // one did: a question about a deleted contact is noise. The verdicts table
+      // gained the same `target_contact_id` column and STILL has no FK on it,
+      // because an ANSWER about a deleted contact is evidence.
+      //
+      // Asserted BY COLUMN and not by count, so a cascade landing on the wrong
+      // column — or one silently added to verdicts — cannot pass here.
+      expect(foreignKeyColumns(harness.db, "contact_link_proposals")).toEqual([
+        "contact_id -> contacts",
+        "target_contact_id -> contacts",
+      ]);
+      expect(foreignKeyColumns(harness.db, "contact_link_verdicts")).toEqual([]);
     });
 
     it("survives its contact being deleted", async () => {

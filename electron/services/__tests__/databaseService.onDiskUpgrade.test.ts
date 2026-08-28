@@ -254,6 +254,13 @@ const BULK_MAIL_HEADERS_VERSION = 62;
  * the moment a v62 lands.
  */
 const ORIGIN_VOCABULARY_VERSION = 61;
+
+/**
+ * BACKLOG-2630 D2 — the migration that lets the questions and the answers name
+ * two records or two contacts. Written as 69 because develop's chain head was
+ * measured at 68; under the standing protocol whoever merges second renumbers.
+ */
+const PAIR_SHAPES_VERSION = 69;
 /**
  * BACKLOG-2427's value-provenance relabel.
  *
@@ -1662,4 +1669,443 @@ describe("databaseService — REAL on-disk v55 -> head upgrade (BACKLOG-2364 + B
       expect(fs.existsSync(`${dbFile}${suffix}`)).toBe(false);
     }
   });
+  // =========================================================================
+  // v69 — THE PAIR SHAPES, PROVED ON A DATABASE THAT REALLY IS OLD.
+  // BACKLOG-2630 slice 2 (board D2) / 2665 / 2616.
+  //
+  // v69 rebuilds BOTH `contact_link_proposals` (the questions) and
+  // `contact_link_verdicts` (the answers) so each can name two records or two
+  // contacts, not only a record and a contact.
+  //
+  // WHY THIS TEST EXISTS RATHER THAN A FRESH-SCHEMA ONE. A migration that adds
+  // a column can pass every synthetic suite and still break a real old->new
+  // upgrade, because test databases are built FRESH from the current constants
+  // while a user's file was built by the code as it was then. BACKLOG-2298 is
+  // that incident. So the genuine pre-v69 DDL is reconstructed here verbatim,
+  // on the real file, and the PUBLIC `runMigrations()` drives the upgrade.
+  //
+  // AND VERDICTS ARE THE DURABLE TABLE. Proposals are recomputed by every
+  // linking pass and losing one costs a sync; a verdict is a person's opinion
+  // and nothing in this system can regenerate it. A rebuild that mangles one
+  // is unrecoverable, which is why the verdict assertions below are field for
+  // field and include the read-time tiebreak.
+  // =========================================================================
+
+  it("v69 rebuilds the questions and the answers on a REAL old database, and every row survives by identity", async () => {
+    assertRealOnDiskTarget();
+
+    const klass = service.constructor as { MIGRATIONS: Array<{ version: number }> };
+    const allMigrations = klass.MIGRATIONS;
+
+    // --- phase 1: reach v68, the real pre-migration state.
+    klass.MIGRATIONS = allMigrations.filter((m) => m.version <= PAIR_SHAPES_VERSION - 1);
+    try {
+      await service.runMigrations();
+    } finally {
+      klass.MIGRATIONS = allMigrations;
+    }
+    expect(schemaVersionOf(db)).toBe(PAIR_SHAPES_VERSION - 1);
+
+    // ---------------------------------------------------------------------
+    // RESTORE THE GENUINE PRE-v69 SHAPE — what a real user's file holds.
+    // ---------------------------------------------------------------------
+    // Same reason as the v61 test above: v59 creates these tables from the
+    // SHARED constants, which always describe the CURRENT shape, so a replayed
+    // chain hands us the v69 tables and v69 correctly no-ops. A real v68
+    // install ran v59 against the code as it was THEN, so its tables carry
+    // `contact_id TEXT NOT NULL` and the four-column UNIQUE. That is the
+    // database v69 has to upgrade in the field.
+    //
+    // The DDL below is the pre-v69 text verbatim, and the column order of
+    // `contact_link_verdicts` is DELIBERATELY DECLARED DIFFERENTLY from the new
+    // table's (`decided_by` and `decided_at` are swapped, `reason` moved). That
+    // is the assertion that fails under a positional `SELECT *` copy — the
+    // failure mode that corrupted `audit_logs` in v33 and `contacts` in v36,
+    // where every row survives holding its neighbour's value and no row count
+    // can see it.
+    db.exec(`
+      DROP TABLE contact_link_proposals;
+      DROP TABLE contact_link_verdicts;
+      CREATE TABLE contact_link_proposals (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        contact_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (
+          source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+        ),
+        source_record_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (
+          status IN ('pending', 'confirmed', 'rejected')
+        ),
+        reason TEXT NOT NULL,
+        matched_on TEXT,
+        identity_assessment TEXT NOT NULL CHECK (
+          identity_assessment IN ('same_person', 'possibly_same_person', 'different_people')
+        ),
+        relationship_assessment TEXT NOT NULL CHECK (
+          relationship_assessment IN ('connected', 'possibly_connected', 'no_known_connection')
+        ),
+        cluster_key TEXT NOT NULL,
+        evidence_json TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        resolved_at DATETIME,
+        FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+        UNIQUE (user_id, contact_id, source_type, source_record_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_contact_link_proposals_pending
+        ON contact_link_proposals(user_id, status, cluster_key);
+      CREATE TABLE contact_link_verdicts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        decided_by TEXT NOT NULL DEFAULT 'user',
+        contact_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (
+          source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
+        ),
+        source_record_id TEXT NOT NULL,
+        reason TEXT,
+        identity_verdict TEXT NOT NULL CHECK (
+          identity_verdict IN ('same_person', 'possibly_same_person', 'different_people')
+        ),
+        relationship_verdict TEXT CHECK (
+          relationship_verdict IN ('connected', 'possibly_connected', 'no_known_connection')
+        ),
+        matched_on TEXT,
+        evidence_json TEXT,
+        decided_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_contact_link_verdicts_pair
+        ON contact_link_verdicts(user_id, source_type, source_record_id, contact_id);
+    `);
+
+    // PRE-MIGRATION PROOF: neither new shape can be recorded yet. Without this
+    // the "admits it after" assertions below would prove nothing — they would
+    // be green on a database that had always accepted them.
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_link_proposals
+             (id, user_id, contact_id, source_type, source_record_id, reason,
+              identity_assessment, relationship_assessment, cluster_key)
+           VALUES ('p-pre-rr', ?, NULL, 'macos', 'rec-a', 'ambiguous_identifier',
+                   'possibly_same_person', 'possibly_connected', 'k')`,
+        )
+        .run(USER_ID),
+    ).toThrow(/NOT NULL/i);
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO contact_link_verdicts
+             (id, user_id, contact_id, source_type, source_record_id, identity_verdict)
+           VALUES ('v-pre-cc', ?, ?, NULL, NULL, 'same_person')`,
+        )
+        .run(USER_ID, CONTACT_IDS[0]),
+    ).toThrow(/NOT NULL/i);
+
+    // --- the rows that must cross both rebuilds untouched.
+    //
+    // Every nullable field is populated DISTINCTLY so a positional copy cannot
+    // land correctly by coincidence.
+    db.prepare(
+      `INSERT INTO contact_link_proposals
+         (id, user_id, contact_id, source_type, source_record_id, status, reason,
+          matched_on, identity_assessment, relationship_assessment, cluster_key,
+          evidence_json, created_at, resolved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "p-v69-pending", USER_ID, CONTACT_IDS[0], "macos", "REC-ALPHA:ABPerson",
+      "pending", "ambiguous_identifier", "email", "possibly_same_person",
+      "possibly_connected", "cluster-alpha", '{"summary":"one shared email"}',
+      "2026-06-01 00:00:00", null,
+    );
+    db.prepare(
+      `INSERT INTO contact_link_proposals
+         (id, user_id, contact_id, source_type, source_record_id, status, reason,
+          matched_on, identity_assessment, relationship_assessment, cluster_key,
+          evidence_json, created_at, resolved_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      "p-v69-resolved", USER_ID, CONTACT_IDS[1], "outlook", "REC-BETA:Entry",
+      "rejected", "name_veto", "unique_name", "different_people",
+      "no_known_connection", "cluster-beta", null,
+      "2026-06-02 00:00:00", "2026-06-03 00:00:00",
+    );
+
+    // TWO VERDICTS SHARING A `decided_at`. Latest-wins is resolved at read time
+    // by `decided_at DESC, rowid DESC`, and A REBUILD REASSIGNS ROWIDS — so the
+    // tiebreak is exactly what a careless copy silently flips. Row identity
+    // alone would not catch it.
+    const insertVerdict = db.prepare(
+      `INSERT INTO contact_link_verdicts
+         (id, user_id, decided_by, contact_id, source_type, source_record_id, reason,
+          identity_verdict, relationship_verdict, matched_on, evidence_json, decided_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insertVerdict.run(
+      "v-v69-first", USER_ID, "user", CONTACT_IDS[0], "macos", "REC-ALPHA:ABPerson",
+      "answered in the queue", "possibly_same_person", "connected", "email",
+      '{"summary":"frozen at answer time"}', "2026-06-10 12:00:00",
+    );
+    insertVerdict.run(
+      "v-v69-tied-later", USER_ID, "user", CONTACT_IDS[0], "macos", "REC-ALPHA:ABPerson",
+      "changed their mind, same second", "different_people", "no_known_connection",
+      "email", '{"summary":"the one that must still win"}', "2026-06-10 12:00:00",
+    );
+
+    // The winner BEFORE the migration, read through the production ordering.
+    const LATEST_WINS_SQL = `SELECT id, identity_verdict FROM contact_link_verdicts
+       WHERE user_id = ? AND contact_id = ? AND source_type = ? AND source_record_id = ?
+       ORDER BY decided_at DESC, rowid DESC LIMIT 1`;
+    const winnerBefore = db
+      .prepare(LATEST_WINS_SQL)
+      .get(USER_ID, CONTACT_IDS[0], "macos", "REC-ALPHA:ABPerson");
+    expect(winnerBefore).toEqual({
+      id: "v-v69-tied-later",
+      identity_verdict: "different_people",
+    });
+
+    const contactsBefore = idsIn(db, "contacts");
+
+    // --- phase 2: the real chain to head, over the real file, with rows present.
+    await service.runMigrations();
+
+    expect(schemaVersionOf(db)).toBe(HEAD_VERSION);
+
+    // (1) THE QUESTIONS SURVIVED FIELD FOR FIELD, and were relabelled as the
+    //     record-to-contact pairs they always were. ZERO ROWS CHANGE MEANING.
+    expect(
+      db
+        .prepare(
+          `SELECT id, user_id, contact_id, source_type, source_record_id, status, reason,
+                  matched_on, identity_assessment, relationship_assessment, cluster_key,
+                  evidence_json, created_at, resolved_at,
+                  pair_kind, target_contact_id, target_source_type,
+                  target_source_record_id, subject_side, pair_key
+             FROM contact_link_proposals ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "p-v69-pending",
+        user_id: USER_ID,
+        contact_id: CONTACT_IDS[0],
+        source_type: "macos",
+        source_record_id: "REC-ALPHA:ABPerson",
+        status: "pending",
+        reason: "ambiguous_identifier",
+        matched_on: "email",
+        identity_assessment: "possibly_same_person",
+        relationship_assessment: "possibly_connected",
+        cluster_key: "cluster-alpha",
+        evidence_json: '{"summary":"one shared email"}',
+        created_at: "2026-06-01 00:00:00",
+        resolved_at: null,
+        pair_kind: "record_contact",
+        target_contact_id: null,
+        target_source_type: null,
+        target_source_record_id: null,
+        // The SUBJECT of a record-to-contact question is the CONTACT — the
+        // incumbent the duplicate was found FOR (BACKLOG-2616, 13 Aug). A row
+        // naming only a pair cannot be executed later.
+        subject_side: "a",
+        pair_key: `c:${CONTACT_IDS[0]}|r:macos:REC-ALPHA:ABPerson`,
+      },
+      {
+        id: "p-v69-resolved",
+        user_id: USER_ID,
+        contact_id: CONTACT_IDS[1],
+        source_type: "outlook",
+        source_record_id: "REC-BETA:Entry",
+        status: "rejected",
+        reason: "name_veto",
+        matched_on: "unique_name",
+        identity_assessment: "different_people",
+        relationship_assessment: "no_known_connection",
+        cluster_key: "cluster-beta",
+        evidence_json: null,
+        created_at: "2026-06-02 00:00:00",
+        resolved_at: "2026-06-03 00:00:00",
+        pair_kind: "record_contact",
+        target_contact_id: null,
+        target_source_type: null,
+        target_source_record_id: null,
+        subject_side: "a",
+        pair_key: `c:${CONTACT_IDS[1]}|r:outlook:REC-BETA:Entry`,
+      },
+    ]);
+
+    // (2) THE ANSWERS SURVIVED FIELD FOR FIELD — including the frozen
+    //     `evidence_json`, which is the labelled example and is not
+    //     regenerable.
+    expect(
+      db
+        .prepare(
+          `SELECT id, user_id, decided_by, contact_id, source_type, source_record_id, reason,
+                  identity_verdict, relationship_verdict, matched_on, evidence_json, decided_at,
+                  pair_kind, target_contact_id, subject_side, pair_key
+             FROM contact_link_verdicts ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "v-v69-first",
+        user_id: USER_ID,
+        decided_by: "user",
+        contact_id: CONTACT_IDS[0],
+        source_type: "macos",
+        source_record_id: "REC-ALPHA:ABPerson",
+        reason: "answered in the queue",
+        identity_verdict: "possibly_same_person",
+        relationship_verdict: "connected",
+        matched_on: "email",
+        evidence_json: '{"summary":"frozen at answer time"}',
+        decided_at: "2026-06-10 12:00:00",
+        pair_kind: "record_contact",
+        target_contact_id: null,
+        subject_side: "a",
+        pair_key: `c:${CONTACT_IDS[0]}|r:macos:REC-ALPHA:ABPerson`,
+      },
+      {
+        id: "v-v69-tied-later",
+        user_id: USER_ID,
+        decided_by: "user",
+        contact_id: CONTACT_IDS[0],
+        source_type: "macos",
+        source_record_id: "REC-ALPHA:ABPerson",
+        reason: "changed their mind, same second",
+        identity_verdict: "different_people",
+        relationship_verdict: "no_known_connection",
+        matched_on: "email",
+        evidence_json: '{"summary":"the one that must still win"}',
+        decided_at: "2026-06-10 12:00:00",
+        pair_kind: "record_contact",
+        target_contact_id: null,
+        subject_side: "a",
+        pair_key: `c:${CONTACT_IDS[0]}|r:macos:REC-ALPHA:ABPerson`,
+      },
+    ]);
+
+    // (3) THE LATEST-WINS TIEBREAK STILL PICKS THE SAME ANSWER. The rebuild
+    //     reassigned rowids; copying in rowid order is what preserves this, and
+    //     nothing else in the suite would notice if it were dropped.
+    expect(
+      db.prepare(LATEST_WINS_SQL).get(USER_ID, CONTACT_IDS[0], "macos", "REC-ALPHA:ABPerson"),
+    ).toEqual(winnerBefore);
+
+    // (4) THE REST OF THE DATABASE IS UNTOUCHED — v69 is schema-only.
+    expect(idsIn(db, "contacts")).toEqual(contactsBefore);
+
+    // (5) BOTH NEW SHAPES ARE NOW LIVE ON THE REAL FILE — the whole point, and
+    //     each was refused above. NOTHING IN PRODUCTION WRITES THEM: these are
+    //     direct inserts, which is exactly the licence the founder's "schema
+    //     first split" decision grants a test and denies production code.
+    db.prepare(
+      `INSERT INTO contact_link_proposals
+         (id, user_id, pair_kind, source_type, source_record_id,
+          target_source_type, target_source_record_id, reason,
+          identity_assessment, relationship_assessment, cluster_key)
+       VALUES ('p-v69-rr', ?, 'record_record', 'macos', 'REC-ALPHA:ABPerson',
+               'outlook', 'REC-BETA:Entry', 'ambiguous_identifier',
+               'possibly_same_person', 'possibly_connected', 'cluster-rr')`,
+    ).run(USER_ID);
+    db.prepare(
+      `INSERT INTO contact_link_proposals
+         (id, user_id, pair_kind, contact_id, target_contact_id, reason,
+          identity_assessment, relationship_assessment, cluster_key)
+       VALUES ('p-v69-cc', ?, 'contact_contact', ?, ?, 'ambiguous_identifier',
+               'possibly_same_person', 'possibly_connected', 'cluster-cc')`,
+    ).run(USER_ID, CONTACT_IDS[0], CONTACT_IDS[1]);
+    db.prepare(
+      `INSERT INTO contact_link_verdicts
+         (id, user_id, pair_kind, source_type, source_record_id,
+          target_source_type, target_source_record_id, identity_verdict)
+       VALUES ('v-v69-rr', ?, 'record_record', 'macos', 'REC-ALPHA:ABPerson',
+               'outlook', 'REC-BETA:Entry', 'same_person')`,
+    ).run(USER_ID);
+    db.prepare(
+      `INSERT INTO contact_link_verdicts
+         (id, user_id, pair_kind, contact_id, target_contact_id, identity_verdict)
+       VALUES ('v-v69-cc', ?, 'contact_contact', ?, ?, 'different_people')`,
+    ).run(USER_ID, CONTACT_IDS[0], CONTACT_IDS[1]);
+
+    // Read back BY IDENTITY. A record pair has NO CONTACT on either side and a
+    // contact pair has NO SOURCE RECORD on either side — no sentinel contact
+    // row was invented to make either fit, which is the founder's explicit
+    // prohibition and the thing a "helpful" placeholder would quietly undo.
+    expect(
+      db
+        .prepare(
+          `SELECT id, pair_kind, contact_id, target_contact_id, source_type,
+                  target_source_type, pair_key
+             FROM contact_link_proposals WHERE pair_kind <> 'record_contact' ORDER BY id`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        id: "p-v69-cc",
+        pair_kind: "contact_contact",
+        contact_id: CONTACT_IDS[0],
+        target_contact_id: CONTACT_IDS[1],
+        source_type: null,
+        target_source_type: null,
+        pair_key: `c:${CONTACT_IDS[0]}|c:${CONTACT_IDS[1]}`,
+      },
+      {
+        id: "p-v69-rr",
+        pair_kind: "record_record",
+        contact_id: null,
+        target_contact_id: null,
+        source_type: "macos",
+        target_source_type: "outlook",
+        pair_key: "r:macos:REC-ALPHA:ABPerson|r:outlook:REC-BETA:Entry",
+      },
+    ]);
+    expect(idsIn(db, "contact_link_verdicts")).toEqual([
+      "v-v69-cc",
+      "v-v69-first",
+      "v-v69-rr",
+      "v-v69-tied-later",
+    ]);
+
+    // (6) THE DUPLICATE-QUESTION GUARD STILL HOLDS, on the real file, for all
+    //     three shapes — and it is the ONLY thing stopping an unanswered
+    //     question being appended again on every sync.
+    //
+    //     Driven with `INSERT OR IGNORE`, which is how the linker writes, so
+    //     what is measured is the production behaviour: 0 rows changed.
+    const orIgnore = db.prepare(
+      `INSERT OR IGNORE INTO contact_link_proposals
+         (id, user_id, pair_kind, contact_id, source_type, source_record_id,
+          target_contact_id, target_source_type, target_source_record_id, reason,
+          identity_assessment, relationship_assessment, cluster_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ambiguous_identifier',
+               'possibly_same_person', 'possibly_connected', 'k')`,
+    );
+    // The same record-to-contact question, re-asked: ignored, as before v69.
+    expect(
+      orIgnore.run("p-dup-rc", USER_ID, "record_contact", CONTACT_IDS[0], "macos",
+        "REC-ALPHA:ABPerson", null, null, null).changes,
+    ).toBe(0);
+    // The two new shapes, re-asked IN THE OPPOSITE DIRECTION. One row per
+    // UNORDERED pair (founder, BACKLOG-2616: "yes we need to stop that") — so
+    // these are the same question, not new ones, and they are ignored too.
+    expect(
+      orIgnore.run("p-dup-cc", USER_ID, "contact_contact", CONTACT_IDS[1], null, null,
+        CONTACT_IDS[0], null, null).changes,
+    ).toBe(0);
+    expect(
+      orIgnore.run("p-dup-rr", USER_ID, "record_record", null, "outlook", "REC-BETA:Entry",
+        null, "macos", "REC-ALPHA:ABPerson").changes,
+    ).toBe(0);
+
+    // Nothing was appended by any of the three.
+    expect(idsIn(db, "contact_link_proposals")).toEqual([
+      "p-v69-cc",
+      "p-v69-pending",
+      "p-v69-resolved",
+      "p-v69-rr",
+    ]);
+  });
+
+
 });
