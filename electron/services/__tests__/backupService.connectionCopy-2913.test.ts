@@ -1,0 +1,395 @@
+/**
+ * BACKLOG-2913, copy defect — "try a different cable" for a cable that was fine.
+ *
+ * The classifier shipped in PR #2420 is correct and the founder verified it on real
+ * hardware on 2026-08-28. Its ADVICE was not. He started an incremental sync, waited
+ * out the passcode, let one 616 MB file complete, then unplugged the cable on
+ * purpose — and the app told him to try a different cable.
+ *
+ * **A drop eleven minutes in, after a successful handshake, a passcode and 616 MB,
+ * is almost never a faulty cable.** A bad cable fails at enumeration or within
+ * seconds. What actually causes a MID-TRANSFER drop is the Mac sleeping, the phone
+ * sleeping or locking, USB power management suspending the port, a hub
+ * renegotiating, or somebody pulling the plug. Leading with hardware sends a user
+ * hunting a problem they do not have.
+ *
+ * So the message splits on whether transfer had begun, and the after-bytes variant
+ * leads with the action that works.
+ *
+ * ## Provenance — the run these tests are written against
+ *
+ * TRANSCRIBED first-hand from the founder's dev log
+ * (`keepr-dev/logs/main.log`, mtime 2026-08-28 12:19; the dev app is live and
+ * writing, so line numbers are as observed and can shift):
+ *
+ * - **line 10729** — `[BackupService] File transfer started after 684.6s - passcode
+ *   entered`, at 12:07:59.607. That sentence is emitted from exactly one place in
+ *   backupService.ts: inside `if (progress.phase === "transferring" &&
+ *   !this.hasReceivedFileProgress)`, the block that sets the flag. **Its presence in
+ *   the log is proof that `hasReceivedFileProgress` was true for this run** — which
+ *   is what makes it the right discriminator rather than a plausible one.
+ * - **line 11542** — `[BackupService] Backup failed with code 255`, at 12:08:53.323.
+ * - **lines 11551-11558** — the teardown block below, verbatim, including
+ *   `usbmuxd_send returned -32 (Broken pipe)` at 12:08:53.319.
+ * - **line 11607** — the renderer printing the defect itself: `Sync failed: The
+ *   connection to your iPhone dropped during the backup. Try a different cable...`
+ *
+ * The progress-bar lines are the ONE fixture here that is not a capture, and it is
+ * not one because it cannot be: backupService filters progress bars out of the log
+ * on purpose (`isProgressBar`), so no run of any date has them. The shape below is
+ * taken from `parseProgress`'s own documented example — the parser's vocabulary,
+ * stated as such rather than passed off as transcription — and the wiring tests
+ * prove by execution that the real parser accepts it, because the flag they assert
+ * on is only set when it does.
+ *
+ * PII: no UDID, device name, contact name, phone or email appears below. The
+ * transcribed block is nine `idevice.c`/`afc.c`/`service.c` lines carrying byte
+ * counts and errno strings.
+ *
+ * ## What each control kills
+ *
+ * - Reordering the clauses of the mid-transfer message -> `does not open with a
+ *   hardware instruction` and `puts trying again ahead of the hardware step`.
+ * - Collapsing the branch to one constant -> `the two cases produce different
+ *   messages`.
+ * - Hardcoding `transferStarted` to false at the call site -> the three wiring
+ *   tests. That mutation is the reason the wiring tests exist: without them,
+ *   "the signal is reachable where the message is built" is a claim, not a result.
+ */
+
+import { EventEmitter } from "events";
+import type { BackupResult } from "../../types/backup";
+
+const TEST_UDID = "a1b2c3d4e5f6789012345678901234567890abcd";
+
+const mockSpawn = jest.fn();
+
+jest.mock("better-sqlite3-multiple-ciphers", () =>
+  jest.fn().mockImplementation(() => ({
+    prepare: jest.fn().mockReturnValue({
+      all: jest.fn().mockReturnValue([]),
+      get: jest.fn().mockReturnValue(null),
+      run: jest.fn(),
+    }),
+    close: jest.fn(),
+    exec: jest.fn(),
+  })),
+);
+
+jest.mock("electron", () => ({
+  app: { getPath: jest.fn().mockReturnValue("/mock/userData"), isPackaged: false },
+}));
+
+jest.mock("electron-log", () => ({
+  default: { info: jest.fn(), debug: jest.fn(), warn: jest.fn(), error: jest.fn() },
+  info: jest.fn(),
+  debug: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+}));
+
+jest.mock("@sentry/electron/main", () => ({
+  captureException: jest.fn(),
+  captureMessage: jest.fn(),
+  addBreadcrumb: jest.fn(),
+}));
+
+jest.mock("fs", () => ({
+  promises: {
+    mkdir: jest.fn().mockResolvedValue(undefined),
+    access: jest.fn().mockRejectedValue(new Error("Not found")),
+    readdir: jest.fn().mockResolvedValue([]),
+    stat: jest
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("no"), { code: "ENOENT" })),
+    rm: jest.fn().mockResolvedValue(undefined),
+    readFile: jest.fn().mockResolvedValue("<plist></plist>"),
+  },
+}));
+
+jest.mock("child_process", () => ({
+  spawn: (...args: unknown[]) => mockSpawn(...args),
+}));
+
+jest.mock("../libimobiledeviceService", () => ({
+  getCommand: jest.fn((name: string) => `/mock/${name}`),
+  isMockMode: jest.fn().mockReturnValue(false),
+}));
+
+jest.mock("../backupDecryptionService", () => ({
+  backupDecryptionService: {
+    isBackupEncrypted: jest.fn().mockResolvedValue(false),
+    decryptBackup: jest.fn(),
+    cleanup: jest.fn(),
+  },
+}));
+
+import {
+  BackupService,
+  classifyBackupFailure,
+  BACKUP_CONNECTION_LOST_MESSAGE,
+  BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE,
+} from "../backupService";
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+/**
+ * TRANSCRIBED verbatim from main.log lines 11551-11558, the founder's 2026-08-28
+ * unplug at 12:08:53.319. This is the whole evidence the classifier gets: the device
+ * never answers once the link is gone, so there is no plist and no `ErrorCode` line.
+ */
+const UNPLUGGED_MID_TRANSFER_STDERR = [
+  "12:08:53.318 notification_proxy.c:278 np_get_notification(): NotificationProxy: error -256 occurred!",
+  "12:08:53.318 notification_proxy.c:67 np_unlock(): Unlocked",
+  "12:08:53.319 property_list_service.c:132 internal_plist_send(): sending 108 bytes",
+  "12:08:53.319 service.c:144 service_send(): sending 4 bytes",
+  "12:08:53.319 idevice.c:1017 internal_ssl_write(): pre-send length = 33 bytes",
+  "12:08:53.319 idevice.c:643 internal_connection_send(): ERROR: usbmuxd_send returned -32 (Broken pipe)",
+  "12:08:53.319 idevice.c:1019 internal_ssl_write(): ERROR: internal_connection_send returned -2",
+  "12:08:53.319 idevice.c:696 idevice_connection_send(): SSL_write 4, sent 0",
+  "12:08:53.319 service.c:147 service_send(): ERROR: sending to device failed.",
+].join("\n");
+
+/** idevicebackup2's stdout for a run that failed without a device error code. */
+const STDOUT_NO_ERROR_LINE = [
+  "Requesting backup from device...",
+  "Incremental backup mode.",
+  "Received 0 files from device.",
+].join("\n");
+
+/**
+ * A per-file progress bar. NOT transcribed — see the header. Shape taken from
+ * `parseProgress`'s own documented example,
+ * `"[====================                              ]  39% (18.8 MB/48.3 MB)"`.
+ * The 616 MB total is the file size from the founder's run.
+ */
+function progressBar(percent: number, doneMb: number, totalMb = 616.0): string {
+  const filled = "=".repeat(Math.max(1, Math.round(percent / 5)));
+  const empty = " ".repeat(20 - Math.min(20, Math.round(percent / 5)));
+  return `[${filled}${empty}] ${percent}% (${doneMb.toFixed(1)} MB/${totalMb.toFixed(1)} MB)\n`;
+}
+
+// ---------------------------------------------------------------------------
+// Harness — the real BackupService, driven end to end
+// ---------------------------------------------------------------------------
+
+class FakeProcess extends EventEmitter {
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+  stdin = { write: jest.fn(), end: jest.fn() };
+  kill = jest.fn();
+}
+
+/** The two private fields this suite reads, to prove which one is load-bearing. */
+interface TransferState {
+  hasReceivedFileProgress: boolean;
+  bytesTransferred: number;
+}
+
+/**
+ * Drives one backup run. The first spawn is the `ideviceinfo` encryption probe, the
+ * second is `idevicebackup2`. Returns the service too, so the test can read the
+ * transfer state the classifier was handed.
+ */
+async function runBackup(
+  script: (proc: FakeProcess) => void,
+): Promise<{ result: BackupResult; state: TransferState }> {
+  const service = new BackupService();
+
+  mockSpawn.mockImplementation((cmd: string) => {
+    const proc = new FakeProcess();
+    if (cmd.includes("ideviceinfo")) {
+      setTimeout(() => {
+        proc.stdout.emit("data", Buffer.from("false\n"));
+        proc.emit("close", 0);
+      });
+    } else {
+      setTimeout(() => script(proc), 0);
+    }
+    return proc;
+  });
+
+  const result = await service.startBackup({ udid: TEST_UDID });
+  const state = service as unknown as TransferState;
+  return {
+    result,
+    state: {
+      hasReceivedFileProgress: state.hasReceivedFileProgress,
+      bytesTransferred: state.bytesTransferred,
+    },
+  };
+}
+
+/** The unplug, after `progress` has been streamed. */
+function unplug(proc: FakeProcess, progress: string[]): void {
+  proc.stdout.emit("data", Buffer.from("Requesting backup from device...\n"));
+  for (const line of progress) {
+    proc.stdout.emit("data", Buffer.from(line));
+  }
+  proc.stderr.emit("data", Buffer.from(UNPLUGGED_MID_TRANSFER_STDERR + "\n"));
+  proc.emit("close", 255);
+}
+
+// ---------------------------------------------------------------------------
+
+describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe("the mid-transfer message leads with the action that works", () => {
+    // Every assertion below names ONE clause. A single full-string equality would
+    // let a later copy tweak drop a clause and stay green.
+
+    it("does not lead with a hardware instruction", () => {
+      // "Leads with" means the first ADVICE, not the first sentence — both orderings
+      // open with the same diagnosis, so a first-sentence check would survive a
+      // reorder and prove nothing. Every hardware word in the message must come
+      // AFTER the try-again clause.
+      const msg = BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE;
+      const tryAgain = msg.indexOf("try syncing again");
+      expect(tryAgain).toBeGreaterThanOrEqual(0);
+
+      const hardwareWords = /cable|hub|dock|port|plug|unplug|restart|cord|adapter/gi;
+      const hardwareAt = [...msg.matchAll(hardwareWords)].map((m) => m.index ?? -1);
+      // The fixture is worth nothing if the message has no hardware advice at all.
+      expect(hardwareAt.length).toBeGreaterThan(0);
+      expect(Math.min(...hardwareAt)).toBeGreaterThan(tryAgain);
+
+      // And it still opens by naming what happened, not by issuing an order.
+      expect(msg.split(". ")[0]).toContain("connection to your iPhone dropped");
+    });
+
+    it("puts trying again ahead of the hardware step", () => {
+      const msg = BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE;
+      // Presence first: indexOf returns -1 for an absent token, and -1 < n passes.
+      expect(msg).toContain("try syncing again");
+      expect(msg).toContain("plug the iPhone straight into this Mac");
+      expect(msg.indexOf("try syncing again")).toBeGreaterThanOrEqual(0);
+      expect(msg.indexOf("plug the iPhone straight into this Mac")).toBeGreaterThan(
+        msg.indexOf("try syncing again"),
+      );
+    });
+
+    it("never sends the user after a cable", () => {
+      // The founder's words: "if the connection dropped after it already went
+      // through a few steps this 100% doesn't mean try a new cable".
+      expect(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE).not.toMatch(/cable/i);
+    });
+
+    it("says the drop is usually temporary, and names sleep", () => {
+      const msg = BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE;
+      expect(msg).toContain("This is often temporary — try syncing again");
+      expect(msg).toContain("without a hub");
+      expect(msg).toContain("neither device is going to sleep");
+    });
+  });
+
+  describe("the two cases are different faults", () => {
+    it("a drop before any transfer keeps the hardware-first advice", () => {
+      // Correct here: a link that dies before the first progress bar died during
+      // enumeration, pairing or the passcode wait, and hardware really is the
+      // likeliest cause at that stage.
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).toMatch(/try a different cable/i);
+      expect(BACKUP_CONNECTION_LOST_MESSAGE.split(". ")[1]).toMatch(/cable/i);
+    });
+
+    it("the two cases produce different messages", () => {
+      const before = classifyBackupFailure(
+        255,
+        STDOUT_NO_ERROR_LINE,
+        UNPLUGGED_MID_TRANSFER_STDERR,
+        false,
+      );
+      const after = classifyBackupFailure(
+        255,
+        STDOUT_NO_ERROR_LINE,
+        UNPLUGGED_MID_TRANSFER_STDERR,
+        true,
+      );
+
+      expect(before.message).toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+      expect(after.message).toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);
+      expect(after.message).not.toBe(before.message);
+    });
+
+    it("classifies both as the same fault, with the same recorded cause", () => {
+      // The split is copy, not classification. BACKLOG-2950 reads `failureCause`
+      // and BACKLOG-2953 owns the error-code union; neither may shift here.
+      const before = classifyBackupFailure(
+        255,
+        STDOUT_NO_ERROR_LINE,
+        UNPLUGGED_MID_TRANSFER_STDERR,
+        false,
+      );
+      const after = classifyBackupFailure(
+        255,
+        STDOUT_NO_ERROR_LINE,
+        UNPLUGGED_MID_TRANSFER_STDERR,
+        true,
+      );
+
+      expect(before.errorCode).toBe("CONNECTION_LOST");
+      expect(after.errorCode).toBe("CONNECTION_LOST");
+      expect(after.cause).toEqual(before.cause);
+      expect(after.cause.deviceErrorCode).toBeNull();
+      expect(after.cause.source).toBe("none");
+    });
+
+    it("defaults to the before-transfer message when the caller cannot say", () => {
+      const unknown = classifyBackupFailure(
+        255,
+        STDOUT_NO_ERROR_LINE,
+        UNPLUGGED_MID_TRANSFER_STDERR,
+      );
+      expect(unknown.message).toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+    });
+  });
+
+  describe("wired to the transfer signal, not to a byte count", () => {
+    it("replays the founder's unplug: one file done, then the cable out", async () => {
+      // 616 MB completes (95% -> 5% is what parseProgress reads as a file boundary),
+      // the next file starts, then the link dies.
+      const { result, state } = await runBackup((proc) =>
+        unplug(proc, [
+          progressBar(10, 61.6),
+          progressBar(95, 585.2),
+          progressBar(5, 12.0),
+        ]),
+      );
+
+      expect(state.hasReceivedFileProgress).toBe(true);
+      expect(state.bytesTransferred).toBeGreaterThan(0);
+      expect(result.success).toBe(false);
+      expect(result.errorCode).toBe("CONNECTION_LOST");
+      expect(result.error).toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);
+    });
+
+    it("a drop before the first progress bar still gets the hardware advice", async () => {
+      const { result, state } = await runBackup((proc) => unplug(proc, []));
+
+      expect(state.hasReceivedFileProgress).toBe(false);
+      expect(state.bytesTransferred).toBe(0);
+      expect(result.errorCode).toBe("CONNECTION_LOST");
+      expect(result.error).toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+    });
+
+    it("a drop inside the FIRST file counts as transfer started, though zero bytes are banked", async () => {
+      // This is why the signal is `hasReceivedFileProgress` and not
+      // `bytesTransferred`. The byte counter only advances when a whole file
+      // COMPLETES, so a link that dies 40% into the first file has banked nothing —
+      // and a `bytesTransferred > 0` discriminator would hand this user the cable
+      // message for what is almost certainly sleep or power management.
+      const { result, state } = await runBackup((proc) =>
+        unplug(proc, [progressBar(10, 61.6), progressBar(40, 246.4)]),
+      );
+
+      expect(state.hasReceivedFileProgress).toBe(true);
+      expect(state.bytesTransferred).toBe(0); // the two signals genuinely disagree
+      expect(result.error).toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);
+      expect(result.error).not.toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+    });
+  });
+});

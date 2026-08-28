@@ -169,13 +169,47 @@ export const BACKUP_DEVICE_LOCKED_MESSAGE =
   "while the sync runs.";
 
 /**
- * BACKLOG-2913: the USB link dropped. Exit 255 with
- * `usbmuxd_send returned -32 (Broken pipe)`.
+ * BACKLOG-2913: the USB link dropped BEFORE any file transfer began. Exit 255 with
+ * `usbmuxd_send returned -32 (Broken pipe)`, and no progress line ever seen.
+ *
+ * Hardware-first advice is correct HERE and only here. A link that dies before the
+ * first progress bar died during enumeration, pairing or the passcode wait — the
+ * stage at which a bad cable, a flaky port, a hub or a dock genuinely is the most
+ * likely cause.
+ *
+ * See {@link BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE} for what happens once
+ * bytes have moved, and why the same sentence there was wrong.
  */
 export const BACKUP_CONNECTION_LOST_MESSAGE =
   "The connection to your iPhone dropped during the backup. Try a different cable, " +
   "plug the iPhone straight into this Mac without a hub or dock, then sync again. " +
   "If it keeps dropping, restart your iPhone.";
+
+/**
+ * BACKLOG-2913: the USB link dropped AFTER file transfer had begun. Same exit code,
+ * same broken-pipe line, different fault — and it needs different advice.
+ *
+ * The founder tested the classifier on real hardware on 2026-08-28: an incremental
+ * sync, `File transfer started after 684.6s` (so: enumerated, paired, passcode
+ * entered), one 616 MB file completed, then he unplugged the cable. The classifier
+ * named the connection correctly — the old code would have said "iPhone is locked" —
+ * but the message told him to try a different cable.
+ *
+ * His objection, and it is right: **a drop eleven minutes in, after a successful
+ * handshake and 616 MB, is almost never a faulty cable.** A bad cable fails at
+ * enumeration or within seconds. The realistic causes of a MID-TRANSFER drop are the
+ * Mac sleeping, the phone sleeping or locking, USB power management suspending the
+ * port, a hub renegotiating, or the user unplugging it. Cable fault is the least
+ * likely of them once bytes have moved, and leading with it sends a user hunting for
+ * a hardware problem they do not have.
+ *
+ * So: the action that actually works comes first, and hardware comes last.
+ */
+export const BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE =
+  "The connection to your iPhone dropped during the backup. This is often " +
+  "temporary — try syncing again. If it keeps happening, plug the iPhone " +
+  "straight into this Mac without a hub, and check that neither device is going " +
+  "to sleep.";
 
 /**
  * BACKLOG-2913: the device's backup service would not negotiate. Exit 255 with
@@ -401,11 +435,21 @@ function describeUnmappedDeviceError(
  * was genuinely a locked phone. Reordering either check above the device-code switch
  * would tell that user to try a different cable. `backupService.failureCause-2913`
  * pins it.
+ *
+ * `transferStarted` carries the one thing the streams cannot say: whether any file
+ * transfer had begun when the link died. It changes NO classification — only which
+ * of the two connection-lost sentences is returned. It defaults to false, the
+ * conservative reading, so a caller that genuinely does not know gets the message
+ * written for "we never got going". See
+ * {@link BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE} for why the split exists, and
+ * `backupService.connectionCopy-2913` for the tests that pin the wording and the
+ * branch.
  */
 export function classifyBackupFailure(
   exitCode: number | null,
   stdout: string,
   stderr: string,
+  transferStarted: boolean = false,
 ): BackupFailureClassification {
   const parsed = parseDeviceBackupError(stdout, stderr);
   const cause: BackupFailureCause = { ...parsed, exitCode };
@@ -460,8 +504,14 @@ export function classifyBackupFailure(
     CONNECTION_DROPPED_PATTERN.test(stderr) ||
     CONNECTION_DROPPED_PATTERN.test(stdout)
   ) {
+    // BACKLOG-2913 (copy defect, founder 2026-08-28): a link drop before the first
+    // progress bar and a link drop at 616 MB are different faults. Same exit code,
+    // same broken-pipe line, opposite advice. `transferStarted` is the only thing
+    // that separates them, and the caller is the only place that knows it.
     return {
-      message: BACKUP_CONNECTION_LOST_MESSAGE,
+      message: transferStarted
+        ? BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE
+        : BACKUP_CONNECTION_LOST_MESSAGE,
       errorCode: "CONNECTION_LOST",
       cause,
     };
@@ -1681,7 +1731,19 @@ export class BackupService extends EventEmitter {
     stdout: string,
     stderr: string,
   ): BackupFailureClassification {
-    const classification = classifyBackupFailure(code, stdout, stderr);
+    // BACKLOG-2913 (copy defect): `hasReceivedFileProgress` is the transfer-started
+    // signal, and `bytesTransferred` deliberately is NOT. The latter only advances
+    // when a whole file COMPLETES (the percent-drop heuristic in parseProgress), so
+    // a drop part-way through the first file reads zero bytes while transfer is
+    // demonstrably under way — and the user would get cable advice for a sleep or a
+    // power-management fault. `hasReceivedFileProgress` flips on the first progress
+    // bar, which cannot be emitted before enumeration, pairing and the passcode.
+    const classification = classifyBackupFailure(
+      code,
+      stdout,
+      stderr,
+      this.hasReceivedFileProgress,
+    );
     log.error("[BackupService] Failure classified", {
       deviceErrorCode: classification.cause.deviceErrorCode,
       deviceErrorDescription: classification.cause.deviceErrorDescription,
