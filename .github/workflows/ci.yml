@@ -7,9 +7,26 @@ name: CI/CD
 #
 # Merge Policy: Always use traditional merges (not squash) to retain commit history
 
+# BACKLOG-2506 (defect 1): ONE event owns PR validation.
+#
+# `push` used to list feature/**, fix/**, claude/** and docs/**, while
+# `pull_request` lists the bases those branches target. A PR from fix/** to
+# develop therefore matched BOTH, and the entire workflow ran TWICE on the same
+# commit — observed on PR #2213 at 06:52:11 (push) and 06:52:13 (pull_request).
+#
+# That was not merely wasteful. The two runs were not equivalent (see the OS
+# matrix step below), and each emitted its own copy of every status check, so a
+# commit carried up to four check runs named `Security Audit`. Branch protection
+# resolves a required context to the LATEST check run of that name, so it could
+# land on a `skipped` twin and refuse the merge while the UI showed all green.
+# That is what left PR #2213 BLOCKED with 23 passing checks and zero failures.
+#
+# Now: pushes are validated only on the two long-lived branches; every branch
+# under review is validated by the `pull_request` event, which is also the event
+# that computes the correct (both-OS) matrix.
 on:
   push:
-    branches: [main, develop, 'feature/**', 'fix/**', 'claude/**', 'docs/**']
+    branches: [main, develop]
   pull_request:
     branches: [main, develop, 'int/**']
 
@@ -46,11 +63,20 @@ jobs:
           echo "$CHANGED"
 
           # Check if all changes are docs/markdown only
+          #
+          # BACKLOG-2506 (defect 4): `.github/workflows/*` USED TO BE ON THIS LIST.
+          # A PR whose only change was to ci.yml was therefore classified
+          # docs-only, the whole test job was skipped, and the PR merged green
+          # having run nothing. A workflow edit is the opposite of a no-risk
+          # change: its blast radius is every subsequent PR on the repo, and a
+          # broken edit could not be caught by the very thing it broke.
+          #
+          # Issue and PR templates stay — those are genuinely inert.
           DOCS_ONLY="true"
           while IFS= read -r file; do
             if [ -n "$file" ]; then
               case "$file" in
-                *.md|.claude/*|docs/*|.github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE/*|.github/workflows/*|LICENSE|*.txt)
+                *.md|.claude/*|docs/*|.github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE/*|LICENSE|*.txt)
                   # Documentation or config file, continue
                   ;;
                 *)
@@ -97,8 +123,21 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          # PRs (to develop/main/int/*) and pushes to develop/main: run both macOS + Windows
-          # Pushes to feature/fix/claude branches: macOS only (Windows runs on the PR)
+          # PRs (to develop/main/int/*) and pushes to develop/main: both macOS + Windows.
+          #
+          # BACKLOG-2506 (defect 2): the final branch is now unreachable, and that
+          # is the point. It used to fire for pushes to feature/fix/claude
+          # branches and emit a macOS-ONLY matrix. Because those pushes also
+          # raced a pull_request run (defect 1), a commit got two runs whose
+          # matrices differed: on PR #2213 the push run produced no
+          # `Test & Lint (windows-latest, 20.x)` job at all, while reporting the
+          # other checks under the same names as the full run. A weaker run was
+          # impersonating the real one.
+          #
+          # With `push` now limited to main/develop, EVENT_NAME=pull_request or
+          # GITHUB_REF_NAME in (main, develop) covers every case. The branch is
+          # kept as a defensive default rather than deleted, so an unforeseen
+          # trigger degrades to a real (if narrower) run instead of an empty matrix.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             echo 'os-matrix=["macos-latest","windows-latest"]' >> $GITHUB_OUTPUT
             echo "OS: both (pull_request)"
@@ -110,25 +149,33 @@ jobs:
             echo "OS: macOS only (push to feature branch)"
           fi
 
-  # For docs-only changes, provide passing status checks without running heavy tests
-  # Matrix must match the real test job to produce identical status check names
-  docs-pass:
-    name: Test & Lint
-    needs: check-changes
-    if: needs.check-changes.outputs.docs-only == 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        os: ${{ fromJson(needs.check-changes.outputs.os-matrix) }}
-        node-version: [20.x]
-    steps:
-      - name: Skip tests (docs-only change)
-        run: echo "Skipping tests for ${{ matrix.os }} / Node ${{ matrix.node-version }} - documentation-only changes detected"
-
+  # BACKLOG-2506 (defect 3): there used to be a `docs-pass` job here, ALSO named
+  # `Test & Lint`, with a matching matrix, gated on the inverse `if`. The comment
+  # on it read "Matrix must match the real test job to produce identical status
+  # check names" — which is exactly the problem.
+  #
+  # A job whose `if` is false is SKIPPED, not absent: GitHub still creates a check
+  # run for it. So every commit got TWO check runs per name, one real and one
+  # `skipped`, and required-check resolution (latest run of that name) could land
+  # on the skipped one and block the merge.
+  #
+  # Worse for trust: on a docs-only change the twin reported
+  # `Test & Lint (macos-latest, 20.x)` GREEN in about four seconds having run no
+  # tests, indistinguishable by name or conclusion from the seven-minute real run.
+  # A required check could be satisfied by a job that tested nothing.
+  #
+  # The pair is now ONE job that always runs, so exactly one check run carries
+  # each required name. The docs-only skip moved from the job's `if` to the
+  # steps', so the reason a run was cheap is visible in its log instead of being
+  # hidden behind an identically-named impostor.
+  #
+  # The name and matrix below are LOAD-BEARING: `Test & Lint` x (os, node-version)
+  # is what produces `Test & Lint (macos-latest, 20.x)` and
+  # `Test & Lint (windows-latest, 20.x)`, both registered as required contexts on
+  # develop. Do not rename either, or reorder the matrix keys.
   test:
     name: Test & Lint
     needs: check-changes
-    if: needs.check-changes.outputs.docs-only != 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30  # Prevent CI from running indefinitely
 
@@ -139,27 +186,40 @@ jobs:
         node-version: [20.x]  # Node 18 dropped - better-sqlite3-multiple-ciphers requires Node 20+
 
     steps:
+      # BACKLOG-2506: the docs-only skip lives here now, on every step, instead
+      # of on the job. The job always runs so its check-run names always exist;
+      # this step is what makes a cheap run legible as a skip in the log.
+      - name: Note docs-only change (tests skipped)
+        if: needs.check-changes.outputs.docs-only == 'true'
+        run: echo "Documentation-only change detected - test steps skipped for ${{ matrix.os }} / Node ${{ matrix.node-version }}"
+
       - name: Checkout code
+        if: needs.check-changes.outputs.docs-only != 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Setup Node.js ${{ matrix.node-version }}
+        if: needs.check-changes.outputs.docs-only != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
       - name: Install Python setuptools
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: pip install setuptools
 
       - name: Install dependencies
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: npm install
         env:
           npm_config_ignore_scripts: true
 
       - name: Build preload
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: npm run build:preload
 
       - name: Rebuild native modules for Electron
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: node scripts/rebuild-native.js
         continue-on-error: true
 
@@ -176,6 +236,7 @@ jobs:
       # every Node step in this job now carries one explicit, identical limit
       # instead of an implicit one that varies with the runner.
       - name: TypeScript type check
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: npm run type-check
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
@@ -197,11 +258,13 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Run linter
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: npm run lint
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Run tests
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: npm test -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB --forceExit
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
@@ -213,6 +276,7 @@ jobs:
       # inherits the macOS + Windows matrix. No --forceExit: this tier is verified
       # to leak no open handles, so we want jest to fail loudly if that changes.
       - name: Run integration test tier
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: npm run test:integration -- --silent --maxWorkers=2 --workerIdleMemoryLimit=512MB
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
@@ -221,11 +285,13 @@ jobs:
       # exist). Runs from the repo root so ts-jest / jest-environment-* resolve from the
       # hoisted root node_modules; the portal config remaps @/ to the portal root.
       - name: Run broker-portal tests
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: npx jest --config broker-portal/jest.config.js --silent
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
 
       - name: Run admin-portal tests
+        if: needs.check-changes.outputs.docs-only != 'true'
         working-directory: admin-portal
         run: npx vitest run
         env:
@@ -449,23 +515,41 @@ jobs:
   # BACKLOG-2221: gate the Expo/React Native companion (android-companion/). It has
   # its own package-lock + jest/eslint/tsc but no root CI job covered it, so SMS
   # pipeline / crypto regressions went uncaught. Isolated job (own lockfile, no
-  # native rebuild). Runs only when android-companion/** changed; the mirror-skip
-  # job below keeps the status check name present on PRs that don't touch it — the
-  # same docs-pass/test idiom used above.
+  # native rebuild).
+  #
+  # BACKLOG-2506 (defect 3): there was a mirror job `android-companion-skip`,
+  # also named `Android Companion`, gated on the inverse `if`, so the status
+  # check name was reported on PRs that don't touch android-companion/**. Its own
+  # comment said "Exactly one of the two runs" — but a skipped job still produces
+  # a check run, so BOTH reported, one `success` and one `skipped`, under one
+  # name. Merged into this job: the check name is always present (which was the
+  # original goal) and now appears exactly once.
+  #
+  # `Android Companion` is not currently a required context, but it was written
+  # to be "ready to be made a required check" — as a duplicate name it would have
+  # wedged every PR the moment it was promoted.
   android-companion:
     name: Android Companion
     needs: check-changes
-    if: needs.check-changes.outputs.android-changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
       run:
         working-directory: android-companion
     steps:
+      # No working-directory dependency: this runs before checkout, when
+      # android-companion/ does not exist yet on the runner.
+      - name: Note no android-companion changes (checks skipped)
+        if: needs.check-changes.outputs.android-changed != 'true'
+        working-directory: ${{ github.workspace }}
+        run: echo "No android-companion changes detected - android-companion checks skipped"
+
       - name: Checkout code
+        if: needs.check-changes.outputs.android-changed == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Setup Node.js 20.x
+        if: needs.check-changes.outputs.android-changed == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20.x
@@ -473,28 +557,20 @@ jobs:
           cache-dependency-path: android-companion/package-lock.json
 
       - name: Install dependencies
+        if: needs.check-changes.outputs.android-changed == 'true'
         run: npm ci
 
       - name: Run tests
+        if: needs.check-changes.outputs.android-changed == 'true'
         run: npm test
 
       - name: TypeScript type check
+        if: needs.check-changes.outputs.android-changed == 'true'
         run: npx tsc --noEmit
 
       - name: Run linter
+        if: needs.check-changes.outputs.android-changed == 'true'
         run: npm run lint
-
-  # Mirror of android-companion for PRs that do NOT touch android-companion/**, so
-  # the "Android Companion" status check is always reported (ready to be made a
-  # required check without blocking unrelated PRs). Exactly one of the two runs.
-  android-companion-skip:
-    name: Android Companion
-    needs: check-changes
-    if: needs.check-changes.outputs.android-changed != 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Skip (no android-companion changes)
-        run: echo "Skipping android-companion checks - no android-companion changes detected"
 
   build:
     name: Build Application
@@ -532,32 +608,39 @@ jobs:
           path: dist/
           retention-days: 7
 
-  # For docs-only changes, provide passing security check
-  security-pass:
-    name: Security Audit
-    needs: check-changes
-    if: needs.check-changes.outputs.docs-only == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Skip security audit (docs-only change)
-        run: echo "Skipping security audit - documentation-only changes detected"
-
+  # BACKLOG-2506 (defect 3): `security-pass` — a second job ALSO named
+  # `Security Audit`, gated on the inverse `if` — was merged into this one. A
+  # false `if` skips a job but still creates a check run, so the pair emitted a
+  # duplicate `skipped` result under the required name. Combined with the
+  # double-trigger that put FOUR check runs named `Security Audit` on a single
+  # commit (two success, two skipped) — which is what branch protection was
+  # resolving against when it refused PR #2213.
+  #
+  # `Security Audit` is a registered required context on develop. This job must
+  # always run: do NOT restore a job-level `if`, or a docs-only PR will report no
+  # such check at all and wedge permanently.
   security:
     name: Security Audit
     needs: check-changes
-    if: needs.check-changes.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
 
     steps:
+      - name: Note docs-only change (audit skipped)
+        if: needs.check-changes.outputs.docs-only == 'true'
+        run: echo "Documentation-only change detected - security audit skipped"
+
       - name: Checkout code
+        if: needs.check-changes.outputs.docs-only != 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Setup Node.js
+        if: needs.check-changes.outputs.docs-only != 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '20.x'
 
       - name: Run npm audit
+        if: needs.check-changes.outputs.docs-only != 'true'
         # audit-level=critical: 72 known high/moderate vulnerabilities from transitive
         # dependencies (minimatch, ajv, tar, qs, next) tracked in BACKLOG-723.
         # None are critical. Will lower to --audit-level=high once dependencies are updated.
@@ -575,6 +658,7 @@ jobs:
           exit $CODE
 
       - name: Check for outdated dependencies
+        if: needs.check-changes.outputs.docs-only != 'true'
         run: npm outdated
         continue-on-error: true
 
