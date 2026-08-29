@@ -14,6 +14,7 @@ import {
   getLLMSettingsByUserId,
   getOrCreateLLMSettings,
   updateLLMSettings,
+  clearLLMSettingsField,
   setLLMDataConsent,
   incrementTokenUsage,
   incrementPlatformAllowanceUsage,
@@ -174,12 +175,17 @@ export class LLMConfigService {
    * Remove API key for a provider.
    */
   async removeApiKey(userId: string, provider: LLMProvider): Promise<void> {
-    const updates: Partial<LLMSettings> =
+    // BACKLOG-2932: this passed `{ <col>: undefined }` to `updateLLMSettings`,
+    // which skips undefined values — the payload emptied out, no UPDATE ran, and
+    // the settings row came back as a success value with the key still in it.
+    // Settings > AI > Remove reported success and re-masked the key on reload.
+    // Clearing is now its own verb, so the mistake is no longer expressible.
+    clearLLMSettingsField(
+      userId,
       provider === 'openai'
-        ? { openai_api_key_encrypted: undefined }
-        : { anthropic_api_key_encrypted: undefined };
-
-    updateLLMSettings(userId, updates);
+        ? 'openai_api_key_encrypted'
+        : 'anthropic_api_key_encrypted'
+    );
   }
 
   /**

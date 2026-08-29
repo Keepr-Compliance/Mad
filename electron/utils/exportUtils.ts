@@ -8,6 +8,7 @@
 import { dbAll } from "../services/db/core/dbConnection";
 import { normalizePhone as sharedNormalizePhone } from "../services/contactResolutionService";
 import logService from "../services/logService";
+import { joinAmbiguousNames } from "../services/folderExport/threadContactLabel";
 
 /**
  * Escape HTML entities in text to prevent XSS in generated HTML.
@@ -107,6 +108,56 @@ export function formatDateTime(dateString: string | Date): string {
 }
 
 /**
+ * BACKLOG-2757 — the sync mirror of `contactResolutionService`'s accumulator.
+ *
+ * Same rule, deliberately duplicated rather than shared: this file is the
+ * SYNCHRONOUS resolver (it runs inside HTML generation, which cannot await), and
+ * the async one carries transaction/user scoping this path has no access to.
+ * What must not differ is the DECISION — a handle naming two contacts reads
+ * "A or B" in both, in the same declared order — so the join and the ordering
+ * come from the one shared function.
+ */
+class SyncHandleAccumulator {
+  private readonly entries = new Map<
+    string,
+    { aliases: Set<string>; names: Map<string, string> }
+  >();
+
+  add(canonicalKey: string, aliases: string[], contactId: string, name: string): void {
+    let entry = this.entries.get(canonicalKey);
+    if (!entry) {
+      entry = { aliases: new Set(), names: new Map() };
+      this.entries.set(canonicalKey, entry);
+    }
+    for (const alias of aliases) if (alias) entry.aliases.add(alias);
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    // Keyed by NAME: one contact reached through two stored number formats is
+    // one name, and two contacts that read the same are not an ambiguity worth
+    // printing.
+    const existing = entry.names.get(trimmed);
+    if (!existing || contactId < existing) entry.names.set(trimmed, contactId);
+  }
+
+  drainInto(result: Record<string, string>): void {
+    for (const [, entry] of this.entries) {
+      const names = Array.from(entry.names.entries())
+        .sort((a, b) => {
+          const byLabel = a[0].localeCompare(b[0], "en");
+          return byLabel !== 0 ? byLabel : a[1].localeCompare(b[1]);
+        })
+        .map(([name]) => name);
+      if (names.length === 0) continue;
+      const label = joinAmbiguousNames(names);
+      for (const alias of entry.aliases) {
+        if (result[alias]) continue;
+        result[alias] = label;
+      }
+    }
+  }
+}
+
+/**
  * Look up contact names for phone numbers from imported contacts.
  * Synchronous version for use in HTML generation methods.
  *
@@ -125,8 +176,14 @@ export function getContactNamesByPhones(phones: string[]): Record<string, string
 
     // Query contact_phones to find names
     const placeholders = normalizedPhones.map(() => "?").join(",");
+    // BACKLOG-2757: `ORDER BY` and `contact_id`. This is the SECOND copy of the
+    // handle->name resolution (the async one lives in contactResolutionService);
+    // it had the same last-row-wins collapse, so it gets the same rule. Leaving
+    // one copy deterministic and the other a coin flip is how the two paths would
+    // start naming the same thread differently.
     const sql = `
       SELECT
+        c.id AS contact_id,
         cp.phone_e164,
         cp.phone_display,
         c.display_name
@@ -134,27 +191,27 @@ export function getContactNamesByPhones(phones: string[]): Record<string, string
       JOIN contacts c ON cp.contact_id = c.id
       WHERE substr(replace(replace(replace(cp.phone_e164, '+', ''), '-', ''), ' ', ''), -10) IN (${placeholders})
          OR substr(replace(replace(replace(cp.phone_display, '+', ''), '-', ''), ' ', ''), -10) IN (${placeholders})
+      ORDER BY c.display_name COLLATE NOCASE, c.id
     `;
 
-    const rows = dbAll<{ phone_e164: string; phone_display: string; display_name: string }>(
-      sql,
-      [...normalizedPhones, ...normalizedPhones]
-    );
+    const rows = dbAll<{
+      contact_id: string;
+      phone_e164: string;
+      phone_display: string;
+      display_name: string;
+    }>(sql, [...normalizedPhones, ...normalizedPhones]);
 
+    const acc = new SyncHandleAccumulator();
     for (const row of rows) {
-      if (row.display_name) {
-        if (row.phone_e164) {
-          const norm = sharedNormalizePhone(row.phone_e164);
-          result[norm] = row.display_name;
-          result[row.phone_e164] = row.display_name;
-        }
-        if (row.phone_display) {
-          const norm = sharedNormalizePhone(row.phone_display);
-          result[norm] = row.display_name;
-          result[row.phone_display] = row.display_name;
-        }
+      if (!row.display_name) continue;
+      for (const stored of [row.phone_e164, row.phone_display]) {
+        if (!stored) continue;
+        const norm = sharedNormalizePhone(stored);
+        if (!norm) continue;
+        acc.add(norm, [norm, stored], row.contact_id, row.display_name);
       }
     }
+    acc.drainInto(result);
   } catch (error) {
     logService.warn(
       "[Export] Failed to look up contact names from imported contacts",
@@ -183,28 +240,33 @@ export function getContactNamesByEmails(emails: string[]): Record<string, string
     const placeholders = lowerEmails.map(() => "?").join(",");
     const sql = `
       SELECT
+        c.id AS contact_id,
         LOWER(ce.email) as email,
         c.display_name
       FROM contact_emails ce
       JOIN contacts c ON ce.contact_id = c.id
       WHERE LOWER(ce.email) IN (${placeholders})
+      ORDER BY c.display_name COLLATE NOCASE, c.id
     `;
 
-    const rows = dbAll<{ email: string; display_name: string }>(
+    const rows = dbAll<{ contact_id: string; email: string; display_name: string }>(
       sql,
       lowerEmails
     );
 
+    const acc = new SyncHandleAccumulator();
     for (const row of rows) {
-      if (row.display_name && row.email) {
-        result[row.email] = row.display_name;
-        // Also store original-case version for direct lookup
-        const original = emails.find((e) => e.toLowerCase() === row.email);
-        if (original && original !== row.email) {
-          result[original] = row.display_name;
-        }
-      }
+      if (!row.display_name || !row.email) continue;
+      // Also store original-case version for direct lookup
+      const original = emails.find((e) => e.toLowerCase() === row.email);
+      acc.add(
+        row.email,
+        original ? [row.email, original] : [row.email],
+        row.contact_id,
+        row.display_name
+      );
     }
+    acc.drainInto(result);
   } catch (error) {
     logService.warn(
       "[Export] Failed to look up contact names from imported contacts (emails)",
