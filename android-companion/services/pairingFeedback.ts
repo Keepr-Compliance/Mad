@@ -93,6 +93,29 @@ export function pairFailureMessage(result: RegisterFailure): PairFailureMessage 
       return { title, body, retryable: false };
     }
     case 'reachability':
+      // BACKLOG-2956 — this copy was challenged and DELIBERATELY KEPT. The
+      // failure that prompted the challenge was an Android cleartext block
+      // (the OS refusing the request before a socket opens), which this message
+      // reports as a Wi-Fi problem — the same wrong-generic-message class as
+      // BACKLOG-2913. The reason it stays is that the client genuinely CANNOT
+      // tell the two apart:
+      //
+      //   node_modules/whatwg-fetch/dist/fetch.umd.js:567
+      //     xhr.onerror = ... reject(new TypeError('Network request failed'))
+      //
+      // React Native's `fetch` is whatwg-fetch (Libraries/Network/fetch.js is a
+      // side-effectful re-export), and that message is a HARDCODED constant.
+      // The native cause — 'java.io.IOException: Cleartext HTTP traffic to
+      // <ip> not permitted' vs a real ECONNREFUSED — never reaches JS, so
+      // `classifySyncError` sees one indistinguishable string for both. Writing
+      // a cleartext-specific branch would mean inventing a fixture for a string
+      // this layer can never observe.
+      //
+      // The cleartext cause is instead removed at the source (the release
+      // manifest now permits it — plugins/withLanCleartext.js), and the one
+      // related failure the app CAN identify precisely, a desktop address
+      // outside the local network, has its own distinct message in
+      // services/lanAddress.ts rather than being funnelled in here.
       return {
         title: "Couldn't Reach Keepr",
         body: "Couldn't reach Keepr on your computer. Make sure the Keepr app is open and your phone is on the same Wi-Fi network, then try again.",

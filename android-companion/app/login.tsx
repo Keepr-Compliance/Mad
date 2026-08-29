@@ -19,6 +19,7 @@ import {
   signInWithMicrosoft,
   signInWithEmail,
 } from '../services/authService';
+import { getVersionLabel } from '../services/appVersion';
 import { colors } from '../theme/colors';
 import { textStyles } from '../theme/typography';
 import { borderRadius, spacing } from '../theme/spacing';
@@ -229,6 +230,9 @@ export default function LoginScreen(): React.JSX.Element {
   // Render: Login form (portal order — OAuth first, email last)
   // -------------------------------------------------------
 
+  // Resolved once: the value cannot change while the app is running.
+  const versionLabel = getVersionLabel();
+
   return (
     <LinearGradient
       colors={[colors.login.glow, 'transparent']}
@@ -335,6 +339,15 @@ export default function LoginScreen(): React.JSX.Element {
               </Text>
               .
             </Text>
+
+            {/* BACKLOG-2956: the running build, readable WITHOUT signing in.
+                Settings > About carries the same string, but it sits behind the
+                login wall — and sign-in is itself one of the reported failures
+                (BACKLOG-2955). A support call needs the build number precisely
+                when the user cannot get past this screen. */}
+            <Text testID="login-version" style={styles.version}>
+              {versionLabel}
+            </Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -343,6 +356,14 @@ export default function LoginScreen(): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
+  // Deliberately low-contrast: an identifier for support, not a UI element
+  // competing with the sign-in actions.
+  version: {
+    marginTop: spacing[4],
+    textAlign: 'center',
+    fontSize: 11,
+    color: colors.gray[400],
+  },
   screen: {
     flex: 1,
     // The LinearGradient paints the top indigo glow; this base color shows

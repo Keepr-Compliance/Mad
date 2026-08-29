@@ -1,5 +1,27 @@
 import React from "react";
 
+/**
+ * Where "View Release Notes" points.
+ *
+ * BACKLOG-2956: this was `https://github.com/5hdaniel/Mad/releases` — the
+ * founder's OLD personal repo. That directly contradicted a rule this codebase
+ * already ENFORCES elsewhere: `electron/services/updaterAssetUrl.ts`
+ * (BACKLOG-1909) hard-refuses `5hdaniel` as `FORBIDDEN_LEGACY_OWNER` and throws
+ * rather than emit a URL containing it. The updater refused the owner while the
+ * settings UI happily opened it.
+ *
+ * It points at `keepr-releases`, NOT `Keepr-Compliance/Mad`, and that is
+ * deliberate. Every desktop release on `Mad` from v2.20 onward is a DRAFT, and
+ * drafts are invisible to a logged-out user — verified unauthenticated, the
+ * newest release notes visible there are v2.19.0. `keepr-releases` is the
+ * public auto-updater feed, currently serving v2.31.0, and is the same
+ * canonical owner/repo `updaterAssetUrl.ts` names in its error message. Sending
+ * a user to `Mad/releases` would have shown them a page missing the last
+ * eleven releases.
+ */
+const RELEASE_NOTES_URL =
+  "https://github.com/Keepr-Compliance/keepr-releases/releases";
+
 export function AboutSettings() {
   const handleContactSupport = (): void => {
     // Dispatch the custom event that SupportWidget listens for.
@@ -18,7 +40,7 @@ export function AboutSettings() {
       <div className="bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg p-4 border border-blue-200">
         <div className="space-y-2 text-xs">
           <button
-            onClick={() => window.open("https://github.com/5hdaniel/Mad/releases", "_blank")}
+            onClick={() => window.open(RELEASE_NOTES_URL, "_blank")}
             className="w-full text-left text-blue-600 hover:text-blue-800 font-medium cursor-pointer"
           >
             View Release Notes
