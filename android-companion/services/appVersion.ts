@@ -29,8 +29,47 @@
  * is worse than no answer here, so unresolvable values render as `unknown`.
  */
 
-import * as Application from 'expo-application';
 import Constants from 'expo-constants';
+
+/**
+ * The shape we use from `expo-application`.
+ */
+interface NativeApplicationModule {
+  nativeApplicationVersion?: string | null;
+  nativeBuildVersion?: string | null;
+}
+
+/**
+ * Load `expo-application` WITHOUT letting a missing native module take the app down.
+ *
+ * `expo-application` resolves its native binding at module scope
+ * (`export default requireNativeModule('ExpoApplication')`), and
+ * `requireNativeModule` THROWS when the module is not linked — the null-returning
+ * variant is `requireOptionalNativeModule`, which it does not use. A static
+ * `import` of it is therefore a throw during module evaluation.
+ *
+ * That throw would surface through `services/sentry.ts` into `app/_layout.tsx`'s
+ * import graph, BEFORE `initSentry()` runs: the app would fail to open and Sentry
+ * would not be up to report why. Trading a whole application for a version string
+ * is the wrong trade in every case — and an invisible boot failure is precisely
+ * the class of defect this module exists to end.
+ *
+ * A lazy `require` inside try/catch is catchable where a static import is not, so
+ * an unlinked module degrades to the app-config fallback and finally to
+ * `unknown`, which is what this module's contract already promises.
+ *
+ * When this returns null on a real device it means the native module was not
+ * autolinked — a build defect. `scripts/build-apk.sh` and `scripts/build-release.sh`
+ * both prebuild unconditionally to prevent it.
+ */
+function loadNativeApplication(): NativeApplicationModule | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+    return require('expo-application') as NativeApplicationModule;
+  } catch {
+    return null;
+  }
+}
 
 /** Rendered when neither the native manifest nor the app config yields a value. */
 export const UNKNOWN_VERSION = 'unknown';
@@ -41,7 +80,7 @@ export const UNKNOWN_VERSION = 'unknown';
  */
 export function getAppVersion(): string {
   // Android PackageInfo.versionName — what this installed APK actually declares.
-  const native = Application.nativeApplicationVersion;
+  const native = loadNativeApplication()?.nativeApplicationVersion;
   if (native) return native;
 
   // Fallback: the embedded app config. Used under jest and in Expo Go, where
@@ -64,7 +103,7 @@ export function getAppVersion(): string {
  */
 export function getBuildNumber(): string {
   // Android PackageInfo.versionCode, stringified by expo-application.
-  const native = Application.nativeBuildVersion;
+  const native = loadNativeApplication()?.nativeBuildVersion;
   if (native) return native;
 
   const fromConfig = Constants.expoConfig?.android?.versionCode;

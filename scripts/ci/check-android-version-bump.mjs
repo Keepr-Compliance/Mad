@@ -50,8 +50,10 @@
  * incoherently:
  *
  *   - `app.json` `expo.version` must equal `android-companion/package.json` version.
- *   - If `expo.version` changes, `versionCode` must change too (a new user-visible
- *     version is always a new artifact).
+ *
+ * A changed `expo.version` implies a changed artifact, but that needs no rule of
+ * its own: Rule 1 already requires versionCode to increase on any shipping
+ * change. See the note where such a rule used to live.
  *
  * The original complaint — "1.0.0 for 54 commits" — is answered by versionCode
  * moving every time, because that is what makes two builds distinguishable. The
@@ -228,27 +230,20 @@ if (headVersion !== undefined && headPkg?.version !== undefined) {
   }
 }
 
-// Rule 3 — a changed user-visible version is always a new artifact.
-if (baseApp !== null) {
-  const baseVersion = baseApp?.expo?.version;
-  if (
-    baseVersion !== undefined &&
-    headVersion !== undefined &&
-    baseVersion !== headVersion
-  ) {
-    const baseCodeNum =
-      typeof baseApp?.expo?.android?.versionCode === "number"
-        ? baseApp.expo.android.versionCode
-        : 1;
-    if (headCode === baseCodeNum) {
-      failures.push(
-        `expo.version changed ("${baseVersion}" -> "${headVersion}") but ` +
-          `expo.android.versionCode did not (${headCode}).\n` +
-          `    A new user-visible version is always a new artifact.`
-      );
-    }
-  }
-}
+// There is deliberately NO separate "version changed but versionCode did not"
+// rule. It would be DEAD CODE: it could only fire when headCode === baseCodeNum,
+// and Rule 1 already fails everything where headCode <= baseCodeNum. Every input
+// that satisfies the one satisfies the other, so it could never be the sole
+// failure — it would only ever add a second message to an already-red run.
+//
+// This was caught in review by building a fixture repo and executing it, not by
+// reading the source: the original version of this script shipped the rule, and
+// the control that supposedly proved it was independent had in fact tripped
+// Rule 1 twice. A check that cannot fail on its own is worse than no check,
+// because the test naming it looks like coverage.
+//
+// The coupling it was meant to express still holds — a changed expo.version
+// implies a changed artifact — but Rule 1 already enforces exactly that.
 
 if (failures.length > 0) {
   console.error("\nandroid version-bump check FAILED (BACKLOG-2956):\n");

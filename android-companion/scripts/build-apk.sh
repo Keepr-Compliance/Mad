@@ -53,11 +53,24 @@ fi
 # -------------------------------------------------------------------
 # 3. Run expo prebuild (generates android/ directory)
 # -------------------------------------------------------------------
-if [ ! -d "$PROJECT_DIR/android" ] || [ "${FORCE_PREBUILD:-}" = "1" ]; then
-  echo "[build-apk] Running expo prebuild..."
-  cd "$PROJECT_DIR"
-  npx expo prebuild --platform android --no-install --clean
-fi
+# BACKLOG-2956: ALWAYS prebuild. This used to be gated on `android/` being
+# absent (or FORCE_PREBUILD=1), which meant a pre-existing android/ was reused
+# with WHATEVER set of native modules it was generated for.
+#
+# That is not a stale-config annoyance, it is a boot crash. Add a native module
+# to package.json — as this PR does with expo-application — and a reused
+# android/ will not have autolinked it. `expo-application` resolves its native
+# binding at MODULE SCOPE (`export default requireNativeModule('ExpoApplication')`),
+# and `requireNativeModule` THROWS when the module is missing; the null-returning
+# variant is `requireOptionalNativeModule`, which it does not use. The throw
+# happens while evaluating app/_layout.tsx's import graph, BEFORE `initSentry()`
+# runs — so the app fails to open and Sentry is not up to report why.
+#
+# Prebuild is cheap relative to the gradle build that follows, and
+# `build-release.sh` step 3 already unconditionally prebuilds for this reason.
+echo "[build-apk] Running expo prebuild..."
+cd "$PROJECT_DIR"
+npx expo prebuild --platform android --no-install --clean
 
 # -------------------------------------------------------------------
 # 4. Patch android/build.gradle for async-storage local maven repo
