@@ -275,3 +275,82 @@ describe('pair-device registration failure feedback (BACKLOG-2212)', () => {
     );
   });
 });
+
+/**
+ * BACKLOG-2956 — the screen must actually CALL the LAN guard.
+ *
+ * `services/lanAddress.ts` decides the policy and is swept range-by-range in
+ * `services/__tests__/lanAddress.test.ts`. These tests cover the other half:
+ * that the pair screen consults it at all. Without them the guard can be
+ * deleted from this file while `lanAddress.ts` stays perfect and every other
+ * suite stays green — the same "correct module nobody calls" shape that let the
+ * cleartext setting go missing from the release manifest in the first place.
+ *
+ * It matters here because the app now permits cleartext HTTP app-wide (Android
+ * cannot scope that to the LAN), so the destination is the only thing bounding
+ * the risk: a QR code naming a public host would otherwise get SMS bodies
+ * POSTed unencrypted to whoever printed it.
+ */
+describe('pair-device LAN address guard (BACKLOG-2956)', () => {
+  const qrForIp = (ip: string): string =>
+    JSON.stringify({
+      ip,
+      port: 51000,
+      secret: 'a'.repeat(64),
+      deviceName: 'Desktop-A',
+      desktopUserIdHash: 'b'.repeat(64),
+    });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    capturedOnBarcodeScanned = null;
+    jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    mockCheckDesktopAccountMatch.mockResolvedValue({ ok: true });
+  });
+
+  it.each([
+    ['8.8.8.8', 'a public address'],
+    ['100.100.100.100', 'CGNAT — outside the permitted ranges'],
+    ['203.0.113.7', 'TEST-NET-3'],
+    ['keepr.example.com', 'a hostname, which could resolve anywhere'],
+  ])(
+    'refuses a QR pointing at %s (%s): nothing leaves the phone',
+    async (ip) => {
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      const { getByText } = render(<PairDeviceScreen />);
+      await scanQr(getByText, qrForIp(ip));
+
+      // The decisive assertions: no request is issued, nothing is persisted,
+      // and onboarding does not advance.
+      expect(mockRegisterDevice).not.toHaveBeenCalled();
+      expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+      expect(mockReplace).not.toHaveBeenCalled();
+
+      expect(Alert.alert).toHaveBeenCalledWith(
+        expect.stringMatching(/Not a Local Network Address/i),
+        expect.stringContaining(ip),
+      );
+      // BACKLOG-2913 class: a known specific cause must not be reported as the
+      // generic reachability message.
+      const blamedWifi = (Alert.alert as jest.Mock).mock.calls.some((c) =>
+        /same Wi-Fi network/i.test(String(c[1])),
+      );
+      expect(blamedWifi).toBe(false);
+    },
+  );
+
+  it.each([
+    ['192.168.0.233', 'the shape the founder actually pairs with'],
+    ['10.1.2.3', '10/8'],
+    ['172.20.0.5', 'inside 172.16/12'],
+  ])(
+    'positive control: %s (%s) pairs normally',
+    async (ip) => {
+      const { getByText } = render(<PairDeviceScreen />);
+      await scanQr(getByText, qrForIp(ip));
+
+      await waitFor(() => expect(mockRegisterDevice).toHaveBeenCalled());
+      expect(mockReplace).toHaveBeenCalledWith('/onboarding/first-sync');
+    },
+  );
+});
