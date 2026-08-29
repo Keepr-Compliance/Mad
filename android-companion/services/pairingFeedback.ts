@@ -43,7 +43,16 @@ export interface RegisterFailure {
   error?: string;
 }
 
-export type PairFailureKind = 'account' | 'reachability' | 'generic';
+export type PairFailureKind =
+  | 'account'
+  | 'reachability'
+  /**
+   * BACKLOG-2956: the destination is not a private LAN address, so the LAN guard
+   * in syncService refused the request before it was sent. Never retryable —
+   * the same address will be refused again.
+   */
+  | 'address'
+  | 'generic';
 
 /**
  * Classify a FAILED `registerDevice` outcome so the UI can show the right
@@ -65,6 +74,10 @@ export function classifyPairFailure(result: RegisterFailure): PairFailureKind {
     case 'timeout':
     case 'network_after_connect':
       return 'reachability';
+    // BACKLOG-2956: the address itself is off-LAN and was refused before any
+    // request. Not reachability — retrying the same address cannot work.
+    case 'invalid_address':
+      return 'address';
     // A non-403 server error, or an error we could not classify.
     case 'server_error':
     case 'unknown':
@@ -92,6 +105,15 @@ export function pairFailureMessage(result: RegisterFailure): PairFailureMessage 
       const { title, body } = accountMatchMessage('account_mismatch');
       return { title, body, retryable: false };
     }
+    case 'address':
+      // Not a network problem: nothing was sent, and a retry sends nothing
+      // again. Reuse the lanAddress module's voice — name the real cause and
+      // point at the one action that fixes it.
+      return {
+        title: 'Not a Local Network Address',
+        body: "This pairing points at a computer that isn't on your local network. Keepr only syncs to a computer on your own Wi-Fi or wired network. Scan the QR code shown in the Keepr desktop app on your own computer.",
+        retryable: false,
+      };
     case 'reachability':
       // BACKLOG-2956 — this copy was challenged and DELIBERATELY KEPT. The
       // failure that prompted the challenge was an Android cleartext block

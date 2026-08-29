@@ -259,7 +259,7 @@ export default function FirstSyncScreen({
       return (
         <View style={styles.screen}>
           <View style={styles.stepIndicator}>
-            <Text style={styles.stepText}>Step 3 of 3</Text>
+            <Text style={styles.stepText}>Step 4 of 4</Text>
           </View>
           <View style={styles.content}>
             <Text style={styles.stepIcon}>{'⏳'}</Text>
@@ -295,7 +295,7 @@ export default function FirstSyncScreen({
     return (
       <View style={styles.screen}>
         <View style={styles.stepIndicator}>
-          <Text style={styles.stepText}>Step 3 of 3</Text>
+          <Text style={styles.stepText}>Step 4 of 4</Text>
         </View>
         <View style={styles.content}>
           <ActivityIndicator size="large" color={colors.primary[600]} />
@@ -327,7 +327,7 @@ export default function FirstSyncScreen({
   return (
     <View style={styles.screen}>
       <View style={styles.stepIndicator}>
-        <Text style={styles.stepText}>Step 3 of 3</Text>
+        <Text style={styles.stepText}>Step 4 of 4</Text>
       </View>
 
       <View style={styles.content}>
@@ -345,13 +345,17 @@ export default function FirstSyncScreen({
             <Text style={styles.subdescription}>
               {/* BACKLOG-2296: distinguish the phone being off Wi-Fi (case b)
                   from the desktop being unreachable while on Wi-Fi (case a). */}
-              {errorType === 'phone_offline'
-                ? "You're not connected to Wi-Fi. Reconnect to the same network as your computer, then retry."
-                : errorType === 'timeout'
-                  ? 'Large data transfers may be blocked on this network. Try your phone\'s mobile hotspot.'
-                  : errorType === 'network_after_connect'
-                    ? 'The connection was interrupted during transfer. A different network or hotspot may help.'
-                    : 'Make sure Keepr is open on your computer and both devices are on the same WiFi network.'}
+              {/* BACKLOG-2956: an off-LAN pairing is refused before a request
+                  is sent — never describe it as a network problem. */}
+              {errorType === 'invalid_address'
+                ? "This pairing points at a computer that isn't on your local network. Pair again with the computer running Keepr."
+                : errorType === 'phone_offline'
+                  ? "You're not connected to Wi-Fi. Reconnect to the same network as your computer, then retry."
+                  : errorType === 'timeout'
+                    ? 'Large data transfers may be blocked on this network. Try your phone\'s mobile hotspot.'
+                    : errorType === 'network_after_connect'
+                      ? 'The connection was interrupted during transfer. A different network or hotspot may help.'
+                      : 'Make sure Keepr is open on your computer and both devices are on the same WiFi network.'}
             </Text>
           </>
         ) : (

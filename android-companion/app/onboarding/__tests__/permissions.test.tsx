@@ -79,6 +79,29 @@ jest.mock('../../../services/onboardingProgress', () => ({
   setOnboardingStep: (step: string) => mockSetOnboardingStep(step),
 }));
 
+// --- Mock disclosureConsent (BACKLOG-2956). `permissions.tsx` now refuses to
+// request any runtime permission until the Play prominent-disclosure consent is
+// recorded. These pre-existing tests all exercise the POST-consent screen, so the
+// default (set in beforeEach) is "consent given"; the guard itself is pinned by
+// its own describe block at the bottom of this file. ---
+const mockHasDisclosureConsent = jest.fn(async () => true);
+jest.mock('../../../services/disclosureConsent', () => ({
+  hasDisclosureConsent: () => mockHasDisclosureConsent(),
+}));
+
+// --- Mock the onboarding sign-out link (BACKLOG-2956). The real component
+// imports authService, which calls expo-linking's createURL() at module scope and
+// needs an expo-constants manifest that jest does not provide. Its behavior has
+// its own suite: components/ui/__tests__/OnboardingSignOutLink.test.tsx ---
+jest.mock('../../../components/ui/OnboardingSignOutLink', () => {
+  const ReactModule = require('react');
+  const { Text } = require('react-native');
+  return {
+    __esModule: true,
+    default: () => ReactModule.createElement(Text, null, 'Sign out'),
+  };
+});
+
 // --- Mock the permissions service. Declared as bare jest.fn()s so each test can
 // drive the exact permission outcome (soft-denied / blocked / granted) via
 // mockResolvedValue. Defaults are set in beforeEach. ---
@@ -127,6 +150,8 @@ describe('PermissionsScreen — denial recovery (BACKLOG-2196 / BACKLOG-2223)', 
     mockRequestContacts.mockReset().mockResolvedValue(CONTACTS_DENIED);
     mockCheckSms.mockReset().mockResolvedValue(SMS_DENIED);
     mockCheckContacts.mockReset().mockResolvedValue(CONTACTS_DENIED);
+    // BACKLOG-2956: these tests exercise the POST-consent screen.
+    mockHasDisclosureConsent.mockReset().mockResolvedValue(true);
 
     openSettingsSpy = jest
       .spyOn(Linking, 'openSettings')
@@ -235,5 +260,86 @@ describe('PermissionsScreen — denial recovery (BACKLOG-2196 / BACKLOG-2223)', 
   it('persists its onboarding step on mount', () => {
     render(<PermissionsScreen />);
     expect(mockSetOnboardingStep).toHaveBeenCalledWith('permissions');
+  });
+});
+
+// =============================================================================
+// BACKLOG-2956 — CONTROL 1: the disclosure precedes the runtime prompt.
+// =============================================================================
+//
+// Google Play requires the prominent data disclosure to be shown IMMEDIATELY
+// BEFORE the runtime permission prompt — not after it, not beside it. Route
+// order alone does not enforce that: a deep link, or an onboarding resume marker
+// persisted by a build that predates the disclosure step, can land a user
+// straight on this screen. The enforcement is the consent guard inside
+// `handleRequestPermissions`, and this is the suite that pins it.
+//
+// MUTATION THAT MUST GO RED: delete the `if (!(await hasDisclosureConsent()))`
+// early-return from app/onboarding/permissions.tsx — i.e. put the prompt back
+// ahead of the disclosure. Both tests below fail, because the OS request fires
+// with no consent recorded.
+describe('PermissionsScreen — disclosure precedes the prompt (BACKLOG-2956)', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    mockReplace.mockClear();
+    mockSetOnboardingStep.mockClear();
+    mockRequestSms.mockReset().mockResolvedValue(SMS_GRANTED);
+    mockRequestContacts.mockReset().mockResolvedValue(CONTACTS_GRANTED);
+    mockCheckSms.mockReset().mockResolvedValue(SMS_GRANTED);
+    mockCheckContacts.mockReset().mockResolvedValue(CONTACTS_GRANTED);
+    mockHasDisclosureConsent.mockReset();
+  });
+
+  afterEach(() => {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  });
+
+  it('does NOT request any runtime permission when consent has not been given', async () => {
+    mockHasDisclosureConsent.mockResolvedValue(false);
+
+    render(<PermissionsScreen />);
+    fireEvent.press(screen.getByText('Grant Permissions'));
+
+    // The redirect proves the press was handled — so "never called" below is a
+    // real refusal, not a press that silently went nowhere.
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/onboarding/disclosure');
+    });
+
+    // The OS dialogs are what Play cares about. Neither may fire pre-consent.
+    expect(mockRequestSms).not.toHaveBeenCalled();
+    expect(mockRequestContacts).not.toHaveBeenCalled();
+  });
+
+  it('positive control: consent given → the runtime permissions ARE requested', async () => {
+    mockHasDisclosureConsent.mockResolvedValue(true);
+
+    render(<PermissionsScreen />);
+    fireEvent.press(screen.getByText('Grant Permissions'));
+
+    await waitFor(() => {
+      expect(mockRequestSms).toHaveBeenCalled();
+    });
+    expect(mockRequestContacts).toHaveBeenCalled();
+    // ...and it advances, rather than bouncing back to the disclosure.
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/onboarding/pair-device');
+    });
+    expect(mockReplace).not.toHaveBeenCalledWith('/onboarding/disclosure');
+  });
+
+  it('gates when the consent store cannot be read (fails closed)', async () => {
+    // hasDisclosureConsent() swallows storage errors and returns false. Pin the
+    // consequence at the screen: an unreadable store must GATE, never leak.
+    mockHasDisclosureConsent.mockResolvedValue(false);
+
+    render(<PermissionsScreen />);
+    fireEvent.press(screen.getByText('Grant Permissions'));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/onboarding/disclosure');
+    });
+    expect(mockRequestSms).not.toHaveBeenCalled();
   });
 });

@@ -34,7 +34,7 @@ import { Wordmark } from '@keepr/ui';
  * build — which is how the March APK kept shipping for five months.
  */
 const APK_URL =
-  'https://github.com/Keepr-Compliance/Mad/releases/download/v1.1.0-companion/keepr-companion-1.1.0-2.apk';
+  'https://github.com/Keepr-Compliance/Mad/releases/download/v1.1.0-companion/keepr-companion-1.1.0-4.apk';
 
 export default function AndroidDownloadPage() {
   const [autoStarted, setAutoStarted] = useState(false);

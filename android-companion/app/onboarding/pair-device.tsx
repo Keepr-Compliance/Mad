@@ -21,11 +21,15 @@ import {
   isPrivateLanIPv4,
   lanAddressRejectionMessage,
 } from '../../services/lanAddress';
-import { setOnboardingStep } from '../../services/onboardingProgress';
+import {
+  setOnboardingStep,
+  completeOnboarding,
+} from '../../services/onboardingProgress';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { Button } from '../../components/ui';
+import OnboardingSignOutLink from '../../components/ui/OnboardingSignOutLink';
 
 /** Data encoded in the QR code from the desktop app */
 interface PairingData {
@@ -192,6 +196,39 @@ export default function PairDeviceScreen(): React.JSX.Element {
     [scanning, pairing],
   );
 
+  /**
+   * BACKLOG-2956: "Continue without a computer".
+   *
+   * Until now pair-device was the ONLY onboarding screen with no way forward and
+   * no way back — permissions and first-sync both already ship "Skip for Now".
+   * Three separate people hit the resulting dead end: a Play reviewer with only a
+   * phone (who can never see the app work, the most likely rejection), the
+   * founder after signing in with the wrong account, and a field tester whose
+   * pairing kept failing. Their only escape was clearing app storage.
+   *
+   * This lands the user in the REAL app, unpaired — no demo mode, no sample data,
+   * no fake content. `app/(main)/home.tsx` already renders a deliberate empty
+   * state for an unpaired phone ("Not Paired" / "Pair with Keepr" / a working
+   * Scan QR Code button), and that state is already exercised in production: a
+   * sign-out clears the pairing, so re-login lands an onboarded user there today.
+   * Pairing therefore stays one tap away from home.
+   *
+   * `completeOnboarding()` is AWAITED before navigating. The auth gate in
+   * app/_layout.tsx treats "reached (main)" as proof the complete flag is
+   * persisted; navigating first would race the gate, which would bounce the user
+   * back into onboarding at the resumed step.
+   */
+  const handleContinueWithoutComputer = useCallback(async (): Promise<void> => {
+    try {
+      await completeOnboarding();
+    } catch (error) {
+      // Non-fatal: the gate's own re-check settles it, and the user is not
+      // trapped either way. Never block the escape hatch on a storage write.
+      console.error('[Onboarding] Failed to mark onboarding complete:', error);
+    }
+    router.replace('/(main)/home');
+  }, [router]);
+
   const handleStartScanning = useCallback(async (): Promise<void> => {
     if (!permission?.granted) {
       const result = await requestPermission();
@@ -246,7 +283,7 @@ export default function PairDeviceScreen(): React.JSX.Element {
     <View style={styles.screen}>
       {/* Step indicator */}
       <View style={styles.stepIndicator}>
-        <Text style={styles.stepText}>Step 2 of 3</Text>
+        <Text style={styles.stepText}>Step 3 of 4</Text>
       </View>
 
       <View style={styles.content}>
@@ -282,6 +319,25 @@ export default function PairDeviceScreen(): React.JSX.Element {
           size="lg"
           fullWidth
         />
+
+        <View style={styles.buttonSpacer} />
+
+        {/* BACKLOG-2956: the escape hatch. Lands in the real app, unpaired. */}
+        <Button
+          title="Continue without a computer"
+          variant="secondary"
+          onPress={() => {
+            void handleContinueWithoutComputer();
+          }}
+          disabled={pairing}
+          size="sm"
+          fullWidth
+        />
+        <Text style={styles.skipNote}>
+          You can pair with your computer later from the home screen.
+        </Text>
+
+        <OnboardingSignOutLink />
       </View>
     </View>
   );
@@ -366,6 +422,15 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.gray[100],
     marginLeft: 40,
+  },
+  buttonSpacer: {
+    height: spacing[3],
+  },
+  skipNote: {
+    ...textStyles.caption,
+    color: colors.gray[500],
+    textAlign: 'center',
+    marginTop: spacing[2],
   },
 
   // Scanner styles

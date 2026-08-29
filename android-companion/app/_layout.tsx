@@ -259,12 +259,18 @@ export default function RootLayout(): React.JSX.Element {
       // BACKLOG-2216: resume at the furthest persisted step (defaults to
       // permissions, step 1, on a fresh run) instead of always restarting.
       //
-      // Exception: don't redirect when already in the main group. The ONLY way
-      // to reach `(main)` is by completing onboarding (which persists the
-      // complete flag before navigating), so `inMainGroup && !onboarded` is the
-      // brief window where `onboarded` is still catching up via the re-check
-      // effect. Bouncing back into the flow there would re-enter the resumed
-      // step (first-sync, which auto-syncs) — so we let the catch-up settle.
+      // Exception: don't redirect when already in the main group. Every route
+      // into `(main)` persists the complete flag BEFORE navigating, so
+      // `inMainGroup && !onboarded` is the brief window where `onboarded` is
+      // still catching up via the re-check effect. Bouncing back into the flow
+      // there would re-enter the resumed step (first-sync, which auto-syncs) —
+      // so we let the catch-up settle.
+      //
+      // There are now TWO writers of that flag (BACKLOG-2956): first-sync
+      // finishing normally, and pair-device's "Continue without a computer"
+      // escape hatch, which lands an UNPAIRED user on home. Both await
+      // `completeOnboarding()` before calling `router.replace`, which is what
+      // keeps the invariant above true. A new writer must do the same.
       if (!inOnboardingGroup && !inMainGroup) {
         router.replace(ONBOARDING_ROUTES[resumeStep]);
       }

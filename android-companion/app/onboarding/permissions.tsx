@@ -18,10 +18,12 @@ import type {
   ContactsPermissionResult,
 } from '../../services/permissions';
 import { setOnboardingStep } from '../../services/onboardingProgress';
+import { hasDisclosureConsent } from '../../services/disclosureConsent';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { Button } from '../../components/ui';
+import OnboardingSignOutLink from '../../components/ui/OnboardingSignOutLink';
 
 export default function PermissionsScreen(): React.JSX.Element {
   const router = useRouter();
@@ -37,6 +39,22 @@ export default function PermissionsScreen(): React.JSX.Element {
   }, []);
 
   const handleRequestPermissions = useCallback(async (): Promise<void> => {
+    // BACKLOG-2956: Google Play's Prominent Disclosure rule requires the
+    // disclosure to be shown IMMEDIATELY BEFORE the runtime permission prompt.
+    // The stack order in _layout.tsx expresses that, but it does not enforce it:
+    // a deep link, or a resume marker persisted by an older build that predates
+    // the disclosure step, can land a user directly on this screen. This guard is
+    // the enforcement. It runs BEFORE any request* call, so the OS dialog cannot
+    // appear without a recorded consent, and it sends the user to the disclosure
+    // rather than silently doing nothing.
+    //
+    // `hasDisclosureConsent` fails CLOSED (storage error / older consent version
+    // both read as "no consent"), so an unreadable store gates rather than leaks.
+    if (!(await hasDisclosureConsent())) {
+      router.replace('/onboarding/disclosure');
+      return;
+    }
+
     setLoading(true);
     try {
       // Request permissions with a 10-second timeout per request
@@ -137,7 +155,7 @@ export default function PermissionsScreen(): React.JSX.Element {
     <View style={styles.screen}>
       {/* Step indicator */}
       <View style={styles.stepIndicator}>
-        <Text style={styles.stepText}>Step 1 of 3</Text>
+        <Text style={styles.stepText}>Step 2 of 4</Text>
       </View>
 
       <View style={styles.content}>
@@ -244,6 +262,10 @@ export default function PermissionsScreen(): React.JSX.Element {
             />
           </View>
         )}
+
+        {/* BACKLOG-2956: the only escape from onboarding before this existed was
+            clearing app storage in Android Settings. */}
+        <OnboardingSignOutLink />
       </View>
     </View>
   );
