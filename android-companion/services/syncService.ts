@@ -12,6 +12,7 @@ import { encrypt } from "./encryption";
 import { deriveTransportKeys } from "./keyDerivation";
 import { getSession } from "./authService";
 import { setContactDiffSupported } from "./contactSyncState";
+import { isPrivateLanIPv4 } from "./lanAddress";
 import type {
   SyncMessage,
   SyncPayload,
@@ -57,6 +58,13 @@ async function getPhoneIdentity(): Promise<{
  * - Any other Error → unknown
  */
 function classifySyncError(err: Error): SyncErrorType {
+  // BACKLOG-2956: a LAN-guard refusal is not a transport failure. It must never
+  // be classified as connection_refused/timeout, which would tell the user to
+  // check their Wi-Fi for a problem Wi-Fi cannot fix.
+  if (isLanAddressRefusal(err)) {
+    return "invalid_address";
+  }
+
   if (err.name === "AbortError") {
     return "timeout";
   }
@@ -97,6 +105,11 @@ function userMessageForErrorType(errorType: SyncErrorType): string {
       return "Connected to desktop but unable to sync data. Try a different WiFi network or use your phone's hotspot.";
     case "server_error":
       return "Desktop received the request but returned an error.";
+    case "invalid_address":
+      // BACKLOG-2956: say what is actually wrong and what fixes it. Offering the
+      // reachability copy here would send the user to check a network that is
+      // working fine (the BACKLOG-2913 defect class).
+      return "This pairing is no longer valid — it points at a computer that isn't on your local network. Pair with your computer again from the home screen.";
     case "unknown":
     default:
       return "Could not reach the desktop app. Make sure both devices are on the same network.";
@@ -110,14 +123,88 @@ const REQUEST_TIMEOUT_MS = 10_000;
 const PING_TIMEOUT_MS = 5_000;
 
 /**
+ * Thrown when a request would go to an address outside the permitted private
+ * LAN ranges. Carries the offending host so the log and Sentry breadcrumb name
+ * it. Distinguished by a marker property rather than `instanceof`, which is
+ * unreliable for Error subclasses under Hermes/Babel down-levelling.
+ */
+class LanAddressRefusedError extends Error {
+  readonly isLanAddressRefusal = true;
+
+  constructor(readonly host: string) {
+    super(`Refused non-LAN destination: ${host}`);
+    this.name = "LanAddressRefusedError";
+  }
+}
+
+function isLanAddressRefusal(err: unknown): err is LanAddressRefusedError {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { isLanAddressRefusal?: boolean }).isLanAddressRefusal === true
+  );
+}
+
+/**
+ * Extract the host from one of this module's request URLs.
+ *
+ * Every URL here is built by this file as `http://<host>:<port>/<path>`, so a
+ * strict regex is both sufficient and safer than `new URL()`, whose availability
+ * and parsing behaviour under Hermes is not something a security guard should
+ * depend on. Anything that does not match returns null and is REFUSED — an
+ * unparseable destination is never assumed safe.
+ */
+function hostFromRequestUrl(url: string): string | null {
+  const match = /^http:\/\/([^:/?#]+):\d+(?:[/?#]|$)/.exec(url);
+  return match ? match[1] : null;
+}
+
+/**
  * Perform a fetch request with a timeout.
  * AbortController is used to cancel the request if it exceeds the timeout.
+ *
+ * BACKLOG-2956 — LAN ENFORCEMENT CHOKE POINT.
+ *
+ * The LAN address check previously ran only in the two QR-scan handlers
+ * (`app/onboarding/pair-device.tsx` and `app/(main)/home.tsx`). That left two
+ * real holes: a pairing saved by a build that predates the check survives an app
+ * upgrade completely unchecked, and BACKGROUND sync never passes through a scan
+ * handler at all, so it was permanently unguarded.
+ *
+ * This matters because the app ships a blanket `usesCleartextTraffic="true"`
+ * (Android's network-security-config has no CIDR syntax, so "cleartext to the
+ * LAN only" cannot be expressed at the OS layer). The LAN check is the only
+ * thing bounding what that flag opens up; a stored pairing pointing at a public
+ * host would send message and contact payloads over plain HTTP to the internet.
+ *
+ * Enforcing here — rather than at the four call sites — means every outbound
+ * request is checked however its address was obtained, and a fifth call site
+ * added later is covered the day it is written. `sendMessages`, `sendContacts`,
+ * `registerDevice` and `pingDesktop` all funnel through this function.
+ *
+ * The refusal happens BEFORE the AbortController and before `fetch` — no request
+ * is issued, not even a connection attempt.
  */
 async function fetchWithTimeout(
   url: string,
   options: RequestInit,
   timeoutMs: number
 ): Promise<Response> {
+  const host = hostFromRequestUrl(url);
+  if (host === null || !isPrivateLanIPv4(host)) {
+    const shown = host ?? "an unrecognised address";
+    console.warn(
+      `[syncService] Refused request to ${shown}: not a private LAN address. ` +
+        "The stored pairing is no longer valid; the user must pair again."
+    );
+    Sentry.captureMessage("Refused non-LAN sync destination", {
+      level: "warning",
+      // Host only — never the URL, which carries no PII but also no value here.
+      tags: { component: "syncService", lan_guard: "refused" },
+    });
+    throw new LanAddressRefusedError(shown);
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

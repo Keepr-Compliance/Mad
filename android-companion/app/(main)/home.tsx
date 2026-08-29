@@ -558,16 +558,21 @@ export default function HomeScreen(): React.JSX.Element {
         // BACKLOG-2296: `phone_offline` (the phone has no Wi-Fi) gets its own
         // title, distinct from a desktop that is closed/unreachable — the two
         // used to be conflated under one "Desktop Not Running" message.
+        // BACKLOG-2956: an off-LAN stored pairing is refused before any request.
+        // It must not read as a Wi-Fi or desktop-down problem — nothing about the
+        // network is wrong, and only re-pairing fixes it.
         const title =
-          result.errorType === 'phone_offline'
-            ? "You're Not on Wi-Fi"
-            : result.errorType === 'timeout'
-              ? 'Connection Timed Out'
-              : result.errorType === 'network_after_connect'
-                ? 'Transfer Failed'
-                : result.errorType === 'connection_refused'
-                  ? "Can't Reach Keepr"
-                  : 'Sync Issue';
+          result.errorType === 'invalid_address'
+            ? 'Pairing No Longer Valid'
+            : result.errorType === 'phone_offline'
+              ? "You're Not on Wi-Fi"
+              : result.errorType === 'timeout'
+                ? 'Connection Timed Out'
+                : result.errorType === 'network_after_connect'
+                  ? 'Transfer Failed'
+                  : result.errorType === 'connection_refused'
+                    ? "Can't Reach Keepr"
+                    : 'Sync Issue';
         Alert.alert(title, result.error);
       } else if (result.readError) {
         // BACKLOG-2206: a read failure is NOT "all synced" — show an actionable

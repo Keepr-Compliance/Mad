@@ -23,6 +23,7 @@ import type { SmsReadError } from "./smsReader";
 import { checkSmsPermissions } from "./permissions";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
+import { isPrivateLanIPv4 } from "./lanAddress";
 import { isPhoneOnLocalNetwork } from "./connectivity";
 import {
   computeContactDiff,
@@ -398,7 +399,34 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
     });
   }
 
-  // Step 2: Check if desktop is reachable
+  // Step 2: Check if desktop is reachable.
+  //
+  // BACKLOG-2956: the LAN guard in syncService's fetchWithTimeout refuses an
+  // off-LAN destination for EVERY request, including this ping — so an invalid
+  // stored pairing would surface here as `desktopReachable === false` and be
+  // reported as "can't reach Keepr / you're not on Wi-Fi". That is the wrong
+  // cause and the wrong fix. Classify it explicitly instead, so background sync
+  // (which never passes through a QR-scan handler) reports the real reason.
+  if (!isPrivateLanIPv4(pairingInfo.ip)) {
+    const queueSize = await getQueueSize();
+    await recordSyncAttempt(false, 0);
+    console.warn(
+      `[BackgroundSync] Stored pairing points at a non-LAN address; refusing to sync.`
+    );
+    return {
+      newMessages,
+      sentMessages: 0,
+      contactsSynced: 0,
+      newContacts: 0,
+      desktopReachable: false,
+      queueSize,
+      error:
+        "This pairing is no longer valid — it points at a computer that isn't on your local network. Pair with your computer again from the home screen.",
+      errorType: "invalid_address",
+      readError,
+    };
+  }
+
   const desktopReachable = await pingDesktop(pairingInfo);
   if (!desktopReachable) {
     const queueSize = await getQueueSize();
