@@ -310,6 +310,12 @@ if [ -x "$AAPT2" ]; then
     *) echo "ERROR: APK manifest versionName does not match app.json ($VERSION)"; exit 1 ;;
   esac
   echo "[verify] manifest matches app.json: $VERSION ($VERSION_CODE)"
+
+  # BACKLOG-2956 — THE gate for the release-only cleartext blocker. Delegated
+  # to a standalone script so it can be run against ANY apk, including the
+  # pre-fix build/keepr-companion-1.1.0-2.apk that it must (and does) reject.
+  # A gate nobody has watched fail is not a gate.
+  "$SCRIPT_DIR/verify-apk-cleartext.sh" "$APK_DEST"
 fi
 
 # `apksigner verify` alone is NOT a useful check: a debug-signed APK verifies

@@ -17,6 +17,10 @@ import {
   accountMatchMessage,
 } from '../../services/accountMatch';
 import { pairFailureMessage } from '../../services/pairingFeedback';
+import {
+  isPrivateLanIPv4,
+  lanAddressRejectionMessage,
+} from '../../services/lanAddress';
 import { setOnboardingStep } from '../../services/onboardingProgress';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
@@ -164,6 +168,16 @@ export default function PairDeviceScreen(): React.JSX.Element {
             'Invalid QR Code',
             'The pairing code is not in the expected format.',
           );
+          return;
+        }
+
+        // BACKLOG-2956: the app permits cleartext HTTP app-wide (Android has no
+        // way to scope that to the LAN), so the DESTINATION is bounded here
+        // instead. A QR code naming a public host would otherwise get SMS
+        // bodies POSTed unencrypted to whoever printed it.
+        if (!isPrivateLanIPv4(data.ip)) {
+          const { title, body } = lanAddressRejectionMessage(data.ip);
+          Alert.alert(title, body);
           return;
         }
 

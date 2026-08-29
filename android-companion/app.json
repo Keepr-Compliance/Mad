@@ -17,7 +17,7 @@
     },
     "android": {
       "package": "com.keepr.companion",
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "backgroundColor": "#574CE8",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -34,6 +34,7 @@
       "bundler": "metro"
     },
     "plugins": [
+      "./plugins/withLanCleartext",
       "expo-router",
       "expo-task-manager",
       [
