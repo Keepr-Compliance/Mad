@@ -1130,6 +1130,20 @@ export class DeviceDetectionService extends EventEmitter {
 
           try {
             const storageInfo = this.parseStorageInfo(stdout);
+            if (storageInfo === null) {
+              // BACKLOG-2925 (second pass): the query SUCCEEDED (exit 0) and still did
+              // not carry the fields. That is "we do not know", and it must not be
+              // handed on as a device with 0 bytes of capacity — see parseStorageInfo.
+              //
+              // stderr is reported because the exit code already told us nothing: on
+              // the founder's 2026-08-27 run the process exited 0, so this branch is
+              // the ONLY place a lockdownd complaint can still be observed.
+              log.warn(
+                `[DeviceDetection] Storage query exited 0 but reported no usable capacity; treating device storage as UNKNOWN. stderrBytes=${stderr.length}${stderr.trim() ? ` stderrFirstLine=${JSON.stringify(stderr.trim().split("\n")[0])}` : ""}`,
+              );
+              resolve(null);
+              return;
+            }
             log.info(`[DeviceDetection] Storage info: ${JSON.stringify(storageInfo)}`);
             resolve(storageInfo);
           } catch (err) {
@@ -1160,9 +1174,10 @@ export class DeviceDetectionService extends EventEmitter {
    * - TotalSystemCapacity: System capacity
    *
    * @param output Raw output from ideviceinfo -q com.apple.disk_usage
-   * @returns Parsed storage info with estimated backup size
+   * @returns Parsed storage info, or `null` when the output does not carry a
+   *          usable capacity reading — see BACKLOG-2925 below.
    */
-  private parseStorageInfo(output: string): DeviceStorageInfo {
+  private parseStorageInfo(output: string): DeviceStorageInfo | null {
     const lines = output.split("\n");
     const info: Record<string, string> = {};
 
@@ -1178,15 +1193,49 @@ export class DeviceDetectionService extends EventEmitter {
     // Log all available fields for debugging
     log.debug("[DeviceDetection] Storage info raw fields:", info);
 
-    // Try multiple field names as they may vary by iOS version
-    const totalCapacity = parseInt(
-      info["TotalDataCapacity"] || info["TotalDiskCapacity"] || "0",
-      10
+    // BACKLOG-2925 (second pass): these lookups used to end in `|| "0"`, so an output
+    // carrying NONE of the four field names produced
+    // `{totalCapacity: 0, availableSpace: 0, usedSpace: 0, estimatedBackupSize: 0}` —
+    // a confident statement that the iPhone has no storage at all. That object is what
+    // the founder's 2026-08-27 23:36:56 run returned, and 0 x any headroom is 0, so
+    // the disk guard downstream "passed" on 15 GB free against a backup that had
+    // measured 58.8 GB. `0` was never a measurement; it was "we could not find out"
+    // wearing a number, which is the founder's BACKLOG-2886 rule verbatim.
+    //
+    // The fallback is now REMOVED rather than widened. A reading is returned only when
+    // the device actually reported a capacity; anything else is `null` (= unknown) and
+    // the caller must handle it. Deliberately NOT a "best guess" default: a wrong
+    // number is spendable by a guard, an absent one is not.
+    const totalCapacity = parseByteField(
+      info["TotalDataCapacity"] ?? info["TotalDiskCapacity"],
     );
-    const availableSpace = parseInt(
-      info["TotalDataAvailable"] || info["TotalSystemAvailable"] || "0",
-      10
+    const availableSpace = parseByteField(
+      info["TotalDataAvailable"] ?? info["TotalSystemAvailable"],
     );
+
+    // VALIDITY IS A PREDICATE ON THE FIELDS, NOT ON THE FINAL NUMBER. Checking only
+    // `estimatedBackupSize > 0` at the end would let "capacity present, available
+    // absent" through as `used = total`, i.e. a phone reported 100% full — wrong, and
+    // wrong in the direction that reads as a LARGER backup, which no guard would
+    // question.
+    if (
+      totalCapacity === null ||
+      availableSpace === null ||
+      totalCapacity <= 0 ||
+      availableSpace < 0 ||
+      availableSpace > totalCapacity
+    ) {
+      // Field NAMES only — never values. This is the half of BACKLOG-2925 that is
+      // still unexplained (why a connected, responding device reports nothing), and
+      // it is logged at WARN because the founder's run proves `log.debug` is not
+      // captured at the level his build runs at: the pre-existing raw-fields debug
+      // line above recorded nothing on the one run where it mattered.
+      log.warn(
+        `[DeviceDetection] disk_usage output carried no usable capacity. keysSeen=${JSON.stringify(Object.keys(info))} lines=${lines.length} totalParsed=${totalCapacity} availableParsed=${availableSpace}`,
+      );
+      return null;
+    }
+
     const usedSpace = totalCapacity - availableSpace;
 
     log.info(`[DeviceDetection] Storage: total=${Math.round(totalCapacity / 1024 / 1024 / 1024)}GB, available=${Math.round(availableSpace / 1024 / 1024 / 1024)}GB, used=${Math.round(usedSpace / 1024 / 1024 / 1024)}GB`);
@@ -1197,10 +1246,34 @@ export class DeviceDetectionService extends EventEmitter {
     // - Encrypted backups include much more data than unencrypted
     // - Photos, messages with attachments can be very large
     // - "Used space" from iOS disk_usage may not include all backed-up data
-    // Since skipApps is always true, apps (often 60-70% of used space) are excluded.
-    // Real backups without apps are typically 15-25% of used space.
-    // 25% is conservative enough to avoid underestimates.
-    const BACKUP_SIZE_RATIO = 0.25; // 25% of "used" space (apps are skipped)
+    //
+    // BACKLOG-2910: the premise this constant was chosen under is FALSE. It used
+    // to read "apps are excluded, so real backups are 15-25% of used space".
+    // Apps were never excluded. --skip-apps is a restore-only option of
+    // idevicebackup2 (the `backup` command accepts only --full), so it had no
+    // effect on any backup this product has ever taken: all of them are full
+    // device backups, AppDomain included.
+    //
+    // The value is deliberately LEFT UNCHANGED rather than re-guessed, because
+    // there is no measurement of it to re-guess from. All three of the founder's
+    // 2026-08-26 runs took the OTHER branch: BACKLOG-2906 records
+    // "Using existing backup size for estimate: 55 GB" on every one of them —
+    // the line emitted by deviceSyncOrchestrator when a previous backup already
+    // exists. This formula runs only on a first-ever sync, and no first-ever
+    // sync has been captured. Its accuracy is therefore unknown, not bad.
+    //
+    // RETRACTED: an earlier version of this comment cited a 3.7 GB estimate,
+    // a "15.9x underestimate", and an inference that even a ratio of 1.0 would
+    // under-predict ~4x. That 3.7 GB was bytesTransferred read off a progress
+    // display mid-transfer, never an estimate. The real estimate was 55 GB
+    // against a ~59 GB backup — about 7% under. Any reasoning resting on the
+    // 3.7 GB figure is void; do not reinstate it.
+    //
+    // Re-deriving the estimate is BACKLOG-2896, sequenced after the
+    // BACKLOG-2894 telemetry that would supply numbers to derive it from.
+    // Until then this is an UNVALIDATED figure, and anything that must not
+    // under-provision (the BACKLOG-2899 disk guard) cannot safely lean on it.
+    const BACKUP_SIZE_RATIO = 0.25; // UNVALIDATED — see BACKLOG-2896
     const estimatedBackupSize = Math.round(usedSpace * BACKUP_SIZE_RATIO);
 
     log.info(`[DeviceDetection] Estimated backup size: ${Math.round(estimatedBackupSize / 1024 / 1024)} MB (${BACKUP_SIZE_RATIO * 100}% of used space)`);
@@ -1212,6 +1285,23 @@ export class DeviceDetectionService extends EventEmitter {
       estimatedBackupSize,
     };
   }
+}
+
+/**
+ * BACKLOG-2925: parses one `ideviceinfo` byte field into a number, or `null` when the
+ * field is absent or is not a base-10 integer.
+ *
+ * `parseInt(undefined as never)` is `NaN` and `NaN > 0` is `false`, so an unchecked
+ * parse cannot be told apart from a genuine zero by any later `> 0` test — which is
+ * how the missing-field case came to be spent as a size. The three states are made
+ * explicit here instead.
+ */
+function parseByteField(raw: string | undefined): number | null {
+  if (raw === undefined) return null;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const value = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(value) ? value : null;
 }
 
 // Export singleton instance

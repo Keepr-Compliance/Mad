@@ -351,6 +351,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             overallProgress: number;
             message?: string;
             estimatedTotalBytes?: number;
+            // BACKLOG-2907: absent on payloads from a main process that predates
+            // the field. Left undefined here; the component reads that as "unknown".
+            priorBackup?: BackupProgress["priorBackup"];
             backupProgress?: {
               bytesTransferred?: number;
               filesTransferred?: number;
@@ -367,6 +370,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
             bytesProcessed: progressWithBackup.backupProgress?.bytesTransferred,
             processedFiles: progressWithBackup.backupProgress?.filesTransferred,
             estimatedTotalBytes: progressWithBackup.estimatedTotalBytes,
+            priorBackup: progressWithBackup.priorBackup,
           });
 
           // TASK-2119: Update orchestrator with progress
@@ -384,10 +388,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
         cleanups.push(unsub);
       }
 
-      // Passcode waiting event (user needs to enter passcode on iPhone)
+      // BACKLOG-2911 (FIX 3): "the device has not started sending yet". A passcode
+      // prompt is one possible cause; the message below claims only the observation.
       if (syncApi.onWaitingForPasscode) {
         const unsub = syncApi.onWaitingForPasscode(() => {
-          logger.debug("[useIPhoneSync] Waiting for user to enter passcode on iPhone");
+          logger.debug("[useIPhoneSync] Device has not started sending files yet");
           setIsWaitingForPasscode(true);
           setProgress((prev) => ({
             phase: "backing_up",

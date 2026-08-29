@@ -71,16 +71,18 @@ class MockBackupService extends EventEmitter {
   }
 
   async checkBackupStatus(_udid: string) {
+    // BACKLOG-2917: three-state report. A measured 100 MB prior backup.
     return {
-      exists: true,
+      state: "present" as const,
       isComplete: true,
-      isCorrupted: false,
-      sizeBytes: 1024 * 1024 * 100, // 100MB
+      isInterrupted: false,
+      snapshotState: "finished" as const,
+      size: { measured: true as const, bytes: 1024 * 1024 * 100 }, // 100MB
       lastModified: new Date(),
     };
   }
 
-  async startBackup(_options: { udid: string; password?: string; forceFullBackup?: boolean; skipApps?: boolean }) {
+  async startBackup(_options: { udid: string; password?: string; forceFullBackup?: boolean }) {
     // Emit progress events
     this.emit("progress", {
       phase: "preparing",
