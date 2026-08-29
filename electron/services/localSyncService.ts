@@ -23,6 +23,7 @@ import { normalizePhone } from "./messageMatchingService";
 import { pairingService } from "./pairingService";
 import * as externalContactDb from "./db/externalContactDbService";
 import type { ContactOrigin } from "./db/contactOriginLink";
+import { findClaimedSourceRecordIds } from "./db/contactOriginLink";
 import { autoLinkNewMessagesForUserDebounced } from "./autoLinkService";
 import { toMatchingKey } from "../utils/phoneNormalization";
 import type {
@@ -524,6 +525,26 @@ class LocalSyncService {
 
   /**
    * Route incoming HTTP requests.
+   *
+   * ## BACKLOG-2956 — why this logs the way it does
+   *
+   * This server used to be effectively SILENT about traffic. The entry line
+   * below was `logService.debug`, and `logService`'s `minLevel` defaults to
+   * `"info"` (see logService.ts), so it was DROPPED in every normal run. The
+   * unknown-route branch at the bottom logged nothing at all. The consequence
+   * was measured on the founder's machine: his phone's BROWSER reached this
+   * server and got a 404, and the desktop log recorded **nothing** — leaving an
+   * Android cleartext block (which never opens a socket) and a genuine network
+   * fault indistinguishable from each other and from the server never having
+   * been contacted. That is what made the failure undiagnosable, here and on a
+   * field tester's machine.
+   *
+   * So: one `info` line per request with method, path and remote address, and
+   * one on completion with the status code and duration. The pair is what
+   * separates "nothing arrived" from "something arrived and we refused it" —
+   * the single most useful distinction when local sync is not working.
+   *
+   * NEVER log the request body or the bearer token. Bodies are SMS content.
    */
   private handleRequest(
     req: http.IncomingMessage,
@@ -531,11 +552,49 @@ class LocalSyncService {
   ): void {
     const urlPath = req.url?.split("?")[0] ?? "";
     const method = req.method?.toUpperCase() ?? "";
+    const remote = req.socket.remoteAddress ?? "unknown";
+    const startedAt = Date.now();
 
-    logService.debug(
-      `[LocalSync] ${method} ${urlPath}`,
+    logService.info(
+      `[LocalSync] --> ${method} ${urlPath} from ${remote}`,
       LOG_TAG
     );
+
+    // One completion line per request, whichever branch answered it — including
+    // branches added later, and including the `catch`-all 500s. Attaching to
+    // "finish" rather than instrumenting each `sendJSON` call site is what makes
+    // that coverage structural instead of a convention someone can forget.
+    res.on("finish", () => {
+      const status = res.statusCode;
+      const durationMs = Date.now() - startedAt;
+      const line = `[LocalSync] <-- ${status} ${method} ${urlPath} from ${remote} (${durationMs}ms)`;
+      if (status >= 400) {
+        logService.warn(line, LOG_TAG);
+      } else {
+        logService.info(line, LOG_TAG);
+      }
+
+      // A failed PAIRING is the outcome users report and the one we have been
+      // unable to see. Send a Sentry EVENT, not a breadcrumb: breadcrumbs are
+      // discarded unless some other event happens to be captured in the same
+      // session (BACKLOG-2913 / BACKLOG-2950), which is exactly why the pairing
+      // failures reported so far left no trace. Remote address is deliberately
+      // NOT sent — it stays in the local log.
+      if (urlPath === "/register" && status >= 400) {
+        Sentry.captureMessage(
+          `[LocalSync] Pairing request failed with ${status}`,
+          {
+            level: "warning",
+            tags: {
+              component: "localSyncService",
+              reason: "register_failed",
+              status: String(status),
+            },
+            extra: { method, durationMs },
+          }
+        );
+      }
+    });
 
     if (method === "GET" && urlPath === "/ping") {
       this.handlePing(res);
@@ -557,7 +616,13 @@ class LocalSyncService {
       return;
     }
 
-    // Unknown route
+    // Unknown route. Logged with the reason because this is the branch a
+    // browser (or a probe, or a companion built against a future API) lands on,
+    // and a bare 404 with no log is indistinguishable from silence.
+    logService.warn(
+      `[LocalSync] No route for ${method} ${urlPath} (from ${remote}) — responding 404`,
+      LOG_TAG
+    );
     sendJSON(res, 404, { error: "Not found" });
   }
 
@@ -1518,21 +1583,27 @@ class LocalSyncService {
     deviceId: string,
     contacts: SyncContact[],
   ): void {
-    // BACKLOG-2593 — TWO KNOWN DEFECTS LIVE IN THE SKIP BELOW. Read before
-    // relying on this method's claims.
+    // BACKLOG-2593 — KNOWN DEFECTS IN THE SKIP BELOW. Read before relying on
+    // this method's claims.
     //
-    // 1. The "already exists" test is a shared last-10-digits phone number with
-    //    NO NAME CHECK — the BACKLOG-2416 shape, on a create path. Two people on
-    //    one office line: the second is never created.
+    // 1. The PHONE test is a shared normalized number with NO NAME CHECK — the
+    //    BACKLOG-2416 shape, on a create path. Two people on one office line:
+    //    the second is never created. STILL OPEN (a person-identity rule, and
+    //    founder-decided; deliberately not touched by BACKLOG-2987).
     // 2. When it skips, NOTHING IS CLAIMED, while `storeContacts` has already
     //    written the record to `external_contacts`. The create path below claims
-    //    its record (BACKLOG-2556); this skip does not.
+    //    its record (BACKLOG-2556); this skip does not. STILL OPEN.
     //
-    // And the BACKLOG-2407 block in `storeContacts` makes the skip the COMMON
-    // case: a re-pairing mints a new `deviceId`, every record re-keys, the full
-    // sync deletes the old rows, and every contact then phone-matches its own
-    // previously-promoted twin. So once the consolidation guessing is deleted,
-    // every Android contact would show twice again by THIS route.
+    // The third — a contact with NO phone was re-created on EVERY sync, because
+    // it never entered the phone loop at all — is CLOSED by the record-claim
+    // probe below (BACKLOG-2987).
+    //
+    // The BACKLOG-2407 block in `storeContacts` used to make the skip the COMMON
+    // case: a re-pairing minted a new `deviceId`, every record re-keyed, and
+    // every contact then phone-matched its own previously-promoted twin. The
+    // companion now re-presents its identity at /register (BACKLOG-2987,
+    // android-companion/services/deviceIdentity.ts) so the id is stable across
+    // re-pairs and the record key no longer churns.
     //
     // Blocker-level for the BACKLOG-2556 deletion PR: claim on the skip path, or
     // have the founder accept it. Deliberately not decided here.
@@ -1548,6 +1619,39 @@ class LocalSyncService {
       origin: ContactOrigin;
     }> = [];
 
+    // =====================================================================
+    // BACKLOG-2987 — HAVE WE ALREADY IMPORTED THIS RECORD?
+    // =====================================================================
+    // Asked BEFORE the phone probe, and answered from our OWN bookkeeping
+    // rather than from a guess about who a person is.
+    //
+    // THE DEFECT IT CLOSES. The phone probe below is the only test this method
+    // had, so a contact carrying no phone number — an email-only address-book
+    // entry — never entered the loop, `alreadyExists` stayed false, and it was
+    // created again on every single sync. Measured on the founder's machine:
+    // the SAME 26 of 389 contacts re-created on three consecutive runs (log
+    // comparison across runs: 0 differing entries), 25 of them carrying an
+    // email and no matchable phone.
+    //
+    // WHY NOT "ALSO MATCH ON EMAIL". That is a new person-identity rule and it
+    // is not this fix's to make (BACKLOG-2416: two people on one shared address
+    // would collapse into one contact). The claim probe asks a bookkeeping
+    // question with a definite answer, so it carries no false-positive risk and
+    // needs no founder ruling.
+    //
+    // IT DEPENDS ON A STABLE deviceId, which is the other half of BACKLOG-2987:
+    // the claim key embeds the device id, so before the companion learned to
+    // re-present its identity at /register this probe would have missed on every
+    // re-pair exactly as the old code did. The two halves ship together.
+    //
+    // ONE QUERY FOR THE BATCH, not one per contact — this runs inside an HTTP
+    // handler against ~400 records.
+    const claimedRecordIds = findClaimedSourceRecordIds(
+      userId,
+      "android_sync",
+      contacts.map((contact) => this.androidExternalRecordId(deviceId, contact.id)),
+    );
+
     for (const contact of contacts) {
       const phones = contact.phones
         .map((p) => p.number)
@@ -1558,6 +1662,13 @@ class LocalSyncService {
 
       // Skip contacts with no phone numbers and no emails — nothing to match or display
       if (phones.length === 0 && emails.length === 0) {
+        continue;
+      }
+
+      // BACKLOG-2987: already promoted on an earlier sync — this exact external
+      // record is claimed by a contact we created. Skip before the phone probe,
+      // which cannot answer for a contact that has no matchable phone.
+      if (claimedRecordIds.has(this.androidExternalRecordId(deviceId, contact.id))) {
         continue;
       }
 

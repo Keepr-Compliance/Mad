@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/react-native';
-import Constants from 'expo-constants';
+
+import { getAppVersion, getBuildNumber } from './appVersion';
 
 /**
  * Sentry setup for the Keepr Android companion.
@@ -37,16 +38,14 @@ export const SENTRY_DSN =
   'https://3ad649526bc88f8e51702b9138f30672@o4510880506183680.ingest.us.sentry.io/4510880579518464';
 
 /**
- * App version (e.g. "1.0.0") used for Sentry release/dist. Mirrors the version
- * resolution already used in settings.tsx / HelpModal.tsx.
+ * App version (e.g. "1.1.0") used for the Sentry `release`.
+ *
+ * BACKLOG-2956: version resolution moved to `services/appVersion.ts` and now
+ * reads the NATIVE package manifest first, so every surface that shows or
+ * reports a version (this module, settings.tsx, HelpModal.tsx) resolves it the
+ * same single way. Re-exported here so existing importers keep working.
  */
-export function getAppVersion(): string {
-  return (
-    Constants.expoConfig?.version ??
-    Constants.manifest2?.extra?.expoClient?.version ??
-    'unknown'
-  );
-}
+export { getAppVersion } from './appVersion';
 
 /**
  * Build the options passed to `Sentry.init`. Pure + exported so the wiring
@@ -55,16 +54,23 @@ export function getAppVersion(): string {
  */
 export function getSentryInitOptions(): Sentry.ReactNativeOptions {
   const version = getAppVersion();
+  const build = getBuildNumber();
 
   return {
     dsn: SENTRY_DSN,
     // Send events in production builds; stay silent in dev to avoid noise.
     enabled: !__DEV__,
     environment: __DEV__ ? 'development' : 'production',
-    // release/dist MUST match the source-map upload in scripts/build-apk.sh so
-    // minified JS frames symbolicate.
+    // release/dist MUST match the source-map upload in scripts/build-apk.sh and
+    // scripts/build-release.sh so minified JS frames symbolicate.
+    //
+    // BACKLOG-2956: `dist` is the BUILD NUMBER (Android versionCode), not the
+    // version name. Sentry treats dist as the sub-identifier within a release,
+    // which is exactly what versionCode is. Previously both were the version
+    // name, so two different builds of "1.0.0" were indistinguishable in Sentry
+    // — the same blind spot that left a field tester's build unidentifiable.
     release: `keepr-companion@${version}`,
-    dist: version,
+    dist: build,
     tracesSampleRate: 1.0,
     // BACKLOG-2222: capture NATIVE (JVM/NDK) crashes, not just JS errors. The
     // @sentry/react-native/expo config plugin (app.json) links the native SDK

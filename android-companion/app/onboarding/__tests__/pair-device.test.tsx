@@ -38,9 +38,27 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 // --- onboardingProgress (BACKLOG-2216): the screen persists its step on mount.
 // Mock it so that step-write does NOT touch the AsyncStorage spied on above —
 // the "no persist on abort" assertion must observe ONLY the pairing write. ---
+// `completeOnboarding` added by BACKLOG-2956 for the "Continue without a
+// computer" escape hatch; spied so the skip suite can assert it is awaited
+// BEFORE navigation.
+const mockCompleteOnboarding = jest.fn(async () => undefined);
 jest.mock('../../../services/onboardingProgress', () => ({
   setOnboardingStep: jest.fn(async () => undefined),
+  completeOnboarding: () => mockCompleteOnboarding(),
 }));
+
+// --- Mock the onboarding sign-out link (BACKLOG-2956). The real component
+// imports authService, which calls expo-linking's createURL() at module scope and
+// needs an expo-constants manifest jest does not provide. Its behavior has its
+// own suite: components/ui/__tests__/OnboardingSignOutLink.test.tsx ---
+jest.mock('../../../components/ui/OnboardingSignOutLink', () => {
+  const ReactModule = require('react');
+  const { Text } = require('react-native');
+  return {
+    __esModule: true,
+    default: () => ReactModule.createElement(Text, null, 'Sign out'),
+  };
+});
 
 // --- syncService.registerDevice: must NOT be called on the abort path.
 // Return shape widened (BACKLOG-2212) so tests can resolve failure results
@@ -274,4 +292,149 @@ describe('pair-device registration failure feedback (BACKLOG-2212)', () => {
       expect(mockReplace).toHaveBeenCalledWith('/onboarding/first-sync'),
     );
   });
+});
+
+// =============================================================================
+// BACKLOG-2956 — CONTROL 3a: the skip reaches the real screens.
+// =============================================================================
+//
+// pair-device was the only onboarding screen with no way forward and no way back
+// (permissions and first-sync both already ship "Skip for Now"). A Play reviewer
+// with only a phone dead-ends here and never sees the app work — the most likely
+// rejection — and the founder hit the same wall after signing in with the wrong
+// account, with clearing app storage as his only escape.
+//
+// The skip must land in the REAL app (no demo mode, no sample data), and it must
+// persist the onboarding-complete flag BEFORE navigating: app/_layout.tsx's auth
+// gate treats "reached (main)" as proof that flag is written, so navigating first
+// races the gate and bounces the user back into onboarding.
+//
+// MUTATION THAT MUST GO RED: delete the "Continue without a computer" Button from
+// app/onboarding/pair-device.tsx. Both tests below fail — the first cannot find
+// the button, the second cannot press it.
+describe('pair-device — continue without a computer (BACKLOG-2956)', () => {
+  beforeEach(() => {
+    mockReplace.mockClear();
+    mockCompleteOnboarding.mockClear();
+    mockRegisterDevice.mockClear();
+  });
+
+  it('offers a way past the pairing screen', () => {
+    const { getByText } = render(<PairDeviceScreen />);
+    expect(getByText('Continue without a computer')).toBeTruthy();
+  });
+
+  it('lands in the real app, and marks onboarding complete BEFORE navigating', async () => {
+    // Order matters, so record the sequence rather than just the two calls.
+    const order: string[] = [];
+    mockCompleteOnboarding.mockImplementation(async () => {
+      order.push('completeOnboarding');
+      return undefined;
+    });
+    mockReplace.mockImplementation((route: string) => {
+      order.push(`replace:${route}`);
+    });
+
+    const { getByText } = render(<PairDeviceScreen />);
+    fireEvent.press(getByText('Continue without a computer'));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/(main)/home');
+    });
+
+    expect(order).toEqual(['completeOnboarding', 'replace:/(main)/home']);
+
+    // The escape hatch must not pair anything or invent a pairing to fake one.
+    expect(mockRegisterDevice).not.toHaveBeenCalled();
+  });
+
+  it('still navigates into the app when the completion write fails (never traps the user)', async () => {
+    mockCompleteOnboarding.mockRejectedValue(new Error('storage full'));
+
+    const { getByText } = render(<PairDeviceScreen />);
+    fireEvent.press(getByText('Continue without a computer'));
+
+    await waitFor(() => {
+      expect(mockReplace).toHaveBeenCalledWith('/(main)/home');
+    });
+  });
+});
+
+/**
+ * BACKLOG-2956 — the screen must actually CALL the LAN guard.
+ *
+ * `services/lanAddress.ts` decides the policy and is swept range-by-range in
+ * `services/__tests__/lanAddress.test.ts`. These tests cover the other half:
+ * that the pair screen consults it at all. Without them the guard can be
+ * deleted from this file while `lanAddress.ts` stays perfect and every other
+ * suite stays green — the same "correct module nobody calls" shape that let the
+ * cleartext setting go missing from the release manifest in the first place.
+ *
+ * It matters here because the app now permits cleartext HTTP app-wide (Android
+ * cannot scope that to the LAN), so the destination is the only thing bounding
+ * the risk: a QR code naming a public host would otherwise get SMS bodies
+ * POSTed unencrypted to whoever printed it.
+ */
+describe('pair-device LAN address guard (BACKLOG-2956)', () => {
+  const qrForIp = (ip: string): string =>
+    JSON.stringify({
+      ip,
+      port: 51000,
+      secret: 'a'.repeat(64),
+      deviceName: 'Desktop-A',
+      desktopUserIdHash: 'b'.repeat(64),
+    });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    capturedOnBarcodeScanned = null;
+    jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
+    mockCheckDesktopAccountMatch.mockResolvedValue({ ok: true });
+  });
+
+  it.each([
+    ['8.8.8.8', 'a public address'],
+    ['100.100.100.100', 'CGNAT — outside the permitted ranges'],
+    ['203.0.113.7', 'TEST-NET-3'],
+    ['keepr.example.com', 'a hostname, which could resolve anywhere'],
+  ])(
+    'refuses a QR pointing at %s (%s): nothing leaves the phone',
+    async (ip) => {
+      const AsyncStorage = require('@react-native-async-storage/async-storage');
+      const { getByText } = render(<PairDeviceScreen />);
+      await scanQr(getByText, qrForIp(ip));
+
+      // The decisive assertions: no request is issued, nothing is persisted,
+      // and onboarding does not advance.
+      expect(mockRegisterDevice).not.toHaveBeenCalled();
+      expect(AsyncStorage.setItem).not.toHaveBeenCalled();
+      expect(mockReplace).not.toHaveBeenCalled();
+
+      expect(Alert.alert).toHaveBeenCalledWith(
+        expect.stringMatching(/Not a Local Network Address/i),
+        expect.stringContaining(ip),
+      );
+      // BACKLOG-2913 class: a known specific cause must not be reported as the
+      // generic reachability message.
+      const blamedWifi = (Alert.alert as jest.Mock).mock.calls.some((c) =>
+        /same Wi-Fi network/i.test(String(c[1])),
+      );
+      expect(blamedWifi).toBe(false);
+    },
+  );
+
+  it.each([
+    ['192.168.0.233', 'the shape the founder actually pairs with'],
+    ['10.1.2.3', '10/8'],
+    ['172.20.0.5', 'inside 172.16/12'],
+  ])(
+    'positive control: %s (%s) pairs normally',
+    async (ip) => {
+      const { getByText } = render(<PairDeviceScreen />);
+      await scanQr(getByText, qrForIp(ip));
+
+      await waitFor(() => expect(mockRegisterDevice).toHaveBeenCalled());
+      expect(mockReplace).toHaveBeenCalledWith('/onboarding/first-sync');
+    },
+  );
 });

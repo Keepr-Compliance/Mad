@@ -24,6 +24,13 @@ export interface UserFacingError {
 
 export type UserErrorCode =
   | "INSUFFICIENT_DISK_SPACE"
+  /**
+   * BACKLOG-2925: distinct from INSUFFICIENT_DISK_SPACE on purpose. That code asserts
+   * a comparison was made and came out short; this one says no comparison was
+   * possible. Collapsing them would make the app claim knowledge it does not have,
+   * which is the defect this code exists to end.
+   */
+  | "BACKUP_SIZE_UNKNOWN"
   | "MISSING_DRIVERS"
   | "DRIVER_SERVICE_STOPPED"
   | "DEVICE_NOT_DETECTED"
@@ -58,6 +65,31 @@ export function formatDiskSpaceError(
     actionSuggestion:
       "Free up disk space by deleting unnecessary files, then try syncing again.",
     code: "INSUFFICIENT_DISK_SPACE",
+  };
+}
+
+/**
+ * BACKLOG-2925: the size of the coming backup could not be established, so whether it
+ * fits cannot be established either.
+ *
+ * The description says "couldn't work out" and NEVER a number. On 2026-08-27 the app
+ * told the founder "Disk space check passed: 15 GB available" for a backup that had
+ * measured 58.8 GB, because an unmeasurable size arrived as `0` and cleared the bar.
+ * A message here that named any figure would repeat that in words.
+ *
+ * The remedy is stated in the DESCRIPTION rather than only in `actionSuggestion`,
+ * because `actionSuggestion` currently reaches no pixel: `IPhoneSyncFlow.tsx` renders
+ * the plain `error` string, and the orchestrator emits `userError.description` as
+ * that string. The structured fields are carried for the UI that will use them.
+ */
+export function formatUnknownBackupSizeError(): UserFacingError {
+  return {
+    title: "Couldn't check there's room for this backup",
+    description:
+      "Keepr couldn't work out how big this iPhone backup will be, so it can't tell whether it fits on this Mac — and it won't start a sync it can't check. Unlock your iPhone, leave it connected and tap Trust if asked, then try again.",
+    actionSuggestion:
+      "Unlock your iPhone and keep it plugged in, then sync again. If it keeps happening, reconnect the cable and free up disk space before retrying.",
+    code: "BACKUP_SIZE_UNKNOWN",
   };
 }
 

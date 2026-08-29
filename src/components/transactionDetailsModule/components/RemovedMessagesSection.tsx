@@ -67,6 +67,13 @@ interface RemovedThread {
 
 interface RemovedMessagesSectionProps {
   transactionId: string;
+  /**
+   * BACKLOG-2758: owner of the contacts. This section resolved handles with NO
+   * userId at all, so the hard filter that keeps another user's contacts from
+   * naming this user's threads was simply absent here — the "user-unscoped"
+   * half of BACKLOG-2758, on a surface the export half never touched.
+   */
+  userId?: string;
   /** Map of phone number -> contact name for resolving senders */
   contactNames?: Record<string, string>;
   /**
@@ -261,6 +268,7 @@ const removeRestoredMessageRows = (
 
 export function RemovedMessagesSection({
   transactionId,
+  userId,
   onRestoreComplete,
   onMessagesChanged,
   contactNames = {},
@@ -339,7 +347,13 @@ export function RemovedMessagesSection({
       const handles = extractAllHandles(messageLike);
       if (handles.length === 0) return;
       try {
-        const nameResult = await window.api.contacts.resolveHandles(handles);
+        // BACKLOG-2758: scoped to this transaction, like the Texts tab above it.
+        // These threads were REMOVED FROM this deal, not from the world — the
+        // card still names them, so it must name them the way the deal does, or
+        // restoring a thread would change what it is called.
+        const nameResult = await window.api.contacts.resolveHandles(handles, userId, {
+          transactionId,
+        });
         if (nameResult.success && nameResult.names) {
           const namesWithNormalized: Record<string, string> = {};
           Object.entries(nameResult.names as Record<string, string>).forEach(([handle, name]) => {
@@ -361,7 +375,7 @@ export function RemovedMessagesSection({
         logger.error("Failed to resolve removed message contact names:", err);
       }
     },
-    [onContactNamesResolved]
+    [onContactNamesResolved, userId, transactionId]
   );
 
   // BACKLOG-2263: contact-merge the removed rows using the SAME identity rule as

@@ -207,6 +207,13 @@ export function TransactionMessagesTab({
 
   // TASK-2026: Look up contact names for all handles (phones + emails + Apple IDs)
   // Uses shared ContactResolutionService via resolveHandles IPC
+  //
+  // BACKLOG-2758: scoped to THIS transaction. Every thread here is already on
+  // the deal, so when a handle is held by two contacts and only one of them is
+  // linked, the linked one is the party to this deal and the other is not
+  // entitled to a share of the label. Without the id these cards kept reading
+  // "A or B" after the user unlinked the duplicate, while the export — which
+  // has always passed a scope — named only the remaining contact.
   useEffect(() => {
     const lookupContactNames = async () => {
       if (messages.length === 0) return;
@@ -215,7 +222,9 @@ export function TransactionMessagesTab({
       if (handles.length === 0) return;
 
       try {
-        const result = await window.api.contacts.resolveHandles(handles, userId);
+        const result = await window.api.contacts.resolveHandles(handles, userId, {
+          transactionId,
+        });
 
         if (result.success && result.names) {
           // Build a lookup map with both original and normalized keys
@@ -243,7 +252,11 @@ export function TransactionMessagesTab({
     };
 
     lookupContactNames();
-  }, [messages]);
+    // BACKLOG-2758: `transactionId` joins the deps because it is now an INPUT to
+    // resolution, not just a prop this component happens to hold — resolve
+    // against the wrong deal and a shared line gets the wrong party's name.
+    // (`userId` was already read here and was already missing from the list.)
+  }, [messages, userId, transactionId]);
 
   // BACKLOG-1589: Merge newly resolved contact names from removed messages into state
   const handleContactNamesResolved = useCallback((names: Record<string, string>) => {
@@ -857,6 +870,7 @@ export function TransactionMessagesTab({
         {transactionId && (
           <RemovedMessagesSection
             transactionId={transactionId}
+            userId={userId}
             contactNames={contactNames}
             onMessagesChanged={onMessagesChanged}
             onRestoreComplete={onRestoreComplete}
@@ -1096,6 +1110,7 @@ export function TransactionMessagesTab({
       {transactionId && (
         <RemovedMessagesSection
           transactionId={transactionId}
+          userId={userId}
           contactNames={contactNames}
           onMessagesChanged={onMessagesChanged}
           onRestoreComplete={onRestoreComplete}

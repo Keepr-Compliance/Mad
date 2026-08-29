@@ -49,9 +49,16 @@ jest.mock('expo-background-fetch', () => ({
   unregisterTaskAsync: jest.fn(async () => undefined),
   getStatusAsync: jest.fn(async () => 3),
 }));
+// BACKLOG-2988: `captureMessage` belongs here even though this suite asserts
+// nothing about it. `performSync` now emits one outcome EVENT per run through
+// it, and the emitter swallows its own errors so a sync is never failed by
+// telemetry — which means an incomplete mock would make every run in this file
+// take the swallow path silently. The same trap `syncServiceLanGuard.test.ts`
+// documents: an omitted Sentry method reads as the feature not firing.
 jest.mock('@sentry/react-native', () => ({
   addBreadcrumb: jest.fn(),
   captureException: jest.fn(),
+  captureMessage: jest.fn(),
 }));
 
 // --- The read/send/network layer we drive per-test ---
@@ -153,6 +160,18 @@ async function setPaired(): Promise<void> {
   await AsyncStorage.setItem(
     PAIRING_STORAGE_KEY,
     JSON.stringify({ ip: '10.0.0.2', port: 8765, secret: 'x'.repeat(64), deviceName: 'desk' }),
+  );
+}
+
+/**
+ * BACKLOG-2956: a stored pairing pointing at an arbitrary address. Used to prove
+ * the LAN guard runs on the BACKGROUND path, which never passes through a
+ * QR-scan handler and so was previously unguarded entirely.
+ */
+async function setPairedAt(ip: string): Promise<void> {
+  await AsyncStorage.setItem(
+    PAIRING_STORAGE_KEY,
+    JSON.stringify({ ip, port: 8765, secret: 'x'.repeat(64), deviceName: 'desk' }),
   );
 }
 
@@ -843,5 +862,73 @@ describe('proactive SMS-permission re-check (BACKLOG-2209)', () => {
     expect(mockReadSmsMessages).not.toHaveBeenCalled();
     expect(result.readError?.reason).toBe('permission_denied');
     expect(result.newMessages).toBe(0);
+  });
+});
+
+// ===========================================================================
+// BACKLOG-2956 — the LAN guard covers BACKGROUND sync.
+// ===========================================================================
+//
+// The LAN address check shipped scan-time only: it ran in the two QR-scan
+// handlers (pair-device.tsx, home.tsx) and nowhere else. Background sync never
+// passes through a scan handler, so it was permanently unguarded — and a pairing
+// stored by a build predating the check survives an upgrade unexamined. With the
+// app shipping a blanket usesCleartextTraffic="true" (Android's
+// network-security-config has no CIDR syntax), this check is the only thing
+// bounding what that flag opens up.
+//
+// These tests drive the REAL performSync, so they are evidence about the
+// background path specifically, not an extrapolation from a screen test.
+//
+// MUTATION THAT MUST GO RED: delete the `if (!isPrivateLanIPv4(pairingInfo.ip))`
+// pre-flight from performSync in services/backgroundSync.ts. The public-address
+// tests fail; the private-address positive control stays green.
+describe('LAN guard on the background sync path (BACKLOG-2956)', () => {
+  it('refuses a STORED pairing that points at a public address, and sends nothing', async () => {
+    await setPairedAt('8.8.8.8');
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(1, 100)]));
+
+    const result = await performSync();
+
+    // Nothing left the phone — not even the reachability ping.
+    expect(mockPingDesktop).not.toHaveBeenCalled();
+    expect(mockSendMessages).not.toHaveBeenCalled();
+    expect(mockSendContacts).not.toHaveBeenCalled();
+
+    // ...and it is reported as an invalid pairing, NOT as a network failure.
+    expect(result.errorType).toBe('invalid_address');
+    expect(result.desktopReachable).toBe(false);
+    expect(result.error).toMatch(/pairing is no longer valid/i);
+    // The wrong-cause copy must not appear: Wi-Fi is not the problem here.
+    expect(result.error).not.toMatch(/same network|not connected to Wi-Fi/i);
+  });
+
+  it('refuses a CGNAT stored pairing too (100.64.0.0/10 is not a permitted range)', async () => {
+    await setPairedAt('100.64.1.1');
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(1, 100)]));
+
+    const result = await performSync();
+
+    expect(mockPingDesktop).not.toHaveBeenCalled();
+    expect(result.errorType).toBe('invalid_address');
+  });
+
+  it('positive control: a private-range stored pairing still syncs normally', async () => {
+    await setPairedAt('192.168.1.50');
+    mockPingDesktop.mockResolvedValue(true);
+    mockSendMessages.mockResolvedValue({
+      success: true,
+      messagesSynced: 1,
+      messagesReceived: 1,
+    } as unknown as SyncResult);
+    mockReadSmsMessages.mockResolvedValue(okRead([msg(1, 100)]));
+
+    const result = await performSync();
+
+    // The guard is not "refuse everything": the normal path is untouched.
+    expect(mockPingDesktop).toHaveBeenCalled();
+    expect(mockSendMessages).toHaveBeenCalled();
+    expect(result.errorType).not.toBe('invalid_address');
+    expect(result.desktopReachable).toBe(true);
   });
 });

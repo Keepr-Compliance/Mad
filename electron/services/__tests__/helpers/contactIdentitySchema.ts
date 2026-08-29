@@ -33,6 +33,9 @@
  * is an immediate "no such column", not a silent wrong answer.
  */
 
+import fs from "fs";
+import path from "path";
+
 import {
   CONTACT_LINK_PROPOSALS_INDEX_SQL,
   CONTACT_LINK_PROPOSALS_TABLE_SQL,
@@ -67,6 +70,11 @@ const SURROUNDING_TABLES = `
     -- reads that file and asserts the same vocabulary.
     source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
     is_imported INTEGER DEFAULT 1,
+    -- BACKLOG-2630 D2 piece 2: named by contactRecencySql's
+    -- IMPORTED_CONTACT_LAST_COMMUNICATION_SQL, which the evidence gatherer execs
+    -- verbatim rather than re-deriving. Transcribed from schema.sql.
+    last_inbound_at DATETIME,
+    last_outbound_at DATETIME,
     removed_at DATETIME,
     removed_reason TEXT
   );
@@ -156,7 +164,79 @@ const SURROUNDING_TABLES = `
     removed_reason TEXT,
     UNIQUE(transaction_id, contact_id)
   );
+
 `;
+
+
+/**
+ * `users_local`, TAKEN FROM `electron/database/schema.sql` AT IMPORT TIME —
+ * BACKLOG-2668.
+ *
+ * ===========================================================================
+ * WHY THIS ONE IS EXTRACTED AND THE OTHERS ARE HAND-WRITTEN
+ * ===========================================================================
+ * It is not a stricter standard applied for its own sake. It is the direct
+ * consequence of a defect this helper CAUSED.
+ *
+ * The first cut of the BACKLOG-2668 gate queried `FROM users`. There is no
+ * `users` table — the local table is `users_local` and has been since the
+ * schema was written. In production the query threw, the gate's `catch`
+ * swallowed it, and every user resolved to "off": the right answer for the
+ * wrong reason, with a warning on every sync pass. IT SURVIVED A FULLY GREEN
+ * SUITE BECAUSE THIS FIXTURE INVENTED A TABLE CALLED `users`.
+ *
+ * The surrounding tables above can be hand-written because every column they
+ * carry is NAMED in a query under test, so a missing one is an immediate "no
+ * such column". That protection does not extend to the TABLE NAME: a fixture
+ * that invents a table makes the query reading it green forever.
+ *
+ * So this block is sliced out of the real schema. A table name that does not
+ * exist in production now cannot pass, because there is nothing to slice.
+ *
+ * The slice is deliberately narrow rather than `exec`ing all of `schema.sql` —
+ * the full schema declares its own `contacts`, which would collide with the
+ * simplified shape above that these suites are built on.
+ */
+function extractUsersLocalDdl(): string {
+  const schemaPath = path.join(__dirname, "..", "..", "..", "database", "schema.sql");
+  const schema = fs.readFileSync(schemaPath, "utf8");
+
+  const start = schema.indexOf("CREATE TABLE IF NOT EXISTS users_local (");
+  if (start === -1) {
+    throw new Error(
+      "contactIdentitySchema: `users_local` is not in electron/database/schema.sql. " +
+        "If the table was renamed, every reader of it is reading a table that no " +
+        "longer exists — fix the readers, do not re-inline the DDL here.",
+    );
+  }
+
+  const end = schema.indexOf("\n);", start);
+  if (end === -1) {
+    throw new Error("contactIdentitySchema: could not find the end of the `users_local` block.");
+  }
+  const ddl = schema.slice(start, end + 3);
+
+  // The one column BACKLOG-2668's gate reads. Asserted loudly rather than left
+  // to a downstream "no such column", because the whole point of extracting is
+  // that the fixture cannot quietly disagree with production.
+  if (!ddl.includes("ai_detection_enabled")) {
+    throw new Error(
+      "contactIdentitySchema: the extracted `users_local` DDL has no " +
+        "`ai_detection_enabled` column — the slice is wrong or the column moved.",
+    );
+  }
+  return ddl;
+}
+
+/**
+ * The real `users_local`, for suites that need one.
+ *
+ * NOT-NULL columns it carries (`email`, `oauth_provider` with its
+ * `CHECK IN ('google','microsoft')`, `oauth_id`) must be filled by the seeder.
+ * That is the point: those constraints are production's, and a fixture that did
+ * not satisfy them would describe a row production cannot hold.
+ */
+export const USERS_LOCAL_TABLE_SQL = extractUsersLocalDdl();
 
 /**
  * Everything the contact-identity suites need, with the three identity tables
@@ -164,6 +244,7 @@ const SURROUNDING_TABLES = `
  */
 export const CONTACT_IDENTITY_SCHEMA = [
   SURROUNDING_TABLES,
+  USERS_LOCAL_TABLE_SQL,
   CONTACT_SOURCE_LINKS_TABLE_SQL,
   CONTACT_SOURCE_LINKS_INDEX_SQL,
   CONTACT_LINK_PROPOSALS_TABLE_SQL,

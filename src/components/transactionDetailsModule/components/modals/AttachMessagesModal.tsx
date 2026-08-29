@@ -292,6 +292,24 @@ export function AttachMessagesModal({
                 .filter((h): h is string => !!h);
               if (handles.length > 0) {
                 try {
+                  // ===========================================================
+                  // BACKLOG-2758 — NO `transactionId` HERE, DELIBERATELY.
+                  // Founder-ratified 2026-08-27. Do not "consistency-fix" this
+                  // to match TransactionMessagesTab and RemovedMessagesSection.
+                  // ===========================================================
+                  // Those two surfaces show threads that are ALREADY on the
+                  // deal, so preferring a linked contact reports a fact. This
+                  // picker shows threads that are NOT on it yet. Pass the id
+                  // here and a shared line — one number, two saved contacts,
+                  // one of them a party to this deal — would be labelled with
+                  // the party's name before anyone decided the thread belongs
+                  // to the deal at all. That is a guess printed as fact: the
+                  // same defect BACKLOG-2757 removed, merely pointed the other
+                  // way.
+                  //
+                  // So an ambiguous number must reach this list as "A or B".
+                  // `userId` IS passed — that one is the hard filter that keeps
+                  // another user's contacts out, and it is never in question.
                   const namesResult = await resolveHandlesFn(handles, userId);
                   if (namesResult.success && namesResult.names) {
                     setResolvedNames(namesResult.names);
@@ -403,23 +421,95 @@ export function AttachMessagesModal({
   // BACKLOG-2263: build the handle -> contact-name record consumed by the shared
   // identity helpers (getHandleMergeKey / mergeThreadsByContact). Mirrors the
   // attached list's map: original + normalized-phone + lowercased-email keys.
+  // ==========================================================================
+  // BACKLOG-2758 — THE RESOLVER'S ANSWER IS AUTHORITATIVE HERE. READ BEFORE
+  // REORDERING.
+  // ==========================================================================
+  // These three sources used to be written in ascending precedence with a bare
+  // `rec[handle] = name`, so the LAST one won:
+  //
+  //     for (const c of allContacts)              add(c.phone, c.name);
+  //     for (const [h, n] of ...resolvedNames)    add(h, n);        // "A or B"
+  //     for (const c of contacts)                 add(c.contact, c.contactName);
+  //
+  // The third loop carries ONE name off the message-contact row, so it silently
+  // overwrote the shared resolver's ambiguous label. A number held by two saved
+  // contacts therefore rendered in "Select Contact" as a single name — chosen by
+  // overwrite order, which is to say by nothing — and the second contact could
+  // not be found by searching this screen at all, because the search matches the
+  // rendered `displayName`. That is exactly the silent-winner defect BACKLOG-2757
+  // removed from the export, still live in the picker.
+  //
+  // `fill` tests a handle's whole ALIAS SET, not just `rec[handle]`. BE HONEST
+  // ABOUT WHY: that is DEFENSIVE REDUNDANCY, and it is not load-bearing today.
+  //
+  // MEASURED (probe of the live resolver over a migrated database — the fixture
+  // is in electron/services/__tests__/inAppHandleScope-2758.test.ts): a phone
+  // answer comes back under BOTH spellings,
+  //
+  //     names = { "5035550155": "A or B", "+15035550155": "A or B" }
+  //
+  // so for every handle the picker passed in, the resolver has already claimed
+  // the raw key that `resolveDisplayName` reads first. Narrowing `fill` to a
+  // single-key check therefore leaves the whole suite GREEN (control P2, 5/5) —
+  // it was written expecting a red and did not get one.
+  //
+  // The alias set is kept anyway because the weak sources are keyed
+  // INDEPENDENTLY of the resolver: `allContacts` supplies `c.phone` from the
+  // contacts table in whatever format it was stored. Today such a spelling is
+  // harmless — "(503) 555-0155" fails the `isPhone` test below (leading paren),
+  // so it only ever writes its own key, which nothing reads. Loosen that regex,
+  // or let a weak source write a normalized key the resolver did not claim, and
+  // the single-key guard becomes the only thing between this screen and the
+  // defect again. Whoever simplifies this should know that is the trade.
+  //
+  // What is deliberately preserved: the two weaker sources still name every
+  // handle the resolver could not answer, and `contacts` still outranks
+  // `allContacts` among those. Only handles the resolver ANSWERED are now
+  // closed to them.
   const contactNamesRecord = useMemo(() => {
     const rec: Record<string, string> = {};
-    const add = (handle: string | undefined | null, name: string | undefined | null) => {
-      if (!handle || !name) return;
-      rec[handle] = name;
+
+    /** Every key this record is read under for one handle. */
+    const aliasKeys = (handle: string): string[] => {
+      const keys = [handle];
       const isPhone = handle.startsWith("+") || /^\d[\d\s\-()]{6,}$/.test(handle);
       if (isPhone) {
         const normalized = handle.replace(/\D/g, "").slice(-10);
-        if (normalized.length >= 7) rec[normalized] = name;
+        if (normalized.length >= 7) keys.push(normalized);
       }
-      if (handle.includes("@")) rec[handle.toLowerCase()] = name;
+      if (handle.includes("@")) keys.push(handle.toLowerCase());
+      return keys;
     };
-    // getAll contacts (phones only) + resolveHandles result (phones AND emails) +
-    // any name carried on the message-contact rows themselves.
-    for (const c of allContacts) add(c.phone, c.name);
-    for (const [handle, name] of Object.entries(resolvedNames)) add(handle, name);
-    for (const c of contacts) add(c.contact, c.contactName);
+
+    // Alias keys the shared resolver has answered for.
+    const resolverClaimed = new Set<string>();
+
+    const write = (
+      handle: string | undefined | null,
+      name: string | undefined | null,
+      claim: boolean
+    ): void => {
+      if (!handle || !name) return;
+      for (const key of aliasKeys(handle)) {
+        rec[key] = name;
+        if (claim) resolverClaimed.add(key);
+      }
+    };
+
+    /** Write only if the shared resolver did not already answer this handle. */
+    const fill = (handle: string | undefined | null, name: string | undefined | null): void => {
+      if (!handle || !name) return;
+      if (aliasKeys(handle).some((key) => resolverClaimed.has(key))) return;
+      write(handle, name, false);
+    };
+
+    // resolveHandles (phones AND emails) is the shared identity source and wins.
+    // getAll contacts (phones only) and any name carried on the message-contact
+    // rows themselves fill the gaps it left.
+    for (const [handle, name] of Object.entries(resolvedNames)) write(handle, name, true);
+    for (const c of allContacts) fill(c.phone, c.name);
+    for (const c of contacts) fill(c.contact, c.contactName);
     return rec;
   }, [allContacts, resolvedNames, contacts]);
 

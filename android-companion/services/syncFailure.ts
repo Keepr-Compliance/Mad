@@ -85,6 +85,19 @@ export function syncDisconnection(
         showReconnect: true,
       };
 
+    // BACKLOG-2956: the stored pairing points off-LAN, so the request was
+    // refused before it was sent. Wi-Fi is not the problem and re-connecting to
+    // the same stored address cannot succeed — the user has to pair again. It
+    // reuses `showReconnect` because that CTA IS the re-pair flow (it opens the
+    // guided QR walkthrough), but the copy must not blame the network.
+    case "invalid_address":
+      return {
+        cause: "desktop_unreachable",
+        title: "This pairing is no longer valid",
+        body: "It points at a computer that isn't on your local network. Pair with your computer again.",
+        showReconnect: true,
+      };
+
     // server_error (403 account rejection — 2284), unknown, or unset: NOT a
     // connectivity banner. Never reclassify a 403 as desktop-unreachable.
     case "server_error":

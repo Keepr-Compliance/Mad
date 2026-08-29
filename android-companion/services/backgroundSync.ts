@@ -23,6 +23,7 @@ import type { SmsReadError } from "./smsReader";
 import { checkSmsPermissions } from "./permissions";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
+import { isPrivateLanIPv4 } from "./lanAddress";
 import { isPhoneOnLocalNetwork } from "./connectivity";
 import {
   computeContactDiff,
@@ -45,6 +46,12 @@ import {
 } from "./smsQueueService";
 import type { SyncIntervalValue } from "./smsQueueService";
 import type { PairingInfo, SyncErrorType } from "../types/sync";
+import {
+  classifyAddress,
+  classifySyncOutcome,
+  reportSyncOutcome,
+} from "./syncOutcome";
+import type { SyncStep } from "./syncOutcome";
 
 // ============================================
 // CONSTANTS
@@ -147,6 +154,24 @@ export interface SyncOperationResult {
    * run that holds the lock is doing the real work.
    */
   skipped?: boolean;
+  /**
+   * BACKLOG-2988: which step the cycle ended on, set by the `return` that ends
+   * it. Carried EXPLICITLY rather than inferred downstream from the shape of the
+   * error, because an inference is a second copy of this function's control flow
+   * that drifts the first time an error message is reworded.
+   */
+  stoppedAt?: SyncStep;
+  /**
+   * BACKLOG-2988: the contact half of the cycle failed while the message half
+   * did not.
+   *
+   * Contact-send failure is deliberately NON-FATAL (a message sync that worked
+   * is still a valid result), which before this flag made it invisible from
+   * BOTH ends: the caller saw `contactsSynced: 0`, indistinguishable from
+   * "nothing to send", and Sentry saw a breadcrumb that was discarded. It is
+   * the shape this item exists for — a run that completes with a bad outcome.
+   */
+  contactsFailed?: boolean;
 }
 
 /**
@@ -193,17 +218,30 @@ function reachabilityErrorMessage(errorType: SyncErrorType): string {
  * This is called both by the background task and by the manual "Sync Now" button.
  */
 export async function performSync(): Promise<SyncOperationResult> {
+  // BACKLOG-2988: THE ONE EMISSION POINT. Every way this function can end —
+  // the lock skip, all five early returns inside the cycle, a clean finish and
+  // a throw — passes through exactly one of the two `emitOutcome` calls below.
+  // Emitting per-branch instead was the shape that produced the defect: the
+  // branches that reported nothing were the ones nobody remembered.
+  const startedAt = Date.now();
+  try {
+    const result = await runSyncUnderLock();
+    await emitOutcome(startedAt, result, false);
+    return result;
+  } catch (error) {
+    await emitOutcome(startedAt, {}, true);
+    throw error;
+  }
+}
+
+/** The lock discipline, unchanged — extracted so `performSync` has one exit. */
+async function runSyncUnderLock(): Promise<SyncOperationResult> {
   // BACKLOG-2200: serialize the whole cycle across UI + background contexts.
   // If another run holds a fresh lock, return early with `skipped: true` and a
   // benign, non-error result so no caller renders a false "Sync Complete" or a
   // false failure. The holder is doing the real work.
   const lockNonce = await acquireSyncLock();
   if (!lockNonce) {
-    Sentry.addBreadcrumb({
-      category: "sync",
-      message: "Sync skipped — another sync in progress",
-      level: "info",
-    });
     return {
       newMessages: 0,
       sentMessages: 0,
@@ -214,6 +252,7 @@ export async function performSync(): Promise<SyncOperationResult> {
       desktopReachable: true,
       queueSize: await getQueueSize(),
       skipped: true,
+      stoppedAt: "lock",
     };
   }
 
@@ -222,6 +261,60 @@ export async function performSync(): Promise<SyncOperationResult> {
   } finally {
     // Always release our lock, even on throw, so a failed cycle can't deadlock.
     await releaseSyncLock(lockNonce);
+  }
+}
+
+/**
+ * Build and send the one outcome event for a finished run.
+ *
+ * NEVER THROWS and never rethrows: a telemetry failure must not turn a
+ * successful sync into a failed one, and on the crash path it must not replace
+ * the real error with its own.
+ *
+ * Re-reads the stored pairing rather than threading it out of the cycle, so the
+ * device id and the address class are available on the paths that never got as
+ * far as loading it (the lock skip, and a throw). It is one AsyncStorage read.
+ */
+async function emitOutcome(
+  startedAt: number,
+  result: SyncOperationResult | Record<string, never>,
+  threw: boolean,
+): Promise<void> {
+  try {
+    const pairing = await loadPairingInfo();
+    const partial = result as Partial<SyncOperationResult>;
+    const { outcome, step } = classifySyncOutcome({
+      skipped: partial.skipped,
+      stoppedAt: partial.stoppedAt,
+      desktopReachable: partial.desktopReachable,
+      error: partial.error,
+      errorType: partial.errorType,
+      readError: partial.readError,
+      contactsFailed: partial.contactsFailed,
+      newMessages: partial.newMessages,
+      sentMessages: partial.sentMessages,
+      contactsSynced: partial.contactsSynced,
+      threw,
+    });
+
+    reportSyncOutcome({
+      outcome,
+      step,
+      elapsedMs: Date.now() - startedAt,
+      addressClass: classifyAddress(pairing?.ip),
+      ...(pairing?.deviceId ? { deviceId: pairing.deviceId } : {}),
+      ...(partial.errorType ? { errorType: partial.errorType } : {}),
+      ...(partial.readError ? { readErrorReason: partial.readError.reason } : {}),
+      counts: {
+        messagesRead: partial.newMessages ?? 0,
+        messagesSent: partial.sentMessages ?? 0,
+        contactsSent: partial.contactsSynced ?? 0,
+        newContacts: partial.newContacts ?? 0,
+        queueSize: partial.queueSize ?? 0,
+      },
+    });
+  } catch (error) {
+    console.warn("[BackgroundSync] Outcome report failed; sync unaffected:", error);
   }
 }
 
@@ -248,6 +341,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       desktopReachable: false,
       queueSize: await getQueueSize(),
       error: "Not paired with a desktop",
+      stoppedAt: "pairing",
     };
   }
 
@@ -398,7 +492,35 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
     });
   }
 
-  // Step 2: Check if desktop is reachable
+  // Step 2: Check if desktop is reachable.
+  //
+  // BACKLOG-2956: the LAN guard in syncService's fetchWithTimeout refuses an
+  // off-LAN destination for EVERY request, including this ping — so an invalid
+  // stored pairing would surface here as `desktopReachable === false` and be
+  // reported as "can't reach Keepr / you're not on Wi-Fi". That is the wrong
+  // cause and the wrong fix. Classify it explicitly instead, so background sync
+  // (which never passes through a QR-scan handler) reports the real reason.
+  if (!isPrivateLanIPv4(pairingInfo.ip)) {
+    const queueSize = await getQueueSize();
+    await recordSyncAttempt(false, 0);
+    console.warn(
+      `[BackgroundSync] Stored pairing points at a non-LAN address; refusing to sync.`
+    );
+    return {
+      newMessages,
+      sentMessages: 0,
+      contactsSynced: 0,
+      newContacts: 0,
+      desktopReachable: false,
+      queueSize,
+      error:
+        "This pairing is no longer valid — it points at a computer that isn't on your local network. Pair with your computer again from the home screen.",
+      errorType: "invalid_address",
+      readError,
+      stoppedAt: "lan_guard",
+    };
+  }
+
   const desktopReachable = await pingDesktop(pairingInfo);
   if (!desktopReachable) {
     const queueSize = await getQueueSize();
@@ -423,6 +545,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       // early return already records a failed attempt (reachedDesktop=false), so
       // the read failure correctly extends the 2203 streak here too.
       readError,
+      stoppedAt: "ping",
     };
   }
 
@@ -497,6 +620,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
   // to the pre-2208 behavior, and the partial-diff window never opens.
   let contactsSynced = 0;
   let newContacts = 0;
+  let contactsFailed = false;
   try {
     const contacts = await readContacts();
     const diffSupported = await isContactDiffSupported();
@@ -517,12 +641,17 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
             `(${isFullSync ? "full" : "diff"}, ${newOrChanged} new/changed)`
         );
       } else {
+        // BACKLOG-2988: still non-fatal, but no longer INVISIBLE. Before this
+        // flag the caller saw `contactsSynced: 0` — indistinguishable from
+        // "nothing to send" — and Sentry saw a breadcrumb that was discarded.
+        contactsFailed = true;
         console.warn(
           `[BackgroundSync] Contact sync failed: ${contactResult.error}`
         );
       }
     }
   } catch (error) {
+    contactsFailed = true;
     console.error("[BackgroundSync] Failed to sync contacts:", error);
     // Non-fatal — message sync result is still valid
   }
@@ -570,6 +699,16 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
     error: sendError,
     errorType: sendErrorType,
     readError,
+    contactsFailed,
+    // BACKLOG-2988: name the step this run actually got to. A send failure ends
+    // it at the message step; a read failure at the read; otherwise it finished.
+    stoppedAt: sendError
+      ? "send_messages"
+      : readError
+        ? "read_sms"
+        : contactsFailed
+          ? "send_contacts"
+          : "complete",
   };
 }
 

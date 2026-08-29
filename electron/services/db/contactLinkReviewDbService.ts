@@ -63,6 +63,10 @@
 import { v4 as uuidv4 } from "uuid";
 import { dbAll, dbGet, dbRun } from "./core/dbConnection";
 import type { ExternalContactSource } from "./externalContactDbService";
+// TYPE-ONLY, and deliberately so: `contactIdentityEvidence` imports this module's
+// verdict readers as VALUES, so a value import here would close a runtime require
+// cycle. `import type` is erased by TypeScript and cannot.
+import type { IdentityEvidenceFacts } from "../contactIdentityEvidence";
 // The SAME key builder the already-imported filter compares against, so a
 // released record and a linked one are keyed identically — the PAIR, never the
 // id alone.
@@ -108,6 +112,20 @@ export type LinkProposalReason =
   /** Exactly two, cross-family, but each already belongs to a DIFFERENT saved
    *  contact. Joining them is a merge (BACKLOG-2370), not a link. */
   | "name_two_saved_contacts"
+  // --- the tier gate (BACKLOG-2668) ---
+  /**
+   * The pair PASSED the unique-name rule — one record on each side, nobody else
+   * anywhere, no generational suffix — and was not linked anyway, because
+   * automatic linking is not turned on for this user.
+   *
+   * The only reason in this union that is not a doubt about the evidence. Every
+   * other name reason says "the rule could not tell"; this one says "the rule
+   * was sure and is not allowed to act on it". That is a different sentence to
+   * the user and has to stay a different value: folding it into
+   * `name_not_unique` would tell them their records are ambiguous when the
+   * entire basis of the question is that they are not.
+   */
+  | "name_unique_suggestion"
   // --- the linker's NAME VETO (BACKLOG-2619 / BACKLOG-2624) ---
   //
   // Not the rule above. Those four are reasons a NAME MATCH was refused; these
@@ -145,6 +163,28 @@ export interface LinkProposalEvidence {
   sourceLabel: string;
   /** The name the source record carries, if any. */
   sourceName: string | null;
+  /**
+   * The FACTS behind the sentences — BACKLOG-2630 D2 piece 2.
+   *
+   * Gathered by `contactIdentityEvidence.gatherIdentityEvidence` and frozen here
+   * beside the prose, under the SAME rule the prose already follows: a verdict is
+   * a labelled example, and a label is only usable alongside the evidence as it
+   * stood when the human saw it. That is what makes the answered rows a usable
+   * calibration set for the matcher D3 will build.
+   *
+   * OPTIONAL, AND THAT IS LOAD-BEARING. Every proposal and verdict written before
+   * this piece landed has no facts, and they are NEVER BACKFILLED — recomputing
+   * them under today's rules would silently relabel history, which is the thing
+   * the frozen-evidence doctrine exists to prevent. A reader must therefore treat
+   * `undefined` as "not gathered", never as "nothing found".
+   *
+   * `parseEvidence` gates only on `summary` being a string and returns the parsed
+   * object as-is, so an older row round-trips unchanged.
+   *
+   * NOTHING IN HERE IS A SCORE, and nothing in here is a decision. See that
+   * module's header.
+   */
+  facts?: IdentityEvidenceFacts;
 }
 
 export interface LinkProposalRow {

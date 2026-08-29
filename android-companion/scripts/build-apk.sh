@@ -53,11 +53,24 @@ fi
 # -------------------------------------------------------------------
 # 3. Run expo prebuild (generates android/ directory)
 # -------------------------------------------------------------------
-if [ ! -d "$PROJECT_DIR/android" ] || [ "${FORCE_PREBUILD:-}" = "1" ]; then
-  echo "[build-apk] Running expo prebuild..."
-  cd "$PROJECT_DIR"
-  npx expo prebuild --platform android --no-install --clean
-fi
+# BACKLOG-2956: ALWAYS prebuild. This used to be gated on `android/` being
+# absent (or FORCE_PREBUILD=1), which meant a pre-existing android/ was reused
+# with WHATEVER set of native modules it was generated for.
+#
+# That is not a stale-config annoyance, it is a boot crash. Add a native module
+# to package.json — as this PR does with expo-application — and a reused
+# android/ will not have autolinked it. `expo-application` resolves its native
+# binding at MODULE SCOPE (`export default requireNativeModule('ExpoApplication')`),
+# and `requireNativeModule` THROWS when the module is missing; the null-returning
+# variant is `requireOptionalNativeModule`, which it does not use. The throw
+# happens while evaluating app/_layout.tsx's import graph, BEFORE `initSentry()`
+# runs — so the app fails to open and Sentry is not up to report why.
+#
+# Prebuild is cheap relative to the gradle build that follows, and
+# `build-release.sh` step 3 already unconditionally prebuilds for this reason.
+echo "[build-apk] Running expo prebuild..."
+cd "$PROJECT_DIR"
+npx expo prebuild --platform android --no-install --clean
 
 # -------------------------------------------------------------------
 # 4. Patch android/build.gradle for async-storage local maven repo
@@ -133,7 +146,7 @@ echo "[build-apk] Embedded drawable assets: $(find "$RES_DIR" -type d -name 'dra
 #    Uploads to the SAME org/project as the runtime DSN (services/sentry.ts):
 #    the `electron` project in org `keeprcompliancecom`. The --release/--dist
 #    below MUST stay in sync with services/sentry.ts (`keepr-companion@<version>`
-#    / `<version>`) or traces won't match. The Debug ID injected by
+#    / `<versionCode>`) or traces won't match. The Debug ID injected by
 #    metro.config.js is the primary matcher; release/dist is the fallback.
 #
 #    Required env for upload:
@@ -147,7 +160,16 @@ BUNDLE_FILE="$ASSETS_DIR/index.android.bundle"
 SOURCEMAP_FILE="$ASSETS_DIR/index.android.bundle.map"
 
 if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
-  APP_VERSION="$(node -p "require('$PROJECT_DIR/app.json').expo.version")"
+  # String() matters: `node -p` renders a NUMBER through util.inspect, which can
+  # emit ANSI colour escapes. An escape-wrapped --dist would be silently wrong
+  # and symbolication would stop matching. (It bit the artifact filenames in
+  # build-release.sh before this was understood.)
+  APP_VERSION="$(node -p "String(require('$PROJECT_DIR/app.json').expo.version)")"
+  # BACKLOG-2956: dist is the BUILD NUMBER (versionCode), matching the runtime
+  # `dist` set in services/sentry.ts. It used to be the version name on both
+  # sides, which made every build of "1.0.0" the same artifact as far as Sentry
+  # was concerned. These two MUST agree or uploaded maps stop matching events.
+  APP_BUILD="$(node -p "String(require('$PROJECT_DIR/app.json').expo.android.versionCode)")"
   SENTRY_RELEASE="keepr-companion@$APP_VERSION"
   echo "[build-apk] Uploading source map to Sentry (release $SENTRY_RELEASE)..."
   # SENTRY_URL / SENTRY_AUTH_TOKEN are read from the environment by sentry-cli
@@ -158,7 +180,7 @@ if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
     --org "${SENTRY_ORG:-keeprcompliancecom}" \
     --project "${SENTRY_PROJECT:-electron}" \
     --release "$SENTRY_RELEASE" \
-    --dist "$APP_VERSION" \
+    --dist "$APP_BUILD" \
     --strip-prefix "$PROJECT_DIR" \
     "$BUNDLE_FILE" "$SOURCEMAP_FILE"
   echo "[build-apk] Source map uploaded to Sentry."
