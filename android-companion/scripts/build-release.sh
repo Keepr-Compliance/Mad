@@ -322,10 +322,12 @@ if [ -x "$APKSIGNER" ]; then
   # `apksigner verify` succeeding proves NOTHING about WHICH key signed it — a
   # debug-signed APK verifies too. The debug keystore's DN is the well-known
   # "CN=Android Debug"; refuse to ship an artifact carrying it.
-  if echo "$CERTS" | grep -qi "CN=Android Debug"; then
-    echo "ERROR: this APK is signed with the ANDROID DEBUG KEY, not the release key."
-    exit 1
-  fi
+  case "$CERTS" in
+    *"CN=Android Debug"*)
+      echo "ERROR: this APK is signed with the ANDROID DEBUG KEY, not the release key."
+      exit 1
+      ;;
+  esac
   if "$APKSIGNER" verify "$APK_DEST" >/dev/null 2>&1; then
     echo "[verify] APK signature: OK"
   else
@@ -336,12 +338,22 @@ fi
 # Prove the JS bundle really is inside the artifacts. A release APK missing
 # index.android.bundle installs happily and then shows a red screen on launch.
 for artifact in "$APK_DEST" "$AAB_DEST"; do
-  if unzip -l "$artifact" 2>/dev/null | grep -q "index.android.bundle"; then
-    echo "[verify] $(basename "$artifact"): JS bundle embedded"
-  else
-    echo "ERROR: $(basename "$artifact") does not contain index.android.bundle"
-    exit 1
-  fi
+  # Capture the listing, THEN search it. `unzip -l ... | grep -q` looks correct
+  # and can never succeed here: grep -q exits on its first match, unzip takes
+  # SIGPIPE, and `set -o pipefail` turns the whole pipeline non-zero — so the
+  # `if` always took the else branch and reported a missing bundle that was
+  # present all along. Same defect as the `| head -1` above; any early-exit
+  # consumer on the right of a pipe is unsafe while pipefail is on.
+  LISTING="$(unzip -l "$artifact" 2>/dev/null || true)"
+  case "$LISTING" in
+    *"index.android.bundle"*)
+      echo "[verify] $(basename "$artifact"): JS bundle embedded"
+      ;;
+    *)
+      echo "ERROR: $(basename "$artifact") does not contain index.android.bundle"
+      exit 1
+      ;;
+  esac
 done
 
 echo ""

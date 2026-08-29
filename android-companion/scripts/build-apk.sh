@@ -147,12 +147,16 @@ BUNDLE_FILE="$ASSETS_DIR/index.android.bundle"
 SOURCEMAP_FILE="$ASSETS_DIR/index.android.bundle.map"
 
 if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
-  APP_VERSION="$(node -p "require('$PROJECT_DIR/app.json').expo.version")"
+  # String() matters: `node -p` renders a NUMBER through util.inspect, which can
+  # emit ANSI colour escapes. An escape-wrapped --dist would be silently wrong
+  # and symbolication would stop matching. (It bit the artifact filenames in
+  # build-release.sh before this was understood.)
+  APP_VERSION="$(node -p "String(require('$PROJECT_DIR/app.json').expo.version)")"
   # BACKLOG-2956: dist is the BUILD NUMBER (versionCode), matching the runtime
   # `dist` set in services/sentry.ts. It used to be the version name on both
   # sides, which made every build of "1.0.0" the same artifact as far as Sentry
   # was concerned. These two MUST agree or uploaded maps stop matching events.
-  APP_BUILD="$(node -p "require('$PROJECT_DIR/app.json').expo.android.versionCode")"
+  APP_BUILD="$(node -p "String(require('$PROJECT_DIR/app.json').expo.android.versionCode)")"
   SENTRY_RELEASE="keepr-companion@$APP_VERSION"
   echo "[build-apk] Uploading source map to Sentry (release $SENTRY_RELEASE)..."
   # SENTRY_URL / SENTRY_AUTH_TOKEN are read from the environment by sentry-cli
