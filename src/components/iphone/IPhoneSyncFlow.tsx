@@ -5,6 +5,7 @@ import { SyncProgress } from "./SyncProgress";
 import { BackupPasswordModal } from "./BackupPasswordModal";
 import { SyncLockBanner } from "../sync/SyncLockBanner";
 import logger from "../../utils/logger";
+import { SyncStepChangeLog } from "../../utils/syncStepLog";
 
 interface IPhoneSyncFlowProps {
   /** Callback when sync is complete and user clicks Continue */
@@ -75,10 +76,32 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose, onSyncS
     return () => logger.info("[IPhoneSyncFlow] Unmounted");
   }, []);
 
-  // Log the SAME `view` that drives the JSX below, so the log can never drift
-  // from what actually renders.
+  // BACKLOG-2898: TWO lines, deliberately separate.
+  //
+  // The per-frame notice stays, but at DEBUG. The main process pins the file
+  // transport at "info" (electron/config/logFileConfig.ts), so debug never
+  // reaches main.log while still being available in the dev console. Before
+  // this change it was `info`, and the founder's 21-minute log held 2,824
+  // byte-identical copies of it — 80.7% of the file — which rotated the
+  // evidence of the sync away at the 1 MB default.
+  //
+  // The step line is the signal: it is emitted only when the user-visible step
+  // CHANGES, and it carries the phase and the message the user is reading.
+  // The `view` logged is the SAME one that drives the JSX below, so the log
+  // can never drift from what actually renders.
+  const stepLog = useRef(new SyncStepChangeLog());
   useEffect(() => {
-    logger.info(`[IPhoneSyncFlow] Rendering: ${view}`, { syncStatus, syncLocked, hasProgress: !!progress, isConnected, needsPassword });
+    logger.debug(`[IPhoneSyncFlow] Rendering: ${view}`, { syncStatus, syncLocked, hasProgress: !!progress, isConnected, needsPassword });
+
+    const stepLine = stepLog.current.next({
+      view,
+      phase: progress?.phase ?? null,
+      message: progress?.message ?? null,
+      detail: { syncStatus, syncLocked, isConnected, needsPassword },
+    });
+    if (stepLine) {
+      logger.info(`[IPhoneSyncFlow] ${stepLine}`);
+    }
   }, [view, syncStatus, syncLocked, progress, isConnected, needsPassword]);
 
   // TASK-2116: Auto-close modal when sync enters backing_up phase

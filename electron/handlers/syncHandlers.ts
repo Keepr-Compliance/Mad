@@ -7,6 +7,7 @@
 
 import { ipcMain, BrowserWindow } from "electron";
 import log from "electron-log";
+import { syncTimeline } from "../services/syncTimeline";
 import * as Sentry from "@sentry/electron/main";
 import { redactId } from "../utils/redactSensitive";
 import {
@@ -388,14 +389,16 @@ function setupEventForwarding(): void {
     sendToRenderer("sync:password-required", {});
   });
 
-  // Forward passcode waiting events (user needs to enter passcode on iPhone)
+  // BACKLOG-2911 (FIX 3): both channel names are historical. They mean "the device has
+  // not started sending yet" and "it has now" — a passcode prompt is one possible cause
+  // of the first, and nothing on this path can establish which.
   orchestrator.on("waiting-for-passcode", () => {
-    log.info("[SyncHandlers] Waiting for user to enter passcode on iPhone");
+    log.info("[SyncHandlers] Device has not started sending files yet");
     sendToRenderer("sync:waiting-for-passcode", {});
   });
 
   orchestrator.on("passcode-entered", () => {
-    log.info("[SyncHandlers] User entered passcode, backup starting");
+    log.info("[SyncHandlers] Device started sending files; transfer beginning");
     sendToRenderer("sync:passcode-entered", {});
   });
 
@@ -437,6 +440,10 @@ function setupEventForwarding(): void {
       // TASK-2110: Reset cancel signal for this persistence run
       persistCancelSignal.cancelled = false;
 
+      // BACKLOG-2898: last persistence sub-phase seen, so a boundary is logged
+      // once instead of once per item.
+      let lastPersistencePhase: string | null = null;
+
       log.info("[SyncHandlers] Starting database persistence for user", {
         userId: redactId(userIdForPersistence),
         sessionId: result.sessionId || "none",
@@ -453,6 +460,15 @@ function setupEventForwarding(): void {
           result,
           result.backupPath, // SPRINT-068: Pass backup path for attachment extraction
           (progress) => {
+            // BACKLOG-2898: a CHANGE of persistence sub-phase is a back-end
+            // step boundary and gets one timeline record. The per-item events
+            // themselves are untouched — throttling what reaches the renderer
+            // is BACKLOG-2897, and nothing here alters what is sent.
+            if (progress.phase !== lastPersistencePhase) {
+              lastPersistencePhase = progress.phase;
+              syncTimeline.enter(`storing:${progress.phase}`);
+            }
+
             const message =
               progress.phase === "messages"
                 ? `Saving messages... ${progress.current.toLocaleString()} of ${progress.total.toLocaleString()}`
@@ -474,6 +490,9 @@ function setupEventForwarding(): void {
           log.info("[SyncHandlers] Database persistence cancelled and rolled back", {
             duration: persistResult.duration,
           });
+          // BACKLOG-2898/2894: a cancelled sync still records the phases that
+          // completed — the case an end-of-run write would lose.
+          syncTimeline.endSync("cancelled");
           sendToRenderer("sync:storage-error", {
             error: "Sync cancelled — partial data has been cleaned up.",
           });
@@ -498,6 +517,27 @@ function setupEventForwarding(): void {
         if (result.needsCleanup && result.backupPath && orchestrator) {
           await orchestrator.cleanupBackup(result.backupPath);
         }
+
+        // BACKLOG-2898/2894: the counts each persistence phase produced, read
+        // from the SAME persistResult the UI reports, so the timeline and the
+        // progress bar cannot disagree.
+        syncTimeline.annotate("storing:messages", {
+          stored: persistResult.messagesStored,
+          skipped: persistResult.messagesSkipped,
+        });
+        syncTimeline.annotate("storing:attachments", {
+          stored: persistResult.attachmentsStored,
+          skipped: persistResult.attachmentsSkipped,
+        });
+        syncTimeline.annotate("storing:contacts", {
+          stored: persistResult.contactsStored,
+          skipped: persistResult.contactsSkipped,
+        });
+        syncTimeline.endSync("complete", {
+          messages: persistResult.messagesStored,
+          contacts: persistResult.contactsStored,
+          attachments: persistResult.attachmentsStored,
+        });
 
         // Send final completion with storage results
         log.info("[SyncHandlers] Sending sync:storage-complete to renderer");
@@ -560,6 +600,9 @@ function setupEventForwarding(): void {
         log.error("[SyncHandlers] Database persistence failed", {
           error: error instanceof Error ? error.message : "Unknown error",
         });
+        // BACKLOG-2898: close the timeline so the phases that DID complete are
+        // recorded, and the failure is dated.
+        syncTimeline.endSync("error");
         sendToRenderer("sync:storage-error", {
           error: error instanceof Error ? error.message : "Failed to save messages",
         });
@@ -581,6 +624,13 @@ function setupEventForwarding(): void {
           conversationCount: result.conversations.length,
         },
       });
+      // BACKLOG-2898: nothing was persisted — close the timeline rather than
+      // leaving the last phase open into the next sync.
+      syncTimeline.endSync("error");
+    } else {
+      // Extraction finished but persistence was skipped (e.g. !result.success).
+      // BACKLOG-2898: still close the timeline.
+      syncTimeline.endSync(result.success ? "complete" : "error");
     }
   });
 }

@@ -4,6 +4,40 @@
  */
 
 /**
+ * BACKLOG-2907: what the host knows about a prior backup for this device.
+ *
+ * Three states, not two. The renderer uses this to decide whether to claim a
+ * first sync, and a two-state boolean would force "I could not tell" to be
+ * reported as one of the two real answers — which is the defect this replaces.
+ *
+ * BACKLOG-2938 CHANGED WHAT THESE VALUES MEAN. They report USABILITY, not
+ * existence. The question this answers is "is a full transfer coming?", not
+ * "is there a directory on disk?".
+ *
+ * - `"exists"`  a prior backup is on disk AND is usable — `isComplete &&
+ *               !isInterrupted`, the one predicate, evaluated by
+ *               `isUsablePriorBackup` in `deviceSyncOrchestrator.ts`. The next
+ *               sync is incremental.
+ * - `"none"`    no full transfer can be avoided. EITHER the host established
+ *               there is no prior backup (a proven ENOENT — producible since
+ *               BACKLOG-2917 split it from a thrown check) OR a directory is on
+ *               disk that cannot be restored from, which is the same thing from
+ *               the user's side.
+ * - `"unknown"` the answer could not be established, or the payload predates
+ *               this field. Consumers must render nothing rather than guess.
+ *
+ * This deliberately reverses the older contract, which read "Complete or partial
+ * (see BACKLOG-2925); for 'is this a first sync?' both mean no". That was sound
+ * for a genuine partial — a torn multi-GB transfer — and false for the state
+ * measured on the founder's install: a 6.3 MB `Info.plist` and no manifest, where
+ * nothing usable was ever transferred. He was told the old backup was worthless
+ * and, in the same breath, not told the replacement would run for hours. Founder
+ * ruling, 2026-08-27: "if the sync isn't useable show the this may take two hours
+ * msg."
+ */
+export type PriorBackupState = "exists" | "none" | "unknown";
+
+/**
  * Device detection methods (Windows)
  */
 export interface WindowApiDevice {
@@ -57,7 +91,6 @@ export interface WindowApiBackup {
   getCapabilities: () => Promise<{
     supportsDomainFiltering: boolean;
     supportsIncremental: boolean;
-    supportsSkipApps: boolean;
     supportsEncryption: boolean;
     availableDomains: string[];
   }>;
@@ -79,7 +112,6 @@ export interface WindowApiBackup {
     udid: string;
     outputDir?: string;
     forceFullBackup?: boolean;
-    skipApps?: boolean;
   }) => Promise<{
     success: boolean;
     backupPath: string | null;
@@ -87,7 +119,15 @@ export interface WindowApiBackup {
     duration: number;
     deviceUdid: string;
     isIncremental: boolean;
-    backupSize: number;
+    /**
+     * BACKLOG-2917: `null` when the backup's size could not be measured, never 0.
+     * This file is a hand-written MIRROR of the main-process producer, structurally
+     * independent of it, so `tsc` cannot catch it drifting — it stayed `number` while
+     * `BackupResult.backupSize` became nullable and the build remained green. The
+     * next renderer to write `(size / 1e9).toFixed(1)` would print "0.0" for a backup
+     * whose size walk threw.
+     */
+    backupSize: number | null;
   }>;
   startWithPassword: (options: {
     udid: string;
@@ -105,7 +145,12 @@ export interface WindowApiBackup {
       path: string;
       deviceUdid: string;
       createdAt: Date;
-      size: number;
+      /**
+       * BACKLOG-2917: `null` when the size could not be measured, never 0.
+       * `backup:list` returns `listBackups()` UNSHAPED (backupHandlers.ts), so
+       * `BackupInfo.size` crosses this boundary verbatim.
+       */
+      size: number | null;
       isEncrypted: boolean;
       iosVersion: string | null;
       deviceName: string | null;
@@ -150,7 +195,8 @@ export interface WindowApiBackup {
       duration: number;
       deviceUdid: string;
       isIncremental: boolean;
-      backupSize: number;
+      /** BACKLOG-2917: `null` when the size could not be measured, never 0. */
+      backupSize: number | null;
     }) => void,
   ) => () => void;
   onError: (callback: (error: { message: string }) => void) => () => void;
@@ -211,6 +257,8 @@ export interface WindowApiSync {
       phaseProgress: number;
       overallProgress: number;
       message: string;
+      /** BACKLOG-2907: prior-backup state for this device. See `PriorBackupState`. */
+      priorBackup?: PriorBackupState;
     }) => void,
   ) => () => void;
   onPhase: (callback: (phase: string) => void) => () => void;

@@ -46,7 +46,11 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
    * Level 2: Dynamic detail from progress.message (smaller, gray)
    */
   const getPhaseTitle = (): string => {
-    // Special state: waiting for passcode
+    /**
+     * BACKLOG-2911 (FIX 3): this state means "the iPhone has not started sending
+     * yet", which is ALL that is known. See the amber panel below for the evidence.
+     * The title was already honest — it says nothing about a passcode — and is kept.
+     */
     if (isWaitingForPasscode) {
       return "Waiting for iPhone";
     }
@@ -80,72 +84,111 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
   // Show passcode waiting warning (special state with detailed instructions)
   const showPasscodeWarning = isWaitingForPasscode;
 
-  // Show first sync time warning once transfer has started
-  const showFirstSyncHint = !isComplete && !isError && isBackingUp && hasStartedTransfer;
+  /**
+   * BACKLOG-2907: the prior-backup signal has THREE states, and only one of them
+   * may claim a full transfer is coming.
+   *
+   * | state       | meaning                                          | banner |
+   * |-------------|--------------------------------------------------|--------|
+   * | `"none"`    | no usable prior backup — a full transfer is next  | shown  |
+   * | `"exists"`  | a USABLE prior backup is on disk; incremental     | hidden |
+   * | `"unknown"` | could not be established, or field absent         | hidden |
+   *
+   * Absent field reads as `"unknown"`: a payload from a main process that
+   * predates this field must not be read as "first sync".
+   *
+   * BACKLOG-2917 is what makes `"none"` producible at all. Before it,
+   * `checkBackupStatus` returned `null` for both ENOENT and a thrown check, so
+   * the orchestrator could only say `"unknown"` and this banner was unreachable.
+   *
+   * BACKLOG-2938 then changed WHICH on-disk states produce `"none"`. The host now
+   * reports USABILITY, not existence: a directory that exists but cannot be
+   * restored from maps to `"none"`, because the user is about to wait for a full
+   * transfer either way. That is the founder's ruling of 2026-08-27 — "if the sync
+   * isn't useable show the this may take two hours msg." — after his own install
+   * showed him "Previous backup can't be used. Starting a fresh backup..." while
+   * this banner stayed hidden.
+   *
+   * The unknown case is unchanged and still renders nothing: claiming a two-hour
+   * first sync on a guess is the bug this all replaces.
+   */
+  const priorBackup = progress.priorBackup ?? "unknown";
+  const isEstablishedFullTransfer = priorBackup === "none";
+
+  // Show first sync time warning once transfer has started — and only when the
+  // host actually established that no usable prior backup exists.
+  const showFirstSyncHint =
+    !isComplete && !isError && isBackingUp && hasStartedTransfer && isEstablishedFullTransfer;
 
   return (
     <div className="p-6">
-      {/* Progress Icon */}
-      <div className="flex justify-center mb-4">
-        {isComplete ? (
-          <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
-            <svg
-              className="w-8 h-8 text-green-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M5 13l4 4L19 7"
-              />
-            </svg>
-          </div>
-        ) : isError ? (
-          <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
-            <svg
-              className="w-8 h-8 text-red-500"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
-          </div>
-        ) : isWaitingForPasscode ? (
-          // Special icon for passcode waiting - phone with keypad
-          <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center animate-pulse">
-            <svg
-              className="w-8 h-8 text-amber-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              {/* Phone outline */}
-              <rect x="7" y="2" width="10" height="20" rx="2" strokeWidth={2} />
-              {/* Keypad dots */}
-              <circle cx="10" cy="10" r="1" fill="currentColor" />
-              <circle cx="12" cy="10" r="1" fill="currentColor" />
-              <circle cx="14" cy="10" r="1" fill="currentColor" />
-              <circle cx="10" cy="13" r="1" fill="currentColor" />
-              <circle cx="12" cy="13" r="1" fill="currentColor" />
-              <circle cx="14" cy="13" r="1" fill="currentColor" />
-              <circle cx="12" cy="16" r="1" fill="currentColor" />
-            </svg>
-          </div>
-        ) : (
-          <div className="w-16 h-16 rounded-full bg-purple-100 flex items-center justify-center">
-            <div className="w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin" />
-          </div>
-        )}
-      </div>
+      {/*
+        Progress Icon
+
+        BACKLOG-2907: the default (in-progress) state has NO icon. The purple
+        spinner that used to fill it was removed at the founder's request. The
+        wrapper is kept — it centres the complete / error / passcode icons — but
+        renders only when one of those exists, so the default state does not
+        leave an empty `mb-4` box pushing the title down.
+      */}
+      {(isComplete || isError || isWaitingForPasscode) && (
+        <div className="flex justify-center mb-4">
+          {isComplete ? (
+            <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
+              <svg
+                className="w-8 h-8 text-green-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M5 13l4 4L19 7"
+                />
+              </svg>
+            </div>
+          ) : isError ? (
+            <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
+              <svg
+                className="w-8 h-8 text-red-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              </svg>
+            </div>
+          ) : (
+            // Special icon for passcode waiting - phone with keypad
+            <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center animate-pulse">
+              <svg
+                className="w-8 h-8 text-amber-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                {/* Phone outline */}
+                <rect x="7" y="2" width="10" height="20" rx="2" strokeWidth={2} />
+                {/* Keypad dots */}
+                <circle cx="10" cy="10" r="1" fill="currentColor" />
+                <circle cx="12" cy="10" r="1" fill="currentColor" />
+                <circle cx="14" cy="10" r="1" fill="currentColor" />
+                <circle cx="10" cy="13" r="1" fill="currentColor" />
+                <circle cx="12" cy="13" r="1" fill="currentColor" />
+                <circle cx="14" cy="13" r="1" fill="currentColor" />
+                <circle cx="12" cy="16" r="1" fill="currentColor" />
+              </svg>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Level 1: Phase Title (combined title + context) */}
       <h3 className="text-lg font-semibold text-gray-800 text-center mb-1">
@@ -226,8 +269,32 @@ export const SyncProgress: React.FC<SyncProgressProps> = ({
             />
           </svg>
           <div className="text-sm text-amber-700">
+            {/*
+              BACKLOG-2911 (FIX 3): SAY WHAT IS KNOWN, THEN THE POSSIBILITY.
+
+              Nothing on this path reports that the device wants a passcode. The
+              signal behind `isWaitingForPasscode` is only that no file has started
+              transferring 5 seconds after the backup was requested — which is
+              produced identically by the device indexing, by a person who has not
+              picked up their phone, and by a hung process.
+
+              On the founder's 12:09 run on 2026-08-28 he had ALREADY ENTERED his
+              passcode and this panel went on telling him to enter it for fifteen
+              more minutes, because the transfer did not begin for 903.9 seconds.
+              The same class of defect as BACKLOG-2913, and the same rule as the
+              three-state ruling in BACKLOG-2886: uncertainty reports itself as
+              uncertainty, it does not substitute a confident cause.
+
+              "Up to 20 minutes" is not a round number chosen for comfort — it is
+              above the longest wait ever measured on his machine (903.9 s = 15.1
+              minutes, with 507 s and 684.6 s on the two runs before it). The first
+              draft of this copy said 15 minutes and
+              `SyncProgress.waitCause-2911.test.tsx` reddened on it: 900 s is BELOW
+              903.9 s, so the reassurance would have run out before his own longest
+              successful sync did.
+            */}
             <p className="text-xs text-amber-600">
-              Enter your passcode on your iPhone if prompted. It may take up to 10 minutes for the iPhone to report back that the passcode was entered as it indexes and prepares the export. This is normal — please don't disconnect or cancel.
+              Your iPhone is preparing the export. This can take up to 20 minutes before the transfer starts, and it&apos;s normal — please don&apos;t disconnect or cancel. If your iPhone is showing a passcode prompt, enter it to continue.
             </p>
           </div>
         </div>

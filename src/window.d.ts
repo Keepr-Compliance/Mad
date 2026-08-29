@@ -110,14 +110,26 @@ interface ElectronAPI {
     onProgress: (
       callback: (progress: BackupProgress) => void,
     ) => (() => void) | undefined;
-    /** Check backup status for a specific device (last sync time, size, etc.) */
+    /**
+     * Check backup status for a specific device (last sync time, size, etc.)
+     *
+     * BACKLOG-2917: `state` replaces `exists`, which was a boolean carrying three
+     * facts. A failed check and a genuinely absent backup both arrived here as
+     * `exists: false`, so a renderer keying on it would announce "first sync" every
+     * time the check threw. `sizeBytes: null` means "not measured", never "empty".
+     */
     checkStatus?: (udid: string) => Promise<{
       success: boolean;
-      exists?: boolean;
+      /** `absent` = proven no backup. `unknown` = the check failed; nothing proven. */
+      state?: "absent" | "unknown" | "present";
+      /** Why the check could not complete. Only set when `state` is `unknown`. */
+      reason?: string;
       isComplete?: boolean;
-      isCorrupted?: boolean;
+      /** BACKLOG-2911: the device never reported the last snapshot as finished. */
+      isInterrupted?: boolean;
       lastSyncTime?: string | null;
-      sizeBytes?: number;
+      /** BACKLOG-2917: `null` = size could not be measured. NOT zero bytes. */
+      sizeBytes?: number | null;
       error?: string;
     }>;
   };
