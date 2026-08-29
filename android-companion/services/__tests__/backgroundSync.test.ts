@@ -49,9 +49,16 @@ jest.mock('expo-background-fetch', () => ({
   unregisterTaskAsync: jest.fn(async () => undefined),
   getStatusAsync: jest.fn(async () => 3),
 }));
+// BACKLOG-2988: `captureMessage` belongs here even though this suite asserts
+// nothing about it. `performSync` now emits one outcome EVENT per run through
+// it, and the emitter swallows its own errors so a sync is never failed by
+// telemetry — which means an incomplete mock would make every run in this file
+// take the swallow path silently. The same trap `syncServiceLanGuard.test.ts`
+// documents: an omitted Sentry method reads as the feature not firing.
 jest.mock('@sentry/react-native', () => ({
   addBreadcrumb: jest.fn(),
   captureException: jest.fn(),
+  captureMessage: jest.fn(),
 }));
 
 // --- The read/send/network layer we drive per-test ---

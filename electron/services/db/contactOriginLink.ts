@@ -75,7 +75,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { dbRun } from "./core/dbConnection";
+import { dbAll, dbRun } from "./core/dbConnection";
 import { ORIGIN_MATCH_METHOD } from "./contactIdentitySchemaSql";
 import logService from "../logService";
 
@@ -197,6 +197,84 @@ export function originSourceTypeFor(
 /** The synthetic record id for a contact's origin row. Unique by construction. */
 export function originRecordId(contactId: string): string {
   return `origin:${contactId}`;
+}
+
+/**
+ * Which of `sourceRecordIds` are ALREADY claimed by a contact, for one source.
+ *
+ * ===========================================================================
+ * BACKLOG-2987 — "HAVE WE ALREADY IMPORTED THIS RECORD" IS NOT A PERSON QUESTION
+ * ===========================================================================
+ * `localSyncService.promoteToMainContacts` decided whether an Android contact
+ * was already in the main table by PHONE NUMBER ALONE. A contact whose only
+ * identifier is an email never entered that loop at all, so it was created on
+ * every single sync, forever — 26 of the founder's 389 contacts, the SAME 26 on
+ * three consecutive runs, verified by comparing the created-contact log lines
+ * across runs (0 differing entries between run 2, run 3 and run 4).
+ *
+ * The obvious-looking fix — also match on email — is the wrong instrument. It
+ * is a new PERSON-IDENTITY rule, the BACKLOG-2416 shape applied to a create
+ * path: two people who share an office address would collapse into one contact,
+ * and identity rules are founder-decided, not chosen inside a duplicate fix.
+ *
+ * This asks a different and strictly answerable question: *is this exact
+ * external record already claimed by a contact we created?* The create path in
+ * `promoteToMainContacts` has claimed its record since BACKLOG-2556 — the
+ * crosswalk row is written inside the same transaction as the contact — so the
+ * claim is a fact about our own bookkeeping, carries no risk of merging two
+ * people, and needs no ruling.
+ *
+ * ONE QUERY FOR THE WHOLE BATCH. A full Android sync promotes against ~400
+ * records; a per-record probe would be 400 round trips inside a request handler.
+ *
+ * CHUNKED, and the limit is MEASURED rather than quoted. The number usually
+ * cited for SQLite host parameters is 999; on the driver this app actually ships
+ * (`better-sqlite3-multiple-ciphers`, SQLite 3.53.2) an `IN (...)` accepts 32,766
+ * and fails at 32,767 with "too many SQL variables" — checked directly, because
+ * a chunk size chosen from a remembered number is how you get a limit that is
+ * either useless or wrong. 400 is well under both the modern cap and the older
+ * 999, so this holds if the driver is ever downgraded, and it bounds the
+ * expression tree too (a plain `?+?+…` hits a separate depth limit far sooner).
+ *
+ * @returns the subset of `sourceRecordIds` that already have a crosswalk row.
+ *   An empty input, a missing user or a missing source type returns an empty
+ *   set — never a throw, because a probe that fails should degrade to "nothing
+ *   is claimed" (today's behaviour) rather than break a sync.
+ */
+export function findClaimedSourceRecordIds(
+  userId: string,
+  sourceType: string,
+  sourceRecordIds: readonly string[],
+): Set<string> {
+  const claimed = new Set<string>();
+  if (!userId || !sourceType || sourceRecordIds.length === 0) return claimed;
+
+  // Well under SQLite's 999-parameter default, with room for the two leading
+  // binds. Chunking rather than a temp table keeps this a pure read with no
+  // schema footprint.
+  const CHUNK = 400;
+
+  try {
+    for (let i = 0; i < sourceRecordIds.length; i += CHUNK) {
+      const chunk = sourceRecordIds.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => "?").join(",");
+      const rows = dbAll<{ source_record_id: string }>(
+        `SELECT source_record_id FROM contact_source_links
+          WHERE user_id = ? AND source_type = ?
+            AND source_record_id IN (${placeholders})`,
+        [userId, sourceType, ...chunk],
+      );
+      for (const row of rows) claimed.add(row.source_record_id);
+    }
+  } catch (error) {
+    logService.warn(
+      `[Contacts] could not read existing source claims: ${error}`,
+      "Contacts",
+    );
+    return new Set<string>();
+  }
+
+  return claimed;
 }
 
 /**

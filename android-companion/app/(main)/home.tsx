@@ -47,8 +47,7 @@ import {
   requestSmsPermissions,
   requestContactsPermissions,
 } from '../../services/permissions';
-import { registerDevice } from '../../services/syncService';
-import { forceFullContactResync } from '../../services/contactSyncState';
+import { registerWithStoredIdentity } from '../../services/deviceIdentity';
 import {
   checkDesktopAccountMatch,
   accountMatchMessage,
@@ -374,23 +373,27 @@ export default function HomeScreen(): React.JSX.Element {
     // is rewritten (BACKLOG-1463 pairing screen redesign).
 
     // Step 1: register with the desktop FIRST so a reachability/account failure
-    // is surfaced (BACKLOG-2212) instead of swallowed. registerDevice never
-    // throws and enforces its own bounded timeout. We persist the pairing (and
+    // is surfaced (BACKLOG-2212) instead of swallowed. The register round trip
+    // never throws and enforces its own bounded timeout. We persist the pairing (and
     // flip the UI to "connected") ONLY after the desktop acknowledges it, so a
     // failed re-pair neither reports false success nor clobbers a previously
     // working pairing.
-    let regResult: Awaited<ReturnType<typeof registerDevice>>;
+    //
+    // BACKLOG-2987: present the device identity this phone ALREADY holds so the
+    // desktop reuses it instead of minting a fresh one. This line used to send
+    // `data.deviceName`, which is never UUID-shaped, so every re-pair minted a
+    // new id and defeated the desktop's per-device contact stale-delete.
+    let regResult: Awaited<ReturnType<typeof registerWithStoredIdentity>>;
     try {
-      regResult = await registerDevice({
-        ip: data.ip,
-        port: data.port,
-        secret: data.secret,
-        deviceId: data.deviceName,
-      });
+      regResult = await registerWithStoredIdentity(
+        { ip: data.ip, port: data.port, secret: data.secret },
+        data.deviceName,
+      );
     } catch (error) {
-      // Defensive: registerDevice maps errors to results, but never trust it to.
+      // Defensive: registerWithStoredIdentity maps every error to a result, but
+      // never trust it to.
       console.warn('[Pairing] Device registration error:', error);
-      regResult = { success: false, errorType: 'unknown' };
+      regResult = { success: false, errorType: 'unknown', claimedDeviceId: data.deviceName, adopted: false };
     }
 
     if (!regResult.success) {
@@ -412,11 +415,12 @@ export default function HomeScreen(): React.JSX.Element {
     }
 
     console.log('[Pairing] Device registered with desktop');
-    // BACKLOG-2210: adopt the desktop-minted device identity so every phone is
-    // unique (no deviceName collision). On this re-pair path the stored
-    // fingerprints may be from a PRIOR pairing, so forcing a FULL contact sync is
-    // what lets the desktop stale-delete the old-id rows and re-key under the new
-    // id (no duplicate contacts).
+    // BACKLOG-2210: the desktop-minted device identity, so every phone is unique
+    // (no deviceName collision). BACKLOG-2987: adopting it into DURABLE storage
+    // and forcing the full contact re-sync are both done by
+    // `registerWithStoredIdentity` now, so the two pairing screens cannot drift.
+    // It is still mirrored into the stored pairing because the sync layer reads
+    // its `deviceId` from there (`backgroundSync.loadPairingInfo`).
     const storedPairing: StoredPairing = {
       ...data,
       pairedAt: new Date().toISOString(),
@@ -427,9 +431,6 @@ export default function HomeScreen(): React.JSX.Element {
       JSON.stringify(storedPairing),
     );
     setPairing(storedPairing);
-    if (regResult.deviceId) {
-      await forceFullContactResync();
-    }
 
     // Step 2: Request SMS and contacts permissions, then start background sync
     try {

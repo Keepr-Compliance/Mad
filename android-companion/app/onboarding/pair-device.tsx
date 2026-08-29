@@ -10,8 +10,7 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { registerDevice } from '../../services/syncService';
-import { forceFullContactResync } from '../../services/contactSyncState';
+import { registerWithStoredIdentity } from '../../services/deviceIdentity';
 import {
   checkDesktopAccountMatch,
   accountMatchMessage,
@@ -86,17 +85,21 @@ export default function PairDeviceScreen(): React.JSX.Element {
     setPairing(true);
     try {
       // BACKLOG-2212: register with the desktop FIRST and surface any failure.
-      // `registerDevice` maps every network/timeout/HTTP error to a result (it
-      // never throws) and enforces its own bounded timeout, so a black-hole
-      // desktop cannot hang the scanner. We persist the pairing ONLY after the
-      // desktop acknowledges it — a failed attempt leaves no half-paired state
-      // and never advances onboarding into a first-sync that cannot work.
-      const regResult = await registerDevice({
-        ip: data.ip,
-        port: data.port,
-        secret: data.secret,
-        deviceId: data.deviceName,
-      });
+      // The register round trip maps every network/timeout/HTTP error to a
+      // result (it never throws) and enforces its own bounded timeout, so a
+      // black-hole desktop cannot hang the scanner. We persist the pairing ONLY
+      // after the desktop acknowledges it — a failed attempt leaves no
+      // half-paired state and never advances onboarding into a first-sync that
+      // cannot work.
+      //
+      // BACKLOG-2987: present the device identity this phone ALREADY holds so
+      // the desktop reuses it instead of minting a fresh one. This call used to
+      // send `data.deviceName`, which is never UUID-shaped, so every re-pair
+      // minted a new id and defeated the desktop's contact stale-delete.
+      const regResult = await registerWithStoredIdentity(
+        { ip: data.ip, port: data.port, secret: data.secret },
+        data.deviceName,
+      );
 
       if (!regResult.success) {
         // BACKLOG-2212: surface the failure instead of swallowing it and pushing
@@ -118,11 +121,12 @@ export default function PairDeviceScreen(): React.JSX.Element {
       }
 
       console.log('[Onboarding] Device registered with desktop');
-      // BACKLOG-2210: adopt the desktop-minted device identity so every phone is
-      // unique (no deviceName collision). Persist it as the pairing identity and
-      // force the next contact sync to be FULL so the desktop re-keys
-      // android_sync contacts under the new id (clean re-key; message dedup is
-      // content-hashed so it needs no reset).
+      // BACKLOG-2210: the desktop-minted device identity, so every phone is
+      // unique (no deviceName collision). BACKLOG-2987: adopting it into DURABLE
+      // storage and forcing the next contact sync to be FULL are both done by
+      // `registerWithStoredIdentity` now, so the two pairing screens cannot
+      // drift. It is still mirrored into the stored pairing because the sync
+      // layer reads its `deviceId` from there (`backgroundSync.loadPairingInfo`).
       const storedPairing: StoredPairing = {
         ...data,
         pairedAt: new Date().toISOString(),
@@ -132,9 +136,6 @@ export default function PairDeviceScreen(): React.JSX.Element {
         PAIRING_STORAGE_KEY,
         JSON.stringify(storedPairing),
       );
-      if (regResult.deviceId) {
-        await forceFullContactResync();
-      }
 
       // Move to the next onboarding step (first-sync)
       // BACKLOG-1473: pair-device is now step 2, next is first-sync (step 3)
