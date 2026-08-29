@@ -48,9 +48,18 @@ jest.mock("../../services/logService", () => {
 jest.mock("../../services/db/core/dbConnection", () => ({
   getRawDatabase: jest.fn(() => ({})),
 }));
-jest.mock("../../services/contactResolutionService", () => ({
-  resolveHandles: (...args: unknown[]) => mockResolveHandles(...args),
-}));
+// BACKLOG-2757: `nameForHandle` is the ONE reader of a resolution map, and the
+// handler now calls it. A factory that returns only `resolveHandles` would hand
+// the handler `undefined` and this suite would report a TypeError instead of the
+// behaviour it exists to pin, so the REAL function is passed through. Only
+// `resolveHandles` is stubbed.
+jest.mock("../../services/contactResolutionService", () => {
+  const actual = jest.requireActual("../../services/contactResolutionService");
+  return {
+    ...actual,
+    resolveHandles: (...args: unknown[]) => mockResolveHandles(...args),
+  };
+});
 jest.mock("../../services/db/transactionSearchDbService", () => ({
   searchLinkedContent: (...args: unknown[]) => mockSearchLinked(...args),
   searchGlobalContent: (...args: unknown[]) => mockSearchGlobal(...args),
@@ -86,9 +95,70 @@ beforeAll(() => {
   registerTransactionSearchHandlers();
 });
 
+/**
+ * BACKLOG-2757 — the shape `resolveHandles` ACTUALLY returns.
+ *
+ * Three corrections over the previous fixture, which described a state the real
+ * producer cannot emit:
+ *
+ *   1. It is `{ names, matches }`, not a flat map. `matches` is what lets a
+ *      caller that must not print a name tell an ambiguous handle from a
+ *      certain one.
+ *   2. Each resolved handle writes SEVERAL alias keys, not one. The imported-
+ *      contacts tier calls `acc.add(norm, [norm, stored], match)` once per
+ *      stored format, where `stored` is `contact_phones.phone_e164` and
+ *      `phone_display`; the external tier adds `row.phone`; the AddressBook
+ *      tier writes the CALLER'S OWN handle plus a `+1`-prefixed form.
+ *   3. `phone_e164` holds the `+` form — `normalizeToE164` (contactDbService)
+ *      returns `+1` + digits, and the DDL documents it as `+14155550102`.
+ *
+ * Transcribed from the real producer, not invented. Measured by calling
+ * `resolveHandles` against a migrated file-backed DB with one seeded contact
+ * (AddressBook stubbed empty to isolate the imported tier):
+ *
+ *   input "+15035550150" -> Object.keys(names) === ["5035550150", "+15035550150"]
+ *
+ * So a handle already in E.164 resolves under BOTH a raw index and
+ * `nameForHandle`. The formats that separate them are measured below.
+ */
+const { normalizePhone } = jest.requireActual(
+  "../../services/contactResolutionService",
+) as { normalizePhone: (s: string) => string };
+
+/** `normalizeToE164`, transcribed from contactDbService.ts:313-319. */
+function toE164(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  if (phone.startsWith("+")) return phone;
+  return `+${digits}`;
+}
+
+/**
+ * The alias set the imported-contacts tier really writes for one stored number:
+ * the normalized lookup key and the stored E.164 form.
+ */
+function resolutionFor(pairs: Array<[string, string]>) {
+  const names: Record<string, string> = {};
+  const matches: Record<string, readonly string[]> = {};
+  for (const [stored, name] of pairs) {
+    for (const alias of [normalizePhone(stored), toE164(stored)]) {
+      if (!alias) continue;
+      names[alias] = name;
+      matches[alias] = [name];
+    }
+  }
+  return { names, matches };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
-  mockResolveHandles.mockResolvedValue({ [KNOWN_A]: NAME_A, [KNOWN_B]: NAME_B });
+  mockResolveHandles.mockResolvedValue(
+    resolutionFor([
+      [KNOWN_A, NAME_A],
+      [KNOWN_B, NAME_B],
+    ]),
+  );
 });
 
 /**
@@ -125,9 +195,36 @@ describe("BACKLOG-2816 — member handles become contact names", () => {
   });
 
   it("yields an EMPTY member list when nobody resolves — never a digit list", async () => {
-    mockResolveHandles.mockResolvedValue({});
+    mockResolveHandles.mockResolvedValue({ names: {}, matches: {} });
     const res = await invokeLinked([threadHit([UNKNOWN])]);
     expect(res.results.groupChats.items[0].memberNames).toEqual([]);
+  });
+
+  /**
+   * BACKLOG-2928 — the format gap, measured rather than assumed.
+   *
+   * `memberHandles` comes from `messages.participants` -> `chat_members`, which
+   * is Apple's raw string and is NOT normalized on ingest. The resolver keys its
+   * map on the normalized digits and on the STORED formats
+   * (`contact_phones.phone_e164` / `phone_display`), so a handle that is neither
+   * — "503-555-0150" against a number stored as "+15035550150" — is present in
+   * the map under a key the raw handle never equals.
+   *
+   * Indexing `names[handle]` directly therefore returns undefined, and the guard
+   * below it omits the member rather than falling back to the number, so the
+   * miss is indistinguishable from "no contact matched". `nameForHandle`
+   * normalizes first and resolves it.
+   *
+   * Handles already in E.164 (every other case in this file) resolve under BOTH
+   * readings, which is why this suite was green against the defect.
+   */
+  it("resolves a member handle whose format differs from the stored number", async () => {
+    const DASHED = "503-555-0150";
+    const STORED = "+15035550150";
+    mockResolveHandles.mockResolvedValue(resolutionFor([[STORED, NAME_A]]));
+
+    const res = await invokeLinked([threadHit([DASHED])]);
+    expect(res.results.groupChats.items[0].memberNames).toEqual([NAME_A]);
   });
 
   it("asks the SHARED resolver once for every handle in the response", async () => {

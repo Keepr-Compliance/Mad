@@ -8,6 +8,7 @@ import type { LLMSettings } from '../../../types/models';
 const mockGetLLMSettingsByUserId = jest.fn();
 const mockGetOrCreateLLMSettings = jest.fn();
 const mockUpdateLLMSettings = jest.fn();
+const mockClearLLMSettingsField = jest.fn();
 const mockSetLLMDataConsent = jest.fn();
 const mockIncrementTokenUsage = jest.fn();
 const mockIncrementPlatformAllowanceUsage = jest.fn();
@@ -16,6 +17,7 @@ jest.mock('../../db/llmSettingsDbService', () => ({
   getLLMSettingsByUserId: mockGetLLMSettingsByUserId,
   getOrCreateLLMSettings: mockGetOrCreateLLMSettings,
   updateLLMSettings: mockUpdateLLMSettings,
+  clearLLMSettingsField: mockClearLLMSettingsField,
   setLLMDataConsent: mockSetLLMDataConsent,
   incrementTokenUsage: mockIncrementTokenUsage,
   incrementPlatformAllowanceUsage: mockIncrementPlatformAllowanceUsage,
@@ -225,20 +227,39 @@ describe('LLMConfigService', () => {
   });
 
   describe('removeApiKey', () => {
+    /**
+     * BACKLOG-2932. These two tests used to assert
+     * `updateLLMSettings(userId, { openai_api_key_encrypted: undefined })` —
+     * they asserted the BUG. `updateLLMSettings` skips undefined values, so
+     * that payload emptied out and no UPDATE ever ran while Settings reported
+     * success.
+     *
+     * They are kept here because a caller-level contract is worth pinning, but
+     * they are NOT the control: this whole suite mocks the db module, and with
+     * the undefined payload reinstated it still passes 40/40. The control that
+     * goes red is the end-to-end one in
+     * `db/__tests__/writerColumnParity-2560.test.ts`, which drives this same
+     * method into a real database and reads the row back.
+     */
     it('should remove OpenAI API key', async () => {
       await service.removeApiKey(testUserId, 'openai');
 
-      expect(mockUpdateLLMSettings).toHaveBeenCalledWith(testUserId, {
-        openai_api_key_encrypted: undefined,
-      });
+      expect(mockClearLLMSettingsField).toHaveBeenCalledWith(
+        testUserId,
+        'openai_api_key_encrypted'
+      );
+      // Never through the update path — that is where the key survived.
+      expect(mockUpdateLLMSettings).not.toHaveBeenCalled();
     });
 
     it('should remove Anthropic API key', async () => {
       await service.removeApiKey(testUserId, 'anthropic');
 
-      expect(mockUpdateLLMSettings).toHaveBeenCalledWith(testUserId, {
-        anthropic_api_key_encrypted: undefined,
-      });
+      expect(mockClearLLMSettingsField).toHaveBeenCalledWith(
+        testUserId,
+        'anthropic_api_key_encrypted'
+      );
+      expect(mockUpdateLLMSettings).not.toHaveBeenCalled();
     });
   });
 

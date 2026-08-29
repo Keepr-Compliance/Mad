@@ -150,6 +150,13 @@ const DANA = {
 };
 /** The SHARED identifier both contacts hold — the person-union shape. */
 const SHARED_PHONE = "+15035550142";
+/**
+ * BACKLOG-2757: how the shared handle is rendered for a human once no contact
+ * name may be attached to it — the export's own display chain applied to
+ * SHARED_PHONE. Written out literally rather than computed, so a change to the
+ * formatter is visible here as a diff instead of silently tracking itself.
+ */
+const SHARED_PHONE_LABEL = "+1 (503) 555-0142";
 const SHARED_EMAIL = "shared.alvarez@example.com";
 /** Attached to TX_OTHER only. */
 const PAT = {
@@ -468,32 +475,64 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
       expect(filteringStatements.map((s) => s.sql)).toEqual([]);
     });
 
-    test("A1: party names land in FILENAMES on disk — exact filename set, shared handle labels ONE of the two contacts", () => {
+    test("A1: party names land in FILENAMES on disk — exact filename set; the shared handle names NOBODY", () => {
       const textFiles = fs.readdirSync(path.join(fx.outputDir, "texts")).sort();
 
-      // Threads are keyed by DATE, not by the resolved name, so these
-      // assertions cannot flake on the shared-handle winner (which is
-      // row-order-arbitrary — no ORDER BY in either resolver stack).
-      const sharedThreadFile = textFiles.filter((f) => f.endsWith("_2026-01-12.pdf"));
-      const chrisThreadFile = textFiles.filter((f) => f.endsWith("_2026-01-13.pdf"));
-      expect(sharedThreadFile).toHaveLength(1);
-      expect(chrisThreadFile).toHaveLength(1);
+      // ---------------------------------------------------------------------
+      // BACKLOG-2757 — THIS LEG FLIPPED, and the flip is the whole fix.
+      //
+      // It used to establish that the shared-phone thread carried ONE holder's
+      // name, and pointedly refused to say which, because the winner came from
+      // row order the code did not guarantee. That refusal was the finding: a
+      // filename on disk, inside an audit package handed to a broker, naming
+      // whichever of two people happened to be inserted second.
+      //
+      // Founder decision (2026-08-20), refined by his ruling of 2026-08-23:
+      // the ambiguous thread's filename carries NO name and NO number — the
+      // sequence id and the date, nothing else. The number is personal data on
+      // a filesystem and already leads the label inside the document; the date
+      // stays so the file still sorts with its neighbours. Both names go in the
+      // LABEL, joined by "or", asserted in the label leg below.
+      // ---------------------------------------------------------------------
 
-      // The single-holder thread is DETERMINISTIC: Chris's own phone, Chris's
-      // name in the filename on disk.
-      expect(chrisThreadFile[0]).toBe("text_002_Chris_Alvarez_2026-01-13.pdf");
+      // Chris's own phone: ONE holder, so nothing changes — same name, same
+      // date suffix, byte for byte what shipped before 2757. This is the
+      // collateral-damage control: a fix that renamed unambiguous threads too
+      // would red right here.
+      expect(textFiles).toContain("text_002_Chris_Alvarez_2026-01-13.pdf");
 
-      // The shared-phone thread is labelled with ONE holder's CONTACT name —
-      // never a person-style merged label, never the raw phone. Winner is
-      // set-membership; the measured winner at this SHA is recorded in the PR
-      // body as characterization, not asserted (asserting it would
-      // manufacture a flake out of an order the code does not guarantee).
-      const winner = ["Chris_Alvarez", "Dana_Alvarez"].filter((n) => sharedThreadFile[0].includes(n));
-      expect(winner).toHaveLength(1);
-      expect(sharedThreadFile[0]).toBe(`text_001_${winner[0]}_2026-01-12.pdf`);
+      // The shared-phone thread: sequence id and date, nothing else. Exact
+      // string — a "does not contain a name" check would pass on a file named
+      // after nothing at all, and a "no digits" check would fail the date.
+      expect(textFiles).toContain("text_001_2026-01-12.pdf");
+
+      // Neither name AND no phone digits for the shared thread.
+      const sharedThreadFile = textFiles.filter((f) => f.startsWith("text_001_"));
+      expect(sharedThreadFile).toEqual(["text_001_2026-01-12.pdf"]);
+      expect(sharedThreadFile[0]).not.toContain("Alvarez");
+      expect(sharedThreadFile[0]).not.toContain("503");
+      expect(sharedThreadFile[0]).not.toContain("555");
 
       // Exact set: nothing else was written to texts/.
-      expect(textFiles).toEqual([sharedThreadFile[0], chrisThreadFile[0]]);
+      expect(textFiles).toEqual([
+        "text_001_2026-01-12.pdf",
+        "text_002_Chris_Alvarez_2026-01-13.pdf",
+      ]);
+    });
+
+    test("A1b: the shared-handle thread's LABEL names BOTH holders with an \"or\"", () => {
+      // The names are not discarded — they move from the filename (where one of
+      // them would be a durable lie) to the label (where both can be told).
+      const threadHtml = mockCapturedHtml.filter((h) => h.includes(SHARED_PHONE_LABEL));
+      expect(threadHtml.length).toBeGreaterThan(0);
+      const label = `${SHARED_PHONE_LABEL} — ${CHRIS.name} or ${DANA.name}`;
+      expect(threadHtml.some((h) => h.includes(label))).toBe(true);
+      // And never as a single crowned winner: the heading form used for an
+      // unambiguous thread must not appear for this one.
+      for (const h of threadHtml) {
+        expect(h).not.toContain(`Conversation with ${CHRIS.name} <span`);
+        expect(h).not.toContain(`Conversation with ${DANA.name} <span`);
+      }
     });
 
     test("A2: the attachment manifest resolves the party by NOTHING — raw handle, no contact name", () => {
@@ -532,16 +571,17 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
       }
     });
 
-    test("shared-handle characterization: thread grouping merges by phone tail — one thread, one winner label", () => {
+    test("shared-handle: ONE thread (grouping is correct and unchanged), named without crowning anyone", () => {
       // Two contacts hold SHARED_PHONE. The thread key is the sorted set of
       // normalized participant phones (textExportHelpers.getThreadKey), so the
-      // shared handle produces ONE conversation PDF under ONE winner's name —
-      // a party collapse in the artifact that exists TODAY, with no person
-      // layer involved. Pinned as-is; reported as a finding on BACKLOG-2612,
-      // not fixed here.
+      // shared handle produces ONE conversation PDF. BACKLOG-2757 confirmed the
+      // GROUPING is right — one number is one real conversation, faithful to
+      // Messages — and that the defect was one layer up, in what that single
+      // thread got CALLED. So this leg still pins one file, and now also pins
+      // that the file does not carry a person's name.
       const textFiles = fs.readdirSync(path.join(fx.outputDir, "texts"));
-      const sharedThreadFiles = textFiles.filter((f) => f.endsWith("_2026-01-12.pdf"));
-      expect(sharedThreadFiles).toHaveLength(1);
+      const sharedThreadFiles = textFiles.filter((f) => f.startsWith("text_001_"));
+      expect(sharedThreadFiles).toEqual(["text_001_2026-01-12.pdf"]);
     });
   });
 
@@ -590,13 +630,23 @@ describe("BACKLOG-2612 — the export party unit is the contact", () => {
       expect(html).not.toContain("archived");
     });
 
-    test("C5: her handles still resolve to her name in filenames (removal does not redact history)", () => {
+    test("C5: her handles still resolve to her name (removal does not redact history)", () => {
       const textFiles = fs.readdirSync(path.join(fx.outputDir, "texts")).sort();
       expect(textFiles).toHaveLength(2);
-      // Both threads still carry a resolved contact name, tombstone or not.
-      for (const f of textFiles) {
-        expect(f.includes("Chris_Alvarez") || f.includes("Dana_Alvarez")).toBe(true);
-      }
+
+      // The single-holder thread still carries a resolved CONTACT NAME on disk,
+      // tombstone or not — that is what this leg has always been about, and it
+      // is unchanged.
+      expect(textFiles).toContain("text_002_Chris_Alvarez_2026-01-13.pdf");
+
+      // BACKLOG-2757: the shared-handle thread carries no identity in its name
+      // at all now, so "does her name still resolve?" has to be asked where the
+      // names actually live — the label. It does, and so does his: a tombstone changes
+      // visibility in Clients & Contacts, it does not redact who was on a
+      // message already captured. If the tombstone filter were ever added to
+      // the resolver, this label would lose a name and this leg reds.
+      const label = `${SHARED_PHONE_LABEL} — ${CHRIS.name} or ${DANA.name}`;
+      expect(mockCapturedHtml.some((h) => h.includes(label))).toBe(true);
     });
   });
 

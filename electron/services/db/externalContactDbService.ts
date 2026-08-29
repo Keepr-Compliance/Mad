@@ -1217,18 +1217,27 @@ export function classifyMacOSSync(
 export function getNamesByPhoneDigits(
   userId: string,
   normalizedPhones: string[]
-): { phone: string; name: string }[] {
+): { phone: string; name: string; contact_id: string }[] {
   if (normalizedPhones.length === 0) return [];
   const db = ensureDb();
   const placeholders = normalizedPhones.map(() => "?").join(", ");
+  // BACKLOG-2757: `ec.id` and a declared ORDER BY. The caller has to distinguish
+  // "one external contact, two stored formats of one number" from "two external
+  // contacts sharing a line", and it must reach the same answer whichever order
+  // the rows were inserted in.
   const sql = `
-    SELECT je.value as phone, ec.name
+    SELECT je.value as phone, ec.name, ec.id as contact_id
     FROM external_contacts ec, json_each(ec.phones_json) je
     WHERE ec.user_id = ?
       AND ec.name IS NOT NULL
       AND substr(replace(replace(replace(je.value, '+', ''), '-', ''), ' ', ''), -10) IN (${placeholders})
+    ORDER BY ec.name COLLATE NOCASE, ec.id
   `;
-  return db.prepare(sql).all(userId, ...normalizedPhones) as { phone: string; name: string }[];
+  return db.prepare(sql).all(userId, ...normalizedPhones) as {
+    phone: string;
+    name: string;
+    contact_id: string;
+  }[];
 }
 
 /**
@@ -1238,18 +1247,24 @@ export function getNamesByPhoneDigits(
 export function getNamesByEmails(
   userId: string,
   lowerEmails: string[]
-): { email: string; name: string }[] {
+): { email: string; name: string; contact_id: string }[] {
   if (lowerEmails.length === 0) return [];
   const db = ensureDb();
   const placeholders = lowerEmails.map(() => "?").join(", ");
+  // BACKLOG-2757: see getNamesByPhoneDigits — identity and a declared order.
   const sql = `
-    SELECT je.value as email, ec.name
+    SELECT je.value as email, ec.name, ec.id as contact_id
     FROM external_contacts ec, json_each(ec.emails_json) je
     WHERE ec.user_id = ?
       AND ec.name IS NOT NULL
       AND LOWER(je.value) IN (${placeholders})
+    ORDER BY ec.name COLLATE NOCASE, ec.id
   `;
-  return db.prepare(sql).all(userId, ...lowerEmails) as { email: string; name: string }[];
+  return db.prepare(sql).all(userId, ...lowerEmails) as {
+    email: string;
+    name: string;
+    contact_id: string;
+  }[];
 }
 
 /**

@@ -184,6 +184,8 @@ import {
 } from "./constants/legalVersions";
 import type { OAuthProvider, SubscriptionTier, SubscriptionStatus, User } from "./types";
 
+import { applyLogFileConfig } from "./config/logFileConfig";
+
 // Import extracted handlers from handlers/ directory
 import {
   registerPermissionHandlers,
@@ -199,8 +201,11 @@ import {
   registerFailureLogHandlers,
 } from "./handlers";
 
-// Configure logging for auto-updater
-log.transports.file.level = "info";
+// Configure logging for auto-updater.
+// BACKLOG-2898: capacity is explicit — the inherited 1 MB default rotated 19
+// of the founder's 24 backup minutes away before anyone could read them. See
+// electron/config/logFileConfig.ts for the measurement behind the number.
+applyLogFileConfig(log.transports.file);
 
 // ==========================================
 // SENTRY ERROR TRACKING (TASK-1967)

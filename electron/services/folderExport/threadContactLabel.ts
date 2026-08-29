@@ -137,6 +137,161 @@ export function fileSafeContactLabel(label: string): string {
   return trimmed;
 }
 
+/**
+ * ===========================================================================
+ * BACKLOG-2757 — WHAT A THREAD IS CALLED WHEN THE HANDLE IS NOT ONE PERSON
+ * ===========================================================================
+ *
+ * Two saved contacts sharing one phone number is ordinary: a household line, an
+ * office line, a couple. BACKLOG-2619/2556 exist because two people share an
+ * office line, and the product's rule is that **a shared identifier is not
+ * evidence of one person**. The export used to assume the opposite — it resolved
+ * the handle to whichever contact SQLite happened to return last, put that name
+ * on the PDF, and wrote it into a FILE NAME inside the audit package. The wrong
+ * person's name, durable on a filesystem, in an audit artifact.
+ *
+ * Founder decision (2026-08-20, settled):
+ *
+ *   - one contact matches -> unchanged, name in the label and the filename;
+ *   - more than one matches -> the LABEL says so with an "or", and the FILENAME
+ *     carries NO name at all, only the index and the number.
+ *
+ * The thread is never split (that would duplicate one real conversation into two
+ * pretend-attributed ones — the grouping is faithful to Messages and correct)
+ * and never blocks the export (a shared office line is routine and often
+ * unresolvable).
+ *
+ * WHY THE FILENAME DROPS THE NAME RATHER THAN CARRYING BOTH: the filename is the
+ * part that survives. Putting "Chris_or_Dana" on disk still asserts a person, in
+ * the one place we cannot correct later.
+ *
+ * WHY IT DROPS THE NUMBER TOO (founder ruling, 2026-08-23):
+ *
+ *   > "you can drop the name and even the phone number if you want, just keep
+ *   > the id is also fine, this isn't critical"
+ *
+ * So an ambiguous thread's file is `text_<NNN>_<YYYY-MM-DD>.pdf` — sequence id
+ * and date, nothing else. Two reasons, and the second is the one that actually
+ * settled it:
+ *
+ *  1. A phone number in a filename is personal data written to a filesystem and
+ *     handed to a broker. The number belongs INSIDE the document, where it
+ *     already is (it leads the label), not in the path.
+ *  2. The date is what made the naming CONSISTENT. Every other exported thread
+ *     file ends in `_<YYYY-MM-DD>.pdf`, so a number-named file with no date
+ *     sorted away from its neighbours. Keeping the date puts the ambiguous file
+ *     back in line with the rest of the folder — which was the real
+ *     inconsistency, not the missing name.
+ *
+ * The label is unchanged and still carries both the number and both names: the
+ * export does not become vaguer, it stops writing identity into a path.
+ *
+ * ---------------------------------------------------------------------------
+ * WHERE BACKLOG-2816 PLUGS IN
+ * ---------------------------------------------------------------------------
+ * 2816 (group chat names in the export, the submission, and the file name)
+ * hard-depends on 2814 importing `chat.display_name` and is NOT implemented
+ * here. When it is: it becomes ONE new branch at the top of `threadNaming`'s
+ * precedence, above the ambiguity branch, setting both `label` and
+ * `fileSegment` from the chat name in the same step —
+ *
+ *     if (chatName) return { label: chatName,
+ *                            fileSegment: fileSafeContactLabel(chatName) };
+ *
+ * — plus one field on `ThreadNamingInput`. It must land here and nowhere else:
+ * every surface that names a thread already routes through this function, so
+ * one branch reaches the PDF header, the summary index, the combined one-PDF
+ * section and the filename together. The sanitisation 2816 asks for ("the name
+ * is user-typed text") is already what `fileSafeContactLabel` does.
+ */
+
+/** What a thread is called, in both places it is called something. */
+export interface ThreadNaming {
+  /** The human label: PDF header, summary index row, combined-PDF section. */
+  label: string;
+  /**
+   * The filename component, already filesystem-safe.
+   *
+   * **Empty string when the thread is ambiguous** — that is not a missing value,
+   * it is the decision: an ambiguous thread contributes NO identity segment to
+   * its filename. Callers must branch on `ambiguous` rather than interpolating
+   * this blindly, or they will write `text_001__2026-02-01.pdf`.
+   */
+  fileSegment: string;
+  /** True when the handle matched more than one contact. */
+  ambiguous: boolean;
+}
+
+export interface ThreadNamingInput {
+  contact: ThreadContact;
+  isGroupChat: boolean;
+  /**
+   * Every distinct contact name this thread's handle resolves to, in the
+   * resolver's declared order, AFTER scoping. Length <= 1 is the ordinary case
+   * and behaves exactly as it did before BACKLOG-2757.
+   */
+  matchedNames?: readonly string[];
+}
+
+/**
+ * Join names the way a person would read them: "A or B", "A, B or C".
+ *
+ * Not "A/B" and not "A & B" — both read as one compound party. "or" is the only
+ * join that says *we do not know which of these it is*, which is the true state.
+ */
+export function joinAmbiguousNames(names: readonly string[]): string {
+  if (names.length === 0) return "";
+  if (names.length === 1) return names[0];
+  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+}
+
+/**
+ * THE naming decision for a text thread. Precedence, top to bottom:
+ *
+ *   1. (BACKLOG-2816 seam — group chat name, not implemented, see above)
+ *   2. AMBIGUOUS: >1 contact on this handle -> label `<handle> — A or B`, and
+ *      NO filename segment at all (the caller writes `text_<NNN>_<date>.pdf`).
+ *   3. GROUP CHAT with no resolvable party -> "Group Chat".
+ *   4. Exactly one name -> that name. Unchanged from BACKLOG-2463.
+ *   5. No name -> the formatted handle. Unchanged from BACKLOG-2463.
+ *
+ * Note the asymmetry between 2 and 5, which is deliberate and was ruled on: an
+ * UNRESOLVED thread still carries the formatted handle in its filename (that is
+ * BACKLOG-2463 behaviour, untouched), while an AMBIGUOUS one carries nothing.
+ * The difference is what each case would be asserting. A number we could not
+ * attach to anybody names a conversation; a number two known people share, put
+ * on disk beside neither name, is an identity claim waiting to be misread.
+ *
+ * Rules 3-5 are byte-for-byte what shipped before; only rule 2 is new, and it
+ * fires only when the resolver found more than one contact.
+ */
+export function threadNaming({
+  contact,
+  isGroupChat,
+  matchedNames,
+}: ThreadNamingInput): ThreadNaming {
+  const names = matchedNames ?? [];
+
+  if (names.length > 1) {
+    // The handle, formatted for a human, with no name attached — the same chain
+    // an unresolved thread already uses, called rather than restated. It goes in
+    // the LABEL only; see the docblock for why it stays out of the filename.
+    const handleLabel = contactDisplayLabel({ name: null, phone: contact.phone });
+    return {
+      label: `${handleLabel} — ${joinAmbiguousNames(names)}`,
+      fileSegment: "",
+      ambiguous: true,
+    };
+  }
+
+  const label =
+    isGroupChat && threadContactIsUnresolved(contact)
+      ? GROUP_CHAT_LABEL
+      : threadContactLabel(contact);
+
+  return { label, fileSegment: fileSafeContactLabel(label), ambiguous: false };
+}
+
 /** Drop the separator characters `sanitizeFileName` may leave at either end. */
 function trimSeparators(value: string): string {
   return value.replace(/^[_\-. ]+/, "").replace(/[_\-. ]+$/, "");
