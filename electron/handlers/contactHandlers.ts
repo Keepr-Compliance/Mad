@@ -59,6 +59,7 @@ import { runUniqueNameAutoLink } from "../services/contactNameAutoLink";
 // nothing here needs the label; `contactLinkEvidence` still owns it for the
 // review queue, provenance and compare screens.
 import { buildEvidence } from "../services/contactLinkEvidence";
+import { tryGatherIdentityEvidence } from "../services/contactIdentityEvidence";
 // BACKLOG-2608: `getRejectedSourceKeys` is no longer imported here. It existed
 // to make a released record skip the CONTENT checks; those are deleted, so it
 // had nothing left to release it FROM. The verdict itself is untouched and is
@@ -739,6 +740,23 @@ function fileNameQuestion(
       nameHolderCount: ctx.holderCount,
       nameText: ctx.displayName,
     });
+    // BACKLOG-2630 D2 piece 2 — the FACTS behind the sentence. Read-only, and
+    // consulted by nothing here: the same question is filed, with the same
+    // wording, in the same order.
+    //
+    // `nameHolderCount` IS passed on this path, because the name pass has already
+    // tallied it (`contactNameAutoLink.collectNameGroups`). The gatherer never
+    // recomputes it — a second tally is a second comparison path.
+    const facts = tryGatherIdentityEvidence({
+      userId,
+      subject: { kind: "contact", contactId: pair.contactId },
+      candidate: {
+        kind: "record",
+        sourceType: pair.sourceType,
+        sourceRecordId: pair.sourceRecordId,
+      },
+      nameHolderCount: ctx.holderCount,
+    });
     proposeLink({
       userId,
       contactId: pair.contactId,
@@ -751,7 +769,7 @@ function fileNameQuestion(
       // Everything sharing this name is one question, however many pairs it
       // decomposes into.
       clusterKey: `name:${ctx.displayName.trim().toLowerCase()}`,
-      evidence: built.evidence,
+      evidence: { ...built.evidence, facts },
     });
   } catch (error) {
     logService.warn(`[Contacts] could not file a name review question: ${error}`, "Contacts");
