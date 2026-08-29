@@ -23,7 +23,6 @@ import * as Sentry from '@sentry/react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
-import Constants from 'expo-constants';
 import {
   checkSmsPermissions,
   checkContactsPermissions,
@@ -48,6 +47,7 @@ import {
   resetAllSyncData,
 } from '../../services/smsQueueService';
 import type { SyncIntervalValue } from '../../services/smsQueueService';
+import { getVersionLabel } from '../../services/appVersion';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
@@ -100,11 +100,11 @@ export default function SettingsScreen(): React.JSX.Element {
   // the re-render — the ref flips immediately.
   const sendingReportRef = useRef(false);
 
-  // App info
-  const appVersion =
-    Constants.expoConfig?.version ??
-    Constants.manifest2?.extra?.expoClient?.version ??
-    '1.0.0';
+  // App info. BACKLOG-2956: read from the NATIVE package manifest and show the
+  // build number alongside the version name ("1.1.0 (2)"). The version name
+  // alone cannot identify a build — every companion build ever shipped called
+  // itself 1.0.0 — so a support conversation needs the number in parentheses.
+  const appVersion = getVersionLabel();
 
   // -------------------------------------------------------
   // Data loading
@@ -437,7 +437,9 @@ export default function SettingsScreen(): React.JSX.Element {
         <Card title="About">
           <View style={styles.row}>
             <Text style={styles.rowLabel}>App Version</Text>
-            <Text style={styles.rowValue}>{appVersion}</Text>
+            <Text testID="app-version-value" style={styles.rowValue}>
+              {appVersion}
+            </Text>
           </View>
           <CardDivider />
           <TouchableOpacity

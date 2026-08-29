@@ -524,6 +524,26 @@ class LocalSyncService {
 
   /**
    * Route incoming HTTP requests.
+   *
+   * ## BACKLOG-2956 — why this logs the way it does
+   *
+   * This server used to be effectively SILENT about traffic. The entry line
+   * below was `logService.debug`, and `logService`'s `minLevel` defaults to
+   * `"info"` (see logService.ts), so it was DROPPED in every normal run. The
+   * unknown-route branch at the bottom logged nothing at all. The consequence
+   * was measured on the founder's machine: his phone's BROWSER reached this
+   * server and got a 404, and the desktop log recorded **nothing** — leaving an
+   * Android cleartext block (which never opens a socket) and a genuine network
+   * fault indistinguishable from each other and from the server never having
+   * been contacted. That is what made the failure undiagnosable, here and on a
+   * field tester's machine.
+   *
+   * So: one `info` line per request with method, path and remote address, and
+   * one on completion with the status code and duration. The pair is what
+   * separates "nothing arrived" from "something arrived and we refused it" —
+   * the single most useful distinction when local sync is not working.
+   *
+   * NEVER log the request body or the bearer token. Bodies are SMS content.
    */
   private handleRequest(
     req: http.IncomingMessage,
@@ -531,11 +551,49 @@ class LocalSyncService {
   ): void {
     const urlPath = req.url?.split("?")[0] ?? "";
     const method = req.method?.toUpperCase() ?? "";
+    const remote = req.socket.remoteAddress ?? "unknown";
+    const startedAt = Date.now();
 
-    logService.debug(
-      `[LocalSync] ${method} ${urlPath}`,
+    logService.info(
+      `[LocalSync] --> ${method} ${urlPath} from ${remote}`,
       LOG_TAG
     );
+
+    // One completion line per request, whichever branch answered it — including
+    // branches added later, and including the `catch`-all 500s. Attaching to
+    // "finish" rather than instrumenting each `sendJSON` call site is what makes
+    // that coverage structural instead of a convention someone can forget.
+    res.on("finish", () => {
+      const status = res.statusCode;
+      const durationMs = Date.now() - startedAt;
+      const line = `[LocalSync] <-- ${status} ${method} ${urlPath} from ${remote} (${durationMs}ms)`;
+      if (status >= 400) {
+        logService.warn(line, LOG_TAG);
+      } else {
+        logService.info(line, LOG_TAG);
+      }
+
+      // A failed PAIRING is the outcome users report and the one we have been
+      // unable to see. Send a Sentry EVENT, not a breadcrumb: breadcrumbs are
+      // discarded unless some other event happens to be captured in the same
+      // session (BACKLOG-2913 / BACKLOG-2950), which is exactly why the pairing
+      // failures reported so far left no trace. Remote address is deliberately
+      // NOT sent — it stays in the local log.
+      if (urlPath === "/register" && status >= 400) {
+        Sentry.captureMessage(
+          `[LocalSync] Pairing request failed with ${status}`,
+          {
+            level: "warning",
+            tags: {
+              component: "localSyncService",
+              reason: "register_failed",
+              status: String(status),
+            },
+            extra: { method, durationMs },
+          }
+        );
+      }
+    });
 
     if (method === "GET" && urlPath === "/ping") {
       this.handlePing(res);
@@ -557,7 +615,13 @@ class LocalSyncService {
       return;
     }
 
-    // Unknown route
+    // Unknown route. Logged with the reason because this is the branch a
+    // browser (or a probe, or a companion built against a future API) lands on,
+    // and a bare 404 with no log is indistinguishable from silence.
+    logService.warn(
+      `[LocalSync] No route for ${method} ${urlPath} (from ${remote}) — responding 404`,
+      LOG_TAG
+    );
     sendJSON(res, 404, { error: "Not found" });
   }
 

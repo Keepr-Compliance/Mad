@@ -68,6 +68,7 @@
     "check:hooks": "node scripts/ci/check-hooks-tracking.mjs",
     "check:text-sources": "node scripts/ci/check-text-sources.mjs",
     "check:test-drift": "node scripts/ci/check-test-drift.mjs",
+    "check:android-version": "node scripts/ci/check-android-version-bump.mjs",
     "hooks:doctor": "node scripts/hooks-doctor.mjs",
     "prepare": "husky",
     "prestart": "node scripts/rebuild-native.js"
