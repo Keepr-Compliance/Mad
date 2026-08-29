@@ -33,6 +33,12 @@ jest.mock('expo-router', () => ({
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(async () => undefined),
   getItem: jest.fn(async () => null),
+  // BACKLOG-2995: the pairing round trip now clears the phone-owned SMS cursor,
+  // so `removeItem` is reached from this screen. Without it the mock returns
+  // undefined, the call throws, and pairing aborts AFTER the identity is
+  // adopted but BEFORE `@keepr/pairing` is written — which is exactly how the
+  // BACKLOG-2210 assertion below caught it.
+  removeItem: jest.fn(async () => undefined),
 }));
 
 // --- onboardingProgress (BACKLOG-2216): the screen persists its step on mount.

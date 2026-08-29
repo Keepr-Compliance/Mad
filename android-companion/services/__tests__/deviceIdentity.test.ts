@@ -35,6 +35,34 @@
  *      the success check. The "does not force a resync on failure" control
  *      fails.
  *
+ * ---------------------------------------------------------------------------
+ * BACKLOG-2995 — THE PHONE FORGETS ITS MESSAGE BOOKMARK WHEN IT PAIRS.
+ * ---------------------------------------------------------------------------
+ *
+ * The SMS high-water mark is PHONE-owned and the desktop never asks for
+ * "everything after T", so a desktop whose database was wiped received only
+ * messages NEWER than whatever this phone had already sent — permanently, while
+ * sync reported success. Re-pair already forced a full CONTACT resync; the
+ * message equivalent did not exist.
+ *
+ * THE CONTROL HAD TO BE CORRECTED, for the same reason M1 records for 2987.
+ * Written first as a bare `register -> assert cleared` with no stored identity,
+ * it was a FIRST pair: the claim is the QR name, the desktop answers with a
+ * UUID, so the two always differ. It stayed GREEN under M5 — i.e. green on code
+ * that still loses history, because BACKLOG-2987 made id REUSE the normal case.
+ * The discriminating shape is PAIR -> RE-PAIR returning the SAME id.
+ *
+ * MUTATIONS RUN, AND WHAT WENT RED (results, not intentions):
+ *  M5  Gate the reset on the id having changed
+ *      (`if (result.deviceId !== claimedDeviceId)`). 1 failed — the re-pair
+ *      control. This is the mutation the first draft of that control MISSED.
+ *  M6  Hoist `resetMessageCursor()` above the success check. 1 failed — the
+ *      "does NOT clear on a failed register" control.
+ *  M7  Delete the `resetMessageCursor()` call. 2 failed — both discriminating
+ *      cursor controls.
+ *  M8  Remove the try/catch around it. 1 failed — the "still completes the
+ *      pairing when clearing throws" control.
+ *
  * NOTHING HERE IS A REAL DEVICE. The UUIDs are invented and the "device name"
  * is a placeholder.
  */
@@ -69,10 +97,23 @@ jest.mock('../syncService', () => ({
 
 jest.mock('../contactSyncState', () => ({
   forceFullContactResync: jest.fn(async () => undefined),
+  // smsQueueService imports this. It is never called from these tests, but the
+  // module must resolve, because the message-cursor reset (BACKLOG-2995) runs
+  // for REAL here rather than as a mock — the cursor controls below assert the
+  // KEY is gone from storage, not that a spy was called.
+  resetContactSyncState: jest.fn(async () => undefined),
 }));
 
 import { registerDevice } from '../syncService';
 import { forceFullContactResync } from '../contactSyncState';
+
+/**
+ * The storage key for the phone-owned SMS high-water mark, written out rather
+ * than imported — same rationale as the enumerated keys in the unpair control
+ * above: the assertion is about the KEY as a storage contract, so a rename in
+ * `smsQueueService` should surface here rather than silently follow.
+ */
+const LAST_SYNC_TIMESTAMP_KEY = '@keepr/last-sync-timestamp';
 import {
   DEVICE_ID_STORAGE_KEY,
   isMintedDeviceId,
@@ -270,5 +311,132 @@ describe('registerWithStoredIdentity', () => {
     const result = await registerWithStoredIdentity(CONNECTION, QR_DEVICE_NAME);
 
     expect(result.claimedDeviceId).toBe(MINTED_A);
+  });
+});
+
+/**
+ * BACKLOG-2995 — the message cursor is PHONE-owned and nothing reset it.
+ *
+ * The SMS high-water mark lives on the phone (`@keepr/last-sync-timestamp`,
+ * `smsQueueService`). The desktop never asks for "everything after T", so a
+ * desktop whose database is wiped silently receives only messages NEWER than
+ * whatever the phone had already sent — while sync reports success. Re-pairing
+ * already forces a full CONTACT resync; there was no message equivalent.
+ *
+ * A full re-send is safe: `messageIdentity()` keys on the content-provider row
+ * id, falling back to the `sender|timestamp|body` tuple the desktop hashes as
+ * `generateExternalId`, so anything the desktop still holds is a no-op there.
+ *
+ * These controls run the REAL `resetMessageCursor` against the stateful
+ * AsyncStorage mock and assert on the KEY, deliberately — a spy would only
+ * prove a call was made, not that the bookmark is actually gone.
+ */
+describe('the phone-owned message cursor on re-pair (BACKLOG-2995)', () => {
+  /**
+   * THE CONTROL — and the one that had to be corrected before it discriminated.
+   *
+   * Written first as a bare `register -> assert cleared` with no stored
+   * identity. That is a FIRST pair: the claim is the QR name, the desktop
+   * answers with a UUID, so the two always differ. It stayed GREEN under a
+   * mutation that only resets when the id CHANGED — i.e. green on code that
+   * still loses Vickie's history, because BACKLOG-2987 made id REUSE the
+   * normal case. Exactly the failure this file's header records for 2987.
+   *
+   * The discriminating shape is PAIR -> RE-PAIR with the SAME id handed back:
+   * the phone already holds MINTED_A, the rebuilt desktop returns MINTED_A,
+   * nothing about the identity changed — and the cursor must still go.
+   */
+  it('clears the cursor on a RE-PAIR that returns the SAME id — the rebuilt-desktop case (THE CONTROL)', async () => {
+    await adoptDeviceIdentity(MINTED_A);
+    // The phone believes it has already sent everything up to this instant.
+    await AsyncStorage.setItem(LAST_SYNC_TIMESTAMP_KEY, '1756400000000');
+    mockRegister.mockResolvedValueOnce({ success: true, deviceId: MINTED_A });
+
+    await registerWithStoredIdentity(CONNECTION, QR_DEVICE_NAME);
+
+    // The identity is unchanged — that is the point of the case, not an aside.
+    expect(await getStoredDeviceIdentity()).toBe(MINTED_A);
+    // Gone, not merely lowered: the next read starts from the beginning.
+    expect(await AsyncStorage.getItem(LAST_SYNC_TIMESTAMP_KEY)).toBeNull();
+  });
+
+  /**
+   * The reset must not be gated on the identity having CHANGED. A phone that
+   * pairs to a rebuilt desktop can be handed back the same id it already held
+   * (BACKLOG-2987 makes id reuse the normal case), and that pairing is exactly
+   * the one whose desktop lost its messages. Goes red on unfixed code, and red
+   * again under M5 below.
+   */
+  it('clears the cursor even when no identity was stored yet — a first pair to a rebuilt desktop', async () => {
+    await AsyncStorage.setItem(LAST_SYNC_TIMESTAMP_KEY, '1756400000000');
+    expect(await getStoredDeviceIdentity()).toBeNull(); // genuinely a first pair
+    mockRegister.mockResolvedValueOnce({ success: true, deviceId: MINTED_A });
+
+    await registerWithStoredIdentity(CONNECTION, QR_DEVICE_NAME);
+
+    expect(await AsyncStorage.getItem(LAST_SYNC_TIMESTAMP_KEY)).toBeNull();
+  });
+
+  /**
+   * GREEN ON UNFIXED CODE BY CONSTRUCTION — recorded, not hidden.
+   *
+   * Before this item nothing cleared the cursor on any path, so this passes
+   * with or without the fix and discriminates nothing today. It is here as a
+   * regression guard, and it goes red only under mutation M6 below (hoisting
+   * the reset above the success check). Stating that is the point: an
+   * unstated control is an unrun control, and a control that cannot fail is
+   * not evidence.
+   */
+  /**
+   * The guard on the reset call. `registerWithStoredIdentity` documents that it
+   * never throws, and its caller is a pairing screen — so a storage failure
+   * while clearing the cursor must cost the phone its history refresh, never
+   * its pairing.
+   *
+   * This is not hypothetical: the first version of this fix had no guard, and
+   * `app/onboarding/__tests__/pair-device.test.tsx` went red because its
+   * AsyncStorage mock has no `removeItem`. The throw aborted the pairing AFTER
+   * the identity was adopted but BEFORE `@keepr/pairing` was written — a worse
+   * outcome than the bug being fixed.
+   */
+  it('still completes the pairing when clearing the cursor throws', async () => {
+    await adoptDeviceIdentity(MINTED_A);
+    mockRegister.mockResolvedValueOnce({ success: true, deviceId: MINTED_A });
+    const removeItem = AsyncStorage.removeItem as jest.Mock;
+    removeItem.mockRejectedValueOnce(new Error('storage unavailable'));
+    const consoleError = jest
+      .spyOn(console, 'error')
+      .mockImplementation(() => undefined);
+
+    const result = await registerWithStoredIdentity(CONNECTION, QR_DEVICE_NAME);
+
+    // The pairing stands.
+    expect(result.success).toBe(true);
+    expect(result.adopted).toBe(true);
+    // And the failure is LOUD, not swallowed — a silently un-cleared cursor is
+    // the shape of BACKLOG-1448/2206.
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('BACKLOG-2995'),
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
+  it('does NOT clear the cursor when the register FAILS', async () => {
+    await AsyncStorage.setItem(LAST_SYNC_TIMESTAMP_KEY, '1756400000000');
+    mockRegister.mockResolvedValueOnce({
+      success: false,
+      error: 'Server responded with 403',
+      errorType: 'server_error',
+      status: 403,
+    });
+
+    await registerWithStoredIdentity(CONNECTION, QR_DEVICE_NAME);
+
+    // A failed pairing attempt must not cost the phone its place — that would
+    // force a full re-send on the next successful sync for no reason.
+    expect(await AsyncStorage.getItem(LAST_SYNC_TIMESTAMP_KEY)).toBe(
+      '1756400000000',
+    );
   });
 });
