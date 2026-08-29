@@ -259,6 +259,37 @@ beforeEach(() => {
       PRIMARY KEY (phone_normalized, user_id)
     );
   `);
+  // BACKLOG-2668 — the unique-name rule is gated on the AI add-on now, and this
+  // is a WHOLE-PASS suite: it drives `runOpportunisticLinking` through the real
+  // handlers, so the gate is live here. Without a `users_local` row
+  // `resolveContactAutoLinkMode` fails closed to `off`, the name rule never
+  // runs, and section 2's exact-set assertion reads an EMPTY queue — which is
+  // the founder's ruling working, not a broken gate.
+  //
+  // This suite predates the gate: it was written on `develop` (BACKLOG-2630 D2
+  // piece 2) while the gate was on `int/acid-identity`, so it never got the
+  // seed its two sibling whole-pass suites got in PR #2367
+  // (`contact-handlers.universalLinking`, `contact-handlers.importTriggersLinking`).
+  // Merging the two branches is what first ran them together.
+  //
+  // Seeded with the add-on ON so this suite keeps testing what it was written
+  // to test: that the facts REACH THE ROW on every path that files a question.
+  // The add-on with no toggle resolves to `suggest`, where the ask band is
+  // unchanged, so the pairs asked about are the same ones the writer always
+  // asked about. The gate itself is asserted in
+  // `contactNameAutoLink.tierGate-2668.test.ts`, not here.
+  //
+  // `ai_detection_enabled` is an ADD-ON, not a plan — it works with any
+  // `license_type` (founder, PR #2367). The NOT NULL columns are filled because
+  // this fixture runs production's own `users_local` DDL, sliced out of
+  // `schema.sql` by the schema helper.
+  mockDb
+    .prepare(
+      `INSERT INTO users_local
+         (id, email, oauth_provider, oauth_id, license_type, ai_detection_enabled)
+       VALUES (?, 'owner@example.invalid', 'google', 'oauth-owner-2630-d2', 'individual', 1)`,
+    )
+    .run(USER);
   mockImportedContacts = [];
   mockShadowRows = [];
   registeredHandlers.clear();

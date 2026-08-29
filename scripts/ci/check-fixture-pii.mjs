@@ -321,6 +321,13 @@ const FICTIONAL_NAMES = new Set([
   "sam hale",
   "lee park",
   "mo park",
+  // BACKLOG-2758 — the portal/PDF party-naming parity suite
+  // (electron/services/__tests__/exportPartyNaming.parity.test.ts). Two
+  // invented people who share a phone line, for the same reason the Alvarez
+  // pair above exists: the rule under test needs one handle held by two
+  // distinct contacts. Neither refers to anyone.
+  "morgan ellery",
+  "riley voss",
   // This repo's established scrub name for the founder's own case. BACKLOG-2731
   // finished the job: an earlier pass replaced the display name and left the
   // address, the surname and the surrounding variable names in place, so the

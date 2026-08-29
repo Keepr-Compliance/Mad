@@ -404,47 +404,6 @@ export async function getEmailsByThread(
 }
 
 /**
- * Update an email
- */
-export async function updateEmail(
-  emailId: string,
-  updates: Partial<Email>
-): Promise<void> {
-  const allowedFields = [
-    "subject",
-    "body_plain",
-    "body_html",
-    "sender",
-    "recipients",
-    "cc",
-    "bcc",
-    "thread_id",
-    "has_attachments",
-    "attachment_count",
-    "labels",
-  ];
-
-  const fields: string[] = [];
-  const values: unknown[] = [];
-
-  Object.keys(updates).forEach((key) => {
-    if (allowedFields.includes(key)) {
-      fields.push(`${key} = ?`);
-      values.push((updates as Record<string, unknown>)[key]);
-    }
-  });
-
-  if (fields.length === 0) {
-    throw new DatabaseError("No valid fields to update");
-  }
-
-  values.push(emailId);
-
-  const sql = `UPDATE emails SET ${fields.join(", ")} WHERE id = ?`;
-  dbRun(sql, values);
-}
-
-/**
  * Delete an email by ID
  * Note: This will also delete any communications referencing this email
  * via the ON DELETE CASCADE foreign key constraint.

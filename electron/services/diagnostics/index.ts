@@ -18,6 +18,7 @@ export type { StartupDiagnostics } from "./startupDiagnosticsCollector";
 
 export {
   formatDiskSpaceError,
+  formatUnknownBackupSizeError,
   formatMissingDriversError,
   formatDriverServiceStoppedError,
   formatDeviceNotDetectedError,

@@ -70,7 +70,11 @@ jest.mock("../logService", () => {
   return { __esModule: true, default: m, logService: m };
 });
 
-import { runUniqueNameAutoLink, type AskPair } from "../contactNameAutoLink";
+import {
+  runUniqueNameAutoLinkForMode,
+  type AskPair,
+  type NameAutoLinkSummary,
+} from "../contactNameAutoLink";
 import { confirmProposal } from "../contactLinkReview";
 import { createLink, getLinksForContact } from "../db/contactSourceLinkDbService";
 import {
@@ -81,6 +85,29 @@ import {
 } from "../db/contactLinkReviewDbService";
 import { buildEvidence } from "../contactLinkEvidence";
 import type { ExternalContactSource } from "../db/externalContactDbService";
+
+/**
+ * BACKLOG-2668 — the freeze and the tier gate are INDEPENDENT, and this suite
+ * pins the freeze.
+ *
+ * Driven in `auto` deliberately. `auto` is the mode where a link would actually
+ * be attempted, so it is the only mode in which "the freeze refused a link" is
+ * a claim with content: in `suggest` no link is attempted and a green test here
+ * would prove nothing about the freeze at all.
+ *
+ * That the freeze ALSO holds in `suggest` — same reason string, not
+ * `name_unique_suggestion` — is asserted in `contactNameAutoLink.tierGate-2668`,
+ * where the two gates meet.
+ */
+function runInAutoMode(
+  userId: string,
+  onAsk?: (
+    pair: AskPair,
+    ctx: { reason: LinkProposalReason; holderCount: number; displayName: string },
+  ) => void,
+): NameAutoLinkSummary {
+  return runUniqueNameAutoLinkForMode("auto", userId, onAsk);
+}
 
 const USER = "user-frozen-name-2666";
 
@@ -327,7 +354,7 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
   it("creates NO link onto a contact on an exported audit", () => {
     seedFrozenPair();
 
-    const summary = runUniqueNameAutoLink(USER, fileNameQuestion);
+    const summary = runInAutoMode(USER, fileNameQuestion);
 
     expect(summary.actions).toEqual([]);
     expect(summary.barredByFreeze).toBe(1);
@@ -341,7 +368,7 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
   it("copies NO value onto a contact on an exported audit", () => {
     seedFrozenPair();
 
-    runUniqueNameAutoLink(USER, fileNameQuestion);
+    runInAutoMode(USER, fileNameQuestion);
 
     // Exact sets. The Outlook record's number differs from the one she already
     // has in the FINAL DIGIT ONLY, so a length check would not separate them.
@@ -352,7 +379,7 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
   it("files the question instead of going quiet, with the frozen reason", () => {
     seedFrozenPair();
 
-    const summary = runUniqueNameAutoLink(USER, fileNameQuestion);
+    const summary = runInAutoMode(USER, fileNameQuestion);
 
     expect(summary.askPairs).toEqual([
       {
@@ -379,7 +406,7 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
    */
   it("renders the frozen sentence, not the generic fallback", () => {
     seedFrozenPair();
-    runUniqueNameAutoLink(USER, fileNameQuestion);
+    runInAutoMode(USER, fileNameQuestion);
 
     const [proposal] = listPendingProposals(USER);
     const evidence = JSON.parse(proposal.evidence_json ?? "{}") as { summary?: string };
@@ -403,7 +430,7 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
   it("still links AND still copies when the contact is not on an exported audit", () => {
     seedUnfrozenPair();
 
-    const summary = runUniqueNameAutoLink(USER, fileNameQuestion);
+    const summary = runInAutoMode(USER, fileNameQuestion);
 
     expect(summary.actions).toEqual([
       { sourceType: "outlook", sourceRecordId: "out-2", contactId: "c-open" },
@@ -428,7 +455,7 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
     seedFrozenPair();
     seedUnfrozenPair();
 
-    const summary = runUniqueNameAutoLink(USER, fileNameQuestion);
+    const summary = runInAutoMode(USER, fileNameQuestion);
 
     expect(summary.actions).toEqual([
       { sourceType: "outlook", sourceRecordId: "out-2", contactId: "c-open" },
@@ -464,7 +491,7 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
       decidedBy: "review_queue",
     });
 
-    const summary = runUniqueNameAutoLink(USER, fileNameQuestion);
+    const summary = runInAutoMode(USER, fileNameQuestion);
 
     expect(summary.barredByVerdict).toBe(1);
     expect(summary.barredByFreeze).toBe(0);
@@ -491,9 +518,9 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
   it("converges — a second and third pass file no new question and copy nothing", () => {
     seedFrozenPair();
 
-    runUniqueNameAutoLink(USER, fileNameQuestion);
-    const second = runUniqueNameAutoLink(USER, fileNameQuestion);
-    runUniqueNameAutoLink(USER, fileNameQuestion);
+    runInAutoMode(USER, fileNameQuestion);
+    const second = runInAutoMode(USER, fileNameQuestion);
+    runInAutoMode(USER, fileNameQuestion);
 
     expect(second.barredByFreeze).toBe(1);
     expect(proposalSet()).toEqual(["c-frozen|outlook|out-1|frozen_audit_contact"]);
@@ -527,7 +554,7 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
    */
   it("a human answering the question DOES link and DOES bring the values across", () => {
     seedFrozenPair();
-    runUniqueNameAutoLink(USER, fileNameQuestion);
+    runInAutoMode(USER, fileNameQuestion);
 
     // Precondition — the machine refused, so there is something to answer.
     expect(linkSet("c-frozen")).toEqual(["macos|mac-1|source_id"]);
@@ -558,7 +585,7 @@ describe("the unique-name rule and a contact on a filed audit (BACKLOG-2666)", (
    */
   it("and the values she confirmed actually arrive on her card", () => {
     seedFrozenPair();
-    runUniqueNameAutoLink(USER, fileNameQuestion);
+    runInAutoMode(USER, fileNameQuestion);
 
     const [proposal] = listPendingProposals(USER);
     confirmProposal(USER, proposal.id);

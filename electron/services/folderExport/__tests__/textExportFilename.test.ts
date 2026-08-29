@@ -94,7 +94,29 @@ jest.mock("../../contactResolutionService", () => ({
   __esModule: true,
   normalizePhone: (s: string) => (s || "").replace(/\D/g, "").slice(-10),
   extractParticipantHandles: () => [],
-  resolveHandles: async () => HANDLE_NAMES,
+  // BACKLOG-2757: the resolver now returns { names, matches }. `matches` holds
+  // the contact names behind each label so a caller can tell a shared line from
+  // a single contact; every name here belongs to exactly one contact, which is
+  // what keeps THIS suite's expected file names unchanged.
+  resolveHandles: async () => ({
+    names: HANDLE_NAMES,
+    matches: Object.fromEntries(
+      Object.entries(HANDLE_NAMES).map(([handle, name]) => [handle, [name]])
+    ),
+  }),
+  matchedNamesFor: (
+    resolution: { matches: Record<string, readonly string[]> } | undefined,
+    handle: string | null | undefined
+  ) => {
+    if (!resolution || !handle) return [];
+    const normalized = (handle || "").replace(/\D/g, "").slice(-10);
+    return (
+      resolution.matches[normalized] ||
+      resolution.matches[handle] ||
+      resolution.matches[handle.toLowerCase()] ||
+      []
+    );
+  },
   resolveGroupChatParticipants: async () => [],
 }));
 

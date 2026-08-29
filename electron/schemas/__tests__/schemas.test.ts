@@ -164,7 +164,14 @@ describe('TransactionSchema', () => {
     attachment_count: 25,
     text_thread_count: 3,
     email_count: 100,
-    text_count: 50,
+    // BACKLOG-2559: `text_count` was removed from TransactionSchema — it is
+    // neither a `transactions` column nor computed on any read path, so it
+    // could never carry a value. Note that leaving it in this fixture would
+    // NOT have failed anything: a plain z.object strips unknown keys, so the
+    // stale key would have been deleted in silence and this suite would have
+    // stayed green. The column set is enforced by
+    // electron/schemas/__tests__/transactionSchemaParity.test.ts, which runs
+    // the real migration chain and compares exact sets.
     export_status: 'not_exported' as const,
     export_count: 0,
     last_exported_at: null,

@@ -554,75 +554,197 @@ export function getTransactionAllAttachments(
 // ============================================
 // CONTACT RESOLUTION QUERIES (TASK-2100)
 // ============================================
+//
+// BACKLOG-2757 / BACKLOG-2758 — READ BEFORE CHANGING ANY QUERY BELOW.
+//
+// These three statements decide WHOSE NAME goes on an exported audit PDF, and
+// in the text-thread case, whose name is written into a FILE NAME on disk.
+//
+// Two properties they did NOT have, and now must:
+//
+//   1. USER SCOPE. `contacts` carries `user_id`; none of these read it. In a
+//      multi-user database a handle could resolve to another user's contact and
+//      that person's name would be printed into this user's audit package.
+//      This is a hard filter — there is no legitimate cross-user resolution.
+//
+//   2. TRANSACTION LINKAGE, as a PREFERENCE not a filter. A handle can match a
+//      contact who has nothing to do with the deal being exported. Filtering
+//      them out entirely would delete names from the export for every message
+//      participant who is not a formal `transaction_contacts` party — which is
+//      most of them. So the queries REPORT linkage (`is_transaction_linked`)
+//      and the caller drops unlinked matches only when a linked one exists.
+//
+// They also now return `contact_id`, because the caller has to be able to tell
+// "two rows, one contact" (two phone formats — not ambiguous) from "two rows,
+// two contacts" (a shared line — ambiguous, and the whole point of 2757).
 
-/**
- * Look up contact display names by phone numbers.
- * Matches against last 10 digits of both phone_e164 and phone_display.
- */
-export function getContactNamesByPhoneDigits(
-  normalizedPhones: string[]
-): { phone_e164: string | null; phone_display: string | null; display_name: string | null }[] {
-  if (normalizedPhones.length === 0) return [];
-  const db = ensureDb();
-  const placeholders = normalizedPhones.map(() => "?").join(", ");
-  const sql = `
-    SELECT
-      cp.phone_e164,
-      cp.phone_display,
-      c.display_name
-    FROM contact_phones cp
-    JOIN contacts c ON cp.contact_id = c.id
-    WHERE substr(replace(replace(replace(cp.phone_e164, '+', ''), '-', ''), ' ', ''), -10) IN (${placeholders})
-       OR substr(replace(replace(replace(cp.phone_display, '+', ''), '-', ''), ' ', ''), -10) IN (${placeholders})
-  `;
-  return db.prepare(sql).all(...normalizedPhones, ...normalizedPhones) as {
-    phone_e164: string | null;
-    phone_display: string | null;
-    display_name: string | null;
-  }[];
+/** Scope for an export-time identity lookup. */
+export interface ContactResolutionScope {
+  /** Hard filter. Contacts belonging to other users never resolve. */
+  userId?: string | null;
+  /**
+   * Preference, not a filter. Matches linked to this transaction are marked so
+   * the caller can prefer them; unlinked matches are still returned.
+   */
+  transactionId?: string | null;
+}
+
+/** One contact matching a handle, with everything needed to rank it. */
+export interface ContactHandleMatch {
+  contact_id: string;
+  display_name: string | null;
+  is_transaction_linked: number;
+}
+
+export interface ContactPhoneMatch extends ContactHandleMatch {
+  phone_e164: string | null;
+  phone_display: string | null;
+}
+
+export interface ContactEmailMatch extends ContactHandleMatch {
+  email: string;
 }
 
 /**
- * Look up contact display names by email addresses (case-insensitive).
+ * The linkage flag and its bound parameter.
+ *
+ * When no transaction is supplied every row reports `0` — "no transaction was
+ * named", which the caller reads as "no preference to apply", NOT as "this
+ * contact is not a party".
+ */
+function transactionLinkedSelect(transactionId?: string | null): {
+  expr: string;
+  params: string[];
+} {
+  if (!transactionId) {
+    return { expr: "0 AS is_transaction_linked", params: [] };
+  }
+  // `tc.removed_at IS NULL` is BACKLOG-2366's off-this-deal enforcement, and it
+  // is load-bearing here: without it a contact who was REMOVED from this
+  // transaction would still count as linked and would out-rank a contact who is
+  // actually a party — reintroducing the wrong-name-wins defect through the
+  // preference tier instead of through row order. (Caught by the BACKLOG-2612
+  // sweep's leg 6a, which asserts every statement touching
+  // `FROM transaction_contacts tc` carries this filter.)
+  return {
+    expr: `EXISTS (
+        SELECT 1 FROM transaction_contacts tc
+        WHERE tc.contact_id = c.id
+          AND tc.transaction_id = ?
+          AND tc.removed_at IS NULL
+      ) AS is_transaction_linked`,
+    params: [transactionId],
+  };
+}
+
+/** The user hard filter and its bound parameter. */
+function userScopeClause(userId?: string | null): { clause: string; params: string[] } {
+  if (!userId) return { clause: "", params: [] };
+  return { clause: "AND c.user_id = ?", params: [userId] };
+}
+
+/**
+ * Look up contact matches by phone numbers.
+ * Matches against last 10 digits of both phone_e164 and phone_display.
+ *
+ * Returns EVERY match, ordered deterministically. The caller decides what a
+ * handle with more than one contact is called — this query does not pick.
+ */
+export function getContactNamesByPhoneDigits(
+  normalizedPhones: string[],
+  scope: ContactResolutionScope = {}
+): ContactPhoneMatch[] {
+  if (normalizedPhones.length === 0) return [];
+  const db = ensureDb();
+  const placeholders = normalizedPhones.map(() => "?").join(", ");
+  const linked = transactionLinkedSelect(scope.transactionId);
+  const user = userScopeClause(scope.userId);
+  const sql = `
+    SELECT
+      c.id AS contact_id,
+      cp.phone_e164,
+      cp.phone_display,
+      c.display_name,
+      ${linked.expr}
+    FROM contact_phones cp
+    JOIN contacts c ON cp.contact_id = c.id
+    WHERE (substr(replace(replace(replace(cp.phone_e164, '+', ''), '-', ''), ' ', ''), -10) IN (${placeholders})
+       OR substr(replace(replace(replace(cp.phone_display, '+', ''), '-', ''), ' ', ''), -10) IN (${placeholders}))
+      ${user.clause}
+    ORDER BY c.display_name COLLATE NOCASE, c.id
+  `;
+  return db
+    .prepare(sql)
+    .all(
+      ...linked.params,
+      ...normalizedPhones,
+      ...normalizedPhones,
+      ...user.params
+    ) as ContactPhoneMatch[];
+}
+
+/**
+ * Look up contact matches by email addresses (case-insensitive).
+ * Returns EVERY match, ordered deterministically.
  */
 export function getContactNamesByEmails(
-  lowerEmails: string[]
-): { email: string; display_name: string | null }[] {
+  lowerEmails: string[],
+  scope: ContactResolutionScope = {}
+): ContactEmailMatch[] {
   if (lowerEmails.length === 0) return [];
   const db = ensureDb();
   const placeholders = lowerEmails.map(() => "?").join(", ");
+  const linked = transactionLinkedSelect(scope.transactionId);
+  const user = userScopeClause(scope.userId);
   const sql = `
     SELECT
+      c.id AS contact_id,
       LOWER(ce.email) as email,
-      c.display_name
+      c.display_name,
+      ${linked.expr}
     FROM contact_emails ce
     JOIN contacts c ON ce.contact_id = c.id
     WHERE LOWER(ce.email) IN (${placeholders})
+      ${user.clause}
+    ORDER BY c.display_name COLLATE NOCASE, c.id
   `;
-  return db.prepare(sql).all(...lowerEmails) as {
-    email: string;
-    display_name: string | null;
-  }[];
+  return db
+    .prepare(sql)
+    .all(...linked.params, ...lowerEmails, ...user.params) as ContactEmailMatch[];
 }
 
 /**
  * Look up a contact display name by Apple ID prefix (email prefix match).
+ *
+ * BACKLOG-2758 finding 2: this was `LIKE ? || '@%' LIMIT 1` with NO `ORDER BY`
+ * — the row returned was whatever SQLite yielded first, stable in practice and
+ * guaranteed by nothing, free to change with an index or a vacuum.
+ *
+ * A single winner is the right shape here (unlike a shared phone line, an Apple
+ * ID prefix collision is a near-miss between different addresses rather than one
+ * identifier two people genuinely share), so the fix is to DECLARE the winner
+ * rather than to surface an ambiguity: the alphabetically first email, tie-broken
+ * on contact id. Both are stable under vacuum and index changes.
  */
 export function getContactNameByAppleIdPrefix(
-  appleIdLower: string
-): { email: string; display_name: string | null } | undefined {
+  appleIdLower: string,
+  scope: ContactResolutionScope = {}
+): { email: string; display_name: string | null; contact_id: string } | undefined {
   const db = ensureDb();
+  const user = userScopeClause(scope.userId);
   const sql = `
     SELECT
+      c.id AS contact_id,
       LOWER(ce.email) as email,
       c.display_name
     FROM contact_emails ce
     JOIN contacts c ON ce.contact_id = c.id
     WHERE LOWER(ce.email) LIKE ? || '@%'
+      ${user.clause}
+    ORDER BY LOWER(ce.email), c.id
     LIMIT 1
   `;
-  return db.prepare(sql).get(appleIdLower) as {
-    email: string;
-    display_name: string | null;
-  } | undefined;
+  return db.prepare(sql).get(appleIdLower, ...user.params) as
+    | { email: string; display_name: string | null; contact_id: string }
+    | undefined;
 }

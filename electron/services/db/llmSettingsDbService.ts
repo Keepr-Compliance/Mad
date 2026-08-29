@@ -8,6 +8,7 @@
 
 import crypto from "crypto";
 import type { LLMSettings } from "../../types/models";
+import { DatabaseError } from "../../types";
 import { dbGet, dbRun } from "./core/dbConnection";
 
 /**
@@ -81,12 +82,18 @@ export function updateLLMSettings(
     (key) => allowedFields.includes(key) && updates[key as keyof typeof updates] !== undefined
   );
 
+  // BACKLOG-2560: this used to return the CURRENT settings as a success value
+  // without ever calling `dbRun`. Every caller then reported success for a write
+  // that never happened — BACKLOG-2932 is what that cost: Settings > AI > Remove
+  // said the API key was gone while the row still held it. Throwing here matches
+  // `updateUser`, `updateCommunication` and the rest of `db/`.
+  //
+  // Reachability was checked before this landed: `removeApiKey` now uses
+  // `clearLLMSettingsField` below, and all five `handlePreferenceUpdate` call
+  // sites in `LLMSettings.tsx` (:697, :718, :738, :750, :759) pass exactly one
+  // defined key, so `updatePreferences` cannot arrive here empty.
   if (fieldsToUpdate.length === 0) {
-    const settings = getLLMSettingsByUserId(userId);
-    if (!settings) {
-      throw new Error(`LLM settings not found for user ${userId}`);
-    }
-    return settings;
+    throw new DatabaseError("No valid fields to update");
   }
 
   // Convert boolean fields to integers for SQLite
@@ -112,6 +119,57 @@ export function updateLLMSettings(
   const settings = getLLMSettingsByUserId(userId);
   if (!settings) {
     throw new Error(`LLM settings not found for user ${userId}`);
+  }
+  return settings;
+}
+
+/**
+ * The columns a caller may set back to NULL.
+ *
+ * ONE definition: the `as const` array is the runtime guard AND the source of
+ * the literal union, so a name can never be accepted by one and rejected by the
+ * other. Same shape as `TABLE_FIELDS` after BACKLOG-2739 (PR #2322).
+ */
+const CLEARABLE_LLM_SETTINGS_COLUMNS = [
+  "openai_api_key_encrypted",
+  "anthropic_api_key_encrypted",
+] as const;
+
+export type ClearableLLMSettingsColumn =
+  (typeof CLEARABLE_LLM_SETTINGS_COLUMNS)[number];
+
+/**
+ * Clear one column back to NULL.
+ *
+ * BACKLOG-2932. `updateLLMSettings` takes `Partial<LLMSettings>` and skips every
+ * `undefined` value, so "remove this key" was inexpressible through it: passing
+ * `{ openai_api_key_encrypted: undefined }` dropped the only field and wrote
+ * nothing. A separate verb makes clearing a real operation instead of a value
+ * the update path has to guess at, and keeps `undefined` meaning "not supplied"
+ * everywhere.
+ */
+export function clearLLMSettingsField(
+  userId: string,
+  column: ClearableLLMSettingsColumn
+): LLMSettings {
+  // The union makes a bad column a compile error; this guards the JS callers and
+  // any `as` cast that gets past it, and is what keeps the interpolation below
+  // safe.
+  if (!(CLEARABLE_LLM_SETTINGS_COLUMNS as readonly string[]).includes(column)) {
+    throw new DatabaseError(`Column is not clearable: ${column}`);
+  }
+
+  const sql = `
+    UPDATE llm_settings
+    SET ${column} = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = ?
+  `;
+
+  dbRun(sql, [userId]);
+
+  const settings = getLLMSettingsByUserId(userId);
+  if (!settings) {
+    throw new DatabaseError(`LLM settings not found for user ${userId}`);
   }
   return settings;
 }
