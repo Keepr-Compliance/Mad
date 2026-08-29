@@ -1065,6 +1065,148 @@ describe("databaseService — v2.27.0 -> develop migration-chain rehearsal (BACK
   });
 
   // =========================================================================
+  // v69 — the pair shapes. BACKLOG-2630 D2 / 2665 / 2616.
+  //
+  // WHAT THIS PATH ACTUALLY EXERCISES, stated because it looks like a gap and
+  // is the point: this fixture predates the identity tables entirely (`grep -c
+  // "CREATE TABLE contact_link_proposals"` over the fixture -> 0), so v59
+  // CREATES them during this chain — from the SHARED constants, which always
+  // describe the CURRENT shape. v69 then finds its `pair_kind` marker and
+  // correctly no-ops.
+  //
+  // That makes this the CONVERGENCE probe, and convergence is the property the
+  // D2 plan's addendum warned could silently fail: a rebuild creates its
+  // indexes INSIDE the marker guard, so anything v69 added as a standalone
+  // `CREATE INDEX` would be present on upgraded databases and ABSENT here. The
+  // uniqueness that carries the founder's "one row per unordered pair" ruling
+  // is therefore a TABLE-LEVEL constraint, which rides inside `CREATE TABLE`
+  // and cannot diverge between the two routes. This probe is what says so.
+  //
+  // The row-carrying UPGRADE path — a real v68 file with proposals and verdicts
+  // in the pre-v69 shape, rebuilt and asserted field for field — is in
+  // `databaseService.onDiskUpgrade.test.ts` ("v69 rebuilds the questions and
+  // the answers..."), because only a database that really is old can prove it.
+  // =========================================================================
+
+  it("v69 applied: both identity tables admit all three pair shapes, and the unordered-pair rule is structural", async () => {
+    assertRealOnDiskTarget();
+    await upgrade();
+
+    // (1) THE VOCABULARY IS PRESENT ON BOTH TABLES. Verdicts matter as much as
+    //     proposals: a question that can be asked and never answered durably is
+    //     the defect this slice exists to avoid.
+    for (const table of ["contact_link_proposals", "contact_link_verdicts"] as const) {
+      expect(columnNames(table)).toEqual(
+        expect.arrayContaining([
+          "pair_kind",
+          "target_contact_id",
+          "target_source_type",
+          "target_source_record_id",
+          "subject_side",
+        ]),
+      );
+
+      // `pair_key` is NOT in that list, and its absence is the assertion:
+      // `PRAGMA table_info` OMITS generated columns entirely (measured — it
+      // reports 2 of 3 columns for a table with one generated column, while
+      // `table_xinfo` reports all three and `SELECT *` returns all three).
+      //
+      // So `pair_key` is asserted through `table_xinfo`, where `hidden = 3`
+      // means STORED-generated. That is the stronger claim anyway: it proves
+      // no INSERT can supply the key, which is what makes it unforgeable
+      // rather than merely conventional.
+      const generated = (
+        db.prepare(`PRAGMA table_xinfo(${table})`).all() as Array<{
+          name: string;
+          hidden: number;
+        }>
+      ).filter((c) => c.hidden === 3);
+      expect(generated.map((c) => c.name)).toEqual(["pair_key"]);
+    }
+
+    // (2) THE DUPLICATE-QUESTION GUARD IS A TABLE-LEVEL UNIQUE ON THE QUESTIONS,
+    //     and deliberately ABSENT from the answers — a user may answer the same
+    //     pair twice and both answers are history.
+    expect(tableSql("contact_link_proposals")).toMatch(/UNIQUE\s*\(\s*user_id\s*,\s*pair_key\s*\)/i);
+    expect(tableSql("contact_link_verdicts")).not.toMatch(/UNIQUE\s*\(/i);
+
+    // (3) ALL THREE SHAPES STORE AND READ BACK, on a real populated database.
+    //     Read back BY IDENTITY — id -> pair_key — so a row landing under the
+    //     wrong key cannot pass.
+    const [ann, ben, cara] = [...CONTACT_IDS].sort();
+    const [extA, extB] = [...EXTERNAL_CONTACT_IDS].sort();
+
+    const propose = db.prepare(
+      `INSERT INTO contact_link_proposals
+         (id, user_id, pair_kind, contact_id, source_type, source_record_id,
+          target_contact_id, target_source_type, target_source_record_id,
+          reason, identity_assessment, relationship_assessment, cluster_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ambiguous_identifier',
+               'possibly_same_person', 'possibly_connected', ?)`,
+    );
+    // record <-> contact: the shape that already worked, unchanged.
+    propose.run("p69-rc", USER_ID, "record_contact", ann, "macos", extA, null, null, null, "k-rc");
+    // record <-> record: NO CONTACT ON EITHER SIDE.
+    propose.run("p69-rr", USER_ID, "record_record", null, "macos", extA, null, "outlook", extB, "k-rr");
+    // contact <-> contact: NO SOURCE RECORD ON EITHER SIDE.
+    propose.run("p69-cc", USER_ID, "contact_contact", ben, null, null, cara, null, null, "k-cc");
+
+    expect(
+      db
+        .prepare("SELECT id, pair_kind, pair_key FROM contact_link_proposals ORDER BY id")
+        .all(),
+    ).toEqual([
+      { id: "p69-cc", pair_kind: "contact_contact", pair_key: `c:${ben}|c:${cara}` },
+      { id: "p69-rc", pair_kind: "record_contact", pair_key: `c:${ann}|r:macos:${extA}` },
+      {
+        id: "p69-rr",
+        pair_kind: "record_record",
+        pair_key: `r:macos:${extA}|r:outlook:${extB}`,
+      },
+    ]);
+
+    // (4) THE REVERSE DIRECTION IS REFUSED — the founder's ruling, proven by
+    //     execution rather than left to an emission pass to remember. Note the
+    //     arguments are swapped end for end; only the generated key collapses
+    //     them.
+    expect(() =>
+      propose.run("p69-cc-rev", USER_ID, "contact_contact", cara, null, null, ben, null, null, "k-cc"),
+    ).toThrow(/UNIQUE/i);
+    expect(() =>
+      propose.run("p69-rr-rev", USER_ID, "record_record", null, "outlook", extB, null, "macos", extA, "k-rr"),
+    ).toThrow(/UNIQUE/i);
+
+    // (5) NO SENTINEL CONTACT ROW WAS INVENTED FOR THE RECORD PAIR. Its contact
+    //     columns really are NULL — the founder's explicit prohibition, and the
+    //     thing a "helpful" placeholder would quietly undo.
+    expect(
+      db
+        .prepare(
+          "SELECT contact_id, target_contact_id FROM contact_link_proposals WHERE id = 'p69-rr'",
+        )
+        .get(),
+    ).toEqual({ contact_id: null, target_contact_id: null });
+
+    // (6) THE ANSWERS TAKE THE SAME THREE SHAPES, and a pair may be answered
+    //     twice — asserted by exact id set, since no UNIQUE stops it.
+    const verdict = db.prepare(
+      `INSERT INTO contact_link_verdicts
+         (id, user_id, pair_kind, contact_id, source_type, source_record_id,
+          target_contact_id, target_source_type, target_source_record_id, identity_verdict)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    verdict.run("v69-rr", USER_ID, "record_record", null, "macos", extA, null, "outlook", extB, "same_person");
+    verdict.run("v69-rr-again", USER_ID, "record_record", null, "macos", extA, null, "outlook", extB, "different_people");
+    verdict.run("v69-cc", USER_ID, "contact_contact", ben, null, null, cara, null, null, "different_people");
+
+    expect(ids("SELECT id FROM contact_link_verdicts")).toEqual([
+      "v69-cc",
+      "v69-rr",
+      "v69-rr-again",
+    ]);
+  });
+
+  // =========================================================================
   // The pre-migration backup — a real upgrade takes one, and it must be a
   // PRE-migration snapshot, not an empty file.
   // =========================================================================

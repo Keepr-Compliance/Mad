@@ -598,6 +598,14 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
             version: 68,
             description: expect.stringContaining("BACKLOG-2859"),
           },
+          {
+            // BACKLOG-2630 slice 2 (board D2), piece 1: the three pair shapes.
+            // Written as 69 because develop's chain head was measured at 68 and
+            // no open PR held 69; under the standing protocol whoever merges
+            // second renumbers.
+            version: 69,
+            description: expect.stringContaining("BACKLOG-2630"),
+          },
         ],
         // BACKLOG-2791: derived — the plan seeds at 29, so this is "every
         // migration above 29", not a literal that needs re-typing each time.
