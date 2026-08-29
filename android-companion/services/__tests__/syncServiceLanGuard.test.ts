@@ -77,7 +77,7 @@ function pairingAt(ip: string): PairingInfo {
 
 const MESSAGE: SyncMessage = {
   smsId: '1',
-  sender: '+15550000001',
+  sender: '+12065550142',
   body: 'test body',
   timestamp: 1_000,
   threadId: 't1',
@@ -87,7 +87,7 @@ const MESSAGE: SyncMessage = {
 const CONTACT: SyncContact = {
   id: 'c1',
   displayName: 'Test Contact',
-  phones: [{ number: '+15550000002' }],
+  phones: [{ number: '+12065550143' }],
   emails: [],
 };
 
