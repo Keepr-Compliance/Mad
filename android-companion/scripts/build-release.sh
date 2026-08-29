@@ -97,8 +97,11 @@ if [ ! -f "$KEEPR_ANDROID_KEYSTORE_PATH" ]; then
   exit 1
 fi
 
-VERSION="$(node -p "require('$PROJECT_DIR/app.json').expo.version")"
-VERSION_CODE="$(node -p "require('$PROJECT_DIR/app.json').expo.android.versionCode")"
+# `node -p` renders a NUMBER through util.inspect, which can emit ANSI colour
+# escapes — those landed inside the artifact FILENAMES on the first run
+# ("keepr-companion-1.1.0-<ESC>[33m2<ESC>[39m.apk"). String() forces plain text.
+VERSION="$(node -p "String(require('$PROJECT_DIR/app.json').expo.version)")"
+VERSION_CODE="$(node -p "String(require('$PROJECT_DIR/app.json').expo.android.versionCode)")"
 
 # A missing versionCode is how every previous build ended up claiming version 1:
 # Expo silently defaults it to 1. Never let that happen again silently.
@@ -288,7 +291,25 @@ echo "[build-release] --- verification ---"
 # report. app.json is an input; this is the output.
 if [ -x "$AAPT2" ]; then
   echo "[verify] compiled manifest:"
-  "$AAPT2" dump badging "$APK_DEST" 2>/dev/null | head -1
+  # NOT `| head -1`: under `set -o pipefail`, head closing the pipe makes aapt2
+  # die on SIGPIPE, the pipeline reports failure, and errexit silently aborts
+  # the script before any of the checks below run. Capture, then slice.
+  BADGING="$("$AAPT2" dump badging "$APK_DEST" 2>/dev/null || true)"
+  MANIFEST_LINE="${BADGING%%$'\n'*}"
+  echo "  $MANIFEST_LINE"
+
+  # The compiled manifest is the authority on what a device will report, so
+  # assert it against app.json rather than just printing it. A mismatch here
+  # means the artifact does not carry the version we think we built.
+  case "$MANIFEST_LINE" in
+    *"versionCode='$VERSION_CODE'"*) ;;
+    *) echo "ERROR: APK manifest versionCode does not match app.json ($VERSION_CODE)"; exit 1 ;;
+  esac
+  case "$MANIFEST_LINE" in
+    *"versionName='$VERSION'"*) ;;
+    *) echo "ERROR: APK manifest versionName does not match app.json ($VERSION)"; exit 1 ;;
+  esac
+  echo "[verify] manifest matches app.json: $VERSION ($VERSION_CODE)"
 fi
 
 # `apksigner verify` alone is NOT a useful check: a debug-signed APK verifies
@@ -296,8 +317,15 @@ fi
 # debug key, so the digest is printed for comparison against the known cert.
 if [ -x "$APKSIGNER" ]; then
   echo "[verify] APK signer certificate:"
-  "$APKSIGNER" verify --print-certs "$APK_DEST" 2>/dev/null \
-    | grep -E "SHA-256 digest|Signer #1 certificate DN" || true
+  CERTS="$("$APKSIGNER" verify --print-certs "$APK_DEST" 2>/dev/null || true)"
+  echo "$CERTS" | grep -E "SHA-256 digest|Signer #1 certificate DN" || true
+  # `apksigner verify` succeeding proves NOTHING about WHICH key signed it — a
+  # debug-signed APK verifies too. The debug keystore's DN is the well-known
+  # "CN=Android Debug"; refuse to ship an artifact carrying it.
+  if echo "$CERTS" | grep -qi "CN=Android Debug"; then
+    echo "ERROR: this APK is signed with the ANDROID DEBUG KEY, not the release key."
+    exit 1
+  fi
   if "$APKSIGNER" verify "$APK_DEST" >/dev/null 2>&1; then
     echo "[verify] APK signature: OK"
   else
