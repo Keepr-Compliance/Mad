@@ -20,8 +20,20 @@ import {
 import {
   threadContactLabel,
   threadContactIsUnresolved,
+  threadNaming,
   GROUP_CHAT_LABEL,
 } from "./threadContactLabel";
+
+/**
+ * BACKLOG-2757: how a renderer asks "how many contacts does this handle name?".
+ *
+ * A function rather than the resolution object so these renderers keep no
+ * dependency on the resolution service; `matchedNamesFor` is the one
+ * implementation and every caller passes it bound.
+ */
+export type MatchedNamesLookup = (
+  handle: string | null | undefined
+) => readonly string[];
 import logService from "../logService";
 
 /**
@@ -280,7 +292,8 @@ export function generateTextIndex(
   texts: Communication[],
   phoneNameMap?: Record<string, string>,
   getContactNamesByPhonesFallback?: (handles: string[]) => Record<string, string>,
-  extractHandles?: (texts: Communication[]) => string[]
+  extractHandles?: (texts: Communication[]) => string[],
+  matchedNames?: MatchedNamesLookup
 ): string {
   // Use provided phoneNameMap or fall back to sync lookup
   const nameMap = phoneNameMap ||
@@ -325,10 +338,13 @@ export function generateTextIndex(
       // BACKLOG-2463: one shared chain (name -> formatted handle -> "No name"),
       // called rather than restated. A group thread with no resolvable party is
       // still named for the chat, which is what it is.
-      const displayName =
-        groupChat && threadContactIsUnresolved(contact)
-          ? GROUP_CHAT_LABEL
-          : threadContactLabel(contact);
+      // BACKLOG-2757: and one shared decision about a handle that names more
+      // than one person — the index must not crown a winner the PDF refused to.
+      const displayName = threadNaming({
+        contact,
+        isGroupChat: groupChat,
+        matchedNames: matchedNames?.(contact.phone),
+      }).label;
 
       return `
           <div class="text-item">
@@ -358,7 +374,8 @@ export function generateTextThreadHTML(
     mime_type: string | null;
     storage_path: string | null;
     file_size_bytes: number | null;
-  }[]
+  }[],
+  matchedNames?: readonly string[]
 ): string {
   // BACKLOG-2280: split tapback rows out of the thread so they are attached to
   // their parent message line (as an evidentiary "Reactions:" line) rather than
@@ -511,6 +528,14 @@ export function generateTextThreadHTML(
       // Group chats always show "Group Chat #XXX"
       if (groupChat) {
         return `${GROUP_CHAT_LABEL} <span class="badge">#${threadId}</span>`;
+      }
+      // BACKLOG-2757: a handle two contacts share is named for the handle AND
+      // both people — "+1 (415) 555-0120 — Chris Alvarez or Dana Alvarez". Read
+      // as a heading, "Conversation with A or B" would suggest the deal knows
+      // which; the bare honest label does not.
+      const naming = threadNaming({ contact, isGroupChat: groupChat, matchedNames });
+      if (naming.ambiguous) {
+        return `${escapeHtml(naming.label)} <span class="badge">#${threadId}</span>`;
       }
       // BACKLOG-2463: with nobody to name the thread after, print the chain's
       // terminal label on its own — "Conversation with No name" reads as a claim

@@ -260,22 +260,56 @@ describe("BACKLOG-2612 — handle resolvers: global, last-write-wins, unscoped",
     await deleteContact(DANA.id, "user_deleted");
   });
 
-  test("a SHARED email resolves to exactly one key with ONE holder's name — set membership, winner not asserted", () => {
+  // =========================================================================
+  // BACKLOG-2757 — THESE TWO LEGS FLIPPED. That flip IS the fix's evidence.
+  //
+  // They used to say "one of the two holders wins, and we will not assert which
+  // because the code does not guarantee an order". That was an honest reading of
+  // a coin flip. There is now an order, and a rule, so the winner-that-cannot-
+  // be-named is replaced by an EXACT STRING that names both people.
+  // =========================================================================
+
+  test("a SHARED email resolves to ONE key naming BOTH holders, in declared order", () => {
     const map = getContactNamesByEmails([SHARED_EMAIL]);
     // EXACT key set (SR §9.1): a length check would pass with a wrong key.
     expect(Object.keys(map)).toEqual([SHARED_EMAIL]);
-    // Two contacts hold this address; the winner is decided by row order over
-    // an unordered result (`result[row.email] = row.display_name`, no ORDER
-    // BY). Asserting a winner would manufacture a flake; the measured winner
-    // at this SHA is recorded on BACKLOG-2612.
-    expect([CHRIS.name, DANA.name]).toContain(map[SHARED_EMAIL]);
+    // Two contacts hold this address. Neither is crowned; the label says so.
+    // Order is (display_name, contact_id) — "Chris" before "Dana" by name, not
+    // by which row SQLite happened to hand back.
+    expect(map[SHARED_EMAIL]).toBe(`${CHRIS.name} or ${DANA.name}`);
   });
 
-  test("a SHARED phone resolves to one name per key format, same one-winner rule", () => {
+  test("a SHARED phone resolves to the same both-holders label under every key format", () => {
     const map = getContactNamesByPhones([SHARED_PHONE]);
     const values = [...new Set(Object.values(map))];
-    expect(values).toHaveLength(1);
-    expect([CHRIS.name, DANA.name]).toContain(values[0]);
+    // Still ONE label across every alias key — the aliases must not disagree.
+    expect(values).toEqual([`${CHRIS.name} or ${DANA.name}`]);
+  });
+
+  test("BACKLOG-2757 determinism: the shared-handle label does NOT depend on row order", () => {
+    // The defect was `result[key] = row.display_name` with no guard, over rows
+    // SQLite returns in rowid (= insertion) order — so the second-inserted
+    // contact won. Reversing what SQLite offers first must change nothing.
+    //
+    // Forced by asking for the SAME handle through both column formats and both
+    // orderings of the input list: any surviving order-sensitivity in the JS
+    // merge shows up as two different labels here.
+    const forward = getContactNamesByPhones([SHARED_PHONE]);
+    const reverse = getContactNamesByPhones([SHARED_PHONE, SHARED_PHONE]);
+    expect([...new Set(Object.values(reverse))]).toEqual([
+      ...new Set(Object.values(forward)),
+    ]);
+    expect(new Set(Object.keys(reverse))).toEqual(new Set(Object.keys(forward)));
+  });
+
+  test("BACKLOG-2757 boundary: ONE contact holding TWO handles is not ambiguous", () => {
+    // Chris holds chris.alvarez@ and Chris.A.Work@. Two rows, ONE contact — the
+    // rule keys on contact identity, not on row count, so neither address may
+    // acquire an "or". The naive "more than one row means ambiguous" reading
+    // would red here.
+    const map = getContactNamesByEmails([CHRIS.primaryEmail, CHRIS.secondEmail.toLowerCase()]);
+    expect(map[CHRIS.primaryEmail]).toBe(CHRIS.name);
+    expect(map[CHRIS.secondEmail.toLowerCase()]).toBe(CHRIS.name);
   });
 
   test("resolution is GLOBAL: a contact attached to NO transaction (or another deal) still labels a handle", () => {
@@ -330,12 +364,14 @@ describe("BACKLOG-2612 — handle resolvers: global, last-write-wins, unscoped",
     // it. Single-holder prefixes are deterministic and pinned exactly; the
     // multiple-holder arbitrariness is reported as a finding on BACKLOG-2612.
     expect(getContactNameByAppleIdPrefix("chris.alvarez")).toEqual({
+      contact_id: CHRIS.id,
       email: CHRIS.primaryEmail,
       display_name: CHRIS.name,
     });
     // Tombstoned Dana still resolves (same no-removed_at-filter policy as the
     // other four resolvers — mutation E4's family applies here too).
     expect(getContactNameByAppleIdPrefix("dana.alvarez")).toEqual({
+      contact_id: DANA.id,
       email: DANA.primaryEmail,
       display_name: DANA.name,
     });

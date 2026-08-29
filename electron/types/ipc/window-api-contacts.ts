@@ -221,8 +221,25 @@ export interface WindowApiContacts {
     names: Record<string, string>;
     error?: string;
   }>;
-  /** TASK-2026: Resolve any mix of phones, emails, Apple IDs to contact names */
-  resolveHandles: (handles: string[], userId?: string) => Promise<{
+  /**
+   * TASK-2026: Resolve any mix of phones, emails, Apple IDs to contact names.
+   *
+   * BACKLOG-2758 — `scope.transactionId` is a PREFERENCE, not a filter. When a
+   * handle is held by several contacts and at least one of them is linked to
+   * that transaction, the unlinked ones stop sharing the label. Omit it and
+   * every contact holding the handle is a peer, so a shared line resolves to
+   * the honest "A or B".
+   *
+   * The scope deliberately carries NO userId. The user is established in the
+   * main process from the `userId` argument via `getValidUserId`; letting the
+   * renderer name a second one here would give the wire a way to widen a hard
+   * filter, since `resolvePhoneNames` reads `scope?.userId ?? userId`.
+   */
+  resolveHandles: (
+    handles: string[],
+    userId?: string,
+    scope?: { transactionId?: string },
+  ) => Promise<{
     success: boolean;
     names: Record<string, string>;
     error?: string;

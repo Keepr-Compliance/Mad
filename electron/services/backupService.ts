@@ -5,9 +5,12 @@
  * Extracts messages and contacts from iPhone backups.
  * Supports encrypted backup decryption (TASK-007).
  *
- * IMPORTANT: Domain filtering is NOT supported by idevicebackup2.
- * See docs/BACKUP_RESEARCH.md for full research findings.
- * This service uses --skip-apps to reduce backup size by ~40%.
+ * IMPORTANT: Domain filtering is NOT supported by idevicebackup2, and neither
+ * is excluding app data. The iOS MobileBackup2 protocol offers no way to request
+ * a subset of domains, and the `backup` command takes exactly one option, --full.
+ * Every backup this service takes is therefore a FULL device backup, app data
+ * included, and its size is not something the argv can influence.
+ * See docs/BACKUP_RESEARCH.md for the measurements behind both statements.
  */
 
 import { spawn, ChildProcess } from "child_process";
@@ -28,8 +31,525 @@ import {
   BackupStatus,
   BackupEncryptionInfo,
   BackupErrorCode,
+  BackupSizeReading,
+  BackupStatusReport,
+  BackupFailureCause,
 } from "../types/backup";
 import { validateDeviceUdid, ValidationError } from "../utils/validation";
+
+/**
+ * BACKLOG-2917: a short, log-safe description of a caught value.
+ *
+ * The three-state values in this file carry a `reason` so that "we do not know" can
+ * say WHY when it reaches a log or a Sentry event. Without it the new unknown state
+ * would be as mute as the `null` it replaces — distinguishable by the machine but
+ * not diagnosable by a human reading a support log.
+ */
+function describeError(error: unknown): string {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+/**
+ * BACKLOG-2899: how idevicebackup2 reports that the HOST disk is full.
+ *
+ * TRANSCRIBED, in two steps, because BACKLOG-2870 is the precedent for a
+ * detector written against an invented string (SQLite's real
+ * "database or disk is full" matched none of the patterns hunting for it).
+ *
+ * 1. The format string, `strings`-ed out of the binary this app actually ships,
+ *    resources/win/libimobiledevice/idevicebackup2.exe:
+ *
+ *        Error opening '%s' for writing: %s
+ *
+ *    and from libimobiledevice tools/idevicebackup2.c, mb2_handle_receive_files(),
+ *    which is where that line is produced:
+ *
+ *        errcode = errno_to_device_error(errno);
+ *        errdesc = strerror(errno);
+ *        progress_printf("Error opening '%s' for writing: %s\n", bname, errdesc);
+ *
+ * 2. The `%s` tail is `strerror(errno)`, supplied by the C runtime rather than
+ *    embedded in the executable — so it is NOT in the binary's strings, and this
+ *    step is INFERRED, not transcribed from an observed failure: Windows maps
+ *    ERROR_DISK_FULL to ENOSPC via _dosmaperr, and UCRT, glibc and BSD all
+ *    render ENOSPC as "No space left on device". The Win32-phrasing and ENOSPC
+ *    alternates below are belt-and-braces for a build that formats it
+ *    differently.
+ *
+ * Note what this detector CANNOT see, which is why BACKLOG-2899 does not rely on
+ * it: in the same function the host-side write is `fwrite(buf, 1, r, f);` with
+ * the return value never checked, and `fclose(f)` unchecked too. A full disk is
+ * therefore usually absorbed in silence — truncated files, exit code 0, and
+ * "Backup Successful." on stdout. The mid-transfer free-space monitor in
+ * deviceSyncOrchestrator is the actual guard; this is the backstop.
+ */
+export const IDEVICEBACKUP2_DISK_FULL_PATTERNS: readonly RegExp[] = [
+  /no space left on device/i,
+  /not enough space on the disk/i,
+  /there is not enough space on the disk/i,
+  /\bENOSPC\b/,
+  /disk (?:is )?full/i,
+];
+
+/**
+ * BACKLOG-2899: true when idevicebackup2 output reports a full host disk.
+ *
+ * Reads STDOUT, not stderr: progress_printf() is `vprintf()`, so every one of
+ * these lines goes to stdout. backupService only ever fed `stderrBuffer` to
+ * getErrorMessage(), so before this the message could not reach any detector.
+ */
+export function isIdevicebackup2DiskFullOutput(output: string): boolean {
+  return IDEVICEBACKUP2_DISK_FULL_PATTERNS.some((p) => p.test(output));
+}
+
+// ============================================================================
+// BACKLOG-2913: what actually went wrong, read from the device instead of guessed
+// ============================================================================
+
+/**
+ * MBErrorDomain codes this app has a specific answer for.
+ *
+ * 105 and 208 were both OBSERVED on the founder's machine on 2026-08-27, with the
+ * exit codes noted. 4 is the code `idevicebackup2 info` returns for a missing
+ * `Status.plist` (BACKLOG-2951 uses it as the "service is healthy" probe result);
+ * its device-supplied description has never been captured here, so nothing in this
+ * file asserts a wording for it.
+ *
+ * The exit code appears to be `(-deviceCode) & 0xFF` — 208 exits 48, 105 exits 151,
+ * and both satisfy it. It is NOT used to classify anything: two data points is not a
+ * rule, and exit 255 (seen twice, for two different connection faults) would invert
+ * to a bogus device code 1.
+ */
+export const MB_ERROR_HOST_DISK_FULL = 105;
+export const MB_ERROR_DEVICE_LOCKED = 208;
+export const MB_ERROR_FILE_MISSING = 4;
+
+/**
+ * BACKLOG-2913: the disk-space message, in one place.
+ *
+ * Two code paths report a full host disk — this one, and the BACKLOG-2899
+ * `diskFullDetected` flag set from stdout during the run. They had different
+ * wording, so which sentence the user saw depended on which detector fired first.
+ *
+ * Three things this sentence has to do, each learned the hard way on 2026-08-27:
+ *
+ * 1. **Name the Mac.** The device's own `ErrorDescription` is "Insufficient free
+ *    disk space on drive to back up" and names no drive. The founder read it, opened
+ *    his iPhone's storage screen, saw 80 GB free, and concluded the app was broken.
+ * 2. **Warn that macOS disagrees.** The Storage pane said 283 GB free while `df`,
+ *    `diskutil`, `statfs` and idevicebackup2 all said 23 GB. The gap is local Time
+ *    Machine snapshots. Saying "not enough space" to someone looking at 283 GB reads
+ *    as a bug in Keepr, every time, for every user with Time Machine configured.
+ * 3. **Not say "delete some files".** Measured three times that evening: deleting
+ *    20 GB freed 4 GB, deleting 26 GB freed 0, deleting 25 GB freed 0 — the blocks
+ *    stay pinned in snapshots. Telling a user to free space by deleting can
+ *    accomplish literally nothing.
+ *
+ * It deliberately quotes no required size: the estimate is ~3x low and belongs to
+ * BACKLOG-2918. A wrong number here would be a fourth thing to disbelieve.
+ *
+ * Keeps the literal substring "disk space" so that deviceSyncOrchestrator's
+ * `/disk space|no space|ENOSPC|not enough space/i` Sentry tag still fires. That
+ * coupling is asserted by a test rather than left to be rediscovered.
+ */
+export const BACKUP_HOST_DISK_FULL_MESSAGE =
+  "Not enough free disk space on this Mac to back up your iPhone. " +
+  "Your Mac may report far more space than this: macOS counts space held by local " +
+  "Time Machine snapshots as free, and a backup cannot use it. Deleting files often " +
+  "frees nothing while those snapshots are holding them.";
+
+/** BACKLOG-2913: correct for MBErrorDomain/208, and now shown only for it. */
+export const BACKUP_DEVICE_LOCKED_MESSAGE =
+  "iPhone is locked. Please unlock your iPhone and try again, and leave it unlocked " +
+  "while the sync runs.";
+
+/**
+ * BACKLOG-2913: the USB link dropped BEFORE any file transfer began. Exit 255 with
+ * `usbmuxd_send returned -32 (Broken pipe)`, and no progress line ever seen.
+ *
+ * Hardware-first advice is correct HERE and only here. A link that dies before the
+ * first progress bar died during enumeration, pairing or the passcode wait — the
+ * stage at which a bad cable, a flaky port, a hub or a dock genuinely is the most
+ * likely cause.
+ *
+ * See {@link BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE} for what happens once
+ * bytes have moved, and why the same sentence there was wrong.
+ */
+export const BACKUP_CONNECTION_LOST_MESSAGE =
+  "The connection to your iPhone dropped during the backup. Try a different cable, " +
+  "plug the iPhone straight into this Mac without a hub or dock, then sync again. " +
+  "If it keeps dropping, restart your iPhone.";
+
+/**
+ * BACKLOG-2913: the USB link dropped AFTER file transfer had begun. Same exit code,
+ * same broken-pipe line, different fault — and it needs different advice.
+ *
+ * The founder tested the classifier on real hardware on 2026-08-28: an incremental
+ * sync, `File transfer started after 684.6s` (so: enumerated, paired, passcode
+ * entered), one 616 MB file completed, then he unplugged the cable. The classifier
+ * named the connection correctly — the old code would have said "iPhone is locked" —
+ * but the message told him to try a different cable.
+ *
+ * His objection, and it is right: **a drop eleven minutes in, after a successful
+ * handshake and 616 MB, is almost never a faulty cable.** A bad cable fails at
+ * enumeration or within seconds. The realistic causes of a MID-TRANSFER drop are the
+ * Mac sleeping, the phone sleeping or locking, USB power management suspending the
+ * port, a hub renegotiating, or the user unplugging it. Cable fault is the least
+ * likely of them once bytes have moved, and leading with it sends a user hunting for
+ * a hardware problem they do not have.
+ *
+ * So: the action that actually works comes first, and hardware comes last.
+ */
+export const BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE =
+  "The connection to your iPhone dropped during the backup. This is often " +
+  "temporary — try syncing again. If it keeps happening, plug the iPhone " +
+  "straight into this Mac without a hub, and check that neither device is going " +
+  "to sleep.";
+
+/**
+ * BACKLOG-2913: the device's backup service would not negotiate. Exit 255 with
+ * `version exchange failed, error -5` and NO disconnect events — repeated fast
+ * retries are what produces this state, so the message must not invite another one.
+ */
+export const BACKUP_SERVICE_UNAVAILABLE_MESSAGE =
+  "Your iPhone's backup service did not respond. Unplug the iPhone, wait ten " +
+  "seconds, plug it back in and unlock it, then try once. Repeated quick retries " +
+  "are what causes this, so give it a moment rather than syncing again straight away.";
+
+/** BACKLOG-2913: MBErrorDomain/4 — the device could not find a file it needed. */
+export const BACKUP_FILE_MISSING_MESSAGE =
+  "Part of the existing backup on this Mac is missing or unreadable, so your iPhone " +
+  "could not continue it. Starting a fresh backup should clear this.";
+
+/**
+ * BACKLOG-2913: idevicebackup2's own failure summary, on STDOUT.
+ *
+ * TRANSCRIBED from the founder's dev log, 2026-08-27 22:44:38 — the block logged by
+ * `[BackupService] stdout:` reads, in full:
+ *
+ *     Requesting backup from device...
+ *     Incremental backup mode.
+ *     *** Waiting for passcode to be entered on the device ***
+ *     ErrorCode 208: Device locked (MBErrorDomain/208)
+ *     Received 0 files from device.
+ *     Backup Failed (Error Code 208).
+ *
+ * This is the PREFERRED source. It comes from `progress_printf()`, so it is emitted
+ * whether or not `-d` was passed, and stdout carries a tiny fraction of the volume
+ * of the debug stream, so it survives the 64KB tail cap that can swallow the plist.
+ */
+const IDEVICEBACKUP2_STDOUT_ERROR_LINE = /^[ \t]*ErrorCode[ \t]+(\d+):[ \t]*(.*)$/gm;
+
+/**
+ * BACKLOG-2913: the `DLMessageProcessMessage` response plist, on STDERR.
+ *
+ * TRANSCRIBED from the same run — `property_list_service.c:253` prints it in full:
+ *
+ *     <array>
+ *     	<string>DLMessageProcessMessage</string>
+ *     	<dict>
+ *     		<key>ErrorCode</key>
+ *     		<integer>208</integer>
+ *     		<key>ErrorDescription</key>
+ *     		<string>Device locked (MBErrorDomain/208)</string>
+ *     		<key>MessageName</key>
+ *     		<string>Response</string>
+ *     	</dict>
+ *     </array>
+ *
+ * Note the keys and values are on SEPARATE tab-indented lines; a pattern written
+ * against a one-line `<key>ErrorCode</key><integer>105</integer>` would match a
+ * fixture and never a real device.
+ *
+ * Scoped to the DLMessageProcessMessage envelope on purpose: the same stream carries
+ * other plists (a `Shutdown` command block, lockdown query responses), and an
+ * unscoped `<key>ErrorCode</key>` hunt would eventually read one of those.
+ */
+const DL_PROCESS_MESSAGE_BLOCK =
+  /DLMessageProcessMessage<\/string>([\s\S]{0,4000}?)<\/array>/g;
+const DL_ERROR_CODE = /<key>ErrorCode<\/key>\s*<integer>(-?\d+)<\/integer>/;
+const DL_ERROR_DESCRIPTION = /<key>ErrorDescription<\/key>\s*<string>([\s\S]*?)<\/string>/;
+
+/**
+ * BACKLOG-2913: exit-255 discriminators. Both TRANSCRIBED, and consulted only when
+ * the device reported no code of its own.
+ *
+ * `SSL_read 4, received 0` is deliberately NOT here, though BACKLOG-2951 lists it
+ * under "USB link flapping". The 2026-08-27 log has about thirty of those lines
+ * (22:42:44 through 22:43:20) inside the run that ended in device-locked/208, on a
+ * healthy link — it is routine notification_proxy polling, the same class of chatter
+ * as `np_lock(): Locked`. Treating it as a link-drop signal would rebuild this exact
+ * bug one rung further down.
+ */
+const CONNECTION_DROPPED_PATTERN = /usbmuxd_send returned -\d+ \(Broken pipe\)/i;
+const SERVICE_VERSION_EXCHANGE_PATTERN =
+  /version exchange failed|Could not perform backup protocol version exchange/i;
+
+/** Minimal XML entity decoding for a plist string value. */
+function decodePlistString(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * BACKLOG-2913: read the device's own error code out of a failed run.
+ *
+ * stdout first WHEN IT CARRIES A CODE, then the stderr plist. The LAST occurrence
+ * wins in both: a run can log several DLMessage responses, and the one that ended it
+ * is the last.
+ *
+ * stdout is preferred because idevicebackup2 prints the `ErrorCode N: ...` line via
+ * `progress_printf` (a `vprintf`), so it is emitted whether or not `-d` was passed,
+ * and stdout is low-volume enough to survive the 64KB tail cap that can push the
+ * stderr plist out of the buffer entirely. Measured on the founder's five real
+ * failures of 2026-08-27: stderr hit the cap in 5 of 5 runs, stdout ran 0–475 bytes.
+ *
+ * Preferred is NOT the same as always present: four of those five runs captured ZERO
+ * stdout, because the run never reached the point of printing a summary. Those runs
+ * are carried by the fallback chain below, not by this parse.
+ *
+ * Returns `deviceErrorCode: null` when neither stream carried a code. That is
+ * "the device did not tell us", never "no error".
+ */
+export function parseDeviceBackupError(
+  stdout: string,
+  stderr: string,
+): Pick<
+  BackupFailureCause,
+  "deviceErrorCode" | "deviceErrorDescription" | "source"
+> {
+  let lastStdoutMatch: RegExpExecArray | null = null;
+  IDEVICEBACKUP2_STDOUT_ERROR_LINE.lastIndex = 0;
+  for (
+    let m = IDEVICEBACKUP2_STDOUT_ERROR_LINE.exec(stdout);
+    m !== null;
+    m = IDEVICEBACKUP2_STDOUT_ERROR_LINE.exec(stdout)
+  ) {
+    lastStdoutMatch = m;
+  }
+  if (lastStdoutMatch) {
+    const description = lastStdoutMatch[2].trim();
+    return {
+      deviceErrorCode: Number.parseInt(lastStdoutMatch[1], 10),
+      deviceErrorDescription: description.length > 0 ? description : null,
+      source: "stdout-line",
+    };
+  }
+
+  let lastCode: number | null = null;
+  let lastDescription: string | null = null;
+  DL_PROCESS_MESSAGE_BLOCK.lastIndex = 0;
+  for (
+    let block = DL_PROCESS_MESSAGE_BLOCK.exec(stderr);
+    block !== null;
+    block = DL_PROCESS_MESSAGE_BLOCK.exec(stderr)
+  ) {
+    const codeMatch = DL_ERROR_CODE.exec(block[1]);
+    if (!codeMatch) continue;
+    lastCode = Number.parseInt(codeMatch[1], 10);
+    const descriptionMatch = DL_ERROR_DESCRIPTION.exec(block[1]);
+    const decoded = descriptionMatch
+      ? decodePlistString(descriptionMatch[1]).trim()
+      : "";
+    lastDescription = decoded.length > 0 ? decoded : null;
+  }
+  if (lastCode !== null) {
+    return {
+      deviceErrorCode: lastCode,
+      deviceErrorDescription: lastDescription,
+      source: "stderr-plist",
+    };
+  }
+
+  return {
+    deviceErrorCode: null,
+    deviceErrorDescription: null,
+    source: "none",
+  };
+}
+
+/** BACKLOG-2913: a classified backup failure — the sentence AND the data behind it. */
+export interface BackupFailureClassification {
+  message: string;
+  errorCode: BackupErrorCode;
+  cause: BackupFailureCause;
+}
+
+/**
+ * BACKLOG-2913: an honest message for a device code we have not mapped.
+ *
+ * It must include the number — that is the one thing that makes an unmapped failure
+ * identifiable in a support ticket — and it must not guess. The device's own
+ * description is quoted rather than paraphrased, and explicitly attributed to the
+ * iPhone, because that text names no drive and would otherwise mislead exactly the
+ * way "Insufficient free disk space on drive to back up" already did.
+ */
+function describeUnmappedDeviceError(
+  code: number,
+  description: string | null,
+): string {
+  const quoted = description ? ` Your iPhone reported: "${description}".` : "";
+  return (
+    `The backup stopped with error ${code}.${quoted} ` +
+    "Keepr does not have a specific explanation for this one — please send this " +
+    "message to support."
+  );
+}
+
+/**
+ * BACKLOG-2913: decide what actually failed, in order of how much the evidence is
+ * worth.
+ *
+ * 1. The code the DEVICE reported. Machine-readable, unambiguous, and it was
+ *    already being logged and thrown away.
+ * 2. Anchored signals in idevicebackup2's own output, for the connection faults the
+ *    device never gets to report because the link died first.
+ * 3. An honest "we do not know", carrying the exit code so a support log can still
+ *    identify the run.
+ *
+ * What it never does is match UNANCHORED routine vocabulary against the raw `-d`
+ * debug stream. That stream contains `afc_lock(): Locked` and `np_lock(): Locked`
+ * hundreds of times per run, plus `PasswordProtected`, `TrustedHostAttached` and
+ * `PairRecordProtectionClass` as ordinary plist keys — so the old ladder's `locked`
+ * rung matched on every single failure and the `disk`, `trust` and `password` rungs
+ * below it were unreachable.
+ *
+ * The `-d` stream is not excluded outright, and saying so would mislead a future
+ * reader into breaking the thing that makes reading it safe. TWO anchored patterns
+ * — `SERVICE_VERSION_EXCHANGE_PATTERN` and `CONNECTION_DROPPED_PATTERN` — do run
+ * against stderr, because in the exit-255 class the device never answers and the
+ * debug stream is the only evidence that exists. Both are gated behind
+ * `deviceErrorCode === null`: they are consulted only when the device reported no
+ * code at all, and can never override a code the device did report. That ordering is
+ * load-bearing — `usbmuxd_send returned -32 (Broken pipe)` is teardown chatter that
+ * appears in four of the five real failures of 2026-08-27, INCLUDING the one that
+ * was genuinely a locked phone. Reordering either check above the device-code switch
+ * would tell that user to try a different cable. `backupService.failureCause-2913`
+ * pins it.
+ *
+ * `transferStarted` carries the one thing the streams cannot say: whether any file
+ * transfer had begun when the link died. It changes NO classification — only which
+ * of the two connection-lost sentences is returned. It defaults to false, the
+ * conservative reading, so a caller that genuinely does not know gets the message
+ * written for "we never got going". See
+ * {@link BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE} for why the split exists, and
+ * `backupService.connectionCopy-2913` for the tests that pin the wording and the
+ * branch.
+ */
+export function classifyBackupFailure(
+  exitCode: number | null,
+  stdout: string,
+  stderr: string,
+  transferStarted: boolean = false,
+): BackupFailureClassification {
+  const parsed = parseDeviceBackupError(stdout, stderr);
+  const cause: BackupFailureCause = { ...parsed, exitCode };
+
+  switch (parsed.deviceErrorCode) {
+    case MB_ERROR_HOST_DISK_FULL:
+      return {
+        message: BACKUP_HOST_DISK_FULL_MESSAGE,
+        errorCode: "INSUFFICIENT_SPACE",
+        cause,
+      };
+    case MB_ERROR_DEVICE_LOCKED:
+      return {
+        message: BACKUP_DEVICE_LOCKED_MESSAGE,
+        errorCode: "DEVICE_LOCKED",
+        cause,
+      };
+    case MB_ERROR_FILE_MISSING:
+      return {
+        message: BACKUP_FILE_MISSING_MESSAGE,
+        errorCode: "BACKUP_FILE_MISSING",
+        cause,
+      };
+  }
+
+  // The device reported something we have no specific answer for. Say so, and hand
+  // over its own words and number rather than picking the nearest-looking rung.
+  if (parsed.deviceErrorCode !== null) {
+    return {
+      message: describeUnmappedDeviceError(
+        parsed.deviceErrorCode,
+        parsed.deviceErrorDescription,
+      ),
+      errorCode: "UNKNOWN_ERROR",
+      cause,
+    };
+  }
+
+  // No device code: the link or the service failed before the device could answer.
+  // Anchored patterns only.
+  if (
+    SERVICE_VERSION_EXCHANGE_PATTERN.test(stderr) ||
+    SERVICE_VERSION_EXCHANGE_PATTERN.test(stdout)
+  ) {
+    return {
+      message: BACKUP_SERVICE_UNAVAILABLE_MESSAGE,
+      errorCode: "SERVICE_UNAVAILABLE",
+      cause,
+    };
+  }
+  if (
+    CONNECTION_DROPPED_PATTERN.test(stderr) ||
+    CONNECTION_DROPPED_PATTERN.test(stdout)
+  ) {
+    // BACKLOG-2913 (copy defect, founder 2026-08-28): a link drop before the first
+    // progress bar and a link drop at 616 MB are different faults. Same exit code,
+    // same broken-pipe line, opposite advice. `transferStarted` is the only thing
+    // that separates them, and the caller is the only place that knows it.
+    return {
+      message: transferStarted
+        ? BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE
+        : BACKUP_CONNECTION_LOST_MESSAGE,
+      errorCode: "CONNECTION_LOST",
+      cause,
+    };
+  }
+
+  // Last resort. This is the only UNANCHORED vocabulary match left, and it is why it
+  // reads `stdout` and not `stderr`: idevicebackup2's own human-readable summary
+  // (BACKLOG-2899's detector), never the `-d` debug stream. The two anchored
+  // exit-255 patterns above DO read stderr — see the docblock — but they match a
+  // specific fault string; these patterns match ordinary words like "disk full",
+  // which the debug stream is entitled to contain for reasons that are not a
+  // failure. Passing `stderr` here re-creates the original bug.
+  if (isIdevicebackup2DiskFullOutput(stdout)) {
+    return {
+      message: BACKUP_HOST_DISK_FULL_MESSAGE,
+      errorCode: "INSUFFICIENT_SPACE",
+      cause,
+    };
+  }
+
+  if (exitCode === -1) {
+    return {
+      message: "Backup was cancelled.",
+      errorCode: "BACKUP_CANCELLED",
+      cause,
+    };
+  }
+
+  return {
+    message:
+      "The backup stopped and neither this Mac nor your iPhone reported a reason" +
+      (exitCode === null ? "" : ` (exit code ${exitCode})`) +
+      ". Please try again with your iPhone unlocked and plugged in directly. If it " +
+      "keeps happening, send this message to support.",
+    errorCode: "UNKNOWN_ERROR",
+    cause,
+  };
+}
 
 /**
  * Service for managing iPhone backups via idevicebackup2
@@ -39,8 +559,12 @@ import { validateDeviceUdid, ValidationError } from "../utils/validation";
  * - 'error': Error - Error events
  * - 'complete': BackupResult - When backup completes
  * - 'password-required': { udid: string } - When encrypted backup needs password (TASK-007)
- * - 'waiting-for-passcode': void - When waiting for user to enter passcode on iPhone
- * - 'passcode-entered': void - When passcode was entered and transfer begins
+ * - 'waiting-for-passcode': void - The device has not started sending files yet. The
+ *   name is historical (BACKLOG-2911 FIX 3): a passcode prompt is ONE possible cause,
+ *   alongside device-side indexing and a stalled process, and nothing here can tell
+ *   them apart. Do not phrase user-facing copy as though it could.
+ * - 'passcode-entered': void - The first file started transferring. Again historical:
+ *   it marks the END of the wait, not the entry of a passcode.
  */
 export class BackupService extends EventEmitter {
   private currentProcess: ChildProcess | null = null;
@@ -61,20 +585,175 @@ export class BackupService extends EventEmitter {
   private hasReceivedFileProgress: boolean = false;
   private hasEmittedPasscodeWaiting: boolean = false;
   private backupCommandStartTime: number = 0;
-  private static readonly PASSCODE_WAIT_DETECTION_MS = 5000; // 5 seconds without progress = waiting for passcode
+  /**
+   * BACKLOG-2911 (FIX 3): how long with no file progress before the UI is told the
+   * device has not started sending yet.
+   *
+   * THE NAME IS THE BUG. Five seconds without progress was read as "the user is being
+   * asked for a passcode", and NOTHING on this path reports that. Indexing, a phone
+   * nobody has picked up, and a hung process all produce exactly this. On the founder's
+   * 12:09 run on 2026-08-28 he had already entered his passcode and the screen told him
+   * to enter it for fifteen more minutes, because the first byte did not arrive for
+   * 903.9 s.
+   *
+   * The threshold and the event are unchanged — five seconds of no transfer really is
+   * worth telling the user about, and the renderer needs a signal to say so. What
+   * changed is the CLAIM made from it: the copy now reports the wait and offers the
+   * passcode as a possibility. See `SyncProgress.tsx`.
+   *
+   * The event name `waiting-for-passcode` is deliberately NOT renamed. It crosses
+   * `deviceSyncOrchestrator` -> `syncHandlers` -> preload -> `useIPhoneSync` ->
+   * `SyncProgress`, and renaming an IPC channel on a shared-file branch buys the
+   * founder nothing he can see. The lie was in the words on his screen, and that is
+   * where it is fixed.
+   */
+  private static readonly PASSCODE_WAIT_DETECTION_MS = 5000;
 
-  // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes
-  // BACKLOG-1628: Track both stdout and stderr activity for watchdog
-  private lastStdoutTimestamp: number = 0;
-  private lastStderrTimestamp: number = 0;
+  // BACKLOG-1582: Watchdog timer to detect zombie idevicebackup2 processes.
+  //
+  // BACKLOG-2911 (FIX 2): THE WATCHDOG COULD NOT FIRE, AND THIS PAIR OF FIELDS IS WHY.
+  //
+  //   12:09:43.414  Watchdog started (timeout: 180s)
+  //   …904 seconds of silence…
+  //   12:24:42.355  File transfer started after 903.9s
+  //
+  // It was silent through five times its own timeout, and `grep -c "Watchdog
+  // fired|zombie|killed by watchdog"` over the founder's entire 2026-08-28 session
+  // returns 0 across three runs. BACKLOG-1582 was CLOSED on the strength of this
+  // watchdog, so the silence has been read as good news for months.
+  //
+  // The two fields it used were `lastStdoutTimestamp` / `lastStderrTimestamp`, each
+  // bumped by its `data` handler on EVERY chunk, with liveness taken as the newer of
+  // the two. `buildBackupArgs` passes `-d` unconditionally, so libimobiledevice emits
+  // continuous debug chatter on stderr — the BACKLOG-2898 note below measures 336 such
+  // records in one 21-minute log — and the timestamp therefore never aged. The timer
+  // ran, asked "did any bytes arrive on either stream?", and could not get "no" while
+  // the process was alive at all.
+  //
+  // Which of the two possible failures this was is ESTABLISHED, not assumed, in
+  // `backupService.watchdogStall-2911.test.ts`: total silence killed the process even
+  // BEFORE this fix, so the timer and the kill path work. The question was what could
+  // not come back false.
+  //
+  // The replacement is a single timestamp advanced only by MEANINGFUL activity — see
+  // `noteMeaningfulActivity`. Idle polling (`np_get_notification`, `SSL_read 4,
+  // received 0`, mutex traces) no longer counts as a sign of life, because it is not
+  // one.
+  private lastMeaningfulActivityAt: number = 0;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private watchdogFired: boolean = false;
   private static readonly WATCHDOG_CHECK_INTERVAL_MS = 30_000; // Check every 30s
-  private static readonly WATCHDOG_PREPARING_TIMEOUT_MS = 180_000; // 3 min during preparation
-  private static readonly WATCHDOG_TRANSFER_TIMEOUT_MS = 120_000; // 2 min during active transfer
+
+  /**
+   * BACKLOG-2911 (FIX 2): how long with NO meaningful activity before the process is
+   * judged dead. One value for the whole run, and deliberately generous.
+   *
+   * THE OLD VALUES CANNOT BE KEPT ONCE LIVENESS MEANS PROGRESS. They were 180 s
+   * preparing / 120 s transferring against "any output at all", and all three of the
+   * founder's runs on 2026-08-28 waited longer than that before their first byte —
+   * 507 s, 684.6 s and 903.9 s — and then COMPLETED. Measuring progress at 180 s would
+   * have killed three working syncs. A watchdog that aborts healthy runs is worse than
+   * one that never fires.
+   *
+   * 30 minutes is just under 2x the worst measured wait (903.9 s), which is the only
+   * measurement that exists. It is not tuned beyond that, and it deliberately does not
+   * split preparing from transferring: nothing has yet measured how long the device may
+   * legitimately go quiet AFTER the last file while it finalises, so a tighter
+   * transfer-phase value would be a guess, and a wrong guess kills a 52-minute run at
+   * minute 51. FIX 4 on this same branch adds the per-phase durations that would make
+   * that number measurable rather than guessed; tighten it then, on data.
+   *
+   * The root cause of the 8-15 minute pre-transfer wait is NOT addressed here and is
+   * explicitly out of scope — see BACKLOG-2911. This constant accommodates it; it does
+   * not explain it.
+   */
+  private static readonly WATCHDOG_NO_PROGRESS_TIMEOUT_MS = 1_800_000;
+
+  /**
+   * BACKLOG-2911 (FIX 2): stderr lines that mean WORK IS HAPPENING, as opposed to
+   * libimobiledevice polling an idle connection.
+   *
+   * Every one of these is already recognised by `parseStderrLine` or
+   * `isKnownDebugLine`; this is the subset that carries evidence of traffic:
+   *
+   *   SSL_write / service_send   bytes LEAVING the host. BACKLOG-1628 put stderr into
+   *                              the liveness check for exactly this — during a
+   *                              563 MB manifest upload stdout is silent for minutes.
+   *   Sending '                  a named file starting to upload.
+   *   Requesting backup          the protocol advancing.
+   *   Starting backup
+   *   Negotiated Protocol
+   *   backup mode                the device answering full vs incremental.
+   *
+   * NOT here, and this is the point: `idevice_connection_receive_timeout`,
+   * `internal_plist_receive_timeout`, `np_get_notification`, and the `np_lock()` /
+   * `np_unlock()` mutex traces. Those are what a stalled connection sounds like.
+   * `SSL_read` is deliberately excluded too — the founder's log carries
+   * `SSL_read 4, received 0`, a read that returned nothing, on the same line shape as
+   * a read that returned 32 KB.
+   *
+   * Anything unrecognised does NOT count as life. That is the same choice
+   * `readSnapshotState` makes: match the known-good value rather than enumerate the
+   * bad ones, so a format change fails safe. The generous timeout above is what makes
+   * failing safe affordable.
+   */
+  private static readonly STDERR_ACTIVITY_SIGNALS = [
+    "SSL_write",
+    "service_send",
+    "Sending '",
+    "Requesting backup",
+    "Starting backup",
+    "Negotiated Protocol",
+    "backup mode",
+  ];
+
+  /**
+   * BACKLOG-2914: the backup mode the DEVICE reported, from idevicebackup2's own
+   * stderr. `null` until it says, and reset per run in the same block as the watchdog
+   * state — inheriting run N's mode into run N+1 would be a wrong answer wearing the
+   * clothes of a measured one.
+   */
+  private deviceReportedBackupMode: "incremental" | "full" | null = null;
 
   // BACKLOG-1628: Stderr debug parsing state
   private stderrLineBuffer: string = "";
+
+  /**
+   * BACKLOG-2898: stderr words that indicate a real fault. Unchanged from
+   * BACKLOG-1628 — what changed is that they are now tested per LINE, with
+   * libimobiledevice's mutex trace removed first.
+   */
+  private static readonly STDERR_ERROR_WORDS = [
+    "trust",
+    "pair",
+    "password",
+    "incorrect",
+    "locked",
+    "passcode",
+    "no device",
+    "not found",
+    "disk",
+    "space",
+    "storage",
+  ];
+
+  /**
+   * `np_lock(): Locked` / `np_unlock(): Unlocked` / `afc_lock(): Locked` — a
+   * pthread mutex trace. The `<name>():` shape is what makes this safe: a real
+   * message ("Device is locked", "please unlock your iPhone") can never match.
+   */
+  private static readonly LIBIMOBILEDEVICE_MUTEX_TRACE =
+    /\b\w*_(?:un)?lock\(\):\s*(?:Locked|Unlocked)\b/gi;
+
+  /** libimobiledevice's -d trace format: `16:06:22 D:\...\idevice.c:652 func(): msg`. */
+  private static readonly LIBIMOBILEDEVICE_TRACE_FORMAT =
+    /^\d{2}:\d{2}:\d{2}\s+\S+[\\/][^\s]+:\d+\s+\w+\(\):/;
+
+  /** Cap on distinct unrecognised stderr lines breadcrumbed per backup run. */
+  private static readonly MAX_STDERR_BREADCRUMBS = 50;
+
+  /** Fingerprints of stderr lines already sent to Sentry this run. */
+  private breadcrumbedStderrLines: Set<string> = new Set();
   private manifestUploadPhase: boolean = false;
   private manifestUploadSize: string | null = null;
 
@@ -92,7 +771,6 @@ export class BackupService extends EventEmitter {
     return {
       supportsDomainFiltering: false,
       supportsIncremental: true,
-      supportsSkipApps: true,
       supportsEncryption: true,
       availableDomains: [
         "HomeDomain",
@@ -187,8 +865,9 @@ export class BackupService extends EventEmitter {
   /**
    * Start a backup operation
    *
-   * Note: Due to iOS backup protocol limitations, this creates a full backup
-   * (minus app data if skipApps is true). Domain-specific backups are not possible.
+   * Note: Due to iOS backup protocol limitations, this creates a FULL device
+   * backup, app data included. Neither domain-specific backups nor app
+   * exclusion are possible with idevicebackup2 (BACKLOG-2910).
    *
    * @param options Backup options
    * @returns Promise resolving to backup result
@@ -309,14 +988,16 @@ export class BackupService extends EventEmitter {
       this.emit("progress", this.lastProgress);
 
       // BACKLOG-1582: Reset watchdog state
-      // BACKLOG-1628: Reset both stdout and stderr timestamps
+      // BACKLOG-2911 (FIX 2): one timestamp, advanced only by meaningful activity.
       this.watchdogFired = false;
-      this.lastStdoutTimestamp = Date.now();
-      this.lastStderrTimestamp = Date.now();
+      this.lastMeaningfulActivityAt = Date.now();
+      this.deviceReportedBackupMode = null;
       this.clearWatchdog();
 
       // BACKLOG-1628: Reset stderr parsing state
       this.stderrLineBuffer = "";
+      // BACKLOG-2898: breadcrumb dedupe is per backup run
+      this.breadcrumbedStderrLines.clear();
       this.manifestUploadPhase = false;
       this.manifestUploadSize = null;
 
@@ -324,28 +1005,61 @@ export class BackupService extends EventEmitter {
         stdio: ["pipe", "pipe", "pipe"],
       });
 
+      // BACKLOG-2911 (FIX 2): ONE start path, here, covering the whole run.
+      //
+      // It used to be started from inside the 5-second passcode timer and restarted at
+      // the first file, which meant the window before either of those was unwatched and
+      // the two call sites carried two different timeouts. There is one timeout now, so
+      // there is one place to start it.
+      this.lastMeaningfulActivityAt = Date.now();
+      this.startWatchdog();
+
       // Start timer to detect if we're waiting for passcode
       // If no file transfer progress after 5 seconds, assume waiting for user passcode
       this.passcodeWaitingTimer = setTimeout(() => {
         if (!this.hasReceivedFileProgress && !this.hasEmittedPasscodeWaiting) {
           this.hasEmittedPasscodeWaiting = true;
           const waitTime = ((Date.now() - this.backupCommandStartTime) / 1000).toFixed(1);
-          log.info(`[BackupService] No file progress after ${waitTime}s - waiting for user passcode`);
+          // BACKLOG-2911 (FIX 3): the log says what was observed. It used to assert
+          // "waiting for user passcode", which is one of at least three causes and is
+          // not the one the founder's 12:09 run had.
+          log.info(
+            `[BackupService] No file transfer ${waitTime}s after requesting the backup; device has not started sending yet (cause unknown: indexing, passcode prompt, or stalled)`,
+          );
           this.emit("waiting-for-passcode");
-          // BACKLOG-1582: Start watchdog with preparing timeout (longer, user may take time)
-          this.startWatchdog(BackupService.WATCHDOG_PREPARING_TIMEOUT_MS);
         }
       }, BackupService.PASSCODE_WAIT_DETECTION_MS);
 
       let stdoutBuffer = "";
       let stderrBuffer = "";
+      // BACKLOG-2899: set when idevicebackup2 reports it could not write to the
+      // local disk. See isIdevicebackup2DiskFullOutput for the transcription.
+      let diskFullDetected = false;
 
       this.currentProcess.stdout?.on("data", (data: Buffer) => {
         const output = data.toString();
         stdoutBuffer += output;
+        // BACKLOG-2899: stdoutBuffer accumulated for the whole run and was never
+        // read — 24 minutes of progress-bar output held in memory. Capped the
+        // way stderrBuffer already is.
+        if (stdoutBuffer.length > 65536) {
+          stdoutBuffer = stdoutBuffer.slice(-65536);
+        }
 
-        // BACKLOG-1582: Track last stdout activity for watchdog
-        this.lastStdoutTimestamp = Date.now();
+        // BACKLOG-2899: host-side write failures are printed HERE, on stdout.
+        if (!diskFullDetected && isIdevicebackup2DiskFullOutput(output)) {
+          diskFullDetected = true;
+          log.error(
+            "[BackupService] idevicebackup2 reported a full disk:",
+            output.trim().substring(0, 300),
+          );
+        }
+
+        // BACKLOG-2911 (FIX 2): stdout from idevicebackup2 is the tool reporting its own
+        // work — progress bars, "Receiving files", "Received N files", "Backup
+        // Successful". Unlike stderr under `-d`, none of it is idle polling, so every
+        // chunk here counts as life.
+        this.noteMeaningfulActivity();
 
         // Only log non-progress-bar output (progress bars are very spammy)
         // Progress bars look like: [====] XX% (X.X MB/Y.Y MB)
@@ -367,11 +1081,15 @@ export class BackupService extends EventEmitter {
             // If we previously emitted waiting-for-passcode, now emit passcode-entered
             if (this.hasEmittedPasscodeWaiting) {
               const waitTime = ((Date.now() - this.backupCommandStartTime) / 1000).toFixed(1);
-              log.info(`[BackupService] File transfer started after ${waitTime}s - passcode entered`);
+              // BACKLOG-2911 (FIX 3): the transfer starting proves the transfer
+              // started. It does NOT prove a passcode was entered — on 2026-08-28 the
+              // founder's passcode had been entered ~15 minutes before this line
+              // printed. The duration is the useful part and it is now the whole claim.
+              log.info(
+                `[BackupService] File transfer started after ${waitTime}s of waiting for the device`,
+              );
               this.emit("passcode-entered");
             }
-            // BACKLOG-1582: Start watchdog with transfer timeout now that data is flowing
-            this.startWatchdog(BackupService.WATCHDOG_TRANSFER_TIMEOUT_MS);
           }
           this.lastProgress = progress;
           this.emit("progress", progress);
@@ -387,8 +1105,10 @@ export class BackupService extends EventEmitter {
           stderrBuffer = stderrBuffer.slice(-65536);
         }
 
-        // BACKLOG-1628: Track stderr activity for watchdog
-        this.lastStderrTimestamp = Date.now();
+        // BACKLOG-2911 (FIX 2): stderr is NOT evidence of life on its own. `-d` makes
+        // libimobiledevice narrate an idle connection indefinitely, which is what kept
+        // the old `lastStderrTimestamp = Date.now()` here from ever ageing. The lines
+        // are classified below and only the ones that carry traffic count.
 
         // BACKLOG-1628: Parse stderr line-by-line for debug signals
         // The -d flag produces very verbose output (30K+ lines in 20s).
@@ -399,54 +1119,34 @@ export class BackupService extends EventEmitter {
         this.stderrLineBuffer = lines.pop() || "";
 
         for (const line of lines) {
+          // BACKLOG-2911 (FIX 2): does this line mean anything is happening?
+          if (BackupService.isStderrActivitySignal(line)) {
+            this.noteMeaningfulActivity();
+          }
           this.parseStderrLine(line, options.udid);
         }
 
-        // Original: log non-progress, non-debug lines for error detection
-        // With -d flag, only log lines that match known error patterns
-        // (the debug output is far too verbose to log in full)
-        const outputLower = output.toLowerCase();
-        const isErrorPattern =
-          outputLower.includes("trust") ||
-          outputLower.includes("pair") ||
-          outputLower.includes("password") ||
-          outputLower.includes("incorrect") ||
-          outputLower.includes("locked") ||
-          outputLower.includes("passcode") ||
-          outputLower.includes("no device") ||
-          outputLower.includes("not found") ||
-          outputLower.includes("disk") ||
-          outputLower.includes("space") ||
-          outputLower.includes("storage");
-
-        if (isErrorPattern) {
-          log.warn("[BackupService] stderr (error pattern):", output.trim().substring(0, 500));
-        } else {
-          // BACKLOG-1628: Restore Sentry breadcrumbs for unrecognized non-debug patterns.
-          // With -d flag, known debug prefixes (SSL_write, service_send, etc.) are very
-          // frequent and should be silently skipped. But genuinely unrecognized lines
-          // may indicate new error patterns we haven't categorized yet.
-          const isDebugLine =
-            output.includes("SSL_write") ||
-            output.includes("service_send") ||
-            output.includes("internal_plist") ||
-            output.includes("idevice_connection") ||
-            output.includes("Sending '") ||
-            output.includes("Negotiated Protocol") ||
-            output.includes("backup mode") ||
-            output.includes("Starting backup") ||
-            output.includes("Requesting backup") ||
-            output.includes("Status.plist") ||
-            output.includes("Manifest.plist") ||
-            output.includes("Manifest.db");
-
-          if (!isDebugLine && output.trim().length > 0) {
-            Sentry.addBreadcrumb({
-              category: "backup",
-              message: output.trim().substring(0, 200),
-              level: "info",
-            });
-          }
+        // BACKLOG-2898: classify PER LINE, not per chunk.
+        //
+        // This block used to test the whole stderr CHUNK for a trigger word and,
+        // on a hit, dump a 500-char window of that chunk at `warn`. Measured on
+        // the founder's real 21-minute log: 336 such records, 123,299 bytes,
+        // 17.5% of the whole file — and a trigger histogram over all 336 shows
+        // exactly ONE word ever fired, "locked", every single time from
+        // libimobiledevice's own MUTEX trace (`notification_proxy.c:52
+        // np_lock(): Locked`). Zero records contained a non-mutex trigger. The
+        // rest of each record — idevice_connection_receive_timeout,
+        // internal_plist_receive_timeout, np_get_notification — carries no
+        // trigger word at all and was pure collateral of the 500-char window.
+        // 13 of the 336 were truncated so hard that the word that caused them
+        // to be logged is not even in the logged text.
+        //
+        // The backup that produced all of this COMPLETED SUCCESSFULLY. Per-line
+        // classification plus demoting the mutex trace removes all 336 without
+        // silencing a single line that carries a genuine trigger — a real
+        // "Device is locked, enter your passcode" still warns.
+        for (const line of lines) {
+          this.classifyStderrLine(line);
         }
       });
 
@@ -479,7 +1179,8 @@ export class BackupService extends EventEmitter {
             error: "Backup process became unresponsive and was terminated",
             duration,
             deviceUdid: options.udid,
-            isIncremental: previousBackupExists,
+            isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+            deviceReportedBackupMode: this.deviceReportedBackupMode,
             backupSize: 0,
             errorCode: "BACKUP_TIMEOUT",
           };
@@ -488,15 +1189,33 @@ export class BackupService extends EventEmitter {
           return;
         }
 
-        const success = code === 0;
-        let backupSize = 0;
+        // BACKLOG-2899: exit code 0 is not sufficient. idevicebackup2 never
+        // checks its own fwrite/fclose, so a run that could not write files can
+        // still exit 0 and print "Backup Successful." If it told us the disk was
+        // full, the backup on disk is truncated and must not be handed to the
+        // parsers as a success.
+        const success = code === 0 && !diskFullDetected;
+        // BACKLOG-2917: `null` means "not measured", NOT "zero bytes". On every
+        // failure path below the walk never ran, and reporting 0 there would claim a
+        // torn backup wrote nothing — a claim this code cannot support, since
+        // idevicebackup2 leaves whatever it transferred on disk.
+        let backupSize: number | null = null;
         let finalBackupPath = deviceBackupPath;
 
         if (success) {
-          backupSize = await this.calculateBackupSize(deviceBackupPath);
-          log.info(
-            `[BackupService] Backup completed successfully in ${duration}ms, size: ${backupSize} bytes`,
-          );
+          const sizeReading = await this.measureBackupSize(deviceBackupPath);
+          backupSize = sizeReading.measured ? sizeReading.bytes : null;
+          if (sizeReading.measured) {
+            log.info(
+              `[BackupService] Backup completed successfully in ${duration}ms, size: ${sizeReading.bytes} bytes`,
+            );
+          } else {
+            // Refuse to print a reassuring number we do not have. This is the
+            // `checkAvailableDiskSpace` rule: never log a 0 GB "reading".
+            log.error(
+              `[BackupService] Backup completed successfully in ${duration}ms, but its size could not be measured (${sizeReading.reason})`,
+            );
+          }
 
           // Check ACTUAL encryption status from backup on disk (not just device setting)
           // The device's WillEncrypt flag may not reflect existing backup encryption
@@ -526,7 +1245,8 @@ export class BackupService extends EventEmitter {
               errorCode: "PASSWORD_REQUIRED" as BackupErrorCode,
               duration: Date.now() - this.startTime,
               deviceUdid: options.udid,
-              isIncremental: previousBackupExists && !options.forceFullBackup,
+              isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+              deviceReportedBackupMode: this.deviceReportedBackupMode,
               backupSize,
               isEncrypted: true,
             };
@@ -543,7 +1263,12 @@ export class BackupService extends EventEmitter {
               currentFile: null,
               filesTransferred: 0,
               totalFiles: null,
-              bytesTransferred: backupSize,
+              // BACKLOG-2917: `totalBytes` is already nullable and carries the
+              // unknown honestly. `bytesTransferred` is a progress-bar input typed
+              // `number`; 0 there means "no bar movement to report", which is the
+              // truth when the size is unmeasured, and it is paired with a null
+              // total so nothing downstream can compute a false percentage from it.
+              bytesTransferred: backupSize ?? 0,
               totalBytes: backupSize,
               estimatedTimeRemaining: 30,
             };
@@ -566,7 +1291,8 @@ export class BackupService extends EventEmitter {
                     : ("DECRYPTION_FAILED" as BackupErrorCode),
                 duration: Date.now() - this.startTime,
                 deviceUdid: options.udid,
-                isIncremental: previousBackupExists && !options.forceFullBackup,
+                isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+              deviceReportedBackupMode: this.deviceReportedBackupMode,
                 backupSize,
                 isEncrypted: true,
               };
@@ -592,24 +1318,55 @@ export class BackupService extends EventEmitter {
               stderr: stderrBuffer.trim().substring(0, 500),
               udid: options.udid.substring(0, 8) + "...",
               duration: `${duration}ms`,
-              isIncremental: previousBackupExists && !options.forceFullBackup,
+              isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+              deviceReportedBackupMode: this.deviceReportedBackupMode,
             },
           });
         }
 
         // Convert error code to user-friendly message
         let errorMessage: string | null = null;
+        let errorCode: BackupErrorCode | undefined;
+        let failureCause: BackupFailureCause | undefined;
         if (!success) {
-          errorMessage = this.getErrorMessage(code, stderrBuffer);
+          if (diskFullDetected) {
+            // BACKLOG-2899: the host disk filled mid-transfer, which idevicebackup2
+            // absorbs in silence — it never checks its own fwrite/fclose, so this
+            // can arrive alongside exit code 0 and "Backup Successful."
+            //
+            // BACKLOG-2913: this branch used to carry its own, vaguer sentence
+            // ("free up space and try again"), so which of the two disk messages the
+            // user saw depended on which detector happened to fire. Both paths now
+            // share one constant. The cause is still recorded so the support log can
+            // tell a mid-transfer fill from a device-reported 105.
+            errorMessage = BACKUP_HOST_DISK_FULL_MESSAGE;
+            errorCode = "INSUFFICIENT_SPACE";
+            failureCause = {
+              ...parseDeviceBackupError(stdoutBuffer, stderrBuffer),
+              exitCode: code,
+            };
+          } else {
+            const classification = this.classifyFailure(
+              code,
+              stdoutBuffer,
+              stderrBuffer,
+            );
+            errorMessage = classification.message;
+            errorCode = classification.errorCode;
+            failureCause = classification.cause;
+          }
         }
 
         const result: BackupResult = {
           success,
           backupPath: success ? finalBackupPath : null,
           error: errorMessage,
+          ...(errorCode ? { errorCode } : {}),
+          ...(failureCause ? { failureCause } : {}),
           duration: Date.now() - this.startTime,
           deviceUdid: options.udid,
-          isIncremental: previousBackupExists && !options.forceFullBackup,
+          isIncremental: this.resolveIsIncremental(previousBackupExists, options),
+          deviceReportedBackupMode: this.deviceReportedBackupMode,
           backupSize,
           isEncrypted: encryptionInfo.isEncrypted,
         };
@@ -620,7 +1377,8 @@ export class BackupService extends EventEmitter {
           currentFile: null,
           filesTransferred: 0,
           totalFiles: null,
-          bytesTransferred: backupSize,
+          // BACKLOG-2917 — see the decrypting-phase progress above.
+          bytesTransferred: backupSize ?? 0,
           totalBytes: backupSize,
           estimatedTimeRemaining: 0,
         };
@@ -660,9 +1418,12 @@ export class BackupService extends EventEmitter {
    * BACKLOG-1582: Start the watchdog timer that detects zombie idevicebackup2 processes.
    * If no stdout activity is received within the timeout, kills the process.
    */
-  private startWatchdog(timeoutMs: number): void {
+  private startWatchdog(): void {
     this.clearWatchdog();
-    log.info(`[BackupService] Watchdog started (timeout: ${timeoutMs / 1000}s)`);
+    const timeoutMs = BackupService.WATCHDOG_NO_PROGRESS_TIMEOUT_MS;
+    log.info(
+      `[BackupService] Watchdog started (no-progress timeout: ${timeoutMs / 1000}s)`,
+    );
 
     this.watchdogInterval = setInterval(() => {
       if (!this.currentProcess || !this.isRunning) {
@@ -670,15 +1431,63 @@ export class BackupService extends EventEmitter {
         return;
       }
 
-      // BACKLOG-1628: Watchdog fires only when BOTH stdout AND stderr are silent.
-      // During manifest upload, stdout is silent but stderr shows SSL_write activity.
-      const lastActivityTimestamp = Math.max(this.lastStdoutTimestamp, this.lastStderrTimestamp);
-      const elapsed = Date.now() - lastActivityTimestamp;
+      // BACKLOG-2911 (FIX 2): the question is "has anything HAPPENED", not "has
+      // anything been PRINTED". BACKLOG-1628's requirement is preserved through the
+      // signal list rather than through the stream: a silent stdout during a manifest
+      // upload is still kept alive, by the SSL_write lines that upload produces.
+      const elapsed = Date.now() - this.lastMeaningfulActivityAt;
       if (elapsed >= timeoutMs) {
-        log.error(`[BackupService] Watchdog: no stdout/stderr for ${Math.round(elapsed / 1000)}s — killing zombie process`);
+        log.error(
+          `[BackupService] Watchdog: no progress for ${Math.round(elapsed / 1000)}s — killing zombie process`,
+        );
         this.killZombieProcess();
       }
     }, BackupService.WATCHDOG_CHECK_INTERVAL_MS);
+  }
+
+  /**
+   * BACKLOG-2911 (FIX 2): something happened. Restart the clock.
+   *
+   * Every call site is a place where the process demonstrated work: stdout from
+   * idevicebackup2, or an stderr line carrying traffic. Adding a call site is adding
+   * something the watchdog will accept as life, so add one only for output that cannot
+   * be produced by an idle connection.
+   */
+  private noteMeaningfulActivity(): void {
+    this.lastMeaningfulActivityAt = Date.now();
+  }
+
+  /**
+   * BACKLOG-2911 (FIX 2): does this stderr line carry evidence of traffic?
+   *
+   * Static and pure so the classification can be tested directly, without a spawned
+   * process. See `STDERR_ACTIVITY_SIGNALS` for what is in the list and — more
+   * importantly — what is deliberately not.
+   */
+  static isStderrActivitySignal(line: string): boolean {
+    return BackupService.STDERR_ACTIVITY_SIGNALS.some((signal) => line.includes(signal));
+  }
+
+  /**
+   * BACKLOG-2914: was this run incremental?
+   *
+   * The device's own report wins when it gave one. The old derivation — a directory
+   * exists and nobody forced a full backup — remains as the fallback, because a run
+   * that fails before the mode line is printed still has to answer, but it is a
+   * FALLBACK now and telemetry records which of the two produced the flag.
+   *
+   * The fallback's failure mode is on record: on 2026-08-28 it reported
+   * `incremental=true` for a 61.2 GB / 52-minute transfer against a 4.4 GB partial
+   * with no `Manifest.db`, while `Status.plist` said `IsFullBackup: 1`.
+   */
+  private resolveIsIncremental(
+    previousBackupExists: boolean,
+    options: BackupOptions,
+  ): boolean {
+    if (this.deviceReportedBackupMode !== null) {
+      return this.deviceReportedBackupMode === "incremental";
+    }
+    return previousBackupExists && !options.forceFullBackup;
   }
 
   /**
@@ -748,13 +1557,95 @@ export class BackupService extends EventEmitter {
   }
 
   /**
+   * BACKLOG-2898: classify ONE stderr line as a real error signal, benign
+   * libimobiledevice debug chatter, or something unrecognised.
+   *
+   * Called for every stderr line on a hot path (30K+ lines in 20s during
+   * manifest upload), so every test is a cheap substring or a single anchored
+   * regex.
+   */
+  private classifyStderrLine(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    // A libimobiledevice MUTEX trace: `np_lock(): Locked`, `np_unlock():
+    // Unlocked`, `afc_lock(): Locked`. The word "Locked" here is a pthread
+    // mutex state inside notification_proxy.c — it says nothing about the
+    // DEVICE being locked, and it is emitted continuously during a healthy
+    // backup. Strip the trace before testing for trigger words, so a line that
+    // ALSO carries a genuine signal is still caught.
+    const withoutMutexTrace = trimmed.replace(
+      BackupService.LIBIMOBILEDEVICE_MUTEX_TRACE,
+      "",
+    );
+
+    const lower = withoutMutexTrace.toLowerCase();
+    const isErrorPattern = BackupService.STDERR_ERROR_WORDS.some((word) =>
+      lower.includes(word),
+    );
+
+    if (isErrorPattern) {
+      log.warn("[BackupService] stderr (error pattern):", trimmed.substring(0, 500));
+      return;
+    }
+
+    // BACKLOG-1628: Sentry breadcrumbs for unrecognised non-debug lines, which
+    // may indicate error patterns we have not categorised yet.
+    //
+    // BACKLOG-2898: this is now per LINE where it used to be per chunk, so it
+    // is bounded two ways — libimobiledevice's own debug-trace format counts as
+    // a known debug line, and identical lines (ignoring numbers) breadcrumb
+    // once per backup. Without both, a chunk that produced one breadcrumb could
+    // produce dozens and push the useful ones out of Sentry's ring buffer.
+    if (this.isKnownDebugLine(trimmed)) return;
+
+    const fingerprint = trimmed.replace(/\d+/g, "#").substring(0, 200);
+    if (this.breadcrumbedStderrLines.has(fingerprint)) return;
+    if (this.breadcrumbedStderrLines.size >= BackupService.MAX_STDERR_BREADCRUMBS) return;
+    this.breadcrumbedStderrLines.add(fingerprint);
+
+    Sentry.addBreadcrumb({
+      category: "backup",
+      message: trimmed.substring(0, 200),
+      level: "info",
+    });
+  }
+
+  /**
+   * Known-benign debug output from the `-d` flag. The first test is
+   * libimobiledevice's own trace FORMAT (`HH:MM:SS <src path>:<line>
+   * <function>(): ...`), which by construction only exists because we pass -d.
+   */
+  private isKnownDebugLine(line: string): boolean {
+    if (BackupService.LIBIMOBILEDEVICE_TRACE_FORMAT.test(line)) return true;
+    return (
+      line.includes("SSL_write") ||
+      line.includes("service_send") ||
+      line.includes("internal_plist") ||
+      line.includes("idevice_connection") ||
+      line.includes("Sending '") ||
+      line.includes("Negotiated Protocol") ||
+      line.includes("backup mode") ||
+      line.includes("Starting backup") ||
+      line.includes("Requesting backup") ||
+      line.includes("Status.plist") ||
+      line.includes("Manifest.plist") ||
+      line.includes("Manifest.db")
+    );
+  }
+
+  /**
    * BACKLOG-1628: Parse a single stderr line from debug output for progress signals.
    *
    * With the -d flag, idevicebackup2 emits detailed debug output on stderr.
    * We parse for specific patterns to:
    * 1. Detect manifest upload phase and surface progress to UI
-   * 2. Reset watchdog on SSL_write/service_send activity
-   * 3. Log significant phase transitions (protocol version, backup mode)
+   * 2. Log significant phase transitions (protocol version, backup mode)
+   *
+   * BACKLOG-2911 (FIX 2): resetting the watchdog is NO LONGER this method's job. It is
+   * done by `isStderrActivitySignal` in the caller, against an explicit list, so that
+   * the set of lines counting as "alive" is one greppable constant rather than a
+   * side effect spread through a parser.
    *
    * This method is designed to be lightweight — it's called for every stderr line
    * (potentially 30K+ lines in 20 seconds during manifest upload).
@@ -787,10 +1678,12 @@ export class BackupService extends EventEmitter {
     }
 
     // Pattern 2: SSL_write or service_send — activity signals (hot path)
-    // These repeat thousands of times; do NOT log. Just confirm the process is alive.
-    // The lastStderrTimestamp is already updated by the data handler.
+    // These repeat thousands of times; do NOT log.
+    // BACKLOG-2911 (FIX 2): the watchdog clock is restarted for these by
+    // `isStderrActivitySignal` in the stderr line loop, BEFORE this parser runs. It
+    // used to be restarted by the `data` handler for every chunk regardless of content,
+    // which is why it could never fire.
     if (line.includes("SSL_write") || line.includes("service_send")) {
-      // Already tracked via lastStderrTimestamp in the data handler.
       return;
     }
 
@@ -843,6 +1736,16 @@ export class BackupService extends EventEmitter {
     // Pattern 8: Backup mode — "Incremental backup mode" or "Full backup mode"
     if (line.includes("backup mode")) {
       log.info("[BackupService] " + line.trim());
+      // BACKLOG-2914: THE DEVICE'S OWN ANSWER, which until now was logged and thrown
+      // away while `isIncremental` was derived from whether a directory existed. On
+      // 2026-08-28 those two disagreed on a 61.2 GB run. Matched case-insensitively
+      // because the only thing pinned about this string is the two words in it.
+      const lower = line.toLowerCase();
+      if (lower.includes("incremental backup mode")) {
+        this.deviceReportedBackupMode = "incremental";
+      } else if (lower.includes("full backup mode")) {
+        this.deviceReportedBackupMode = "full";
+      }
       return;
     }
   }
@@ -850,8 +1753,10 @@ export class BackupService extends EventEmitter {
   /**
    * Build backup command arguments
    *
-   * Note: We use --skip-apps to reduce backup size since we only need
-   * messages and contacts which are in HomeDomain.
+   * Note: the `backup` command accepts exactly one option, --full, so the argv
+   * built here is the whole of what we are able to ask the device for. We need
+   * only messages and contacts (HomeDomain); we receive the entire device
+   * regardless. See BACKLOG-2910 and docs/BACKUP_RESEARCH.md.
    *
    * SECURITY (TASK-601): The validatedUdid parameter MUST be pre-validated using
    * validateDeviceUdid() before calling this method. This is a private method,
@@ -878,12 +1783,6 @@ export class BackupService extends EventEmitter {
 
     // Command: backup
     args.push("backup");
-
-    // Skip apps to reduce backup size (recommended for our use case)
-    // This removes AppDomain which can be 10-30 GB
-    if (options.skipApps !== false) {
-      args.push("--skip-apps");
-    }
 
     // Force full backup if requested (otherwise incremental)
     if (options.forceFullBackup) {
@@ -1033,58 +1932,45 @@ export class BackupService extends EventEmitter {
   }
 
   /**
-   * Convert exit code to user-friendly error message
+   * BACKLOG-2913: classify a failed backup from what the device actually reported.
+   *
+   * This used to be a substring ladder over the raw `-d` debug stream, and every
+   * failure — disk full, cable pulled, service stuck, genuinely locked — came out as
+   * "iPhone is locked. Please unlock your iPhone and try again.", because
+   * libimobiledevice writes `afc_lock(): Locked` hundreds of times per run and the
+   * `locked` rung sat above every other rung. Four causes were observed on the
+   * founder's machine in one evening and all four produced that sentence.
+   *
+   * The work now lives in the exported {@link classifyBackupFailure}, which is a
+   * pure function of the two streams and the exit code, so the real captured output
+   * can be tested against it without spawning anything.
    */
-  private getErrorMessage(code: number | null, stderr: string): string {
-    // Convert unsigned 32-bit to signed (Windows wraps negative codes)
-    const signedCode = code !== null && code > 2147483647 ? code - 4294967296 : code;
-
-    // Check stderr for specific error messages first
-    const stderrLower = stderr.toLowerCase();
-
-    if (stderrLower.includes("password") || stderrLower.includes("incorrect")) {
-      return "Incorrect backup password. Please try again with the correct password.";
-    }
-
-    if (stderrLower.includes("locked") || stderrLower.includes("passcode")) {
-      return "iPhone is locked. Please unlock your iPhone and try again.";
-    }
-
-    if (stderrLower.includes("trust") || stderrLower.includes("pair")) {
-      return "iPhone trust not established. Please disconnect and reconnect your iPhone, then tap 'Trust' when prompted.";
-    }
-
-    if (stderrLower.includes("no device") || stderrLower.includes("not found")) {
-      return "iPhone disconnected. Please reconnect your iPhone and try again.";
-    }
-
-    if (stderrLower.includes("disk") || stderrLower.includes("space") || stderrLower.includes("storage")) {
-      return "Not enough disk space to complete the backup. Please free up space and try again.";
-    }
-
-    // Check by exit code
-    switch (signedCode) {
-      case -208:
-      case -207:
-        // Connection lost / device disconnected
-        return "Connection to iPhone was lost. Please make sure your iPhone stays connected and unlocked during the sync.";
-
-      case -1:
-        return "Backup was cancelled.";
-
-      case 1:
-        return "Backup failed. Please make sure your iPhone is unlocked and connected.";
-
-      case 2:
-        return "Invalid backup configuration. Please try again.";
-
-      default:
-        // Generic error with code
-        if (stderr.trim()) {
-          return `Backup failed: ${stderr.trim().substring(0, 200)}`;
-        }
-        return `Backup failed with error code ${code}. Please try again.`;
-    }
+  private classifyFailure(
+    code: number | null,
+    stdout: string,
+    stderr: string,
+  ): BackupFailureClassification {
+    // BACKLOG-2913 (copy defect): `hasReceivedFileProgress` is the transfer-started
+    // signal, and `bytesTransferred` deliberately is NOT. The latter only advances
+    // when a whole file COMPLETES (the percent-drop heuristic in parseProgress), so
+    // a drop part-way through the first file reads zero bytes while transfer is
+    // demonstrably under way — and the user would get cable advice for a sleep or a
+    // power-management fault. `hasReceivedFileProgress` flips on the first progress
+    // bar, which cannot be emitted before enumeration, pairing and the passcode.
+    const classification = classifyBackupFailure(
+      code,
+      stdout,
+      stderr,
+      this.hasReceivedFileProgress,
+    );
+    log.error("[BackupService] Failure classified", {
+      deviceErrorCode: classification.cause.deviceErrorCode,
+      deviceErrorDescription: classification.cause.deviceErrorDescription,
+      exitCode: classification.cause.exitCode,
+      source: classification.cause.source,
+      errorCode: classification.errorCode,
+    });
+    return classification;
   }
 
   /**
@@ -1171,10 +2057,31 @@ export class BackupService extends EventEmitter {
   }
 
   /**
-   * Calculate the total size of a backup directory.
+   * Measure the total size of a backup directory.
    * BACKLOG-1086: Use atomic readdir instead of check-then-read (TOCTOU fix).
+   *
+   * BACKLOG-2917: this returned `number` and answered `0` on any throw, so an
+   * unreadable backup and an empty one were the same value. Two distinct defects
+   * followed from that, and only the first had been reported:
+   *
+   *  1. The whole walk throwing reported a real backup as 0 bytes. Downstream that
+   *     becomes `{ exists: true, sizeBytes: 0 }`, a successful backup annotated
+   *     `bytes: 0`, and a real backup listed to the user at size 0.
+   *  2. **The recursion swallowed subtree failures silently.** Every recursive call
+   *     had its own catch-all, so one unreadable subdirectory returned 0 for that
+   *     subtree and the PARENT added 0 and carried on — returning a short total with
+   *     no error anywhere. A partial sum presented as a measurement is worse than a
+   *     failure, because nothing downstream can tell it apart from a smaller backup.
+   *     Unmeasured now propagates up through the recursion.
+   *
+   * `measureBackupSize` is the name because `calculateBackupSize` returning a
+   * `BackupSizeReading` would leave every existing call site compiling unchanged.
+   *
+   * Note the ENOENT paths are NOT failures and stay `measured`: a directory that does
+   * not exist genuinely holds 0 bytes, and a file that vanished between `readdir` and
+   * `stat` is a normal race in a directory the device is still writing to.
    */
-  private async calculateBackupSize(backupPath: string): Promise<number> {
+  private async measureBackupSize(backupPath: string): Promise<BackupSizeReading> {
     try {
       let totalSize = 0;
       // Atomic: attempt readdir directly, handle ENOENT if path disappeared
@@ -1183,7 +2090,7 @@ export class BackupService extends EventEmitter {
         files = await fs.readdir(backupPath, { withFileTypes: true });
       } catch (err: unknown) {
         if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ENOENT") {
-          return 0;
+          return { measured: true, bytes: 0 };
         }
         throw err;
       }
@@ -1191,7 +2098,13 @@ export class BackupService extends EventEmitter {
       for (const file of files) {
         const filePath = path.join(backupPath, file.name);
         if (file.isDirectory()) {
-          totalSize += await this.calculateBackupSize(filePath);
+          const subtree = await this.measureBackupSize(filePath);
+          // The defect this replaces: an unmeasurable subtree used to contribute 0
+          // and the parent reported a short total as if it were a measurement.
+          if (!subtree.measured) {
+            return subtree;
+          }
+          totalSize += subtree.bytes;
         } else {
           try {
             const stats = await fs.stat(filePath);
@@ -1206,10 +2119,13 @@ export class BackupService extends EventEmitter {
         }
       }
 
-      return totalSize;
+      return { measured: true, bytes: totalSize };
     } catch (error) {
-      log.error("[BackupService] Error calculating backup size:", error);
-      return 0;
+      log.error("[BackupService] Error measuring backup size:", error);
+      Sentry.captureException(error, {
+        tags: { service: "backup", operation: "measureBackupSize" },
+      });
+      return { measured: false, reason: describeError(error) };
     }
   }
 
@@ -1226,17 +2142,28 @@ export class BackupService extends EventEmitter {
   }
 
   /**
-   * Check if a backup for a device exists and its status
+   * Check if a backup for a device exists and its status.
+   *
+   * BACKLOG-2917: returns a three-state report. It used to return `null` for BOTH
+   * "ENOENT, no backup exists" and "the check itself threw", which are opposite
+   * facts. `deviceSyncOrchestrator` read the collapsed value as a first sync, so a
+   * failing check produced a confident first-sync estimate and — after BACKLOG-2898 —
+   * a telemetry mark asserting `reusedPreviousBackup: false`. The epic calls a
+   * `checkBackupStatus` that cannot find a backup which demonstrably exists "a far
+   * larger bug than a bad estimate"; this is the value that has to be able to say so.
+   *
+   * Not hypothetical: the walk behind `size` measures 7.2 s warm over 496k blobs and
+   * runs twice per sync, so a throw is a realistic event.
+   *
+   * `exists` and the deprecated `isCorrupted` alias are gone. `exists: true` was
+   * failure-proof but redundant once `state: "present"` carries it, and
+   * `isCorrupted`'s own doc gave its removal condition as "once PR #2409 and
+   * BACKLOG-2910 have landed" — both are merged into this branch's base.
+   *
    * @param udid Device UDID
-   * @returns Backup status info or null if no backup exists
+   * @returns Which of the three states was established, never a collapsed `null`
    */
-  async checkBackupStatus(udid: string): Promise<{
-    exists: boolean;
-    isComplete: boolean;
-    isCorrupted: boolean;
-    lastModified: Date | null;
-    sizeBytes: number;
-  } | null> {
+  async checkBackupStatus(udid: string): Promise<BackupStatusReport> {
     // BACKLOG-1123: Validate UDID before using in path operations
     const validatedUdid = validateDeviceUdid(udid);
     const backupPath = this.getDefaultBackupPath();
@@ -1249,12 +2176,14 @@ export class BackupService extends EventEmitter {
         stats = await fs.stat(deviceBackupPath);
       } catch (err: unknown) {
         if (err && typeof err === "object" && "code" in err && (err as { code: string }).code === "ENOENT") {
-          return null;
+          // The ONE state that proves there is no backup. Everything else that can
+          // go wrong here lands in the catch below as `unknown`.
+          return { state: "absent" };
         }
         throw err;
       }
 
-      const size = await this.calculateBackupSize(deviceBackupPath);
+      const size = await this.measureBackupSize(deviceBackupPath);
 
       // Check for key files atomically by attempting to access them directly
       const manifestPath = path.join(deviceBackupPath, "Manifest.db");
@@ -1274,42 +2203,134 @@ export class BackupService extends EventEmitter {
       // A complete backup should have Manifest.db and Info.plist
       const isComplete = hasManifest && hasInfoPlist;
 
-      // Check for corruption indicators: read directly, handle ENOENT
-      let isCorrupted = false;
-      try {
-        const statusContent = await fs.readFile(statusPlistPath, "utf8");
-        // If Status.plist indicates backup was in progress, it was interrupted
-        if (statusContent.includes("BackupState") && statusContent.includes("InProgress")) {
-          isCorrupted = true;
-        }
-      } catch (statusErr: unknown) {
-        if (statusErr && typeof statusErr === "object" && "code" in statusErr && (statusErr as { code: string }).code === "ENOENT") {
-          // Status.plist doesn't exist — not corrupted by this metric
-        } else {
-          // Can't read status, assume potentially corrupted
-          isCorrupted = !isComplete;
-        }
-      }
+      // BACKLOG-2911: did the device report this snapshot as finished?
+      const snapshotState = await this.readSnapshotState(statusPlistPath);
+      const isInterrupted = snapshotState === "unfinished";
 
       log.info(`[BackupService] Backup status for ${udid}:`, {
-        exists: true,
+        state: "present",
         isComplete,
-        isCorrupted,
+        isInterrupted,
+        snapshotState,
         hasManifest,
         hasInfoPlist,
-        sizeBytes: size,
+        // BACKLOG-2917: log what was established, not a number stood in for it.
+        sizeBytes: size.measured ? size.bytes : "unmeasured",
+        sizeUnmeasuredReason: size.measured ? undefined : size.reason,
       });
 
       return {
-        exists: true,
+        state: "present",
         isComplete,
-        isCorrupted,
+        isInterrupted,
+        // BACKLOG-2926: the value was computed and logged here, then dropped on the
+        // floor. Only the wire was missing.
+        snapshotState,
         lastModified: stats.mtime,
-        sizeBytes: size,
+        size,
       };
     } catch (error) {
-      log.error("[BackupService] Error checking backup status:", error);
-      return null;
+      // BACKLOG-2917: the check FAILED. Saying "no backup" here is the defect —
+      // it converts an unknown into a confident wrong answer, and the caller then
+      // reports a first sync that nobody established.
+      const reason = describeError(error);
+      log.error("[BackupService] Backup status check failed; state is UNKNOWN, not absent:", error);
+      // A backup that demonstrably exists failing its check is the alarming case the
+      // epic names. A timeline mark is only seen when someone pulls the timeline, so
+      // this one is raised without being asked for.
+      Sentry.captureException(error, {
+        tags: { service: "backup", operation: "checkBackupStatus" },
+        extra: { reason },
+      });
+      return { state: "unknown", reason };
+    }
+  }
+
+  /**
+   * BACKLOG-2911: read the device's own verdict on the last backup from `Status.plist`.
+   *
+   * `Status.plist` is written by BackupAgent2 on the device and uploaded to the host.
+   * The values it actually carries are `SnapshotState: "uploading" | "finished"` and
+   * `BackupState: "empty" | "new"`.
+   *
+   * The predicate this replaced looked for the substring `"InProgress"`, which iOS
+   * never writes, so it could not return true for any readable `Status.plist`. Verified
+   * against a real torn backup (`SnapshotState: "uploading"`, 41,097 orphaned blobs,
+   * no `Manifest.db`) — see `backupService.interruptedDetection-2911.test.ts` for the
+   * bytes and their provenance. The old code also read a binary plist as UTF-8, which
+   * mangles every non-ASCII byte.
+   *
+   * This matches the ONE known-good value rather than enumerating in-progress ones, so
+   * any state not seen before — an older iOS variant, a truncated write, a format
+   * change — counts as unfinished rather than silently passing as complete.
+   *
+   * `"absent"` is reported separately from `"unfinished"` because a missing
+   * `Status.plist` carries no evidence either way: it is also the state before a
+   * device has ever completed a backup into this directory.
+   *
+   * Note this is only a *report*. It never deletes the partial backup and never
+   * changes the backup invocation — `idevicebackup2` does not read `Status.plist` on
+   * the backup path at all (`mb2_status_check_snapshot_state` is called only from
+   * `CMD_RESTORE`), and the only option the protocol accepts on a backup request is
+   * `ForceFullBackup`. Continuation across a failed run is device-driven.
+   */
+  private async readSnapshotState(
+    statusPlistPath: string,
+  ): Promise<"finished" | "unfinished" | "absent"> {
+    let raw: Buffer;
+    try {
+      raw = await fs.readFile(statusPlistPath);
+    } catch (readErr: unknown) {
+      if (readErr && typeof readErr === "object" && "code" in readErr && (readErr as { code: string }).code === "ENOENT") {
+        return "absent";
+      }
+      // Present but unreadable: we cannot prove the snapshot finished, so it did not.
+      //
+      // BACKLOG-2926 (§6.4): failing CLOSED is correct — this refuses under uncertainty
+      // rather than substituting a different answer, which is the opposite of the
+      // BACKLOG-2917 defect. But an infrastructure break would present to EVERY user as
+      // "Previous sync didn't finish" with only a `log.warn` to show for it. The
+      // breadcrumb makes "the file could not be read" separable from "the device said
+      // the snapshot was not finished" without changing the safe behaviour.
+      log.warn("[BackupService] Status.plist unreadable, treating snapshot as unfinished:", readErr);
+      Sentry.addBreadcrumb({
+        category: "backup.snapshot",
+        message: "Status.plist unreadable; failing closed to unfinished",
+        level: "warning",
+        data: { reason: describeError(readErr) },
+      });
+      return "unfinished";
+    }
+
+    try {
+      // Required lazily rather than imported at the top of the file: `Status.plist` may
+      // be binary or XML, and `simple-plist` handles both, but keeping the require here
+      // keeps this change clear of the import block that PR #2409 and BACKLOG-2910 both
+      // edit. Same pattern as electron/utils/messageParser.ts.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const simplePlist = require("simple-plist") as { parse: (data: Buffer) => unknown };
+      const parsed = simplePlist.parse(raw);
+      const snapshotState =
+        parsed && typeof parsed === "object"
+          ? (parsed as Record<string, unknown>)["SnapshotState"]
+          : undefined;
+
+      // The only value that means "the device finished this snapshot".
+      const SNAPSHOT_STATE_FINISHED = "finished";
+      return snapshotState === SNAPSHOT_STATE_FINISHED ? "finished" : "unfinished";
+    } catch (parseErr: unknown) {
+      // BACKLOG-2926 (§6.4): as above. This catch cannot separate "the plist says
+      // something else" from "the parser broke", and a broken parser would report every
+      // user's healthy backup as torn. Failing closed stays; the breadcrumb is what
+      // makes a systemic break visible as one.
+      log.warn("[BackupService] Status.plist unparseable, treating snapshot as unfinished:", parseErr);
+      Sentry.addBreadcrumb({
+        category: "backup.snapshot",
+        message: "Status.plist unparseable; failing closed to unfinished",
+        level: "warning",
+        data: { reason: describeError(parseErr) },
+      });
+      return "unfinished";
     }
   }
 
@@ -1408,7 +2429,16 @@ export class BackupService extends EventEmitter {
   ): Promise<BackupInfo | null> {
     try {
       const stats = await fs.stat(backupPath);
-      const size = await this.calculateBackupSize(backupPath);
+      // BACKLOG-2917: the third caller of the size walk. A real backup whose walk
+      // threw used to be listed to the user at size 0; `null` says "not measured"
+      // and cannot be formatted as "0 B" without the caller deciding to.
+      const sizeReading = await this.measureBackupSize(backupPath);
+      const size = sizeReading.measured ? sizeReading.bytes : null;
+      if (!sizeReading.measured) {
+        log.warn(
+          `[BackupService] Listing a backup whose size could not be measured (${sizeReading.reason})`,
+        );
+      }
 
       // Try to read Info.plist for device info
       let deviceName: string | null = null;

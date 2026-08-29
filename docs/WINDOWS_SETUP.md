@@ -73,12 +73,21 @@ The first sync takes longer because it creates a complete backup:
 
 | Scenario | Duration | Size |
 |----------|----------|------|
-| First sync | 15-45 minutes | 20-60 GB |
-| Subsequent syncs | 5-15 minutes | 2-10 GB |
+| First sync | 20-45 minutes | as large as the used space on your iPhone |
+| Subsequent syncs | 20-25 minutes | grows toward the same size |
 
-Subsequent syncs are faster because only new data is transferred (incremental backup).
+Subsequent syncs transfer only new data, but they are **not** proportionally
+faster: a measured incremental run on 2026-08-26 took 20-23 minutes to add a
+handful of new messages, because the backup index itself is large and is sent
+in both directions before any content moves.
 
-> **Tip:** The sync uses `--skip-apps` to reduce backup size by excluding app data. Only messages, contacts, and system data are included.
+> **Note on size:** the sync stores a **complete** iPhone backup, including app
+> data. It is not possible to back up only messages and contacts — Apple's
+> backup protocol has no option to request a subset, and `idevicebackup2` has no
+> option to exclude apps from a backup. A measured run produced a **58.8 GB**
+> backup. Make sure the destination drive has room for a full backup of your
+> iPhone. An earlier version of this page claimed app data was excluded; that
+> was wrong (BACKLOG-2910).
 
 ## Troubleshooting
 

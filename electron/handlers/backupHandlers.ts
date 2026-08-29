@@ -62,7 +62,6 @@ export function registerBackupHandlers(mainWindow: BrowserWindow): void {
       return {
         supportsDomainFiltering: false,
         supportsIncremental: true,
-        supportsSkipApps: true,
         supportsEncryption: true,
         availableDomains: [],
       };
@@ -90,21 +89,40 @@ export function registerBackupHandlers(mainWindow: BrowserWindow): void {
 
       const status = await backupService.checkBackupStatus(udid);
 
-      if (!status) {
+      // BACKLOG-2917: the IPC boundary repeated the collapse it was handed. A failed
+      // check and a genuinely absent backup both returned `exists: false`, so even a
+      // correct three-state value in the main process would have arrived in the
+      // renderer as two. `state` crosses the boundary intact.
+      //
+      // No renderer code calls this today (`deviceBridge.ts` exposes it;
+      // `src/services/deviceService.ts` wraps every other `backup:*` channel and not
+      // this one), so this is fixed as fragile construction, not as a live bug.
+      if (status.state === "unknown") {
         return {
           success: true,
-          exists: false,
+          state: "unknown" as const,
+          reason: status.reason,
+          lastSyncTime: null,
+        };
+      }
+
+      if (status.state === "absent") {
+        return {
+          success: true,
+          state: "absent" as const,
           lastSyncTime: null,
         };
       }
 
       return {
         success: true,
-        exists: status.exists,
+        state: "present" as const,
         isComplete: status.isComplete,
-        isCorrupted: status.isCorrupted,
-        lastSyncTime: status.lastModified?.toISOString() || null,
-        sizeBytes: status.sizeBytes,
+        // BACKLOG-2911: the device did not report the snapshot as finished.
+        isInterrupted: status.isInterrupted,
+        lastSyncTime: status.lastModified.toISOString(),
+        // BACKLOG-2917: `null` means the size could not be measured. It is NOT 0.
+        sizeBytes: status.size.measured ? status.size.bytes : null,
       };
     } catch (error) {
       log.error("[BackupHandlers] Error checking backup status:", error);

@@ -223,6 +223,17 @@ export function summaryForReason(
         `each is already saved as its own contact. Joining them would merge two saved people, which is ` +
         `more than a link.`
       );
+    // BACKLOG-2668 — the ONLY name reason that is not a doubt. The rule was
+    // sure; the setting is what stopped it. The sentence has to say that, or
+    // the user reads a confident match as a failed one and answers the wrong
+    // question. It also names the setting, because "this is being left to you"
+    // without saying why is the shape of a bug report.
+    case "name_unique_suggestion":
+      return (
+        `${ctx.nameText ?? who} appears exactly once in your address book and once in your email ` +
+        `contacts, and nobody else you have is called that. Automatic linking is off, so this one is ` +
+        `being left to you.`
+      );
     // BACKLOG-2619 / BACKLOG-2624 — the linker's name veto. Both sentences name
     // the identifier AND say what the names did, because the identifier alone is
     // what made this look like a match in the first place.
@@ -341,8 +352,15 @@ export function contactsShareTransaction(contactA: string, contactB: string): bo
   return row !== undefined && row !== null;
 }
 
-/** Every transaction address the two sides share, for the "both appear on" line. */
-function sharedTransactionAddresses(contactA: string, contactB: string): string[] {
+/**
+ * Every transaction address the two sides share, for the "both appear on" line.
+ *
+ * EXPORTED for `contactIdentityEvidence` (BACKLOG-2630 D2 piece 2). The gatherer
+ * reports the COUNT as a relationship fact and renders no sentence of its own, so
+ * the sentence built below and the fact gathered there cannot disagree about
+ * which transactions the two sides share.
+ */
+export function sharedTransactionAddresses(contactA: string, contactB: string): string[] {
   if (!contactA || !contactB || contactA === contactB) return [];
   // BACKLOG-2366: the transaction_contacts branch below is DELIBERATELY NOT
   // filtered by removed_at, unlike the "who is on this deal now" readers. Two
@@ -538,6 +556,12 @@ function defaultRelationshipFor(reason: LinkProposalReason): RelationshipAssessm
     case "name_generational_suffix":
     case "name_same_source_family":
     case "name_two_saved_contacts":
+    // BACKLOG-2668 — the unique-name rule's own verdict was that these two are
+    // one person, and the tier gate is the only thing that stopped the link.
+    // `possibly_connected` is the floor that reading supports; it is not
+    // upgraded to `connected` here because the evidence is still a name, and
+    // `contactsShareTransaction` can raise it on evidence that is not.
+    case "name_unique_suggestion":
     // BACKLOG-2619 — a shared phone or email means SOMETHING even when the names
     // say it is not one person. The office line that produced the mismatch is
     // itself the connection, and `contactsShareTransaction` can still upgrade

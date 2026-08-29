@@ -145,6 +145,7 @@ import { hasCannotLink, proposeLink } from "./db/contactLinkReviewDbService";
 import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
 import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
 import { buildEvidence, sourceRecordName } from "./contactLinkEvidence";
+import { tryGatherIdentityEvidence } from "./contactIdentityEvidence";
 import { applyLinkedSourceValues } from "./contactSourceValues";
 import { toMatchingKey } from "../utils/phoneNormalization";
 import { realContactName } from "../utils/contactDisplayLabel";
@@ -465,6 +466,25 @@ function recordProposal(args: {
       matchedValues: args.matchedValues,
       relatedContactIds: args.relatedContactIds ?? [],
     });
+    // BACKLOG-2630 D2 piece 2 — the FACTS behind the sentence, frozen alongside
+    // it. This changes NO DECISION: the gatherer is read-only and its output is
+    // consulted by nothing in this file. The branches above chose this pair, and
+    // they choose it identically with or without the facts. Wiring it here rather
+    // than in D3 is deliberate — it exercises the gatherer on every existing
+    // production path while changing nothing, so the matcher inherits a substrate
+    // that has already run.
+    //
+    // `nameHolderCount` is absent on purpose: an identifier match has no name
+    // tally, and `null` says "not computed", never "zero".
+    const facts = tryGatherIdentityEvidence({
+      userId: args.userId,
+      subject: { kind: "contact", contactId: args.contactId },
+      candidate: {
+        kind: "record",
+        sourceType: args.sourceType,
+        sourceRecordId: args.sourceRecordId,
+      },
+    });
     proposeLink({
       userId: args.userId,
       contactId: args.contactId,
@@ -475,7 +495,7 @@ function recordProposal(args: {
       identityAssessment: built.identityAssessment,
       relationshipAssessment: built.relationshipAssessment,
       clusterKey: args.clusterKey,
-      evidence: built.evidence,
+      evidence: { ...built.evidence, facts },
     });
   } catch (error) {
     logService.warn(

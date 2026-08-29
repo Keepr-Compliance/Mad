@@ -49,11 +49,13 @@ jest.mock("../backupService", () => ({
     on: jest.fn(),
     emit: jest.fn(),
     removeAllListeners: jest.fn(),
+    // BACKLOG-2917: three-state report; `sizeBytes` is now a `size` reading.
     checkBackupStatus: jest.fn().mockResolvedValue({
-      exists: true,
+      state: "present",
       isComplete: true,
-      isCorrupted: false,
-      sizeBytes: 100 * 1024 * 1024,
+      isInterrupted: false,
+      snapshotState: "finished",
+      size: { measured: true, bytes: 100 * 1024 * 1024 },
       lastModified: new Date(),
     }),
     startBackup: jest.fn(),

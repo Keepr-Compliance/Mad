@@ -69,10 +69,14 @@ import { DatabaseError } from "../types";
 import {
   CONTACT_LINK_PROPOSALS_TABLE_SQL,
   CONTACT_LINK_PROPOSALS_INDEX_SQL,
+  CONTACT_LINK_PROPOSALS_PRE_V69_COLUMNS,
   CONTACT_LINK_VERDICTS_TABLE_SQL,
   CONTACT_LINK_VERDICTS_INDEX_SQL,
+  CONTACT_LINK_VERDICTS_PRE_V69_COLUMNS,
   CONTACT_SOURCE_LINKS_COLUMNS,
   CONTACT_SOURCE_LINKS_INDEX_SQL,
+  contactLinkProposalsRebuildTableSql,
+  contactLinkVerdictsRebuildTableSql,
   contactSourceLinksRebuildTableSql,
 } from "./db/contactIdentitySchemaSql";
 import {
@@ -466,13 +470,48 @@ class DatabaseService implements IDatabaseService {
 
         if (tableInfo?.sql) {
           newDb.exec(tableInfo.sql);
-          const rows = oldDb.prepare(`SELECT * FROM "${tableName}"`).all();
+
+          // BACKLOG-2630: the column list comes from `PRAGMA table_info`, NOT from
+          // `SELECT *` + `Object.keys(rows[0])`.
+          //
+          // WHY, CONCRETELY. `PRAGMA table_info` OMITS stored generated columns;
+          // `SELECT *` RETURNS them. The old code derived the INSERT's column list
+          // from the shape of a returned row, so the moment any table gained a
+          // `GENERATED ALWAYS AS (...) STORED` column the list named it and SQLite
+          // refused the statement at PREPARE time with "cannot INSERT into
+          // generated column". `contact_link_proposals.pair_key` and
+          // `contact_link_verdicts.pair_key` (migration v69) are the first such
+          // columns in this schema. The throw propagates out of the catch below —
+          // which restores the plaintext backup — and out of `runMigrations()` in
+          // `initialize()`, so the app would not start.
+          //
+          // A generated column is exactly what must NOT be copied: the destination
+          // recomputes it from the values that ARE copied. Excluding it is correct,
+          // not a workaround. Use `table_info`, never `table_xinfo` — the latter
+          // includes generated columns and reintroduces the bug.
+          const columns = (
+            oldDb.pragma(`table_info("${tableName}")`) as { name: string }[]
+          ).map((c) => c.name);
+
+          // Empty-table short-circuit, preserved from the original. The column list
+          // no longer depends on a row existing, so this is a cheap skip rather than
+          // a correctness requirement — but keeping it means an empty table behaves
+          // exactly as it did before this change.
+          const rows =
+            columns.length > 0
+              ? oldDb
+                  .prepare(
+                    `SELECT ${columns.map((c) => `"${c}"`).join(", ")} FROM "${tableName}"`
+                  )
+                  .all()
+              : [];
           if (rows.length > 0) {
-            const columns = Object.keys(rows[0] as object);
             const placeholders = columns.map(() => "?").join(", ");
             const insertStmt = newDb.prepare(
               `INSERT INTO "${tableName}" (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${placeholders})`
             );
+            // BY NAME, never positionally: the binder looks each column up on the
+            // row object rather than trusting the order values came back in.
             const insertMany = newDb.transaction((data: unknown[]) => {
               for (const row of data) {
                 insertStmt.run(...columns.map((col) => (row as Record<string, unknown>)[col]));
@@ -4229,6 +4268,143 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
         }
       },
     },
+    {
+      version: 69,
+      description:
+        "The questions and the answers can name two records or two contacts, not only a record and a contact (BACKLOG-2630 D2 / 2665 / 2616)",
+      migrate: (d) => {
+        // BACKLOG-2630 slice 2 (board D2), piece 1 of 3 — THE SHAPE ONLY.
+        //
+        // `contact_link_proposals` (the questions) and `contact_link_verdicts`
+        // (the answers) can express exactly one kind of pair today: an external
+        // RECORD and a saved CONTACT. Both carry `contact_id NOT NULL` with an
+        // FK to `contacts`, plus `source_type` / `source_record_id`. So:
+        //
+        //   - a RECORD-TO-RECORD pair has no contact on either side, and
+        //   - a CONTACT-TO-CONTACT pair has no source record on either side,
+        //
+        // and `UNIQUE (user_id, contact_id, source_type, source_record_id)`
+        // cannot express either. This migration widens both tables to three
+        // pair shapes. The full vocabulary and every founder ruling it encodes
+        // are documented in `db/contactIdentitySchemaSql.ts`.
+        //
+        // NOTHING WRITES THE TWO NEW SHAPES. Founder decision 2026-08-27,
+        // "yeah i agree schema first split": the schema ships now, the matcher
+        // that generates such pairs waits on a measurement nobody has taken.
+        // A test may insert one directly to prove the shape holds; production
+        // code must not.
+        //
+        // WHY BOTH TABLES, AND WHY IN ONE MIGRATION. Widening the questions
+        // alone ships a question that can be asked and never answered durably —
+        // `recordVerdict` would be refused by the verdicts CHECK, and "a no
+        // holds until new evidence arrives" is unimplementable for a pair that
+        // cannot be stored. Verdicts are also the DURABLE table: proposals are
+        // recomputed by every linking pass and losing one costs a sync, while a
+        // verdict is a person's opinion and nothing can regenerate it. Two
+        // migrations over one territory in one train is the shape the record
+        // already rejected.
+        //
+        // ------------------------------------------------------------------
+        // THE 12-STEP TABLE REBUILD, TWICE — the v61 template, line for line
+        // ------------------------------------------------------------------
+        // SQLite cannot ALTER a CHECK or a NOT NULL. Guarded on `'pair_kind'`,
+        // a marker no earlier DDL can contain, so a re-run and a fresh chain
+        // replay both no-op.
+        //
+        // `typeof sql === "string"` and not a truthiness check on the row:
+        // `sqlite_master.sql` is NULL for auto-created objects, and this
+        // migration also meets partial-schema fixtures where the table is
+        // absent entirely. Reading `.includes` off a non-string would throw
+        // INSIDE the migration transaction, which the runner escalates to a
+        // restore-from-backup dialog — a catastrophic response to an absent
+        // table.
+        //
+        // THE COPY IS BY NAME, NEVER POSITIONAL. Both sides of the
+        // INSERT ... SELECT list the PRE-v69 columns explicitly. A positional
+        // `SELECT *` is what corrupted `audit_logs` in v33 and `contacts` in
+        // v36: every row survives holding its neighbour's value, so no row
+        // count can detect it. `databaseService.migration-v69.test.ts` seeds
+        // tables whose columns are DECLARED IN A DIFFERENT ORDER and asserts
+        // the copy still lands field for field.
+        //
+        // The READ side uses the PRE-v69 column lists rather than the full
+        // ones: on a v68 database the four new columns do not exist. The WRITE
+        // side lists the same names, so `pair_kind` ('record_contact'),
+        // `subject_side` ('a') and the generated `pair_key` come from the new
+        // table's DEFAULTs and its generated expression. Every existing row is
+        // a record-to-contact pair, so ZERO ROWS CHANGE MEANING.
+        //
+        // `pair_key` appears in NEITHER list — it is a generated column and
+        // cannot be written. Naming it is an immediate error, not a silent
+        // wrong answer.
+        const rebuild = (
+          table: string,
+          tempName: string,
+          createSql: string,
+          preV69Columns: readonly string[],
+          indexSql: string,
+          orderBy: string,
+        ): boolean => {
+          const existing = d
+            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
+            .get(table) as { sql?: string | null } | undefined;
+
+          if (typeof existing?.sql !== "string") {
+            // No such table on this database (partial-schema fixture, or a
+            // mocked connection). Nothing to widen and nothing to copy INTO.
+            return false;
+          }
+
+          if (existing.sql.includes("pair_kind")) {
+            // Already rebuilt — a re-run, or a fresh install where v59 exec'd
+            // the current constants and produced this shape directly.
+            return false;
+          }
+
+          const cols = preV69Columns.join(", ");
+
+          d.exec(createSql);
+          // ORDER BY rowid: `contact_link_verdicts` resolves latest-wins by
+          // `decided_at DESC, rowid DESC`, and a rebuild REASSIGNS rowids.
+          // Copying in rowid order preserves the relative order two verdicts
+          // sharing a `decided_at` depend on, so the tiebreak still picks the
+          // same winner after the migration as before it.
+          d.exec(`INSERT INTO ${tempName} (${cols}) SELECT ${cols} FROM ${table} ORDER BY ${orderBy};`);
+          d.exec(`DROP TABLE ${table};`);
+          d.exec(`ALTER TABLE ${tempName} RENAME TO ${table};`);
+          // The DROP took the table's standalone index with it.
+          d.exec(indexSql);
+          return true;
+        };
+
+        const proposalsRebuilt = rebuild(
+          "contact_link_proposals",
+          "contact_link_proposals_v69",
+          contactLinkProposalsRebuildTableSql("contact_link_proposals_v69"),
+          CONTACT_LINK_PROPOSALS_PRE_V69_COLUMNS,
+          CONTACT_LINK_PROPOSALS_INDEX_SQL,
+          "rowid",
+        );
+
+        const verdictsRebuilt = rebuild(
+          "contact_link_verdicts",
+          "contact_link_verdicts_v69",
+          contactLinkVerdictsRebuildTableSql("contact_link_verdicts_v69"),
+          CONTACT_LINK_VERDICTS_PRE_V69_COLUMNS,
+          CONTACT_LINK_VERDICTS_INDEX_SQL,
+          "rowid",
+        );
+
+        if (proposalsRebuilt || verdictsRebuilt) {
+          logService.info(
+            "[Migration v69] contact_link_proposals and contact_link_verdicts now admit " +
+              "record-to-record and contact-to-contact pairs. Schema only — nothing writes " +
+              "either shape yet (BACKLOG-2630 D2)",
+            "Database",
+          );
+        }
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -4906,10 +5082,6 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
     return messageDb.getMessagesByContact(userId, contact);
   }
 
-  async updateMessage(messageId: string, updates: Partial<Message>): Promise<void> {
-    return messageDb.updateMessage(messageId, updates);
-  }
-
   async linkMessageToTransaction(messageId: string, transactionId: string): Promise<void> {
     return messageDb.linkMessageToTransaction(messageId, transactionId);
   }
@@ -5014,16 +5186,25 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
   // CONTACT RESOLUTION QUERIES (Delegate to attachmentDbService)
   // ============================================
 
-  getContactNamesByPhoneDigits(normalizedPhones: string[]) {
-    return attachmentDb.getContactNamesByPhoneDigits(normalizedPhones);
+  getContactNamesByPhoneDigits(
+    normalizedPhones: string[],
+    scope?: attachmentDb.ContactResolutionScope
+  ) {
+    return attachmentDb.getContactNamesByPhoneDigits(normalizedPhones, scope);
   }
 
-  getContactNamesByEmails(lowerEmails: string[]) {
-    return attachmentDb.getContactNamesByEmails(lowerEmails);
+  getContactNamesByEmails(
+    lowerEmails: string[],
+    scope?: attachmentDb.ContactResolutionScope
+  ) {
+    return attachmentDb.getContactNamesByEmails(lowerEmails, scope);
   }
 
-  getContactNameByAppleIdPrefix(appleIdLower: string) {
-    return attachmentDb.getContactNameByAppleIdPrefix(appleIdLower);
+  getContactNameByAppleIdPrefix(
+    appleIdLower: string,
+    scope?: attachmentDb.ContactResolutionScope
+  ) {
+    return attachmentDb.getContactNameByAppleIdPrefix(appleIdLower, scope);
   }
 
   // ============================================

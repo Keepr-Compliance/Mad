@@ -68,16 +68,18 @@ CREATE TABLE IF NOT EXISTS phone_last_message (
 );
 `;
 
-/**
- * The two denormalized recency columns, TRANSCRIBED from `schema.sql:168-169`
- * (`last_inbound_at DATETIME` / `last_outbound_at DATETIME`). The shared
- * identity fixture omits them; the recency fragment inside the projection reads
- * both, so without them the statement under test cannot even prepare.
+/*
+ * The two denormalized recency columns (`last_inbound_at` / `last_outbound_at`)
+ * used to be ALTERed in here, because the shared identity fixture omitted them
+ * and the recency fragment inside the projection reads both.
+ *
+ * BACKLOG-2630 D2 piece 2 moved them INTO the shared fixture, where they belong
+ * — `contactIdentityEvidence` reads the same recency fragment and needed them
+ * too, and two suites each patching the same two columns onto the same fixture
+ * is a second definition waiting to disagree. The ALTERs are deleted rather than
+ * guarded: a duplicate-column error is the correct signal that the fixture now
+ * carries them.
  */
-const CONTACT_RECENCY_COLUMNS = [
-  "ALTER TABLE contacts ADD COLUMN last_inbound_at DATETIME",
-  "ALTER TABLE contacts ADD COLUMN last_outbound_at DATETIME",
-];
 
 let mockDb: TestDb | null = null;
 let poolReady = false;
@@ -199,7 +201,6 @@ beforeEach(() => {
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   mockDb.exec(CONTACT_COMMUNICATION_SCHEMA);
   mockDb.exec(PHONE_LAST_MESSAGE_SCHEMA);
-  for (const stmt of CONTACT_RECENCY_COLUMNS) mockDb.exec(stmt);
   seed();
   poolReady = false;
 });
