@@ -21,11 +21,15 @@ export async function saveFeedback(
 ): Promise<UserFeedback> {
   const id = crypto.randomUUID();
 
+  // BACKLOG-2560: `attachment_id` is a real column (schema.sql:956) and
+  // `UserFeedback` declares it (models.ts:1421), but the INSERT used to omit it
+  // — so document-type feedback about an attachment landed with no attachment on
+  // it. The declared model and the writer now agree.
   const sql = `
     INSERT INTO classification_feedback (
-      id, user_id, transaction_id, message_id, contact_id,
+      id, user_id, transaction_id, message_id, attachment_id, contact_id,
       feedback_type, original_value, corrected_value, reason
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `;
 
   const params = [
@@ -33,6 +37,7 @@ export async function saveFeedback(
     feedbackData.user_id,
     feedbackData.transaction_id || null,
     feedbackData.message_id || null,
+    feedbackData.attachment_id || null,
     feedbackData.contact_id || null,
     feedbackData.feedback_type,
     feedbackData.original_value || null,

@@ -150,11 +150,25 @@ export const contactBridge = {
   /**
    * TASK-2026: Resolve any mix of phone numbers, emails, and Apple IDs to contact names
    * Uses shared ContactResolutionService (imported contacts + macOS Contacts + email lookup)
+   *
+   * BACKLOG-2758: `scope.transactionId` biases a shared handle toward the
+   * contacts linked to that deal. A surface showing threads that are ALREADY on
+   * the transaction passes it; a surface showing threads that are NOT yet on it
+   * (the attach picker) must not, or it would name a shared line after this
+   * deal's party on no evidence.
+   *
+   * This hop is forwarding only — it must pass `scope` THROUGH. A bridge that
+   * forwards two arguments still type-checks against the three-argument
+   * contract (fewer parameters is assignable), so nothing but this comment and
+   * the arity below stops the id being silently dropped on the wire.
+   *
    * @param handles - Array of phone numbers, emails, or Apple IDs to resolve
+   * @param userId - Owner of the contacts; the hard filter, validated in main
+   * @param scope - Optional transaction preference
    * @returns Map of handle -> contact name
    */
-  resolveHandles: (handles: string[], userId?: string): Promise<{ success: boolean; names: Record<string, string>; error?: string }> =>
-    ipcRenderer.invoke("contacts:resolve-handles", handles, userId),
+  resolveHandles: (handles: string[], userId?: string, scope?: { transactionId?: string }): Promise<{ success: boolean; names: Record<string, string>; error?: string }> =>
+    ipcRenderer.invoke("contacts:resolve-handles", handles, userId, scope),
 
   /**
    * BACKLOG-1762: Get an email address -> display_name map for the user's contacts.
