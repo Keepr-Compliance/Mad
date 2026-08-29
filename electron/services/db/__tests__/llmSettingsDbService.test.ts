@@ -191,13 +191,25 @@ describe("llmSettingsDbService", () => {
       );
     });
 
-    it("should return existing settings if no fields to update", () => {
+    /**
+     * BACKLOG-2560 / BACKLOG-2932 — this test used to assert that a zero-field
+     * payload RETURNS THE CURRENT SETTINGS as a success value. That is the
+     * defect, not the contract: `removeApiKey` passed
+     * `{ openai_api_key_encrypted: undefined }`, every field was dropped, and
+     * the caller was handed a settings object for a write that never happened.
+     * Throwing matches `updateUser`, `updateCommunication` and the rest of db/.
+     */
+    it("throws on a payload with nothing writable, rather than reporting success", () => {
       mockDbGet.mockReturnValue(mockLLMSettingsRow);
 
-      const result = updateLLMSettings(TEST_USER_ID, {});
+      expect(() => updateLLMSettings(TEST_USER_ID, {})).toThrow(
+        "No valid fields to update"
+      );
+      expect(() =>
+        updateLLMSettings(TEST_USER_ID, { openai_api_key_encrypted: undefined })
+      ).toThrow("No valid fields to update");
 
       expect(mockDbRun).not.toHaveBeenCalled();
-      expect(result.id).toBe("test-llm-settings-uuid");
     });
   });
 
