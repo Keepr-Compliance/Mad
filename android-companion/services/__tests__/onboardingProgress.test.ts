@@ -45,6 +45,7 @@ import {
   ONBOARDING_STEP_KEY,
   ONBOARDING_ROUTES,
   ONBOARDING_STEPS,
+  clearOnboardingStep,
   getOnboardingStep,
   setOnboardingStep,
   getResumeStep,
@@ -63,9 +64,12 @@ describe('onboardingProgress — resume persistence (BACKLOG-2216)', () => {
     jest.clearAllMocks();
   });
 
-  it('resumes at step 1 (permissions) on a fresh run with nothing persisted', async () => {
+  // BACKLOG-2956: step 1 is now `disclosure` — Google Play requires the prominent
+  // data disclosure to precede the runtime permission prompt, so a fresh run (and
+  // any run with no valid progress) must land there and not on `permissions`.
+  it('resumes at step 1 (disclosure) on a fresh run with nothing persisted', async () => {
     expect(await getOnboardingStep()).toBeNull();
-    expect(await getResumeStep()).toBe('permissions');
+    expect(await getResumeStep()).toBe('disclosure');
     expect(await isOnboardingComplete()).toBe(false);
   });
 
@@ -75,7 +79,7 @@ describe('onboardingProgress — resume persistence (BACKLOG-2216)', () => {
     expect(await getOnboardingStep()).toBe('pair-device');
     // The resume target is the interrupted step — NOT the start of the flow.
     expect(await getResumeStep()).toBe('pair-device');
-    expect(await getResumeStep()).not.toBe('permissions');
+    expect(await getResumeStep()).not.toBe('disclosure');
   });
 
   it('advances the resume marker as later steps are reached', async () => {
@@ -91,7 +95,7 @@ describe('onboardingProgress — resume persistence (BACKLOG-2216)', () => {
 
     // Completing onboarding clears the persisted progress...
     expect(await getOnboardingStep()).toBeNull();
-    expect(await getResumeStep()).toBe('permissions');
+    expect(await getResumeStep()).toBe('disclosure');
     // ...and records completion.
     expect(await isOnboardingComplete()).toBe(true);
     // Direct key checks: complete=true, step removed.
@@ -102,10 +106,11 @@ describe('onboardingProgress — resume persistence (BACKLOG-2216)', () => {
   it('treats a corrupt/legacy stored step value as no progress', async () => {
     await AsyncStorage.setItem(ONBOARDING_STEP_KEY, 'not-a-real-step');
     expect(await getOnboardingStep()).toBeNull();
-    expect(await getResumeStep()).toBe('permissions');
+    expect(await getResumeStep()).toBe('disclosure');
   });
 
   it('maps every onboarding step to its screen route', () => {
+    expect(ONBOARDING_ROUTES.disclosure).toBe('/onboarding/disclosure');
     expect(ONBOARDING_ROUTES.permissions).toBe('/onboarding/permissions');
     expect(ONBOARDING_ROUTES['pair-device']).toBe('/onboarding/pair-device');
     expect(ONBOARDING_ROUTES['first-sync']).toBe('/onboarding/first-sync');
@@ -113,5 +118,31 @@ describe('onboardingProgress — resume persistence (BACKLOG-2216)', () => {
     for (const step of ONBOARDING_STEPS) {
       expect(ONBOARDING_ROUTES[step]).toBe(`/onboarding/${step}`);
     }
+  });
+
+  // BACKLOG-2956: Play requires the disclosure BEFORE the permission prompt. The
+  // binding enforcement is the consent guard in permissions.tsx, but the declared
+  // sequence must agree with it — a reordering here is a review signal.
+  it('orders the disclosure ahead of the permission step', () => {
+    expect(ONBOARDING_STEPS.indexOf('disclosure')).toBe(0);
+    expect(ONBOARDING_STEPS.indexOf('disclosure')).toBeLessThan(
+      ONBOARDING_STEPS.indexOf('permissions'),
+    );
+  });
+
+  // BACKLOG-2956: sign-out from inside onboarding clears the resume marker
+  // WITHOUT marking onboarding complete, so the next account to sign in on this
+  // phone starts at the disclosure rather than resuming past a consent it never
+  // gave.
+  it('clears the resume marker on sign-out without marking onboarding complete', async () => {
+    await setOnboardingStep('pair-device');
+
+    await clearOnboardingStep();
+
+    expect(await getOnboardingStep()).toBeNull();
+    expect(await getResumeStep()).toBe('disclosure');
+    // Crucially NOT complete — otherwise the next user skips onboarding entirely.
+    expect(await isOnboardingComplete()).toBe(false);
+    expect(await AsyncStorage.getItem(ONBOARDING_COMPLETE_KEY)).toBeNull();
   });
 });

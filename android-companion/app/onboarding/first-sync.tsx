@@ -259,7 +259,7 @@ export default function FirstSyncScreen({
       return (
         <View style={styles.screen}>
           <View style={styles.stepIndicator}>
-            <Text style={styles.stepText}>Step 3 of 3</Text>
+            <Text style={styles.stepText}>Step 4 of 4</Text>
           </View>
           <View style={styles.content}>
             <Text style={styles.stepIcon}>{'⏳'}</Text>
@@ -295,7 +295,7 @@ export default function FirstSyncScreen({
     return (
       <View style={styles.screen}>
         <View style={styles.stepIndicator}>
-          <Text style={styles.stepText}>Step 3 of 3</Text>
+          <Text style={styles.stepText}>Step 4 of 4</Text>
         </View>
         <View style={styles.content}>
           <ActivityIndicator size="large" color={colors.primary[600]} />
@@ -327,7 +327,7 @@ export default function FirstSyncScreen({
   return (
     <View style={styles.screen}>
       <View style={styles.stepIndicator}>
-        <Text style={styles.stepText}>Step 3 of 3</Text>
+        <Text style={styles.stepText}>Step 4 of 4</Text>
       </View>
 
       <View style={styles.content}>
