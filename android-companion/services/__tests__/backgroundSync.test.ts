@@ -338,8 +338,13 @@ describe('same-millisecond boundary safety', () => {
     // then correct. Returning `maxCount` twins at the same millisecond is what
     // expresses truncation under the new rule, which is the state this test has
     // always been about.
+    // THREE twins into a ceiling of two, so the slice genuinely CUTS one: 9003
+    // is really left unread at the boundary millisecond. Two twins into a
+    // ceiling of two severs nothing — it would exercise the conservative
+    // predicate without ever splitting a same-millisecond group, so the
+    // inclusive advance would be merely cautious rather than necessary.
     mockReadSmsMessages.mockImplementation(async (_since, maxCount) => {
-      const twins = [msg(9001, 9_000), msg(9002, 9_000)];
+      const twins = [msg(9001, 9_000), msg(9002, 9_000), msg(9003, 9_000)];
       return okRead(twins.slice(0, Math.max(0, maxCount ?? 0)));
     });
 

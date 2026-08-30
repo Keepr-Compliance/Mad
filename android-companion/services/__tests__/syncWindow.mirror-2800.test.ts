@@ -186,6 +186,52 @@ describe('resolveLookbackMonths — a corrupt stored value must not disable the 
   });
 });
 
+describe('the ONE deliberate divergence from the renderer resolver', () => {
+  /**
+   * `resolveStoredLookbackMonths` in
+   * `src/components/settings/messageImportPreferences.ts` returns a stored
+   * value VERBATIM once it is neither undefined nor null. This resolver
+   * additionally requires a finite positive number.
+   *
+   * THAT DIFFERENCE IS INTENDED, and this case exists so that somebody told to
+   * "restore parity with the renderer" finds a test saying so rather than
+   * inferring the validation is drift and deleting it. The two consumers fail
+   * differently: the renderer's value lands in a dropdown, where junk simply
+   * matches no option; this one is fed to calendar arithmetic and then to a
+   * native query, where junk does not throw, it produces an unbounded read.
+   *
+   * If you are deliberately changing this contract, change this test WITH the
+   * code — do not delete it to make a red run green.
+   */
+  it('DIVERGES from the renderer on purpose: junk is defaulted here, passed through there', () => {
+    const junk = { messageImport: { android: { filters: { lookbackMonths: 'abc' } } } };
+
+    // The renderer's rule, restated: anything not undefined/null passes through.
+    const rendererWouldReturn = (
+      junk.messageImport.android.filters as { lookbackMonths?: unknown }
+    ).lookbackMonths;
+    expect(rendererWouldReturn).toBe('abc');
+
+    // This resolver deliberately does NOT do that.
+    expect(resolveLookbackMonths(junk)).toBe(DEFAULT_LOOKBACK_MONTHS);
+    expect(resolveLookbackMonths(junk)).not.toBe(rendererWouldReturn);
+  });
+
+  it('parity is preserved for every value the panel can actually WRITE', () => {
+    // The divergence is unreachable through the UI: the dropdown writes only
+    // these. So the two resolvers agree on the entire producible input set, and
+    // the divergence covers only corrupt/hand-edited storage.
+    const producible: Array<number | null> = [3, 6, 9, 12, 18, 24, null];
+    for (const value of producible) {
+      expect(
+        resolveLookbackMonths({
+          messageImport: { android: { filters: { lookbackMonths: value } } },
+        }),
+      ).toBe(value);
+    }
+  });
+});
+
 describe('computeWindowStart — All time', () => {
   it('null months means NO lower bound', () => {
     expect(computeWindowStart(null, Date.parse('2026-08-30T12:00:00Z'))).toBeNull();

@@ -509,24 +509,33 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
         // union holds at least C elements <= T_B, so the C-th smallest element
         // of the union is <= T_B. The trim keeps exactly the C smallest, so its
         // newest element T satisfies T <= T_B for EVERY truncated box; and any
-        // box that returned fewer than C was exhausted. Hence both boxes are
-        // complete over [readFrom, T], and the cursor may safely reach T.
+        // box that returned fewer than C was exhausted (the ONE exception to
+        // that clause is BACKLOG-3018, noted at the predicate below). Hence both
+        // boxes are complete over [readFrom, T], and the cursor may safely
+        // reach T.
         //
         // BACKLOG-3005 (page-chaining for throughput) MUST PRESERVE THIS: what
         // it advances the cursor to has to be a timestamp below which BOTH boxes
         // are known complete, not merely the newest message it happened to read.
-        // Evaluated PRE-trim, on the union. If any box returned exactly its
-        // ceiling (= remainingCapacity) the union necessarily reaches the
-        // ceiling too; and if the union is short of it, neither box hit its
-        // ceiling and both are exhausted. (Testing the KEPT set instead is
-        // equivalent — when the union exceeds the cap the kept set is exactly
-        // the cap — but the union reads directly off the proof.)
+
+        // TRUNCATION, evaluated PRE-trim on the union. If any box returned
+        // exactly its ceiling (= remainingCapacity) the union necessarily
+        // reaches the ceiling too; and if the union is short of it, neither box
+        // hit its ceiling and both are exhausted. (Testing the KEPT set instead
+        // is equivalent — when the union exceeds the cap the kept set is
+        // exactly the cap — but the union reads directly off the proof.)
         //
-        // Caveat, pre-existing and not fixed here: `readBoxPaged` bounds its
-        // collection by VALID messages while `indexFrom` advances by RAW rows,
-        // so the MAX_PAGES_PER_BOX valve could in principle return fewer than
-        // the ceiling with rows still unread. It needs ~100k consecutive
-        // invalid rows at the current page size to trigger.
+        // THE ONE EXCEPTION to the proof above, filed as BACKLOG-3018 and
+        // deliberately NOT fixed here: `readBoxPaged` bounds its collection by
+        // VALID messages while `indexFrom` advances by RAW rows, so the
+        // MAX_PAGES_PER_BOX valve can end a read with fewer than the ceiling
+        // collected AND rows still unread. That falsifies the proof's second
+        // clause — "any box that returned fewer than C was exhausted" — which
+        // makes this predicate false and lets the cursor advance past them.
+        // Triggering it needs fewer than `remainingCapacity` valid messages
+        // inside the first ~100,000 raw rows above the cursor, so it is
+        // pathological today. BACKLOG-3005 sits directly on that valve and must
+        // not make it reachable.
         const unionWasTruncated =
           readResult.messages.length >= remainingCapacity;
 

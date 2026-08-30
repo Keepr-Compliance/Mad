@@ -194,8 +194,26 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
  * Resolve the lookback the ANDROID sync must apply, from a raw preferences blob.
  *
  * MIRROR of `resolveAndroidImportFilters` + `resolveStoredLookbackMonths` in
- * `src/components/settings/messageImportPreferences.ts`. Three rules, and every
- * one of them has already been a bug somewhere in this codebase:
+ * `src/components/settings/messageImportPreferences.ts`, with ONE DELIBERATE
+ * DIVERGENCE — see the validation at the end of this function.
+ *
+ * ## The divergence, named so nobody "restores parity" by deleting it
+ *
+ * `resolveStoredLookbackMonths` returns a stored value VERBATIM once it is
+ * neither `undefined` nor `null`. This resolver additionally requires it to be
+ * a finite positive number, and falls back to the default otherwise.
+ *
+ * That is intentional and NOT drift. The renderer's value is rendered into a
+ * dropdown, where a junk value simply fails to match an option. This one is fed
+ * to calendar arithmetic and then onto a native query, where a junk value does
+ * not throw — it POISONS, silently producing an unbounded read (the reasoning
+ * is at the validation itself). The two consumers have different failure modes,
+ * so they get different guards.
+ *
+ * Pinned by `syncWindow.mirror-2800.test.ts`, which asserts the SHARED rules as
+ * parity cases AND asserts this divergence is intended.
+ *
+ * The three shared rules, every one of which has already been a bug here:
  *
  *   1. `messageImport.android` ABSENT falls back to the legacy shared key
  *      `messageImport.filters`. The desktop panel only seeds the `android`
@@ -378,7 +396,13 @@ export async function clearSyncWindowCache(): Promise<void> {
       AsyncStorage.removeItem(SYNC_WINDOW_FAILED_KEY),
     ]);
   } catch {
-    // Nothing to do — a surviving record is inert once the stamp mismatches.
+    // Best effort. A surviving record is not necessarily inert: `readCache`
+    // only enforces the owner stamp when it KNOWS the current user
+    // (`if (userId && parsed.userId !== userId)`), so a phone that cannot read
+    // its session still accepts whatever is cached. That is the intended
+    // behaviour — a signed-out but paired phone keeping its last known window
+    // beats going unwindowed — but it means this removal is real hygiene, not a
+    // no-op, and the owner stamp is not a guarantee on that path.
   }
 }
 
