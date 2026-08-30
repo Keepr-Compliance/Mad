@@ -21,8 +21,9 @@
  *   C10      compliant `const sql` + later shadowed literal    -> COMPLIANT then VIOLATION
  *   C11      reassignment / += / parameter shadowing an import -> UNRESOLVABLE (no collateral)
  *   C12      --update-baseline refuses a swap, still allows a shrink
- *   C13      nested siblings share a taint span -> documented false RED
+ *   C13      taint spans the DECLARING scope (fails under both approximations)
  *   C14      reassigned regex receiver cannot green .exec() on SQL
+ *   C15      module-scoped binding, written in one fn, read in another -> RED
  *   A2a      3-hop alias chain                                 -> UNRESOLVABLE (fail-closed)
  *   A2b      2-hop alias to a db/ import (the :83 shape)       -> COMPLIANT
  *   VSUM     absolute call-site count + COMPLIANT reason census on a known tree
@@ -494,41 +495,89 @@ for (const [id, verb, call] of [
 }
 
 // ---------------------------------------------------------------------------
-// C13 — the KNOWN LIMIT the outermost taint span buys, pinned deliberately.
+// C13 — the taint span is the scope that DECLARES the name.
 //
-// Taint spans the OUTERMOST enclosing function, so two sibling arrows nested
-// inside ONE outer function share a span: a write in either taints the name for
-// both, and a legitimate `const sql = <db import>` in the first is reported
-// UNRESOLVABLE. That is a FALSE RED -- fail closed, the same trade the alias
-// cutoff already makes, and no such site exists in the tree today.
+// This is the property, not a snapshot of one implementation. It fails under
+// BOTH earlier approximations, which is what makes it the right control:
 //
-// This control exists so the trade is visible in both directions. Narrowing the
-// span back to the innermost function to "fix" this false red would re-open the
-// nested-callback false green in C11, and this control would go red saying so.
-// See KNOWN LIMITS 4 in check-sql-boundary.mjs.
+//   innermost function around the write -> (b) `read` is not tainted, because
+//     the write sits in a SIBLING closure. False green.
+//   outermost function around the write -> (a) `legit` IS tainted, because a
+//     sibling closure's parameter shares the outer span. False red.
+//
+// Only "span = the declaring scope" gives (a) COMPLIANT and (b) UNRESOLVABLE.
+//
+// This replaces an earlier C13 that asserted the outermost rule's false red as
+// a permanent limit. That limit no longer exists, so the control was rewritten
+// to the property it had been protecting rather than deleted.
 // ---------------------------------------------------------------------------
 {
   const dir = mkTree({
     [DB_MODULE]: DB_MODULE_SRC,
-    "electron/workers/siblings.ts": [
+    "electron/workers/scopes.ts": [
       'import { OK_SQL } from "../services/db/okSql";',
-      "export function outer(db: any) {",
+      "// (a) each closure declares its OWN binding: no cross-taint between siblings",
+      "export function ownBindings(db: any) {",
       "  const legit = () => { const sql = OK_SQL; return db.prepare(sql).all(); };",
       "  const taken = (sql: string) => db.prepare(sql).all();",
       "  return { legit, taken };",
+      "}",
+      "// (b) the binding is declared in the ENCLOSING scope, so a write in one",
+      "// closure taints the sibling that reads it",
+      "export function sharedBinding(db: any, term: string) {",
+      "  let sql = OK_SQL;",
+      "  const write = () => { sql = `SELECT id FROM widgets WHERE label LIKE '%${term}%'`; };",
+      "  const read = () => db.prepare(sql).all();",
+      "  return { write, read };",
       "}",
       "",
     ].join("\n"),
   });
   const r = seedAndRun(dir, ["--explain"]);
-  const lines = r.all.split("\n").filter((l) => l.includes("siblings.ts"));
+  const lines = r.all.split("\n").filter((l) => l.includes("scopes.ts"));
+  const compliant = lines.filter((l) => /COMPLIANT\s+from-db-import/.test(l)).length;
   const unresolvable = lines.filter((l) => /UNRESOLVABLE/.test(l)).length;
   record(
     "C13",
-    "nested siblings share one taint span: documented FALSE RED, fail closed (KNOWN LIMITS 4)",
-    lines.length === 2 && unresolvable === 2,
-    `sites=${lines.length} unresolvable=${unresolvable} (want 2/2)`
+    "taint spans the DECLARING scope: own-binding siblings stay COMPLIANT, a shared binding taints the sibling reader",
+    lines.length === 3 && compliant === 1 && unresolvable === 2,
+    `sites=${lines.length} compliant=${compliant} unresolvable=${unresolvable} (want 3/1/2)`
   );
+}
+
+// ---------------------------------------------------------------------------
+// C15 — a module-scoped binding, written in one function, read in another.
+//
+//     let cachedSql = <db import>;                    // module scope
+//     export function configure(t) { cachedSql = `... ${t}`; }
+//     export function run(db) { db.prepare(cachedSql); }
+//
+// A lazily-built or memoised module-level query. Both position-based spans miss
+// it: the write's innermost AND outermost enclosing function are both
+// `configure`, and the read is in `run`. Only the declaring scope (here, the
+// source file) covers both.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    [DB_MODULE]: DB_MODULE_SRC,
+    "electron/handlers/cached.ts": [
+      'import { OK_SQL } from "../services/db/okSql";',
+      "let cachedSql = OK_SQL;",
+      "export function configure(term: string) {",
+      "  cachedSql = `SELECT id FROM widgets WHERE label LIKE '%${term}%'`;",
+      "}",
+      "export function run(db: any) { return db.prepare(cachedSql).all(); }",
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--json"]);
+  let ok = false, detail = `code=${r.code}`;
+  try {
+    const j = JSON.parse(r.out);
+    ok = j.callSites === 1 && j.compliant === 0 && j.unresolvable === 1 && j.violation === 0;
+    detail = `sites=${j.callSites} C=${j.compliant} U=${j.unresolvable} V=${j.violation}`;
+  } catch { /* ok stays false */ }
+  record("C15", "module-scoped binding written in one function and read in another is UNRESOLVABLE", ok, detail);
 }
 
 // ---------------------------------------------------------------------------

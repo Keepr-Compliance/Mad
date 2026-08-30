@@ -214,10 +214,9 @@ exceeding the limit can only ever produce a **false red, never a false green**.
 
 A name written by a form the binding map does not model -- assignment, `+=`,
 parameter, destructuring, catch variable, uninitialised `let` -- is **tainted** for
-the outermost function enclosing the write, and can never be COMPLIANT. The span is
-the outermost function because it has to cover where the name is *used*, not where
-the write sits: `filters.forEach((f) => { sql += ... })` writes inside a callback
-and prepares the result outside it. This matters because
+**the scope that declares it**, and can never be COMPLIANT. The span is the
+binding's scope rather than a position around the write, so it covers every read of
+that binding wherever it happens. This matters because
 `let sql = <db import>; sql += ...` is the dominant query-assembly idiom in this
 codebase, and without taint the append is invisible:
 
@@ -227,19 +226,46 @@ sql += ` LIMIT ${Math.floor(limit)}`;   // still authoring SQL outside db/
 db.prepare(sql);                        // -> UNRESOLVABLE, not COMPLIANT
 ```
 
+It holds across scopes too -- a write in a callback, or in a sibling function, still
+taints a module-level binding read elsewhere:
+
+```ts
+let cachedSql = WIDGETS_BY_OWNER_SQL;
+export function configure(t) { cachedSql = `... '%${t}%'`; }
+export function run(db) { db.prepare(cachedSql); }   // -> UNRESOLVABLE
+```
+
 **Moving a query in halves does not clear it.** If you move the base SELECT into
 `db/` but leave an interpolated `+=` at the call site, the site stays red. Move the
 whole statement, or parameterise the part that varies.
 
-**What the gate does NOT catch, stated plainly:** interprocedural flow. It cannot
-tell whether the text a helper receives originated in `db/`, so it reports
-UNRESOLVABLE -- it says it cannot trace the origin, it does not certify the site.
-Nearest-preceding resolution is also positional rather than lexical, so a `const`
-in a nested function can capture a later outer use; that fails **closed** (a false
-red on a compliant site) and no such site exists today. For the same reason, sibling
-closures nested inside one outer function share a taint span, so a legitimate
-`const sql = <db import>` in one of them reads UNRESOLVABLE -- again a fail-closed
-false red, and again absent from the tree.
+### Where the classifier can be wrong
+
+All fail **closed** -- they produce a false red, never a false green -- and none
+exists in the tree today.
+
+- **Interprocedural flow is not modelled.** It cannot tell whether the text a helper
+  receives originated in `db/`, so it reports UNRESOLVABLE. That means *it cannot
+  trace the origin*, not that the site is certified.
+- **Nearest-preceding resolution is positional, not lexical**, so a `const` in a
+  nested function can capture a later outer use.
+- **Taint is scope-exact but not flow-exact.** It cannot tell a write that precedes
+  a read from one that follows it, so a name written anywhere in its declaring scope
+  is tainted for all of it.
+
+### What the gate does not cover at all
+
+A **different guarantee** from the limits above: these sites are not classified
+COMPLIANT, they are never *enumerated*. Both are swept and empty today; neither is
+closed in principle.
+
+- **Matcher shape.** Only `<expr>.prepare(...)` / `.exec(...)` / `.pragma(...)`
+  property-access calls are seen. `db["prepare"](sql)`, `db.prepare.bind(db)(sql)`
+  and `const { prepare } = db; prepare(sql)` produce **zero** call sites -- invisible,
+  absent from the census. Zero instances in the tree. Closing this would mean matching
+  bare calls, which reintroduces the receiver-name blacklist the design avoids.
+- **Enumeration.** `.ts`/`.tsx` only. The one non-TS source file under `electron/` or
+  `src/` is a 7-line `electron/main.js` with no db calls.
 
 ### The baseline
 

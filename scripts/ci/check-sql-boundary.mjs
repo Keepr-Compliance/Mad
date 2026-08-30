@@ -46,21 +46,35 @@
  *   The binding map models two forms: a declaration with an initializer, and a
  *   named import. Any OTHER write or binding of a name — assignment, `+=`,
  *   parameter, destructuring, catch variable, uninitialised `let` — taints that
- *   name for the span of the OUTERMOST function enclosing the write, and a
- *   tainted name can never yield COMPLIANT. Without this, `let sql = <db
- *   import>; sql += ...` resolved past the write to the import and greened
- *   interpolated SQL.
+ *   name, and a tainted name can never yield COMPLIANT. Without this,
+ *   `let sql = <db import>; sql += ...` resolved past the write to the import
+ *   and greened interpolated SQL.
  *
- *   The span is the outermost function, not the innermost, because it must
- *   cover where the NAME IS USED rather than where the write happens to sit —
- *   `filters.forEach((f) => { sql += ... })` writes inside a callback and uses
- *   the result outside it. Taint is checked at BOTH places that resolve a name
+ *   THE SPAN IS THE SCOPE THAT DECLARES THE NAME. The property being protected
+ *   — "this name may hold something the model cannot see" — belongs to the
+ *   BINDING, so the span is the binding's scope. Two earlier revisions
+ *   approximated it with the syntactic position of the write, and an
+ *   approximation of a binding scope can be wrong in both directions; both
+ *   happened, and each admitted a false green:
+ *
+ *     innermost function around the write  -> too narrow: a write in a callback
+ *       left the enclosing-scope read COMPLIANT
+ *       (`filters.forEach((f) => { sql += ... }); db.prepare(sql)`)
+ *     outermost function around the write  -> still too narrow for a
+ *       module-scoped name written in a sibling function, and too wide for
+ *       sibling closures (a false red, since removed)
+ *
+ *   Using the declaring scope closes both directions at once and is not an
+ *   approximation, so "too narrow" and "too wide" stop being available failure
+ *   directions. Taint is checked at BOTH places that resolve a name
  *   (`classifyArg` and `isRegexReceiver`), not just the first.
  *
  *   Taint downgrades only FROM_DB; a name resolving to a LITERAL still keys as
  *   LITERAL, so the baseline does not move.
  *
- * KNOWN LIMITS — what this gate does NOT catch, stated plainly
+ * KNOWN LIMITS — where the CLASSIFIER can be wrong.
+ *   These are all fail-closed: they can produce a false RED, never a false
+ *   green. None exists in the tree today.
  *   1. Resolution never crosses a function boundary. SQL passed INTO a helper
  *      (`const run = (sql: string) => db.prepare(sql)`) is UNRESOLVABLE, which
  *      counts as a violation. That case is reported.
@@ -69,15 +83,26 @@
  *      tell; it does not certify the site.
  *   3. Nearest-preceding is positional, not lexical. A `const` inside a nested
  *      function textually precedes a later use in the OUTER scope, so that use
- *      can resolve to it. The effect is a false RED on a compliant site — fail
- *      closed, and no such site exists in the tree today.
- *   4. Because the taint span is the outermost enclosing function, sibling
- *      closures nested in one outer function share it: a write in either taints
- *      the name for both, so a legitimate `const sql = <db import>` in one of
- *      them reads UNRESOLVABLE. Also a false RED, also fail closed, also absent
- *      from the tree. Control C13 pins this trade in BOTH directions —
- *      narrowing the span back to the innermost function to remove this false
- *      red re-opens the nested-callback false green, and C11 then goes red.
+ *      can resolve to it — a false RED on a compliant site.
+ *   4. Taint is scope-exact but not FLOW-exact. It cannot tell a write that
+ *      precedes a read from one that follows it, or a branch never taken, so a
+ *      name written anywhere in its declaring scope is tainted for all of it.
+ *      Over-tainting is the fail-closed direction.
+ *
+ * NOT ENFORCED — two axes the gate does not cover at all. These are a DIFFERENT
+ *   guarantee from the classifier limits above: a site here is not classified
+ *   COMPLIANT, it is never enumerated. Both are swept and empty today; neither
+ *   is closed in principle.
+ *   A. MATCHER SHAPE. Only `<expr>.prepare(...)` / `.exec(...)` / `.pragma(...)`
+ *      property-access calls are enumerated. `db["prepare"](sql)`,
+ *      `db.prepare.bind(db)(sql)` and `const { prepare } = db; prepare(sql)`
+ *      produce ZERO call sites — invisible, absent from the census entirely.
+ *      Zero instances in the tree. Closing this means matching bare calls, which
+ *      reintroduces the receiver-name blacklist this design deliberately avoids.
+ *   B. ENUMERATION. `.ts`/`.tsx` only. The single non-TS source file under
+ *      `electron/` or `src/` is a 7-line `electron/main.js` with no db calls,
+ *      and no tracked non-TS file in either tree contains any of the three
+ *      verbs. Bounded today, unbounded in principle.
  *
  * USAGE
  *   node scripts/ci/check-sql-boundary.mjs
@@ -210,6 +235,54 @@ const hash12 = (s) => createHash("sha256").update(s).digest("hex").slice(0, 12);
  */
 function buildBindings(sf, rel) {
   const bindings = new Map(); // name -> [{ pos, kind, init?, spec?, fromDb? }]
+  const taints = []; // { name, start, end }
+
+  const isFnLike = (p) =>
+    ts.isFunctionDeclaration(p) ||
+    ts.isFunctionExpression(p) ||
+    ts.isArrowFunction(p) ||
+    ts.isMethodDeclaration(p) ||
+    ts.isConstructorDeclaration(p);
+
+  // The scope a node sits in: nearest enclosing function, else the file.
+  const scopeOf = (n) => {
+    let p = n.parent;
+    while (p && !isFnLike(p) && !ts.isSourceFile(p)) p = p.parent;
+    return p ?? sf;
+  };
+
+  // PASS 1 — which scope DECLARES each name.
+  const declsByScope = new Map();
+  const declare = (nameNode, atNode) => {
+    if (!nameNode || !ts.isIdentifier(nameNode)) return;
+    const sc = scopeOf(atNode);
+    if (!declsByScope.has(sc)) declsByScope.set(sc, new Set());
+    declsByScope.get(sc).add(nameNode.text);
+  };
+  (function declareAll(n) {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name)) declare(n.name, n);
+    if (ts.isParameter(n)) declare(n.name, n);
+    if (ts.isBindingElement(n)) declare(n.name, n);
+    if (ts.isCatchClause(n) && n.variableDeclaration) declare(n.variableDeclaration.name, n);
+    if (ts.isFunctionDeclaration(n) && n.name) declare(n.name, n);
+    if (ts.isClassDeclaration(n) && n.name) declare(n.name, n);
+    if (ts.isImportSpecifier(n)) declare(n.name, n);
+    if (ts.isImportClause(n) && n.name) declare(n.name, n);
+    if (ts.isNamespaceImport(n)) declare(n.name, n);
+    ts.forEachChild(n, declareAll);
+  })(sf);
+
+  // The scope that declares `name`, seen from `fromNode`: walk outward until a
+  // scope claims it, else the file. An undeclared/global write taints file-wide,
+  // which is the fail-closed direction.
+  const declaringScope = (name, fromNode) => {
+    let sc = scopeOf(fromNode);
+    for (;;) {
+      if (declsByScope.get(sc)?.has(name)) return sc;
+      if (ts.isSourceFile(sc)) return sf;
+      sc = scopeOf(sc);
+    }
+  };
 
   // TAINT (BACKLOG-2959 amendment A5).
   //
@@ -230,45 +303,33 @@ function buildBindings(sf, rel) {
   // half-move of iosMessagesParser.ts:674 (BACKLOG-2990) drops its baseline
   // entry to zero while the file still authors `LIMIT ${...}` outside db/.
   //
-  // So: a name with an unmodelled write in scope at the use site cannot yield a
-  // COMPLIANT verdict. Taint is recorded with the span of the innermost
-  // OUTERMOST function enclosing the write, not file-wide, so an unrelated
-  // legitimate use of the same name in a sibling TOP-LEVEL function is not
-  // collaterally reddened. Sibling closures nested inside one outer function do
-  // share a span; that is KNOWN LIMITS 4, a deliberate fail-closed trade.
-  const taints = []; // { name, start, end }
-  const isFnLike = (p) =>
-    ts.isFunctionDeclaration(p) ||
-    ts.isFunctionExpression(p) ||
-    ts.isArrowFunction(p) ||
-    ts.isMethodDeclaration(p) ||
-    ts.isConstructorDeclaration(p);
-  // OUTERMOST enclosing function, not the innermost.
+  // So: a name with an unmodelled write cannot yield a COMPLIANT verdict
+  // anywhere in the scope that DECLARES it.
   //
-  // The taint span must cover where the NAME is used, not where the write sits.
-  // A write inside a callback mutates a name declared in an enclosing scope, and
-  // the use is out there too:
+  // The span is the declaring scope, not a syntactic position around the write.
+  // Approximating it by position is wrong in two directions, and both happened:
   //
-  //     let sql = <db import>;
-  //     filters.forEach((f) => { sql += ` AND ${f} = ?`; });  // write: arrow body
-  //     db.prepare(sql);                                      // use: outside it
+  //   innermost function around the write -> TOO NARROW. A write inside a
+  //     callback tainted only the callback, while the name it mutates is
+  //     declared and read outside it:
+  //         let sql = <db import>;
+  //         filters.forEach((f) => { sql += ` AND ${f} = ?`; });
+  //         db.prepare(sql);                     // was COMPLIANT
   //
-  // An innermost walk tainted only the arrow body and left the use COMPLIANT.
-  // `forEach` + `+=` is the canonical dynamic-WHERE idiom, so this is not a
-  // corner case. Widening to the outermost function costs one false-RED class
-  // (KNOWN LIMITS 4) and no false greens.
-  const enclosingScope = (n) => {
-    let p = n.parent;
-    let outermost = null;
-    while (p && !ts.isSourceFile(p)) {
-      if (isFnLike(p)) outermost = p;
-      p = p.parent;
-    }
-    return outermost ?? sf;
-  };
+  //   outermost function around the write -> STILL TOO NARROW for a
+  //     module-scoped name, and TOO WIDE for sibling closures:
+  //         let cachedSql = <db import>;         // declared at module scope
+  //         export function configure(t) { cachedSql = `... ${t}`; }
+  //         export function run(db) { db.prepare(cachedSql); }   // was COMPLIANT
+  //
+  // The property being protected — "this name may hold something the model
+  // cannot see" — belongs to the BINDING. So the span IS the binding's scope.
+  // That closes both directions at once, and removes the sibling-closure false
+  // red the outermost rule introduced: a scope that declares its own binding is
+  // never tainted by a write to a same-named binding elsewhere.
   const taint = (nm, at) => {
     if (!nm || !ts.isIdentifier(nm)) return;
-    const scope = enclosingScope(at);
+    const scope = declaringScope(nm.text, at);
     taints.push({ name: nm.text, start: scope.getStart(sf), end: scope.getEnd() });
   };
 
@@ -684,11 +745,16 @@ function main() {
         "UNRESOLVABLE, which counts as a violation — exceeding the cutoff can only produce a " +
         "false RED, never a false green.\n" +
         "A name written by a form the binding map does not model (assignment, +=, parameter, " +
-        "destructuring, catch variable, uninitialised let) is tainted for the OUTERMOST " +
-        "function enclosing the write — which is where the name is used, not where the write " +
-        "sits — and cannot be COMPLIANT.\n" +
-        "Not caught: interprocedural flow. SQL passed into a helper is reported UNRESOLVABLE — " +
-        "the gate says it cannot trace the origin, it does not certify the site."
+        "destructuring, catch variable, uninitialised let) is tainted for THE SCOPE THAT " +
+        "DECLARES IT, and cannot be COMPLIANT. The span is the binding's scope, not a " +
+        "position around the write, so it covers every read of that binding.\n" +
+        "Classifier limits, all fail-closed (false red, never false green): interprocedural " +
+        "flow is not modelled — SQL passed into a helper is reported UNRESOLVABLE, which means " +
+        "the gate cannot trace the origin, NOT that the site is certified; and taint is " +
+        "scope-exact but not flow-exact.\n" +
+        "Not enforced at all — a different guarantee: computed/bound/destructured calls " +
+        "(db[\"prepare\"](...), .bind, const { prepare } = db) are never ENUMERATED, and only " +
+        ".ts/.tsx files are scanned. Zero instances of either in the tree today."
     );
   }
 
