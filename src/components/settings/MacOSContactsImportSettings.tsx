@@ -6,10 +6,14 @@
  * import controls (sync, force re-import).
  *
  * Features:
- * - Source stats grid (macOS, iPhone, Outlook counts)
+ * - Source stats grid (macOS, iPhone, Outlook, Google, Android counts)
  * - Toggle switches for direct import sources + auto-discover
  * - macOS Contacts: sync status, import, force re-import (macOS only)
  * - Outlook Contacts: import button, reconnect-required handling
+ * - Android Phone Contacts (BACKLOG-2986): count, toggle, and a NON-DESTRUCTIVE
+ *   pointer to the Android Companion re-import. The destructive control stays
+ *   where it is: Android is push-only, so a delete here would not be
+ *   recoverable (see the DECISION on BACKLOG-3001).
  *
  * @module settings/ContactsImportSettings
  */
