@@ -1597,8 +1597,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           // unrelated answer, and cost macOS its toggle.
           //
           // That Windows problem is now solved at its own layer: `iphoneContacts`
-          // is the sole member of BACKEND_DERIVED_DEFAULT_KEYS, so an absent key
-          // derives `!isMacOS` — true on Windows (`contactSourceDefaults.ts:140`).
+          // is in BACKEND_DERIVED_DEFAULT_KEYS — no longer alone there, since
+          // BACKLOG-2986 added `androidContacts` — so an absent key derives
+          // `!isMacOS`, true on Windows. The rule is the `iphoneContacts` arm of
+          // `isContactSourceOnByDefault` in `contactSourceDefaults.ts`, cited by
+          // NAME rather than by line: the number this comment used to give
+          // (`:140`) rotted the moment that file grew a docblock.
           // Windows keeps working without borrowing anything.
           if (extContact.source === "iphone" && !iphoneEnabled) {
             sourceDisabledCount++;
