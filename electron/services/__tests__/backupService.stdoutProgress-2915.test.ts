@@ -585,34 +585,37 @@ describe("BACKLOG-2915 rows 21-22 — one emit per chunk, and the tail is not lo
     // capture's final flush happened to arrive whole, so this exact split was not
     // observed; it is mechanically possible and the parser must not lose the tail.
     //
-    // Asserted through the CLASSIFICATION rather than through a progress event, because
-    // that is where losing the tail would actually hurt: an `ErrorCode` line stranded in
-    // the buffer is a device-reported failure reported as an unexplained one.
-    const withFlush = await runBackup((proc) => {
+    // Two assertions, on the two things that are lost without it.
+    //
+    // (a) THE FINAL RENDER. This one is not synthetic at all — it happens on every run,
+    // because a byte render carries no terminator and is therefore ALWAYS the held
+    // partial when the process exits. `FIRST_CHUNK` is the capture's own first read and
+    // ends exactly that way, on `1% (262.1 KB/50.8 MB)`.
+    const { progress } = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from(FIRST_CHUNK));
+      proc.close(255);
+    });
+    expect(
+      progress.some(
+        (p) =>
+          p.batchBytesTransferred !== null &&
+          Math.abs(p.batchBytesTransferred - 262.1 * 1024) < 1,
+      ),
+    ).toBe(true);
+
+    // (b) A LATCH WITH NO BUFFER FALLBACK. `deviceReportedBackupMode` is set only by
+    // the line parser — unlike the device error code, nothing re-reads it out of
+    // `stdoutBuffer` at the end — so a mode line stranded in the partial buffer is
+    // simply lost, and `isIncremental` silently reverts to the directory heuristic
+    // whose 61.2 GB failure BACKLOG-2914 documents. THIS half is SYNTHETIC: node
+    // delivers `data` on pipe-read boundaries rather than line boundaries, so the split
+    // is mechanically possible, but the capture's own final flush arrived whole.
+    const held = await runBackup((proc) => {
       proc.stdout.emit("data", Buffer.from("Requesting backup from device...\n"));
-      // The read ends mid-way through the error line; the rest never arrives, because
-      // the process exits.
-      proc.stdout.emit(
-        "data",
-        Buffer.from("ErrorCode 208: Device locked (MBErrorDomain/208)"),
-      );
-      proc.close(48);
+      proc.stdout.emit("data", Buffer.from("Full backup mode."));
+      proc.close(0);
     });
-
-    expect(withFlush.result.errorCode).toBe("DEVICE_LOCKED");
-    expect(withFlush.result.failureCause?.deviceErrorCode).toBe(208);
-
-    // THE DISCRIMINATOR, run: the same line WITH its terminator is parsed by the chunk
-    // handler and never reaches the close-flush at all — so if this pair ever stopped
-    // disagreeing, the row above would be measuring the chunk handler by accident.
-    const terminated = await runBackup((proc) => {
-      proc.stdout.emit(
-        "data",
-        Buffer.from("ErrorCode 208: Device locked (MBErrorDomain/208)\n"),
-      );
-      proc.close(48);
-    });
-    expect(terminated.result.errorCode).toBe("DEVICE_LOCKED");
+    expect(held.result.deviceReportedBackupMode).toBe("full");
   });
 });
 

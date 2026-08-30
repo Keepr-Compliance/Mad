@@ -2054,16 +2054,25 @@ export class BackupService extends EventEmitter {
   /**
    * BACKLOG-2915 (SR B4): parse whatever partial line is still held, at `close`.
    *
-   * A byte render has no terminator, so the final render of every run — and on an
-   * aborted run the outcome lines that share its flush — would otherwise be held
-   * forever. Called before the close handler reads any latch.
+   * A byte render has no terminator, so the final render of EVERY run is still held at
+   * this point and was, before this, dropped on the floor every time. A `data` event is
+   * a pipe read, not a line, so any other line can be left held too.
+   *
+   * It EMITS rather than only latching, because the held render carries the last thing
+   * known about how far the batch got, and a consumer that never receives it is stuck
+   * on the second-to-last value. Called before the close handler reads any latch, so
+   * `deviceReportedBackupMode` and the device error code are set from it in time to
+   * decide the result.
    */
   private flushStdoutLineBuffer(): void {
     const tail = this.stdoutLineBuffer;
     this.stdoutLineBuffer = "";
     if (!tail) return;
     const progress = this.parseStdoutLine(tail);
-    if (progress) this.lastProgress = progress;
+    if (progress) {
+      this.lastProgress = progress;
+      this.emit("progress", progress);
+    }
   }
 
   /** preparing < transferring < finishing. Used only to order candidates within one chunk. */
