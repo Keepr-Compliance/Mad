@@ -1,4 +1,4 @@
-# Pull Request Standard Operating Procedure
+/# Pull Request Standard Operating Procedure
 
 This document outlines the standard procedure for creating, reviewing, and merging pull requests in Magic Audit. All agents and contributors should follow this SOP.
 
@@ -367,6 +367,240 @@ Review for:
 - [ ] IPC boundaries respected (main/preload/renderer)
 - [ ] Service abstractions used (no direct `window.api` in components)
 
+### 6.2b Database Writes — ACID (MANDATORY for any PR that writes to the database)
+
+**Nothing in this document asked for this until 2026-08-05, which is exactly how a rename came to
+silently do nothing and an edit came to be able to wipe a contact's email addresses. The reviewer
+did not miss it — nobody had ever asked.**
+
+**Atomicity**
+- [ ] Does one user-visible action write **more than one statement**? If so, are they in a
+      single transaction (`db.transaction(fn)()`)?
+- [ ] **Name the intermediate state a crash would leave**, concretely — *"a contact with no
+      origin, indistinguishable from one a path never wrote"*, not *"data could be inconsistent"*.
+- [ ] Is there a **forced-crash test**? Throw between the statements and assert the prior state
+      survives. **A test that saves successfully and checks the result passes with or without a
+      transaction** — it proves nothing about atomicity.
+
+**Consistency**
+- [ ] Is the invariant already enforced by a **constraint** (FK, CHECK, UNIQUE)? If so, name it
+      and do NOT add a redundant application-level check.
+- [ ] If the change introduces a state the schema permits but the product forbids, say so.
+
+**Isolation**
+- [ ] Can two paths write this concurrently? The main process is single-threaded, but the query
+      worker is a second connection. **If a check and the write that makes it true are separated
+      by an `await`, the check does not hold** — that is how BACKLOG-2525's re-entry bug worked.
+
+**Durability**
+- [ ] `synchronous = NORMAL` is set (`databaseService.ts:383`). A committed write survives an app
+      crash but **can be lost on power failure**. If a change depends on stronger durability,
+      raise it — do not change the pragma inside an unrelated PR.
+
+**Silent field loss**
+- [ ] Does the write use an **allow-list or filter**? A filter drops unrecognised fields *silently*.
+      Compare the fields the caller sends against the fields the writer accepts, **as two lists**,
+      and account for every difference.
+- [ ] **A `@deprecated` comment is not a constraint.** BACKLOG-2528's broken call was type-correct;
+      a sentence was the only guard.
+
+**Asserting that a database write FAILED**
+- [ ] Use the **captured** form, not `.rejects.toThrow()` / `.toThrow()`:
+      ```ts
+      let outcome = "NO THROW";
+      try { await thing(); } catch (e) { outcome = `THREW: ${(e as Error).message}`; }
+      expect(outcome).toMatch(/^THREW: .*<exact expected text>/);
+      ```
+      It asserts both **that** it threw and **what it said**, so it is stricter than
+      what it replaces, not weaker.
+- [ ] **Why:** two `expect` packages coexist in this tree — hoisted 30.4.1 and
+      `jest-circus/node_modules/expect` 29.7.0, which is the one jest actually runs — and
+      a `SqliteError` built inside the native addon does not reliably survive that
+      boundary. **BACKLOG-2539 established the failure is a spurious RED on CI, not a
+      silent green**, so this is about CI reliability, not blindness. Only sites asserting
+      a rejection from the native driver need it; there is no sweep to do.
+
+**Establishing a violation from a tool's output**
+- [ ] **A tool reporting a violation has not established one.** Open the code and read it
+      before writing the finding down.
+- [ ] **Incident (BACKLOG-2543, 2026-08-06):** the write-atomicity guard reported nine
+      unwrapped multi-write functions. **Seven were false positives** — it did not
+      recognise `db.transaction(...)` as wrapping, and it counted branch-exclusive upsert
+      writes (`if (existing) { UPDATE…; return; } INSERT…;`) as sequential. All nine were
+      filed with fluent, specific damage descriptions **before any of them was opened.**
+- [ ] A generated list needs a per-entry human confirmation, and the confirmation is
+      "I read the function", not "the description sounds plausible".
+
+**Engine parity**
+- [ ] Database tests must run under the **shipping** driver:
+      `ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --bail=0 <path>`
+      (`--bail=0` is mandatory). `better-sqlite3` and `node:sqlite` **disagree** — `undefined`
+      binds as NULL on the former and throws on the latter. **A test on the wrong engine can
+      report a clean error where production silently destroys data.**
+
+### 6.2c Refactors — behaviour-preserving changes (MANDATORY for any PR that moves code without changing what it does)
+
+**A refactor makes exactly one claim: *nothing changed*. The test suite is the only evidence for
+that claim.** Which makes the reviewer's first question not *"is the new structure better?"* but
+***"can these tests tell us if it isn't?"***
+
+**§6.1 already says "code that needs refactoring." This section is the counterweight — when NOT to,
+and what to establish first.**
+
+**Before the move — prove the suite can see**
+- [ ] **Name the behaviours this refactor could break**, and for a sample, **break each one
+      deliberately in the new code and confirm a test goes red.** Not the old code — the new.
+      A suite that stays green while the refactored code is wrong is the only failure mode a
+      refactor has, and it is invisible without this step.
+- [ ] **Are there known blind spots in the suite covering this area?** Mocked-away transactions,
+      assertions that cannot observe the error they assert, snapshot tests that were regenerated
+      rather than read. **A blind spot under a refactor is worse than under a fix** — a fix at
+      least changes behaviour the founder can see.
+- [ ] **Is the code reachable?** Refactoring code no user can reach is work with no upside and a
+      real downside: it makes the dead code look maintained. See ENGINEER-WORKFLOW Step 1a.
+
+**Sequencing — refactors go last**
+- [ ] **Correctness fixes first, then test-suite integrity, then structure.** A refactor performed
+      on a suite with unmapped holes converts a known-good state into an unknown one. If the same
+      area has open correctness work, the refactor waits.
+- [ ] **Size alone is not a reason.** A 2,600-line file is harder to read, not more likely to be
+      wrong. Splitting it buys readability; it does not buy correctness, and it spends the one
+      thing a refactor costs — confidence that the code still does what it did. **Ask what the
+      split makes possible that is currently blocked.** If the answer is "nothing yet," it waits.
+- [ ] **The refactor that removes a class of bug outranks the one that moves code.** Collapsing
+      four definitions of a record's fields into one eliminates the drift; moving those four into
+      a tidier file preserves it.
+
+**In the PR**
+- [ ] **Never in the same commit as a behaviour change**, and preferably not the same PR. When a
+      mixed PR regresses, the bisect cannot separate "the move broke it" from "the change broke it."
+- [ ] **State the controls run and what went red** — an unstated control is an unrun control.
+- [ ] File lifecycle: no orphans, no dangling imports, old tests removed
+      (`.claude/docs/shared/file-lifecycle-protocol.md`).
+
+**Incident (2026-08-05):** the atomicity sweep found ten test files that mock `dbTransaction` as a
+passthrough, and 121 assertions that may be unable to observe an error raised inside the native
+database module — two of which were **passing on CI while blind to the exact defect they existed
+for**. Any refactor of contact writes performed before those are fixed would have been protected by
+tests that could not report a break.
+
+### 6.2d Red Checks — fix or file, never quiet (MANDATORY)
+
+**When a check goes red, exactly two moves are permitted:**
+
+1. **Fix the cause.**
+2. **File the finding** as a backlog item and obtain a **recorded SR ruling** that the red is
+   environmental or out of scope for this PR.
+
+**Never quiet the check.** No baselining, no exemption-list entries, no raised timeouts, no widened
+allow-lists, no `--quiet` flags, no skipped suites — not without the recorded ruling above. A
+quieted check still renders green and therefore reads as coverage; it is worse than a deleted
+check, because a deleted check at least announces its absence.
+
+Why this exists (all from 2026-08-06, one PR train):
+
+| The tempting quiet move | What fix-or-file found instead |
+|---|---|
+| Add the flagged function to `KNOWN_UNWRAPPED` | The guard had a blind spot; the function was dead code — both fixed |
+| Widen `FICTIONAL_NAMES` so the PII guard passes | The fixtures carried real-name shapes; renamed to sanctioned invented names |
+| Raise the 30s timeout on a flaking Windows suite | The suite has a real 168s Windows I/O problem — filed with the constraint that the fix must not be a raised timeout |
+
+Each quiet move would have turned a true signal into permanent silence. The pattern compounds:
+every "small" exemption makes the next one look normal, until the suite is green and means
+nothing.
+
+**Reviewer's check:** any diff hunk touching a baseline file, exemption list, timeout constant,
+lint flag, or CI-guard configuration requires a linked SR ruling in the PR body. Absent that link,
+the hunk is a blocker regardless of why the author says it was needed.
+
+### 6.2e Rules kept by hand — ask whether the compiler could hold them (MANDATORY for any PR that adds or edits a hand-maintained list of names, or relies on a call being remembered)
+
+**A rule the compiler cannot see is a rule that will drift.** Three shapes recur here, and each has
+already shipped a live bug that passed `tsc`, eslint, the full suite and CI:
+
+| Shape | The instance | What the user got |
+|---|---|---|
+| **A — a hand-typed list beside a schema** | `transactionDbService.ts:419` keeps its own `allowedFields`. `detection_status`, `reviewed_at` and `rejection_reason` are real columns (`sqlFieldWhitelist.ts:151,155,156`) that appear on **zero lines** of that writer | **Approve** writes 1 of 3 fields and returns **success**; the transaction stays in the queue. **Reject** loses all 3, so nothing is left to write and it hard-fails "No valid fields to update" (BACKLOG-2558) |
+| **B — a companion call kept by convention** | `auditService.log` is called in the handler, by agreement. Ten sites honour it; `transactions:create-audited` and `transactions:resubmit` do not — and resubmit calls `logService.info` instead, so the handler *reads* as logged | The compliance trail is missing the creation event for exactly the transactions built for compliance, and drops every resubmit (BACKLOG-2563) |
+| **C — `??` collapsing "absent" and "explicitly null"** | `null ?? 3 === 3`, at four sites. "All time" is spelled `null` | Choosing **All time** imported 3 months, while the count on the same screen showed the full total (BACKLOG-2561) |
+
+**Two questions the reviewer must ask, and record the answer to in `pm_comments`:**
+
+1. **Could a type hold this instead of a person?** If the same names are typed out in two places
+   that must agree, the second copy is a defect with a delay on it. Derive one from the other.
+2. **Is the failure a WRONG name or a MISSING one?** This decides the fix and is the most common
+   review error. A union of string literals catches a **typo**. It does not catch an **omission** —
+   nothing about `"status" | "detection_status"` notices that a writer never mentioned the second.
+   Absence needs **exhaustiveness**: a `Record<Column, Decision>` that fails to compile until
+   someone declares each new column writable or deliberately excluded. **BACKLOG-2558 is an
+   omission, so a union alone would not have caught it.** Deliberate exclusions stop being
+   comments and become entries — here, `last_exported_at` (`:444`) and the unfreeze override.
+
+**Why the compiler is powerless in this codebase today, and it is one wrapper:**
+`sqlFieldWhitelist.ts:18-213` is declared `as const` — but wraps each table's fields in
+`new Set([...])`, which **erases the string literals**. What survives is `Set<string>`, and
+`validateFields(fields: string[])` takes plain strings. Every field name in the system is text as
+far as `tsc` is concerned. Removing the `Set` wrapper is the precondition for any type-level fix.
+
+**A validator placed after the discard cannot see the discard.** `validateFields` runs at `:559`;
+the filter that drops unknown keys runs at `:539` and the throw at `:555`. The check the codebase
+relies on to catch this drift executes **after** the evidence is gone. When reviewing any
+guard, establish *where in the sequence it runs*, not merely that it exists.
+
+**What does NOT belong at compile time.** Structural facts — which fields exist, which calls are
+required — belong to `tsc`. Facts about the world do not: no type system knows whether an address
+in a fixture belongs to a real person. That needs a check executed against the world (BACKLOG-2731
+was found by intersecting the repo against a real address book, not by any type). Do not propose a
+type as the fix for a fact the compiler cannot know.
+
+**Reviewer's check:** any diff hunk that adds or edits an array/Set of field, column, channel,
+preference or event names — or that adds a call site to an existing "always also call X" convention
+— requires an explicit answer to the two questions above in the review. "It matches today" is not
+an answer; today is when every one of these matched.
+
+### 6.2f An item ships only when its own promise is true (MANDATORY for any finding deferred to a new backlog item)
+
+**When a finding means the item under review does not do what it says, it belongs to that item — not
+to a new one.** Splitting is how an incomplete item passes review, and the justification sounds
+reasonable every time it is offered.
+
+The test is one question: **ship this as-is — is the thing it promised true?**
+
+- **No** → the finding is in scope. Keep working the item.
+- **Yes, but something else surfaced** → file it separately.
+
+A second test settles the borderline cases: **did this change make it consequential?** A
+pre-existing defect that was harmless until this PR made it reachable is this PR's to close.
+
+**"It regresses nothing" is not the bar.** An item can regress nothing and still ship a control that
+lies — which is the specific failure this rule exists to stop.
+
+Why this exists (BACKLOG-2986, 2026-08-30). The item added a Settings switch for Android contact
+import, after a founder ruling that contacts must not be auto-imported. Mid-build it emerged that
+the `androidContacts` preference gates the contact picker but **not** the write path —
+`promoteToMainContacts` reads no preference at all — so switching it off would hide contacts from
+the picker while the next sync kept writing new ones into the main `contacts` table.
+
+That was filed as a separate item and approved as a split, on the recorded grounds that *"2986
+regresses nothing."* True, and beside the point: it would have shipped a control that disagrees with
+its own effect — the exact defect BACKLOG-2486 closed for the iPhone switch — into the same settings
+panel, in the same release, as the fix for that class of bug. A second finding went the same way: a
+swallowed write in the shared toggle handler, harmless while every absent key meant *enabled*, and
+newly able to make the switch lie precisely because this PR introduced the first derived-OFF switch.
+
+**Both the engineer and the reviewer accepted the split.** The founder rejected it. Applying the test
+above resolves both correctly and takes one sentence.
+
+| finding | promise still true if shipped without it? | call |
+|---|---|---|
+| write path ungated | No — "a control over Android contact import" is false | same item |
+| switch can lie on a failed write | No — "a working switch" is false | same item |
+| `tsconfig` excludes test files from type-check | Yes — the toggle works regardless | separate item |
+
+**Reviewer's check:** for any finding deferred to a new backlog item, state in the ruling why the
+item under review still keeps its promise without it. **If that sentence cannot be written, the
+finding is in scope**, and approving the split is a blocker rather than a note.
+
 ### 6.3 Review Prompt Template
 
 Use this prompt to request a code review:
@@ -382,6 +616,16 @@ Please review this branch for PR readiness. Check for:
 7. Architecture boundary violations
 8. Performance issues
 9. Security concerns
+10. Rules kept by hand that a type could hold instead (§6.2e) — any list of field,
+    column, channel, preference or event names typed out in two places that must
+    agree, and any "always also call X" convention with a new call site. For each:
+    state whether the failure mode is a WRONG name (a union catches it) or a
+    MISSING one (only exhaustiveness catches it).
+11. Any finding you propose to defer to a NEW backlog item (§6.2f) — for each,
+    write the sentence "this item still does what it says without the fix,
+    because ___". If that sentence cannot be written, the finding is in scope
+    and deferring it is a blocker, not a note. "It regresses nothing" does not
+    complete the sentence.
 
 Provide specific file:line references and suggested fixes.
 ```

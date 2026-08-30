@@ -127,6 +127,38 @@ When verifying a fix or process (sync jobs, reindexing, CI automations), confirm
 
 **Incident Reference:** BACKLOG-1875 — pm-task-sync ran "successfully" while every RPC call was rejected; the error was masked as "task not found".
 
+### Break it and watch it go red (MANDATORY for any PR)
+
+**A check is only worth what its inputs can distinguish. "It passed" says nothing until you have made it fail on purpose.**
+
+Before claiming a fix is verified, revert one line of it and confirm a test goes red. **State in your handoff which controls you ran and what failed** — an unstated control is an unrun control.
+
+Three ways a green signal carries no information. All three occurred on 2026-08-04 (BACKLOG-2439):
+
+| Shape | Example |
+|---|---|
+| The fixture describes a state the code **cannot emit** | A test helper forced preferences into a combination Windows never produces — making an entire root cause false. It was filed, briefed, built and decided on before anyone ran the real path. |
+| The verification set **omits the only check that would fail** | A PR passed `tsc`, eslint, 11,485 jest tests and a full SR review, then failed CI: the app would not build. Every green check reads *source*; none runs a bundler. |
+| The check's inputs **cannot separate pass from fail** | A parity test justifying a duplicated module was drifted and stayed green — the hand-picked corpus had no input at the boundary. |
+
+**Rules that follow:**
+
+1. **Transcribe fixtures, never invent them.** A fixture standing in for a real producer (a SQL projection, an IPC payload, a provider mapper) must come from that producer's actual output. Run it once, paste the shape, cite where it came from.
+2. **When a control does NOT go red, suspect the fixture before the control.**
+3. **A fixture missing an always-set field: add it and re-run.** Still passes → latent, record it, don't block. Fails → the test was proving something else, and it blocks.
+4. **Sweep boundaries, don't sample them.** One input per branch cannot catch an off-by-one.
+5. **A PR that moves a module across the main/renderer boundary MUST run `npm run build`.** `electron/` cannot import from `src/` (`rootDir`), and the renderer cannot *value*-import from `electron/` (Vite parses it as JavaScript). Neither direction works; a shared module needs `src/` with a mirror, plus a parity test whose corpus covers every boundary.
+
+### Sequencing PR trains
+
+**Run them one at a time.** Worktrees isolate files, not facts — a review of PR A is only valid while PR B holds still, and a published branch is shared by definition.
+
+On 2026-08-04, nine PRs on one integration branch produced **four** merge-order conclusions, **two of them wrong**: one a stale measurement (a real conflict that dissolved when the other PR reverted), one that never existed (derived by grepping `git merge-tree` output for `changed in both` — informational, not a conflict marker).
+
+- **Stamp every cross-branch claim with the SHA it was measured at.**
+- **Re-verify merge order at merge time** by running the merge and the affected suites on the merged tree. Never inherit an ordering note.
+- **Textual conflicts announce themselves; semantic ones merge cleanly and produce broken code.** `git merge-tree` is silent on the second kind, which is the kind that matters.
+
 ### Prove the mutation applied before you count its result (MANDATORY)
 
 **An unverified mutation is an unrun control.** When you break your own code on purpose to prove a test can see the break, you apply the break as a text replacement — and **if the pattern does not match, nothing is replaced**. The code is untouched, the suite passes, and the green run gets written down as *"I broke it and the tests did not catch it."* Nothing was ever broken. The record then points at the wrong thing: it reads as a weak test when it is a broken harness, and the next person "fixes" a test that was fine.

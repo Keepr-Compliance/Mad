@@ -88,6 +88,13 @@ The PM will create `int/<sprint-name>` from develop at sprint start. The task pl
 
 ## Step 1: PLAN (Read-Only Exploration)
 
+**ENTRY GATE — both must be answered before planning starts. A failure here ends the task; it does not become a note in the plan.**
+
+- [ ] **Reachability established** — the chain from a user action to this code is named. **If it is unreachable, STOP and report. Do not plan a fix for dead code.**
+- [ ] **The work is not already done** — confirmed against the code, not the status field.
+
+See **Step 1a** below for how to establish both.
+
 **Purpose:** Create a detailed implementation plan before any code is written.
 
 **Who:** Engineer agent — planning phase is read-only (no Edit/Write of production files).
@@ -103,6 +110,23 @@ The PM will create `int/<sprint-name>` from develop at sprint start. The task pl
 6. Write the plan back to Supabase — either UPDATE `pm_backlog_items.body` (for umbrella refactor) or `pm_add_comment(p_item_id := '<backlog_item_uuid>', p_body := '<plan markdown>')` (for incremental). Do NOT create a `.claude/plans/tasks/*.md` file. Do NOT edit production files yet.
 
 **Deliverable:** Implementation plan stored in Supabase (`pm_backlog_items.body` or `pm_comments`)
+
+### Step 1a: REACHABILITY (MANDATORY — before planning anything else)
+
+**Establish that a user can reach the code you are about to change. If they cannot, stop and report it.**
+
+**On 2026-08-05, five backlog items targeted `ContactSelectModal` — a screen unmounted since January 2026. Three of them were built and merged. They changed code no user runs.** The founder settled it with one click.
+
+Nothing in the toolchain catches this. **`tsc`, eslint and jest all read source; none asks whether a component is mounted or a function is called.** A dead function with a passing test looks exactly like a live one.
+
+**Do this before writing a plan:**
+
+1. **Walk the import chain upward** to a mounted component, a registered IPC handler, or an app entry point. **Stop at the first orphan** — a parent that nothing imports means the whole chain below it is dead.
+2. **Check for dynamic reachability before declaring anything dead** — `React.lazy`, a runtime `import()`, a string-keyed registry, a barrel re-export. **"No static imports found" is not proof.** A wrong "this is dead" is worse than leaving dead code alone.
+3. **For a screen, ask the founder to confirm what he sees.** One click beats any amount of import tracing. Give him a distinguishing detail — a button's exact label — not "does this screen work".
+4. **If it turns out unreachable: STOP.** Report it, and say whether the defect also exists on the live surface in different code. **Do not fix the dead copy, and do not move the fix to the live one without saying so** — that is a different change against a different file.
+
+**Also check the item itself is not already built.** BACKLOG-2364 was dispatched to an engineer weeks after it had shipped. `git log -S` on a distinctive string from the item beats reading the status field.
 
 **IMMEDIATELY RECORD:**
 ```
