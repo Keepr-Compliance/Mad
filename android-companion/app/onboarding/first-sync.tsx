@@ -9,6 +9,7 @@ import { useRouter } from 'expo-router';
 import {
   startBackgroundSync,
   performSync,
+  MAX_SYNC_CYCLES_PER_RUN,
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
 import {
@@ -129,7 +130,9 @@ export default function FirstSyncScreen({
       // bound, instead of surfacing the skip as a terminal state.
       const MAX_SKIP_RETRIES = 5;
       const SKIP_RETRY_DELAY_MS = 1500;
-      let result = await performSync();
+      // BACKLOG-3005: THIS is the first-pairing path — a new user's history
+      // arrives here, not through the home screen's button — so it drains.
+      let result = await performSync({ maxCycles: MAX_SYNC_CYCLES_PER_RUN });
       for (
         let attempt = 0;
         result.skipped && attempt < MAX_SKIP_RETRIES;
@@ -139,7 +142,7 @@ export default function FirstSyncScreen({
           `[Onboarding] First sync skipped (another sync in progress) — retrying (${attempt + 1}/${MAX_SKIP_RETRIES})`,
         );
         await new Promise((r) => setTimeout(r, SKIP_RETRY_DELAY_MS));
-        result = await performSync();
+        result = await performSync({ maxCycles: MAX_SYNC_CYCLES_PER_RUN });
       }
 
       // If the user already skipped into the app the screen is unmounted — do

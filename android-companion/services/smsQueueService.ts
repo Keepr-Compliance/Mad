@@ -440,6 +440,47 @@ export async function acquireSyncLock(
 }
 
 /**
+ * Refresh the timestamp on a lock we still hold, WITHOUT changing its nonce.
+ *
+ * ## The landmine this defuses (BACKLOG-3005)
+ *
+ * `acquireSyncLock` stamps `acquiredAt` once and nothing ever updated it, so
+ * the TTL below was really "the maximum a run may take", not "the maximum a
+ * CRASHED run may block for". That was invisible while every run was a single
+ * cycle. A multi-cycle drain holding the lock past `SYNC_LOCK_TTL_MS` would
+ * have it force-broken mid-run by the OS background task or the AppState
+ * catch-up, reintroducing precisely the concurrent read-modify-write race on
+ * the queue and cursor that BACKLOG-2200 exists to prevent.
+ *
+ * Renewing between cycles bounds the stale-recovery window to ONE cycle rather
+ * than one whole run, so a genuinely crashed run is still recovered on time.
+ *
+ * ## What this does NOT fix, deliberately
+ *
+ * Intra-cycle overrun is untouched and pre-existing: a single cycle can already
+ * exceed 90s today (the send loop is unbounded batches, each with its own
+ * timeout), and nothing renews inside it. Out of scope here.
+ *
+ * @returns false when the lock is gone or now carries a DIFFERENT nonce — i.e.
+ *   it was stolen. A caller that gets false MUST abort; it must never
+ *   re-acquire, because the thief is mid-run on the same shared state.
+ * @param now - injectable clock for tests (defaults to Date.now())
+ */
+export async function renewSyncLock(
+  nonce: string,
+  now: number = Date.now()
+): Promise<boolean> {
+  const existing = await readSyncLock();
+  if (!existing || existing.nonce !== nonce) return false;
+  // Same nonce, so `releaseSyncLock`'s ownership check still matches.
+  await AsyncStorage.setItem(
+    SYNC_LOCK_KEY,
+    JSON.stringify({ nonce, acquiredAt: now } satisfies SyncLock)
+  );
+  return true;
+}
+
+/**
  * Release the sync lock, but only if we still hold it (nonce match).
  * A no-op if the lock was already stale-broken and re-acquired by another run,
  * so we never stomp a newer holder's lock.

@@ -49,6 +49,7 @@ import {
   getBackgroundSyncEnabled,
   acquireSyncLock,
   releaseSyncLock,
+  renewSyncLock,
 } from "./smsQueueService";
 import type { SyncIntervalValue } from "./smsQueueService";
 import type { PairingInfo, SyncErrorType } from "../types/sync";
@@ -133,6 +134,23 @@ export interface SyncOperationResult {
   newContacts: number;
   /** Whether the desktop was reachable */
   desktopReachable: boolean;
+  /**
+   * BACKLOG-3005: this cycle's read was cut short by the queue's remaining
+   * capacity, so there is MORE history above the cursor right now.
+   *
+   * The single-cycle code already computed this fact and threw it away; only
+   * the 15-minute timer or another tap resumed the drain. Defaulting it to
+   * FALSE (absent) is the safety property: every path that does not read —
+   * permission revoked, queue at capacity, read failure, zero messages, the LAN
+   * guard and ping early returns — stops a continuation loop for free, without
+   * each one having to remember to say so.
+   */
+  readWasTruncated?: boolean;
+  /**
+   * BACKLOG-3005: how many cycles this run executed. 1 for every caller that
+   * does not opt in to continuation.
+   */
+  cyclesRun?: number;
   /** Current queue size after this operation */
   queueSize: number;
   /** Error message if sync failed */
@@ -223,6 +241,10 @@ function reachabilityErrorMessage(errorType: SyncErrorType): string {
  *
  * This is called both by the background task and by the manual "Sync Now" button.
  *
+ * @param options.maxCycles - how many cycles this run may execute before it
+ *   stops (BACKLOG-3005). DEFAULT 1, which is byte-identical to the pre-3005
+ *   behaviour — continuation is strictly opt-in, so the OS background task and
+ *   the AppState catch-up are untouched by construction rather than by review.
  * @param options.userInitiated - set ONLY by the manual "Sync Now" button. It
  *   makes the cycle re-read the import setting from Supabase even when the
  *   cached copy is still inside its TTL (BACKLOG-3017). A user who has just
@@ -231,7 +253,7 @@ function reachabilityErrorMessage(errorType: SyncErrorType): string {
  *   changes, and the setting fetch still degrades exactly as it always did.
  */
 export async function performSync(
-  options: { userInitiated?: boolean } = {}
+  options: SyncRunOptions = {}
 ): Promise<SyncOperationResult> {
   // BACKLOG-2988: THE ONE EMISSION POINT. Every way this function can end —
   // the lock skip, all five early returns inside the cycle, a clean finish and
@@ -240,7 +262,7 @@ export async function performSync(
   // branches that reported nothing were the ones nobody remembered.
   const startedAt = Date.now();
   try {
-    const result = await runSyncUnderLock(options.userInitiated === true);
+    const result = await runSyncUnderLock(options);
     await emitOutcome(startedAt, result, false);
     return result;
   } catch (error) {
@@ -251,7 +273,7 @@ export async function performSync(
 
 /** The lock discipline, unchanged — extracted so `performSync` has one exit. */
 async function runSyncUnderLock(
-  userInitiated: boolean
+  options: SyncRunOptions
 ): Promise<SyncOperationResult> {
   // BACKLOG-2200: serialize the whole cycle across UI + background contexts.
   // If another run holds a fresh lock, return early with `skipped: true` and a
@@ -274,7 +296,7 @@ async function runSyncUnderLock(
   }
 
   try {
-    return await runSyncCycle(userInitiated);
+    return await runSyncCycles(options, lockNonce);
   } finally {
     // Always release our lock, even on throw, so a failed cycle can't deadlock.
     await releaseSyncLock(lockNonce);
@@ -336,6 +358,167 @@ async function emitOutcome(
 }
 
 /**
+ * How many cycles ONE opted-in run may execute. ~10,000 messages per tap at
+ * `MAX_QUEUE_SIZE = 500`.
+ *
+ * A ceiling, not a target: it exists so a pathological loop terminates, and
+ * every real drain stops earlier on "the read was not truncated".
+ */
+export const MAX_SYNC_CYCLES_PER_RUN = 20;
+
+/** Options for one `performSync` run. */
+export interface SyncRunOptions {
+  /**
+   * BACKLOG-3005. DEFAULT 1. Continuation is opt-in so that every existing
+   * caller keeps byte-identical behaviour without being edited.
+   */
+  maxCycles?: number;
+  /** BACKLOG-3017. Set only by the manual "Sync Now" button. */
+  userInitiated?: boolean;
+}
+
+/**
+ * Run cycles back-to-back until the history above the cursor is exhausted.
+ *
+ * ## The defect (BACKLOG-3005)
+ *
+ * `MAX_QUEUE_SIZE = 500` is back-pressure on a queue held as ONE JSON blob in
+ * AsyncStorage, and it stays. The bug was never the cap: each cycle ESTABLISHED
+ * that more history sat above the cursor and then threw that fact away, so only
+ * the 15-minute timer or another tap resumed the drain. Founder: *"we can have
+ * a cap for pagination reason but we can't ask the user to keep clicking
+ * sync... who does that? no one."*
+ *
+ * ## Why the loop lives HERE and not around `performSync`
+ *
+ * `runSyncUnderLock` acquires the lock once and releases it in `finally`.
+ * Re-entering `performSync` per iteration would re-take a lock this run already
+ * holds — the BACKLOG-3003 failure mode. So the loop sits INSIDE the lock, and
+ * each iteration is exactly the cycle a timer tick would have run.
+ *
+ * ## Why the BACKLOG-2800 watermark proof survives
+ *
+ * By induction. Nothing inside `runSyncCycle` changes: the per-box ceiling, the
+ * combined trim, `newestTimestamp` and the inclusive-vs-`+1` advance are
+ * untouched. Each iteration re-enters from the top with the same inputs a
+ * 15-minute timer cycle would have supplied — a cursor and a queue. Compressing
+ * the wait between cycles changes when they run, not what they read.
+ *
+ * ## The five stops, and the ONE that deviates from the written spec
+ *
+ *   1. lock stolen     — `renewSyncLock` false. Break, NEVER re-acquire: the
+ *                        thief is mid-run on the same queue and cursor.
+ *   2. interruption    — an error, a read error, or an unreachable desktop.
+ *   3. exhausted       — the read was not capacity-truncated, so nothing is
+ *                        left above the cursor. This is how a real drain ends.
+ *   4. no cursor MOVE  — see below.
+ *   5. the ceiling     — `maxCycles`.
+ *
+ * **Deviation, stated rather than silent.** The spec for stop 4 was
+ * `cursorAfter <= cursorBefore`. That is wrong on this branch, because
+ * BACKLOG-3017 (same PR) makes a widening cycle LOWER the cursor deliberately:
+ * a phone at 26 Aug that widens to 9 months rewinds to 30 Nov and reads its
+ * first 500, ending around January — `cursorAfter < cursorBefore`, so `<=`
+ * would stop the run after one cycle with months of backlog left. That is the
+ * 3005 defect re-created for exactly the founder''s "widen, then tap Sync Now"
+ * procedure, in the PR that ships both fixes. The condition stop 4 actually
+ * guards is a SPIN, i.e. the cursor not moving at all: when at least
+ * `remainingCapacity` messages share one millisecond the advance is inclusive,
+ * `nextCursor === cursorBefore`, and the next read is byte-identical forever.
+ * `===` catches that and lets a legitimate rewind proceed.
+ *
+ * A pathological *repeated* lowering (a persistently failing
+ * `recordAppliedWindow` re-detecting the same widening every cycle) is bounded
+ * by `maxCycles` and costs re-reads the desktop dedupes, never loss.
+ *
+ * ## Merging
+ *
+ * Counts are SUMMED; state fields take the last cycle''s value. Summing
+ * `contactsSynced` is required, not cosmetic: cycle 1 sends the contact diff
+ * and later cycles send 0, and `home.tsx` renders
+ * `result.contactsSynced > 0 ? result.newContacts : 0` — last-cycle-wins would
+ * announce "0 new contacts" after successfully syncing hundreds. The merged
+ * shape (messages sent AND a trailing error) is already in the single-cycle
+ * vocabulary — batch 1 succeeds, batch 2 fails — so `classifySyncOutcome`
+ * needs no change.
+ */
+async function runSyncCycles(
+  options: SyncRunOptions,
+  lockNonce: string
+): Promise<SyncOperationResult> {
+  const maxCycles = Math.max(1, Math.trunc(options.maxCycles ?? 1));
+  const userInitiated = options.userInitiated === true;
+
+  let last: SyncOperationResult | undefined;
+  let cyclesRun = 0;
+  let newMessages = 0;
+  let sentMessages = 0;
+  let contactsSynced = 0;
+  let newContacts = 0;
+
+  for (let cycle = 0; cycle < maxCycles; cycle++) {
+    // Stop 1, checked BEFORE any shared state is touched. Cycle 0 already holds
+    // a lock stamped moments ago by `acquireSyncLock`.
+    if (cycle > 0 && !(await renewSyncLock(lockNonce))) {
+      console.warn(
+        `[BackgroundSync] Sync lock was taken by another run after ${cyclesRun} cycle(s) — stopping (BACKLOG-3005)`
+      );
+      break;
+    }
+
+    const cursorBefore = await getLastSyncTimestamp();
+
+    // `userInitiated` applies to the FIRST cycle only. Letting every cycle
+    // bypass the window cache would put up to `maxCycles` Supabase round trips,
+    // each a 5s timeout surface, on the one path a user is watching — and would
+    // let a setting changed mid-drain re-widen inside the loop.
+    const result = await runSyncCycle(userInitiated && cycle === 0);
+
+    cyclesRun += 1;
+    newMessages += result.newMessages;
+    sentMessages += result.sentMessages;
+    contactsSynced += result.contactsSynced;
+    newContacts += result.newContacts;
+    last = result;
+
+    // Stop 2 — an interruption. Continuing would retry a failure in a tight
+    // loop rather than at the next scheduled cycle.
+    if (result.error || result.readError || !result.desktopReachable) break;
+
+    // Stop 3 — nothing is left above the cursor. Absent means false, so every
+    // path that never reached a read stops here for free.
+    if (!result.readWasTruncated) break;
+
+    // Stop 4 — a spin. See the deviation note above: `===`, never `<=`.
+    const cursorAfter = await getLastSyncTimestamp();
+    if (cursorAfter === cursorBefore) {
+      console.warn(
+        `[BackgroundSync] Cursor did not move at ${cursorBefore} — stopping to avoid a spin (BACKLOG-3005)`
+      );
+      break;
+    }
+  }
+
+  // `maxCycles >= 1`, so the body ran at least once and `last` is set.
+  const finalResult = last as SyncOperationResult;
+
+  if (cyclesRun > 1) {
+    console.log(
+      `[BackgroundSync] Drained ${cyclesRun} cycles in one run: ${newMessages} read, ${sentMessages} sent (BACKLOG-3005)`
+    );
+  }
+
+  return {
+    ...finalResult,
+    newMessages,
+    sentMessages,
+    contactsSynced,
+    newContacts,
+    cyclesRun,
+  };
+}
+
+/**
  * The actual sync cycle. Only ever invoked by performSync while holding the
  * sync lock (BACKLOG-2200), so its queue/cursor mutations are atomic across
  * contexts.
@@ -381,6 +564,9 @@ async function runSyncCycle(
   //     move at all.
   let newMessages = 0;
   let readError: SmsReadError | undefined;
+  // BACKLOG-3005: hoisted so the fact reaches the caller. It stays FALSE on
+  // every path that does not reach a truncated read.
+  let readWasTruncated = false;
   try {
     // BACKLOG-2209: PROACTIVELY re-check the READ_SMS runtime permission at the
     // START of every cycle, BEFORE issuing any read. If the user revoked SMS
@@ -652,7 +838,7 @@ async function runSyncCycle(
           // not visible here. It can only OVER-report (both boxes short but
           // summing to exactly the ceiling), which costs one re-read
           // millisecond and never loses a message.
-          const readWasTruncated = unionWasTruncated;
+          readWasTruncated = unionWasTruncated;
           const nextCursor = readWasTruncated
             ? newestTimestamp // inclusive: re-read the boundary ms next cycle
             : newestTimestamp + 1; // safe to skip past — full tail was read
@@ -707,6 +893,7 @@ async function runSyncCycle(
         "This pairing is no longer valid — it points at a computer that isn't on your local network. Pair with your computer again from the home screen.",
       errorType: "invalid_address",
       readError,
+      readWasTruncated,
       stoppedAt: "lan_guard",
     };
   }
@@ -735,6 +922,7 @@ async function runSyncCycle(
       // early return already records a failed attempt (reachedDesktop=false), so
       // the read failure correctly extends the 2203 streak here too.
       readError,
+      readWasTruncated,
       stoppedAt: "ping",
     };
   }
@@ -889,6 +1077,7 @@ async function runSyncCycle(
     error: sendError,
     errorType: sendErrorType,
     readError,
+    readWasTruncated,
     contactsFailed,
     // BACKLOG-2988: name the step this run actually got to. A send failure ends
     // it at the message step; a read failure at the read; otherwise it finished.

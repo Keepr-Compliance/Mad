@@ -22,6 +22,7 @@ import {
   stopBackgroundSync,
   performSync,
   isBackgroundSyncActive,
+  MAX_SYNC_CYCLES_PER_RUN,
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
 import { resetAllSyncData } from '../../services/smsQueueService';
@@ -442,6 +443,12 @@ export default function HomeScreen(): React.JSX.Element {
     }
 
     // Step 3: Auto-trigger first sync immediately after pairing + permissions.
+    //
+    // DELIBERATELY SINGLE-CYCLE (BACKLOG-3005). This races `first-sync.tsx` for
+    // the sync lock, and onboarding's patience budget is 5 x 1500ms = 7.5s.
+    // Finishing in seconds and YIELDING the lock is the point; a multi-cycle run
+    // here would blow through that budget and amplify BACKLOG-3003 from a 30ms
+    // window into minutes. Onboarding does the real drain.
     try {
       const syncResult = await performSync();
       console.log(
@@ -550,7 +557,14 @@ export default function HomeScreen(): React.JSX.Element {
     setSyncing(true);
 
     try {
-      const result = await performSync({ userInitiated: true });
+      // BACKLOG-3005: the literal ask — one tap drains the backlog instead of
+      // stopping at MAX_QUEUE_SIZE and waiting for the timer or another tap.
+      // BACKLOG-3017: `userInitiated` re-reads the import setting through a
+      // fresh cache, so a window the user just widened takes effect now.
+      const result = await performSync({
+        userInitiated: true,
+        maxCycles: MAX_SYNC_CYCLES_PER_RUN,
+      });
       setLastSyncResult(result);
 
       // BACKLOG-2301: derive the persistent 2296 disconnected banner from THIS

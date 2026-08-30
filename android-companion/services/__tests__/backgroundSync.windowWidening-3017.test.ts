@@ -134,10 +134,11 @@ jest.mock('../supabaseClient', () => ({
 }));
 
 import { NativeModules } from 'react-native';
-import { performSync } from '../backgroundSync';
+import { performSync, MAX_SYNC_CYCLES_PER_RUN } from '../backgroundSync';
 import {
   getLastSyncTimestamp,
   resetMessageCursor,
+  MAX_QUEUE_SIZE,
 } from '../smsQueueService';
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
@@ -672,5 +673,64 @@ describe('resetMessageCursor forgets the applied window with the cursor', () => 
 
     expect(await storedApplied()).toBeUndefined();
     expect(await getLastSyncTimestamp()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. BACKLOG-3017 x BACKLOG-3005 — the two fixes must COMPOSE
+// ---------------------------------------------------------------------------
+
+describe('a widened window drains in one tap', () => {
+  /**
+   * The founder's actual procedure: widen the window on the desktop, tap Sync
+   * Now once, get the history. That needs BOTH fixes at once — 3017 to lower
+   * the read floor, 3005 to keep reading past `MAX_QUEUE_SIZE`.
+   *
+   * THIS CONTROL IS WHY BACKLOG-3005's "no cursor advance" stop is `===` and
+   * not the `<=` it was specified as. A widening cycle lowers the cursor ON
+   * PURPOSE, so `cursorAfter < cursorBefore` on the very first cycle of the
+   * drain — `<=` would stop the run there with months of backlog unread, which
+   * is the 3005 defect re-created for exactly this procedure.
+   *
+   * MUTATION that must go red: restore `cursorAfter <= cursorBefore`. Only the
+   * first 500 arrive.
+   */
+  it('lowers the floor AND keeps reading past the queue cap, in one performSync', async () => {
+    // 1,150 messages inside 9 months but outside 3 — more than twice the queue
+    // cap, so a single cycle cannot possibly deliver them.
+    const band = Array.from({ length: 1_150 }, (_, i) =>
+      row(10_000 + i, NINE_MONTHS_AGO + (i + 1) * 60_000),
+    );
+    const recent = row(99_001, NOW - DAY);
+    installPagingSms({ inbox: [...band, recent] });
+
+    // Cycle A — "Last 3 months". Only the recent message is in window.
+    await performSync();
+    expect(sentIds()).toEqual(new Set(['99001']));
+    const cursorAfterNarrow = await getLastSyncTimestamp();
+    expect(cursorAfterNarrow).toBeGreaterThan(THREE_MONTHS_AGO);
+
+    // The user widens to "Last 9 months" and taps Sync Now ONCE.
+    mockPrefRow.mockResolvedValue(prefs(9));
+    mockSendMessages.mockClear();
+
+    const result = await performSync({
+      userInitiated: true,
+      maxCycles: MAX_SYNC_CYCLES_PER_RUN,
+    });
+
+    // Every message in the widened band arrived, by identity — plus the recent
+    // one, which the lowered floor legitimately re-reads (the desktop dedupes
+    // on the unique (user_id, external_id), verified in syncDbService).
+    const expected = new Set([
+      ...band.map((r) => r._id),
+      String(recent._id),
+    ]);
+    expect(sentIds()).toEqual(expected);
+
+    // It took more than one cycle, and it was bounded — not the ceiling.
+    expect(result.cyclesRun).toBe(3);
+    expect(result.cyclesRun).toBeLessThan(MAX_SYNC_CYCLES_PER_RUN);
+    expect(band.length).toBeGreaterThan(2 * MAX_QUEUE_SIZE);
   });
 });
