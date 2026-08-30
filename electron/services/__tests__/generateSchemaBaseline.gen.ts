@@ -24,6 +24,14 @@
  *       transcript is faithful; the committed fixture is the durable control
  *       thereafter. The run FAILS if the two sides diverge at all.
  *
+ *   SCOPE NOTE (founder ruling, 2026-08-30): of the artefacts below, only
+ *   fixtures/chain-v69-schema.sql and electron/database/schema.sql remain in
+ *   the tree. The v68 fixture and the mode=fresh outputs (fresh-v70/71) were
+ *   generated, used to verify the boundary during development, and then
+ *   dropped with the four-point boundary sweep when the control matrix was
+ *   cut to the single v69 refusal test. The generator still documents how
+ *   every one of them was produced.
+ *
  *   mode=fresh   (run AFTER electron/database/schema.sql is the regenerated
  *                 file):
  *     - fixtures/fresh-v70-schema.sql   fresh install on the NEW schema.sql —

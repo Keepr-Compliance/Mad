@@ -51,13 +51,14 @@ jest.mock("electron", () => ({
 }));
 
 const mockIsInitialized = jest.fn().mockReturnValue(true);
+const mockGetLatestSchemaVersion = jest.fn(() => 56);
 jest.mock("../databaseService", () => ({
   __esModule: true,
   default: {
     isInitialized: () => mockIsInitialized(),
     getRawDatabase: () => db,
     getDatabasePath: () => dbPath,
-    getLatestSchemaVersion: () => 56,
+    getLatestSchemaVersion: () => mockGetLatestSchemaVersion(),
   },
 }));
 
@@ -324,6 +325,7 @@ beforeEach(() => {
 
   resetContactIngestionFunnel();
   mockIsInitialized.mockReturnValue(true);
+  mockGetLatestSchemaVersion.mockImplementation(() => 56);
   mockCheckFda.mockResolvedValue({ hasPermission: true });
 });
 
@@ -390,6 +392,24 @@ describe("a ticket from a machine with 3 address books", () => {
     // Not a single "read: 0" / "parsed 0" anywhere.
     expect(block).not.toMatch(/read \d+ of/);
     expect(block).not.toContain("parsed 0");
+  });
+
+  it("a THROWING getLatestSchemaVersion voids storage as 'collection failed' — never as silent zeros (BACKLOG-2993 / SR D1)", async () => {
+    // The exact failure shape the empty-MIGRATIONS guard prevents: before the
+    // guard, an empty chain made the accessor a TypeError, the catch in
+    // supportTicketService only warns, and every ticket silently lost its
+    // whole storage block. This pins that a throw is VISIBLE as a failed
+    // collection — so a regression cannot hide behind a green ticket test.
+    makeBook("AddressBook-v22.abcddb");
+    makeDatabase();
+    mockGetLatestSchemaVersion.mockImplementation(() => {
+      throw new TypeError("Cannot read properties of undefined (reading 'version')");
+    });
+
+    const block = await composedBlock();
+
+    expect(block).toContain("Storage: diagnostics collection failed");
+    expect(block).not.toContain("schema_version=");
   });
 
   it("reports a failed storage collection as failed, not as an empty database", async () => {

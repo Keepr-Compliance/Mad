@@ -358,14 +358,28 @@ class DatabaseService implements IDatabaseService {
         // ORDER IS LOAD-BEARING: the dialog is AWAITED, then quit. Dropping
         // the await would exit mid-dialog — the user would never learn why
         // the app won't start. The boundary-sweep suite pins this order.
+        // The in-app reset flow (Settings → Troubleshooting) is UNREACHABLE
+        // here — the app is about to quit — so the copy points at the cleanup
+        // scripts. They matter beyond convenience: the database is encrypted
+        // and its key lives outside the file (macOS Keychain "keepr Safe
+        // Storage" / Windows DPAPI), and the scripts remove BOTH; a
+        // hand-deleted folder leaves a stale key behind and produces a
+        // different, more confusing failure. No retry is offered — there is
+        // nothing to retry.
         await dialog.showMessageBox({
           type: "error",
           title: "Database from an older version",
-          message: "This database was created by an older version of Keepr and cannot be upgraded.",
+          message: "This database was created by an older version of Keepr and cannot be opened.",
           detail:
-            "Keepr reset its local database format, and versions before the reset have " +
-            "no upgrade path. Reinstall Keepr, or move the old database file aside, then " +
-            "launch again. Cloud data is unaffected and will re-sync.\n\n" +
+            "Keepr reset its local database format, and older databases have no " +
+            "upgrade path.\n\n" +
+            "To start fresh, run the Keepr cleanup script for your platform, then " +
+            "reinstall:\n" +
+            "  \u2022 macOS:   scripts/cleanup-macos.sh\n" +
+            "  \u2022 Windows: scripts/cleanup-windows.ps1\n\n" +
+            "The script also removes the old encryption key, which deleting the " +
+            "database folder by hand would leave behind. Cloud data is unaffected " +
+            "and will re-sync.\n\n" +
             `Database: ${this.dbPath ?? "unknown"}`,
           buttons: ["Quit"],
         });

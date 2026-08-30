@@ -712,6 +712,18 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(DatabaseServiceClass.MIGRATIONS).toEqual([]);
     });
 
+    it("getLatestSchemaVersion() answers the baseline with the chain empty — the guard that keeps diagnostics.storage alive", () => {
+      // SR review D1 (BACKLOG-2993): unguarded, the last-element read is a
+      // TypeError inside supportTicketService's try, whose catch only warns —
+      // silently voiding the ENTIRE storage-diagnostics block of every
+      // support ticket. The companion test in
+      // supportTicketService.contactsStorage.test.ts pins what that void
+      // looks like when the accessor throws.
+      expect(databaseService.getLatestSchemaVersion()).toBe(
+        DatabaseServiceClass.BASELINE_VERSION,
+      );
+    });
+
     it("should have no duplicate versions in MIGRATIONS", () => {
       expect(() =>
         DatabaseServiceClass.validateNoDuplicateVersions(

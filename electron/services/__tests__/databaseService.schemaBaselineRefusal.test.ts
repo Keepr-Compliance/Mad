@@ -1,38 +1,44 @@
 /**
  * @jest-environment node
  *
- * C1 — THE REFUSAL CONTROL (BACKLOG-2993). The one that matters most: a real
- * pre-baseline database file, opened through the REAL initialize() path, must
- * be REFUSED, UNMODIFIED, and EXPLAINED — not migrated, not crashed, not
- * restore-looped, not silently reported as initialized.
+ * THE REFUSAL CONTROL (BACKLOG-2993) — the one test the founder's scope cut
+ * kept, because it is the off-by-one guard nothing else can replace:
  *
- * ---------------------------------------------------------------------------
- * THE FIXTURE IS A REAL PRODUCER'S TRANSCRIPT
- * ---------------------------------------------------------------------------
- * `fixtures/v2.27.0-populated.sql` is the shipped v2.27.0 database (schema
- * version 55, populated corpus), produced by the shipped code's own init path
- * (see buildV2270Fixture.gen.ts). It is replayed onto a real file that is
- * ENCRYPTED with the EXACT pragma text the production opener uses
- * (`key = "x'test-encryption-key-hex'"` — the interpolated string is not
- * valid raw-key hex, so the cipher derives it as a passphrase; keying the
- * fixture any other way makes the fence's readonly read fail with a decrypt
- * error and this suite would then be testing the wrong axis). The file is
- * deliberately left NON-WAL: that is the pre-WAL-era shape whose header the
- * read-write opener's `journal_mode = WAL` pragma would rewrite — the exact
- * write the readonly fence exists to prevent (SR review B2).
+ *   A real chain-built VERSION 69 database, opened through the REAL
+ *   initialize() path, must be REFUSED — not migrated, not half-written by
+ *   schema.sql, not crashed, not restore-looped, not reported initialized.
  *
- * ---------------------------------------------------------------------------
- * "UNMODIFIED" IS PROVEN BY CONTENT HASH, NEVER MTIME
- * ---------------------------------------------------------------------------
- * SHA-256 of the main database file before vs after, plus a fresh read-only
- * reopen asserting schema_version is unchanged (SR review E2 — under WAL,
- * mtime cannot separate pass from fail; for this non-WAL fixture the hash
- * equality is exact).
+ * WHY 69 SPECIFICALLY. The baseline rule is "strictly greater than any
+ * version any existing database can hold", and 69 is that maximum (develop
+ * and shipped main both topped out there at the reset). A fence at 69
+ * instead of 70 would silently ACCEPT the chain-built databases the reset
+ * exists to reject — with no visible symptom anywhere else in CI. This test
+ * is what makes 70-not-69 provable.
+ *
+ * THE FIXTURE IS IRREPLACEABLE. fixtures/chain-v69-schema.sql is the
+ * transcript of the OLD schema.sql + the FULL real migration chain, captured
+ * at 0bd6703bb in the one-way window before BACKLOG-2993 deleted the chain.
+ * It is also the frozen side of the schema-parity control
+ * (databaseService.schema-parity.test.ts). Never regenerate it; never "fix"
+ * a red run by editing it.
+ *
+ * The file is encrypted with the EXACT pragma text the production opener
+ * uses (`key = "x'test-encryption-key-hex'"` — not valid raw-key hex, so the
+ * cipher derives it as a passphrase; keyed any other way the fence would see
+ * a decrypt error, not a version, and this suite would be testing the wrong
+ * axis).
  *
  * Runs with the REAL better-sqlite3-multiple-ciphers driver.
+ *
+ * SCOPE NOTE (founder ruling, 2026-08-30): the wider control matrix this
+ * suite once carried — a 68/69/70/71 boundary sweep on four fixtures, a
+ * dialog-then-quit ordering control, byte-identical SHA-256 proofs, hot-WAL
+ * and cannot-open axis cases — was deliberately dropped. Three known users,
+ * all reinstalling fresh via the cleanup scripts; the refusal path is a
+ * backstop for a case being actively prevented. What remains is this file
+ * plus the fresh-install assertion below.
  */
 
-import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -44,8 +50,7 @@ import type { Database as DatabaseType } from "better-sqlite3";
 
 // THE LOAD-BEARING ONE. jest.config.js maps better-sqlite3-multiple-ciphers
 // to a stub; this factory overrides the mapping with the REAL module so that
-// databaseService's OWN `new Database()` calls (the readonly fence and
-// _openDatabase) run against the real driver — the whole point of this suite.
+// databaseService's OWN opens run against the real driver.
 jest.mock("better-sqlite3-multiple-ciphers", () =>
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require("../../../node_modules/better-sqlite3-multiple-ciphers"),
@@ -90,8 +95,7 @@ jest.mock("../logService", () => {
 
 // isDatabaseEncrypted MUST resolve true: with the standard `false` mock,
 // _checkMigrationNeeded() would send the fixture through
-// _migrateToEncryptedDatabase, which REWRITES the file before the fence runs
-// and falsifies the content-hash control.
+// _migrateToEncryptedDatabase, which rewrites the file before the fence runs.
 jest.mock("../databaseEncryptionService", () => {
   const m = {
     initialize: jest.fn().mockResolvedValue(undefined),
@@ -111,31 +115,21 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 
 import { SchemaBaselineRefusalError } from "../../types";
 import { isInitialized as dbConnectionIsInitialized } from "../db/core/dbConnection";
-import { initializationBroadcaster } from "../initializationBroadcaster";
 
-// Real driver, bypassing the jest auto-mock.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const RealDatabase = require(
   path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
 ) as typeof import("better-sqlite3-multiple-ciphers");
 
-const FIXTURE_SQL_PATH = path.join(__dirname, "fixtures", "v2.27.0-populated.sql");
+const V69_TRANSCRIPT_PATH = path.join(__dirname, "fixtures", "chain-v69-schema.sql");
 
-/**
- * EXACTLY the production opener's keying text (databaseService._openDatabase
- * interpolates `key = "x'<key>'"` and then `cipher_compatibility = 4`), with
- * the key the mocked databaseEncryptionService hands initialize().
- */
+/** EXACTLY the production opener's keying text (databaseService._openDatabase). */
 const PRODUCTION_KEY_PRAGMA = `key = "x'test-encryption-key-hex'"`;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyService = any;
 
-function sha256(file: string): string {
-  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-}
-
-describe("schema-baseline fence — refusal of a real pre-baseline database (BACKLOG-2993, C1)", () => {
+describe("schema-baseline fence — a chain-built v69 database is refused (BACKLOG-2993)", () => {
   let service: AnyService;
   let tmpDir: string;
   let dbFile: string;
@@ -170,178 +164,110 @@ describe("schema-baseline fence — refusal of a real pre-baseline database (BAC
     for (const d of createdTmpDirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
   });
 
-  /**
-   * Replay the shipped-v2.27.0 transcript onto a real file, encrypted with
-   * the production pragma text, journal mode left at the pre-WAL default.
-   */
-  function buildEncryptedV55Fixture(): void {
+  /** Replay the frozen v69 transcript onto an encrypted real file at mad.db. */
+  function buildEncryptedV69Fixture(): void {
     const db = new RealDatabase(dbFile) as DatabaseType;
     db.pragma(PRODUCTION_KEY_PRAGMA);
     db.pragma("cipher_compatibility = 4");
-    db.exec(fs.readFileSync(FIXTURE_SQL_PATH, "utf8"));
+    db.exec(fs.readFileSync(V69_TRANSCRIPT_PATH, "utf8"));
     db.close();
   }
 
-  it("PRECONDITION: the fixture opens with the production keying and reads schema_version 55", () => {
-    buildEncryptedV55Fixture();
-    // Open the way the fence and the production opener do — if this read
-    // fails, every refusal below would be a decrypt error wearing a green
-    // coat, not a baseline verdict.
-    const probe = new RealDatabase(dbFile, { readonly: true }) as DatabaseType;
+  /** schema_version read back through a fresh keyed readonly connection. */
+  function readVersionFromDisk(): number {
+    const db = new RealDatabase(dbFile, { readonly: true }) as DatabaseType;
     try {
-      probe.pragma(PRODUCTION_KEY_PRAGMA);
-      probe.pragma("cipher_compatibility = 4");
-      const version = (
-        probe.prepare("SELECT version FROM schema_version WHERE id = 1").get() as {
+      db.pragma(PRODUCTION_KEY_PRAGMA);
+      db.pragma("cipher_compatibility = 4");
+      return (
+        db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as {
           version: number;
         }
       ).version;
-      expect(version).toBe(55);
-      // Populated, not hollow: the corpus this transcript carries.
-      const contacts = (
-        probe.prepare("SELECT COUNT(*) AS n FROM contacts").get() as { n: number }
-      ).n;
-      expect(contacts).toBeGreaterThan(0);
-      // And genuinely non-WAL — the pre-WAL-era shape B2 is about.
-      const mode = (probe.pragma("journal_mode") as Array<{ journal_mode: string }>)[0]
-        .journal_mode;
-      expect(mode).not.toBe("wal");
     } finally {
-      probe.close();
+      db.close();
     }
+  }
+
+  it("PRECONDITION: the fixture opens with the production keying and reads schema_version 69", () => {
+    buildEncryptedV69Fixture();
+    expect(readVersionFromDisk()).toBe(69);
   });
 
-  it("C1: refuses the shipped v2.27.0 database — terminally, byte-identical, no backup, no restore, not initialized", async () => {
-    buildEncryptedV55Fixture();
-    const hashBefore = sha256(dbFile);
-    const siblingsBefore = fs.readdirSync(tmpDir).sort();
+  it("REFUSES the v69 database: terminal dialog + quit — not migrated, not half-written, not crashed, not restored, not initialized", async () => {
+    buildEncryptedV69Fixture();
 
     const restoreSpy = jest.spyOn(service, "_attemptAutoRestore");
-    const broadcastSpy = jest.spyOn(initializationBroadcaster, "broadcast");
 
-    await expect(service.initialize()).rejects.toThrow(SchemaBaselineRefusalError);
+    let caught: unknown;
+    try {
+      await service.initialize();
+    } catch (e) {
+      caught = e;
+    }
 
-    // Terminal and DISTINCT from migration failure: auto-restore never ran.
+    // Refused with the DISTINCT error class — not a crash, not a migration
+    // failure, and initialize() did not lie with `return true`.
+    expect(caught).toBeInstanceOf(SchemaBaselineRefusalError);
+    expect((caught as SchemaBaselineRefusalError).foundVersion).toBe(69);
+
+    // Terminal: auto-restore never ran (every restorable backup is also
+    // pre-baseline; that path would restore-and-refuse in a loop).
     expect(restoreSpy).not.toHaveBeenCalled();
 
     // Not initialized — through EITHER predicate the 46 call sites gate on.
     expect(service.isInitialized()).toBe(false);
     expect(dbConnectionIsInitialized()).toBe(false);
 
-    // UNMODIFIED, by content hash (never mtime — SR review E2)...
-    expect(sha256(dbFile)).toBe(hashBefore);
-    // ...by a fresh read-only reopen still reading the OLD version...
-    const reopen = new RealDatabase(dbFile, { readonly: true }) as DatabaseType;
-    try {
-      reopen.pragma(PRODUCTION_KEY_PRAGMA);
-      reopen.pragma("cipher_compatibility = 4");
-      expect(
-        (reopen.prepare("SELECT version FROM schema_version WHERE id = 1").get() as {
-          version: number;
-        }).version,
-      ).toBe(55);
-    } finally {
-      reopen.close();
-    }
-    // ...and by the directory: no pre-migration backup, no .encrypted/.backup
-    // scratch, no -wal/-shm — nothing was written anywhere.
-    expect(fs.readdirSync(tmpDir).sort()).toEqual(siblingsBefore);
+    // Not migrated and not half-written: the version on disk is still 69,
+    // and no migration machinery touched the directory (no rolling backup,
+    // no encryption-migration scratch files).
+    expect(readVersionFromDisk()).toBe(69);
+    const siblings = fs.readdirSync(tmpDir);
+    expect(siblings.filter((f) => f.includes("-backup-"))).toEqual([]);
+    expect(siblings.filter((f) => f.endsWith(".encrypted") || f.endsWith(".backup"))).toEqual([]);
 
-    // EXPLAINED: the dialog carried the message and the database path.
+    // Explained, then exited: the dialog names the problem and the cleanup
+    // scripts, and the app quits.
     expect(showMessageBoxMock).toHaveBeenCalledTimes(1);
-    const dialogArg = showMessageBoxMock.mock.calls[0][0] as {
-      message: string;
-      detail: string;
-    };
+    const dialogArg = showMessageBoxMock.mock.calls[0][0] as { message: string; detail: string };
     expect(dialogArg.message).toContain("older version");
-    expect(dialogArg.detail).toContain(dbFile);
-
-    // ...and the app exited.
-    expect(quitMock).toHaveBeenCalledTimes(1);
-
-    // The broadcast is telemetry-only (SR review C) but its shape is pinned:
-    // a permanent condition must not be broadcast as retryable.
-    expect(broadcastSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stage: "error",
-        error: expect.objectContaining({ retryable: false }),
-      }),
-    );
-  });
-
-  it("ORDER CONTROL: the dialog is awaited, THEN app.quit() — dropping the await goes red here", async () => {
-    buildEncryptedV55Fixture();
-
-    let resolveDialog!: (v: { response: number }) => void;
-    showMessageBoxMock.mockReset();
-    showMessageBoxMock.mockImplementation(
-      () => new Promise<{ response: number }>((r) => (resolveDialog = r)),
-    );
-
-    const initPromise = service.initialize();
-    const rejection = expect(initPromise).rejects.toThrow(SchemaBaselineRefusalError);
-
-    // Let initialize() run up to the awaited dialog.
-    await new Promise((r) => setTimeout(r, 50));
-    expect(showMessageBoxMock).toHaveBeenCalledTimes(1);
-    // The dialog is OPEN and UNANSWERED: the app must still be running.
-    // (The mutation this control exists for: remove the `await` on
-    // showMessageBox and quit fires here — the user never learns why.)
-    expect(quitMock).not.toHaveBeenCalled();
-
-    resolveDialog({ response: 0 });
-    await rejection;
+    expect(dialogArg.detail).toContain("cleanup");
     expect(quitMock).toHaveBeenCalledTimes(1);
   });
 
-  it("AXIS CONTROL: a file that cannot be OPENED is not 'pre-reset' — it fails with a decrypt error, no dialog, no quit", async () => {
-    // Version and openability are independent axes (SR review addendum). A
-    // refusal here would tell the owner of a corrupt-but-current database to
-    // reinstall and lose their data for no reason. The mutation this control
-    // exists for: map the fence's open/read failure to a refusal.
-    fs.writeFileSync(dbFile, Buffer.from("not a database, not even close"));
+  it("fresh install (no file) lands at schema_version 70 with the four previously-chain-only tables present", async () => {
+    expect(fs.existsSync(dbFile)).toBe(false);
 
-    let caught: unknown;
-    try {
-      await service.initialize();
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeDefined();
-    expect(caught).not.toBeInstanceOf(SchemaBaselineRefusalError);
-    // The canonical failure is the driver's own, from the read-write opener's
-    // key pragma hitting a non-database header — byte-identical to the
-    // pre-fence behaviour for a garbage file.
-    expect(String((caught as Error).message)).toContain("file is not a database");
-
-    expect(showMessageBoxMock).not.toHaveBeenCalled();
+    await expect(service.initialize()).resolves.toBe(true);
+    expect(service.isInitialized()).toBe(true);
     expect(quitMock).not.toHaveBeenCalled();
-  });
-
-  it("AXIS CONTROL: a valid pre-baseline file under the WRONG key fails as a driver error, never a refusal", async () => {
-    // The other openability failure: the file is a real encrypted database,
-    // but this machine's key cannot read it. The fence's readonly read fails
-    // and DEFERS; the read-write opener then throws the driver's own
-    // "file is not a database" from its first post-key pragma — measured as
-    // today's actual wrong-key behaviour (the cipher_integrity_check wrap is
-    // never reached; the earlier pragma throws first, fence or no fence).
-    const db = new RealDatabase(dbFile) as DatabaseType;
-    db.pragma(`key = "x'some-other-key-entirely'"`);
-    db.pragma("cipher_compatibility = 4");
-    db.exec(fs.readFileSync(FIXTURE_SQL_PATH, "utf8"));
-    db.close();
-
-    let caught: unknown;
-    try {
-      await service.initialize();
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeDefined();
-    expect(caught).not.toBeInstanceOf(SchemaBaselineRefusalError);
-    expect(String((caught as Error).message)).toContain("file is not a database");
-
     expect(showMessageBoxMock).not.toHaveBeenCalled();
-    expect(quitMock).not.toHaveBeenCalled();
+
+    const version = (
+      service.db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as {
+        version: number;
+      }
+    ).version;
+    expect(version).toBe(70);
+
+    // Not just the number: the four tables only the old chain used to create
+    // must exist on a fresh install — the exact loss the schema regeneration
+    // exists to prevent.
+    const tables = new Set(
+      (
+        service.db
+          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+          .all() as Array<{ name: string }>
+      ).map((r: { name: string }) => r.name),
+    );
+    for (const t of [
+      "contact_source_links",
+      "transaction_unlocks_cache",
+      "contact_link_proposals",
+      "contact_link_verdicts",
+    ]) {
+      expect(tables.has(t)).toBe(true);
+    }
   });
 });
