@@ -214,7 +214,10 @@ exceeding the limit can only ever produce a **false red, never a false green**.
 
 A name written by a form the binding map does not model -- assignment, `+=`,
 parameter, destructuring, catch variable, uninitialised `let` -- is **tainted** for
-its enclosing function and can never be COMPLIANT. This matters because
+the outermost function enclosing the write, and can never be COMPLIANT. The span is
+the outermost function because it has to cover where the name is *used*, not where
+the write sits: `filters.forEach((f) => { sql += ... })` writes inside a callback
+and prepares the result outside it. This matters because
 `let sql = <db import>; sql += ...` is the dominant query-assembly idiom in this
 codebase, and without taint the append is invisible:
 
@@ -233,7 +236,10 @@ tell whether the text a helper receives originated in `db/`, so it reports
 UNRESOLVABLE -- it says it cannot trace the origin, it does not certify the site.
 Nearest-preceding resolution is also positional rather than lexical, so a `const`
 in a nested function can capture a later outer use; that fails **closed** (a false
-red on a compliant site) and no such site exists today.
+red on a compliant site) and no such site exists today. For the same reason, sibling
+closures nested inside one outer function share a taint span, so a legitimate
+`const sql = <db import>` in one of them reads UNRESOLVABLE -- again a fail-closed
+false red, and again absent from the tree.
 
 ### The baseline
 

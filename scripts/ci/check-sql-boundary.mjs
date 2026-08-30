@@ -46,9 +46,17 @@
  *   The binding map models two forms: a declaration with an initializer, and a
  *   named import. Any OTHER write or binding of a name — assignment, `+=`,
  *   parameter, destructuring, catch variable, uninitialised `let` — taints that
- *   name for the span of its innermost enclosing function, and a tainted name
- *   can never yield COMPLIANT. Without this, `let sql = <db import>; sql += ...`
- *   resolved past the write to the import and greened interpolated SQL.
+ *   name for the span of the OUTERMOST function enclosing the write, and a
+ *   tainted name can never yield COMPLIANT. Without this, `let sql = <db
+ *   import>; sql += ...` resolved past the write to the import and greened
+ *   interpolated SQL.
+ *
+ *   The span is the outermost function, not the innermost, because it must
+ *   cover where the NAME IS USED rather than where the write happens to sit —
+ *   `filters.forEach((f) => { sql += ... })` writes inside a callback and uses
+ *   the result outside it. Taint is checked at BOTH places that resolve a name
+ *   (`classifyArg` and `isRegexReceiver`), not just the first.
+ *
  *   Taint downgrades only FROM_DB; a name resolving to a LITERAL still keys as
  *   LITERAL, so the baseline does not move.
  *
@@ -63,6 +71,13 @@
  *      function textually precedes a later use in the OUTER scope, so that use
  *      can resolve to it. The effect is a false RED on a compliant site — fail
  *      closed, and no such site exists in the tree today.
+ *   4. Because the taint span is the outermost enclosing function, sibling
+ *      closures nested in one outer function share it: a write in either taints
+ *      the name for both, so a legitimate `const sql = <db import>` in one of
+ *      them reads UNRESOLVABLE. Also a false RED, also fail closed, also absent
+ *      from the tree. Control C13 pins this trade in BOTH directions —
+ *      narrowing the span back to the innermost function to remove this false
+ *      red re-opens the nested-callback false green, and C11 then goes red.
  *
  * USAGE
  *   node scripts/ci/check-sql-boundary.mjs
@@ -217,21 +232,39 @@ function buildBindings(sf, rel) {
   //
   // So: a name with an unmodelled write in scope at the use site cannot yield a
   // COMPLIANT verdict. Taint is recorded with the span of the innermost
-  // enclosing function, not file-wide, so an unrelated legitimate use of the
-  // same name elsewhere in the file is not collaterally reddened.
+  // OUTERMOST function enclosing the write, not file-wide, so an unrelated
+  // legitimate use of the same name in a sibling TOP-LEVEL function is not
+  // collaterally reddened. Sibling closures nested inside one outer function do
+  // share a span; that is KNOWN LIMITS 4, a deliberate fail-closed trade.
   const taints = []; // { name, start, end }
+  const isFnLike = (p) =>
+    ts.isFunctionDeclaration(p) ||
+    ts.isFunctionExpression(p) ||
+    ts.isArrowFunction(p) ||
+    ts.isMethodDeclaration(p) ||
+    ts.isConstructorDeclaration(p);
+  // OUTERMOST enclosing function, not the innermost.
+  //
+  // The taint span must cover where the NAME is used, not where the write sits.
+  // A write inside a callback mutates a name declared in an enclosing scope, and
+  // the use is out there too:
+  //
+  //     let sql = <db import>;
+  //     filters.forEach((f) => { sql += ` AND ${f} = ?`; });  // write: arrow body
+  //     db.prepare(sql);                                      // use: outside it
+  //
+  // An innermost walk tainted only the arrow body and left the use COMPLIANT.
+  // `forEach` + `+=` is the canonical dynamic-WHERE idiom, so this is not a
+  // corner case. Widening to the outermost function costs one false-RED class
+  // (KNOWN LIMITS 4) and no false greens.
   const enclosingScope = (n) => {
     let p = n.parent;
-    while (
-      p &&
-      !ts.isFunctionDeclaration(p) &&
-      !ts.isFunctionExpression(p) &&
-      !ts.isArrowFunction(p) &&
-      !ts.isMethodDeclaration(p) &&
-      !ts.isConstructorDeclaration(p) &&
-      !ts.isSourceFile(p)
-    ) p = p.parent;
-    return p ?? sf;
+    let outermost = null;
+    while (p && !ts.isSourceFile(p)) {
+      if (isFnLike(p)) outermost = p;
+      p = p.parent;
+    }
+    return outermost ?? sf;
   };
   const taint = (nm, at) => {
     if (!nm || !ts.isIdentifier(nm)) return;
@@ -351,6 +384,12 @@ function classifyArg(node, depth, usePos, ctx) {
 function isRegexReceiver(node, ctx) {
   if (ts.isRegularExpressionLiteral(node)) return true;
   if (!ts.isIdentifier(node)) return false;
+  // Taint applies at BOTH call sites of nearestPreceding, not just classifyArg.
+  // A reassigned regex variable would otherwise keep greening `.exec()`:
+  //   let r = /^abc$/; r = db; r.exec(`DELETE FROM t WHERE id = '${id}'`);
+  // The whole point of taint is that a name the model cannot track is never a
+  // positive proof — including the proof that a call is not a database call.
+  if (isTainted(ctx.taints, node.text, node.getStart(ctx.sf))) return false;
   const b = nearestPreceding(ctx.bindings, node.text, node.getStart(ctx.sf));
   if (!b || b.kind !== "var") return false;
   const init = b.init;
@@ -645,8 +684,9 @@ function main() {
         "UNRESOLVABLE, which counts as a violation — exceeding the cutoff can only produce a " +
         "false RED, never a false green.\n" +
         "A name written by a form the binding map does not model (assignment, +=, parameter, " +
-        "destructuring, catch variable, uninitialised let) is tainted for its enclosing " +
-        "function and cannot be COMPLIANT.\n" +
+        "destructuring, catch variable, uninitialised let) is tainted for the OUTERMOST " +
+        "function enclosing the write — which is where the name is used, not where the write " +
+        "sits — and cannot be COMPLIANT.\n" +
         "Not caught: interprocedural flow. SQL passed into a helper is reported UNRESOLVABLE — " +
         "the gate says it cannot trace the origin, it does not certify the site."
     );

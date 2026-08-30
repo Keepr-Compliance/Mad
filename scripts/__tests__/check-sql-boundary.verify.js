@@ -21,6 +21,8 @@
  *   C10      compliant `const sql` + later shadowed literal    -> COMPLIANT then VIOLATION
  *   C11      reassignment / += / parameter shadowing an import -> UNRESOLVABLE (no collateral)
  *   C12      --update-baseline refuses a swap, still allows a shrink
+ *   C13      nested siblings share a taint span -> documented false RED
+ *   C14      reassigned regex receiver cannot green .exec() on SQL
  *   A2a      3-hop alias chain                                 -> UNRESOLVABLE (fail-closed)
  *   A2b      2-hop alias to a db/ import (the :83 shape)       -> COMPLIANT
  *   VSUM     absolute call-site count + COMPLIANT reason census on a known tree
@@ -375,7 +377,17 @@ for (const [id, verb, call] of [
       "}",
       "// (iii) a parameter shadowing the db import",
       "export function shadowed(db: any, OK_SQL: string) { return db.prepare(OK_SQL).all(); }",
-      "// (iv) the legitimate use of the same import -- must NOT be collaterally reddened",
+      "// (iv) the write is in a NESTED callback, the use is in the enclosing scope.",
+      "// This is why the taint span is the OUTERMOST enclosing function: an",
+      "// innermost walk taints only the arrow body and leaves the use compliant.",
+      "// `forEach` + `+=` is the canonical dynamic-WHERE assembly idiom.",
+      "export function nestedWrite(db: any, filters: string[]) {",
+      "  let sql = OK_SQL;",
+      "  filters.forEach((f) => { sql += ` AND ${f} = ?`; });",
+      "  return db.prepare(sql).all();",
+      "}",
+      "// (v) the legitimate use of the same import in a SIBLING TOP-LEVEL function",
+      "// -- must NOT be collaterally reddened",
       "export function legitimate(db: any) { return db.prepare(OK_SQL).all(); }",
       "",
     ].join("\n"),
@@ -386,9 +398,9 @@ for (const [id, verb, call] of [
   const compliant = lines.filter((l) => /COMPLIANT\s+from-db-import/.test(l)).length;
   record(
     "C11",
-    "unmodelled writes (reassign, +=, param shadow) are UNRESOLVABLE; the legitimate use stays COMPLIANT",
-    lines.length === 4 && unresolvable === 3 && compliant === 1,
-    `sites=${lines.length} unresolvable=${unresolvable} compliant=${compliant} (want 4/3/1)`
+    "unmodelled writes (reassign, +=, param shadow, nested-callback write) are UNRESOLVABLE; the sibling top-level use stays COMPLIANT",
+    lines.length === 5 && unresolvable === 4 && compliant === 1,
+    `sites=${lines.length} unresolvable=${unresolvable} compliant=${compliant} (want 5/4/1)`
   );
 }
 
@@ -444,6 +456,79 @@ for (const [id, verb, call] of [
     detail = `fromDbImport=${j.complianceReasons["from-db-import"]} violation=${j.violation}`;
   } catch { /* ok stays false */ }
   record("A2b", "2-hop alias to a db/ import is COMPLIANT (the :83 shape)", ok, detail);
+}
+
+// ---------------------------------------------------------------------------
+// C14 — taint applies at BOTH call sites of nearestPreceding.
+//
+// isRegexReceiver resolves a name the same way classifyArg does, so it needed
+// the same taint check. A reassigned regex variable otherwise keeps `regex` as
+// a COMPLIANT reason for a call whose argument is interpolated SQL. Nobody
+// writes this, but "the name is provably a RegExp" is a POSITIVE PROOF, and a
+// proof built on a name the model cannot track is exactly what taint exists to
+// refuse. C2 (the honest RegExp cases) must stay green alongside it.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    [DB_MODULE]: DB_MODULE_SRC,
+    "electron/workers/rx.ts": [
+      "export function e1(db: any, id: string) {",
+      "  let r = /^abc$/;",
+      "  r = db;",
+      "  return r.exec(`DELETE FROM widgets WHERE id = '${id}'`);",
+      "}",
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--json"]);
+  let ok = false, detail = `code=${r.code}`;
+  try {
+    const j = JSON.parse(r.out);
+    // The receiver is tainted, so `regex` is refused and the argument is judged
+    // on its own: an interpolated template literal -> VIOLATION.
+    ok = j.callSites === 1 && j.compliant === 0 && (j.violation + j.unresolvable) === 1 &&
+         (j.complianceReasons.regex ?? 0) === 0;
+    detail = `sites=${j.callSites} C=${j.compliant} V=${j.violation} U=${j.unresolvable} regex=${j.complianceReasons.regex ?? 0}`;
+  } catch { /* ok stays false */ }
+  record("C14", "a reassigned regex receiver cannot green .exec() on interpolated SQL", ok, detail);
+}
+
+// ---------------------------------------------------------------------------
+// C13 — the KNOWN LIMIT the outermost taint span buys, pinned deliberately.
+//
+// Taint spans the OUTERMOST enclosing function, so two sibling arrows nested
+// inside ONE outer function share a span: a write in either taints the name for
+// both, and a legitimate `const sql = <db import>` in the first is reported
+// UNRESOLVABLE. That is a FALSE RED -- fail closed, the same trade the alias
+// cutoff already makes, and no such site exists in the tree today.
+//
+// This control exists so the trade is visible in both directions. Narrowing the
+// span back to the innermost function to "fix" this false red would re-open the
+// nested-callback false green in C11, and this control would go red saying so.
+// See KNOWN LIMITS 4 in check-sql-boundary.mjs.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    [DB_MODULE]: DB_MODULE_SRC,
+    "electron/workers/siblings.ts": [
+      'import { OK_SQL } from "../services/db/okSql";',
+      "export function outer(db: any) {",
+      "  const legit = () => { const sql = OK_SQL; return db.prepare(sql).all(); };",
+      "  const taken = (sql: string) => db.prepare(sql).all();",
+      "  return { legit, taken };",
+      "}",
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--explain"]);
+  const lines = r.all.split("\n").filter((l) => l.includes("siblings.ts"));
+  const unresolvable = lines.filter((l) => /UNRESOLVABLE/.test(l)).length;
+  record(
+    "C13",
+    "nested siblings share one taint span: documented FALSE RED, fail closed (KNOWN LIMITS 4)",
+    lines.length === 2 && unresolvable === 2,
+    `sites=${lines.length} unresolvable=${unresolvable} (want 2/2)`
+  );
 }
 
 // ---------------------------------------------------------------------------
