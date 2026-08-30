@@ -86,10 +86,7 @@ const NEUTRAL_BODY = "on my way";
  * this fixture replays the ALTERs the way a real install does.
  */
 const V56_TOMBSTONE_COLUMNS = `
-  ALTER TABLE contacts ADD COLUMN removed_at DATETIME;
-  ALTER TABLE contacts ADD COLUMN removed_reason TEXT;
-  ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;
-  ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;`;
+`;
 
 function seed(db: DatabaseType): void {
   db.exec(SCHEMA);

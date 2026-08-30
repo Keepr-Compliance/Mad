@@ -235,10 +235,6 @@ const SCHEMA_PATH = path.join(__dirname, "../database/schema.sql");
  * from it alone is not the shape production has.
  */
 const V56_TOMBSTONE_DDL = [
-  "ALTER TABLE contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE contacts ADD COLUMN removed_reason TEXT",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT",
 ];
 
 function buildSchema(db: TestDb): void {

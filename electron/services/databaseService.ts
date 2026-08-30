@@ -462,6 +462,18 @@ class DatabaseService implements IDatabaseService {
 
       const newDb = new Database(encryptedPath);
       newDb.pragma(`key = "x'${this.encryptionKey}'"`);
+      // BACKLOG-2993: this build of better-sqlite3-multiple-ciphers compiles
+      // with foreign_keys ON by default (verified: `pragma foreign_keys` on a
+      // fresh connection returns 1). With enforcement on, this copy only works
+      // if sqlite_master order happens to put every FK parent before its
+      // children — true of the old hand-ordered schema.sql, NOT true of the
+      // regenerated (name-ordered) one, and never guaranteed for a real file
+      // whose tables were rebuilt by the old chain (DROP+CREATE moves a parent
+      // to the end). A clone must reproduce the source byte-for-byte, orphans
+      // included, not re-validate it mid-copy — so enforcement is off for the
+      // duration. The next real open re-enables it (_openDatabase pragmas
+      // foreign_keys = ON per session).
+      newDb.pragma("foreign_keys = OFF");
 
       for (const { name: tableName } of tables) {
         const tableInfo = oldDb.prepare(

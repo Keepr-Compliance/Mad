@@ -117,10 +117,6 @@ function seed(db: DatabaseType): void {
   db.exec(SCHEMA);
   // Migration-only v56 columns, absent from schema.sql. Omitting them is a state
   // the app never has — same note as reviewStateService-2791/tabReachability-2861.
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
   db.prepare(
     "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', 'oauth-1')",
   ).run(USER, "me@agent.com");

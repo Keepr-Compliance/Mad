@@ -1,7 +1,25 @@
-
-import { chainHeadVersion } from "./helpers/chainHead";/**
+/**
  * @jest-environment node
  */
+
+
+/**
+ * BACKLOG-2993: these dry-run / skip tests assert against the CHAIN'S OWN top
+ * version (the highest entry in DatabaseService.MIGRATIONS), not the
+ * fresh-install head — after the baseline reset the two differ (the install
+ * head is schema.sql's seed, 70; the chain tops out below it or is empty).
+ * Derived from the chain itself so the claim moves with the chain.
+ */
+function chainTailVersion(): number {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const svc = require("../databaseService").default;
+  const migrations = svc.constructor.MIGRATIONS as Array<{ version: number }>;
+  if (migrations.length === 0) {
+    throw new Error("chainTailVersion is only meaningful while MIGRATIONS is non-empty");
+  }
+  return migrations[migrations.length - 1].version;
+}
+
 
 /**
  * Unit tests for DatabaseService migration runner robustness
@@ -433,7 +451,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(plan).toEqual({
         currentVersion: 29,
         // BACKLOG-2791: derived. A literal here re-breaks on every new migration.
-        targetVersion: chainHeadVersion(),
+        targetVersion: chainTailVersion(),
         pendingMigrations: [
           {
             version: 30,
@@ -627,7 +645,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       // chain grows, rather than quietly becoming "one behind".
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: chainHeadVersion() });
+        .mockReturnValueOnce({ version: chainTailVersion() });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -639,8 +657,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: chainHeadVersion(),
-        targetVersion: chainHeadVersion(),
+        currentVersion: chainTailVersion(),
+        targetVersion: chainTailVersion(),
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -793,7 +811,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       // "one behind".
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: chainHeadVersion() });
+        .mockReturnValueOnce({ version: chainTailVersion() });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },

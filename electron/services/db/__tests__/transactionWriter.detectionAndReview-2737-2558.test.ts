@@ -285,14 +285,11 @@ describe("transaction writer — detection fields and the review queue (BACKLOG-
   // -------------------------------------------------------------------------
 
   it("migrated a real on-disk database all the way to the head migration", () => {
+    // BACKLOG-2993: the install head is schema.sql's own seed (the chain is
+    // gone); chainHeadVersion() derives it from the artefacts.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const DatabaseService =
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require("../../databaseService").DatabaseService ??
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require("../../databaseService").default.constructor;
-    const migrations = DatabaseService.MIGRATIONS as Array<{ version: number }>;
-    const head = migrations[migrations.length - 1].version;
+    const { chainHeadVersion } = require("../../__tests__/helpers/chainHead") as typeof import("../../__tests__/helpers/chainHead");
+    const head = chainHeadVersion();
 
     const version = (
       db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as {

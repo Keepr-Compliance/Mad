@@ -1,34 +1,22 @@
--- ============================================
--- MAD - LOCAL SQLite DATABASE SCHEMA
--- ============================================
 -- ===================================================================
 -- GENERATED — DO NOT HAND-EDIT (BACKLOG-2993)
 -- ===================================================================
 -- Produced by electron/services/__tests__/generateSchemaBaseline.gen.ts.
 -- Regeneration steps are in that file's header.
 --
--- source commit : 0bd6703bbe957417f7e01a0446d34185d1c7094c
+-- source commit : 72681f137175c809465d986fa9f9613438fe9929
 -- generated     : 2026-08-30
--- declared schema_version: 70
--- producer      : OLD electron/database/schema.sql + the FULL migration
---                 chain (v30..v69) run through the real runner, dumped
---                 from sqlite_master and rewritten with IF NOT EXISTS.
--- 
--- This file is the POST-RESET BASELINE (BACKLOG-2993): the complete
--- v69-chain shape, declared as version 70. The migration chain that
--- carried v30..v69 was deleted in the same change. Fresh installs get
--- this file and nothing else; databases below version 70 are REFUSED
--- by the baseline fence in databaseService (they predate the reset and
--- no upgrade path exists any more).
--- 
--- Hand-edits are caught by databaseService.schema-parity.test.ts,
--- which diffs a fresh exec of this file against the frozen transcript
--- fixtures/chain-v69-schema.sql.
+-- schema_version: 70
+-- producer      : fresh install on the NEW (regenerated)
+--                 electron/database/schema.sql — a real producer.
+-- role          : v70 boundary-sweep fixture (the exact baseline; must
+--                 be ACCEPTED by the fence).
 -- ===================================================================
 
+PRAGMA foreign_keys=OFF;
 BEGIN TRANSACTION;
 
-CREATE TABLE IF NOT EXISTS attachments (
+CREATE TABLE attachments (
   id TEXT PRIMARY KEY,
   message_id TEXT,                       -- FK to messages (iMessage attachments) - nullable for email attachments
   email_id TEXT,                         -- TASK-1775: FK to emails (Gmail/Outlook attachments)
@@ -63,8 +51,7 @@ CREATE TABLE IF NOT EXISTS attachments (
   -- because SQLite CREATE TABLE IF NOT EXISTS won't update existing tables
   CHECK (message_id IS NOT NULL OR email_id IS NOT NULL)
 );
-
-CREATE TABLE IF NOT EXISTS "audit_logs" (
+CREATE TABLE "audit_logs" (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             session_id TEXT,
@@ -90,8 +77,7 @@ CREATE TABLE IF NOT EXISTS "audit_logs" (
             synced_at DATETIME,
             FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
           );
-
-CREATE TABLE IF NOT EXISTS audit_packages (
+CREATE TABLE audit_packages (
   id TEXT PRIMARY KEY,
   transaction_id TEXT NOT NULL,
   user_id TEXT NOT NULL,
@@ -122,8 +108,7 @@ CREATE TABLE IF NOT EXISTS audit_packages (
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS classification_feedback (
+CREATE TABLE classification_feedback (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
 
@@ -155,8 +140,7 @@ CREATE TABLE IF NOT EXISTS classification_feedback (
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
   FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL
 );
-
-CREATE TABLE IF NOT EXISTS communications (
+CREATE TABLE communications (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   transaction_id TEXT,                     -- Nullable: may link content before transaction exists
@@ -186,8 +170,7 @@ CREATE TABLE IF NOT EXISTS communications (
     OR (message_id IS NULL AND email_id IS NULL AND thread_id IS NOT NULL)
   )
 );
-
-CREATE TABLE IF NOT EXISTS contact_emails (
+CREATE TABLE contact_emails (
   id TEXT PRIMARY KEY,
   contact_id TEXT NOT NULL,
 
@@ -201,8 +184,7 @@ CREATE TABLE IF NOT EXISTS contact_emails (
   FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
   UNIQUE(contact_id, email)
 );
-
-CREATE TABLE IF NOT EXISTS contact_link_proposals (
+CREATE TABLE contact_link_proposals (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     contact_id TEXT,
@@ -275,8 +257,7 @@ CREATE TABLE IF NOT EXISTS contact_link_proposals (
     UNIQUE (user_id, contact_id, source_type, source_record_id),
     UNIQUE (user_id, pair_key)
   );
-
-CREATE TABLE IF NOT EXISTS contact_link_verdicts (
+CREATE TABLE contact_link_verdicts (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     contact_id TEXT,
@@ -341,8 +322,7 @@ CREATE TABLE IF NOT EXISTS contact_link_verdicts (
         AND target_source_type IS NULL AND target_source_record_id IS NULL)
     )
   );
-
-CREATE TABLE IF NOT EXISTS contact_phones (
+CREATE TABLE contact_phones (
   id TEXT PRIMARY KEY,
   contact_id TEXT NOT NULL,
 
@@ -358,8 +338,7 @@ CREATE TABLE IF NOT EXISTS contact_phones (
   FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
   UNIQUE(contact_id, phone_e164)
 );
-
-CREATE TABLE IF NOT EXISTS "contact_source_links" (
+CREATE TABLE "contact_source_links" (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     contact_id TEXT NOT NULL,
@@ -380,8 +359,7 @@ CREATE TABLE IF NOT EXISTS "contact_source_links" (
     FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     UNIQUE (user_id, source_type, source_record_id)
   );
-
-CREATE TABLE IF NOT EXISTS "contacts" (
+CREATE TABLE "contacts" (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
             display_name TEXT NOT NULL,
@@ -399,8 +377,7 @@ CREATE TABLE IF NOT EXISTS "contacts" (
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, removed_at DATETIME, removed_reason TEXT,
             FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
           );
-
-CREATE TABLE IF NOT EXISTS data_clear_events (
+CREATE TABLE data_clear_events (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   scope TEXT NOT NULL CHECK (scope IN ('emails', 'messages', 'contacts', 'all')),
@@ -411,8 +388,7 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
   cloud_synced_at DATETIME,
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS email_participants (
+CREATE TABLE email_participants (
   email_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
   position INTEGER NOT NULL,
@@ -423,8 +399,7 @@ CREATE TABLE IF NOT EXISTS email_participants (
   PRIMARY KEY (email_id, role, position),
   FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
+CREATE TABLE email_participants_backfill_errors (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email_id TEXT NOT NULL,
   role TEXT NOT NULL,
@@ -432,8 +407,7 @@ CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
   reason TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-
-CREATE TABLE IF NOT EXISTS email_sync_state (
+CREATE TABLE email_sync_state (
   user_id TEXT NOT NULL,
   account_id TEXT NOT NULL,
   provider TEXT NOT NULL CHECK (provider IN ('google', 'microsoft')),
@@ -449,8 +423,7 @@ CREATE TABLE IF NOT EXISTS email_sync_state (
   PRIMARY KEY (user_id, account_id),
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS email_tombstones (
+CREATE TABLE email_tombstones (
   user_id TEXT NOT NULL,
   account_id TEXT NOT NULL,
   external_id TEXT NOT NULL,
@@ -460,8 +433,7 @@ CREATE TABLE IF NOT EXISTS email_tombstones (
   PRIMARY KEY (user_id, account_id, external_id),
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS emails (
+CREATE TABLE emails (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
 
@@ -575,8 +547,7 @@ CREATE TABLE IF NOT EXISTS emails (
 
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS external_contacts (
+CREATE TABLE external_contacts (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   name TEXT,
@@ -593,8 +564,7 @@ CREATE TABLE IF NOT EXISTS external_contacts (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
   UNIQUE(user_id, source, external_record_id)
 );
-
-CREATE TABLE IF NOT EXISTS extracted_transaction_data (
+CREATE TABLE extracted_transaction_data (
   id TEXT PRIMARY KEY,
   transaction_id TEXT NOT NULL,
 
@@ -616,8 +586,7 @@ CREATE TABLE IF NOT EXISTS extracted_transaction_data (
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
   FOREIGN KEY (source_message_id) REFERENCES messages(id) ON DELETE SET NULL
 );
-
-CREATE TABLE IF NOT EXISTS failure_log (
+CREATE TABLE failure_log (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   timestamp TEXT NOT NULL DEFAULT (datetime('now')),
   operation TEXT NOT NULL,
@@ -625,8 +594,7 @@ CREATE TABLE IF NOT EXISTS failure_log (
   metadata TEXT,
   acknowledged INTEGER NOT NULL DEFAULT 0
 );
-
-CREATE TABLE IF NOT EXISTS ignored_communications (
+CREATE TABLE ignored_communications (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   transaction_id TEXT NOT NULL,
@@ -656,8 +624,7 @@ CREATE TABLE IF NOT EXISTS ignored_communications (
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
   FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS llm_settings (
+CREATE TABLE llm_settings (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL UNIQUE,
 
@@ -697,8 +664,7 @@ CREATE TABLE IF NOT EXISTS llm_settings (
 
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS message_import_state (
+CREATE TABLE message_import_state (
   user_id TEXT PRIMARY KEY,
   last_import_at DATETIME,
   last_expansion_at DATETIME,
@@ -706,8 +672,7 @@ CREATE TABLE IF NOT EXISTS message_import_state (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS message_thread_names (
+CREATE TABLE message_thread_names (
   user_id TEXT NOT NULL,
   thread_id TEXT NOT NULL,               -- Matches messages.thread_id ("macos-chat-<chat ROWID>")
   display_name TEXT NOT NULL,            -- Trimmed, non-empty; absence = no row
@@ -716,8 +681,7 @@ CREATE TABLE IF NOT EXISTS message_thread_names (
   PRIMARY KEY (user_id, thread_id),
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS messages (
+CREATE TABLE messages (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
 
@@ -798,8 +762,7 @@ CREATE TABLE IF NOT EXISTS messages (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL
 );
-
-CREATE TABLE IF NOT EXISTS oauth_tokens (
+CREATE TABLE oauth_tokens (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   provider TEXT NOT NULL CHECK (provider IN ('google', 'microsoft')),
@@ -830,8 +793,7 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
   UNIQUE(user_id, provider, purpose)
 );
-
-CREATE TABLE IF NOT EXISTS pending_review_communications (
+CREATE TABLE pending_review_communications (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   transaction_id TEXT NOT NULL,
@@ -852,22 +814,19 @@ CREATE TABLE IF NOT EXISTS pending_review_communications (
     OR (thread_id IS NOT NULL AND email_id IS NULL)
   )
 );
-
-CREATE TABLE IF NOT EXISTS phone_last_message (
+CREATE TABLE phone_last_message (
   phone_normalized TEXT NOT NULL,
   user_id TEXT NOT NULL,
   last_message_at DATETIME NOT NULL,
   PRIMARY KEY (phone_normalized, user_id),
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS schema_version (
+CREATE TABLE schema_version (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   version INTEGER NOT NULL DEFAULT 1,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 , migrated_at TEXT);
-
-CREATE TABLE IF NOT EXISTS sessions (
+CREATE TABLE sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   session_token TEXT NOT NULL UNIQUE,
@@ -877,8 +836,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS transaction_contacts (
+CREATE TABLE transaction_contacts (
   id TEXT PRIMARY KEY,
   transaction_id TEXT NOT NULL,
   contact_id TEXT NOT NULL,
@@ -897,8 +855,7 @@ CREATE TABLE IF NOT EXISTS transaction_contacts (
   FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
   UNIQUE(transaction_id, contact_id)
 );
-
-CREATE TABLE IF NOT EXISTS transaction_participants (
+CREATE TABLE transaction_participants (
   id TEXT PRIMARY KEY,
   transaction_id TEXT NOT NULL,
   contact_id TEXT NOT NULL,
@@ -928,8 +885,7 @@ CREATE TABLE IF NOT EXISTS transaction_participants (
   FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
   UNIQUE(transaction_id, contact_id)
 );
-
-CREATE TABLE IF NOT EXISTS transaction_stage_history (
+CREATE TABLE transaction_stage_history (
   id TEXT PRIMARY KEY,
   transaction_id TEXT NOT NULL,
 
@@ -944,8 +900,7 @@ CREATE TABLE IF NOT EXISTS transaction_stage_history (
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
   FOREIGN KEY (trigger_message_id) REFERENCES messages(id) ON DELETE SET NULL
 );
-
-CREATE TABLE IF NOT EXISTS transaction_unlocks_cache (
+CREATE TABLE transaction_unlocks_cache (
             local_transaction_id TEXT NOT NULL,
             user_id TEXT NOT NULL,
             unlocked_at TEXT NOT NULL,
@@ -953,8 +908,7 @@ CREATE TABLE IF NOT EXISTS transaction_unlocks_cache (
             cached_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (local_transaction_id, user_id)
           );
-
-CREATE TABLE IF NOT EXISTS transactions (
+CREATE TABLE transactions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
 
@@ -1062,8 +1016,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
-
-CREATE TABLE IF NOT EXISTS users_local (
+CREATE TABLE users_local (
   -- Core Identity (synced from cloud)
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -1115,7 +1068,18 @@ CREATE TABLE IF NOT EXISTS users_local (
   UNIQUE(oauth_provider, oauth_id)
 );
 
-CREATE VIEW IF NOT EXISTS contact_lookup AS
+INSERT INTO "schema_version" ("id", "version", "updated_at", "migrated_at") VALUES (1, 70, '2026-08-30 00:42:16', NULL);
+
+CREATE TRIGGER communications_email_thread_required
+BEFORE INSERT ON communications
+FOR EACH ROW
+WHEN NEW.email_id IS NOT NULL
+  AND NULLIF(NEW.thread_id, '') IS NULL
+  AND NULLIF((SELECT thread_id FROM emails WHERE id = NEW.email_id), '') IS NOT NULL
+BEGIN
+  SELECT RAISE(ABORT, 'communications.thread_id required: linked email has a thread_id (BACKLOG-1768)');
+END;
+CREATE VIEW contact_lookup AS
           SELECT
             c.id as contact_id,
             c.user_id,
@@ -1125,8 +1089,142 @@ CREATE VIEW IF NOT EXISTS contact_lookup AS
           FROM contacts c
           LEFT JOIN contact_emails ce ON c.id = ce.contact_id
           LEFT JOIN contact_phones cp ON c.id = cp.contact_id;
-
-CREATE VIEW IF NOT EXISTS transaction_summary AS
+CREATE INDEX idx_attachments_document_type ON attachments(document_type);
+CREATE INDEX idx_attachments_email_id ON attachments(email_id);
+CREATE INDEX idx_attachments_external_message_id ON attachments(external_message_id);
+CREATE INDEX idx_attachments_message_id ON attachments(message_id);
+CREATE INDEX idx_attachments_sync_session ON attachments(sync_session_id);
+CREATE INDEX idx_audit_logs_action ON audit_logs(action);
+CREATE INDEX idx_audit_logs_resource_type ON audit_logs(resource_type);
+CREATE INDEX idx_audit_logs_session_id ON audit_logs(session_id);
+CREATE INDEX idx_audit_logs_synced ON audit_logs(synced_at);
+CREATE INDEX idx_audit_logs_timestamp ON audit_logs(timestamp);
+CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX idx_audit_packages_transaction ON audit_packages(transaction_id);
+CREATE INDEX idx_audit_packages_user ON audit_packages(user_id);
+CREATE UNIQUE INDEX idx_comm_email_txn ON communications(email_id, transaction_id) WHERE email_id IS NOT NULL AND transaction_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_comm_msg_txn ON communications(message_id, transaction_id) WHERE message_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_comm_thread_txn ON communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL AND message_id IS NULL AND email_id IS NULL;
+CREATE INDEX idx_communications_email_id ON communications(email_id);
+CREATE INDEX idx_communications_message_id ON communications(message_id);
+CREATE INDEX idx_communications_thread_id ON communications(thread_id);
+CREATE INDEX idx_communications_transaction_id ON communications(transaction_id);
+CREATE INDEX idx_communications_txn_msg ON communications(transaction_id, message_id);
+CREATE INDEX idx_communications_user_id ON communications(user_id);
+CREATE INDEX idx_contact_emails_contact_id ON contact_emails(contact_id);
+CREATE INDEX idx_contact_emails_email ON contact_emails(email);
+CREATE INDEX idx_contact_emails_email_lower ON contact_emails(LOWER(email));
+CREATE INDEX idx_contact_link_proposals_pending
+    ON contact_link_proposals(user_id, status, cluster_key);
+CREATE INDEX idx_contact_link_verdicts_pair
+    ON contact_link_verdicts(user_id, source_type, source_record_id, contact_id);
+CREATE INDEX idx_contact_phones_contact_id ON contact_phones(contact_id);
+CREATE INDEX idx_contact_phones_normalized ON contact_phones(phone_normalized);
+CREATE INDEX idx_contact_phones_phone ON contact_phones(phone_e164);
+CREATE INDEX idx_contact_source_links_contact
+    ON contact_source_links(contact_id);
+CREATE INDEX idx_contacts_display_name ON contacts(display_name);
+CREATE INDEX idx_contacts_is_imported ON contacts(is_imported);
+CREATE INDEX idx_contacts_user_id ON contacts(user_id);
+CREATE INDEX idx_contacts_user_imported ON contacts(user_id, is_imported);
+CREATE INDEX idx_data_clear_events_pending ON data_clear_events(cloud_synced_at) WHERE cloud_synced_at IS NULL;
+CREATE INDEX idx_email_participants_address_role
+  ON email_participants(email_address, role);
+CREATE INDEX idx_email_participants_email_address
+  ON email_participants(email_address);
+CREATE INDEX idx_email_participants_email_id
+  ON email_participants(email_id);
+CREATE INDEX idx_email_participants_lower_address
+  ON email_participants(LOWER(email_address));
+CREATE INDEX idx_email_tombstones_msgid ON email_tombstones(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
+CREATE UNIQUE INDEX idx_emails_account_external ON emails(account_id, external_id) WHERE external_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_emails_account_message_id_header ON emails(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
+CREATE INDEX idx_emails_derived_version_stale
+             ON emails(derived_version) WHERE derived_version < 1;
+CREATE INDEX idx_emails_external_id ON emails(external_id);
+CREATE INDEX idx_emails_sender ON emails(sender);
+CREATE INDEX idx_emails_sent_at ON emails(sent_at);
+CREATE INDEX idx_emails_thread_id ON emails(thread_id);
+CREATE INDEX idx_emails_user_id ON emails(user_id);
+CREATE INDEX idx_emails_user_sent ON emails(user_id, sent_at);
+CREATE INDEX idx_external_contacts_last_msg ON external_contacts(user_id, last_message_at DESC);
+CREATE INDEX idx_external_contacts_source ON external_contacts(user_id, source);
+CREATE INDEX idx_external_contacts_sync_session ON external_contacts(user_id, sync_session_id);
+CREATE INDEX idx_external_contacts_user ON external_contacts(user_id);
+CREATE INDEX idx_extracted_data_field ON extracted_transaction_data(field_name);
+CREATE INDEX idx_extracted_data_transaction ON extracted_transaction_data(transaction_id);
+CREATE INDEX idx_failure_log_acknowledged ON failure_log(acknowledged);
+CREATE INDEX idx_failure_log_timestamp ON failure_log(timestamp);
+CREATE INDEX idx_feedback_message ON classification_feedback(message_id);
+CREATE INDEX idx_feedback_type ON classification_feedback(feedback_type);
+CREATE INDEX idx_feedback_user ON classification_feedback(user_id);
+CREATE INDEX idx_ignored_comms_email_id ON ignored_communications(email_id, transaction_id) WHERE email_id IS NOT NULL;
+CREATE INDEX idx_ignored_comms_thread_id ON ignored_communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL;
+CREATE INDEX idx_ignored_comms_transaction ON ignored_communications(transaction_id);
+CREATE INDEX idx_ignored_comms_user_email ON ignored_communications(user_id, email_sender, email_subject, email_sent_at);
+CREATE INDEX idx_llm_settings_user ON llm_settings(user_id);
+CREATE INDEX idx_message_thread_names_thread
+  ON message_thread_names(thread_id);
+CREATE INDEX idx_messages_assoc_guid ON messages(associated_message_guid) WHERE associated_message_type IS NOT NULL;
+CREATE INDEX idx_messages_channel ON messages(channel);
+CREATE INDEX idx_messages_content_hash ON messages(content_hash);
+CREATE INDEX idx_messages_duplicate_of ON messages(duplicate_of);
+CREATE INDEX idx_messages_external_id ON messages(external_id);
+CREATE INDEX idx_messages_is_transaction_related ON messages(is_transaction_related);
+CREATE INDEX idx_messages_message_id_header ON messages(message_id_header);
+CREATE INDEX idx_messages_participants_flat ON messages(participants_flat);
+CREATE INDEX idx_messages_sent_at ON messages(sent_at);
+CREATE INDEX idx_messages_sync_session ON messages(user_id, sync_session_id);
+CREATE INDEX idx_messages_thread_id ON messages(thread_id);
+CREATE INDEX idx_messages_transaction_id ON messages(transaction_id);
+CREATE UNIQUE INDEX idx_messages_user_external_id ON messages(user_id, external_id) WHERE external_id IS NOT NULL;
+CREATE INDEX idx_messages_user_id ON messages(user_id);
+CREATE INDEX idx_messages_user_sent ON messages(user_id, sent_at);
+CREATE INDEX idx_oauth_tokens_user_provider ON oauth_tokens(user_id, provider, purpose);
+CREATE UNIQUE INDEX idx_pending_review_txn_email
+             ON pending_review_communications(transaction_id, email_id)
+           WHERE email_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_pending_review_txn_thread
+             ON pending_review_communications(transaction_id, thread_id)
+           WHERE thread_id IS NOT NULL;
+CREATE INDEX idx_phone_last_msg_user ON phone_last_message(user_id);
+CREATE INDEX idx_sessions_token ON sessions(session_token);
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX idx_stage_history_changed_at ON transaction_stage_history(changed_at);
+CREATE INDEX idx_stage_history_transaction ON transaction_stage_history(transaction_id);
+CREATE INDEX idx_transaction_contacts_category ON transaction_contacts(role_category);
+CREATE INDEX idx_transaction_contacts_contact ON transaction_contacts(contact_id);
+CREATE INDEX idx_transaction_contacts_primary ON transaction_contacts(is_primary);
+CREATE INDEX idx_transaction_contacts_role ON transaction_contacts(role);
+CREATE INDEX idx_transaction_contacts_specific_role ON transaction_contacts(specific_role);
+CREATE INDEX idx_transaction_contacts_transaction ON transaction_contacts(transaction_id);
+CREATE INDEX idx_transaction_participants_contact ON transaction_participants(contact_id);
+CREATE INDEX idx_transaction_participants_role ON transaction_participants(role);
+CREATE INDEX idx_transaction_participants_transaction ON transaction_participants(transaction_id);
+CREATE INDEX idx_transaction_unlocks_cache_user
+            ON transaction_unlocks_cache(user_id);
+CREATE INDEX idx_transactions_export_status ON transactions(export_status);
+CREATE INDEX idx_transactions_last_exported_on ON transactions(last_exported_on);
+CREATE INDEX idx_transactions_property_address ON transactions(property_address);
+CREATE INDEX idx_transactions_stage ON transactions(stage);
+CREATE INDEX idx_transactions_status ON transactions(status);
+CREATE INDEX idx_transactions_submission_id ON transactions(submission_id);
+CREATE INDEX idx_transactions_submission_status ON transactions(submission_status);
+CREATE INDEX idx_transactions_user_id ON transactions(user_id);
+CREATE INDEX idx_users_local_email ON users_local(email);
+CREATE INDEX idx_users_local_license_type ON users_local(license_type);
+CREATE INDEX idx_users_local_organization ON users_local(organization_id);
+CREATE TRIGGER prevent_audit_delete
+          BEFORE DELETE ON audit_logs
+          BEGIN
+            SELECT RAISE(ABORT, 'Audit logs cannot be deleted');
+          END;
+CREATE TRIGGER prevent_audit_update
+          BEFORE UPDATE ON audit_logs
+          BEGIN
+            SELECT RAISE(ABORT, 'Audit logs cannot be modified');
+          END;
+CREATE VIEW transaction_summary AS
 SELECT
   t.id,
   t.user_id,
@@ -1142,312 +1240,40 @@ SELECT
   (SELECT COUNT(*) FROM transaction_contacts tc WHERE tc.transaction_id = t.id) as participant_count,
   (SELECT COUNT(*) FROM audit_packages ap WHERE ap.transaction_id = t.id) as audit_count
 FROM transactions t;
-
-CREATE INDEX IF NOT EXISTS idx_attachments_document_type ON attachments(document_type);
-
-CREATE INDEX IF NOT EXISTS idx_attachments_email_id ON attachments(email_id);
-
-CREATE INDEX IF NOT EXISTS idx_attachments_external_message_id ON attachments(external_message_id);
-
-CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
-
-CREATE INDEX IF NOT EXISTS idx_attachments_sync_session ON attachments(sync_session_id);
-
-CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
-
-CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_type ON audit_logs(resource_type);
-
-CREATE INDEX IF NOT EXISTS idx_audit_logs_session_id ON audit_logs(session_id);
-
-CREATE INDEX IF NOT EXISTS idx_audit_logs_synced ON audit_logs(synced_at);
-
-CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
-
-CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_audit_packages_transaction ON audit_packages(transaction_id);
-
-CREATE INDEX IF NOT EXISTS idx_audit_packages_user ON audit_packages(user_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_email_txn ON communications(email_id, transaction_id) WHERE email_id IS NOT NULL AND transaction_id IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_msg_txn ON communications(message_id, transaction_id) WHERE message_id IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_thread_txn ON communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL AND message_id IS NULL AND email_id IS NULL;
-
-CREATE INDEX IF NOT EXISTS idx_communications_email_id ON communications(email_id);
-
-CREATE INDEX IF NOT EXISTS idx_communications_message_id ON communications(message_id);
-
-CREATE INDEX IF NOT EXISTS idx_communications_thread_id ON communications(thread_id);
-
-CREATE INDEX IF NOT EXISTS idx_communications_transaction_id ON communications(transaction_id);
-
-CREATE INDEX IF NOT EXISTS idx_communications_txn_msg ON communications(transaction_id, message_id);
-
-CREATE INDEX IF NOT EXISTS idx_communications_user_id ON communications(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_contact_emails_contact_id ON contact_emails(contact_id);
-
-CREATE INDEX IF NOT EXISTS idx_contact_emails_email ON contact_emails(email);
-
-CREATE INDEX IF NOT EXISTS idx_contact_emails_email_lower ON contact_emails(LOWER(email));
-
-CREATE INDEX IF NOT EXISTS idx_contact_link_proposals_pending
-    ON contact_link_proposals(user_id, status, cluster_key);
-
-CREATE INDEX IF NOT EXISTS idx_contact_link_verdicts_pair
-    ON contact_link_verdicts(user_id, source_type, source_record_id, contact_id);
-
-CREATE INDEX IF NOT EXISTS idx_contact_phones_contact_id ON contact_phones(contact_id);
-
-CREATE INDEX IF NOT EXISTS idx_contact_phones_normalized ON contact_phones(phone_normalized);
-
-CREATE INDEX IF NOT EXISTS idx_contact_phones_phone ON contact_phones(phone_e164);
-
-CREATE INDEX IF NOT EXISTS idx_contact_source_links_contact
-    ON contact_source_links(contact_id);
-
-CREATE INDEX IF NOT EXISTS idx_contacts_display_name ON contacts(display_name);
-
-CREATE INDEX IF NOT EXISTS idx_contacts_is_imported ON contacts(is_imported);
-
-CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_contacts_user_imported ON contacts(user_id, is_imported);
-
-CREATE INDEX IF NOT EXISTS idx_data_clear_events_pending ON data_clear_events(cloud_synced_at) WHERE cloud_synced_at IS NULL;
-
-CREATE INDEX IF NOT EXISTS idx_email_participants_address_role
-  ON email_participants(email_address, role);
-
-CREATE INDEX IF NOT EXISTS idx_email_participants_email_address
-  ON email_participants(email_address);
-
-CREATE INDEX IF NOT EXISTS idx_email_participants_email_id
-  ON email_participants(email_id);
-
-CREATE INDEX IF NOT EXISTS idx_email_participants_lower_address
-  ON email_participants(LOWER(email_address));
-
-CREATE INDEX IF NOT EXISTS idx_email_tombstones_msgid ON email_tombstones(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_external ON emails(account_id, external_id) WHERE external_id IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_message_id_header ON emails(account_id, message_id_header) WHERE message_id_header IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_emails_derived_version_stale
-             ON emails(derived_version) WHERE derived_version < 1;
-
-CREATE INDEX IF NOT EXISTS idx_emails_external_id ON emails(external_id);
-
-CREATE INDEX IF NOT EXISTS idx_emails_sender ON emails(sender);
-
-CREATE INDEX IF NOT EXISTS idx_emails_sent_at ON emails(sent_at);
-
-CREATE INDEX IF NOT EXISTS idx_emails_thread_id ON emails(thread_id);
-
-CREATE INDEX IF NOT EXISTS idx_emails_user_id ON emails(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_emails_user_sent ON emails(user_id, sent_at);
-
-CREATE INDEX IF NOT EXISTS idx_external_contacts_last_msg ON external_contacts(user_id, last_message_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_external_contacts_source ON external_contacts(user_id, source);
-
-CREATE INDEX IF NOT EXISTS idx_external_contacts_sync_session ON external_contacts(user_id, sync_session_id);
-
-CREATE INDEX IF NOT EXISTS idx_external_contacts_user ON external_contacts(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_extracted_data_field ON extracted_transaction_data(field_name);
-
-CREATE INDEX IF NOT EXISTS idx_extracted_data_transaction ON extracted_transaction_data(transaction_id);
-
-CREATE INDEX IF NOT EXISTS idx_failure_log_acknowledged ON failure_log(acknowledged);
-
-CREATE INDEX IF NOT EXISTS idx_failure_log_timestamp ON failure_log(timestamp);
-
-CREATE INDEX IF NOT EXISTS idx_feedback_message ON classification_feedback(message_id);
-
-CREATE INDEX IF NOT EXISTS idx_feedback_type ON classification_feedback(feedback_type);
-
-CREATE INDEX IF NOT EXISTS idx_feedback_user ON classification_feedback(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_ignored_comms_email_id ON ignored_communications(email_id, transaction_id) WHERE email_id IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_ignored_comms_thread_id ON ignored_communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction ON ignored_communications(transaction_id);
-
-CREATE INDEX IF NOT EXISTS idx_ignored_comms_user_email ON ignored_communications(user_id, email_sender, email_subject, email_sent_at);
-
-CREATE INDEX IF NOT EXISTS idx_llm_settings_user ON llm_settings(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_message_thread_names_thread
-  ON message_thread_names(thread_id);
-
-CREATE INDEX IF NOT EXISTS idx_messages_assoc_guid ON messages(associated_message_guid) WHERE associated_message_type IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel);
-
-CREATE INDEX IF NOT EXISTS idx_messages_content_hash ON messages(content_hash);
-
-CREATE INDEX IF NOT EXISTS idx_messages_duplicate_of ON messages(duplicate_of);
-
-CREATE INDEX IF NOT EXISTS idx_messages_external_id ON messages(external_id);
-
-CREATE INDEX IF NOT EXISTS idx_messages_is_transaction_related ON messages(is_transaction_related);
-
-CREATE INDEX IF NOT EXISTS idx_messages_message_id_header ON messages(message_id_header);
-
-CREATE INDEX IF NOT EXISTS idx_messages_participants_flat ON messages(participants_flat);
-
-CREATE INDEX IF NOT EXISTS idx_messages_sent_at ON messages(sent_at);
-
-CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id);
-
-CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
-
-CREATE INDEX IF NOT EXISTS idx_messages_transaction_id ON messages(transaction_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_user_external_id ON messages(user_id, external_id) WHERE external_id IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_messages_user_sent ON messages(user_id, sent_at);
-
-CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_provider ON oauth_tokens(user_id, provider, purpose);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_email
-             ON pending_review_communications(transaction_id, email_id)
-           WHERE email_id IS NOT NULL;
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_thread
-             ON pending_review_communications(transaction_id, thread_id)
-           WHERE thread_id IS NOT NULL;
-
-CREATE INDEX IF NOT EXISTS idx_phone_last_msg_user ON phone_last_message(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(session_token);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_stage_history_changed_at ON transaction_stage_history(changed_at);
-
-CREATE INDEX IF NOT EXISTS idx_stage_history_transaction ON transaction_stage_history(transaction_id);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_contacts_category ON transaction_contacts(role_category);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_contacts_contact ON transaction_contacts(contact_id);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_contacts_primary ON transaction_contacts(is_primary);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_contacts_role ON transaction_contacts(role);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_contacts_specific_role ON transaction_contacts(specific_role);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_contacts_transaction ON transaction_contacts(transaction_id);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_participants_contact ON transaction_participants(contact_id);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_participants_role ON transaction_participants(role);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_participants_transaction ON transaction_participants(transaction_id);
-
-CREATE INDEX IF NOT EXISTS idx_transaction_unlocks_cache_user
-            ON transaction_unlocks_cache(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_export_status ON transactions(export_status);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_last_exported_on ON transactions(last_exported_on);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_property_address ON transactions(property_address);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_stage ON transactions(stage);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_submission_id ON transactions(submission_id);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_submission_status ON transactions(submission_status);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
-
-CREATE INDEX IF NOT EXISTS idx_users_local_email ON users_local(email);
-
-CREATE INDEX IF NOT EXISTS idx_users_local_license_type ON users_local(license_type);
-
-CREATE INDEX IF NOT EXISTS idx_users_local_organization ON users_local(organization_id);
-
-CREATE TRIGGER IF NOT EXISTS communications_email_thread_required
-BEFORE INSERT ON communications
-FOR EACH ROW
-WHEN NEW.email_id IS NOT NULL
-  AND NULLIF(NEW.thread_id, '') IS NULL
-  AND NULLIF((SELECT thread_id FROM emails WHERE id = NEW.email_id), '') IS NOT NULL
-BEGIN
-  SELECT RAISE(ABORT, 'communications.thread_id required: linked email has a thread_id (BACKLOG-1768)');
-END;
-
-CREATE TRIGGER IF NOT EXISTS prevent_audit_delete
-          BEFORE DELETE ON audit_logs
-          BEGIN
-            SELECT RAISE(ABORT, 'Audit logs cannot be deleted');
-          END;
-
-CREATE TRIGGER IF NOT EXISTS prevent_audit_update
-          BEFORE UPDATE ON audit_logs
-          BEGIN
-            SELECT RAISE(ABORT, 'Audit logs cannot be modified');
-          END;
-
-CREATE TRIGGER IF NOT EXISTS update_contacts_timestamp
+CREATE TRIGGER update_contacts_timestamp
           AFTER UPDATE ON contacts
           BEGIN
             UPDATE contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
           END;
-
-CREATE TRIGGER IF NOT EXISTS update_llm_settings_timestamp
+CREATE TRIGGER update_llm_settings_timestamp
 AFTER UPDATE ON llm_settings
 BEGIN
   UPDATE llm_settings SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
-
-CREATE TRIGGER IF NOT EXISTS update_oauth_tokens_timestamp
+CREATE TRIGGER update_oauth_tokens_timestamp
 AFTER UPDATE ON oauth_tokens
 BEGIN
   UPDATE oauth_tokens SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
-
-CREATE TRIGGER IF NOT EXISTS update_transaction_contacts_timestamp
+CREATE TRIGGER update_transaction_contacts_timestamp
 AFTER UPDATE ON transaction_contacts
 BEGIN
   UPDATE transaction_contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
-
-CREATE TRIGGER IF NOT EXISTS update_transaction_participants_timestamp
+CREATE TRIGGER update_transaction_participants_timestamp
 AFTER UPDATE ON transaction_participants
 BEGIN
   UPDATE transaction_participants SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
-
-CREATE TRIGGER IF NOT EXISTS update_transactions_timestamp
+CREATE TRIGGER update_transactions_timestamp
 AFTER UPDATE ON transactions
 BEGIN
   UPDATE transactions SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
-
-CREATE TRIGGER IF NOT EXISTS update_users_local_timestamp
+CREATE TRIGGER update_users_local_timestamp
 AFTER UPDATE ON users_local
 BEGIN
   UPDATE users_local SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
-
--- Initialize schema version if not exists.
--- Version 70: the post-reset baseline (BACKLOG-2993). This file IS the
--- v69-chain shape, declared as version 70 so that the baseline fence in
--- databaseService accepts only databases built from this file — and refuses
--- every database the deleted migration chain ever touched.
-INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 70);
 
 COMMIT;

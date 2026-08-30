@@ -156,10 +156,6 @@ const SCHEMA_PATH = path.join(__dirname, "../../../database/schema.sql");
 
 /** Migration v56's exact DDL — see the file header for the source it came from. */
 const V56_TOMBSTONE_DDL = [
-  "ALTER TABLE contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE contacts ADD COLUMN removed_reason TEXT",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT",
 ];
 
 /** Every junction row on a transaction, tombstoned or not — read RAW. */

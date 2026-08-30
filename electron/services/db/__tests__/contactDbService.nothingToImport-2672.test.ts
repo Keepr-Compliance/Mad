@@ -86,10 +86,6 @@ const SCHEMA_PATH = path.join(__dirname, "../../../database/schema.sql");
  * without these columns fails the query outright rather than testing anything.
  */
 const V56_TOMBSTONE_DDL = [
-  "ALTER TABLE contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE contacts ADD COLUMN removed_reason TEXT",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT",
 ];
 
 /**
@@ -100,8 +96,6 @@ const V56_TOMBSTONE_DDL = [
  * two ALTERs appear in `contact-handlers.universalLinking.test.ts:179-180`.
  */
 const EXTERNAL_CONTACTS_MIGRATION_DDL = [
-  "ALTER TABLE external_contacts ADD COLUMN external_uuid TEXT",
-  "ALTER TABLE external_contacts ADD COLUMN source_identity_json TEXT",
 ];
 
 /**

@@ -49,10 +49,6 @@ const USER = "user-2804";
 
 /** The two columns migration v56 appends, applied with v56's exact DDL. */
 const V56_TOMBSTONE_DDL = [
-  "ALTER TABLE contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE contacts ADD COLUMN removed_reason TEXT",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT",
 ];
 
 function addContact(id: string, displayName: string): void {
