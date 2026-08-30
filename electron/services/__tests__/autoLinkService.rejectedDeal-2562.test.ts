@@ -192,6 +192,20 @@ function createSchema(database: DatabaseType): void {
       original_communication_id TEXT
     );
 
+    -- BACKLOG-2880: linkEmailToTransaction now asks the review store whether a
+    -- human has already been asked to rule on this email. The table is created
+    -- by migration v65, so every shipped database has it; a fixture without it
+    -- describes a state the app cannot be in, and its absence here made the
+    -- whole auto-link pass throw into its own catch and link nothing.
+    CREATE TABLE pending_review_communications (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      transaction_id TEXT NOT NULL,
+      email_id TEXT,
+      thread_id TEXT,
+      found_at DATETIME
+    );
+
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
       user_id TEXT,
