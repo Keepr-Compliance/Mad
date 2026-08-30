@@ -327,6 +327,20 @@ function parser(): {
 const sentSignal = (proc: FakeProcess, signal: string): boolean =>
   proc.kill.mock.calls.some((c) => c[0] === signal);
 
+/**
+ * BACKLOG-2915: rows that assert a SIGKILL ESCALATION are POSIX-only.
+ *
+ * `killZombieProcess` installs its escalation timer inside
+ * `if (process.platform !== "win32")`, and correctly so: on Windows node's SIGTERM is
+ * `TerminateProcess`, which has already hard-killed the process, so there is nothing
+ * to escalate to and no timer to observe. CI runs this suite on macOS AND Windows.
+ *
+ * Only the row that asserts a SIGKILL is SENT is skipped. The rows asserting a SIGKILL
+ * is NOT sent, the safety-net timing, and the constant ordering all run everywhere,
+ * because none of them depends on that timer existing.
+ */
+const itPosix = process.platform === "win32" ? it.skip : it;
+
 /** Advances fake time in steps so intervals get a chance to run. */
 async function advance(totalMs: number, stepMs = 10_000): Promise<void> {
   for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
@@ -976,7 +990,7 @@ describe("BACKLOG-2915 row 23 — the kill path waits for the flush it depends o
     expect(state.isRunning).toBe(false);
   });
 
-  it("ROW 23c — the watchdog's SIGKILL escalation actually runs (mutation: restore `!proc.killed`)", async () => {
+  itPosix("ROW 23c — the watchdog's SIGKILL escalation actually runs (mutation: restore `!proc.killed`)", async () => {
     // THE DEAD GUARD. `killZombieProcess` sent SIGTERM and then guarded its SIGKILL
     // with `!this.currentProcess.killed` — which node had already set to true on that
     // SIGTERM one line earlier. The escalation was unreachable for as long as it has
