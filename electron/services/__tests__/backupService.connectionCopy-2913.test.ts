@@ -139,6 +139,18 @@ import {
  * TRANSCRIBED verbatim from main.log lines 11551-11558, the founder's 2026-08-28
  * unplug at 12:08:53.319. This is the whole evidence the classifier gets: the device
  * never answers once the link is gone, so there is no plist and no `ErrorCode` line.
+ *
+ * BACKLOG-2915 — **PRODUCTION CAN NO LONGER PRODUCE THIS INPUT.** Every line here is
+ * `debug_info()` output, gated on `debug_level`, which only `-d` sets, and
+ * `buildBackupArgs` no longer passes `-d`. It is kept as a historical fixture because
+ * the file's real subject — WHICH SENTENCE a link drop gets, and that the split turns
+ * on `transferStarted` rather than on a byte count — is unchanged and still worth
+ * pinning. But the classification these tests exercise is now reached by the D1
+ * INFERENCE RUNG (non-zero exit, no device code, no version-exchange), not by matching
+ * the broken-pipe line: measured, replacing `CONNECTION_DROPPED_PATTERN` with a
+ * never-matching regex leaves this whole suite green.
+ *
+ * Do not read this fixture as evidence that the stderr path is live. It is not.
  */
 const UNPLUGGED_MID_TRANSFER_STDERR = [
   "12:08:53.318 notification_proxy.c:278 np_get_notification(): NotificationProxy: error -256 occurred!",
@@ -384,7 +396,14 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
       );
 
       expect(state.hasReceivedFileProgress).toBe(true);
-      expect(state.bytesTransferred).toBeGreaterThan(0);
+      // BACKLOG-2915 (SR C1): THIS ASSERTION USED TO READ `toBeGreaterThan(0)`, AND IT
+      // COULD NOT SEE THE THING THE COMMENT ABOVE PROMISES. The fold produces 597.2 MB
+      // (585.2 banked + 12.0 in the newly-opened batch); a `bytesTransferred = current`
+      // regression produces 12.0 MB. Both are greater than zero, so four separate
+      // mutations to the batch-fold logic left the entire suite green. A test comment
+      // that promises a future red is a second claim needing its own control, and the
+      // control has to be the VALUE, never a floor.
+      expect(state.bytesTransferred).toBeCloseTo(597.2 * 1024 * 1024, 0);
       expect(result.success).toBe(false);
       expect(result.errorCode).toBe("CONNECTION_LOST");
       expect(result.error).toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);

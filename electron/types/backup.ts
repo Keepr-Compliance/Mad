@@ -187,10 +187,22 @@ export interface BackupFailureCause {
  * - `stderr-plist` — the `DLMessageProcessMessage` plist in the `-d` debug stream.
  *   Only present when `-d` is passed, and can be pushed out of the tail cap by the
  *   debug flood, so it is the fallback rather than the primary.
+ * - `stdout-summary` — BACKLOG-2915. The number inside idevicebackup2's closing
+ *   `Backup Failed (Error Code %d).` line. It carries no description, so it ranks
+ *   BELOW `stdout-line` and is latched only when no richer line was seen. It exists
+ *   because the two lines co-occurring is OBSERVED, not proven: the founder's
+ *   2026-08-27 log shows both for code 208, and idevicebackup2 1.4.0 was not traced
+ *   far enough to establish that they always do. Without this, a run that printed only
+ *   the summary would lose its code entirely and fall to the inference rung — telling
+ *   a user with a device-reported file-missing error to try a different cable.
  * - `none` — no code was reported; the failure was classified from exit code and
  *   idevicebackup2's own stdout, or not at all.
  */
-export type BackupFailureCauseSource = "stdout-line" | "stderr-plist" | "none";
+export type BackupFailureCauseSource =
+  | "stdout-line"
+  | "stderr-plist"
+  | "stdout-summary"
+  | "none";
 
 /**
  * BACKLOG-2917: the result of measuring a backup directory.

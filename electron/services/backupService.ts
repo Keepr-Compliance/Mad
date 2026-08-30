@@ -286,6 +286,11 @@ const DL_ERROR_DESCRIPTION = /<key>ErrorDescription<\/key>\s*<string>([\s\S]*?)<
  * as `np_lock(): Locked`. Treating it as a link-drop signal would rebuild this exact
  * bug one rung further down.
  */
+/**
+ * BACKLOG-2915: this pattern is UNREACHABLE under the shipped argv. See the ordering
+ * note in {@link classifyBackupFailure} for why it is kept rather than deleted, and
+ * where the link-drop class is decided instead.
+ */
 const CONNECTION_DROPPED_PATTERN = /usbmuxd_send returned -\d+ \(Broken pipe\)/i;
 const SERVICE_VERSION_EXCHANGE_PATTERN =
   /version exchange failed|Could not perform backup protocol version exchange/i;
@@ -461,18 +466,32 @@ function describeUnmappedDeviceError(
  * rung matched on every single failure and the `disk`, `trust` and `password` rungs
  * below it were unreachable.
  *
- * The `-d` stream is not excluded outright, and saying so would mislead a future
- * reader into breaking the thing that makes reading it safe. TWO anchored patterns
- * — `SERVICE_VERSION_EXCHANGE_PATTERN` and `CONNECTION_DROPPED_PATTERN` — do run
- * against stderr, because in the exit-255 class the device never answers and the
- * debug stream is the only evidence that exists. Both are gated behind
- * `deviceErrorCode === null`: they are consulted only when the device reported no
- * code at all, and can never override a code the device did report. That ordering is
- * load-bearing — `usbmuxd_send returned -32 (Broken pipe)` is teardown chatter that
- * appears in four of the five real failures of 2026-08-27, INCLUDING the one that
- * was genuinely a locked phone. Reordering either check above the device-code switch
- * would tell that user to try a different cable. `backupService.failureCause-2913`
- * pins it.
+ * BACKLOG-2915 — READ THIS BEFORE TRUSTING THE STDERR ARMS BELOW. Two anchored
+ * patterns still run against stderr, and after the `-d` removal **one of them can no
+ * longer fire in production**:
+ *
+ *   `SERVICE_VERSION_EXCHANGE_PATTERN` — ALIVE, via its STDOUT arm.
+ *       `printf("Could not perform backup protocol version exchange, error code %d\n")`
+ *       at idevicebackup2.c:1917 is unconditional. Its stderr copy is gone with `-d`.
+ *
+ *   `CONNECTION_DROPPED_PATTERN` — **UNREACHABLE UNDER THE SHIPPED ARGV.**
+ *       `usbmuxd_send returned -N (Broken pipe)` is `debug_info()` output
+ *       (src/idevice.c:643), gated on `debug_level`, which only `-d` sets — and it is
+ *       never printed on stdout. `buildBackupArgs` no longer passes `-d`, so no run can
+ *       produce this line. The rung is KEPT because it is correct and free if `-d` ever
+ *       returns, but it decides nothing today: the USB link-drop class is now reached by
+ *       the D1 INFERENCE RUNG at the bottom of this function, not by reading this line.
+ *       Measured: replacing the pattern with a never-matching regex leaves the whole
+ *       backup suite green.
+ *
+ * Both stderr arms are gated behind `deviceErrorCode === null`: consulted only when the
+ * device reported no code at all, never able to override one it did report. That
+ * ordering is load-bearing and survives unchanged — `usbmuxd_send returned -32 (Broken
+ * pipe)` was teardown chatter present in four of the five real failures of 2026-08-27,
+ * INCLUDING the one that was genuinely a locked phone, and the same is true of the
+ * inference rung that replaced it. Reordering either above the device-code switch tells
+ * that user to try a different cable. `backupService.failureCause-2913` and
+ * `stdoutProgress-2915` ROW 17 pin it.
  *
  * `transferStarted` carries the one thing the streams cannot say: whether any file
  * transfer had begun when the link died. It changes NO classification — only which
@@ -2006,6 +2025,9 @@ export class BackupService extends EventEmitter {
   /** `ErrorCode 208: Device locked (MBErrorDomain/208)` — `printf` at :2500, unconditional. */
   private static readonly STDOUT_ERROR_CODE_LINE = /^[ \t]*ErrorCode[ \t]+(\d+):[ \t]*(.*)$/;
 
+  /** `Backup Failed (Error Code 208).` — the closing summary. Secondary source; see below. */
+  private static readonly STDOUT_FAILED_SUMMARY = /Backup Failed \(Error Code (\d+)\)/;
+
   /** `*** Waiting for passcode to be entered on the device ***` — iOS >= 16.1 only, :2055-2063. */
   private static readonly PASSCODE_PROMPT_LINE =
     "*** Waiting for passcode to be entered on the device ***";
@@ -2213,6 +2235,22 @@ export class BackupService extends EventEmitter {
     }
     if (line.includes("Backup Failed")) {
       this.deviceOutcomeLine = "failed";
+      // BACKLOG-2915 (SR I3): the closing summary carries the device's code too, and
+      // until now the number was thrown away. It is a SECONDARY source — no
+      // description, and only read when no `ErrorCode N: <desc>` line was latched, so
+      // the richer line always wins. The gap it closes is small but real: the two lines
+      // co-occurring is OBSERVED (the founder's 2026-08-27 log, code 208) rather than
+      // proven, and a run that printed only the summary would otherwise lose its code
+      // and drop to the inference rung — a device-reported `4` answered with cable
+      // advice.
+      const summaryCode = BackupService.STDOUT_FAILED_SUMMARY.exec(line);
+      if (summaryCode && this.latchedDeviceError === null) {
+        this.latchedDeviceError = {
+          deviceErrorCode: Number.parseInt(summaryCode[1], 10),
+          deviceErrorDescription: null,
+          source: "stdout-summary",
+        };
+      }
       log.error(`[BackupService] idevicebackup2 reported: ${line.trim()}`);
       return null;
     }

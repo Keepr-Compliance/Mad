@@ -403,6 +403,102 @@ describe("BACKLOG-2915 rows 3-7, 12-14, 24 — reading the progress renders", ()
     expect(progress!.totalBytes).toBeNull();
   });
 
+  it("ROW 3b — the fold happens on a TOTAL CHANGE (mutation: delete the `openBatch` call)", () => {
+    // C1. The device supplies a fresh total on every `DLMessageUploadFiles`, and the
+    // capture recorded 36 distinct batch totals in one run — so a changed total IS a
+    // batch boundary and the previous batch's bytes belong in the run total.
+    //
+    // This row exists because `openBatch` and `closeBatch` are MUTUALLY REDUNDANT by
+    // design: with two different totals, deleting the `Receiving files` fold still
+    // leaves `openBatch` to catch the boundary. That redundancy is what made all four
+    // fold mutations survive the old suite, and it is why this row deliberately drives
+    // NO `Receiving files` line — it isolates `openBatch`.
+    // Every render below needs the NEXT one to terminate it — a render carries no
+    // newline of its own — so the parser is always one behind and the sequence runs one
+    // render past the state being asserted.
+    const p = parser();
+    p.chunk(byteRender(48, "24.2 MB", "50.8 MB"));
+    p.chunk(byteRender(99, "50.3 MB", "50.8 MB"));
+    // A new batch opens: a different total, and the current restarts low.
+    p.chunk(byteRender(1, "60.0 MB", "4.3 GB"));
+    p.chunk(byteRender(48, "2.1 GB", "4.3 GB"));
+    const progress = p.chunk(byteRender(49, "2.2 GB", "4.3 GB"));
+
+    expect(progress).not.toBeNull();
+    // The open batch is batch two…
+    expect(progress!.batchBytesTransferred).toBeCloseTo(2.1 * 1024 ** 3, 0);
+    expect(progress!.batchTotalBytes).toBeCloseTo(4.3 * 1024 ** 3, 0);
+    // …and the RUN total is batch one's last reading PLUS it. Asserted by identity, not
+    // as a floor: `bytesTransferred = current` alone would give 2.1 GB and pass any
+    // `> 0` or `> batchBytesTransferred` check.
+    expect(progress!.bytesTransferred).toBeCloseTo(
+      50.3 * 1024 * 1024 + 2.1 * 1024 ** 3,
+      0,
+    );
+  });
+
+  it("ROW 3c — the fold also happens on `Receiving files` (mutation: delete that `closeBatch()`)", () => {
+    // The paired isolation. Here the two batches share a total and the current RISES
+    // across the boundary, so `openBatch` sees nothing to fold — only the
+    // `Receiving files` line marks it. Delete that fold and the run total silently
+    // becomes the current batch's, which is the exact shape of the bug this PR removes.
+    //
+    // SYNTHETIC in one respect, and labelled: all 36 batch totals in the capture were
+    // distinct, so two consecutive batches sharing a total was not observed. The row
+    // exists precisely so the boundary signal does not depend on the totals differing.
+    // The trailing `\n` on the first render is `print_progress`'s own end-of-batch
+    // flush, exactly as the capture shows it: `...48% (2.1 GB/4.3 GB)     <LF>` and only
+    // then the next line. Without it the unterminated render and `Receiving files`
+    // concatenate into one line — which is what the splitter is for, and is why the
+    // fixture has to carry the real byte.
+    const p = parser();
+    p.chunk(byteRender(48, "24.2 MB", "50.8 MB") + "\n");
+    p.chunk("Receiving files\n");
+    p.chunk(byteRender(59, "30.0 MB", "50.8 MB"));
+    const progress = p.chunk(byteRender(60, "30.5 MB", "50.8 MB"));
+
+    expect(progress).not.toBeNull();
+    expect(progress!.batchBytesTransferred).toBeCloseTo(30.0 * 1024 * 1024, 0);
+    expect(progress!.bytesTransferred).toBeCloseTo(
+      (24.2 + 30.0) * 1024 * 1024,
+      0,
+    );
+  });
+
+  it("ROW 3d — the run total never regresses across a whole multi-batch run", () => {
+    // The invariant behind both rows above, asserted over a sequence rather than at a
+    // point: `bytesTransferred` is what the founder will be looking at, and a bar that
+    // walks backwards mid-sync is what the old per-file heuristic produced.
+    const p = parser();
+    const script = [
+      byteRender(10, "5.0 MB", "50.8 MB"),
+      byteRender(48, "24.2 MB", "50.8 MB") + "\n", // end-of-batch flush
+      "Receiving files\n",
+      byteRender(1, "262.1 KB", "4.3 GB"),
+      byteRender(48, "2.1 GB", "4.3 GB") + "\n", // end-of-batch flush
+      "Receiving files\n",
+      byteRender(3, "79 Bytes", "64.0 KB"),
+      byteRender(99, "63.5 KB", "64.0 KB"),
+      byteRender(99, "63.6 KB", "64.0 KB"),
+    ];
+
+    const totals: number[] = [];
+    for (const chunk of script) {
+      const progress = p.chunk(chunk);
+      if (progress) totals.push(progress.bytesTransferred);
+    }
+
+    expect(totals.length).toBeGreaterThan(3);
+    for (let i = 1; i < totals.length; i += 1) {
+      expect(totals[i]).toBeGreaterThanOrEqual(totals[i - 1]);
+    }
+    // And the end state is the sum of what each batch actually reached, by identity.
+    expect(totals[totals.length - 1]).toBeCloseTo(
+      24.2 * 1024 * 1024 + 2.1 * 1024 ** 3 + 63.5 * 1024,
+      0,
+    );
+  });
+
   it("ROW 4 — `% Finished` is a DIFFERENT number (mutation: route it to the byte handler)", () => {
     // The capture's own contradiction, in two lines: the byte bar read 48% while the
     // overall bar read 94%, in the same second. Parsing them as one number is the bug.
@@ -414,6 +510,39 @@ describe("BACKLOG-2915 rows 3-7, 12-14, 24 — reading the progress renders", ()
     expect(progress!.deviceOverallPercent).toBe(94);
     // The byte figures are untouched by an overall render.
     expect(progress!.batchTotalBytes).toBeCloseTo(4.3 * 1024 * 1024 * 1024, 0);
+  });
+
+  it("ROW 4b — the overall render is anchored at both ends (mutation: drop the `$`)", () => {
+    // Defensive, and cheap. `Content:` (idevicebackup2.c:2508-2513) printfs arbitrary
+    // DEVICE-SUPPLIED text on this stream, so neither render pattern may match a line
+    // that merely starts the right way. The `^` is pinned by ROW 14/24; this is its
+    // other end.
+    const p = parser();
+    p.chunk("\r[=      ]  42% Finished and then some device text\r");
+    p.chunk(byteRender(1, "1.0 MB", "50.8 MB"));
+    const after = p.chunk(byteRender(2, "2.0 MB", "50.8 MB"));
+    expect(after).not.toBeNull();
+    expect(after!.deviceOverallPercent).toBeNull();
+  });
+
+  it("ROW 4c — `% Finished` before any bytes move is PREPARING, not transferring", () => {
+    // User-reachable. The capture's very first overall render is `0% Finished`, and it
+    // arrives BEFORE `Receiving files` and before any byte render — the device is
+    // reporting, nothing has been received. Collapsing this to a constant
+    // `"transferring"` would report a transfer during the preparing stage, which is the
+    // class of lie BACKLOG-2911 FIX 3 already had to correct once.
+    const before = parser();
+    const early = before.chunk(overallRender(0));
+    expect(early).not.toBeNull();
+    expect(early!.phase).toBe("preparing");
+
+    // …and once bytes have actually moved, the same line is transferring.
+    const after = parser();
+    after.chunk(byteRender(1, "262.1 KB", "50.8 MB"));
+    after.chunk(byteRender(2, "525.0 KB", "50.8 MB"));
+    const later = after.chunk(overallRender(17));
+    expect(later).not.toBeNull();
+    expect(later!.phase).toBe("transferring");
   });
 
   it("ROW 5 — a render split across two chunks survives (mutation: remove the partial buffer)", () => {
@@ -662,6 +791,84 @@ describe("BACKLOG-2915 row 15 — the three outcome lines are three different th
       outcomeOf("Backup Failed (Error Code 208)."),
     ]);
     expect(distinct.size).toBe(3);
+  });
+});
+
+describe("BACKLOG-2915 rows 15b, 25-26 — the summary code and the two numbers that change", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("ROW 15b — the closing summary's code is latched when nothing richer was seen", async () => {
+    // SR I3. `Backup Failed (Error Code 4).` carries the device's number and it used to
+    // be discarded, so a run that printed the summary WITHOUT the per-message
+    // `ErrorCode 4: <desc>` line lost its code and dropped to the inference rung — a
+    // device-reported file-missing error answered with "try a different cable".
+    //
+    // STATED AS INFERRED, NOT ESTABLISHED: the founder's 2026-08-27 log shows the two
+    // lines together for 208, and idevicebackup2 1.4.0 was not traced far enough to
+    // prove they always co-occur. This closes the gap either way.
+    const { result } = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from("Backup Failed (Error Code 4).\n"));
+      proc.close(252);
+    });
+
+    expect(result.errorCode).toBe("BACKUP_FILE_MISSING");
+    expect(result.failureCause?.deviceErrorCode).toBe(4);
+    expect(result.failureCause?.source).toBe("stdout-summary");
+    // No description is available from the summary, and none is invented.
+    expect(result.failureCause?.deviceErrorDescription).toBeNull();
+  });
+
+  it("ROW 15c — the richer `ErrorCode` line outranks the summary (mutation: latch the summary unconditionally)", async () => {
+    // The ordering control. Both lines are present, as they were in the founder's real
+    // 2026-08-27 block, and the one carrying the device's own words must win.
+    const { result } = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from(lockedDeviceStdout(true)));
+      proc.close(48);
+    });
+
+    expect(result.failureCause?.source).toBe("stdout-line");
+    expect(result.failureCause?.deviceErrorDescription).toBe(
+      "Device locked (MBErrorDomain/208)",
+    );
+  });
+
+  it("ROW 25 — `filesTransferred` is 0 all run and then the DEVICE'S count", async () => {
+    // A USER-VISIBLE CHANGE the founder should expect before he tests, and the direction
+    // is DOWN for most of a sync. The old percent-drop heuristic showed a growing count
+    // that was wrong — it incremented once per BATCH, so the captured run would have
+    // reported 29 against the device's 4,604. There is no per-file signal on this
+    // stream, so the honest answer is 0 until the device says, then its number.
+    const { progress } = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from(FIRST_CHUNK));
+      proc.stdout.emit("data", Buffer.from(byteRender(48, "24.2 MB", "50.8 MB")));
+      proc.stdout.emit("data", Buffer.from(byteRender(49, "24.9 MB", "50.8 MB")));
+      proc.stdout.emit("data", Buffer.from(FINAL_ABORT_FLUSH));
+      proc.close(255);
+    });
+
+    const transferring = progress.filter((p) => p.phase === "transferring");
+    expect(transferring.length).toBeGreaterThan(0);
+    // Not one of them claims a file count while the transfer is running…
+    expect(transferring.every((p) => p.filesTransferred === 0)).toBe(true);
+    // …and the device's own number is what finally appears.
+    expect(progress.some((p) => p.filesTransferred === 4604)).toBe(true);
+  });
+
+  it("ROW 26 — `isIncremental` now comes from the device, against the directory heuristic", async () => {
+    // The second user-visible change, and it moves a Sentry tag and the value
+    // `deviceService` returns. In this suite `fs.stat` rejects, so no previous backup
+    // exists and the OLD derivation (`previousBackupExists && !forceFullBackup`) says
+    // FALSE. The device says incremental. Before BACKLOG-2915 the device's answer was
+    // read off stderr, where idevicebackup2 never writes it, so the heuristic always
+    // won — including on the 61.2 GB run that it got wrong.
+    const { result } = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from("Incremental backup mode.\n"));
+      proc.stdout.emit("data", Buffer.from("Backup Successful.\n"));
+      proc.close(0);
+    });
+
+    expect(result.deviceReportedBackupMode).toBe("incremental");
+    expect(result.isIncremental).toBe(true); // the heuristic would have said false
   });
 });
 
