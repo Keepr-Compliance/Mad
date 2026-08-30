@@ -169,21 +169,45 @@ export const BACKUP_DEVICE_LOCKED_MESSAGE =
   "while the sync runs.";
 
 /**
- * BACKLOG-2913: the USB link dropped BEFORE any file transfer began. Exit 255 with
- * `usbmuxd_send returned -32 (Broken pipe)`, and no progress line ever seen.
+ * The backup stopped BEFORE any file transfer began, and nothing said why.
  *
- * Hardware-first advice is correct HERE and only here. A link that dies before the
- * first progress bar died during enumeration, pairing or the passcode wait — the
- * stage at which a bad cable, a flaky port, a hub or a dock genuinely is the most
- * likely cause.
+ * BACKLOG-2915 REWROTE THIS SENTENCE, AND THE REASON IS THAT THE BRANCH BELOW IT
+ * CHANGED MEANING. It used to be reached only by reading
+ * `usbmuxd_send returned -32 (Broken pipe)` off the `-d` debug stream, so it really
+ * was a dropped USB link and hardware-first advice was correct. That line does not
+ * exist any more (see {@link CONNECTION_DROPPED_PATTERN}), and this message is now
+ * reached by INFERENCE — a non-zero exit with no device code, no version-exchange
+ * match, no disk-full and no cancel.
  *
- * See {@link BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE} for what happens once
- * bytes have moved, and why the same sentence there was wrong.
+ * Several common causes land in that shape and are NOT link drops. From the string
+ * table of the binary this app executes:
+ *
+ *   - `Could not connect to lockdownd` — the iPhone is not trusted, not paired, or
+ *     locked at connect. This is the frequent one.
+ *   - `Could not start service com.apple.mobilebackup2`
+ *   - `device refused to start the backup process` / `backup protocol version
+ *     mismatch` — note neither is matched by SERVICE_VERSION_EXCHANGE_PATTERN.
+ *   - `Backup directory "…" is invalid. No Info.plist found` — reachable after a
+ *     partial reset.
+ *
+ * All of those happen before a single byte moves, so all of them take this arm. The
+ * old sentence opened by asserting the connection dropped and led with "Try a
+ * different cable", which sent a user whose iPhone simply was not trusted hunting for
+ * a hardware fault.
+ *
+ * FOUNDER-CHOSEN WORDING, 2026-08-30, picked knowingly over a longer variant that kept
+ * the cable advice. It claims only what is known, and it leads with the two causes
+ * that are far more likely than a cable — locked, and not trusted. Do not add hardware
+ * advice back; `backupService.connectionCopy-2913` pins the exact string.
+ *
+ * See {@link BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE} for the other arm, which is
+ * unchanged: once bytes have moved the link demonstrably worked, so asserting a
+ * dropped connection there is still true.
  */
 export const BACKUP_CONNECTION_LOST_MESSAGE =
-  "The connection to your iPhone dropped during the backup. Try a different cable, " +
-  "plug the iPhone straight into this Mac without a hub or dock, then sync again. " +
-  "If it keeps dropping, restart your iPhone.";
+  "We couldn't get the backup going, and your iPhone didn't tell us why. Start by " +
+  "unlocking it and tapping Trust This Computer if you're asked. If that's not it, " +
+  "plug it straight into your Mac and try again.";
 
 /**
  * BACKLOG-2913: the USB link dropped AFTER file transfer had begun. Same exit code,

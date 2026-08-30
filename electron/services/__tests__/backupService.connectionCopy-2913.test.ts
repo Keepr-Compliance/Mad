@@ -33,6 +33,7 @@
  *   `usbmuxd_send returned -32 (Broken pipe)` at 12:08:53.319.
  * - **line 11607** — the renderer printing the defect itself: `Sync failed: The
  *   connection to your iPhone dropped during the backup. Try a different cable...`
+ *   (HISTORICAL. BACKLOG-2915 replaced that sentence — see the copy tests below.)
  *
  * The progress-bar lines are the ONE fixture here that is not a capture, and it is
  * not one because it cannot be: backupService filters progress bars out of the log
@@ -300,12 +301,51 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
   });
 
   describe("the two cases are different faults", () => {
-    it("a drop before any transfer keeps the hardware-first advice", () => {
-      // Correct here: a link that dies before the first progress bar died during
-      // enumeration, pairing or the passcode wait, and hardware really is the
-      // likeliest cause at that stage.
-      expect(BACKUP_CONNECTION_LOST_MESSAGE).toMatch(/try a different cable/i);
-      expect(BACKUP_CONNECTION_LOST_MESSAGE.split(". ")[1]).toMatch(/cable/i);
+    it("BACKLOG-2915 — the before-transfer message is the founder's exact wording", () => {
+      // PINNED WHOLE, on purpose. This is founder-chosen copy of 2026-08-30, picked
+      // knowingly over a longer variant that kept the cable advice, so the control is
+      // the string itself rather than a set of clauses that a later edit could satisfy
+      // while drifting the sentence.
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).toBe(
+        "We couldn't get the backup going, and your iPhone didn't tell us why. " +
+          "Start by unlocking it and tapping Trust This Computer if you're asked. " +
+          "If that's not it, plug it straight into your Mac and try again.",
+      );
+    });
+
+    it("BACKLOG-2915 — it no longer asserts a dropped connection, and no longer sends anyone after a cable", () => {
+      // THE ASSERTION THIS FILE USED TO MAKE HERE WAS THE OPPOSITE, AND IT WAS RIGHT
+      // AT THE TIME. This arm was reached only by reading
+      // `usbmuxd_send returned -32 (Broken pipe)` off the `-d` debug stream, so it
+      // really was a dropped USB link and hardware-first advice was correct.
+      //
+      // BACKLOG-2915 removed `-d`, so that line no longer exists and the arm is now
+      // reached by INFERENCE — a non-zero exit with no device code. Causes that land
+      // in that shape and are NOT link drops, from the binary's own string table:
+      // `Could not connect to lockdownd` (not trusted, not paired, or locked — the
+      // common one), `Could not start service com.apple.mobilebackup2`, `device
+      // refused to start the backup process`, `backup protocol version mismatch`, and
+      // an invalid backup directory. All of them happen before a byte moves, so all of
+      // them take this arm.
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).not.toMatch(/cable/i);
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).not.toMatch(/connection .*dropped/i);
+      // It says what is actually known, and leads with the two likeliest causes.
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).toMatch(/didn't tell us why/i);
+      const unlockAt = BACKUP_CONNECTION_LOST_MESSAGE.indexOf("unlocking it");
+      const trustAt = BACKUP_CONNECTION_LOST_MESSAGE.indexOf("Trust This Computer");
+      const plugAt = BACKUP_CONNECTION_LOST_MESSAGE.indexOf("plug it straight");
+      expect(unlockAt).toBeGreaterThan(0);
+      expect(trustAt).toBeGreaterThan(unlockAt);
+      expect(plugAt).toBeGreaterThan(trustAt);
+    });
+
+    it("the mid-transfer message DOES still assert a dropped connection, and is unchanged", () => {
+      // The other arm is untouched, and the asymmetry is the point: once bytes have
+      // moved the link demonstrably worked, so "the connection dropped" is a true
+      // statement there and a claim we cannot support before any byte moves.
+      expect(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE).toMatch(
+        /connection to your iPhone dropped/i,
+      );
     });
 
     it("the two cases produce different messages", () => {
@@ -364,11 +404,24 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
         orchestratorDiskPattern.test(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE),
       ).toBe(false);
 
-      // Both variants keep the same opening sentence, so anything that ever keys on
-      // "the connection dropped" sees both.
-      expect(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE.split(". ")[0]).toBe(
-        BACKUP_CONNECTION_LOST_MESSAGE.split(". ")[0],
-      );
+      // BACKLOG-2915 — THE SHARED-OPENING-SENTENCE CONTROL WAS REMOVED HERE, AND IT
+      // MUST NOT BE RESTORED.
+      //
+      // It asserted that both variants open with the same sentence, so that anything
+      // keying on "the connection dropped" would see both. That was sound while the
+      // two described the SAME event reached by the SAME evidence — the broken-pipe
+      // line — and differed only in advice.
+      //
+      // They no longer describe the same event. After the `-d` removal the
+      // before-transfer arm is reached by inference and says we do not know why; the
+      // mid-transfer arm still reads a demonstrably-worked link and says it dropped.
+      // Asserting a shared opening would now be asserting something false, and the
+      // only way to satisfy it would be to bend the founder's chosen wording back
+      // toward a claim the code cannot support.
+      //
+      // What replaced it: the exact-string pin and the two directional controls above,
+      // plus rows 16/16b in `backupService.stdoutProgress-2915` which prove each
+      // sentence is routed to the right shape through the real service.
     });
 
     it("defaults to the before-transfer message when the caller cannot say", () => {
