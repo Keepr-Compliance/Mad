@@ -214,7 +214,11 @@ export function AndroidMessagesSettings({ userId }: AndroidMessagesSettingsProps
   };
 
   return (
-    <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
+    /* BACKLOG-2986: the anchor Settings > Contacts points at for the Android
+       contact re-import. The working control is this panel's Force Re-import;
+       the Contacts screen links here rather than duplicating a destructive call
+       the desktop cannot undo (see the DECISION on BACKLOG-3001). */
+    <div id="settings-android-companion" className="p-4 bg-gray-50 rounded-lg border border-gray-200">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <svg className="w-5 h-5 text-green-500" viewBox="0 0 24 24" fill="currentColor">

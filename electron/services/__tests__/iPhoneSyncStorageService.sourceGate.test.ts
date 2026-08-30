@@ -240,6 +240,43 @@ describe("BACKLOG-2486 — the read-failure path still fails OPEN", () => {
    * Without this case, replacing the `catch` fallback with the derived rule
    * would pass every other test in this file on macOS.
    */
+  /**
+   * BACKLOG-2986 — the FOURTH outcome, which had no name until the timeout gave
+   * it one: the read never returns.
+   *
+   * A pending promise is not an error, so before the timeout the `catch` below
+   * never ran and this sync simply stopped, mid-import, with no log and no
+   * failure. The fix lives in `preferenceHelper` rather than at any call site,
+   * which is why this gate — untouched by BACKLOG-2986 — is covered too.
+   *
+   * NEVER SETTLES, not rejects: the case beneath already covers a rejection and
+   * passed before the timeout existed. Asserting the full `recordId` SET rather
+   * than mere completion is what separates "rejects and falls open" from
+   * "resolves an empty bag", which would derive OFF on macOS and store nothing.
+   */
+  it("stores every contact when the preference read NEVER RETURNS, even on macOS", async () => {
+    jest.useFakeTimers();
+    const supabaseService = jest.requireMock("../supabaseService").default;
+    try {
+      setPlatform("darwin");
+      supabaseService.getPreferences.mockImplementation(() => new Promise(() => {}));
+
+      const pending = runSync();
+      await jest.runAllTimersAsync();
+      await pending;
+
+      expect(storedRecordIds()).toEqual(ALL);
+    } finally {
+      jest.useRealTimers();
+      // Restore the suite's own implementation: jest.config sets neither
+      // `resetMocks` nor `restoreMocks`, so an override here would otherwise
+      // outlive this case and hang every test after it.
+      supabaseService.getPreferences.mockImplementation(() =>
+        Promise.resolve(mockPreferences),
+      );
+    }
+  });
+
   it("stores every contact when the preference store throws, even on macOS", async () => {
     setPlatform("darwin");
     const supabaseService = jest.requireMock("../supabaseService").default;

@@ -49,7 +49,19 @@
 
 jest.mock("../supabaseService", () => ({
   __esModule: true,
-  default: { getClient: () => ({ auth: { getUser: jest.fn() } }) },
+  default: {
+    getClient: () => ({ auth: { getUser: jest.fn() } }),
+    // BACKLOG-2986: `storeContacts` now reads `androidContacts` before it
+    // promotes, via the REAL `preferenceHelper`. Stated explicitly rather than
+    // left to the helper's catch: without this key the read would throw, the
+    // helper would fail open to `true`, and every case below would be green by
+    // accident instead of by design. `localSyncService.writeGate-2986.test.ts`
+    // is where the gate itself is swept.
+    getPreferences: jest.fn().mockResolvedValue({
+      phone_type: "android",
+      contactSources: { direct: { androidContacts: true } },
+    }),
+  },
 }));
 
 jest.mock("../db/externalContactDbService", () => ({
@@ -118,16 +130,16 @@ function storedRecordIds(): string[] {
 beforeEach(() => jest.clearAllMocks());
 
 describe("promoteToMainContacts claims the record it promoted (BACKLOG-2556)", () => {
-  it("passes a sourceRecords origin, not a derived one", () => {
-    storeContacts(USER, DEVICE, contacts, true);
+  it("passes a sourceRecords origin, not a derived one", async () => {
+    await storeContacts(USER, DEVICE, contacts, true);
 
     for (const created of promotedContacts()) {
       expect(created.origin.kind).toBe("sourceRecords");
     }
   });
 
-  it("claims (android_sync, <the id actually stored>) for every promoted contact", () => {
-    storeContacts(USER, DEVICE, contacts, true);
+  it("claims (android_sync, <the id actually stored>) for every promoted contact", async () => {
+    await storeContacts(USER, DEVICE, contacts, true);
 
     const claimed = promotedContacts().map((c) => {
       const origin = c.origin;
@@ -145,8 +157,8 @@ describe("promoteToMainContacts claims the record it promoted (BACKLOG-2556)", (
     expect(claimed.map((i) => i.sourceRecordId)).toEqual(storedRecordIds());
   });
 
-  it("the claimed key is the deviceId-scoped one the crosswalk will look up", () => {
-    storeContacts(USER, DEVICE, contacts, true);
+  it("the claimed key is the deviceId-scoped one the crosswalk will look up", async () => {
+    await storeContacts(USER, DEVICE, contacts, true);
 
     // Belt and braces on top of the identity comparison above: if BOTH sites
     // drifted together, the comparison would still pass and this would not.
@@ -154,12 +166,12 @@ describe("promoteToMainContacts claims the record it promoted (BACKLOG-2556)", (
     expect(storedRecordIds()).toEqual(["android-device-1-c1", "android-device-1-c2"]);
   });
 
-  it("a contact already present by phone is not promoted, and claims nothing", () => {
+  it("a contact already present by phone is not promoted, and claims nothing", async () => {
     (databaseService.findContactByNormalizedPhone as unknown as jest.Mock).mockReturnValueOnce({
       id: "existing-1",
     });
 
-    storeContacts(USER, DEVICE, contacts, true);
+    await storeContacts(USER, DEVICE, contacts, true);
 
     const promoted = promotedContacts();
     expect(promoted.map((c) => c.display_name)).toEqual(["Bob"]);
