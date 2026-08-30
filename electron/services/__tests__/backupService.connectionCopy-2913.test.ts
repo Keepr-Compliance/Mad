@@ -370,9 +370,11 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
   });
 
   describe("wired to the transfer signal, not to a byte count", () => {
-    it("replays the founder's unplug: one file done, then the cable out", async () => {
-      // 616 MB completes (95% -> 5% is what parseProgress reads as a file boundary),
-      // the next file starts, then the link dies.
+    it("replays the founder's unplug: one batch done, then the cable out", async () => {
+      // 95% -> 5% on the same total: BACKLOG-2915 reads the regression in `current` as
+      // a batch boundary, folds 585.2 MB into the run total and opens a new batch.
+      // (Before 2915 the same drop was read as a FILE boundary, which is what made
+      // `filesTransferred` disagree with the device's own count by 159x.)
       const { result, state } = await runBackup((proc) =>
         unplug(proc, [
           progressBar(10, 61.6),
@@ -397,18 +399,27 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
       expect(result.error).toBe(BACKUP_CONNECTION_LOST_MESSAGE);
     });
 
-    it("a drop inside the FIRST file counts as transfer started, though zero bytes are banked", async () => {
-      // This is why the signal is `hasReceivedFileProgress` and not
-      // `bytesTransferred`. The byte counter only advances when a whole file
-      // COMPLETES, so a link that dies 40% into the first file has banked nothing —
-      // and a `bytesTransferred > 0` discriminator would hand this user the cable
-      // message for what is almost certainly sleep or power management.
+    it("a drop inside the FIRST batch counts as transfer started, and now banks the real bytes", async () => {
+      // BACKLOG-2915 CHANGED THIS TEST'S PREMISE, AND THE OLD PREMISE WAS THE BUG.
+      //
+      // It used to assert `bytesTransferred === 0` here and call the two signals
+      // "genuinely disagreeing". They only disagreed because the byte counter was a
+      // file-completion HEURISTIC: it advanced when the render's percentage dropped by
+      // more than 50 from above 90, on the belief that the render was per-file. The
+      // render is per-BATCH — `backup_real_size` / `backup_total_size` are locals of
+      // `mb2_handle_receive_files()` — so 40% into a 616 MB batch, 246.4 MB really had
+      // moved and the counter reported none of it.
+      //
+      // The claim this test exists for is unchanged and is still pinned below: the
+      // DISCRIMINATOR is `hasReceivedFileProgress`, never a byte count. What is gone is
+      // the artefact that made the two look like different signals.
       const { result, state } = await runBackup((proc) =>
         unplug(proc, [progressBar(10, 61.6), progressBar(40, 246.4)]),
       );
 
       expect(state.hasReceivedFileProgress).toBe(true);
-      expect(state.bytesTransferred).toBe(0); // the two signals genuinely disagree
+      // 246.4 MB, 1024-based, as `string_format_size` prints it.
+      expect(state.bytesTransferred).toBeCloseTo(246.4 * 1024 * 1024, 0);
       expect(result.error).toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);
       expect(result.error).not.toBe(BACKUP_CONNECTION_LOST_MESSAGE);
     });

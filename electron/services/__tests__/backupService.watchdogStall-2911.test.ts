@@ -229,44 +229,32 @@ const LONGEST_MEASURED_WAIT_MS = 903_900;
  */
 const LONGER_THAN_THE_TIMEOUT_MS = 40 * 60 * 1000;
 
-describe("BACKLOG-2911 FIX 2 — what counts as a sign of life", () => {
-  /**
-   * The discriminator on its own, against the transcribed lines. This is the whole of
-   * the fix in one assertion: the two groups below are the SAME trace format, from the
-   * SAME library, in the SAME second of the SAME log. Only their content separates
-   * them, which is why a format test or a stream test cannot.
-   */
-  it("idle polling is not activity; bytes on the wire are", () => {
-    for (const line of IDLE_CHATTER.trim().split("\n")) {
-      expect(BackupService.isStderrActivitySignal(line)).toBe(false);
-    }
-
-    for (const line of MANIFEST_UPLOAD_CHATTER.trim().split("\n")) {
-      expect(BackupService.isStderrActivitySignal(line)).toBe(true);
-    }
-  });
-
-  it("a read that returned NOTHING is not activity, even though a read happened", () => {
-    // From the founder's log. `SSL_read` is absent from the signal list on purpose:
-    // `received 0` and `received 32768` share a line shape, and counting the shape
-    // would readmit the idle case through the door the fix just closed.
-    expect(
-      BackupService.isStderrActivitySignal(
-        "16:06:23 D:\\a\\1\\s\\libimobiledevice\\src\\idevice.c:652 idevice_connection_receive_timeout(): SSL_read 4, received 0",
-      ),
-    ).toBe(false);
-  });
-
-  it("protocol progress counts — the device answering, a file starting", () => {
-    expect(BackupService.isStderrActivitySignal("Requesting backup from device...")).toBe(true);
-    expect(BackupService.isStderrActivitySignal("Incremental backup mode.")).toBe(true);
-    expect(
-      BackupService.isStderrActivitySignal(
-        "Sending 'a1b2c3d4/Manifest.db' (563.0 MB)",
-      ),
-    ).toBe(true);
-  });
-});
+/**
+ * BACKLOG-2915 — THE STDERR SIGN-OF-LIFE DISCRIMINATOR IS RETIRED, DELIBERATELY.
+ *
+ * Three tests stood here, all of them direct calls to
+ * `BackupService.isStderrActivitySignal`. That method and its
+ * `STDERR_ACTIVITY_SIGNALS` list are deleted, so the tests are removed rather than
+ * left green against a mechanism that no longer exists.
+ *
+ * Why the mechanism went, and why keeping these tests would have been worse than
+ * useless: the list had seven entries and FIVE OF THEM COULD NEVER HAVE FIRED.
+ * `Sending '`, `Requesting backup`, `Starting backup`, `Negotiated Protocol` and
+ * `backup mode` are all `printf`/`PRINT_VERBOSE` calls in idevicebackup2 — stdout,
+ * with or without `-d` — while this list was only ever tested against stderr lines.
+ * The three tests passed because they called the classifier DIRECTLY with a string,
+ * which proves a substring match and nothing about which stream carries the line.
+ * That is the same shape BACKLOG-2915 found in `parseStderrLine` and in
+ * `backupService.backupMode-2914.test.ts`; it is the third instance, so it is a
+ * pattern and not an accident.
+ *
+ * The remaining two entries, `SSL_write` and `service_send`, were `debug_info()`
+ * output and existed only under `-d`, which BACKLOG-2915 removes.
+ *
+ * The replacement claim is asserted below, through the spawned process rather than
+ * through a direct call: stdout is the liveness feed, and stderr — INCLUDING the exact
+ * chatter that used to count as work — no longer keeps a stalled run alive.
+ */
 
 describe("BACKLOG-2911 FIX 2 — a stall with continuous chatter must kill the process", () => {
   beforeEach(() => {
@@ -276,6 +264,24 @@ describe("BACKLOG-2911 FIX 2 — a stall with continuous chatter must kill the p
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  it("BACKLOG-2915 — 40 minutes of MANIFEST-UPLOAD chatter on stderr now fires the watchdog", async () => {
+    // This is the retired discriminator's claim, re-asserted from the other side and
+    // through the real stream. `SSL_write` / `service_send` were the two entries in
+    // `STDERR_ACTIVITY_SIGNALS` that genuinely appeared on stderr, and they were the
+    // reason BACKLOG-1628 put stderr into the liveness check at all. They exist only
+    // under `-d`, which is gone — so if this stream ever carries them again, it must
+    // NOT be able to hold a stalled run open.
+    const { proc, result } = await startRun();
+
+    await streamFor(proc, "stderr", MANIFEST_UPLOAD_CHATTER, 40 * 60 * 1000);
+
+    expect(proc.kill).toHaveBeenCalled();
+
+    proc.emit("close", null);
+    const finished = await result;
+    expect(finished.errorCode).toBe("BACKUP_TIMEOUT");
   });
 
   it("THE CONTROL — 40 minutes of idle chatter and no progress fires the watchdog", async () => {
@@ -340,14 +346,25 @@ describe("BACKLOG-2911 FIX 2 — the founder's SUCCESSFUL runs must survive", ()
     await result;
   });
 
-  it("COUNTER-CONTROL 2 — continuous SSL_write (manifest upload) is NOT killed", async () => {
-    // BACKLOG-1628's case: stdout goes quiet for minutes while the host pushes a
-    // 563 MB backup index, and stderr shows the writes. Bytes are leaving the machine,
-    // so this is work, not a stall. This is the reason liveness is not "stdout only".
+  it("COUNTER-CONTROL 2 (BACKLOG-2915) — the manifest upload is now TOTAL SILENCE, and it survives", async () => {
+    // BACKLOG-1628's case, re-measured after the `-d` removal. It used to be "stdout
+    // goes quiet while stderr shows SSL_write", which is why liveness was not
+    // stdout-only. With `-d` gone there is no stderr either: the 2026-08-30 capture
+    // recorded **zero bytes on both streams for 564.219 s**, then a single 826-byte
+    // chunk carrying eleven lines that had been printed across those 9.4 minutes.
+    //
+    // So the thing that now keeps this run alive is the SIZE OF THE TIMEOUT, not a
+    // signal — 1,800 s against a measured 564 s, and against the founder's worst
+    // observed pre-transfer wait of 903.9 s. That is the trade BACKLOG-2915 §10.1
+    // records, and this test is what pins the margin.
     const { proc, result } = await startRun();
 
-    await streamFor(proc, "stderr", MANIFEST_UPLOAD_CHATTER, LONGER_THAN_THE_TIMEOUT_MS);
+    await silenceFor(LONGEST_MEASURED_WAIT_MS);
+    expect(proc.kill).not.toHaveBeenCalled();
 
+    // …and then the whole buffered pre-receive phase arrives at once, as it did live.
+    proc.stdout.emit("data", Buffer.from(PROGRESS_BAR));
+    await jest.advanceTimersByTimeAsync(1000);
     expect(proc.kill).not.toHaveBeenCalled();
 
     proc.emit("close", 0);

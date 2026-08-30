@@ -497,12 +497,40 @@ describe("BACKLOG-2913: backup failures report the cause the device gave", () =>
       expect(result.cause.deviceErrorCode).toBe(56);
     });
 
-    it("a failure with no reported cause says so and carries the exit code", () => {
+    it("BACKLOG-2915 — a non-zero exit with no reported cause is now INFERRED as a link drop", async () => {
+      // THIS EXPECTATION IS DELIBERATELY INVERTED, BY FOUNDER DECISION OF 2026-08-30.
+      //
+      // It used to assert the generic "neither this Mac nor your iPhone reported a
+      // reason (exit code 255)". That was the right answer while `usbmuxd_send returned
+      // -N (Broken pipe)` existed to carry the real link-drop class — but that line was
+      // `debug_info()` output and only ever appeared under `-d`, which BACKLOG-2915
+      // removes. Scale, from this file's own transcription: broken-pipe appears in FOUR
+      // OF THE FIVE real failures of 2026-08-27, and four of those five captured zero
+      // stdout. Leaving them on the generic rung would take three user-facing sentences
+      // down with them, including the mid-transfer copy the founder wrote himself.
+      //
+      // So the class is inferred instead: non-zero exit, no device code, no
+      // version-exchange match. It is weaker than reading the line and it will also
+      // catch a future unclassified non-zero exit — recorded on BACKLOG-2915 as the
+      // accepted cost, which is also why the cancel rung sits above it.
       const result = classifyBackupFailure(255, STDOUT_NO_ERROR_LINE, mutexFlood(50));
-      expect(result.message).toContain("255");
-      expect(result.message).toMatch(/did not report|no.*reason|neither/i);
+      expect(result.errorCode).toBe("CONNECTION_LOST");
+      expect(result.message).toBe(BACKUP_CONNECTION_LOST_MESSAGE);
       expect(result.message).not.toBe(BACKUP_DEVICE_LOCKED_MESSAGE);
+      // The exit code is still carried, in the structured cause rather than the
+      // sentence — BACKLOG-2950 reads it from there.
+      expect(result.cause.exitCode).toBe(255);
+      expect(result.cause.deviceErrorCode).toBeNull();
+    });
+
+    it("THE CONTROL — exit 0 with no reported cause still gets the generic sentence", () => {
+      // The generic rung is not dead: the inference rung is gated on a NON-ZERO exit,
+      // so a failure that exits 0 (BACKLOG-2899's silent truncation shape) is still
+      // reported as unexplained rather than blamed on the cable.
+      const result = classifyBackupFailure(0, STDOUT_NO_ERROR_LINE, "");
       expect(result.errorCode).toBe("UNKNOWN_ERROR");
+      expect(result.message).toMatch(/did not report|no.*reason|neither/i);
+      expect(result.message).not.toBe(BACKUP_CONNECTION_LOST_MESSAGE);
     });
 
     it("a null exit code does not print `exit code null`", () => {

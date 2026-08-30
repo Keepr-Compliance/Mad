@@ -433,14 +433,25 @@ describe("BackupService - buildBackupArgs", () => {
     backupService = new BackupService();
   });
 
-  // BACKLOG-1628: Verify -d flag is present as the first argument
-  it("should include -d flag as the first argument", () => {
+  // BACKLOG-2915: THE `-d` FLAG IS GONE. This assertion is inverted deliberately.
+  //
+  // BACKLOG-1628 added `-d` to get libimobiledevice's debug output on stderr, for the
+  // watchdog and for progress. Neither purpose survived contact with the evidence:
+  // `-d` maps to `case 'd': idevice_set_debug_level(1);` and never touches `verbose`,
+  // so stdout is byte-identical with and without it, and every signal this service
+  // needs is a `printf` on stdout. What the flag actually produced was a 65 KB stderr
+  // cap hit in 5 of 5 real failures, 336 mis-labelled "error pattern" log records in
+  // one run (BACKLOG-2903), and a watchdog liveness clock that could never age
+  // (BACKLOG-2911). Measured with the flag off, on 2026-08-30: 11 bytes of stderr in
+  // 20 minutes.
+  it("does NOT pass -d, and -u is the first argument", () => {
     const buildArgs = (backupService as any).buildBackupArgs.bind(
       backupService,
     );
     const args = buildArgs({ udid: TEST_UDID }, "/backup/path", TEST_UDID);
 
-    expect(args[0]).toBe("-d");
+    expect(args).not.toContain("-d");
+    expect(args[0]).toBe("-u");
   });
 
   // TASK-601: buildBackupArgs now takes validatedUdid as third parameter
@@ -489,152 +500,64 @@ describe("BackupService - buildBackupArgs", () => {
   });
 });
 
-describe("BackupService - parseProgress", () => {
+/**
+ * BACKLOG-2915 — `parseProgress` and `parseStderrLine` are both gone; `parseStdoutLine`
+ * replaces them, and it is fed by a `\r`/`\n` line splitter rather than a regex over
+ * the raw chunk.
+ *
+ * `parseStderrLine`'s five tests are RETIRED rather than moved. They called the method
+ * directly with a string, so they proved a substring matched and nothing about which
+ * stream carries the line — and six of that method's eight patterns matched lines
+ * idevicebackup2 prints on STDOUT (`Sending '...Manifest.db'`, the two `.plist` sends,
+ * `Negotiated Protocol`, `Requesting backup`, the backup-mode line). Pattern 1's
+ * "Preparing incremental backup — uploading backup index" message had therefore never
+ * fired in production. The remaining two, `SSL_write` and `service_send`, existed only
+ * under `-d`.
+ *
+ * The claims worth keeping are re-asserted in
+ * `backupService.stdoutProgress-2915.test.ts`, through the real `proc.stdout` emitter,
+ * with a control that the same bytes on `proc.stderr` do nothing. The smoke tests below
+ * cover the same five branches the old `parseProgress` block did.
+ */
+describe("BackupService - parseStdoutLine", () => {
   let backupService: BackupService;
+  const parse = (line: string) =>
+    (backupService as any).parseStdoutLine.bind(backupService)(line);
 
   beforeEach(() => {
     backupService = new BackupService();
+    (backupService as any).startTime = Date.now();
   });
 
-  it("should parse progress bar format", () => {
-    const parseProgress = (backupService as any).parseProgress.bind(
-      backupService,
-    );
-
-    // Progress bar format: "[====...] XX% (X.X MB/Y.Y MB)"
-    const progress = parseProgress("[====      ] 50% (25.0 MB/50.0 MB)");
+  it("should parse the byte progress render", () => {
+    const progress = parse("[====      ] 50% (25.0 MB/50.0 MB)");
     expect(progress).not.toBeNull();
     expect(progress?.phase).toBe("transferring");
     expect(progress?.bytesTransferred).toBeGreaterThan(0);
+    expect(progress?.batchTotalBytes).toBe(50 * 1024 * 1024);
   });
 
-  it("should parse file count at end of backup", () => {
-    const parseProgress = (backupService as any).parseProgress.bind(
-      backupService,
-    );
-
-    // File count pattern indicates finishing phase
-    const progress = parseProgress("Received 500 files");
+  it("should parse the device's file count at the end of the backup", () => {
+    const progress = parse("Received 500 files from device.");
     expect(progress).not.toBeNull();
     expect(progress?.filesTransferred).toBe(500);
     expect(progress?.phase).toBe("finishing");
   });
 
-  it("should detect preparing phase", () => {
-    const parseProgress = (backupService as any).parseProgress.bind(
-      backupService,
-    );
-
-    const progress = parseProgress("Requesting backup from device");
+  it("should detect the preparing phase", () => {
+    const progress = parse("Requesting backup from device...");
     expect(progress).not.toBeNull();
     expect(progress?.phase).toBe("preparing");
   });
 
-  it("should detect waiting phase", () => {
-    const parseProgress = (backupService as any).parseProgress.bind(
-      backupService,
-    );
-
-    const progress = parseProgress("Waiting for device to respond");
+  it("should detect the start of the backup", () => {
+    const progress = parse("Starting backup...");
     expect(progress).not.toBeNull();
     expect(progress?.phase).toBe("preparing");
   });
 
-  it("should return null for unrecognized output", () => {
-    const parseProgress = (backupService as any).parseProgress.bind(
-      backupService,
-    );
-
-    const progress = parseProgress("Some random output");
-    expect(progress).toBeNull();
-  });
-});
-
-describe("BackupService - parseStderrLine", () => {
-  let backupService: BackupService;
-
-  beforeEach(() => {
-    backupService = new BackupService();
-  });
-
-  afterEach(() => {
-    backupService.removeAllListeners();
-  });
-
-  it("should detect Manifest.db upload pattern and emit progress with size", () => {
-    const parseStderrLine = (backupService as any).parseStderrLine.bind(
-      backupService,
-    );
-    const progressEvents: any[] = [];
-    backupService.on("progress", (p: any) => progressEvents.push(p));
-
-    parseStderrLine(
-      "Sending '00008140-1234ABCD5678/Manifest.db' (563.0 MB)",
-      TEST_UDID,
-    );
-
-    expect(progressEvents.length).toBe(1);
-    expect(progressEvents[0].phase).toBe("preparing");
-    expect(progressEvents[0].message).toContain("563.0 MB");
-  });
-
-  it("should silently skip SSL_write lines (activity signal, no log)", () => {
-    const parseStderrLine = (backupService as any).parseStderrLine.bind(
-      backupService,
-    );
-    const progressEvents: any[] = [];
-    backupService.on("progress", (p: any) => progressEvents.push(p));
-
-    parseStderrLine("SSL_write 32768, sent 32768", TEST_UDID);
-
-    // SSL_write should not emit any progress events
-    expect(progressEvents.length).toBe(0);
-  });
-
-  it("should silently skip service_send lines (activity signal, no log)", () => {
-    const parseStderrLine = (backupService as any).parseStderrLine.bind(
-      backupService,
-    );
-    const progressEvents: any[] = [];
-    backupService.on("progress", (p: any) => progressEvents.push(p));
-
-    parseStderrLine("service_send(): sending 32768 bytes", TEST_UDID);
-
-    // service_send should not emit any progress events
-    expect(progressEvents.length).toBe(0);
-  });
-
-  it("should detect 'Requesting backup from device...' phase transition", () => {
-    const parseStderrLine = (backupService as any).parseStderrLine.bind(
-      backupService,
-    );
-    // Set manifestUploadPhase to true to test transition
-    (backupService as any).manifestUploadPhase = true;
-
-    const progressEvents: any[] = [];
-    backupService.on("progress", (p: any) => progressEvents.push(p));
-
-    parseStderrLine("Requesting backup from device...", TEST_UDID);
-
-    expect(progressEvents.length).toBe(1);
-    expect(progressEvents[0].phase).toBe("preparing");
-    expect(progressEvents[0].message).toContain("Waiting for iPhone");
-  });
-
-  it("should return early for empty or short lines", () => {
-    const parseStderrLine = (backupService as any).parseStderrLine.bind(
-      backupService,
-    );
-    const progressEvents: any[] = [];
-    backupService.on("progress", (p: any) => progressEvents.push(p));
-
-    // Empty string
-    parseStderrLine("", TEST_UDID);
-    // Short string (< 5 chars)
-    parseStderrLine("abc", TEST_UDID);
-
-    // Neither should emit progress events
-    expect(progressEvents.length).toBe(0);
+  it("should return null for unrecognised output", () => {
+    expect(parse("Some random output")).toBeNull();
   });
 });
 
@@ -684,9 +607,12 @@ describe("BackupService - buildBackupArgs argv identity (BACKLOG-2910)", () => {
     backupService = new BackupService();
   });
 
-  it("builds a default backup invocation with no --skip-apps and nothing else changed", () => {
+  // BACKLOG-2915 updated both arrays: `-d` is gone. The exact-array form is KEPT, and
+  // that is the point of touching these rather than deleting them — the BACKLOG-2910
+  // claim is "we ask the device for exactly one thing and nothing else moved", and it
+  // is only worth anything if the array is pinned whole through a change like this one.
+  it("builds a default backup invocation with no --skip-apps, no -d, and nothing else changed", () => {
     expect(buildArgs({ udid: TEST_UDID })).toEqual([
-      "-d",
       "-u",
       TEST_UDID,
       "backup",
@@ -694,9 +620,8 @@ describe("BackupService - buildBackupArgs argv identity (BACKLOG-2910)", () => {
     ]);
   });
 
-  it("builds a forced full backup invocation with no --skip-apps and nothing else changed", () => {
+  it("builds a forced full backup invocation with no --skip-apps, no -d, and nothing else changed", () => {
     expect(buildArgs({ udid: TEST_UDID, forceFullBackup: true })).toEqual([
-      "-d",
       "-u",
       TEST_UDID,
       "backup",

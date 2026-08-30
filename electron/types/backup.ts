@@ -29,8 +29,52 @@ export interface BackupProgress {
   totalFiles: number | null;
   /** Bytes transferred so far */
   bytesTransferred: number;
-  /** Total bytes to transfer, if known */
+  /**
+   * Total bytes for the WHOLE backup, if known.
+   *
+   * BACKLOG-2915: still `null` for the entire transfer, and deliberately so. The
+   * only total idevicebackup2 ever prints is the CURRENT BATCH's — see
+   * `batchTotalBytes` — and writing a batch total here would be read downstream as a
+   * whole-run denominator. It is set only on the close-handler paths, from the
+   * measured size of the finished backup.
+   */
   totalBytes: number | null;
+  /**
+   * BACKLOG-2915: bytes moved so far WITHIN the batch idevicebackup2 is currently
+   * receiving, straight from its own progress render. `null` before the first render.
+   *
+   * The render reads `[====] 48% (24.2 MB/50.8 MB)`, and both numbers are
+   * per-BATCH: `backup_real_size` / `backup_total_size` are function-locals of
+   * `mb2_handle_receive_files()`, reset on every `DLMessageUploadFiles` message, with
+   * the total taken from `message[3]`. The 2026-08-30 capture saw **36 distinct batch
+   * totals** in one 20-minute run, from 63.5 KB to 10.5 GB.
+   *
+   * The code this replaced called the same pair "per-file" and built a file-completion
+   * heuristic on it, which is why `filesTransferred` never matched the device's own
+   * `Received N files from device.` — that heuristic was counting batches. On the
+   * captured run it would have reported 29 files against the device's 4,604.
+   */
+  batchBytesTransferred: number | null;
+  /** BACKLOG-2915: total bytes in the batch currently being received. See above. */
+  batchTotalBytes: number | null;
+  /**
+   * BACKLOG-2915: the overall percentage the DEVICE itself authored, from
+   * idevicebackup2's `[====] 62% Finished` render. `null` until the device says.
+   *
+   * This is the honest progress number and it is a different quantity from the byte
+   * render above: the 2026-08-30 capture recorded a byte bar reading 48% while the
+   * overall bar read 94%. Parsing the two as one number is the bug this field exists
+   * to end.
+   *
+   * It is SPARSE and bursty — 37 samples against 76,024 byte renders in 20 minutes,
+   * with the distinct sequence 0,1,2,3,4,5,6,8,9,10,11,12,17,62,75,94 (no 7) —
+   * because `print_progress_real(overall_progress, 0)` passes `flush = 0`, so a value
+   * only reaches us on the next byte render's flush. Any consumer must HOLD the last
+   * value rather than wait for the next one.
+   *
+   * Nothing in the renderer reads it yet: BACKLOG-1925 owns that wiring.
+   */
+  deviceOverallPercent: number | null;
   /** Estimated time remaining in seconds, if calculable */
   estimatedTimeRemaining: number | null;
   /**
