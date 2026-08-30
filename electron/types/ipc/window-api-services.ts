@@ -17,10 +17,24 @@ export interface WindowApiPreferences {
     userId: string,
     preferences: Record<string, unknown>,
   ) => Promise<{ success: boolean }>;
+  /**
+   * BACKLOG-2986: carries `error`, because the handler always did.
+   *
+   * `preferences:update` returns `PreferenceResponse`
+   * (`preferenceHandlers.ts:21-25` — `{ success, error?, preferences? }`) and
+   * sets `error` on every failure path. This declaration said
+   * `{ success: boolean }`, so the string was dropped at the type boundary and
+   * `settingsService.updatePreferences` had nothing to forward — which made the
+   * Settings toggle's failure message permanently generic even though a real
+   * reason existed one process away. A stale IPC type, not a service bug.
+   *
+   * `get` and `save` narrow the same response the same way. Pre-existing, and
+   * nothing reads their `error` today, so they are left alone here.
+   */
   update: (
     userId: string,
     partialPreferences: Record<string, unknown>,
-  ) => Promise<{ success: boolean }>;
+  ) => Promise<{ success: boolean; error?: string }>;
 }
 
 /**

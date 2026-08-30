@@ -331,6 +331,39 @@ describe("BACKLOG-2986 — the write path reads the SAME derived default as the 
   });
 
   /**
+   * W-C7 — THE GATE THAT SITS ON THE PHONE'S REQUEST PATH MUST ALWAYS ANSWER.
+   *
+   * This read is the reason BACKLOG-2986 had to grow a timeout at all: it is on
+   * the inbound HTTP handler of the LAN sync server, so a read that never
+   * returns is not a slow sync — it is a sync the phone cannot complete, and
+   * from the phone that is indistinguishable from a desktop that is down
+   * (BACKLOG-2955).
+   *
+   * NEVER SETTLES, not rejects. A rejection already fell back correctly before
+   * the timeout existed (see the case above); a pending promise did not, because
+   * it is not an error and the `catch` never ran.
+   *
+   * The assertion is the fail-open VALUE. A timeout that RESOLVED with `{}`
+   * would also complete — and `{}` is a readable bag, so `androidContacts`
+   * would derive FALSE and a hung network would silently stop promoting.
+   */
+  it("completes and promotes when the preference read never returns", async () => {
+    jest.useFakeTimers();
+    try {
+      mockGetPreferences.mockImplementation(() => new Promise(() => {}));
+
+      // Start first, then advance: the timer is created inside the call.
+      const pending = storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+      await jest.runAllTimersAsync();
+      await pending;
+
+      expect(contactNamesOnDisk()).toEqual(ALL_NAMES);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  /**
    * W-C6. The `androidContacts` arm of the rule reads the phone type and
    * nothing else, so no `process.platform` stub appears anywhere above. Pinned
    * rather than assumed: a platform clause added later would make every verdict

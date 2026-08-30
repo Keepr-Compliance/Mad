@@ -119,6 +119,14 @@ interface ContactsImportSettingsProps {
    * page for the re-import note to point at.
    */
   androidCompanionActive: boolean;
+  /**
+   * BACKLOG-2986: the "could not be saved" message for the last failed toggle
+   * write, or null. Owned by the parent (which owns the handler) and rendered
+   * here, immediately above the toggle group, because that is where the click
+   * was — at the top of the section a user flipping one of the lower switches
+   * could miss it without scrolling.
+   */
+  saveError: string | null;
   gmailContactsEnabled: boolean;
   /** TASK-2303: Google Contacts toggle (People API) */
   googleContactsEnabled: boolean;
@@ -145,6 +153,7 @@ export function ContactsImportSettings({
   androidContactsEnabled,
   androidContactsDeclared,
   androidCompanionActive,
+  saveError,
   gmailContactsEnabled,
   googleContactsEnabled,
   outlookEmailsInferred,
@@ -490,6 +499,23 @@ export function ContactsImportSettings({
       <p className="text-xs text-gray-600 mb-3">
         Manage contact sources and import contacts for transaction assignment.
       </p>
+
+      {/*
+        BACKLOG-2986: a failed preference write is visible, and visible HERE —
+        directly above the switches, so the message sits next to the control the
+        user just clicked. It first rendered at the top of the Contacts section,
+        which put it off-screen for anyone toggling one of the lower switches.
+        An error nobody sees is not much better than the silent failure it
+        replaced.
+      */}
+      {saveError && (
+        <div
+          role="alert"
+          className="mb-3 p-2 rounded text-xs bg-red-50 text-red-700 border border-red-200"
+        >
+          {saveError}
+        </div>
+      )}
 
       {/* Import From (direct) toggle switches */}
       <div className="mb-3">

@@ -20,6 +20,106 @@ import {
 } from "./contactSourceDefaults";
 
 /**
+ * BACKLOG-2986 — how long a preference read may take before it is abandoned.
+ *
+ * THE DEFECT THIS CLOSES. Every caller here passes a `defaultValue` and every
+ * one of them fails OPEN on it. That covers a read that FAILS. It does not
+ * cover a read that never returns: a promise that never settles is not an
+ * error, so the `catch` never runs, the default is never applied, and the
+ * caller waits forever.
+ *
+ * WHY IT BECAME URGENT. `localSyncService.storeContacts` now reads a preference
+ * on the INBOUND HTTP handler of the LAN sync server (BACKLOG-2986). Before
+ * that, the phone's POST touched only local SQLite. A hang there is not a slow
+ * sync — it is a sync the phone cannot complete, and a desktop that accepts the
+ * TCP connection and then hangs inside the handler is indistinguishable, from
+ * the phone, from a desktop that is down. That is precisely the unexplained
+ * "desktop unreachable" the field tester reports in BACKLOG-2955.
+ *
+ * WHERE THE NUMBER COMES FROM — the phone's own client timeout is the ceiling:
+ *
+ *   - The companion aborts at `REQUEST_TIMEOUT_MS = 10_000`
+ *     (`android-companion/services/syncService.ts:120`), and `/sync/contacts`
+ *     uses it (`:358-368`). Past 10s the phone reports `timeout`.
+ *   - 3s for the read leaves 7s for the full-snapshot DB write — up to ~400
+ *     upserts plus promotion — and the response.
+ *   - The read itself is a single-row primary-key `select` on
+ *     `user_preferences`, so 3s is roughly 6x a bad-but-working read. A slow
+ *     connection is not aborted casually.
+ *
+ * EXPORTED because the tests must advance fake timers by this constant rather
+ * than by a literal that would silently stop matching it.
+ */
+export const PREFERENCES_READ_TIMEOUT_MS = 3_000;
+
+/**
+ * Read the preferences bag, or REJECT once `PREFERENCES_READ_TIMEOUT_MS` has
+ * passed. Every function in this module reads through here.
+ *
+ * IT REJECTS, AND THAT IS THE WHOLE DESIGN. Resolving with `{}` instead would
+ * be worse than the bug it fixes: an empty bag is a READABLE bag, so it flows
+ * into the derived-default rule, an absent `androidContacts` derives FALSE, and
+ * a hung network would silently switch the user's Android contact import off.
+ * Rejecting routes a hang into the same fail-open `catch` each caller already
+ * has for a failed read, which is the behaviour every one of them documents.
+ *
+ * TWO THINGS THIS DOES NOT DO, stated so nobody assumes otherwise:
+ *
+ * 1. IT DOES NOT CANCEL THE REQUEST. `supabaseService.getPreferences` takes no
+ *    `AbortSignal`, so the hung read stays hung in the background holding its
+ *    socket. What is fixed is the CALLER being unblocked — which is the defect:
+ *    a handler that never returns. A true cancellation needs an `AbortSignal`
+ *    threaded through `supabaseService`.
+ * 2. IT IS NOT APPLIED IN `supabaseService.getPreferences` ITSELF. That function
+ *    has around ten other consumers — `preferenceHandlers`, `permissionHandlers`,
+ *    `userSettingsHandlers`, `supportTicketService`, `importPlanInputs` — whose
+ *    failure semantics nobody has audited. Timing them out is a behaviour change
+ *    to five modules this item has no business touching. Every contact-source
+ *    gate goes through `isContactSourceEnabled` below, so covering this module
+ *    covers all three of them, and a fourth gate must come through here too.
+ *
+ * The `clearTimeout` in `finally` is not tidiness: a pending timer keeps the
+ * Node event loop alive, so without it every successful read would leave a live
+ * handle behind for up to three seconds.
+ */
+async function readPreferences(
+  userId: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- matches getPreferences
+): Promise<Record<string, any>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      supabaseService.getPreferences(userId),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- never resolves
+      new Promise<Record<string, any>>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          // Logged HERE, not in the callers' catch blocks, because their message
+          // says "could not load" — which reads as a failed read. "The read
+          // failed" and "the read never returned" are different states, and
+          // collapsing them once already hid a zero-message release for weeks
+          // (BACKLOG-2206). A support investigation must be able to tell them
+          // apart from the log alone.
+          logService.warn(
+            `[PreferenceHelper] Preference read did not return within ` +
+              `${PREFERENCES_READ_TIMEOUT_MS}ms — abandoning it and falling back. ` +
+              `The underlying request is still outstanding; it was not cancelled.`,
+            "Preferences",
+            { userId, timeoutMs: PREFERENCES_READ_TIMEOUT_MS },
+          );
+          reject(
+            new Error(
+              `Preference read timed out after ${PREFERENCES_READ_TIMEOUT_MS}ms`,
+            ),
+          );
+        }, PREFERENCES_READ_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
  * Check if a specific contact source is enabled in user preferences.
  *
  * Three different situations get three different answers:
@@ -32,8 +132,12 @@ import {
  *    skip no longer switches on a source the step deliberately left off. Every
  *    other key keeps `defaultValue`; see that constant's docblock for why the
  *    list is not all five.
- * 3. **Preferences could not be READ at all** (e.g. Supabase offline). Fail
- *    open on `defaultValue`, unchanged. Deliberately NOT folded into case 2:
+ * 3. **Preferences could not be READ at all** — Supabase offline, or, since
+ *    BACKLOG-2986, a read that did not return within
+ *    `PREFERENCES_READ_TIMEOUT_MS`. Fail open on `defaultValue`, unchanged.
+ *    Before that timeout existed this case covered a rejection only, and a hung
+ *    read reached neither branch: it simply never returned. Deliberately NOT
+ *    folded into case 2:
  *    when the read fails we cannot see `phone_type` either, so applying the
  *    rule would be guessing — and guessing OFF silently breaks a working
  *    import.
@@ -51,7 +155,7 @@ export async function isContactSourceEnabled(
   defaultValue: boolean = true,
 ): Promise<boolean> {
   try {
-    const preferences = await supabaseService.getPreferences(userId);
+    const preferences = await readPreferences(userId);
     const value = preferences?.contactSources?.[category]?.[key];
     if (typeof value === "boolean") return value;
 
@@ -167,7 +271,7 @@ export async function getEmailCacheDurationMonths(
   userId: string,
 ): Promise<number> {
   try {
-    const preferences = await supabaseService.getPreferences(userId);
+    const preferences = await readPreferences(userId);
     return resolveEmailCacheDurationMonths(preferences);
   } catch {
     logService.warn(
@@ -194,7 +298,11 @@ export async function getEmailCacheDurationMonths(
 export async function isShadowDeltaSyncEnabled(userId: string): Promise<boolean> {
   if (process.env.KEEPR_SHADOW_DELTA_SYNC === "1") return true;
   try {
-    const preferences = await supabaseService.getPreferences(userId);
+    // BACKLOG-2986: a TIMEOUT lands in the catch below and therefore fails
+    // CLOSED here, unlike the two readers above. Deliberate, and it is this
+    // function's own documented rule: an opt-in experiment must never be turned
+    // on by a read that did not answer.
+    const preferences = await readPreferences(userId);
     return preferences?.shadowDeltaSync?.enabled === true;
   } catch {
     logService.warn(

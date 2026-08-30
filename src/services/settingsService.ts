@@ -141,7 +141,12 @@ export const settingsService = {
   ): Promise<ApiResult> {
     try {
       const result = await window.api.preferences.update(userId, partialPreferences);
-      return { success: result.success };
+      // BACKLOG-2986: forward `error`. This returned `{ success }` alone, so
+      // every caller's `result.error` was permanently undefined and a failed
+      // preference write could only ever produce a generic message — the main
+      // process had the reason and it was discarded at this line. See the
+      // widened `WindowApiPreferences.update`.
+      return { success: result.success, error: result.error };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }

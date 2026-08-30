@@ -104,10 +104,15 @@ let mockShadowRows: any[] = [];
 
 // THE ONLY PREFERENCE MOCK. `preferenceHelper` itself runs for real.
 let mockPreferences: Record<string, any> = {};
+// BACKLOG-2986: when true, the read NEVER SETTLES — the state a rejection mock
+// cannot model, and the one the timeout exists for.
+let hangPreferences = false;
 jest.mock("../services/supabaseService", () => ({
   __esModule: true,
   default: {
-    getPreferences: jest.fn(() => Promise.resolve(mockPreferences)),
+    getPreferences: jest.fn(() =>
+      hangPreferences ? new Promise(() => {}) : Promise.resolve(mockPreferences),
+    ),
   },
 }));
 
@@ -255,6 +260,7 @@ beforeEach(() => {
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   mockShadowRows = [...ALL_ROWS];
   mockPreferences = {};
+  hangPreferences = false;
   mockFullSync.mockClear();
   mockGetContactNames.mockClear();
   registeredHandlers.clear();
@@ -443,6 +449,39 @@ describe("BACKLOG-2486 — a preference READ FAILURE still fails open", () => {
    * Without this case, replacing the `catch` fallback with the derived rule
    * would pass every other test in this file.
    */
+  /**
+   * BACKLOG-2986 — AND A READ THAT NEVER RETURNS IS NOT A READ THAT THREW.
+   *
+   * The case below covers a rejection, which fell back correctly long before
+   * this. A pending promise did not: it is not an error, so the `catch` never
+   * ran, the default was never applied, and this handler never returned. The
+   * renderer would have waited forever for its contact list.
+   *
+   * `runAllTimersAsync`, not a single advance by the timeout: THIS GATE READS
+   * PREFERENCES FIVE TIMES IN SEQUENCE, one per source, and each read only
+   * creates its timer once the previous one has settled. Advancing once would
+   * clear the first and hang on the second — a control that looked thorough and
+   * proved one fifth of the claim.
+   *
+   * The assertion is the full id SET, so a timeout that resolved with an empty
+   * bag — which would derive `androidContacts` FALSE and drop `ext-rec-android`
+   * — fails here rather than passing as "it completed".
+   */
+  it("shows every source when the preference read NEVER RETURNS", async () => {
+    jest.useFakeTimers();
+    try {
+      setPlatform("darwin");
+      hangPreferences = true;
+
+      const pending = pickerIds();
+      await jest.runAllTimersAsync();
+
+      expect(await pending).toEqual([ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID]);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("shows every source when the preference store throws", async () => {
     setPlatform("darwin");
     const supabaseService = jest.requireMock("../services/supabaseService").default;

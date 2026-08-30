@@ -160,8 +160,8 @@ export function ContactsSettings({
 
   /**
    * BACKLOG-2986: the message shown when a toggle's write fails, cleared on the
-   * next attempt. Held here rather than in the child because this component
-   * owns the handler that writes.
+   * next attempt. Held here because this component owns the handler that
+   * writes; rendered by the child, next to the switches it is about.
    */
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -215,36 +215,42 @@ export function ContactsSettings({
      *
      * One handler serves all six toggles, so this covers every one of them.
      */
+    // The two routes converge on one nullable reason rather than one throwing
+    // into the other. Turning `{ success: false }` into an exception just to
+    // catch it again made the resolved case borrow the thrown case's message,
+    // so an absent `error` produced "… could not be saved: Preferences could
+    // not be saved". A value is a value.
+    let reason: string | null = null;
     try {
       const result = await settingsService.updatePreferences(userId, {
         contactSources: { [category]: { [key]: newValue } },
       });
-      if (!result?.success) {
-        throw new Error(result?.error ?? "Preferences could not be saved");
-      }
-    } catch {
-      // Put the switch back where the stored preference still has it, and say
-      // so. A silent revert would look like the click did not register.
-      setters[key](currentValue);
-      setSaveError(
-        `${CONTACT_SOURCE_LABELS[key] ?? "That setting"} could not be saved. ` +
-          `Check your connection and try again.`,
-      );
+      if (result?.success) return;
+      // BACKLOG-2986: `result.error` is a real string now. It used to be
+      // permanently `undefined` — `WindowApiPreferences.update` declared
+      // `{ success: boolean }` while the handler returned
+      // `{ success, error?, preferences? }`, so the reason was dropped at the
+      // type boundary and `settingsService` had nothing to forward.
+      reason = result?.error ?? null;
+    } catch (err) {
+      reason = err instanceof Error && err.message ? err.message : null;
     }
+
+    // Put the switch back where the stored preference still has it, and say so.
+    // A silent revert would look like the click did not register.
+    setters[key](currentValue);
+    // Label first — it is what the user just clicked; the reason is context.
+    const label = CONTACT_SOURCE_LABELS[key] ?? "That setting";
+    setSaveError(
+      reason
+        ? `${label} could not be saved: ${reason}`
+        : `${label} could not be saved. Check your connection and try again.`,
+    );
   };
 
   return (
     <div id="settings-contacts" className="mb-8">
       <h3 className="text-lg font-semibold text-gray-900 mb-4">Contacts</h3>
-      {/* BACKLOG-2986: a failed preference write is visible, not silent. */}
-      {saveError && (
-        <div
-          role="alert"
-          className="mb-3 p-2 rounded text-xs bg-red-50 text-red-700 border border-red-200"
-        >
-          {saveError}
-        </div>
-      )}
       <div className="space-y-4">
         <ContactsImportSettings
           userId={userId}
@@ -262,6 +268,12 @@ export function ContactsSettings({
           androidContactsEnabled={androidContactsEnabled}
           androidContactsDeclared={androidContactsDeclared}
           androidCompanionActive={androidCompanionActive}
+          /* BACKLOG-2986: rendered by the child, immediately above the toggle
+             group. It first sat at the top of this section, where a user
+             flipping one of the lower switches could miss it without scrolling
+             — an error nobody sees is not much better than the silent failure
+             it replaced. */
+          saveError={saveError}
           gmailContactsEnabled={gmailContactsEnabled}
           googleContactsEnabled={googleContactsEnabled}
           outlookEmailsInferred={outlookEmailsInferred}

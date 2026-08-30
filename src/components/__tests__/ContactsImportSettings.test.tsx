@@ -90,6 +90,9 @@ const defaultProps = {
   androidContactsEnabled: false,
   androidContactsDeclared: false,
   androidCompanionActive: false,
+  // BACKLOG-2986: required at the real call site; test files are excluded from
+  // `tsc`, so omitting it would silently hand the component `undefined`.
+  saveError: null,
   gmailContactsEnabled: true,
   googleContactsEnabled: true,
   outlookEmailsInferred: false,

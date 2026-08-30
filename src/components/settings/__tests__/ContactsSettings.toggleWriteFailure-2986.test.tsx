@@ -165,6 +165,124 @@ describe("BACKLOG-2986 — a resolved { success: false } reverts the switch", ()
   });
 });
 
+/**
+ * ===========================================================================
+ * THE REASON HAS TO SURVIVE THE TRIP, AND IT DID NOT
+ * ===========================================================================
+ * These cases run the REAL `settingsService` — only `window.api` is mocked —
+ * because the failure was spread across three layers and mocking the service
+ * would hide two of them:
+ *
+ *   1. `WindowApiPreferences.update` declared `=> Promise<{ success: boolean }>`
+ *      while `preferences:update` has always returned
+ *      `{ success, error?, preferences? }` (`preferenceHandlers.ts:21-25`). The
+ *      reason was dropped at the TYPE boundary.
+ *   2. `settingsService.updatePreferences` therefore returned `{ success }`
+ *      alone — it had nothing to forward.
+ *   3. The toggle handler wrote `catch {` without binding, so even a forwarded
+ *      reason would have died there.
+ *
+ * Fix any two of the three and the banner still says nothing useful, which is
+ * why the assertion is on the STRING reaching the alert rather than on any one
+ * layer's return value.
+ */
+describe("BACKLOG-2986 — the failure reason reaches the user", () => {
+  /** The real settingsService over a mocked IPC bridge. */
+  function renderWithRealService(updateResult: { success: boolean; error?: string }) {
+    Object.defineProperty(window, "api", {
+      value: {
+        ...originalApi,
+        system: { ...originalApi?.system, platform: "darwin" },
+        preferences: { update: jest.fn().mockResolvedValue(updateResult) },
+        contacts: {
+          getExternalSyncStatus: jest.fn().mockResolvedValue({ success: true }),
+          getSourceStats: jest
+            .fn()
+            .mockResolvedValue({ success: true, stats: { android_sync: 389 } }),
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    return render(
+      <PlatformProvider>
+        <ContactsSettings
+          userId="user-1"
+          initialPreferences={ANDROID_OFF as never}
+          isMicrosoftConnected={true}
+          isGoogleConnected={false}
+        />
+      </PlatformProvider>,
+    );
+  }
+
+  it("shows the reason the main process gave, not a generic message", async () => {
+    jest.unmock("../../../services");
+    const { settingsService } = jest.requireActual("../../../services");
+    mockUpdatePreferences.mockImplementation((...args: unknown[]) =>
+      (settingsService.updatePreferences as (...a: unknown[]) => unknown)(...args),
+    );
+
+    renderWithRealService({ success: false, error: "session expired" });
+
+    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /Android Phone Contacts could not be saved: session expired/i,
+    );
+  });
+
+  it("falls back to the generic message when the main process gave no reason", async () => {
+    // An earlier draft turned `{ success: false }` into a thrown Error so both
+    // routes could share one catch, which made this case read
+    // "… could not be saved: Preferences could not be saved". A value is a
+    // value; only a real reason is appended.
+    jest.unmock("../../../services");
+    const { settingsService } = jest.requireActual("../../../services");
+    mockUpdatePreferences.mockImplementation((...args: unknown[]) =>
+      (settingsService.updatePreferences as (...a: unknown[]) => unknown)(...args),
+    );
+
+    renderWithRealService({ success: false });
+
+    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/Android Phone Contacts could not be saved\./i);
+    expect(alert).not.toHaveTextContent(/could not be saved:/i);
+  });
+});
+
+describe("BACKLOG-2986 — the banner is where the click was", () => {
+  it("renders above the toggle group, not above the whole section", async () => {
+    // It first rendered at the top of Contacts, which put it off-screen for
+    // anyone toggling one of the lower switches. Document order is the
+    // assertion because it is what "the user can see it" reduces to here:
+    // the alert must precede the switch it is about, adjacent to it.
+    mockUpdatePreferences.mockResolvedValue({ success: false, error: "offline" });
+    renderSettings(ANDROID_OFF);
+
+    fireEvent.click(await screen.findByLabelText(ANDROID_SWITCH));
+
+    const alert = await screen.findByRole("alert");
+
+    // Node.DOCUMENT_POSITION_FOLLOWING === 4: the second node comes after the
+    // first. Two assertions, because "before the switch" alone was also true of
+    // the position this replaced.
+    //
+    // (a) The alert precedes the switch it is about.
+    expect(alert.compareDocumentPosition(screen.getByLabelText(ANDROID_SWITCH)) & 4).toBeTruthy();
+    // (b) And it sits INSIDE the import panel — after that panel's own heading,
+    //     immediately above the "Import From" group. The old position was
+    //     between the section's <h3> and this panel, which satisfied (a) while
+    //     being a scroll away from every switch.
+    const panelHeading = screen.getByRole("heading", { level: 4, name: "Contacts" });
+    expect(panelHeading.compareDocumentPosition(alert) & 4).toBeTruthy();
+    expect(alert.compareDocumentPosition(screen.getByText("Import From")) & 4).toBeTruthy();
+  });
+});
+
 describe("BACKLOG-2986 — a thrown error reverts the switch too", () => {
   it("puts the switch back and says so when the call rejects", async () => {
     mockUpdatePreferences.mockRejectedValue(new Error("boom"));
