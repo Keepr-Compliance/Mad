@@ -130,7 +130,11 @@ jest.mock('../supabaseClient', () => ({
 
 import { NativeModules } from 'react-native';
 import { performSync } from '../backgroundSync';
-import { getLastSyncTimestamp, MAX_QUEUE_SIZE } from '../smsQueueService';
+import {
+  getLastSyncTimestamp,
+  enqueueMessages,
+  MAX_QUEUE_SIZE,
+} from '../smsQueueService';
 
 const PAIRING_STORAGE_KEY = '@keepr/pairing';
 const USER = 'user-aaa';
@@ -520,6 +524,77 @@ describe('narrowing the window never deletes or rewinds anything', () => {
     expect(cursorAfterNarrow).toBeGreaterThanOrEqual(cursorAfterWide);
     // The old message was already delivered and is not re-sent or retracted.
     expect(sentIds()).toEqual(idsAfterWide);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6b. THE BACK-PRESSURE RATCHET — INTENDED, and pinned so nobody files it
+// ---------------------------------------------------------------------------
+
+describe('a message can age out of the window while back-pressure holds the cursor', () => {
+  /**
+   * THIS IS INTENDED BEHAVIOUR, NOT A BUG. Recording it as a control so the
+   * next reader finds a decision rather than a surprise.
+   *
+   * The window is ROLLING. If the queue stays at capacity long enough for the
+   * window edge to move past a message the phone had not yet reached, that
+   * message is never read. "Last 3 months" is a rolling request: a message
+   * older than three months is outside what the user asked for, so declining to
+   * read it is the setting working, not data loss.
+   *
+   * What must remain true — and is asserted below — is that the cursor never
+   * advances past an unread message that IS in window. `max()` only ever raises
+   * the floor to the window edge; it never moves the cursor.
+   *
+   * The walk-through, with a fixed clock advanced between two real cycles:
+   *   - NOW  = 30 Aug 2026, window edge E0 = 30 May 2026
+   *   - cycle 1: queue at capacity -> back-pressure -> NOTHING is read, cursor 0
+   *   - clock advances 10 days; the edge moves with it to E1 = 9 Jun 2026
+   *   - cycle 2: capacity has freed -> the read floor is now E1
+   *   - a message dated 4 Jun 2026 was inside the window during cycle 1 and is
+   *     outside it during cycle 2. It is ABSENT, deliberately.
+   */
+  it('the aged-out message is absent and the still-in-window one arrives (exact ids)', async () => {
+    const NOW2 = new Date(2026, 8, 9, 12, 0, 0).getTime(); // NOW + 10 days
+
+    // Between E0 (30 May) and E1 (9 Jun): in window at NOW, out of it at NOW2.
+    const agesOut = row(1200, new Date(2026, 5, 4, 12, 0, 0).getTime());
+    // Comfortably inside the window at BOTH clocks.
+    const survivor = row(1201, new Date(2026, 7, 29, 12, 0, 0).getTime());
+    installPagingSms({ inbox: [agesOut, survivor] });
+
+    // Fill the queue so the cycle-1 read is refused for back-pressure. The
+    // cursor must not move while the phone declines to read.
+    await enqueueMessages(
+      Array.from({ length: MAX_QUEUE_SIZE }, (_, i) => ({
+        smsId: `filler-${i}`,
+        sender: '+12065550199',
+        body: `filler ${i}`,
+        timestamp: 1_000 + i,
+        direction: 'inbound' as const,
+      })),
+    );
+
+    await performSync();
+
+    // Back-pressure held: nothing new was read and the cursor is untouched.
+    expect(await getLastSyncTimestamp()).toBe(0);
+    const readInCycle1 = [...sentIds()].filter((id) => id === '1200' || id === '1201');
+    expect(readInCycle1).toEqual([]);
+
+    // The clock advances while the backlog drains, carrying the window edge.
+    jest.spyOn(Date, 'now').mockReturnValue(NOW2);
+    mockSendMessages.mockClear();
+
+    // Drain the rest of the queue so cycle 2 has capacity to read with.
+    await AsyncStorage.removeItem('@keepr/sms-queue');
+    await AsyncStorage.removeItem('@keepr/sync-window'); // force a fresh window
+
+    await performSync();
+
+    // The 4 June message aged out of the rolling window between the two cycles.
+    expect(sentIds()).toEqual(new Set(['1201']));
+    expect(sentIds().has('1200')).toBe(false);
   });
 });
 
