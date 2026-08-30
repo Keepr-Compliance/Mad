@@ -607,6 +607,45 @@ export function notifyReviewStateChanged(transactionId: string): void {
 }
 
 /**
+ * Announce a discovery run that happened OUTSIDE `syncReviewQueueForTransaction`
+ * (BACKLOG-2880).
+ *
+ * The "Sync Emails" button reaches the classifier through
+ * `emailSyncService.syncTransactionEmails`, not through the sweep above, so it
+ * never broadcast. Nothing then set `lastAdded`/`lastLinked` in the renderer,
+ * and the founder's popup — gated on `lastFound > 0` — stayed silent while nine
+ * emails landed in his queue. Add-contact and range-change reach the popup for
+ * exactly the opposite reason: their sweeps run through the function above,
+ * which broadcasts.
+ *
+ * This is the SAME channel and the SAME payload, not a second announcement. A
+ * parallel notification is how two surfaces start disagreeing about one number.
+ *
+ * Emitted on every completed run, including one that found nothing: the hook
+ * always re-reads on the event (which is what makes a Sync click refresh the
+ * badge and the tabs at all) and gates only the POPUP on added/linked being
+ * non-zero. "Refresh regardless" and "announce only when there is something"
+ * are different rules, and the existing contract already draws that line.
+ *
+ * `reason` stays inside the published `PendingSyncReason` vocabulary rather than
+ * gaining a member for this caller: the field is diagnostic in this payload —
+ * only `syncReviewQueueForTransaction` acts on it, for the watermark — and that
+ * vocabulary is under active work elsewhere.
+ */
+export function notifyReviewDiscovery(
+  transactionId: string,
+  found: { added: number; linked: number; reason?: PendingSyncReason },
+): void {
+  broadcastReviewQueueChanged({
+    transactionId,
+    added: found.added,
+    linked: found.linked,
+    outstanding: countReviewItems(transactionId),
+    reason: found.reason ?? "background",
+  });
+}
+
+/**
  * Queue ONE email for review, without linking it.
  *
  * The single write-point for the ambiguous half of develop's classification
@@ -636,6 +675,38 @@ export async function queueEmailForReview(
     [crypto.randomUUID(), userId, transactionId, emailId],
   );
   return (res.changes ?? 0) > 0;
+}
+
+/**
+ * Is this email awaiting a human decision on this transaction? (BACKLOG-2880)
+ *
+ * The one question a WRITER needs to ask the review store, and it lives here
+ * for the reason the whole service exists: `reviewStateService.singleReadPath`
+ * pins that nothing else queries `pending_review_communications`, and a
+ * write-time interlock is not an exception to that — it is exactly the kind of
+ * second SELECT the rule was written to stop.
+ *
+ * Deliberately NOT `getReviewState(...).items.some(...)`: that builds the full
+ * display projection for every queued item, and this is called once per
+ * candidate email inside a sweep that runs for every live contact-transaction
+ * pair. One indexed lookup, no projection.
+ *
+ * Scoped to the transaction on purpose. Review is a per-deal decision — the same
+ * email may be pending on one deal and legitimately linkable to another.
+ */
+export function isEmailAwaitingReview(transactionId: string, emailId: string): boolean {
+  // Truthiness, NOT `!== undefined`. "No row" arrives as `undefined` from
+  // better-sqlite3 and as `null` from several of the wrappers and test doubles
+  // in this tree, and `null !== undefined` is true — which would have made this
+  // predicate answer "awaiting review" for every email that is not, blocking all
+  // auto-linking everywhere. Caught by three mock-driven autoLink suites going
+  // red at once.
+  return Boolean(
+    dbGet<{ id: string }>(
+      "SELECT id FROM pending_review_communications WHERE transaction_id = ? AND email_id = ?",
+      [transactionId, emailId],
+    ),
+  );
 }
 
 /**
