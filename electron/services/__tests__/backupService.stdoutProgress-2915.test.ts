@@ -559,25 +559,60 @@ describe("BACKLOG-2915 rows 21-22 — one emit per chunk, and the tail is not lo
     expect(state.manifestUploadSize).toBe("869.3 MB");
   });
 
-  it("ROW 22 — the held partial is flushed at close (mutation: remove the close-flush)", async () => {
-    // The capture's real ending. The final flush is delivered WITHOUT a trailing
-    // newline, so `Backup Aborted.` and the file count sit in the partial buffer until
-    // `close` — which is exactly the shape a byte render always has.
+  it("ROW 22 — the whole final flush is parsed, including its unterminated tail", async () => {
+    // The capture's real ending, delivered as it arrived: one 148-byte read carrying
+    // `Discarding current data hunk.`, a `94% Finished` render, the device's file count
+    // and `Backup Aborted.` — after 13.1 seconds of unwinding that the old 5-second
+    // SIGKILL never allowed.
     const { result, progress } = await runBackup((proc) => {
       proc.stdout.emit("data", Buffer.from(FIRST_CHUNK));
-      proc.stdout.emit(
-        "data",
-        Buffer.from(FINAL_ABORT_FLUSH.replace(/\n$/, "")),
-      );
+      proc.stdout.emit("data", Buffer.from(FINAL_ABORT_FLUSH));
       proc.close(255);
     });
 
     expect(result.success).toBe(false);
     // 4,604 files — the number the DEVICE reported. The percent-drop heuristic this
-    // replaced would have reported 29 for the same run.
+    // replaced would have reported 29 for the same run: a 159x undercount.
     expect(progress.some((p) => p.filesTransferred === 4604)).toBe(true);
     // …and the device's own overall percent came off the same flush.
     expect(progress.some((p) => p.deviceOverallPercent === 94)).toBe(true);
+  });
+
+  it("ROW 22b — a line held in the partial buffer at close still classifies (mutation: remove the close-flush)", async () => {
+    // SYNTHETIC, AND LABELLED. Node delivers `data` events on PIPE READ boundaries, not
+    // on line boundaries, so any line can be cut in half by the last read of a run —
+    // and a byte render, which carries no terminator at all, is ALWAYS left held. The
+    // capture's final flush happened to arrive whole, so this exact split was not
+    // observed; it is mechanically possible and the parser must not lose the tail.
+    //
+    // Asserted through the CLASSIFICATION rather than through a progress event, because
+    // that is where losing the tail would actually hurt: an `ErrorCode` line stranded in
+    // the buffer is a device-reported failure reported as an unexplained one.
+    const withFlush = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from("Requesting backup from device...\n"));
+      // The read ends mid-way through the error line; the rest never arrives, because
+      // the process exits.
+      proc.stdout.emit(
+        "data",
+        Buffer.from("ErrorCode 208: Device locked (MBErrorDomain/208)"),
+      );
+      proc.close(48);
+    });
+
+    expect(withFlush.result.errorCode).toBe("DEVICE_LOCKED");
+    expect(withFlush.result.failureCause?.deviceErrorCode).toBe(208);
+
+    // THE DISCRIMINATOR, run: the same line WITH its terminator is parsed by the chunk
+    // handler and never reaches the close-flush at all — so if this pair ever stopped
+    // disagreeing, the row above would be measuring the chunk handler by accident.
+    const terminated = await runBackup((proc) => {
+      proc.stdout.emit(
+        "data",
+        Buffer.from("ErrorCode 208: Device locked (MBErrorDomain/208)\n"),
+      );
+      proc.close(48);
+    });
+    expect(terminated.result.errorCode).toBe("DEVICE_LOCKED");
   });
 });
 
