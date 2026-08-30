@@ -891,22 +891,51 @@ describe("BACKLOG-2915 row 23 — the kill path waits for the flush it depends o
     expect(progress.some((p) => p.filesTransferred === 4604)).toBe(true);
   });
 
-  it("ROW 23b — the state-reset safety net does not fire before that flush (mutation: restore 10 s)", async () => {
-    // SR blocker B1. The safety net used to be 10 seconds against a 13.1-second
-    // shutdown, so it fired FIRST on every kill: `isRunning = false`,
-    // `currentProcess = null`, BACKUP_TIMEOUT emitted — and the real outcome then
-    // landed three seconds later on a run that had already been torn down. Raising the
-    // SIGKILL grace without raising this one buys exactly nothing.
-    const { service, proc, result, errors } = await startRun();
-    service.cancelBackup();
+  it("ROW 23b — the state-reset safety net does not fire before that flush (mutation: restore the 10 s net)", async () => {
+    // SR BLOCKER B1, AND IT IS THE HALF THAT WAS NEARLY MISSED. Raising the SIGKILL
+    // grace on its own is a dead letter: `killZombieProcess` installs a SECOND timer
+    // that force-resets the run — `isRunning = false`, `currentProcess = null`, an
+    // `error` carrying BACKUP_TIMEOUT — and it was set to 10 seconds against a
+    // 13.1-second shutdown. It therefore fired FIRST on every kill, and the real
+    // outcome landed three seconds later on a run the service had already torn down.
+    //
+    // Driven through the WATCHDOG rather than a cancel, because that is the path where
+    // the safety net emits something observable.
+    const { proc, result, progress, errors } = await startRun();
 
+    await advance(BackupService["WATCHDOG_NO_PROGRESS_TIMEOUT_MS"] + 5_000);
+    expect(sentSignal(proc, "SIGTERM")).toBe(true);
+
+    // The 13.1 seconds idevicebackup2 needs to unwind. Under the old 10 s net the
+    // BACKUP_TIMEOUT error has already been emitted by this point.
     await advance(13_100, 1_000);
     expect(errors).toHaveLength(0);
 
+    // …and only now does the flush arrive, still into a live run.
     proc.stdout.emit("data", Buffer.from(FINAL_ABORT_FLUSH));
     proc.close(255);
     const finished = await result;
-    expect(finished.errorCode).toBe("BACKUP_CANCELLED");
+
+    expect(finished.errorCode).toBe("BACKUP_TIMEOUT");
+    // The harvest the whole change exists for: the device's own file count.
+    expect(progress.some((p) => p.filesTransferred === 4604)).toBe(true);
+  });
+
+  it("ROW 23e — a cancel keeps the run OPEN until the process closes (mutation: reset isRunning in cancelBackup)", async () => {
+    // The ordering half of B1. `cancelBackup` used to clear `isRunning` synchronously,
+    // so the 13.1-second flush arrived into a run the service considered finished — and
+    // a second backup could be started on top of a process that was still writing.
+    const { service, proc, result } = await startRun();
+    const state = service as unknown as { isRunning: boolean };
+
+    service.cancelBackup();
+    await advance(13_000, 1_000);
+    expect(state.isRunning).toBe(true);
+
+    proc.stdout.emit("data", Buffer.from(FINAL_ABORT_FLUSH));
+    proc.close(255);
+    await result;
+    expect(state.isRunning).toBe(false);
   });
 
   it("ROW 23c — the watchdog's SIGKILL escalation actually runs (mutation: restore `!proc.killed`)", async () => {
