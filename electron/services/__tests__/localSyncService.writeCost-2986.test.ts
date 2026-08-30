@@ -204,14 +204,30 @@ function promotedNames(): string[] {
  * count. The docblock made that claim while `COUNT(*)` was all that backed it,
  * which a count cannot do.
  *
- * WHAT WAS ACTUALLY DEMONSTRATED, stated at the strength it was demonstrated:
- * dropping one contact from the promoted batch turns this red and NAMES it
- * ("Bench Fixture 0"), where a count would have said only "2199, expected
- * 2200". I did NOT manage to build a mutation where the count stays equal while
- * identity breaks — promoting a same-named duplicate is refused by the
- * promotion path's own dedup, so the two assertions happen not to diverge here.
- * The gain is therefore diagnostic precision and conformity with the standing
- * rule (assert ID sets, never counts), not a defect a count would have missed.
+ * A DIVERGENT CASE EXISTS AND WAS BUILT — the count is green on it and this is
+ * red. Corrupt one `display_name` at the write site (`localSyncService.ts:1812`)
+ * so one contact is dropped and another duplicated:
+ *
+ *     display_name: (contact.displayName || "Unknown").replace(/ 1$/, " 0"),
+ *
+ * "Bench Fixture 1" is written as a second "Bench Fixture 0". Probed row counts:
+ *
+ *     rows=389   expected=389   distinct=388
+ *     rows=2200  expected=2200  distinct=2199
+ *
+ * `rows` equals `expected` every time, so `expect(contactCount()).toBe(size)` —
+ * the assertion this replaced — is GREEN on all three cases. These assertions
+ * are red on all three and name "Bench Fixture 1".
+ *
+ * The promotion path's dedup cannot catch it: `findContactByNormalizedPhone`
+ * (`:1802`) is keyed on PHONE, not on name. It cannot see a name collision, and
+ * the two colliding contacts carry different numbers, so both rows land.
+ *
+ * (An earlier revision of this docblock claimed no such mutation could be built,
+ * and blamed a name-keyed dedup that does not exist. It was inference standing
+ * in for execution — the same failure the rest of this PR spent five passes
+ * correcting — and it pointed the wrong way, handing the next reader a
+ * documented reason to downgrade this back to a count.)
  *
  * The two directions are reported separately, and as the offending NAMES rather
  * than a 2,200-element `toEqual` whose diff nobody could read. That is also what
