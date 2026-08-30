@@ -1479,9 +1479,15 @@ class LocalSyncService {
      * below runs unconditionally. iPhone contacts are desktop-PULLED — a record
      * we decline to store can be read off the backup again. Android contacts are
      * phone-PUSHED and the companion sends a DIFF (BACKLOG-2411), so a record we
-     * refuse to store is one the desktop can NEVER ask for again. Per the
-     * DECISION on BACKLOG-3001, no operation may treat `android_sync` as
-     * re-fetchable. `external_contacts` therefore stays LOSSLESS and only the
+     * refuse to store is one the desktop cannot ask for again on any INCREMENTAL
+     * cycle: `handleSyncContacts` answers 200 whatever the store did, and on a
+     * 200 the companion advances its fingerprint map for exactly what it sent
+     * (`android-companion/services/contactSyncState.ts` `commitContactSync`), so
+     * it has no reason to mention those contacts again. They return only on the
+     * next FULL snapshot — `FULL_RESYNC_INTERVAL_MS`, 24h — so gating the store
+     * would open a silent up-to-24h window in which the shadow ledger disagrees
+     * with the phone. Per the DECISION on BACKLOG-3001, no operation may treat
+     * `android_sync` as re-fetchable. `external_contacts` therefore stays LOSSLESS and only the
      * automatic write into the main `contacts` table is gated — the user's route
      * back is the picker, which the same key already governs.
      *
@@ -1633,10 +1639,14 @@ class LocalSyncService {
     // smaller version of the feature.
     //
     // NOT re-promoted on switch-on. Contacts that arrived while the switch was
-    // off stay unpromoted until the next FULL sync mentions them again; they are
-    // in the picker throughout, which is the user-driven import path.
-    // Auto-promoting a backlog the user had deliberately switched off would be
-    // the same auto-import this gate exists to stop.
+    // off stay unpromoted until the next FULL sync mentions them again — at most
+    // 24h away (`FULL_RESYNC_INTERVAL_MS` on the companion). They are NOT in the
+    // picker while the switch is off: `contactHandlers.ts:1619` gates
+    // `android_sync` on this same key, so an off switch hides them from both
+    // places. Switching it back ON opens the picker on the whole backlog
+    // immediately, and that is the user-driven route back. Auto-promoting a
+    // backlog the user had deliberately switched off would be the same
+    // auto-import this gate exists to stop.
     if (androidEnabled) {
       this.promoteToMainContacts(userId, deviceId, contacts);
     } else {
@@ -1644,8 +1654,9 @@ class LocalSyncService {
       // indistinguishable in the field from a sync that failed.
       logService.info(
         `[LocalSync] Android contact promotion skipped: the Android Phone Contacts source ` +
-          `is off for this user (${contacts.length} contacts stored in external_contacts ` +
-          `and offered in the picker, none written to the contacts table)`,
+          `is off for this user (${contacts.length} contacts stored in external_contacts, ` +
+          `none written to the contacts table, and none offered in the picker — the same ` +
+          `preference hides them there until the user switches the source back on)`,
         LOG_TAG
       );
     }
