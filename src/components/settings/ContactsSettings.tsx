@@ -8,6 +8,23 @@ import {
 } from "../../utils/contactSourceDefaults";
 import type { PreferencesResult } from './types';
 
+/**
+ * Human labels for the six preference keys this screen writes, used only in the
+ * failure message. Named after the switch the user actually clicked — "Android
+ * Phone Contacts could not be saved" is actionable; "an error occurred" is not.
+ */
+const CONTACT_SOURCE_LABELS: Record<string, string> = {
+  outlookContacts: "Outlook Contacts",
+  macosContacts: "macOS Contacts",
+  iphoneContacts: "iPhone Contacts",
+  androidContacts: "Android Phone Contacts",
+  gmailContacts: "Gmail Contacts",
+  googleContacts: "Google Contacts",
+  outlookEmails: "Outlook emails",
+  gmailEmails: "Gmail emails",
+  messages: "Messages",
+};
+
 interface ContactsSettingsProps {
   userId: string;
   initialPreferences: PreferencesResult['preferences'];
@@ -141,6 +158,13 @@ export function ContactsSettings({
     return typeof val === "boolean" ? val : false;
   });
 
+  /**
+   * BACKLOG-2986: the message shown when a toggle's write fails, cleared on the
+   * next attempt. Held here rather than in the child because this component
+   * owns the handler that writes.
+   */
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const handleContactSourceToggle = async (
     category: "direct" | "inferred",
     key: string,
@@ -159,18 +183,68 @@ export function ContactsSettings({
     };
     const newValue = !currentValue;
     setters[key](newValue);
+    setSaveError(null);
+
+    /**
+     * =====================================================================
+     * BACKLOG-2986 — A LOST WRITE MUST NOT LEAVE THE SWITCH LYING.
+     * =====================================================================
+     * This block used to be `try { await updatePreferences(...) } catch { /* Silently
+     * handle *\/ }`: the optimistic flip stood whatever happened, and a failed
+     * write left the switch showing one thing while the stored preference said
+     * another.
+     *
+     * THE `catch` WAS NOT EVEN THE ROUTE. `settingsService.updatePreferences`
+     * (`settingsService.ts:138-148`) has its own try/catch and RESOLVES with
+     * `{ success: false, error }` — it does not throw. So for the failure that
+     * actually happens the catch never ran; the result was simply discarded. A
+     * revert added only to the catch — the obvious fix — would pass every
+     * thrown-error test and still lie on the real failure. Both routes are
+     * handled below, and `ContactsSettings.toggleWriteFailure-2986.test.tsx`
+     * drives them separately for exactly that reason.
+     *
+     * WHY IT MATTERS NOW, having been survivable for a long time. While every
+     * absent key meant ENABLED, an unsaved toggle and the backend agreed by
+     * luck: the user flipped a switch ON, the write vanished, the key stayed
+     * absent, and absent read as ON anyway. BACKLOG-2986 makes `androidContacts`
+     * the first switch whose OFF is a DERIVED default, so the symmetry breaks —
+     * switch it back ON, lose the write, and the backend keeps deriving OFF
+     * while the control claims otherwise. That is the same
+     * control-disagrees-with-its-own-effect defect BACKLOG-2486 closed for the
+     * iPhone switch, reached through a different door.
+     *
+     * One handler serves all six toggles, so this covers every one of them.
+     */
     try {
-      await settingsService.updatePreferences(userId, {
+      const result = await settingsService.updatePreferences(userId, {
         contactSources: { [category]: { [key]: newValue } },
       });
+      if (!result?.success) {
+        throw new Error(result?.error ?? "Preferences could not be saved");
+      }
     } catch {
-      // Silently handle
+      // Put the switch back where the stored preference still has it, and say
+      // so. A silent revert would look like the click did not register.
+      setters[key](currentValue);
+      setSaveError(
+        `${CONTACT_SOURCE_LABELS[key] ?? "That setting"} could not be saved. ` +
+          `Check your connection and try again.`,
+      );
     }
   };
 
   return (
     <div id="settings-contacts" className="mb-8">
       <h3 className="text-lg font-semibold text-gray-900 mb-4">Contacts</h3>
+      {/* BACKLOG-2986: a failed preference write is visible, not silent. */}
+      {saveError && (
+        <div
+          role="alert"
+          className="mb-3 p-2 rounded text-xs bg-red-50 text-red-700 border border-red-200"
+        >
+          {saveError}
+        </div>
+      )}
       <div className="space-y-4">
         <ContactsImportSettings
           userId={userId}

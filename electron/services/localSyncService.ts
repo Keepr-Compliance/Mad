@@ -26,6 +26,9 @@ import type { ContactOrigin } from "./db/contactOriginLink";
 import { findClaimedSourceRecordIds } from "./db/contactOriginLink";
 import { autoLinkNewMessagesForUserDebounced } from "./autoLinkService";
 import { toMatchingKey } from "../utils/phoneNormalization";
+// BACKLOG-2986: the Android contact WRITE gate. Same helper the picker gate and
+// the iPhone write gate read.
+import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import type {
   EncryptedPayload,
   SyncPayload,
@@ -1362,7 +1365,14 @@ class LocalSyncService {
       let storedCount = 0;
       if (this.userId && contactPayload.contacts.length > 0) {
         try {
-          storedCount = this.storeContacts(
+          // BACKLOG-2986: `storeContacts` became async when it grew the
+          // `androidContacts` gate — it reads the preference before writing.
+          // This handler was already async, so the await costs nothing
+          // structurally; it does mean the phone's POST now waits on one
+          // Supabase round trip. Worst case on a network blip is latency and
+          // then fail-open, and a phone retry is safe because BACKLOG-2987's
+          // record claims make promotion idempotent.
+          storedCount = await this.storeContacts(
             this.userId,
             contactPayload.deviceId,
             contactPayload.contacts,
@@ -1421,6 +1431,9 @@ class LocalSyncService {
    *
    * BACKLOG-1449: Android contacts sync
    * BACKLOG-2208: full snapshot vs incremental diff.
+   * BACKLOG-2986: the `androidContacts` preference now gates the PROMOTION at
+   *   the bottom of this method. It does NOT gate the shadow-table write above
+   *   it — see the gate for why, and note that this is why the method is async.
    *
    * @param userId - User ID for contact ownership
    * @param deviceId - Android device ID from pairing
@@ -1434,12 +1447,56 @@ class LocalSyncService {
    *   full sync, preserving the pre-2208 behavior.
    * @returns Number of contacts stored/upserted
    */
-  private storeContacts(
+  private async storeContacts(
     userId: string,
     deviceId: string,
     contacts: SyncContact[],
     isFullSync?: boolean
-  ): number {
+  ): Promise<number> {
+    /**
+     * =====================================================================
+     * BACKLOG-2986 — THE WRITE GATE. Read before moving it or narrowing it.
+     * =====================================================================
+     * Read at the TOP, used at the bottom, on purpose: the Supabase round trip
+     * happens BEFORE any DB work rather than interleaved between
+     * `syncContactsBySource` and `promoteToMainContacts`.
+     *
+     * WHY THE PREFERENCE IS READ HERE AND NOT PASSED IN. It could have been
+     * hoisted into `handleSyncContacts` and threaded down as a parameter,
+     * keeping this method synchronous. It is read here so that the read and the
+     * gate it feeds sit in the same function, which is the only arrangement a
+     * `storeContacts` test can observe: with the read hoisted, a mutation
+     * replacing it with a literal `true` stays green in every suite that drives
+     * this method. `handleSyncContacts` was already `async`, so nothing had to
+     * be restructured to allow this.
+     *
+     * The precedent is `iPhoneSyncStorageService.storeContacts`, which reads the
+     * same helper at the top of the method it gates, with the same fail-open
+     * default and the same info-level skip log.
+     *
+     * ONE DELIBERATE DIVERGENCE FROM THAT PRECEDENT: the iPhone gate skips the
+     * WHOLE store. This one skips only the promotion, and the shadow-table write
+     * below runs unconditionally. iPhone contacts are desktop-PULLED — a record
+     * we decline to store can be read off the backup again. Android contacts are
+     * phone-PUSHED and the companion sends a DIFF (BACKLOG-2411), so a record we
+     * refuse to store is one the desktop can NEVER ask for again. Per the
+     * DECISION on BACKLOG-3001, no operation may treat `android_sync` as
+     * re-fetchable. `external_contacts` therefore stays LOSSLESS and only the
+     * automatic write into the main `contacts` table is gated — the user's route
+     * back is the picker, which the same key already governs.
+     *
+     * `defaultValue: true` is the picker's value, not a guess. It is reached
+     * only when preferences cannot be READ AT ALL, where a failed read cannot
+     * see `phone_type` either — so both gates fail open together and can never
+     * disagree about a user who is offline.
+     */
+    const androidEnabled = await isContactSourceEnabled(
+      userId,
+      "direct",
+      "androidContacts",
+      true,
+    );
+
     // Map SyncContact to ExternalContactInput for the generic upsert
     const externalContacts: externalContactDb.ExternalContactInput[] = contacts.map(
       (contact) => {
@@ -1556,13 +1613,42 @@ class LocalSyncService {
       LOG_TAG
     );
 
-    // BACKLOG-1469: Promote Android contacts to the main contacts table.
+    // BACKLOG-1469 / BACKLOG-2986: promote Android contacts to the main contacts
+    // table — ONLY when the user has the Android contact source switched on.
+    //
     // Outlook/Google contacts rely on user-initiated import from the "Available"
-    // list, but Android contacts should auto-promote so they appear immediately
-    // in the main contacts view. Match by phone number to avoid duplicates.
-    // On a partial diff this only promotes the new/changed contacts, which is
-    // correct — unchanged contacts were promoted on a prior sync (BACKLOG-2208).
-    this.promoteToMainContacts(userId, deviceId, contacts);
+    // list; Android auto-promotes so the phone's address book appears
+    // immediately in the main contacts view. Match by phone number to avoid
+    // duplicates. On a partial diff this only promotes the new/changed contacts,
+    // which is correct — unchanged contacts were promoted on a prior sync
+    // (BACKLOG-2208).
+    //
+    // BACKLOG-2986 ADDED THE CONDITION, and the paragraph above used to argue
+    // for it being unconditional. Until this change `androidContacts` gated the
+    // PICKER and nothing else, so a user who switched Android contacts off
+    // watched them disappear from the picker while this line kept writing new
+    // ones straight into their contacts table on every sync. Founder,
+    // 2026-08-30: "contacts aren't auto imported." A control that does not
+    // control the thing it names is the defect BACKLOG-2986 exists to fix, not a
+    // smaller version of the feature.
+    //
+    // NOT re-promoted on switch-on. Contacts that arrived while the switch was
+    // off stay unpromoted until the next FULL sync mentions them again; they are
+    // in the picker throughout, which is the user-driven import path.
+    // Auto-promoting a backlog the user had deliberately switched off would be
+    // the same auto-import this gate exists to stop.
+    if (androidEnabled) {
+      this.promoteToMainContacts(userId, deviceId, contacts);
+    } else {
+      // Info, not debug, and it names the reason: a silent skip is
+      // indistinguishable in the field from a sync that failed.
+      logService.info(
+        `[LocalSync] Android contact promotion skipped: the Android Phone Contacts source ` +
+          `is off for this user (${contacts.length} contacts stored in external_contacts ` +
+          `and offered in the picker, none written to the contacts table)`,
+        LOG_TAG
+      );
+    }
 
     return inserted;
   }
@@ -1574,6 +1660,12 @@ class LocalSyncService {
    *
    * BACKLOG-1469: Android contacts were only stored in external_contacts shadow
    * table but never promoted to the main contacts table, making them invisible.
+   *
+   * BACKLOG-2986: THIS METHOD STILL READS NO PREFERENCE, and must not start —
+   * its caller decides. The gate lives at the top of `storeContacts`, which is
+   * where the read can be observed by the suites that drive the write path. Do
+   * not add a second read here: two gates on one decision is how they come to
+   * disagree.
    *
    * BACKLOG-2556 — `deviceId` is a parameter because THE PROMOTED CONTACT MUST
    * CLAIM THE RECORD IT CAME FROM. See the origin below.

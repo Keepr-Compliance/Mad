@@ -14,7 +14,19 @@
 // Keep localSyncService importable under jest without touching the network/DB.
 jest.mock("../supabaseService", () => ({
   __esModule: true,
-  default: { getClient: () => ({ auth: { getUser: jest.fn() } }) },
+  default: {
+    getClient: () => ({ auth: { getUser: jest.fn() } }),
+    // BACKLOG-2986: `storeContacts` now reads `androidContacts` before it
+    // promotes, via the REAL `preferenceHelper`. Stated explicitly rather than
+    // left to the helper's catch: without this key the read would throw, the
+    // helper would fail open to `true`, and every case below would be green by
+    // accident instead of by design. `localSyncService.writeGate-2986.test.ts`
+    // is where the gate itself is swept.
+    getPreferences: jest.fn().mockResolvedValue({
+      phone_type: "android",
+      contactSources: { direct: { androidContacts: true } },
+    }),
+  },
 }));
 
 jest.mock("../db/externalContactDbService", () => ({
@@ -76,8 +88,8 @@ const contacts: SyncContact[] = [
 beforeEach(() => jest.clearAllMocks());
 
 describe("storeContacts — full vs partial (BACKLOG-2208)", () => {
-  it("FULL sync (isFullSync=true) reconciles via syncContactsBySource (upsert + stale-delete)", () => {
-    storeContacts(USER, DEVICE, contacts, true);
+  it("FULL sync (isFullSync=true) reconciles via syncContactsBySource (upsert + stale-delete)", async () => {
+    await storeContacts(USER, DEVICE, contacts, true);
 
     expect(syncSpy).toHaveBeenCalledTimes(1);
     expect(syncSpy.mock.calls[0][1]).toBe("android_sync");
@@ -90,15 +102,15 @@ describe("storeContacts — full vs partial (BACKLOG-2208)", () => {
     expect(markCurrentSpy).not.toHaveBeenCalled();
   });
 
-  it("legacy phone (isFullSync absent) is treated as FULL — preserves stale-delete", () => {
-    storeContacts(USER, DEVICE, contacts);
+  it("legacy phone (isFullSync absent) is treated as FULL — preserves stale-delete", async () => {
+    await storeContacts(USER, DEVICE, contacts);
 
     expect(syncSpy).toHaveBeenCalledTimes(1);
     expect(upsertSpy).not.toHaveBeenCalled();
   });
 
-  it("PARTIAL diff (isFullSync=false) upserts ONLY — never triggers stale-delete", () => {
-    storeContacts(USER, DEVICE, contacts, false);
+  it("PARTIAL diff (isFullSync=false) upserts ONLY — never triggers stale-delete", async () => {
+    await storeContacts(USER, DEVICE, contacts, false);
 
     expect(upsertSpy).toHaveBeenCalledTimes(1);
     expect(upsertSpy.mock.calls[0][1]).toBe("android_sync");
@@ -118,8 +130,8 @@ describe("storeContacts — full vs partial (BACKLOG-2208)", () => {
     expect(markCurrentSpy.mock.calls[0][1]).toBe("android_sync");
   });
 
-  it("PARTIAL upsert receives the deviceId-keyed external record ids", () => {
-    storeContacts(USER, DEVICE, contacts, false);
+  it("PARTIAL upsert receives the deviceId-keyed external record ids", async () => {
+    await storeContacts(USER, DEVICE, contacts, false);
 
     const upserted = upsertSpy.mock.calls[0][2] as Array<{
       external_record_id: string;
