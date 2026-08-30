@@ -996,6 +996,36 @@ describe("BACKLOG-2915 rows 16-20 — the classes that change when `-d` goes", (
     expect(result.error).toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);
   });
 
+  it("ROW 16c — the broken-pipe rung is pinned, though production can no longer reach it", () => {
+    // SR I1 gave a choice: pin this rung or delete it. Pinned, because deleting it
+    // would also delete the only place the link-drop class is decided from EVIDENCE
+    // rather than inferred — and `-d` could return for debugging.
+    //
+    // It is unreachable under the shipped argv: `usbmuxd_send returned -N (Broken pipe)`
+    // is `debug_info()` output (src/idevice.c:643) gated on `debug_level`, which only
+    // `-d` sets, and it is never printed on stdout. Measured, and the measurement is why
+    // this row is written the way it is: replacing the pattern with a never-matching
+    // regex leaves every OTHER test in the backup suite green, because each one now
+    // reaches CONNECTION_LOST through the D1 inference rung instead.
+    //
+    // EXIT CODE 0 IS WHAT SEPARATES THEM. The inference rung is gated on a non-zero
+    // exit, so this is the one shape where the two rungs disagree — and therefore the
+    // only shape that can pin the pattern at all.
+    const evidenced = classifyBackupFailure(
+      0,
+      "",
+      "usbmuxd_send returned -32 (Broken pipe)",
+    );
+    expect(evidenced.errorCode).toBe("CONNECTION_LOST");
+    expect(evidenced.message).toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+
+    // The discriminator: the same exit 0 with nothing to read is unexplained, not a
+    // link drop. If this pair ever stopped disagreeing the row above would be measuring
+    // the inference rung by accident.
+    const nothing = classifyBackupFailure(0, "", "");
+    expect(nothing.errorCode).toBe("UNKNOWN_ERROR");
+  });
+
   it("ROW 17 — the inference rung is NOT lock and NOT disk-full (mutation: route it above the device switch)", () => {
     // The ordering is the whole safety property. `usbmuxd_send returned -32 (Broken
     // pipe)` was teardown chatter present in four of five real failures INCLUDING the
