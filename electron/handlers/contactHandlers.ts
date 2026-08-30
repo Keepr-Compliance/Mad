@@ -1244,11 +1244,30 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // the *macOS* preference. See the long note at that deletion site for
         // why that was wrong but NOT, as first diagnosed, a Windows outage.
         //
-        // Default `true` on purpose, and it carries real weight: the key is only
-        // written when the user declared an Android phone (`phoneType:
-        // "android"` at ContactSourceStep.tsx:138 keeps it out of
-        // `visibleSources` otherwise), so for most users it is ABSENT. Absent
-        // must mean shown — the same reading the other four sources take.
+        // BACKLOG-2986 — ABSENT NO LONGER MEANS SHOWN. The paragraph that stood
+        // here argued the opposite ("Absent must mean shown — the same reading
+        // the other four sources take") and it was wrong in the way that
+        // mattered: because onboarding writes this key ONLY for a user who
+        // declared an Android phone (`ContactSourceStep.tsx:140`), absent is the
+        // state nearly every user is in, so "absent = shown" imported Android
+        // contacts for essentially everybody — with no Settings control able to
+        // stop it, since onboarding was the key's only writer. Founder,
+        // 2026-08-30: "contacts aren't auto imported."
+        //
+        // `androidContacts` is now the second member of
+        // BACKEND_DERIVED_DEFAULT_KEYS, so an absent key is answered by
+        // onboarding's own rule instead of by the argument below: FALSE unless
+        // the user declared an Android phone. Read that constant's docblock for
+        // the production row counts behind the change.
+        //
+        // THE 4th ARGUMENT STAYS `true`, and it is not vestigial. It is reached
+        // only by case 3 of `isContactSourceEnabled` — preferences could not be
+        // READ AT ALL (Supabase offline). Every source fails OPEN there by
+        // design, because a failed read cannot see `phone_type` either, so
+        // deriving would be guessing and guessing OFF silently breaks a working
+        // import on a network blip. Tightening it to `false` would do exactly
+        // that; the derived default already handles the readable-but-absent
+        // case, which is the one this item is about.
         const androidEnabled = await isContactSourceEnabled(validatedUserId, "direct", "androidContacts", true);
 
         // Convert Contacts app data to contact objects

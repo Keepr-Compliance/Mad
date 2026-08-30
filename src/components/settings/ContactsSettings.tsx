@@ -13,6 +13,18 @@ interface ContactsSettingsProps {
   initialPreferences: PreferencesResult['preferences'];
   isMicrosoftConnected: boolean;
   isGoogleConnected: boolean;
+  /**
+   * BACKLOG-2986: is the Android companion the ACTIVE message import source?
+   *
+   * Decides only whether the Android re-import affordance can point at a
+   * control that is on the page. `Settings.tsx` renders `AndroidMessagesSettings`
+   * — and with it the Force Re-import button — solely when the active source is
+   * `android-companion`, so a button that scrolled there unconditionally would
+   * land the user on the macOS panel instead. Defaults to `false` because the
+   * active source is loaded asynchronously and is `null` until it arrives; an
+   * absent answer must not draw a control that goes nowhere.
+   */
+  androidCompanionActive?: boolean;
 }
 
 export function ContactsSettings({
@@ -20,6 +32,7 @@ export function ContactsSettings({
   initialPreferences,
   isMicrosoftConnected,
   isGoogleConnected,
+  androidCompanionActive = false,
 }: ContactsSettingsProps) {
   const { isMacOS } = usePlatform();
   // BACKLOG-2486: the phone type the user declared at onboarding decides both
@@ -72,6 +85,48 @@ export function ContactsSettings({
       authProvider: null,
     });
   });
+  /**
+   * BACKLOG-2986: the Android Contacts switch.
+   *
+   * Same shape as `iphoneContacts` above and for the same reason — an absent
+   * key goes through the rule the MAIN PROCESS applies to it
+   * (`preferenceHelper.ts` -> `isContactSourceOnByDefault`), not through the
+   * blanket `true` the toggles above it use. `androidContacts` joined
+   * `BACKEND_DERIVED_DEFAULT_KEYS` in the same change, so drawing this switch
+   * ON for an absent key would paint it ON while the backend read the same key
+   * as OFF.
+   *
+   * Until this change Settings could not write the key at all — onboarding was
+   * its only writer, and only for a user who declared an Android phone — so a
+   * user whose Android contacts were importing had no way to stop them.
+   */
+  const [androidContactsEnabled, setAndroidContactsEnabled] = useState<boolean>(() => {
+    const val = initialPreferences?.contactSources?.direct?.androidContacts;
+    if (typeof val === "boolean") return val;
+    return isContactSourceOnByDefault("androidContacts", {
+      platform: isMacOS ? "macos" : "windows",
+      phoneType,
+      // Not read by the androidContacts arm of the rule; see its switch case.
+      authProvider: null,
+    });
+  });
+  /**
+   * BACKLOG-2986: does this user have an Android relationship at all?
+   *
+   * TRUE when they declared an Android phone, or when a preference for the key
+   * has ever been stored. The child ORs in "and/or android_sync contacts
+   * exist", which it can see and this component cannot.
+   *
+   * The stored-preference clause is load-bearing rather than defensive: the
+   * founder's own state is `phone_type: "iphone"` with a stored
+   * `androidContacts`, and after an Android Force Re-import his contact count
+   * is 0 — so a gate of "declared Android OR count > 0" alone would hide the
+   * switch from exactly the person who reported its absence, in exactly the
+   * window where he needs it.
+   */
+  const androidContactsDeclared =
+    phoneType === "android" ||
+    typeof initialPreferences?.contactSources?.direct?.androidContacts === "boolean";
   // Contact source preferences - inferred from conversations
   const [outlookEmailsInferred, setOutlookEmailsInferred] = useState<boolean>(() => {
     const val = initialPreferences?.contactSources?.inferred?.outlookEmails;
@@ -95,6 +150,7 @@ export function ContactsSettings({
       outlookContacts: setOutlookContactsEnabled,
       macosContacts: setMacosContactsEnabled,
       iphoneContacts: setIphoneContactsEnabled,
+      androidContacts: setAndroidContactsEnabled,
       gmailContacts: setGmailContactsEnabled,
       googleContacts: setGoogleContactsEnabled,
       outlookEmails: setOutlookEmailsInferred,
@@ -129,6 +185,9 @@ export function ContactsSettings({
           // derived default is OFF and hiding the control would leave them no
           // way back.
           showIphoneContacts={phoneType !== "android"}
+          androidContactsEnabled={androidContactsEnabled}
+          androidContactsDeclared={androidContactsDeclared}
+          androidCompanionActive={androidCompanionActive}
           gmailContactsEnabled={gmailContactsEnabled}
           googleContactsEnabled={googleContactsEnabled}
           outlookEmailsInferred={outlookEmailsInferred}

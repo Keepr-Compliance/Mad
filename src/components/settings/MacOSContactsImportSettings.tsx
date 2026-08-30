@@ -100,6 +100,21 @@ interface ContactsImportSettingsProps {
    * import from.
    */
   showIphoneContacts: boolean;
+  /** BACKLOG-2986: Android companion contacts, which now have a switch here. */
+  androidContactsEnabled: boolean;
+  /**
+   * BACKLOG-2986: the caller knows this user has an Android relationship — they
+   * declared an Android phone, or a preference for the key has been stored.
+   * ORed here with "android_sync contacts exist", which only this component can
+   * see, to decide whether the Android switch, count and re-import note appear.
+   */
+  androidContactsDeclared: boolean;
+  /**
+   * BACKLOG-2986: is the Android companion the ACTIVE message import source?
+   * Only then is the Android Companion panel — and its Force Re-import — on the
+   * page for the re-import note to point at.
+   */
+  androidCompanionActive: boolean;
   gmailContactsEnabled: boolean;
   /** TASK-2303: Google Contacts toggle (People API) */
   googleContactsEnabled: boolean;
@@ -123,6 +138,9 @@ export function ContactsImportSettings({
   macosContactsEnabled,
   iphoneContactsEnabled,
   showIphoneContacts,
+  androidContactsEnabled,
+  androidContactsDeclared,
+  androidCompanionActive,
   gmailContactsEnabled,
   googleContactsEnabled,
   outlookEmailsInferred,
@@ -349,7 +367,29 @@ export function ContactsImportSettings({
   // BACKLOG-2486: `showIphoneContacts` counts as a source. Without it, a Windows
   // user with an iPhone and no mailbox connected hit the "no sources" placeholder
   // below and never saw the one switch that governs their only contact source.
-  const hasAnySources = hasMacOS || hasOutlook || hasGoogle || showIphoneContacts;
+  /**
+   * BACKLOG-2986 — Android as a first-class contact source on this screen.
+   *
+   * Shown when the caller says the user has an Android relationship (declared
+   * phone, or a stored preference) OR when `android_sync` rows actually exist.
+   * The second clause is what covers the reported case: the founder's
+   * `phone_type` is "iphone", he never declared Android, and 389 Android
+   * contacts were sitting in `external_contacts` with this screen silent about
+   * all of them.
+   *
+   * Deliberately NOT `count > 0` alone. A count-only gate would make the panel
+   * look identical whether Android sync is working or broken — the missing
+   * SIGNAL that BACKLOG-2986 calls the worse of its two defects — and would
+   * hide the switch during the window after a Force Re-import, when the count
+   * is legitimately 0 and the user most needs the control.
+   */
+  const androidContactCount = sourceStats?.android_sync ?? 0;
+  const showAndroidContacts = androidContactsDeclared || androidContactCount > 0;
+  // BACKLOG-2986: Android counts as a source, for the same reason BACKLOG-2486
+  // added `showIphoneContacts` — a user whose only address book is the phone in
+  // their pocket must not hit the "no sources" placeholder.
+  const hasAnySources =
+    hasMacOS || hasOutlook || hasGoogle || showIphoneContacts || showAndroidContacts;
 
   const anySyncing = isSyncing || outlookSyncing || googleSyncing;
 
@@ -578,6 +618,43 @@ export function ContactsImportSettings({
               </button>
             </div>
           )}
+
+          {/*
+            BACKLOG-2986: Android Phone Contacts.
+
+            The preference existed and the backend honoured it
+            (`contactHandlers.ts` gates `android_sync` rows on it by name since
+            BACKLOG-2478), but onboarding was its ONLY writer — and only for a
+            user who declared an Android phone. So a user whose Android contacts
+            were importing had no control anywhere that could stop them. That,
+            plus an absent key reading as `true`, is BACKLOG-2986.
+          */}
+          {showAndroidContacts && (
+            <div className="flex items-center justify-between py-1">
+              <div className="flex flex-col">
+                <span className="text-sm text-gray-700">Android Phone Contacts</span>
+                <span className="text-xs text-gray-400">
+                  Contacts pushed from the Keepr Companion app on your Android phone.
+                </span>
+              </div>
+              <button
+                onClick={() => onToggleSource("direct", "androidContacts", androidContactsEnabled)}
+                disabled={loadingPreferences}
+                className={`ml-4 shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  androidContactsEnabled ? "bg-blue-500" : "bg-gray-300"
+                }`}
+                role="switch"
+                aria-checked={androidContactsEnabled}
+                aria-label="Android Phone Contacts import"
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    androidContactsEnabled ? "translate-x-6" : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -749,7 +826,76 @@ export function ContactsImportSettings({
             <div className={`text-xs ${googleContactsEnabled ? "text-green-600" : "text-gray-400"}`}>Google</div>
           </div>
         )}
+        {/*
+          BACKLOG-2986 — the Android cell.
+
+          WHICH NUMBER THIS IS: `android_sync` rows in `external_contacts`, the
+          same `getContactSourceStats` GROUP BY every other cell in this grid
+          reads. On the founder's machine that is 389. It is NOT the 26 from
+          "Promoted 26 Android contacts to main contacts table" — that is a
+          `promoteToMainContacts` result, a different quantity, and no cell here
+          shows a promotion count for any source. Putting 26 in this cell would
+          make it the only cell in the row that means something else.
+
+          `getContactSourceStats` already seeds and returns the `android_sync`
+          key, so nothing behind this needed to change — the grid was simply not
+          asking.
+        */}
+        {showAndroidContacts && (
+          <div className={`p-2 rounded border ${
+            androidContactsEnabled
+              ? "bg-teal-50 border-teal-200"
+              : "bg-gray-50 border-gray-200 opacity-50"
+          }`}>
+            <div className={`text-lg font-semibold ${androidContactsEnabled ? "text-teal-700" : "text-gray-400"}`}>
+              {sourceStats?.android_sync?.toLocaleString() ?? "—"}
+            </div>
+            <div className={`text-xs ${androidContactsEnabled ? "text-teal-600" : "text-gray-400"}`}>Android</div>
+          </div>
+        )}
       </div>
+
+      {/*
+        BACKLOG-2986 — where the Android re-import lives, said on the screen
+        that owns contact sources.
+
+        THIS IS A POINTER, NOT A SECOND DESTROYER, and that is deliberate. The
+        DECISION on BACKLOG-3001 rules that Android is push-only: the desktop
+        cannot re-fetch it, so no operation may treat it as re-fetchable. The
+        companion sends a DIFF, not a full snapshot (`storeContacts(...,
+        isFullSync)` is decided by the phone; BACKLOG-2411 is still open), so
+        deleting `android_sync` contacts from here and waiting for the next sync
+        would NOT bring them back. The one flow that does work — clear plus
+        `stopServer`, so the phone re-sends from scratch — also deletes MESSAGES,
+        which is not a thing a button on the Contacts screen should do.
+
+        So this says where the working control is, and only offers to take the
+        user there when that control is actually rendered.
+      */}
+      {showAndroidContacts && (
+        <div className="mb-3 p-2 rounded text-xs bg-gray-50 text-gray-600 border border-gray-200">
+          <p>
+            Your phone holds the only copy of these contacts — the desktop cannot fetch
+            them again on its own.
+            {androidCompanionActive
+              ? " Re-importing clears the synced messages and contacts together, then the companion app re-sends both."
+              : " Set your message import source to Android above to manage or re-import them."}
+          </p>
+          {androidCompanionActive && (
+            <button
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("settings-android-companion")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
+              }
+              className="mt-1 text-xs font-medium text-blue-600 hover:text-blue-700 underline"
+            >
+              Go to Android Companion re-import
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Offline warning for Outlook contacts */}
       {!isOnline && hasOutlook && outlookContactsEnabled && (

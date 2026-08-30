@@ -116,9 +116,35 @@ export const CONTACT_SOURCE_KEYS: readonly ContactSourceKey[] = [
  * would risk defaulting a working mailbox import to OFF. The onboarding step
  * writes these on BOTH continue and skip, which covers the population that the
  * mismatch actually affected.
- */
+ *
+ * BACKLOG-2986: `androidContacts` JOINS THE LIST. Until now it was absent from
+ * it, so `contactHandlers.ts` answered an absent key with the blanket `true` it
+ * passes as `defaultValue` — and because onboarding writes the key ONLY when
+ * the user declared an Android phone (`ContactSourceStep.tsx:140`, the card
+ * carries `phoneType: "android"`), absent is the state nearly every user is in.
+ * Android contacts therefore imported for essentially everybody, and Settings
+ * had no control that could turn them off: BACKLOG-2986 is that report.
+ *
+ * Founder, 2026-08-30: *"contacts aren't auto imported."* Deriving is what
+ * delivers that, and it was measured rather than assumed. Grouping every
+ * `user_preferences` row at the time of writing: 10 rows are
+ * `phone_type=iphone` with the key ABSENT (-> now derives FALSE, the fix), 2
+ * are `phone_type=iphone` with an explicit `true` and 1 is
+ * `phone_type=android` with an explicit `true` (-> unchanged, a stored value
+ * always wins). ZERO rows are absent-with-a-declared-Android-phone, the one
+ * combination this rule still answers TRUE for — and for that user TRUE is
+ * right, because it is exactly the card onboarding would have pre-ticked and
+ * the companion is the only address book they have. That is the same reasoning
+ * that keeps `iphoneContacts` ON on Windows.
+ *
+ * The renderer half of this is `ContactsSettings.tsx`, which resolves an absent
+ * `androidContacts` through this same rule. A switch drawn from a blanket
+ * `true` while the main process derived `false` would be a control that
+ * disagrees with its own effect — the defect BACKLOG-2486 closed for iPhone.
+  */
 export const BACKEND_DERIVED_DEFAULT_KEYS: readonly ContactSourceKey[] = [
   "iphoneContacts",
+  "androidContacts",
 ];
 
 /**

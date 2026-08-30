@@ -83,9 +83,16 @@ export const CONTACT_SOURCE_KEYS: readonly ContactSourceKey[] = [
  * `outlookContacts`/`googleContacts` need an `authProvider` the main process
  * cannot see. The `contactHandlers.ts:1294` catch-all this comment used to cite
  * was deleted by BACKLOG-2478 — `android_sync` reads `androidContacts` by name.
+ *
+ * BACKLOG-2986 added `androidContacts`. Settings > Contacts resolves an absent
+ * key through this rule for the same reason it does for iPhone: the main
+ * process now derives it too, and a switch drawn from a blanket `true` while
+ * the backend derived `false` would disagree with its own effect. See the
+ * canonical file for the measured production evidence behind the change.
  */
 export const BACKEND_DERIVED_DEFAULT_KEYS: readonly ContactSourceKey[] = [
   "iphoneContacts",
+  "androidContacts",
 ];
 
 /**

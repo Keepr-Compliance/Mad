@@ -68,6 +68,13 @@ export interface PreferencesResult {
          * from this type for the same reason.
          */
         iphoneContacts?: boolean;
+        /**
+         * BACKLOG-2986: same story one source later — written by onboarding
+         * since BACKLOG-1900, and only for a user who declared an Android
+         * phone, so Settings could never turn it off. It was absent from this
+         * type for the same reason `iphoneContacts` was.
+         */
+        androidContacts?: boolean;
       };
       inferred?: {
         outlookEmails?: boolean;

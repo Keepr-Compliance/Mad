@@ -27,8 +27,8 @@
  * is mocked — one level further out, at the actual I/O boundary. That makes the
  * derived-default rule (`contactSourceDefaults.isContactSourceOnByDefault`) part
  * of what is under test, which it must be: `iphoneContacts` is the only key in
- * BACKEND_DERIVED_DEFAULT_KEYS, so it is the only key whose absent value is not
- * simply `true`.
+ * BACKEND_DERIVED_DEFAULT_KEYS. BACKLOG-2986 added `androidContacts` to that
+ * list, so those two are the keys whose absent value is not simply `true`.
  *
  * `process.platform` is overridden per case because the derived rule reads it
  * (`preferenceHelper.ts:66`).
@@ -275,8 +275,16 @@ afterEach(() => {
 // rather than derived from the rule, so that a bug in the rule cannot also
 // produce the expectation that hides it.
 //
-// Outlook and Android appear in EVERY expected set. They are the controls: no
-// combination of the iPhone and macOS preferences may move them.
+// Outlook and Android are the CONTROLS: no combination of the iPhone and macOS
+// preferences may move either one.
+//
+// BACKLOG-2986 flipped Android's constant from "in every set" to "in none", and
+// the control is unchanged by that. Every bag below carries `phone_type:
+// "iphone"` with `androidContacts` ABSENT — the state onboarding actually
+// leaves an iPhone user in — and an absent `androidContacts` now DERIVES FALSE
+// rather than falling to the blanket `true` the caller passes. What the control
+// still asserts is the thing that matters: Android's presence does not move when
+// the iPhone or macOS preference moves. Its own key is swept separately below.
 // ===========================================================================
 
 type Cell = {
@@ -289,36 +297,36 @@ type Cell = {
 const MATRIX: Cell[] = [
   // ---- macOS ------------------------------------------------------------
   // Stored iPhone value wins in every row where it is present.
-  { platform: "darwin", iphone: true, macos: true, expected: [ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
-  { platform: "darwin", iphone: true, macos: false, expected: [ANDROID_ID, IPHONE_ID, OUTLOOK_ID] },
+  { platform: "darwin", iphone: true, macos: true, expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", iphone: true, macos: false, expected: [IPHONE_ID, OUTLOOK_ID] },
   // THE FOUNDER'S CASE. Before the fix this row was identical to the one above
   // it: `macosEnabled` answered for iPhone and the record came through anyway.
-  { platform: "darwin", iphone: false, macos: true, expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
-  { platform: "darwin", iphone: false, macos: false, expected: [ANDROID_ID, OUTLOOK_ID] },
+  { platform: "darwin", iphone: false, macos: true, expected: [MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", iphone: false, macos: false, expected: [OUTLOOK_ID] },
   // Absent iPhone on macOS DERIVES false (BACKLOG-2479: the Mac address book
   // already carries the iPhone's contacts via iCloud).
-  { platform: "darwin", macos: true, expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
-  { platform: "darwin", macos: false, expected: [ANDROID_ID, OUTLOOK_ID] },
+  { platform: "darwin", macos: true, expected: [MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", macos: false, expected: [OUTLOOK_ID] },
   // Absent macOS fails OPEN on true — it is NOT in BACKEND_DERIVED_DEFAULT_KEYS.
-  { platform: "darwin", iphone: true, expected: [ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
-  { platform: "darwin", iphone: false, expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", iphone: true, expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", iphone: false, expected: [MACOS_ID, OUTLOOK_ID] },
   // Both absent: iPhone derives false, macOS fails open true.
-  { platform: "darwin", expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", expected: [MACOS_ID, OUTLOOK_ID] },
 
   // ---- Windows ----------------------------------------------------------
   // No macOS address book exists here, but the preference is still readable.
-  { platform: "win32", iphone: true, macos: true, expected: [ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
-  { platform: "win32", iphone: true, macos: false, expected: [ANDROID_ID, IPHONE_ID, OUTLOOK_ID] },
-  { platform: "win32", iphone: false, macos: true, expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
-  { platform: "win32", iphone: false, macos: false, expected: [ANDROID_ID, OUTLOOK_ID] },
+  { platform: "win32", iphone: true, macos: true, expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", iphone: true, macos: false, expected: [IPHONE_ID, OUTLOOK_ID] },
+  { platform: "win32", iphone: false, macos: true, expected: [MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", iphone: false, macos: false, expected: [OUTLOOK_ID] },
   // Absent iPhone on Windows DERIVES TRUE. This is the case commit `c774e198`
   // bolted the OR on to rescue; the derived default now covers it, which is what
   // makes removing the OR safe.
-  { platform: "win32", macos: true, expected: [ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
-  { platform: "win32", macos: false, expected: [ANDROID_ID, IPHONE_ID, OUTLOOK_ID] },
-  { platform: "win32", iphone: true, expected: [ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
-  { platform: "win32", iphone: false, expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
-  { platform: "win32", expected: [ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", macos: true, expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", macos: false, expected: [IPHONE_ID, OUTLOOK_ID] },
+  { platform: "win32", iphone: true, expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", iphone: false, expected: [MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
 ];
 
 describe("BACKLOG-2486 — the iPhone x macOS preference matrix", () => {
@@ -483,7 +491,11 @@ describe("BACKLOG-2477 — `messages.source` is not part of any contacts decisio
         ...(source ? { messages: { source } } : {}),
       };
 
-      expect(await pickerIds()).toEqual([ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID]);
+      // BACKLOG-2986: Android is absent from this set because `androidContacts`
+      // is absent from the bag and the bag says `phone_type: "iphone"` — it now
+      // derives FALSE. That is orthogonal to what this suite asserts: the set is
+      // the SAME for all four radio positions, which is the invariant.
+      expect(await pickerIds()).toEqual([IPHONE_ID, MACOS_ID, OUTLOOK_ID]);
     });
   }
 
@@ -496,6 +508,87 @@ describe("BACKLOG-2477 — `messages.source` is not part of any contacts decisio
       messages: { source: "iphone-sync" },
     };
 
-    expect(await pickerIds()).toEqual([ANDROID_ID, MACOS_ID, OUTLOOK_ID]);
+    expect(await pickerIds()).toEqual([MACOS_ID, OUTLOOK_ID]);
   });
+});
+
+// ===========================================================================
+// BACKLOG-2986 — `androidContacts` x declared phone type, swept.
+//
+// The matrix above holds Android still while iPhone and macOS move. This one
+// does the opposite: it moves ONLY the Android key and the phone type the
+// derived default reads, and pins the exact id set at every point.
+//
+// It exists because BACKLOG-2986 changed what an ABSENT `androidContacts` means.
+// Before: the blanket `true` the caller passes, so Android contacts imported for
+// essentially every user — onboarding writes this key ONLY for someone who
+// declared an Android phone, so absent is where nearly everyone is, and there
+// was no Settings control that could write it. Founder, 2026-08-30: "contacts
+// aren't auto imported."
+//
+// FIXTURE PROVENANCE: `outlookContacts` is pinned true because onboarding writes
+// it for every user; `macosContacts` and `iphoneContacts` are left ABSENT
+// because for a declared-Android user onboarding genuinely never writes them
+// (their cards carry `platforms: ["macos"]` / `phoneType: "iphone"`), and
+// pinning them would be a bag no producer can emit. Expectations are literal id
+// sets, not derived from the rule, so a bug in the rule cannot also write the
+// expectation that hides it.
+// ===========================================================================
+
+type AndroidCell = {
+  platform: "darwin" | "win32";
+  phoneType?: "iphone" | "android";
+  android?: boolean;
+  expected: string[];
+};
+
+const ANDROID_MATRIX: AndroidCell[] = [
+  // ---- macOS ------------------------------------------------------------
+  // THE REPORTED CASE: iPhone declared, key absent. Was [ANDROID, MACOS,
+  // OUTLOOK] before the fix — 389 Android contacts nobody asked for.
+  { platform: "darwin", phoneType: "iphone", expected: [MACOS_ID, OUTLOOK_ID] },
+  // A stored value always wins over the derived default, in both directions.
+  { platform: "darwin", phoneType: "iphone", android: true, expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", phoneType: "iphone", android: false, expected: [MACOS_ID, OUTLOOK_ID] },
+  // Declared Android + absent key derives ON: the companion is this user's only
+  // address book, and it is the card onboarding would have pre-ticked.
+  { platform: "darwin", phoneType: "android", expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", phoneType: "android", android: true, expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", phoneType: "android", android: false, expected: [MACOS_ID, OUTLOOK_ID] },
+  // No phone type recorded at all — an install predating the step. Absent reads
+  // as "not an Android user", so OFF.
+  { platform: "darwin", expected: [MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", android: true, expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "darwin", android: false, expected: [MACOS_ID, OUTLOOK_ID] },
+
+  // ---- Windows ----------------------------------------------------------
+  // The Android answer is identical on Windows: the rule reads the PHONE, not
+  // the desktop. (iPhone's presence differs, because an absent `iphoneContacts`
+  // derives TRUE on Windows — BACKLOG-2486.)
+  { platform: "win32", phoneType: "iphone", expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", phoneType: "iphone", android: true, expected: [ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", phoneType: "iphone", android: false, expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", phoneType: "android", expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", phoneType: "android", android: true, expected: [ANDROID_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", phoneType: "android", android: false, expected: [MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", android: true, expected: [ANDROID_ID, IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+  { platform: "win32", android: false, expected: [IPHONE_ID, MACOS_ID, OUTLOOK_ID] },
+];
+
+describe("BACKLOG-2986 — the androidContacts x phone-type matrix", () => {
+  for (const cell of ANDROID_MATRIX) {
+    const label =
+      `${cell.platform}: androidContacts=${cell.android ?? "ABSENT"}, ` +
+      `phone_type=${cell.phoneType ?? "ABSENT"}`;
+
+    it(label, async () => {
+      setPlatform(cell.platform);
+      const direct: Record<string, boolean> = { outlookContacts: true };
+      if (cell.android !== undefined) direct.androidContacts = cell.android;
+      mockPreferences = prefs(direct, cell.phoneType);
+
+      expect(await pickerIds()).toEqual(cell.expected);
+    });
+  }
 });

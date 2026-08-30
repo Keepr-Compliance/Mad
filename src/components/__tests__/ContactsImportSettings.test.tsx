@@ -80,6 +80,16 @@ const defaultProps = {
   // to assert; the iPhone switch has its own describe block below.
   iphoneContactsEnabled: false,
   showIphoneContacts: false,
+  // BACKLOG-2986: Android Contacts became a switch of its own. Held OFF and
+  // undeclared here for the same reason as iPhone above — the pre-existing
+  // cases keep asserting what they were written to assert. Present rather than
+  // omitted because these are REQUIRED props at the real call site
+  // (`ContactsSettings.tsx`); test files are excluded from `tsc`, so leaving
+  // them off would silently give the component `undefined` where production
+  // always passes a boolean.
+  androidContactsEnabled: false,
+  androidContactsDeclared: false,
+  androidCompanionActive: false,
   gmailContactsEnabled: true,
   googleContactsEnabled: true,
   outlookEmailsInferred: false,

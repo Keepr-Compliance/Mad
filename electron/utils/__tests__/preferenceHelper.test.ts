@@ -185,6 +185,87 @@ describe("preferenceHelper", () => {
         ).toBe(false);
       });
 
+      // =====================================================================
+      // BACKLOG-2986 — the BACKEND half of "the Android switch is OFF".
+      //
+      // THIS IS THE CONTROL THAT MATTERS, and it is here rather than in the
+      // renderer suite on purpose. A test that asserts only the switch's
+      // aria-checked passes while the main process happily keeps importing:
+      // the switch would be a picture. These assertions pin what
+      // `contactHandlers.ts` will actually do with the same absent key.
+      //
+      // Note the 4th argument is `true` in every case below — exactly what the
+      // caller passes. The derived rule has to BEAT it; a test that passed
+      // `false` here would prove nothing at all.
+      // =====================================================================
+      it("turns Android Contacts OFF when nothing is stored and no Android phone was declared", async () => {
+        // The reported state. `androidContacts` is written by onboarding ONLY
+        // for a user who declared an Android phone, so absent is where nearly
+        // everyone is — and absent used to mean `true`, which is why 389
+        // Android contacts imported for a user who never asked for them.
+        for (const platform of ["darwin", "win32"] as NodeJS.Platform[]) {
+          setPlatform(platform);
+          mockGetPreferences.mockResolvedValue({ phone_type: "iphone" });
+
+          expect(
+            await isContactSourceEnabled("user-1", "direct", "androidContacts", true),
+          ).toBe(false);
+        }
+      });
+
+      it("turns Android Contacts OFF when nothing is stored and no phone_type was recorded either", async () => {
+        setPlatform("darwin");
+        mockGetPreferences.mockResolvedValue({});
+
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "androidContacts", true),
+        ).toBe(false);
+      });
+
+      it("keeps Android Contacts ON for a user who declared an Android phone", async () => {
+        // Not a hole in "default OFF" — it is the same clause that keeps
+        // iPhone Contacts ON on Windows. This user told us the companion is
+        // their address book, and it is the card onboarding would have
+        // pre-ticked. Zero production rows are in this state today (every
+        // absent row is phone_type=iphone); the ones that declared Android
+        // carry an explicit `true`, which wins before this branch is reached.
+        for (const platform of ["darwin", "win32"] as NodeJS.Platform[]) {
+          setPlatform(platform);
+          mockGetPreferences.mockResolvedValue({ phone_type: "android" });
+
+          expect(
+            await isContactSourceEnabled("user-1", "direct", "androidContacts", true),
+          ).toBe(true);
+        }
+      });
+
+      it("lets an explicitly stored androidContacts win over the derived default", async () => {
+        // The 3 production rows carrying an explicit `true` must not lose their
+        // Android contacts to this change. They now get a switch instead.
+        setPlatform("darwin");
+        mockGetPreferences.mockResolvedValue({
+          phone_type: "iphone",
+          contactSources: { direct: { androidContacts: true } },
+        });
+
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "androidContacts", true),
+        ).toBe(true);
+      });
+
+      it("still fails OPEN on androidContacts when preferences cannot be read at all", async () => {
+        // Case 3, not case 2. A failed read cannot see `phone_type`, so
+        // deriving would be guessing — and guessing OFF silently breaks a
+        // working import on a network blip. This is why the call site in
+        // contactHandlers.ts keeps passing `true` as the 4th argument.
+        setPlatform("darwin");
+        mockGetPreferences.mockRejectedValue(new Error("Network error"));
+
+        expect(
+          await isContactSourceEnabled("user-1", "direct", "androidContacts", true),
+        ).toBe(true);
+      });
+
       it("does NOT derive macosContacts — Android contacts are gated on it", async () => {
         // THE GUARD. contactHandlers.ts:1294 gates every external contact whose
         // source is not outlook/google_contacts/iphone/macos on macosContacts,
