@@ -43,15 +43,21 @@ import {
  *     (`android-companion/services/syncService.ts:120`), and `/sync/contacts`
  *     uses it (`:358-368`). Past 10s the phone reports `timeout`. Everything
  *     this handler does has to fit inside that.
- *   - THE WRITE COSTS ~0.36s at full address-book size. Measured, not guessed:
+ *   - THE WRITE COSTS ~0.35s at full address-book size. Measured, not guessed:
  *     `localSyncService.writeCost-2986.test.ts` drives the real shadow write
- *     and the real promotion over an on-disk SQLite file and prints the figure
- *     on every run — 121ms for 389 contacts, 358ms for 2,200, 88ms for a
- *     re-sync where every contact is already claimed (three runs, +/-5ms).
- *   - So the read gets 6s and ~4s is left for the write and the response. That
- *     reserve is ELEVEN TIMES the measured write, which is the margin for the
- *     things the measurement does not cover: page encryption, a cold cache, a
- *     busy Windows disk.
+ *     and the real promotion over an on-disk SQLite file and prints the figure,
+ *     the engine and the encryption caveat on every run. Observed RANGE across
+ *     runs and two machines — 107-124ms for 389 contacts, 330-364ms for 2,200,
+ *     71-89ms for a re-sync where every contact is already claimed. A range,
+ *     not a "+/-5ms" spread: the spread did not reproduce on a second machine.
+ *     The figure is a FLOOR — the fixture is unencrypted, production is not.
+ *   - So the read gets `PREFERENCES_READ_TIMEOUT_MS` and what remains —
+ *     `PREFERENCES_READ_WRITE_RESERVE_MS`, DERIVED below rather than restated —
+ *     is for the write and the response. That reserve is an order of magnitude
+ *     above the measured write, which is the margin for the things the
+ *     measurement does not cover: page encryption, a cold cache, a busy Windows
+ *     disk. `localSyncService.writeCost-2986.test.ts` asserts the measured write
+ *     stays inside it, so the split cannot quietly stop holding.
  *   - The read itself is a single-row primary-key `select` on
  *     `user_preferences`, so 6s is a very slow one, not a marginal one.
  *
@@ -68,6 +74,24 @@ import {
  * than by a literal that would silently stop matching it.
  */
 export const PREFERENCES_READ_TIMEOUT_MS = 6_000;
+
+/**
+ * The companion's own abort — `REQUEST_TIMEOUT_MS` in
+ * `android-companion/services/syncService.ts:120`, applied to `/sync/contacts`
+ * at `:358-368`. Duplicated here because the desktop cannot import from the
+ * companion tree; it is the ceiling every figure above is derived from.
+ */
+export const PHONE_REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * What is left for the DB write and the response once the read has taken its
+ * slice. **Derived, never written down twice.** The docblock above used to
+ * state "~4s" as prose beside a 6s constant, which is the same shape as the
+ * "up to three seconds" line this file also carried after the constant moved —
+ * a number restated near, but not tied to, the value it comes from.
+ */
+export const PREFERENCES_READ_WRITE_RESERVE_MS =
+  PHONE_REQUEST_TIMEOUT_MS - PREFERENCES_READ_TIMEOUT_MS;
 
 /**
  * Read the preferences bag, or REJECT once `PREFERENCES_READ_TIMEOUT_MS` has
@@ -97,7 +121,12 @@ export const PREFERENCES_READ_TIMEOUT_MS = 6_000;
  *
  * The `clearTimeout` in `finally` is not tidiness: a pending timer keeps the
  * Node event loop alive, so without it every successful read would leave a live
- * handle behind for up to three seconds.
+ * handle behind for up to `PREFERENCES_READ_TIMEOUT_MS`.
+ *
+ * Named, not restated. This line said "up to three seconds" and the very commit
+ * that raised the constant to 6s left it saying three — a comment falsified by a
+ * value living thirty lines above it. Naming the constant is what makes the next
+ * change to it unable to do that again.
  */
 async function readPreferences(
   userId: string,

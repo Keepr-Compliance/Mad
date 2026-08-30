@@ -17,10 +17,21 @@
  * round: the read is the variable half — a Supabase round trip over whatever
  * connection the desktop has — while the write is local `better-sqlite3`.
  *
- * MEASURED HERE, three runs, +/-5ms: **121ms for 389 contacts, 358ms for 2,200,
- * 88ms for a re-sync where every contact is already claimed.** Roughly twenty
- * times smaller than the reservation it replaced. The split is now 6s for the
- * read and ~4s for everything else — eleven times the measured write.
+ * MEASURED HERE. The figures below are the OBSERVED RANGE across runs and
+ * across two machines, not a spread around one number: an earlier version of
+ * this docblock quoted "+/-5ms", which did not reproduce on a second machine
+ * and sold itself as checkable while not being. Ranges do reproduce.
+ *
+ *     389 contacts    107 - 124 ms
+ *     2,200 contacts  330 - 364 ms
+ *     2,200 re-sync    71 -  89 ms
+ *
+ * (The upper 2,200 figures predate the email-only tenth described under
+ * `addressBook`; the fixture changed mid-measurement and the range spans both.)
+ *
+ * Roughly twenty times smaller than the reservation it replaced. The engine and
+ * the encryption caveat are printed beside every figure, because a number
+ * quoted without them is not comparable to the next person's.
  *
  * That matters for this item's own promise. A read that WOULD have returned a
  * stored `androidContacts: false` at 3.5s was abandoned, fail-open applied, and
@@ -71,7 +82,8 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { openTestDb, type TestDb } from "./helpers/syncSqliteDriver";
+import { openTestDb, currentEngine, type TestDb } from "./helpers/syncSqliteDriver";
+import { PREFERENCES_READ_WRITE_RESERVE_MS } from "../../utils/preferenceHelper";
 import { CONTACT_IDENTITY_SCHEMA } from "./helpers/contactIdentitySchema";
 
 let mockDb: TestDb | null = null;
@@ -178,12 +190,43 @@ function addressBook(size: number): SyncContact[] {
   });
 }
 
-function contactCount(): number {
+/** Every display name in the main contacts table, duplicates preserved. */
+function promotedNames(): string[] {
   return (
     mockDb!
-      .prepare("SELECT COUNT(*) AS n FROM contacts WHERE user_id = ?")
-      .get(USER) as { n: number }
-  ).n;
+      .prepare("SELECT display_name FROM contacts WHERE user_id = ? ORDER BY display_name")
+      .all(USER) as Array<{ display_name: string }>
+  ).map((r) => r.display_name);
+}
+
+/**
+ * "Every contact promoted, exactly once" — asserted as an IDENTITY, not a
+ * count. The docblock made that claim while `COUNT(*)` was all that backed it,
+ * which a count cannot do.
+ *
+ * WHAT WAS ACTUALLY DEMONSTRATED, stated at the strength it was demonstrated:
+ * dropping one contact from the promoted batch turns this red and NAMES it
+ * ("Bench Fixture 0"), where a count would have said only "2199, expected
+ * 2200". I did NOT manage to build a mutation where the count stays equal while
+ * identity breaks — promoting a same-named duplicate is refused by the
+ * promotion path's own dedup, so the two assertions happen not to diverge here.
+ * The gain is therefore diagnostic precision and conformity with the standing
+ * rule (assert ID sets, never counts), not a defect a count would have missed.
+ *
+ * The two directions are reported separately, and as the offending NAMES rather
+ * than a 2,200-element `toEqual` whose diff nobody could read. That is also what
+ * made the WC2 mutation legible: the delta was exactly the 220 email-only
+ * fixtures, where a bare count says only "2420, expected 2200".
+ */
+function expectPromotedExactly(book: SyncContact[]): void {
+  const expected = book.map((c) => c.displayName as string);
+  const actual = promotedNames();
+  const actualSet = new Set(actual);
+  const expectedSet = new Set(expected);
+
+  expect(expected.filter((n) => !actualSet.has(n))).toEqual([]); // missing
+  expect(actual.filter((n) => !expectedSet.has(n))).toEqual([]); // unexpected
+  expect(actual).toHaveLength(expected.length); // exactly once
 }
 
 beforeEach(() => {
@@ -271,7 +314,15 @@ describe("BACKLOG-2986 — the cost of an Android contact write, measured", () =
 
       // The assertion is CORRECTNESS at this size, not the clock. Nothing else
       // in the repo drives this path with more than three contacts.
-      expect(contactCount()).toBe(size);
+      expectPromotedExactly(book);
+
+      // AND that the measured write still fits the budget it was measured for.
+      // This is not a performance test and the margin says so: the reserve is
+      // an order of magnitude above the observed figure, so ordinary CI noise
+      // cannot reach it. What it catches is the write growing until the split
+      // in `PREFERENCES_READ_TIMEOUT_MS`'s docblock quietly stops holding —
+      // which is exactly how the 7s estimate it replaced went unnoticed.
+      expect(elapsedMs).toBeLessThan(PREFERENCES_READ_WRITE_RESERVE_MS);
 
       // Printed, not asserted. This is the number the timeout docblock cites,
       // so it is re-derived on every run rather than inherited from a comment.
@@ -279,7 +330,8 @@ describe("BACKLOG-2986 — the cost of an Android contact write, measured", () =
       // output and this suite exists to be read.
       process.stdout.write(
         `\n[BACKLOG-2986] storeContacts write: ${size} contacts in ${elapsedMs}ms ` +
-          `(on-disk unencrypted SQLite; production adds page encryption)\n`,
+          `[engine: ${currentEngine() ?? "unknown"}; on-disk, UNENCRYPTED — ` +
+          `production adds page encryption, so this is a FLOOR]\n`,
       );
     });
   }
@@ -306,9 +358,10 @@ describe("BACKLOG-2986 — the cost of an Android contact write, measured", () =
     await storeContacts(USER, DEVICE, book, true);
     const elapsedMs = Date.now() - startedAt;
 
-    expect(contactCount()).toBe(2200);
+    expectPromotedExactly(book);
     process.stdout.write(
-      `\n[BACKLOG-2986] storeContacts re-sync (all skipped): 2200 contacts in ${elapsedMs}ms\n`,
+      `\n[BACKLOG-2986] storeContacts re-sync (all skipped): 2200 contacts in ` +
+        `${elapsedMs}ms [engine: ${currentEngine() ?? "unknown"}]\n`,
     );
   });
 });
