@@ -147,7 +147,7 @@ Three ways a green signal carries no information. All three occurred on 2026-08-
 2. **When a control does NOT go red, suspect the fixture before the control.**
 3. **A fixture missing an always-set field: add it and re-run.** Still passes → latent, record it, don't block. Fails → the test was proving something else, and it blocks.
 4. **Sweep boundaries, don't sample them.** One input per branch cannot catch an off-by-one.
-5. **A PR that moves a module across the main/renderer boundary MUST run `npm run build`.** `electron/` cannot import from `src/` (`rootDir`), and the renderer cannot *value*-import from `electron/` (Vite parses it as JavaScript). Neither direction works; a shared module needs `src/` with a mirror, plus a parity test whose corpus covers every boundary.
+5. **A PR that moves a module across the main/renderer boundary MUST run `npm run build`** (CI also runs it — job "Build Application", `ci.yml`, in a step labelled "Build Vite app" which reads as renderer-only and has caused three separate documents to claim CI never builds; run it locally anyway so you find out in minutes, not after a push)**.** `electron/` cannot import from `src/` (`rootDir`), and the renderer cannot *value*-import from `electron/` (Vite parses it as JavaScript). Neither direction works; a shared module needs `src/` with a mirror, plus a parity test whose corpus covers every boundary.
 
 ### Sequencing PR trains
 
@@ -661,7 +661,8 @@ npm run build            # Build for production
 npx jest path/to/file.test.ts   # PREFERRED for single suites - never touches node_modules
 npm test                 # Full suite. Flips the shared native module for the duration
                          # of the run, then always restores it (see Native Module Errors)
-npm run type-check       # TypeScript check
+npm run type-check       # TypeScript check — PRODUCTION code ONLY
+npm run type-check:tests # TypeScript check for *.test.ts — SEPARATE CI step, easily missed
 npm run lint             # ESLint check
 
 # Native modules (REQUIRED after npm install or Node.js update)
@@ -678,8 +679,26 @@ NODE_MODULE_VERSION 127. This version of Node.js requires NODE_MODULE_VERSION 13
 
 **Symptoms**: Database fails to initialize, app stuck on loading/onboarding screens in an infinite loop.
 
-**Check which build is currently live** (a plain `require()` is NOT proof — `bindings` finds a
-cwd-relative copy and falsely succeeds, so use `dlopen` on the absolute path):
+**Check which build is currently live.** A plain `require()` is NOT proof — `bindings` finds a
+cwd-relative copy and falsely succeeds. **And `node -e` is not proof either**: node catches the
+error and any failure reads as "Electron build, dev OK", so an *architecture* mismatch
+(x86_64 binary, arm64 machine) reports SUCCESS. That gave three false all-clears on
+2026-08-30 while `npm run dev` was broken. **Check under the real Electron binary, and check
+the architecture separately:**
+
+```bash
+# 1. architecture — must say arm64 on Apple Silicon, NOT x86_64
+file /Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node
+
+# 2. does the Electron that dev actually runs load it?
+ELECTRON_RUN_AS_NODE=1 npx electron -e "try{process.dlopen({exports:{}},'/Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node');console.log('dev OK')}catch(e){console.log('BROKEN: '+e.message)}"
+```
+
+Repair: `npx electron-rebuild -f -w better-sqlite3-multiple-ciphers` in `~/Developer/Mad`,
+then re-run check 2.
+
+The older node-only check below distinguishes the two ABIs but **cannot see an architecture
+mismatch** — keep it only as a secondary signal:
 
 ```bash
 node -e "try{process.dlopen({exports:{}},'/Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node');console.log('NODE build -> dev WILL break')}catch(e){console.log('ELECTRON build -> dev OK')}"
@@ -707,6 +726,14 @@ it prints.
 
 **Still true, and not protected:**
 - **`npm install` / `npm rebuild` have the same hazard and no such protection.**
+- **`npm run package` has it too, and it is worse.** electron-builder runs `@electron/rebuild`
+  during packaging. Run from a worktree whose `node_modules` is a **symlink** to the main repo,
+  it rebuilds the SHARED binary — and it builds for the packaging target, so on an arm64 Mac it
+  writes an **x86_64** binary and `npm run dev` dies with
+  `incompatible architecture (have 'x86_64', need 'arm64')`. This broke the founder's dev app on
+  2026-08-30. **Before packaging from a worktree, replace the symlink with a hardlinked copy:**
+  `rm node_modules && cp -Rc /Users/daniel/Developer/Mad/node_modules ./node_modules` — instant,
+  no extra disk, and the rebuild can no longer reach the shared tree.
 - While any `npm test` run is in progress the shared binary is Node-ABI, so starting
   `npm run dev` mid-run can still fail. BACKLOG-2374 (worktree-local native module) is the
   durable fix.

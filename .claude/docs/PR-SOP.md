@@ -601,6 +601,54 @@ above resolves both correctly and takes one sentence.
 item under review still keeps its promise without it. **If that sentence cannot be written, the
 finding is in scope**, and approving the split is a blocker rather than a note.
 
+### 6.2g A claim you inherited is not a claim you checked
+
+Recorded 2026-08-30. Three separate documents — a backlog item body, a PM engineer brief, and
+an implementation plan — all asserted that CI never runs `npm run build`. It has run it all
+along, in a job called "Build Application", in a step labelled "Build Vite app". The label
+reads as renderer-only, so nobody opened the file. Cost: a deliverable planned that already
+existed, and a second correction after the first.
+
+**The rule: any claim about what CI does, what a file contains, or which lines import versus
+inline, is verifiable by opening one file. Open it.** Inheriting the claim costs one read to
+verify and three documents to unwind.
+
+The same day, in the same item: a plan asserted that closing a classifier gap "needs type
+information plus dataflow". The reviewer wrote the resolver in ~40 lines and recovered 15 real
+violations that would otherwise have been permanently baselined as clean. **"This cannot be
+done" is a claim like any other. Try it before you write it down.**
+
+### 6.2h `npm run type-check` does not check your tests
+
+`npm run type-check` runs against the production tsconfig. Test files are covered only by
+`npm run type-check:tests` (`tsc -p tsconfig.test.json`), which CI runs as its own step.
+
+An engineer who edits `*.test.ts`, runs `npm run type-check`, and reports "tsc clean" has
+verified nothing about the files they touched. This took PR #2434 red on both platforms after
+a truthful "tsc clean" report — 22 errors invisible to the check that was run.
+
+**Before pushing any PR that touches a test file, run BOTH targets and state both results in
+the handoff.** This is the omitted-check shape from §6.2: the verification set left out the
+only check that would fail.
+
+### 6.2i A sum that cannot come apart proves nothing
+
+A gate built on 2026-08-30 classified every SQL call site into three buckets and asserted the
+three counts summed to the total, as a guard against silently skipping input.
+
+**The assertion was tautological.** Each site was bucketed in an exhaustive if/else *before*
+being counted, so both sides of the equation moved together and a skipped file contributed zero
+to each. It could only ever hold. Its real value was narrow — proving no fourth, silent bucket
+existed — and it was described as proving far more.
+
+It also did not catch the bug that mattered: a site in the exemplar file was misclassified, and
+the total summed correctly both before and after. What caught it was a breakdown of *why* each
+site was classified as it was.
+
+**Before asserting an invariant, ask what would have to be true for it to fail.** If you cannot
+construct that state, the assertion is documentation, not a control. Prefer assertions on
+identity — which sites, classified how, and for what reason — over assertions on counts.
+
 ### 6.3 Review Prompt Template
 
 Use this prompt to request a code review:
