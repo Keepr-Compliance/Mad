@@ -161,6 +161,7 @@ function advanceClock(): void {
 const CHILD_SOURCE = `
 const Module = require('module');
 const path = require('path');
+const fs = require('fs');
 const REPO = process.argv[2];
 const DB_PATH = process.argv[3];
 const KILL_AT = process.argv[4];
@@ -208,14 +209,20 @@ const realDb = new Database(DB_PATH);
 realDb.pragma('journal_mode = WAL');
 realDb.pragma('synchronous = NORMAL');
 
-// HARNESS MARKER. Written before any kill point and outside the transaction under
-// test, so it survives every SIGKILL. Its absence means the child never got here,
-// which is the ONLY thing that distinguishes a real pass from a vacuous one: every
-// crash control's assertions (trigger present, rows unsynced) are trivially true of
-// a database no child ever touched. user_version is 0 in schema.sql and unused.
-realDb.pragma('user_version = 4242');
 
-const kill = () => process.kill(process.pid, 'SIGKILL');
+// KILL-POINT SENTINEL. Written to a plain file, NOT the database: a database write
+// at the kill point would be inside the transaction under test and would roll back
+// with it, so it could never be observed afterwards. This is the only evidence that
+// the child reached the kill point INSIDE markAuditLogsSynced — without it, a
+// production function that throws on entry leaves C1/C6 asserting the untouched
+// seeded state and passing. fsync'd before the SIGKILL so it cannot be lost.
+const kill = (where) => {
+  const fd = fs.openSync(DB_PATH + '.killpoint', 'w');
+  fs.writeSync(fd, where);
+  fs.fsyncSync(fd);
+  fs.closeSync(fd);
+  process.kill(process.pid, 'SIGKILL');
+};
 
 // The kill points are keyed to the production SQL AS EXECUTED. Nothing is copied.
 const dbProxy = new Proxy(realDb, {
@@ -224,7 +231,7 @@ const dbProxy = new Proxy(realDb, {
     if (prop === 'exec') {
       return (sql) => {
         const r = value.call(target, sql);
-        if (KILL_AT === 'after-drop' && /^\\s*DROP\\s+TRIGGER/i.test(sql)) kill();
+        if (KILL_AT === 'after-drop' && /^\\s*DROP\\s+TRIGGER/i.test(sql)) kill('after-drop');
         return r;
       };
     }
@@ -237,7 +244,7 @@ const dbProxy = new Proxy(realDb, {
             if (p === 'run') {
               return (...args) => {
                 const rr = sv.apply(st, args);
-                if (KILL_AT === 'after-update' && /^\\s*UPDATE\\s+audit_logs/i.test(sql)) kill();
+                if (KILL_AT === 'after-update' && /^\\s*UPDATE\\s+audit_logs/i.test(sql)) kill('after-update');
                 return rr;
               };
             }
@@ -250,11 +257,20 @@ const dbProxy = new Proxy(realDb, {
   },
 });
 
-require(path.join(REPO, 'electron/services/db/core/dbConnection.ts')).setDb(dbProxy);
+const dbConnection = require(path.join(REPO, 'electron/services/db/core/dbConnection.ts'));
+const auditLogDbService = require(path.join(REPO, 'electron/services/db/auditLogDbService.ts'));
+dbConnection.setDb(dbProxy);
 
-if (KILL_AT === 'before-drop') kill();
+// IMPORT MARKER, written only once BOTH production modules have imported successfully.
+// Position is load-bearing. At its first position — immediately after opening the
+// database — it was written BEFORE these requires, so the CI failure (the Sentry
+// import dying under plain node) still stamped it and the guard passed anyway. That
+// left C1/C2/C6 exactly as vacuous as they were before the guard existed.
+realDb.pragma('user_version = 4242');
 
-require(path.join(REPO, 'electron/services/db/auditLogDbService.ts'))
+if (KILL_AT === 'before-drop') kill('before-drop');
+
+auditLogDbService
   .markAuditLogsSynced(IDS)
   .then(() => { realDb.close(); process.exit(0); })
   .catch((e) => { console.error(String((e && e.message) || e)); process.exit(2); });
@@ -302,6 +318,21 @@ function runCrashChild(dbPath: string, killAt: string, ids: string[]): ChildRun 
  * child's stderr, which the first version of this harness threw away, leaving the
  * CI failure with no diagnosis at all.
  */
+function assertReachedKillPoint(dbPath: string, run: ChildRun, killAt: string): void {
+  const sentinel = `${dbPath}.killpoint`;
+  const got = fs.existsSync(sentinel) ? fs.readFileSync(sentinel, "utf8") : null;
+  if (got !== killAt) {
+    throw new Error(
+      `CHILD NEVER REACHED THE KILL POINT (expected \`${killAt}\`, sentinel ${
+        got === null ? "absent" : `= \`${got}\``
+      }). This control proves NOTHING — the assertions below are the untouched seeded ` +
+        `state, so a production function that threw before the kill would satisfy them.\n` +
+        `  exit status : ${String(run.status)}   signal: ${String(run.signal)}\n` +
+        `  child stderr: ${run.stderr.trim() || "(empty)"}`,
+    );
+  }
+}
+
 function assertHarnessRan(db: DatabaseType, run: ChildRun, killAt: string): void {
   const marker = db.pragma("user_version", { simple: true }) as number;
   if (marker !== 4242) {
@@ -484,6 +515,7 @@ describe("BACKLOG-2548 · a crash during the sync write", () => {
     // Must come first: without it the assertions below pass on a database the child
     // never opened. See assertHarnessRan.
     assertHarnessRan(db, run, "after-drop");
+    assertReachedKillPoint(dbPath, run, "after-drop");
     const sql = triggerSql(db);
     // RED before the fix: TRIGGER ABSENT — the append-only guarantee was simply off.
     expect(sql).not.toBeNull();
@@ -502,6 +534,7 @@ describe("BACKLOG-2548 · a crash during the sync write", () => {
     // Must come first: without it the assertions below pass on a database the child
     // never opened. See assertHarnessRan.
     assertHarnessRan(db, run, "after-update");
+    assertReachedKillPoint(dbPath, run, "after-update");
     const sql = triggerSql(db);
     // RED before the fix: trigger ABSENT *and* synced_at WRITTEN — so the next sync
     // skips the row and nothing ever prompts a repair.
@@ -520,6 +553,9 @@ describe("BACKLOG-2548 · a crash during the sync write", () => {
     const db = openDb(dbPath);
     // Must come first: without it the assertions below pass on a database the child
     // never opened. See assertHarnessRan.
+    // C2 gets no kill-point sentinel, and cannot: its kill fires OUTSIDE the production
+    // function, before it is entered. "both production modules imported and setDb
+    // succeeded" is the honest limit of what this control can assert about the child.
     assertHarnessRan(db, run, "before-drop");
     const sql = triggerSql(db);
     expect(sql).not.toBeNull();
