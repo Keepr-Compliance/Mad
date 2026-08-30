@@ -87,10 +87,6 @@ beforeEach(() => {
   db = h.db;
   db.exec(SCHEMA);
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS i1 ON pending_review_communications(transaction_id,email_id) WHERE email_id IS NOT NULL;`);
-  for (const t of ["transaction_contacts", "contacts"]) {
-    db.exec(`ALTER TABLE ${t} ADD COLUMN removed_at DATETIME;`);
-    db.exec(`ALTER TABLE ${t} ADD COLUMN removed_reason TEXT;`);
-  }
   db.prepare("INSERT INTO users_local (id,email,oauth_provider,oauth_id) VALUES (?,?,'google','o')").run(U, "me@a.com");
   db.prepare("INSERT INTO transactions (id,user_id,property_address,started_at,closed_at) VALUES (?,?,?,?,?)")
     .run(T, U, PROPERTY, "2026-01-01T00:00:00.000Z", "2026-12-31T00:00:00.000Z");

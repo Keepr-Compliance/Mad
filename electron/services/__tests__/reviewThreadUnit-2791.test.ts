@@ -101,10 +101,6 @@ function seed(db: DatabaseType): void {
   db.exec(SCHEMA);
   db.exec(V64_INDEXES);
   // v56 tombstone columns — migration-only, on neither table in schema.sql.
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
   db.prepare(
     "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', 'oauth-1')",
   ).run(USER, "me@agent.com");

@@ -131,10 +131,6 @@ function seed(db: DatabaseType): void {
   // schema.sql. autoLinkService's candidate-transaction count reads
   // `tc.removed_at`; without them it throws into its own catch and reports
   // "found nothing", which would make this whole file pass for the wrong reason.
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
   db.prepare(
     "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', 'oauth-1')",
   ).run(USER, "me@agent.com");

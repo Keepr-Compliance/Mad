@@ -63,11 +63,13 @@ const mockGetPath = jest.fn();
 const mockIsReady = jest.fn();
 const mockWhenReady = jest.fn();
 const mockShowMessageBox = jest.fn();
+const mockQuit = jest.fn();
 jest.mock("electron", () => ({
   app: {
     getPath: mockGetPath,
     isReady: mockIsReady,
     whenReady: mockWhenReady,
+    quit: mockQuit,
   },
   dialog: {
     showMessageBox: mockShowMessageBox,
@@ -209,9 +211,16 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         };
       }
       if (sql.includes("SELECT version FROM schema_version")) {
-        // BACKLOG-1722: bumped from 40 to 41 with the v41 (email_participants)
-        // migration so the runner sees no pending work in the happy-path test.
-        return { get: jest.fn().mockReturnValue({ version: 41 }) };
+        // BACKLOG-2993: the baseline. The schema-baseline fence refuses any
+        // version below it before runMigrations is reached, so this suite's
+        // auto-restore machinery is exercised on a post-baseline database —
+        // the only kind that can still reach a migration failure.
+        return {
+          get: jest.fn().mockReturnValue({
+            version: (service.constructor as { BASELINE_VERSION: number })
+              .BASELINE_VERSION,
+          }),
+        };
       }
       if (sql.includes("SELECT 1")) {
         return { get: jest.fn().mockReturnValue({ ok: 1 }) };
@@ -279,19 +288,38 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     }
 
     it("creates a rolling pre-migration backup when a migration WILL run (on-disk version behind latest)", async () => {
-      seedOnDiskVersion(41); // behind latest (45) → willRunMigration = true
+      // BACKLOG-2993: nothing below the baseline can pass the fence, so
+      // "behind latest" now means a FUTURE migration above the baseline.
+      // Inject one; the runner and the S5 backup gate treat it exactly as
+      // they treated the old chain.
+      const klass = service.constructor as {
+        MIGRATIONS: Array<{ version: number; description: string; migrate: (d: unknown) => void }>;
+        BASELINE_VERSION: number;
+      };
+      const baseline = klass.BASELINE_VERSION;
+      const original = klass.MIGRATIONS;
+      klass.MIGRATIONS = [
+        ...original,
+        { version: baseline + 1, description: "future test migration", migrate: () => undefined },
+      ];
+      try {
+        seedOnDiskVersion(baseline); // behind the injected future head → willRunMigration = true
 
-      const result = await service.initialize();
+        const result = await service.initialize();
 
-      expect(result).toBe(true);
-      expect(rollingBackupCopies()).toBeGreaterThan(0);
+        expect(result).toBe(true);
+        expect(rollingBackupCopies()).toBeGreaterThan(0);
+      } finally {
+        klass.MIGRATIONS = original;
+      }
     });
 
     it("SKIPS the rolling pre-migration backup when the DB is already at the latest version", async () => {
       // Latest migration version, so no migration runs and no backup is needed
       // (previously every launch copied the DB and churned the 3-file window).
-      const migrations = service.constructor.MIGRATIONS as Array<{ version: number }>;
-      const latest = migrations[migrations.length - 1].version;
+      // BACKLOG-2993: "latest" is the baseline — the chain is gone.
+      const latest = (service.constructor as { BASELINE_VERSION: number })
+        .BASELINE_VERSION;
       seedOnDiskVersion(latest);
 
       const result = await service.initialize();
@@ -703,79 +731,12 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
   });
 
   describe("Pre-junction backfill snapshot (R1, BACKLOG-1722)", () => {
-    it("creates snapshot when DB version is below 41", async () => {
-      // Override version mock to return 40
-      mockDbPrepare.mockImplementation((sql: string) => {
-        if (sql.includes("sqlite_master") && sql.includes("schema_version")) {
-          return { get: jest.fn().mockReturnValue({ name: "schema_version" }) };
-        }
-        if (sql.includes("SELECT version FROM schema_version")) {
-          return { get: jest.fn().mockReturnValue({ version: 40 }) };
-        }
-        if (sql.includes("PRAGMA table_info")) {
-          return {
-            all: jest.fn().mockReturnValue([
-              { name: "id" }, { name: "version" }, { name: "updated_at" }, { name: "migrated_at" },
-            ]),
-          };
-        }
-        if (sql.includes("SELECT 1")) {
-          return { get: jest.fn().mockReturnValue({ ok: 1 }) };
-        }
-        return { get: jest.fn(), all: jest.fn().mockReturnValue([]), run: jest.fn() };
-      });
-
-      // Snapshot file does NOT exist yet; DB file and backups exist
-      mockExistsSync.mockImplementation((p: string) => {
-        if (typeof p === "string" && p.includes("pre-junction-backfill")) return false;
-        return true;
-      });
-
-      mockCopyFileSync.mockClear();
-
-      await service.initialize();
-
-      // copyFileSync should be called for (1) rolling backup and (2) snapshot
-      const snapshotCall = mockCopyFileSync.mock.calls.find(
-        (call: unknown[]) => typeof call[1] === "string" && (call[1] as string).includes("pre-junction-backfill")
-      );
-      expect(snapshotCall).toBeDefined();
-      expect(snapshotCall![1]).toMatch(/mad-pre-junction-backfill\.db$/);
-    });
-
-    it("does NOT create snapshot when DB version is 41 or above", async () => {
-      // Default mock has version = 41
-      mockExistsSync.mockReturnValue(true);
-      mockCopyFileSync.mockClear();
-
-      await service.initialize();
-
-      const snapshotCall = mockCopyFileSync.mock.calls.find(
-        (call: unknown[]) => typeof call[1] === "string" && (call[1] as string).includes("pre-junction-backfill")
-      );
-      expect(snapshotCall).toBeUndefined();
-    });
-
-    it("does NOT overwrite an existing snapshot (idempotent)", async () => {
-      // version = 40, but snapshot file already exists
-      mockDbPrepare.mockImplementation((sql: string) => {
-        if (sql.includes("sqlite_master") && sql.includes("schema_version")) {
-          return { get: jest.fn().mockReturnValue({ name: "schema_version" }) };
-        }
-        if (sql.includes("SELECT version FROM schema_version")) {
-          return { get: jest.fn().mockReturnValue({ version: 40 }) };
-        }
-        if (sql.includes("PRAGMA table_info")) {
-          return {
-            all: jest.fn().mockReturnValue([
-              { name: "id" }, { name: "version" }, { name: "updated_at" }, { name: "migrated_at" },
-            ]),
-          };
-        }
-        return { get: jest.fn(), all: jest.fn().mockReturnValue([]), run: jest.fn() };
-      });
-
-      // ALL files exist — snapshot already there
+    // BACKLOG-2993: the CREATION branch (version < 41) is unreachable — the
+    // baseline fence refuses every pre-baseline database before runMigrations.
+    // What must keep working: no snapshot is ever created for a baseline
+    // database, and the 30-day CLEANUP of a legacy snapshot still runs.
+    it("does NOT create snapshot for a baseline database", async () => {
+      // Default mock has version = the baseline
       mockExistsSync.mockReturnValue(true);
       mockCopyFileSync.mockClear();
 

@@ -22,6 +22,7 @@ jest.mock("electron", () => ({
     getPath: jest.fn(() => "/mock/user/data"),
     isReady: jest.fn(() => true),
     whenReady: jest.fn().mockResolvedValue(undefined),
+    quit: jest.fn(),
   },
   dialog: {
     showMessageBox: mockShowMessageBox,
@@ -34,6 +35,7 @@ jest.mock("@sentry/electron/main", () => ({
   captureException: mockCaptureException,
   setUser: jest.fn(),
   addBreadcrumb: jest.fn(),
+  flush: jest.fn().mockResolvedValue(true),
 }));
 
 // Mock better-sqlite3-multiple-ciphers
@@ -56,10 +58,29 @@ interface MockDb {
   transaction: jest.Mock;
 }
 
+/**
+ * BACKLOG-2993: the schema-baseline fence reads schema_version before ANY
+ * migration machinery runs, and refuses (dialog + app.quit) on a hollow or
+ * pre-baseline answer. This suite's shared statement would answer it with
+ * whatever the current test seeded for OTHER queries, so the version read is
+ * intercepted and answered as a baseline database — keeping every test here
+ * pointed at what it was written to test. Refusal behaviour itself is covered
+ * by databaseService.schemaBaselineRefusal.test.ts on real files.
+ */
+const fenceVersionStatement = {
+  get: jest.fn(() => ({ version: 70 })),
+  all: jest.fn(() => []),
+  run: jest.fn(),
+};
+
 const mockDb: MockDb = {
   pragma: jest.fn(),
   exec: jest.fn(),
-  prepare: jest.fn(() => mockStatement),
+  prepare: jest.fn((sql: string) =>
+    typeof sql === "string" && sql.includes("SELECT version FROM schema_version")
+      ? fenceVersionStatement
+      : mockStatement,
+  ),
   close: jest.fn(),
   serialize: jest.fn((callback: () => void) => callback()),
   run: jest.fn(
@@ -1453,7 +1474,15 @@ describe("DatabaseService", () => {
       // Reset mock defaults on shared mocks (these survive resetModules)
       // CRITICAL: clearAllMocks() removes implementations from all mocks,
       // including mockDb members. Must re-set them here.
-      mockDb.prepare.mockImplementation(() => mockStatement);
+      // BACKLOG-2993: re-apply the fence's version interception too — a bare
+      // `() => mockStatement` here re-answers the baseline read with whatever
+      // a test seeded and turns the whole block into refusal tests.
+      mockDb.prepare.mockImplementation((sql: string) =>
+        typeof sql === "string" && sql.includes("SELECT version FROM schema_version")
+          ? fenceVersionStatement
+          : mockStatement,
+      );
+      fenceVersionStatement.get.mockImplementation(() => ({ version: 70 }));
       mockDb.exec.mockImplementation(() => {});
       mockDb.pragma.mockImplementation(() => undefined);
       mockDb.close.mockImplementation(() => {});
