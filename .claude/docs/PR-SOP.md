@@ -1,4 +1,4 @@
-# Pull Request Standard Operating Procedure
+/# Pull Request Standard Operating Procedure
 
 This document outlines the standard procedure for creating, reviewing, and merging pull requests in Magic Audit. All agents and contributors should follow this SOP.
 
@@ -472,6 +472,94 @@ nothing.
 lint flag, or CI-guard configuration requires a linked SR ruling in the PR body. Absent that link,
 the hunk is a blocker regardless of why the author says it was needed.
 
+### 6.2e Rules kept by hand — ask whether the compiler could hold them (MANDATORY for any PR that adds or edits a hand-maintained list of names, or relies on a call being remembered)
+
+**A rule the compiler cannot see is a rule that will drift.** Three shapes recur here, and each has
+already shipped a live bug that passed `tsc`, eslint, the full suite and CI:
+
+| Shape | The instance | What the user got |
+|---|---|---|
+| **A — a hand-typed list beside a schema** | `transactionDbService.ts:419` keeps its own `allowedFields`. `detection_status`, `reviewed_at` and `rejection_reason` are real columns (`sqlFieldWhitelist.ts:151,155,156`) that appear on **zero lines** of that writer | **Approve** writes 1 of 3 fields and returns **success**; the transaction stays in the queue. **Reject** loses all 3, so nothing is left to write and it hard-fails "No valid fields to update" (BACKLOG-2558) |
+| **B — a companion call kept by convention** | `auditService.log` is called in the handler, by agreement. Ten sites honour it; `transactions:create-audited` and `transactions:resubmit` do not — and resubmit calls `logService.info` instead, so the handler *reads* as logged | The compliance trail is missing the creation event for exactly the transactions built for compliance, and drops every resubmit (BACKLOG-2563) |
+| **C — `??` collapsing "absent" and "explicitly null"** | `null ?? 3 === 3`, at four sites. "All time" is spelled `null` | Choosing **All time** imported 3 months, while the count on the same screen showed the full total (BACKLOG-2561) |
+
+**Two questions the reviewer must ask, and record the answer to in `pm_comments`:**
+
+1. **Could a type hold this instead of a person?** If the same names are typed out in two places
+   that must agree, the second copy is a defect with a delay on it. Derive one from the other.
+2. **Is the failure a WRONG name or a MISSING one?** This decides the fix and is the most common
+   review error. A union of string literals catches a **typo**. It does not catch an **omission** —
+   nothing about `"status" | "detection_status"` notices that a writer never mentioned the second.
+   Absence needs **exhaustiveness**: a `Record<Column, Decision>` that fails to compile until
+   someone declares each new column writable or deliberately excluded. **BACKLOG-2558 is an
+   omission, so a union alone would not have caught it.** Deliberate exclusions stop being
+   comments and become entries — here, `last_exported_at` (`:444`) and the unfreeze override.
+
+**Why the compiler is powerless in this codebase today, and it is one wrapper:**
+`sqlFieldWhitelist.ts:18-213` is declared `as const` — but wraps each table's fields in
+`new Set([...])`, which **erases the string literals**. What survives is `Set<string>`, and
+`validateFields(fields: string[])` takes plain strings. Every field name in the system is text as
+far as `tsc` is concerned. Removing the `Set` wrapper is the precondition for any type-level fix.
+
+**A validator placed after the discard cannot see the discard.** `validateFields` runs at `:559`;
+the filter that drops unknown keys runs at `:539` and the throw at `:555`. The check the codebase
+relies on to catch this drift executes **after** the evidence is gone. When reviewing any
+guard, establish *where in the sequence it runs*, not merely that it exists.
+
+**What does NOT belong at compile time.** Structural facts — which fields exist, which calls are
+required — belong to `tsc`. Facts about the world do not: no type system knows whether an address
+in a fixture belongs to a real person. That needs a check executed against the world (BACKLOG-2731
+was found by intersecting the repo against a real address book, not by any type). Do not propose a
+type as the fix for a fact the compiler cannot know.
+
+**Reviewer's check:** any diff hunk that adds or edits an array/Set of field, column, channel,
+preference or event names — or that adds a call site to an existing "always also call X" convention
+— requires an explicit answer to the two questions above in the review. "It matches today" is not
+an answer; today is when every one of these matched.
+
+### 6.2f An item ships only when its own promise is true (MANDATORY for any finding deferred to a new backlog item)
+
+**When a finding means the item under review does not do what it says, it belongs to that item — not
+to a new one.** Splitting is how an incomplete item passes review, and the justification sounds
+reasonable every time it is offered.
+
+The test is one question: **ship this as-is — is the thing it promised true?**
+
+- **No** → the finding is in scope. Keep working the item.
+- **Yes, but something else surfaced** → file it separately.
+
+A second test settles the borderline cases: **did this change make it consequential?** A
+pre-existing defect that was harmless until this PR made it reachable is this PR's to close.
+
+**"It regresses nothing" is not the bar.** An item can regress nothing and still ship a control that
+lies — which is the specific failure this rule exists to stop.
+
+Why this exists (BACKLOG-2986, 2026-08-30). The item added a Settings switch for Android contact
+import, after a founder ruling that contacts must not be auto-imported. Mid-build it emerged that
+the `androidContacts` preference gates the contact picker but **not** the write path —
+`promoteToMainContacts` reads no preference at all — so switching it off would hide contacts from
+the picker while the next sync kept writing new ones into the main `contacts` table.
+
+That was filed as a separate item and approved as a split, on the recorded grounds that *"2986
+regresses nothing."* True, and beside the point: it would have shipped a control that disagrees with
+its own effect — the exact defect BACKLOG-2486 closed for the iPhone switch — into the same settings
+panel, in the same release, as the fix for that class of bug. A second finding went the same way: a
+swallowed write in the shared toggle handler, harmless while every absent key meant *enabled*, and
+newly able to make the switch lie precisely because this PR introduced the first derived-OFF switch.
+
+**Both the engineer and the reviewer accepted the split.** The founder rejected it. Applying the test
+above resolves both correctly and takes one sentence.
+
+| finding | promise still true if shipped without it? | call |
+|---|---|---|
+| write path ungated | No — "a control over Android contact import" is false | same item |
+| switch can lie on a failed write | No — "a working switch" is false | same item |
+| `tsconfig` excludes test files from type-check | Yes — the toggle works regardless | separate item |
+
+**Reviewer's check:** for any finding deferred to a new backlog item, state in the ruling why the
+item under review still keeps its promise without it. **If that sentence cannot be written, the
+finding is in scope**, and approving the split is a blocker rather than a note.
+
 ### 6.3 Review Prompt Template
 
 Use this prompt to request a code review:
@@ -487,6 +575,16 @@ Please review this branch for PR readiness. Check for:
 7. Architecture boundary violations
 8. Performance issues
 9. Security concerns
+10. Rules kept by hand that a type could hold instead (§6.2e) — any list of field,
+    column, channel, preference or event names typed out in two places that must
+    agree, and any "always also call X" convention with a new call site. For each:
+    state whether the failure mode is a WRONG name (a union catches it) or a
+    MISSING one (only exhaustiveness catches it).
+11. Any finding you propose to defer to a NEW backlog item (§6.2f) — for each,
+    write the sentence "this item still does what it says without the fix,
+    because ___". If that sentence cannot be written, the finding is in scope
+    and deferring it is a blocker, not a note. "It regresses nothing" does not
+    complete the sentence.
 
 Provide specific file:line references and suggested fixes.
 ```
