@@ -228,19 +228,13 @@ const mockEvent = {} as IpcMainInvokeEvent;
 
 const SCHEMA_PATH = path.join(__dirname, "../database/schema.sql");
 
-/**
- * Migration v56's exact DDL, transcribed from the migration (see the identical
- * block in `services/db/__tests__/contactRestore.test.ts`). `schema.sql` is the
- * FRESH-INSTALL shape and predates the tombstone columns, so a database built
- * from it alone is not the shape production has.
- */
-const V56_TOMBSTONE_DDL = [
-];
-
 function buildSchema(db: TestDb): void {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(readFileSync(SCHEMA_PATH, "utf8"));
-  for (const ddl of V56_TOMBSTONE_DDL) db.exec(ddl);
+  // BACKLOG-2993: the v56 tombstone columns (and every other chain-added
+  // column) now come from the baseline schema.sql exec'd above — the
+  // per-migration DDL bolt-ons this fixture used to apply are gone with
+  // the chain.
   // v59's crosswalk — `getContactById` reads it via `getLiveSourcesForContact`.
   db.exec(CONTACT_SOURCE_LINKS_TABLE_SQL);
   db.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);

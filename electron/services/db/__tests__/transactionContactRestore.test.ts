@@ -67,10 +67,6 @@ import {
 
 const SCHEMA_PATH = path.join(__dirname, "../../../database/schema.sql");
 
-/** The two columns migration v56 appends. Applied with v56's exact DDL. */
-const V56_TOMBSTONE_DDL = [
-];
-
 const USER_ID = "user-2367";
 
 const TXN_A = "txn-alpha";
@@ -128,7 +124,10 @@ beforeEach(() => {
   db = openTestDb();
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(readFileSync(SCHEMA_PATH, "utf8"));
-  for (const ddl of V56_TOMBSTONE_DDL) db.exec(ddl);
+  // BACKLOG-2993: the v56 tombstone columns (and every other chain-added
+  // column) now come from the baseline schema.sql exec'd above — the
+  // per-migration DDL bolt-ons this fixture used to apply are gone with
+  // the chain.
 
   db.prepare(
     `INSERT INTO users_local (id, email, oauth_provider, oauth_id)

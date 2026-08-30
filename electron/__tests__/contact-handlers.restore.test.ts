@@ -112,10 +112,6 @@ const USER = "3f2a1c60-0000-4000-8000-000000002367";
 const DANA = "3f2a1c60-0000-4000-8000-00000000da4a";
 const SCHEMA_PATH = path.join(__dirname, "../database/schema.sql");
 
-/** The two columns migration v56 appends. Applied with v56's exact DDL. */
-const V56_TOMBSTONE_DDL = [
-];
-
 type Handler = (event: IpcMainInvokeEvent, ...args: never[]) => Promise<unknown>;
 
 /** Pull a registered handler out of the ipcMain.handle mock by channel name. */
@@ -139,7 +135,10 @@ beforeEach(() => {
   db = openTestDb();
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(readFileSync(SCHEMA_PATH, "utf8"));
-  for (const ddl of V56_TOMBSTONE_DDL) db.exec(ddl);
+  // BACKLOG-2993: the v56 tombstone columns (and every other chain-added
+  // column) now come from the baseline schema.sql exec'd above — the
+  // per-migration DDL bolt-ons this fixture used to apply are gone with
+  // the chain.
   db.exec(CONTACT_SOURCE_LINKS_TABLE_SQL);
 
   db.prepare(

@@ -81,24 +81,6 @@ const USER = "user-2672";
 const SCHEMA_PATH = path.join(__dirname, "../../../database/schema.sql");
 
 /**
- * v56 (BACKLOG-2364/2365). `getMessageDerivedContacts` reads `c.removed_at` —
- * a removed contact must still suppress its message-derived twin — so a schema
- * without these columns fails the query outright rather than testing anything.
- */
-const V56_TOMBSTONE_DDL = [
-];
-
-/**
- * `external_contacts` columns that `schema.sql` does NOT declare — they are
- * added by migrations only (`databaseService.ts:3017` and `:3095`), so a fresh
- * `exec(schema.sql)` produces a table the real `upsertFromiPhone` cannot write
- * to ("table external_contacts has no column named external_uuid"). The same
- * two ALTERs appear in `contact-handlers.universalLinking.test.ts:179-180`.
- */
-const EXTERNAL_CONTACTS_MIGRATION_DDL = [
-];
-
-/**
  * `sanitizeString`, transcribed from `iPhoneSyncStorageService.ts:90-96`.
  *
  * Copied rather than imported because importing that module pulls the whole
@@ -143,8 +125,10 @@ beforeEach(() => {
   db = openTestDb();
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(readFileSync(SCHEMA_PATH, "utf8"));
-  for (const ddl of V56_TOMBSTONE_DDL) db.exec(ddl);
-  for (const ddl of EXTERNAL_CONTACTS_MIGRATION_DDL) db.exec(ddl);
+  // BACKLOG-2993: the v56 tombstone columns (and every other chain-added
+  // column) now come from the baseline schema.sql exec'd above — the
+  // per-migration DDL bolt-ons this fixture used to apply are gone with
+  // the chain.
   db.exec(CONTACT_SOURCE_LINKS_TABLE_SQL);
   db.prepare(
     `INSERT INTO users_local (id, email, oauth_provider, oauth_id)
