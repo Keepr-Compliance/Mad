@@ -157,6 +157,84 @@ src/
 
 ---
 
+## SQL Text Lives in One Layer
+
+**Enforced by CI:** job `SQL Boundary Gate` -> `npm run check:sql-boundary`
+(`scripts/ci/check-sql-boundary.mjs`, baseline `scripts/ci/sql-boundary-baseline.json`).
+
+### The rule
+
+> **SQL *text* is defined only in `electron/services/db/**`** -- the `*Sql.ts`
+> pattern that already exists (`contactProjectionSql`, `contactRecencySql`,
+> `contactSourceLinkSql`, `contactTombstoneSql`, `frozenContactSql`,
+> `contactIdentitySchemaSql`).
+>
+> *Executing* declared SQL against a non-singleton handle is permitted where
+> declared: worker threads, backup/manifest database files, schema bootstrap and
+> the encryption-rebuild path. **That exception licenses EXECUTING on a
+> non-singleton handle. It never licenses DEFINING text outside `db/`.**
+
+Why it matters: a second platform can reuse SQL *text*. It can never reuse a
+`better-sqlite3` statement object.
+
+### Writing compliant code
+
+```ts
+// electron/services/db/widgetSql.ts
+export const WIDGETS_BY_OWNER_SQL = `SELECT id FROM widgets WHERE owner_id = ?`;
+
+// anywhere else
+import { WIDGETS_BY_OWNER_SQL } from "../services/db/widgetSql";
+db.prepare(WIDGETS_BY_OWNER_SQL).all(ownerId);
+```
+
+`electron/workers/contactQueryWorker.ts` is the working example: it opens its own
+readonly handle on a worker thread and still imports every query from `db/`.
+
+### What the gate flags
+
+All three verbs -- `.prepare(`, `.exec(`, `.pragma(`. A `.prepare(`-only gate is
+decorative: it would pass a file holding raw `db.exec()` DDL.
+
+It classifies **where argument 0's text came from**, not the receiver name, so
+`RegExp.exec` is green with no name blacklist. Every call site lands in exactly
+one of three buckets -- there is no "cannot tell, assume fine":
+
+| bucket | meaning |
+|---|---|
+| COMPLIANT | inside `db/**`, or text imported from `db/**`, or a proven RegExp receiver, or a declared `.pragma()` exception |
+| VIOLATION | SQL text authored outside `db/**`, including hoisted consts, concatenations, ternaries, and imports from non-`db` modules |
+| UNRESOLVABLE | origin not statically determinable -- **counts as a violation** |
+
+**UNRESOLVABLE is not a loophole, it is the point.** Passing SQL through a helper
+parameter (`const run = (sql: string) => db.prepare(sql)`) is exactly the
+untraceability the rule prevents, so the gate reports it rather than passing it.
+Resolution follows at most two alias hops and does not cross a function boundary;
+beyond that it returns UNRESOLVABLE, so exceeding the limit can only ever produce
+a **false red, never a false green**.
+
+### The baseline
+
+`sql-boundary-baseline.json` records today's pre-existing sites so the gate fails
+only on **new** ones. It is **identity-keyed** (`file :: verb :: hash of the SQL`),
+not counted -- swapping one query for another is caught even though the count is
+unchanged. Every entry names the backlog item that will remove it; `UNOWNED` is
+not a legal value.
+
+- Moving SQL into `db/**`? Run `npm run check:sql-boundary -- --update-baseline`
+  **in the same commit**. A stale entry is a hard failure, which is what forces
+  the file to shrink rather than rot.
+- **Never** add or regenerate an entry to silence a new finding. `--update-baseline`
+  refuses to grow the total without an explicit `--allow-growth`.
+- `npm run check:sql-boundary -- --explain` prints every site's classification.
+
+Permanent exceptions live in the script, not the baseline JSON: the JSON is
+regenerable, so an exception stored there could be silently promoted from a
+genuine new violation. They are `.pragma()`-only (connection and cipher
+configuration). **No file is exempt as a whole.**
+
+---
+
 ## PR Review Enforcement
 
 When reviewing PRs, check for:
