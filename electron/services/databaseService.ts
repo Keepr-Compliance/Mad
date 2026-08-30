@@ -507,8 +507,10 @@ class DatabaseService implements IDatabaseService {
    * produce its canonical error, and keeps heavily-mocked test harnesses
    * transparent).
    *
-   * The boundary, swept not sampled (68/69 refuse, 70/71 accept in the
-   * boundary-sweep suite), plus the structural cases:
+   * The strictly-greater boundary is pinned on a real chain-built v69 file in
+   * databaseService.schemaBaselineRefusal.test.ts — the off-by-one guard (the
+   * wider 68/69/70/71 sweep was cut by founder ruling, 2026-08-30; see that
+   * suite's scope note). The predicate's cases:
    *   - schema_version.version <  baseline → REFUSE (pre-reset)
    *   - schema_version.version == baseline → accept
    *   - schema_version.version >  baseline → accept, warn (a NEWER build
