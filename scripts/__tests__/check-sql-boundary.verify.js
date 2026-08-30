@@ -19,6 +19,8 @@
  *   C8       SQL arriving as a function parameter (tier 3)     -> RED as UNRESOLVABLE
  *   C9       SQL imported from a non-db module                 -> RED
  *   C10      compliant `const sql` + later shadowed literal    -> COMPLIANT then VIOLATION
+ *   C11      reassignment / += / parameter shadowing an import -> UNRESOLVABLE (no collateral)
+ *   C12      --update-baseline refuses a swap, still allows a shrink
  *   A2a      3-hop alias chain                                 -> UNRESOLVABLE (fail-closed)
  *   A2b      2-hop alias to a db/ import (the :83 shape)       -> COMPLIANT
  *   VSUM     absolute call-site count + COMPLIANT reason census on a known tree
@@ -338,6 +340,59 @@ for (const [id, verb, call] of [
 }
 
 // ---------------------------------------------------------------------------
+// C11 — a name written by a form the binding map does not model.
+//
+// The map knows two forms (declaration-with-initializer, named import). An
+// assignment, `+=`, or a shadowing parameter is invisible to it, so without
+// taint the use resolves PAST the write to the modelled declaration above and
+// classifies COMPLIANT -- greening interpolated SQL. That is not exotic:
+// `let sql = ...; sql += ...` is the dominant query-assembly idiom inside
+// electron/services/db/ itself, and a half-move of iosMessagesParser.ts:674
+// (BACKLOG-2990) would drop its baseline entry to zero while the file still
+// authors `LIMIT ${...}` outside db/ -- a false DONE on the remediation path.
+//
+// All three halves are asserted. Asserting only the red halves would permit a
+// file-wide taint, which reds the LEGITIMATE use of the same import in the same
+// file; that collateral would grow as remediation lands and from-db-import
+// climbs from 3.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    [DB_MODULE]: DB_MODULE_SRC,
+    "electron/workers/written.ts": [
+      'import { OK_SQL } from "../services/db/okSql";',
+      "// (i) reassignment: the write is invisible to the binding map",
+      "export function reassigned(db: any, legacy: boolean, term: string) {",
+      "  let sql = OK_SQL;",
+      "  if (legacy) sql = `SELECT id FROM widgets WHERE label LIKE '%${term}%'`;",
+      "  return db.prepare(sql).all();",
+      "}",
+      "// (ii) append: the shape used throughout electron/services/db/",
+      "export function appended(db: any, limit: number) {",
+      "  let sql = OK_SQL;",
+      "  sql += ` LIMIT ${Math.floor(limit)}`;",
+      "  return db.prepare(sql).all();",
+      "}",
+      "// (iii) a parameter shadowing the db import",
+      "export function shadowed(db: any, OK_SQL: string) { return db.prepare(OK_SQL).all(); }",
+      "// (iv) the legitimate use of the same import -- must NOT be collaterally reddened",
+      "export function legitimate(db: any) { return db.prepare(OK_SQL).all(); }",
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--explain"]);
+  const lines = r.all.split("\n").filter((l) => l.includes("written.ts"));
+  const unresolvable = lines.filter((l) => /UNRESOLVABLE/.test(l)).length;
+  const compliant = lines.filter((l) => /COMPLIANT\s+from-db-import/.test(l)).length;
+  record(
+    "C11",
+    "unmodelled writes (reassign, +=, param shadow) are UNRESOLVABLE; the legitimate use stays COMPLIANT",
+    lines.length === 4 && unresolvable === 3 && compliant === 1,
+    `sites=${lines.length} unresolvable=${unresolvable} compliant=${compliant} (want 4/3/1)`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // A2a / A2b — the alias cutoff and its fail direction.
 // A2a proves exceeding the cutoff fails CLOSED (UNRESOLVABLE = violation), so
 // the cutoff is a precision knob, not a safety knob. A2b proves it is high
@@ -389,6 +444,47 @@ for (const [id, verb, call] of [
     detail = `fromDbImport=${j.complianceReasons["from-db-import"]} violation=${j.violation}`;
   } catch { /* ok stays false */ }
   record("A2b", "2-hop alias to a db/ import is COMPLIANT (the :83 shape)", ok, detail);
+}
+
+// ---------------------------------------------------------------------------
+// C12 — --update-baseline refuses a SWAP, and still allows a shrink.
+//
+// A total-based growth guard lets a swap through: remove one baselined query,
+// add a brand-new one, total unchanged, regeneration succeeds silently -- while
+// the baseline's own $comment claims it cannot. The guard compares KEYS.
+// Both halves are asserted: refusing the swap is worthless if it also blocks
+// the ratchet-down that items 2989/2990/2991 depend on.
+// ---------------------------------------------------------------------------
+{
+  const two = 'export function q(db: any) { db.prepare("SELECT alpha FROM t").get(); db.prepare("SELECT beta FROM t").get(); }\n';
+  const dir = mkTree({ [DB_MODULE]: DB_MODULE_SRC, "electron/handlers/h.ts": two });
+  runGate(["--root", dir, "--baseline", bl(dir), "--update-baseline"]);
+
+  // (i) SWAP: beta -> gamma. Same count, one brand-new key.
+  fs.writeFileSync(
+    path.join(dir, "electron/handlers/h.ts"),
+    'export function q(db: any) { db.prepare("SELECT alpha FROM t").get(); db.prepare("SELECT gamma FROM t").get(); }\n'
+  );
+  const swap = runGate(["--root", dir, "--baseline", bl(dir), "--update-baseline"]);
+  const swapRefused = swap.code === 1 && /REFUSING to record/.test(swap.all);
+  const allowed = runGate(["--root", dir, "--baseline", bl(dir), "--update-baseline", "--allow-growth"]);
+
+  // (ii) SHRINK: drop one query entirely. Must regenerate with NO flag.
+  fs.writeFileSync(
+    path.join(dir, "electron/handlers/h.ts"),
+    'export function q(db: any) { db.prepare("SELECT alpha FROM t").get(); }\n'
+  );
+  const shrink = runGate(["--root", dir, "--baseline", bl(dir), "--update-baseline"]);
+  const after = runGate(["--root", dir, "--baseline", bl(dir)]);
+  const shrank = shrink.code === 0 && after.code === 0 &&
+    JSON.parse(fs.readFileSync(bl(dir), "utf8")).totalSites === 1;
+
+  record(
+    "C12",
+    "--update-baseline refuses a swap (same total, new key) but still allows a shrink",
+    swapRefused && allowed.code === 0 && shrank,
+    `swapRefused=${swapRefused} allowGrowth=${allowed.code} shrank=${shrank}`
+  );
 }
 
 // ---------------------------------------------------------------------------

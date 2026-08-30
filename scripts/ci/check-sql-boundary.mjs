@@ -42,9 +42,27 @@
  *   compliant `const sql = <db import>` green every later `db.prepare(sql)` in
  *   the same file — including a raw interpolated SELECT. Control C10 pins this.
  *
- * KNOWN LIMIT
- *   Resolution does not cross a function boundary, so SQL arriving as a
- *   parameter is UNRESOLVABLE — reported as a violation, not silently passed.
+ * UNMODELLED WRITES ARE TAINTED (amendment A5)
+ *   The binding map models two forms: a declaration with an initializer, and a
+ *   named import. Any OTHER write or binding of a name — assignment, `+=`,
+ *   parameter, destructuring, catch variable, uninitialised `let` — taints that
+ *   name for the span of its innermost enclosing function, and a tainted name
+ *   can never yield COMPLIANT. Without this, `let sql = <db import>; sql += ...`
+ *   resolved past the write to the import and greened interpolated SQL.
+ *   Taint downgrades only FROM_DB; a name resolving to a LITERAL still keys as
+ *   LITERAL, so the baseline does not move.
+ *
+ * KNOWN LIMITS — what this gate does NOT catch, stated plainly
+ *   1. Resolution never crosses a function boundary. SQL passed INTO a helper
+ *      (`const run = (sql: string) => db.prepare(sql)`) is UNRESOLVABLE, which
+ *      counts as a violation. That case is reported.
+ *   2. Interprocedural flow is not modelled: this gate cannot say whether the
+ *      text a helper receives originated in `db/`. It reports that it cannot
+ *      tell; it does not certify the site.
+ *   3. Nearest-preceding is positional, not lexical. A `const` inside a nested
+ *      function textually precedes a later use in the OUTER scope, so that use
+ *      can resolve to it. The effect is a false RED on a compliant site — fail
+ *      closed, and no such site exists in the tree today.
  *
  * USAGE
  *   node scripts/ci/check-sql-boundary.mjs
@@ -177,6 +195,50 @@ const hash12 = (s) => createHash("sha256").update(s).digest("hex").slice(0, 12);
  */
 function buildBindings(sf, rel) {
   const bindings = new Map(); // name -> [{ pos, kind, init?, spec?, fromDb? }]
+
+  // TAINT (BACKLOG-2959 amendment A5).
+  //
+  // This map models exactly two binding forms: a declaration with an
+  // initializer, and a named import. A name written or bound by any OTHER form
+  // — assignment, `+=`, parameter, destructuring, catch variable, uninitialised
+  // `let` — is invisible to it, so `nearestPreceding` would skip the write and
+  // resolve the use to the modelled declaration above it. That greens
+  // interpolated SQL:
+  //
+  //     let sql = <db import>;
+  //     sql += ` LIMIT ${n}`;      // invisible
+  //     db.prepare(sql);           // resolved to the import -> COMPLIANT
+  //
+  // and it is not exotic: `let sql = ...; sql += ...` is the dominant
+  // query-assembly idiom inside electron/services/db/ itself. Left unfixed it
+  // produces a false DONE on the very remediation this gate protects — a
+  // half-move of iosMessagesParser.ts:674 (BACKLOG-2990) drops its baseline
+  // entry to zero while the file still authors `LIMIT ${...}` outside db/.
+  //
+  // So: a name with an unmodelled write in scope at the use site cannot yield a
+  // COMPLIANT verdict. Taint is recorded with the span of the innermost
+  // enclosing function, not file-wide, so an unrelated legitimate use of the
+  // same name elsewhere in the file is not collaterally reddened.
+  const taints = []; // { name, start, end }
+  const enclosingScope = (n) => {
+    let p = n.parent;
+    while (
+      p &&
+      !ts.isFunctionDeclaration(p) &&
+      !ts.isFunctionExpression(p) &&
+      !ts.isArrowFunction(p) &&
+      !ts.isMethodDeclaration(p) &&
+      !ts.isConstructorDeclaration(p) &&
+      !ts.isSourceFile(p)
+    ) p = p.parent;
+    return p ?? sf;
+  };
+  const taint = (nm, at) => {
+    if (!nm || !ts.isIdentifier(nm)) return;
+    const scope = enclosingScope(at);
+    taints.push({ name: nm.text, start: scope.getStart(sf), end: scope.getEnd() });
+  };
+
   const add = (name, entry) => {
     if (!bindings.has(name)) bindings.set(name, []);
     bindings.get(name).push(entry);
@@ -207,10 +269,25 @@ function buildBindings(sf, rel) {
         });
       }
     }
+    if (
+      ts.isBinaryExpression(n) &&
+      ts.isIdentifier(n.left) &&
+      n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      n.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) taint(n.left, n);
+    if ((ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) && ts.isIdentifier(n.operand))
+      taint(n.operand, n);
+    if (ts.isParameter(n)) taint(n.name, n);
+    if (ts.isBindingElement(n)) taint(n.name, n);
+    if (ts.isCatchClause(n) && n.variableDeclaration) taint(n.variableDeclaration.name, n);
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && !n.initializer) taint(n.name, n);
     ts.forEachChild(n, collect);
   })(sf);
-  return bindings;
+  return { bindings, taints };
 }
+
+const isTainted = (taints, name, usePos) =>
+  taints.some((t) => t.name === name && usePos >= t.start && usePos <= t.end);
 
 const nearestPreceding = (bindings, name, usePos) => {
   const list = bindings.get(name);
@@ -249,12 +326,16 @@ function classifyArg(node, depth, usePos, ctx) {
     if (depth >= ALIAS_DEPTH_CUTOFF) return { tag: "UNRESOLVABLE", node };
     const b = nearestPreceding(ctx.bindings, node.text, usePos);
     if (!b) return { tag: "UNRESOLVABLE", node };
+    // Deliberate asymmetry: taint downgrades only FROM_DB. A name resolving to a
+    // LITERAL must keep classifying as LITERAL so its `text:` key — and its
+    // baseline entry — are preserved. Tainting that path would move the baseline.
+    const tainted = isTainted(ctx.taints, node.text, usePos);
     if (b.kind === "import") {
-      return b.fromDb
-        ? { tag: "FROM_DB", node }
-        : { tag: "IMPORTED_ELSEWHERE", node, importRef: `import:${b.spec}#${b.imported}` };
+      if (b.fromDb) return tainted ? { tag: "UNRESOLVABLE", node } : { tag: "FROM_DB", node };
+      return { tag: "IMPORTED_ELSEWHERE", node, importRef: `import:${b.spec}#${b.imported}` };
     }
-    return classifyArg(b.init, depth + 1, b.init.getStart(ctx.sf), ctx);
+    const resolved = classifyArg(b.init, depth + 1, b.init.getStart(ctx.sf), ctx);
+    return tainted && resolved.tag === "FROM_DB" ? { tag: "UNRESOLVABLE", node } : resolved;
   }
 
   // Calls, parameters, property access, element access, await, etc.
@@ -296,7 +377,8 @@ function scanFile(rel, source) {
     throw new Error(`cannot parse ${rel}: ${diags.length} parse diagnostic(s); first: ${first}`);
   }
 
-  const ctx = { sf, bindings: buildBindings(sf, rel) };
+  const bound = buildBindings(sf, rel);
+  const ctx = { sf, bindings: bound.bindings, taints: bound.taints };
   const inDb = rel.startsWith(DB_LAYER);
   const sites = [];
 
@@ -388,8 +470,10 @@ const BASELINE_COMMENT =
   "scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the " +
   "backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this " +
   "file when its SQL moves into db/**, never by being deleted to silence the gate, and " +
-  "never by regenerating after adding a violation (--update-baseline refuses to grow " +
-  "without --allow-growth). owner:UNOWNED is not a legal value.";
+  "never by regenerating after adding a violation: --update-baseline refuses to record ANY " +
+  "key absent from the current baseline (not merely a grown total, which a swap would slip " +
+  "past) unless given --allow-growth. Removing keys never needs a flag. " +
+  "owner:UNOWNED is not a legal value.";
 
 function loadBaseline(file) {
   if (!existsSync(file)) return { entries: [], map: new Map(), missing: true };
@@ -559,20 +643,35 @@ function main() {
     say(
       "\nAlias depth cutoff is " + ALIAS_DEPTH_CUTOFF + ". Beyond it the classifier returns " +
         "UNRESOLVABLE, which counts as a violation — exceeding the cutoff can only produce a " +
-        "false RED, never a false green. SQL arriving as a function parameter is UNRESOLVABLE " +
-        "by the same rule: resolution does not cross a function boundary."
+        "false RED, never a false green.\n" +
+        "A name written by a form the binding map does not model (assignment, +=, parameter, " +
+        "destructuring, catch variable, uninitialised let) is tainted for its enclosing " +
+        "function and cannot be COMPLIANT.\n" +
+        "Not caught: interprocedural flow. SQL passed into a helper is reported UNRESOLVABLE — " +
+        "the gate says it cannot trace the origin, it does not certify the site."
     );
   }
 
   // --- update mode ---------------------------------------------------------
   if (args.update) {
     const prior = loadBaseline(baselineFile);
-    const priorTotal = prior.missing ? 0 : (prior.meta.totalSites ?? 0);
-    if (!prior.missing && currentTotal > priorTotal && !args.allowGrowth) {
+    // Refuse any key ABSENT from the prior baseline -- not merely a grown total.
+    // A total-based guard lets a swap through: remove one baselined query, add a
+    // brand-new one, and the count is unchanged so regeneration succeeds
+    // silently. Removing keys is always allowed, so the ratchet-down path is
+    // untouched: that is the whole point of this file.
+    const priorKeys = prior.missing ? null : new Set(prior.entries.map(keyOf));
+    const brandNew = priorKeys ? entries.filter((e) => !priorKeys.has(keyOf(e))) : [];
+    if (brandNew.length && !args.allowGrowth) {
       console.error(
-        `\nREFUSING to grow the baseline: ${priorTotal} -> ${currentTotal}.\n` +
-          `Regenerating after ADDING a violation is how a gate is quietly switched off.\n` +
-          `Move the SQL into ${DB_LAYER}, or pass --allow-growth with a reviewed reason.`
+        `\nREFUSING to record ${brandNew.length} key(s) absent from the current baseline:`
+      );
+      for (const e of brandNew.slice(0, 20)) console.error(`  ${keyOf(e)}`);
+      console.error(
+        `\nRegenerating after ADDING a violation is how a gate is quietly switched off,\n` +
+          `and swapping one query for another keeps the total unchanged.\n` +
+          `Move the SQL into ${DB_LAYER}, or pass --allow-growth with a reviewed reason.\n` +
+          `(Removing keys never needs a flag — ratcheting down is always allowed.)`
       );
       process.exit(1);
     }

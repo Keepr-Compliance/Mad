@@ -209,9 +209,31 @@ one of three buckets -- there is no "cannot tell, assume fine":
 **UNRESOLVABLE is not a loophole, it is the point.** Passing SQL through a helper
 parameter (`const run = (sql: string) => db.prepare(sql)`) is exactly the
 untraceability the rule prevents, so the gate reports it rather than passing it.
-Resolution follows at most two alias hops and does not cross a function boundary;
-beyond that it returns UNRESOLVABLE, so exceeding the limit can only ever produce
-a **false red, never a false green**.
+Resolution follows at most two alias hops; beyond that it returns UNRESOLVABLE, so
+exceeding the limit can only ever produce a **false red, never a false green**.
+
+A name written by a form the binding map does not model -- assignment, `+=`,
+parameter, destructuring, catch variable, uninitialised `let` -- is **tainted** for
+its enclosing function and can never be COMPLIANT. This matters because
+`let sql = <db import>; sql += ...` is the dominant query-assembly idiom in this
+codebase, and without taint the append is invisible:
+
+```ts
+let sql = WIDGETS_BY_OWNER_SQL;
+sql += ` LIMIT ${Math.floor(limit)}`;   // still authoring SQL outside db/
+db.prepare(sql);                        // -> UNRESOLVABLE, not COMPLIANT
+```
+
+**Moving a query in halves does not clear it.** If you move the base SELECT into
+`db/` but leave an interpolated `+=` at the call site, the site stays red. Move the
+whole statement, or parameterise the part that varies.
+
+**What the gate does NOT catch, stated plainly:** interprocedural flow. It cannot
+tell whether the text a helper receives originated in `db/`, so it reports
+UNRESOLVABLE -- it says it cannot trace the origin, it does not certify the site.
+Nearest-preceding resolution is also positional rather than lexical, so a `const`
+in a nested function can capture a later outer use; that fails **closed** (a false
+red on a compliant site) and no such site exists today.
 
 ### The baseline
 
