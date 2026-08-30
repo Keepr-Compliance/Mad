@@ -20,7 +20,12 @@ import * as BackgroundFetch from "expo-background-fetch";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { readSmsMessages } from "./smsReader";
 import type { SmsReadError } from "./smsReader";
-import { getSyncWindowStart } from "./syncWindow";
+import {
+  resolveSyncWindow,
+  readAppliedWindow,
+  recordAppliedWindow,
+  isWidening,
+} from "./syncWindow";
 import { checkSmsPermissions } from "./permissions";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
@@ -217,8 +222,17 @@ function reachabilityErrorMessage(errorType: SyncErrorType): string {
  * 5. Update sync stats
  *
  * This is called both by the background task and by the manual "Sync Now" button.
+ *
+ * @param options.userInitiated - set ONLY by the manual "Sync Now" button. It
+ *   makes the cycle re-read the import setting from Supabase even when the
+ *   cached copy is still inside its TTL (BACKLOG-3017). A user who has just
+ *   changed the setting on the desktop and tapped Sync Now is the one case
+ *   where an hour-old cache is visibly wrong; nothing else about the cycle
+ *   changes, and the setting fetch still degrades exactly as it always did.
  */
-export async function performSync(): Promise<SyncOperationResult> {
+export async function performSync(
+  options: { userInitiated?: boolean } = {}
+): Promise<SyncOperationResult> {
   // BACKLOG-2988: THE ONE EMISSION POINT. Every way this function can end —
   // the lock skip, all five early returns inside the cycle, a clean finish and
   // a throw — passes through exactly one of the two `emitOutcome` calls below.
@@ -226,7 +240,7 @@ export async function performSync(): Promise<SyncOperationResult> {
   // branches that reported nothing were the ones nobody remembered.
   const startedAt = Date.now();
   try {
-    const result = await runSyncUnderLock();
+    const result = await runSyncUnderLock(options.userInitiated === true);
     await emitOutcome(startedAt, result, false);
     return result;
   } catch (error) {
@@ -236,7 +250,9 @@ export async function performSync(): Promise<SyncOperationResult> {
 }
 
 /** The lock discipline, unchanged — extracted so `performSync` has one exit. */
-async function runSyncUnderLock(): Promise<SyncOperationResult> {
+async function runSyncUnderLock(
+  userInitiated: boolean
+): Promise<SyncOperationResult> {
   // BACKLOG-2200: serialize the whole cycle across UI + background contexts.
   // If another run holds a fresh lock, return early with `skipped: true` and a
   // benign, non-error result so no caller renders a false "Sync Complete" or a
@@ -258,7 +274,7 @@ async function runSyncUnderLock(): Promise<SyncOperationResult> {
   }
 
   try {
-    return await runSyncCycle();
+    return await runSyncCycle(userInitiated);
   } finally {
     // Always release our lock, even on throw, so a failed cycle can't deadlock.
     await releaseSyncLock(lockNonce);
@@ -324,7 +340,9 @@ async function emitOutcome(
  * sync lock (BACKLOG-2200), so its queue/cursor mutations are atomic across
  * contexts.
  */
-async function runSyncCycle(): Promise<SyncOperationResult> {
+async function runSyncCycle(
+  userInitiated: boolean
+): Promise<SyncOperationResult> {
   Sentry.addBreadcrumb({
     category: "sync",
     message: "Sync cycle started",
@@ -413,10 +431,10 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       const lastTimestamp = await getLastSyncTimestamp();
 
       // BACKLOG-2800: the desktop's "Import messages from" setting now GOVERNS
-      // this read. `getSyncWindowStart` returns the oldest timestamp the window
-      // admits, or null for "All time" — and also null when no value could be
-      // obtained at all, because it fails OPEN (its docblock explains why the
-      // two failure directions are not symmetric).
+      // this read. `resolveSyncWindow` returns the oldest timestamp the window
+      // admits (`null` for an explicit "All time"), or `unknown` when no value
+      // could be obtained at all, because it fails OPEN (its docblock explains
+      // why the two failure directions are not symmetric).
       //
       // The read floor is the LATER of the cursor and the window edge. The
       // cursor already carries the `+1`: it is STORED as `newest + 1` at
@@ -437,20 +455,80 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       // sync immediately after registering, so the pairing-time prime can lose
       // that race — keying the refresh off the cursor makes correctness
       // independent of it, and covers force re-import for free.
-      const windowStart = await getSyncWindowStart(Date.now(), {
+      //
+      // `userInitiated` on a manual "Sync Now" (BACKLOG-3017): a widening is
+      // useless if the phone cannot SEE it for up to the cache TTL, and "change
+      // the setting, then hit Sync Now" is the procedure this is accepted by.
+      const resolution = await resolveSyncWindow(Date.now(), {
         forceRefresh: lastTimestamp === 0,
+        userInitiated,
       });
+
+      // BACKLOG-3017 — WIDENING LOWERS THE READ FLOOR.
+      //
+      // `max(cursor, windowStart)` governs narrowing and is INERT for widening:
+      // once the cursor is past the edge, moving the edge further back changes
+      // nothing, so "All time" brought nothing older and the setting appeared to
+      // work while doing nothing. Telling "the user widened" apart from "the
+      // cursor is simply ahead" needs the edge we LAST READ FROM, which is state
+      // that did not exist before this record.
+      //
+      // Only a KNOWN window may move the cursor. An `unknown` resolution is a
+      // Supabase outage, not a user decision: it keeps today's behaviour (read
+      // from the cursor) and records nothing, so a failure can never claim
+      // All-time coverage and blind every future widening.
+      let effectiveCursor = lastTimestamp;
+      const windowStart =
+        resolution.kind === "known" ? resolution.start : null;
+
+      if (resolution.kind === "known") {
+        const applied = await readAppliedWindow();
+        const widened = isWidening(resolution.start, applied);
+
+        if (widened) {
+          // `null` ("All time") is -Infinity, hence a floor of 0. `min` is not
+          // decoration: after a BACKLOG-2995 re-pair the cursor is already 0,
+          // and writing the edge over it would RAISE the floor and skip the very
+          // history the widening asked for.
+          const floor = resolution.start ?? 0;
+          if (floor < effectiveCursor) {
+            // ORDER IS LOAD-BEARING: lower the cursor BEFORE recording the new
+            // applied window. A crash between the two costs a repeated re-read,
+            // which the desktop dedupes (`INSERT OR IGNORE` on the unique
+            // `(user_id, external_id)`); the other order records the claim,
+            // loses the rewind, and the re-read never happens again.
+            await setLastSyncTimestamp(floor);
+            effectiveCursor = floor;
+            console.log(
+              `[BackgroundSync] Import window WIDENED: read floor lowered ${lastTimestamp} -> ${floor}${
+                resolution.start === null
+                  ? " (All time)"
+                  : ` (${new Date(floor).toISOString()})`
+              } — re-reading history the previous window excluded (BACKLOG-3017)`
+            );
+          }
+        }
+
+        // Recorded on a widening EVEN WHEN the cursor needed no lowering.
+        // Skipping it there leaves the record bounded while the phone is now
+        // reading All time, so every later cycle re-detects the same widening
+        // and rewinds the cursor forever.
+        if (widened || !applied.present) {
+          await recordAppliedWindow(resolution.start);
+        }
+      }
+
       const readFrom =
         windowStart === null
-          ? lastTimestamp
-          : Math.max(lastTimestamp, windowStart);
+          ? effectiveCursor
+          : Math.max(effectiveCursor, windowStart);
 
       // The only field-visible signal that the window actually SKIPPED history,
       // as opposed to trailing harmlessly below the cursor (its normal state
       // once the first post-pairing cycle has run).
-      if (windowStart !== null && windowStart > lastTimestamp) {
+      if (windowStart !== null && windowStart > effectiveCursor) {
         console.log(
-          `[BackgroundSync] Import window raised the read floor: cursor=${lastTimestamp} -> windowStart=${windowStart} (${new Date(windowStart).toISOString()}) — older history is outside the configured window (BACKLOG-2800)`
+          `[BackgroundSync] Import window raised the read floor: cursor=${effectiveCursor} -> windowStart=${windowStart} (${new Date(windowStart).toISOString()}) — older history is outside the configured window (BACKLOG-2800)`
         );
       }
 

@@ -19,7 +19,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { SyncMessage } from "../types/sync";
 import { resetContactSyncState } from "./contactSyncState";
-import { clearSyncWindowCache } from "./syncWindow";
+import { clearSyncWindowCache, clearAppliedWindow } from "./syncWindow";
 
 // ============================================
 // CONSTANTS
@@ -336,9 +336,23 @@ export async function setLastSyncTimestamp(timestamp: number): Promise<void> {
  * the contact fingerprints. This one removes the cursor and nothing else,
  * because a re-pair must not discard messages that are queued and un-acked —
  * BACKLOG-2199 exists precisely to stop history being dropped on the floor.
+ *
+ * ## Why the APPLIED WINDOW goes with the cursor (BACKLOG-3017)
+ *
+ * That record claims "this phone has already read from edge E", and the claim
+ * is only true OF A PAIRING — the desktop on the other end can change, and this
+ * function exists precisely for the case where it has been wiped. Left behind,
+ * it breaks the recovery it was meant to serve: an All-time era records
+ * `null`, the user narrows to 3 months, the desktop database is wiped, the
+ * phone re-pairs, and the user widens back to All time to get their history
+ * back — `null` against a recorded `null` is not a widening, so nothing older
+ * is ever read and there is no recourse short of another re-pair. Clearing it
+ * makes the next cycle a first observation, which (with the cursor at 0) does
+ * not lower anything and simply records the new baseline.
  */
 export async function resetMessageCursor(): Promise<void> {
   await AsyncStorage.removeItem(LAST_SYNC_TIMESTAMP_KEY);
+  await clearAppliedWindow();
 }
 
 // ============================================

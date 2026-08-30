@@ -237,7 +237,7 @@ export async function registerWithStoredIdentity(
   // BACKLOG-2800: fetch the user's import window while we are still online.
   //
   // `resetMessageCursor()` above has just put the cursor at zero, so the next
-  // sync cycle is bounded by the WINDOW and nothing else. `getSyncWindowStart`
+  // sync cycle is bounded by the WINDOW and nothing else. `resolveSyncWindow`
   // fails OPEN, so a phone that cannot reach Supabase on that cycle would read
   // its entire history — the defect BACKLOG-2800 exists to fix. Priming here,
   // while the user is on Wi-Fi completing an online pairing, makes that rung

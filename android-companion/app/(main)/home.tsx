@@ -550,7 +550,7 @@ export default function HomeScreen(): React.JSX.Element {
     setSyncing(true);
 
     try {
-      const result = await performSync();
+      const result = await performSync({ userInitiated: true });
       setLastSyncResult(result);
 
       // BACKLOG-2301: derive the persistent 2296 disconnected banner from THIS

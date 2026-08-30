@@ -1,5 +1,5 @@
 /**
- * Sync Window (Android Companion) — BACKLOG-2800
+ * Sync Window (Android Companion) — BACKLOG-2800, BACKLOG-3017
  *
  * Makes the desktop's "Import messages from" setting GOVERN the Android sync.
  *
@@ -56,6 +56,16 @@
  * only its own `user_preferences` row under RLS — and it is a degrading path
  * that disappears as desktops update.
  *
+ * ## BACKLOG-3017 — the fold: widening had to bring something back
+ *
+ * BACKLOG-2800's read floor is `max(storedCursor, windowStart)`, which governs
+ * NARROWING and is inert for WIDENING: after the first pair the cursor sits
+ * above the window edge, so moving the edge further back changes nothing. The
+ * panel then offers "All time" and the phone brings nothing older — the setting
+ * APPEARS to work and does not, which is the same defect 2800 was filed to
+ * close. So the applied-window record and `isWidening` below belong to 2800 and
+ * ship with it.
+ *
  * @module services/syncWindow
  */
 
@@ -109,6 +119,15 @@ const SYNC_WINDOW_KEY = "@keepr/sync-window";
 
 /** AsyncStorage key for the last FAILED fetch, used as a short backoff. */
 const SYNC_WINDOW_FAILED_KEY = "@keepr/sync-window-failed-at";
+
+/**
+ * AsyncStorage key for the window edge this phone has already READ FROM.
+ *
+ * BACKLOG-3017. Without this the cycle cannot tell "the user widened the
+ * window" from "the cursor is simply ahead of the window edge", because both
+ * present identically at the read: `max(cursor, windowStart) === cursor`.
+ */
+const APPLIED_WINDOW_KEY = "@keepr/sync-window-applied";
 
 /**
  * Refresh the cached setting when it is older than this.
@@ -171,6 +190,36 @@ interface CachedSyncWindow {
 type WindowFetchResult =
   | { ok: true; lookbackMonths: number | null }
   | { ok: false; reason: "no_session" | "query_failed" | "timeout" };
+
+/**
+ * What this cycle knows about the window — and it MUST stay discriminated.
+ *
+ * BACKLOG-3017: `number | null` cannot carry this. `null` is the user's
+ * EXPLICIT "All time", and `null` was ALSO what the old `getSyncWindowStart`
+ * returned from the terminal fail-open rung, i.e. "nothing is known". Those two
+ * facts read identically, and once a widening detector exists they must not:
+ * a transient Supabase outage would otherwise present as "the user just widened
+ * to All time", rewind the cursor to zero on a FAILURE, and — far worse —
+ * record All time as the applied window, which permanently claims full coverage
+ * and kills detection of every real widening after it.
+ *
+ * A STALE CACHED value is `known`. It is the user's real choice, merely old.
+ */
+export type SyncWindowResolution =
+  | { kind: "known"; start: number | null }
+  | { kind: "unknown"; reason: string };
+
+/**
+ * The window edge this phone has already read from, if it has ever recorded one.
+ *
+ * `present: false` is "never observed" and is NOT the same as
+ * `{ present: true, start: null }` ("All time has been applied"). The storage
+ * below keeps them apart with an `in` check rather than `??`, which is the same
+ * absent-vs-explicit-null distinction BACKLOG-2561 turned on.
+ */
+export type AppliedWindow =
+  | { present: true; start: number | null }
+  | { present: false };
 
 // ============================================
 // THE RESOLVER MIRROR
@@ -265,7 +314,8 @@ export function resolveLookbackMonths(preferences: unknown): number | null {
  * month lands on 3 March, skipping February outright. Overflow always moves the
  * edge FORWARD, i.e. it silently NARROWS the window the user asked for, so the
  * clamp is the faithful reading of "the last N months" and not a nicety.
- * Boundary cases are swept, not sampled, in `syncWindow.window-2800.test.ts`.
+ * Boundary cases are swept, not sampled, in `syncWindow.mirror-2800.test.ts`
+ * ("computeWindowStart — month-end clamp, swept not sampled").
  *
  * @returns the lower bound in epoch ms, or `null` for "All time".
  */
@@ -379,6 +429,136 @@ async function writeCache(record: CachedSyncWindow): Promise<void> {
   }
 }
 
+// ============================================
+// THE APPLIED WINDOW (BACKLOG-3017)
+// ============================================
+
+/**
+ * The stored record, stamped with its owner.
+ *
+ * The `userId` stamp mirrors `CachedSyncWindow` (BACKLOG-2800 SR review R12).
+ * A record left behind by a PREVIOUS account must read as ABSENT, which is the
+ * safe direction: absent is a first observation, and a first observation never
+ * lowers the cursor.
+ */
+interface StoredAppliedWindow {
+  userId: string;
+  windowStart: number | null;
+}
+
+/**
+ * The window edge this phone has already read from.
+ *
+ * Returns `{ present: false }` for a missing, corrupt, or foreign-stamped
+ * record. `"windowStart" in parsed` rather than `parsed.windowStart ?? …` is
+ * what keeps an explicit All-time record (`null`) from collapsing into absent —
+ * the exact conflation this module already guards in `resolveLookbackMonths`.
+ */
+export async function readAppliedWindow(): Promise<AppliedWindow> {
+  let userId: string | undefined;
+  try {
+    userId = await currentUserId();
+  } catch {
+    userId = undefined;
+  }
+
+  try {
+    const raw = await AsyncStorage.getItem(APPLIED_WINDOW_KEY);
+    if (!raw) return { present: false };
+    const parsed = JSON.parse(raw) as Partial<StoredAppliedWindow>;
+    if (!parsed || typeof parsed !== "object") return { present: false };
+    if (typeof parsed.userId !== "string") return { present: false };
+    if (userId && parsed.userId !== userId) return { present: false };
+    if (!("windowStart" in parsed)) return { present: false };
+    const start = parsed.windowStart;
+    if (start === null) return { present: true, start: null };
+    if (typeof start === "number" && Number.isFinite(start)) {
+      return { present: true, start };
+    }
+    return { present: false };
+  } catch {
+    return { present: false };
+  }
+}
+
+/**
+ * Record the window edge this phone is reading from.
+ *
+ * MUST be called AFTER any cursor lowering it justifies — see the ordering
+ * argument at the call site in `backgroundSync.ts`. A crash between the two
+ * writes then costs a harmless repeat of the re-read; the other order loses it
+ * silently and forever.
+ */
+export async function recordAppliedWindow(
+  windowStart: number | null
+): Promise<void> {
+  let userId: string | undefined;
+  try {
+    userId = await currentUserId();
+  } catch {
+    userId = undefined;
+  }
+  // With no session there is nothing to stamp, and an unstamped record reads
+  // back as absent anyway. Skip the write rather than store a value that can
+  // never be trusted.
+  if (!userId) return;
+
+  try {
+    const record: StoredAppliedWindow = { userId, windowStart };
+    await AsyncStorage.setItem(APPLIED_WINDOW_KEY, JSON.stringify(record));
+  } catch {
+    // Best effort. Losing it re-runs the first-observation path next cycle,
+    // which records without lowering the cursor — no re-read is triggered by a
+    // failed write.
+  }
+}
+
+/** Forget the applied window. See both call sites in `smsQueueService`. */
+export async function clearAppliedWindow(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(APPLIED_WINDOW_KEY);
+  } catch {
+    // Best effort.
+  }
+}
+
+/**
+ * Did the user WIDEN the window since the phone last applied one?
+ *
+ * BACKLOG-3017 — the defect this answers. BACKLOG-2800 set the read floor to
+ * `max(storedCursor, windowStart)`. That is correct for NARROWING and INERT for
+ * widening: once the cursor is above the window edge, moving the edge further
+ * back changes nothing, so the panel offers "All time" and the phone brings
+ * nothing older. Confirmed on an SM-A146U on 2026-08-30 — `lookbackMonths`
+ * 3 -> 9 with no re-pair read `since=2026-08-26` and found 0 messages.
+ *
+ * `null` is treated as -Infinity throughout, because "All time" IS the widest
+ * window and must widen like one rather than read as "no information".
+ *
+ *   - absent applied   -> NOT widening. An upgrading phone has no record; the
+ *                         first cycle must observe and store, never re-read its
+ *                         whole window (constraint 4 of the fold brief).
+ *   - applied null     -> NOT widening. Already -Infinity; nothing is wider.
+ *   - resolved null    -> WIDENING from any bounded edge.
+ *   - both numbers     -> widening iff the new edge is strictly EARLIER.
+ *
+ * The stored value is a LOW-WATER MARK, not "the last window seen": the caller
+ * records only on absence or on widening. That is deliberate. The window is
+ * ROLLING, so a fixed "Last 3 months" setting produces an edge that creeps
+ * forward every day; recording every cycle would be harmless but recording only
+ * the floor is what makes narrow-then-widen-back a no-op instead of a pointless
+ * full re-read of history the phone already sent.
+ */
+export function isWidening(
+  resolvedStart: number | null,
+  applied: AppliedWindow
+): boolean {
+  if (!applied.present) return false;
+  if (applied.start === null) return false;
+  if (resolvedStart === null) return true;
+  return resolvedStart < applied.start;
+}
+
 /**
  * Drop the cached window.
  *
@@ -394,6 +574,9 @@ export async function clearSyncWindowCache(): Promise<void> {
     await Promise.all([
       AsyncStorage.removeItem(SYNC_WINDOW_KEY),
       AsyncStorage.removeItem(SYNC_WINDOW_FAILED_KEY),
+      // BACKLOG-3017: the applied window is a per-PAIRING claim ("this phone
+      // has read from here"), so the unpair teardown drops it with the rest.
+      AsyncStorage.removeItem(APPLIED_WINDOW_KEY),
     ]);
   } catch {
     // Best effort. A surviving record is not necessarily inert: `readCache`
@@ -423,11 +606,16 @@ export async function primeSyncWindow(): Promise<void> {
 }
 
 /**
- * The oldest timestamp this cycle's read may reach, or `null` for no bound.
+ * What this cycle knows about the import window.
+ *
+ * `{ kind: "known", start }` — `start` is the oldest timestamp the read may
+ * reach, or `null` for an explicit "All time". `{ kind: "unknown" }` — nothing
+ * could be obtained; the caller must run UNWINDOWED and must NOT treat it as a
+ * window change (BACKLOG-3017).
  *
  * ## The fallback ladder, and why the last rung is fail-OPEN
  *
- *   fresh fetch -> cached value (however stale) -> NO lower bound
+ *   fresh fetch -> cached value (however stale) -> UNKNOWN (no lower bound)
  *
  * The terminal rung reproduces today's behaviour rather than blocking, because
  * the two failure directions are not symmetric:
@@ -442,11 +630,15 @@ export async function primeSyncWindow(): Promise<void> {
  * Irreversible loss beats bounded, recoverable excess. This is soft state; the
  * founder-approved discriminator reserves fail-closed for access-control state,
  * which a display preference is not.
+ *
+ * BACKLOG-3017 keeps that rung fail-open but no longer lets it MASQUERADE as
+ * "All time": it now returns `unknown`, so the widening detector cannot mistake
+ * an outage for a user decision.
  */
-export async function getSyncWindowStart(
+export async function resolveSyncWindow(
   now: number,
-  options: { forceRefresh?: boolean } = {}
-): Promise<number | null> {
+  options: { forceRefresh?: boolean; userInitiated?: boolean } = {}
+): Promise<SyncWindowResolution> {
   // THIS FUNCTION MUST NEVER THROW.
   //
   // It is called inside `performSync`'s outer try/catch, whose catch sets
@@ -457,20 +649,25 @@ export async function getSyncWindowStart(
   // because Supabase was slow. Every rung below is individually guarded, and
   // this outer guard is the backstop.
   try {
-    return await resolveWindowStart(now, options.forceRefresh === true);
+    return await resolveWindowStart(
+      now,
+      options.forceRefresh === true,
+      options.userInitiated === true
+    );
   } catch (err) {
     console.warn(
       "[SyncWindow] Unexpected failure resolving the import window — syncing UNWINDOWED:",
       err
     );
-    return null;
+    return { kind: "unknown", reason: "threw" };
   }
 }
 
 async function resolveWindowStart(
   now: number,
-  forceRefresh: boolean
-): Promise<number | null> {
+  forceRefresh: boolean,
+  userInitiated: boolean
+): Promise<SyncWindowResolution> {
   let userId: string | undefined;
   try {
     userId = await currentUserId();
@@ -490,14 +687,27 @@ async function resolveWindowStart(
   // window does maximum damage. Keying off the cursor rather than off a pairing
   // callback also covers force re-import without depending on how that reset
   // reaches the phone.
-  if (isFresh && !forceRefresh) {
-    return computeWindowStart(cached.lookbackMonths, now);
+  //
+  // `userInitiated` (BACKLOG-3017) also overrides a fresh cache, but is a
+  // WEAKER override: it skips the TTL and NOT the failure backoff below. It is
+  // set only by the manual "Sync Now" button, which is the one moment a user
+  // has plausibly just changed the setting on the desktop and is standing there
+  // watching the phone. Without it a widening lands up to `CACHE_TTL_MS` late —
+  // which is exactly the founder's stated acceptance procedure ("change the
+  // setting, hit Sync Now, no re-pair") failing for a second, unrelated reason.
+  if (isFresh && !forceRefresh && !userInitiated) {
+    return { kind: "known", start: computeWindowStart(cached.lookbackMonths, now) };
   }
 
   // Back off after a recent failure so an offline phone does not pay the full
   // timeout every cycle — but never when the cursor says this cycle matters.
   if (!forceRefresh && (await recentlyFailed(now))) {
-    if (cached) return computeWindowStart(cached.lookbackMonths, now);
+    if (cached) {
+      return {
+        kind: "known",
+        start: computeWindowStart(cached.lookbackMonths, now),
+      };
+    }
     return reportUnwindowed("backoff");
   }
 
@@ -509,7 +719,10 @@ async function resolveWindowStart(
       fetchedAt: now,
     });
     await clearFailureMarker();
-    return computeWindowStart(result.lookbackMonths, now);
+    return {
+      kind: "known",
+      start: computeWindowStart(result.lookbackMonths, now),
+    };
   }
 
   await recordFailure(now);
@@ -519,7 +732,10 @@ async function resolveWindowStart(
     console.warn(
       `[SyncWindow] Using stale cached window (fetch failed: ${result.ok ? "n/a" : result.reason})`
     );
-    return computeWindowStart(cached.lookbackMonths, now);
+    return {
+      kind: "known",
+      start: computeWindowStart(cached.lookbackMonths, now),
+    };
   }
 
   // Rung 3 — nothing was ever obtained. Proceed UNWINDOWED rather than block.
@@ -533,7 +749,7 @@ async function resolveWindowStart(
  * item fixes — "the setting governs nothing and nobody can tell" — so it is
  * always logged and always reported.
  */
-function reportUnwindowed(reason: string): null {
+function reportUnwindowed(reason: string): SyncWindowResolution {
   console.warn(
     `[SyncWindow] No window available (${reason}) and nothing cached — syncing UNWINDOWED (BACKLOG-2800 fail-open)`
   );
@@ -549,7 +765,7 @@ function reportUnwindowed(reason: string): null {
   } catch {
     // Reporting must never be the thing that breaks a sync cycle.
   }
-  return null;
+  return { kind: "unknown", reason };
 }
 
 async function recentlyFailed(now: number): Promise<boolean> {
