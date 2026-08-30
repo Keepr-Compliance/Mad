@@ -2378,6 +2378,12 @@ export class BackupService extends EventEmitter {
       },
     );
     log.error("[BackupService] Failure classified", {
+      // BACKLOG-2915: recorded because it is the one thing a support log cannot
+      // reconstruct afterwards. It is NOT used to classify anything — the line is
+      // gated on iOS >= 16.1 inside a 2-second race and arrived SEVEN MINUTES late in
+      // the 2026-08-30 capture, so it can only ever be read post-mortem.
+      deviceRequestedPasscode: this.deviceRequestedPasscode,
+      deviceOutcomeLine: this.deviceOutcomeLine,
       deviceErrorCode: classification.cause.deviceErrorCode,
       deviceErrorDescription: classification.cause.deviceErrorDescription,
       exitCode: classification.cause.exitCode,
