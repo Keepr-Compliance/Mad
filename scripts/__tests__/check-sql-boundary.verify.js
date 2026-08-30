@@ -622,6 +622,52 @@ for (const [id, verb, call] of [
 }
 
 // ---------------------------------------------------------------------------
+// C16 — a db/ module cannot launder text defined outside the layer.
+//
+// `from-db-import` claims the text ORIGINATES in db/, but the specifier is
+// resolved one hop and only asks where the module SITS. A two-line barrel
+// inside the layer re-exporting outward makes every importer read COMPLIANT on
+// a proof it does not have -- and that falsifies the "fail-closed, never a
+// false green" guarantee the classifier limits state.
+//
+// All four halves are asserted. The two exemptions matter as much as the two
+// violations: db/index.ts carries 15 legitimate inward `export * from "./..."`
+// today, and a type-only re-export carries no runtime string. A control that
+// only asserted the red halves would permit a check that reds all of those.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    [DB_MODULE]: DB_MODULE_SRC,
+    "electron/handlers/outsideA.ts":
+      "export const A_SQL = `SELECT id FROM widgets`;\nexport type Row = { id: string };\n",
+    "electron/handlers/outsideB.ts": "export const B_SQL = `SELECT label FROM widgets`;\n",
+    "electron/services/db/inner.ts": "export const INNER_SQL = `SELECT 1`;\n",
+    "electron/services/db/barrel.ts": [
+      '// (i) named re-export pointing OUT of the layer -> VIOLATION',
+      'export { A_SQL } from "../../handlers/outsideA";',
+      '// (ii) star re-export pointing OUT of the layer -> VIOLATION',
+      'export * from "../../handlers/outsideB";',
+      '// (iii) inward re-export -> clean (db/index.ts has 15 of these)',
+      'export * from "./inner";',
+      '// (iv) type-only re-export carries no runtime string -> clean',
+      'export type { Row } from "../../handlers/outsideA";',
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--explain"]);
+  const rex = r.all.split("\n").filter((l) => /reexport:/.test(l));
+  const named = rex.filter((l) => /reexport:\.\.\/\.\.\/handlers\/outsideA/.test(l)).length;
+  const star = rex.filter((l) => /reexport:\.\.\/\.\.\/handlers\/outsideB/.test(l)).length;
+  const inward = rex.filter((l) => /reexport:\.\/inner/.test(l)).length;
+  record(
+    "C16",
+    "a db/ barrel re-exporting outward is a VIOLATION (both forms); inward and type-only re-exports stay clean",
+    rex.length === 2 && named === 1 && star === 1 && inward === 0,
+    `findings=${rex.length} named=${named} star=${star} inward=${inward} (want 2/1/1/0)`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // VSUM — a tree of KNOWN contents. Asserts the absolute call-site count and the
 // COMPLIANT reason census by name.
 //

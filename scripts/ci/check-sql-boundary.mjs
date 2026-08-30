@@ -72,9 +72,23 @@
  *   Taint downgrades only FROM_DB; a name resolving to a LITERAL still keys as
  *   LITERAL, so the baseline does not move.
  *
+ * LAYER INTEGRITY — what keeps `from-db-import` honest
+ *   `from-db-import` asserts the text ORIGINATES in the layer, but a specifier
+ *   is resolved one hop and only says where a module SITS. A two-line barrel
+ *   inside `db/` re-exporting outward would launder text defined elsewhere and
+ *   green it for every importer. So a `db/` file whose `export ... from`
+ *   resolves outside `db/` is itself a VIOLATION, raised AT THE BARREL (see
+ *   scanFile). Without that check the fail-closed statement below is false.
+ *
  * KNOWN LIMITS — where the CLASSIFIER can be wrong.
- *   These are all fail-closed: they can produce a false RED, never a false
- *   green. None exists in the tree today.
+ *   Each of these is fail-closed: it can produce a false RED, never a false
+ *   green. None exists in the tree today. That claim covers the classifier and
+ *   depends on the layer-integrity check above; it does NOT extend to the two
+ *   NOT ENFORCED axes further down, which are a different guarantee.
+ *
+ *   Standing rule for anyone adding to this list: a limit ships with a control
+ *   that exercises it. Limits 1-4 map to C8, C8/A2a, C13's positional half and
+ *   the flow fixture; axes A and B have fixtures but are not enforced.
  *   1. Resolution never crosses a function boundary. SQL passed INTO a helper
  *      (`const run = (sql: string) => db.prepare(sql)`) is UNRESOLVABLE, which
  *      counts as a violation. That case is reported.
@@ -482,6 +496,45 @@ function scanFile(rel, source) {
   const inDb = rel.startsWith(DB_LAYER);
   const sites = [];
 
+  // LAYER INTEGRITY.
+  //
+  // `from-db-import` is a positive proof that the SQL text ORIGINATES in the db
+  // layer, but `fromDbLayer()` only resolves one hop and asks where the module
+  // SITS. A two-line barrel inside the layer launders text defined outside it:
+  //
+  //     // electron/services/db/barrel.ts
+  //     export { EVIL_SQL } from "../../handlers/evilSql";
+  //     export * from "../../handlers/evilSql";
+  //
+  // every importer of `db/barrel` then reads COMPLIANT from-db-import.
+  //
+  // The finding is raised AT THE BARREL, not at the importer: the PR that
+  // creates the laundering fails, and no legitimate in-layer import is
+  // punished for someone else's re-export. Type-only re-exports are exempt —
+  // a type carries no runtime string. This is not a call site, so it is
+  // reported separately and never enters the three-bucket census.
+  const layerFindings = [];
+  if (inDb) {
+    for (const st of sf.statements) {
+      if (!ts.isExportDeclaration(st) || !st.moduleSpecifier) continue;
+      if (st.isTypeOnly) continue;
+      if (!ts.isStringLiteral(st.moduleSpecifier)) continue;
+      const spec = st.moduleSpecifier.text;
+      const resolved = spec.startsWith(".")
+        ? path.posix.normalize(path.posix.join(path.posix.dirname(rel), spec))
+        : null; // bare specifier: resolves into node_modules, i.e. outside db/
+      if (resolved !== null && resolved.startsWith(DB_LAYER)) continue; // inward, fine
+      layerFindings.push({
+        file: rel,
+        line: sf.getLineAndCharacterOfPosition(st.getStart(sf)).line + 1,
+        verb: "reexport",
+        bucket: "VIOLATION",
+        reason: "db-layer-re-exports-text-defined-outside",
+        match: `reexport:${spec}`,
+      });
+    }
+  }
+
   (function walk(n) {
     if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)) {
       const verb = n.expression.name.text;
@@ -528,7 +581,7 @@ function scanFile(rel, source) {
     ts.forEachChild(n, walk);
   })(sf);
 
-  return sites;
+  return { sites, layerFindings };
 }
 
 // ---------------------------------------------------------------------------
@@ -545,9 +598,9 @@ function baselineEligible(sites) {
   return sites.filter((s) => s.bucket === "VIOLATION" || s.bucket === "UNRESOLVABLE");
 }
 
-function buildEntries(sites) {
+function buildEntries(eligible) {
   const seen = new Map();
-  for (const s of baselineEligible(sites)) {
+  for (const s of eligible) {
     const k = keyOf(s);
     if (seen.has(k)) seen.get(k).count += 1;
     else
@@ -640,6 +693,7 @@ function main() {
   const files = fixtureMode ? enumerateDir(root) : enumerateRepo();
 
   const sites = [];
+  const layerFindings = [];
   for (const rel of files) {
     let source;
     try {
@@ -650,7 +704,9 @@ function main() {
       process.exit(2);
     }
     try {
-      sites.push(...scanFile(rel, source));
+      const scanned = scanFile(rel, source);
+      sites.push(...scanned.sites);
+      layerFindings.push(...scanned.layerFindings);
     } catch (err) {
       console.error(`FATAL: ${err.message}`);
       process.exit(2);
@@ -682,8 +738,8 @@ function main() {
   const reasonCensus = {};
   for (const s of compliant) reasonCensus[s.reason] = (reasonCensus[s.reason] ?? 0) + 1;
 
-  const eligible = baselineEligible(sites);
-  const entries = buildEntries(sites);
+  const eligible = [...baselineEligible(sites), ...layerFindings];
+  const entries = buildEntries(eligible);
   const currentTotal = eligible.length;
 
   // --- fixture-tree assertions (A3) ---------------------------------------
@@ -718,6 +774,7 @@ function main() {
     violation: violations.length,
     unresolvable: unresolvable.length,
     baselineEligible: currentTotal,
+    layerIntegrity: layerFindings.length,
     complianceReasons: reasonCensus,
   };
 
@@ -732,11 +789,12 @@ function main() {
   say(`  COMPLIANT          ${report.compliant}  ${JSON.stringify(reasonCensus)}`);
   say(`  VIOLATION          ${report.violation}`);
   say(`  UNRESOLVABLE       ${report.unresolvable}  (counts as a violation)`);
+  say(`  layer integrity    ${report.layerIntegrity} re-export(s) of text defined outside ${DB_LAYER}`);
   say(`  baseline-eligible  ${report.baselineEligible} in ${entries.length} distinct keys`);
 
   if (args.explain) {
     say("\nPer-site classification:");
-    for (const s of sites) {
+    for (const s of [...sites, ...layerFindings]) {
       const tail = s.match ? `  ${s.match}` : "";
       say(`  ${s.bucket.padEnd(13)} ${s.reason.padEnd(38)} ${s.verb.padEnd(8)} ${s.file}:${s.line}${tail}`);
     }
@@ -752,6 +810,9 @@ function main() {
         "flow is not modelled — SQL passed into a helper is reported UNRESOLVABLE, which means " +
         "the gate cannot trace the origin, NOT that the site is certified; and taint is " +
         "scope-exact but not flow-exact.\n" +
+        "`from-db-import` means the text originates in the layer: a db/ file re-exporting " +
+        "from outside db/ is itself a VIOLATION, raised at the barrel, so no importer can " +
+        "inherit a proof the layer does not have.\n" +
         "Not enforced at all — a different guarantee: computed/bound/destructured calls " +
         "(db[\"prepare\"](...), .bind, const { prepare } = db) are never ENUMERATED, and only " +
         ".ts/.tsx files are scanned. Zero instances of either in the tree today."
@@ -819,8 +880,15 @@ function main() {
     failed = true;
     console.error(`\n${added.length} NEW SQL site(s) outside ${DB_LAYER}:`);
     for (const e of added.slice(0, 40)) {
-      const where = sites.find((s) => keyOf(s) === keyOf(e));
+      const where = [...sites, ...layerFindings].find((s) => keyOf(s) === keyOf(e));
       console.error(`  ${e.file}:${where ? where.line : "?"}  ${e.verb}  [${e.bucket}]  ${e.match}`);
+    }
+    if (added.some((e) => e.verb === "reexport")) {
+      console.error(
+        `\nA re-export above sends text DEFINED OUTSIDE ${DB_LAYER} back out through the ` +
+          `layer, which would make every importer read as compliant on a proof it does not ` +
+          `have. Move the declaration into ${DB_LAYER} instead of re-exporting it.`
+      );
     }
     console.error(
       `\nDefine the SQL text in ${DB_LAYER} (the *Sql.ts pattern) and import it. ` +

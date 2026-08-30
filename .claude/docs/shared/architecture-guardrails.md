@@ -239,10 +239,32 @@ export function run(db) { db.prepare(cachedSql); }   // -> UNRESOLVABLE
 `db/` but leave an interpolated `+=` at the call site, the site stays red. Move the
 whole statement, or parameterise the part that varies.
 
+### Layer integrity -- what keeps `from-db-import` honest
+
+`from-db-import` asserts the text *originates* in the layer, but a specifier is
+resolved one hop and only says where a module *sits*. A two-line barrel inside
+`db/` would launder text defined anywhere:
+
+```ts
+// electron/services/db/barrel.ts
+export { EVIL_SQL } from "../../handlers/evilSql";   // text DEFINED outside db/
+export * from "../../handlers/evilSql";
+```
+
+So **a `db/` file whose `export ... from` resolves outside `db/` is itself a
+violation**, raised at the barrel rather than at the importer: the PR that creates
+the laundering fails, and no legitimate in-layer import is punished. Inward
+re-exports are fine (`db/index.ts` has 15), and type-only re-exports are exempt.
+
+**If you need something from outside the layer, move the declaration in. Do not
+re-export it.**
+
 ### Where the classifier can be wrong
 
 All fail **closed** -- they produce a false red, never a false green -- and none
-exists in the tree today.
+exists in the tree today. That claim covers the classifier and rests on the
+layer-integrity check above; it does **not** extend to the two unenforced axes
+below, which are a different guarantee.
 
 - **Interprocedural flow is not modelled.** It cannot tell whether the text a helper
   receives originated in `db/`, so it reports UNRESOLVABLE. That means *it cannot
