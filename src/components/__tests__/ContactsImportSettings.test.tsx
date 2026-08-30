@@ -82,16 +82,21 @@ const defaultProps = {
   showIphoneContacts: false,
   // BACKLOG-2986: Android Contacts became a switch of its own. Held OFF and
   // undeclared here for the same reason as iPhone above — the pre-existing
-  // cases keep asserting what they were written to assert. Present rather than
-  // omitted because these are REQUIRED props at the real call site
-  // (`ContactsSettings.tsx`); test files are excluded from `tsc`, so leaving
-  // them off would silently give the component `undefined` where production
-  // always passes a boolean.
+  // cases keep asserting what they were written to assert. Present because they
+  // are REQUIRED props: omitting them would hand the component `undefined`
+  // where production always passes a boolean.
   androidContactsEnabled: false,
   androidContactsDeclared: false,
   androidCompanionActive: false,
-  // BACKLOG-2986: required at the real call site; test files are excluded from
-  // `tsc`, so omitting it would silently hand the component `undefined`.
+  // BACKLOG-2986: required at the real call site, so it is declared here too.
+  //
+  // AN EARLIER REVISION OF THIS COMMENT SAID "test files are excluded from
+  // `tsc`, so omitting it would be silent". THAT IS FALSE, and has been since
+  // BACKLOG-2414: `npm run type-check` uses `tsconfig.json`, which does exclude
+  // `**/*.test.*`, but `npm run type-check:tests` (`tsc -p tsconfig.test.json`)
+  // re-includes them and runs as its own CI step. Omitting a required prop here
+  // fails that gate — six TS2741 errors, not silence. The prop belongs here
+  // because the component needs it, not because nothing would notice.
   saveError: null,
   gmailContactsEnabled: true,
   googleContactsEnabled: true,

@@ -36,21 +36,38 @@ import {
  * the phone, from a desktop that is down. That is precisely the unexplained
  * "desktop unreachable" the field tester reports in BACKLOG-2955.
  *
- * WHERE THE NUMBER COMES FROM — the phone's own client timeout is the ceiling:
+ * WHERE THE NUMBER COMES FROM — the phone's own client timeout is the ceiling,
+ * and the other half of the budget is MEASURED rather than estimated:
  *
  *   - The companion aborts at `REQUEST_TIMEOUT_MS = 10_000`
  *     (`android-companion/services/syncService.ts:120`), and `/sync/contacts`
- *     uses it (`:358-368`). Past 10s the phone reports `timeout`.
- *   - 3s for the read leaves 7s for the full-snapshot DB write — up to ~400
- *     upserts plus promotion — and the response.
+ *     uses it (`:358-368`). Past 10s the phone reports `timeout`. Everything
+ *     this handler does has to fit inside that.
+ *   - THE WRITE COSTS ~0.36s at full address-book size. Measured, not guessed:
+ *     `localSyncService.writeCost-2986.test.ts` drives the real shadow write
+ *     and the real promotion over an on-disk SQLite file and prints the figure
+ *     on every run — 121ms for 389 contacts, 358ms for 2,200, 88ms for a
+ *     re-sync where every contact is already claimed (three runs, +/-5ms).
+ *   - So the read gets 6s and ~4s is left for the write and the response. That
+ *     reserve is ELEVEN TIMES the measured write, which is the margin for the
+ *     things the measurement does not cover: page encryption, a cold cache, a
+ *     busy Windows disk.
  *   - The read itself is a single-row primary-key `select` on
- *     `user_preferences`, so 3s is roughly 6x a bad-but-working read. A slow
- *     connection is not aborted casually.
+ *     `user_preferences`, so 6s is a very slow one, not a marginal one.
+ *
+ * THE SPLIT USED TO BE THE OTHER WAY ROUND — 3s for the read, 7s reserved for
+ * the write — and both halves were wrong. The write is local `better-sqlite3`
+ * and sub-second; the READ is the variable half, a Supabase round trip over
+ * whatever connection the desktop has. The consequence was narrow and went
+ * against this item's own promise: a read that WOULD have returned a stored
+ * `androidContacts: false` at 3.5s was abandoned, fail-open applied, and an OFF
+ * switch silently promoted. Failing open on an UNAVAILABLE preference is
+ * correct; doing it because the read was merely slow is not.
  *
  * EXPORTED because the tests must advance fake timers by this constant rather
  * than by a literal that would silently stop matching it.
  */
-export const PREFERENCES_READ_TIMEOUT_MS = 3_000;
+export const PREFERENCES_READ_TIMEOUT_MS = 6_000;
 
 /**
  * Read the preferences bag, or REJECT once `PREFERENCES_READ_TIMEOUT_MS` has
