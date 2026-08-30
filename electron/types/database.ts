@@ -298,6 +298,28 @@ export class DatabaseError extends Error {
   }
 }
 
+/**
+ * BACKLOG-2993 — thrown by the schema-baseline fence when an on-disk database
+ * predates the baseline reset (schema_version below the baseline, or a
+ * pre-baseline relic with user tables but no schema_version row). The old
+ * migration chain was deleted; such a database has NO upgrade path and must be
+ * refused UNTOUCHED — never migrated, never auto-restored (every restorable
+ * backup is also pre-baseline, so routing this through auto-restore would
+ * restore-and-refuse in a loop).
+ *
+ * Deliberately a DISTINCT class from a migration failure: initialize() treats
+ * it as terminal (native dialog, then app.quit()) instead of retryable.
+ */
+export class SchemaBaselineRefusalError extends DatabaseError {
+  constructor(
+    message: string,
+    public foundVersion?: number,
+  ) {
+    super(message, "SCHEMA_BASELINE_REFUSED");
+    this.name = "SchemaBaselineRefusalError";
+  }
+}
+
 export class ValidationError extends Error {
   constructor(
     message: string,

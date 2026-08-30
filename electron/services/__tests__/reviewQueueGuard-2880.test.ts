@@ -114,15 +114,14 @@ const V65_INDEXES = `
 function seed(db: DatabaseType): void {
   db.exec(SCHEMA);
   db.exec(V65_INDEXES);
-  // MIGRATION-ONLY COLUMNS — the v56 tombstones are added by the chain and are
-  // on NEITHER table in schema.sql. Without them autoLinkService's
+  // The v56 tombstone columns (removed_at / removed_reason on contacts and
+  // transaction_contacts) used to be chain-only and were added here by hand.
+  // BACKLOG-2993 folded them into schema.sql, so db.exec(SCHEMA) above now
+  // supplies them and re-adding them raises "duplicate column name".
+  // They are still load-bearing for this suite: without them autoLinkService's
   // candidate-transaction count throws "no such column: tc.removed_at" into its
   // own catch and silently reports "found nothing", so every email would fall
   // through to the queue and this suite would pass for the wrong reason.
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
   db.prepare(
     "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?,?,'google','o1')",
   ).run(USER, "me@agent.com");
