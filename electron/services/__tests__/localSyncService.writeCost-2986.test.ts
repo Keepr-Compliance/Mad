@@ -151,15 +151,28 @@ const DEVICE = "33333333-4444-4555-8666-777777777777";
  * rolling area code, which is what makes 2,200 DISTINCT numbers possible while
  * staying inside the range the PII guard permits. Distinct matters — identical
  * numbers would collapse in the phone probe and measure the wrong thing.
+ *
+ * ONE IN TEN CARRIES NO PHONE, and that is not decoration. An all-phone book is
+ * protected on a re-sync by `findContactByNormalizedPhone` alone: every contact
+ * matches an existing one and is skipped, so the BACKLOG-2987 crosswalk claims
+ * never have to do anything. Proven by mutation — disabling the claims skip left
+ * this suite fully GREEN while `promoteTwice-2987` went red, because that suite
+ * uses precisely the shapes the phone probe cannot answer for.
+ *
+ * A control whose "creates nothing" is carried by a mechanism it did not intend
+ * to test is a control that would not notice the mechanism it did. The
+ * email-only tenth restores that: the re-sync case below now exercises the phone
+ * probe AND the claims, at full size.
  */
 function addressBook(size: number): SyncContact[] {
   return Array.from({ length: size }, (_unused, i) => {
     const area = 200 + Math.floor(i / 100);
     const line = String(i % 100).padStart(2, "0");
+    const emailOnly = i % 10 === 0;
     return {
       id: `bench-${i}`,
       displayName: `Bench Fixture ${i}`,
-      phones: [{ number: `+1${area}55501${line}` }],
+      phones: emailOnly ? [] : [{ number: `+1${area}55501${line}` }],
       emails: [{ address: `bench-${i}@example.test` }],
     };
   });
@@ -272,9 +285,20 @@ describe("BACKLOG-2986 — the cost of an Android contact write, measured", () =
   }
 
   it("a second sync of the same book creates nothing and costs less", async () => {
-    // The steady state after the first full snapshot: the BACKLOG-2987 claims
-    // make every contact a skip. Worth measuring beside the first run, because
-    // it is what a real desktop does every 24h once it is caught up.
+    // The steady state after the first full snapshot — what a real desktop does
+    // every 24h once it is caught up.
+    //
+    // WHICH MECHANISM ACTUALLY CARRIES THIS, established by mutation rather than
+    // by reading the code:
+    //   - Disable the BACKLOG-2987 claims skip -> this case goes RED. The
+    //     email-only tenth is re-created, because the phone probe cannot see a
+    //     contact with no phone. The claims are load-bearing.
+    //   - Disable `findContactByNormalizedPhone` -> this case stays GREEN, and
+    //     that is correct, not a hole: after the first sync every contact is
+    //     claimed, so the claims skip already covers the nine tenths the probe
+    //     would have. On the RE-SYNC path the probe is redundant.
+    // Recorded because the second result looks like a missing control until you
+    // know why, and the first is the reason the fixture is not all-phone.
     const book = addressBook(2200);
     await storeContacts(USER, DEVICE, book, true);
 
