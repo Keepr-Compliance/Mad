@@ -104,10 +104,6 @@ function seed(db: DatabaseType): void {
   // in schema.sql, so a schema.sql-only fixture is a state the app never has:
   // autoLinkService's candidate-transaction count reads `tc.removed_at` and
   // threw "no such column", which its own catch swallowed into "found nothing".
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
   db.prepare(
     "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', 'oauth-1')",
   ).run(USER, "me@agent.com");

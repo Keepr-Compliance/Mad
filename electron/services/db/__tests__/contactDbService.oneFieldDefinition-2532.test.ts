@@ -40,12 +40,23 @@ import { CONTACT_UPDATE_FIELD_TO_COLUMN } from "../../../types/models";
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
 const SCHEMA = path.join(REPO_ROOT, "electron", "database", "schema.sql");
 
-/** Column names declared on `contacts` in the real schema. */
+/**
+ * Column names declared on `contacts` in the real schema.
+ *
+ * BACKLOG-2993: schema.sql is now a GENERATED transcript of the chain-built
+ * shape, so the contacts DDL carries the old migration v48 rebuild's exact
+ * text — quoted table name, indented body, indented closing paren. The parser
+ * accepts both the quoted and unquoted spellings and ends the body at the
+ * first closing-paren line whatever its indentation.
+ */
 function contactsColumns(): string[] {
   const sql = fs.readFileSync(SCHEMA, "utf8");
-  const start = sql.indexOf("CREATE TABLE IF NOT EXISTS contacts (");
+  let start = sql.indexOf('CREATE TABLE IF NOT EXISTS "contacts" (');
+  if (start === -1) start = sql.indexOf("CREATE TABLE IF NOT EXISTS contacts (");
   if (start === -1) throw new Error("contacts table not found in schema.sql");
-  const end = sql.indexOf("\n);", start);
+  const endMatch = /\n\s*\);/.exec(sql.slice(start));
+  if (!endMatch) throw new Error("contacts table body has no closing paren line");
+  const end = start + endMatch.index;
   const body = sql.slice(start, end);
 
   return body
