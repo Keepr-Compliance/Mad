@@ -63,7 +63,7 @@ import type {
   ContactInfoSource,
 } from "../types";
 
-import { DatabaseError } from "../types";
+import { DatabaseError, SchemaBaselineRefusalError } from "../types";
 // BACKLOG-2410 — the contact-identity DDL has exactly one definition, shared
 // with the test helper so the two cannot drift. See that file's header.
 import {
@@ -212,7 +212,51 @@ class DatabaseService implements IDatabaseService {
         await this._migrateToEncryptedDatabase();
       }
 
-      this.db = this._openDatabase();
+      // ======================================================================
+      // BACKLOG-2993 — THE SCHEMA-BASELINE FENCE.
+      //
+      // The local migration chain was deleted; schema.sql IS the schema, at
+      // the baseline (70). A database below the baseline predates the reset
+      // and has no upgrade path: it must be REFUSED, UNTOUCHED, and EXPLAINED
+      // — never half-migrated (exec'ing today's schema.sql against an old
+      // file is BACKLOG-2751's corrupt-then-crash), and never routed through
+      // auto-restore (every restorable backup is also pre-baseline, so that
+      // path would restore-and-refuse in a loop).
+      //
+      // Two evaluations of the same predicate, both BEFORE this.db is
+      // assigned or setDb() is called — 21 call sites gate on
+      // databaseService.isInitialized() and 25 more on
+      // dbConnection.isInitialized(), so a refused database must never be
+      // exposed through either:
+      //
+      //  1. A separate READ-ONLY open. _openDatabase() runs
+      //     `journal_mode = WAL`, which rewrites the header of any
+      //     pre-WAL-era file — precisely the oldest databases the fence most
+      //     needs to refuse untouched. The readonly pre-open refuses them
+      //     with zero writes. (Verified empirically for this driver: a
+      //     readonly open+read SUCCEEDS against a crashed hot-WAL database,
+      //     with and without its -shm file, main file hash unchanged — so an
+      //     open/read failure here is NOT "pre-reset", it is "cannot open",
+      //     a different axis. Such failures defer to the read-write open
+      //     below, which reproduces today's canonical error behaviour.)
+      //  2. The same predicate against the read-write handle, before
+      //     assignment — closes the readonly→read-write gap and any future
+      //     driver-behaviour drift.
+      // ======================================================================
+      this._enforceSchemaBaselineReadonly();
+
+      const openedDb = this._openDatabase();
+      try {
+        this._evaluateSchemaBaseline(openedDb, "read-write");
+      } catch (fenceError) {
+        try {
+          openedDb.close();
+        } catch {
+          /* the refusal matters, not the close */
+        }
+        throw fenceError;
+      }
+      this.db = openedDb;
 
       // Share connection with dbConnection module for sub-services
       setDb(this.db);
@@ -294,6 +338,58 @@ class DatabaseService implements IDatabaseService {
       await logService.debug("Database initialized successfully with encryption", "DatabaseService");
       return true;
     } catch (error) {
+      if (error instanceof SchemaBaselineRefusalError) {
+        // BACKLOG-2993 — terminal refusal surface. The broadcast below is
+        // TELEMETRY ONLY: the renderer's reducer never reads `error` off the
+        // init broadcast (reducer.ts destructures {stage, progress, message}
+        // and documents the case as informational), and LoadingOrchestrator
+        // reads `retryable` only into a Sentry extra. What actually stops a
+        // retry loop on an unfixable database is the sequence below: the user
+        // is TOLD (dialog, awaited), and then the app EXITS (app.quit()) —
+        // quit makes renderer state moot. Do not "fix" a future retry bug by
+        // teaching the reducer about retryable; the dialog+quit is the
+        // load-bearing surface, by SR ruling on this item.
+        initializationBroadcaster.broadcast({
+          stage: "error",
+          error: { message: error.message, retryable: false },
+        });
+        await logService.error("Pre-baseline database refused (schema baseline fence)", "DatabaseService", {
+          error: error.message,
+          foundVersion: error.foundVersion,
+          path: this.dbPath,
+        });
+        Sentry.captureException(error, {
+          tags: {
+            service: "database-service",
+            operation: "initialize",
+            schema_baseline_refusal: "true",
+          },
+        });
+        // Flush before the quit path so the event survives the exit
+        // (BACKLOG-1576 precedent on the auto-restore path).
+        await Sentry.flush(2000);
+
+        if (!app.isReady()) {
+          await app.whenReady();
+        }
+        // ORDER IS LOAD-BEARING: the dialog is AWAITED, then quit. Dropping
+        // the await would exit mid-dialog — the user would never learn why
+        // the app won't start. The boundary-sweep suite pins this order.
+        await dialog.showMessageBox({
+          type: "error",
+          title: "Database from an older version",
+          message: "This database was created by an older version of Keepr and cannot be upgraded.",
+          detail:
+            "Keepr reset its local database format, and versions before the reset have " +
+            "no upgrade path. Reinstall Keepr, or move the old database file aside, then " +
+            "launch again. Cloud data is unaffected and will re-sync.\n\n" +
+            `Database: ${this.dbPath ?? "unknown"}`,
+          buttons: ["Quit"],
+        });
+        app.quit();
+        throw error;
+      }
+
       // BACKLOG-1381: Broadcast error on initialization failure
       initializationBroadcaster.broadcast({
         stage: "error",
@@ -351,7 +447,139 @@ class DatabaseService implements IDatabaseService {
    * ships migrations regularly.
    */
   getLatestSchemaVersion(): number {
-    return DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
+    // BACKLOG-2993: with the chain empty the baseline IS the latest version a
+    // build ships. Unguarded, the last-element read is a TypeError that would
+    // silently void the ENTIRE support-ticket storage-diagnostics block
+    // (supportTicketService.ts catches and leaves it null).
+    const migrations = DatabaseService.MIGRATIONS;
+    if (migrations.length === 0) return DatabaseService.SCHEMA_BASELINE_VERSION;
+    return migrations[migrations.length - 1].version;
+  }
+
+  /**
+   * BACKLOG-2993 — readonly half of the schema-baseline fence. See the block
+   * comment in initialize() for the full design.
+   *
+   * Refuses BEFORE any read-write open so a pre-WAL-era file is never touched
+   * (the read-write opener's `journal_mode = WAL` rewrites the main file's
+   * header). An open/read failure here is NOT a refusal — version and
+   * openability are independent axes (SR review addendum, BACKLOG-2993): it
+   * logs and defers to the read-write open, whose predicate re-check keeps
+   * the fence closed and whose failure modes are today's canonical ones.
+   */
+  private _enforceSchemaBaselineReadonly(): void {
+    if (!this.dbPath || !this.encryptionKey) return; // initialize() sets both first
+    // Load-bearing, not defensive: a readonly open of a MISSING file fails
+    // (SQLITE_CANTOPEN) — a fresh install must skip the fence entirely.
+    if (!fs.existsSync(this.dbPath)) return;
+
+    let ro: DatabaseType | null = null;
+    try {
+      ro = new Database(this.dbPath, { readonly: true });
+      ro.pragma(`key = "x'${this.encryptionKey}'"`);
+      ro.pragma("cipher_compatibility = 4");
+      ro.pragma("busy_timeout = 5000");
+    } catch (openError) {
+      try {
+        ro?.close();
+      } catch {
+        /* ignore */
+      }
+      log.warn(
+        "[BaselineFence] readonly open failed — deferring to the read-write open (cannot-open is not pre-reset):",
+        openError instanceof Error ? openError.message : String(openError),
+      );
+      return;
+    }
+    try {
+      this._evaluateSchemaBaseline(ro, "read-only");
+    } finally {
+      try {
+        ro.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /**
+   * BACKLOG-2993 — the schema-baseline predicate. Throws
+   * SchemaBaselineRefusalError on a positive pre-baseline determination;
+   * throws NOTHING else (a driver-level read failure is "could not evaluate",
+   * neither refusal nor acceptance — it logs and lets the existing pipeline
+   * produce its canonical error, and keeps heavily-mocked test harnesses
+   * transparent).
+   *
+   * The boundary, swept not sampled (68/69 refuse, 70/71 accept in the
+   * boundary-sweep suite), plus the structural cases:
+   *   - schema_version.version <  baseline → REFUSE (pre-reset)
+   *   - schema_version.version == baseline → accept
+   *   - schema_version.version >  baseline → accept, warn (a NEWER build
+   *     wrote it; refusing would brick a downgrade with no upside)
+   *   - user objects but NO schema_version table → REFUSE (pre-baseline
+   *     relic — made explicit so a later refactor cannot silently turn a
+   *     `?? 0` accident into "proceed")
+   *   - empty database (no user objects) → accept (fresh install)
+   *   - schema_version table present, row missing or non-numeric → REFUSE
+   *     (deliberately inverts the old runner's "unreadable → migrate"
+   *     default: the fence errs toward refusal)
+   */
+  private _evaluateSchemaBaseline(db: DatabaseType, via: "read-only" | "read-write"): void {
+    const baseline = DatabaseService.SCHEMA_BASELINE_VERSION;
+    let refusal: string | null = null;
+    let foundVersion: number | undefined;
+
+    try {
+      const svTable = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+        .get();
+      if (!svTable) {
+        const userObjects = (
+          db
+            .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+            .get() as { n: number }
+        ).n;
+        if (userObjects === 0) {
+          return; // fresh/empty file — nothing to refuse
+        }
+        refusal =
+          "This database has user tables but no schema_version table — it predates " +
+          `the schema baseline (version ${baseline}) and cannot be upgraded.`;
+      } else {
+        const row = db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as
+          | { version: unknown }
+          | undefined;
+        const version = row?.version;
+        if (typeof version !== "number" || !Number.isFinite(version)) {
+          refusal =
+            "This database has a schema_version table but no readable version row — " +
+            `it cannot be verified against the schema baseline (version ${baseline}).`;
+        } else if (version < baseline) {
+          foundVersion = version;
+          refusal =
+            `This database is at schema version ${version}, which predates the ` +
+            `schema baseline (version ${baseline}). The migration chain that could ` +
+            "have upgraded it no longer exists.";
+        } else {
+          if (version > baseline) {
+            log.warn(
+              `[BaselineFence] database schema_version ${version} is ABOVE this build's ` +
+                `baseline ${baseline} — written by a newer build; proceeding.`,
+            );
+          }
+          return;
+        }
+      }
+    } catch (readError) {
+      log.warn(
+        `[BaselineFence] could not evaluate the baseline predicate via ${via} — ` +
+          "neither refusing nor accepting; the existing open/migration pipeline decides:",
+        readError instanceof Error ? readError.message : String(readError),
+      );
+      return;
+    }
+
+    throw new SchemaBaselineRefusalError(refusal, foundVersion);
   }
 
   private _openDatabase(): DatabaseType {
@@ -733,8 +961,13 @@ class DatabaseService implements IDatabaseService {
     // rolling backup when it will. schema.sql is re-exec'd unconditionally below
     // but is fully IF NOT EXISTS (idempotent), so an up-to-date DB mutates
     // nothing and needs no snapshot.
+    // BACKLOG-2993: guarded — with the chain empty the baseline is the latest
+    // version. This line runs on EVERY open (fresh installs included), so an
+    // unguarded last-element read would be a startup crash for every user.
     const latestMigrationVersion =
-      DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
+      DatabaseService.MIGRATIONS.length === 0
+        ? DatabaseService.SCHEMA_BASELINE_VERSION
+        : DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
     let willRunMigration = true;
     if (this.dbPath && fs.existsSync(this.dbPath)) {
       try {
@@ -885,6 +1118,22 @@ class DatabaseService implements IDatabaseService {
       }
     }
   }
+
+  /**
+   * BACKLOG-2993 — the schema-baseline fence's floor: the version schema.sql
+   * seeds on a fresh install, and the lowest version initialize() will open.
+   *
+   * THE RULE, NOT THE NUMBER: the baseline must be STRICTLY GREATER than any
+   * version any existing database can hold. At the reset, both develop and
+   * shipped main topped out at migration 69, so the baseline is 70 — 69 would
+   * be a bug (it would accept exactly the chain-built databases the reset
+   * exists to reject). Re-derive against the live artefacts if this is ever
+   * changed; never copy it forward.
+   *
+   * (Transitional: unified with BASELINE_VERSION when the chain is deleted in
+   * the following commit of BACKLOG-2993.)
+   */
+  static readonly SCHEMA_BASELINE_VERSION = 70;
 
   /** Baseline version -- schema.sql contains everything through migration 28 */
   static readonly BASELINE_VERSION = 29;
