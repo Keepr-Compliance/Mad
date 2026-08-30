@@ -309,10 +309,79 @@ Every handoff MUST use this format:
 **Status:** [approved/rejected/changes-requested/complete]
 **Next Action:** [what the receiving agent should do]
 **Context:** [any relevant info - branch, PR, blockers]
+**Controls run:** [which line you reverted, and what went red — see below]
+**Measured at:** [SHA, for any claim about another branch]
 **Issues/Blockers:** [problems encountered, workarounds used, or "None"]
 ```
 
 See `templates/handoff-message.template.md` for the full template.
+
+---
+
+## Situational Awareness (MANDATORY)
+
+An agent knows its task. It does not know what changed around it. These steps close that gap; none takes more than a minute.
+
+### 0. Before dispatching ANY item — check it is not already built
+
+```bash
+gh pr list --state all --search "BACKLOG-XXXX" --json number,state,title,baseRefName
+```
+
+Then grep for the thing it would add. If a migration, check the version list. If a column, check whether anything reads it.
+
+**Two instances in one day, 2026-08-04:**
+- **BACKLOG-2364** was dispatched to an engineer. Migration **v56** had shipped it weeks earlier, verbatim, in PRs #2167 and #2161. The engineer correctly refused and wrote no code. Writing the assigned migration would have added duplicate columns to two tables.
+- **PR #1782** (2026-06-08, still open) turned out to duplicate work later redone under BACKLOG-2352. Its backlog item had been deleted, so nothing connected the two.
+
+The founder, on the second: *"i guess we did the work twice... it is what it is it's an example why we need to figure out how to better track our work."*
+
+**The check costs seconds. Skipping it costs an agent run and burns the founder's trust in the backlog.** A `status` of `pending` is not evidence the work is undone — statuses drift, items get deleted, and PRs mention several task ids at once (three items showed "2 PRs" that were the same migration PR naming all of them).
+
+### 1. Before any claim about another branch — check what is moving
+
+**Agents register themselves automatically.** The `PostToolUse:Agent` hook writes `pm_agent_activity` at launch; the `PostToolUse:Edit|Write` hook refreshes it on every edit and **detects** which files are actually being touched (`git diff --name-only`, not a declared list — a declared list goes stale the moment scope changes). You do not have to remember to do anything.
+
+**You DO have to look.** Before editing a shared file, or claiming anything about another branch:
+
+```sql
+-- who else is working, and on what
+SELECT agent_id, legacy_id, branch_name, status, note, minutes_since_heartbeat
+FROM pm_agents_active;
+
+-- am I about to collide with someone?
+SELECT * FROM pm_agent_file_collisions;
+```
+
+`pm_agent_file_collisions` lists any file two live agents are both editing. On 2026-08-04 two agents rewrote `contactPickerList.ts` unaware of each other; it took **three review cycles** to surface. This query surfaces it on the first edit.
+
+**Stamp the SHA into the claim.** "No conflict with #2204" is unverifiable an hour later; "no conflict with #2204 at `13a4e32b`" is a one-line recheck. Four merge-order conclusions were reached that night and two were wrong — one measured against a branch force-pushed twenty minutes later.
+
+```bash
+gh pr list --base int/<sprint-name> --json number,headRefOid,title
+```
+
+**The registry is non-blocking and therefore fails silently.** `pm_agent_bypassed` reconciles it against `pm_token_metrics` — any agent that ran but never registered appears there. A steady trickle means the hook is broken; a spike means agents are working outside the harness. **Check it when the registry looks suspiciously empty**, rather than concluding nobody is working.
+
+### 2. Controls are part of the handoff, not a detail
+
+**Revert one line of your fix and confirm a test goes red.** Report which control and what failed. See `CLAUDE.md` → *Break it and watch it go red*. An unstated control is an unrun control, and three PRs that night had controls which proved nothing until a reviewer re-ran them.
+
+### 3. Namespace anything in a shared location
+
+The session scratchpad is **shared across all agents**, not per-agent. Two collisions on 2026-08-04, both on the obvious name `pr-body.md`: one agent deleted a sibling's file, another had its own overwritten and published a sibling's text onto its PR.
+
+**Prefix scratchpad files with the item or agent id** (`pr-body-2459.md`). Never delete a scratchpad file you did not create.
+
+### 4. Verify `pwd` after any `cd` into a path you did not create
+
+A `cd` into a worktree a sibling has removed silently lands in the main repo — where a `git checkout` then moves the founder's working tree. Happened 2026-08-04; caught and restored.
+
+### Plan review is not optional
+
+Step 7 exists because an engineer who plans in the open gets corrected before writing code. On 2026-08-04 the one item that received a plan review had a dead-code target caught before implementation — *"otherwise it would have shipped a no-op behind a green test."* An item where the step was skipped was built on a root cause that turned out to be false, and the founder made a product decision on it.
+
+**Skipping Steps 6-8 is the single most expensive shortcut in this workflow.**
 
 ---
 
