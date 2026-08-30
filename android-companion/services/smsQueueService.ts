@@ -306,6 +306,40 @@ export async function setLastSyncTimestamp(timestamp: number): Promise<void> {
   await AsyncStorage.setItem(LAST_SYNC_TIMESTAMP_KEY, String(timestamp));
 }
 
+/**
+ * Forget the SMS high-water mark, so the next read starts from the beginning
+ * of the phone's history (BACKLOG-2995).
+ *
+ * ## Why this has to exist
+ *
+ * The high-water mark is PHONE-owned and the desktop never asks for
+ * "everything after T". So a desktop whose database is wiped — a reinstall, or
+ * the schema baseline reset in BACKLOG-2993 — receives only messages NEWER
+ * than whatever this phone had already sent, permanently, while sync reports
+ * success. Re-pairing already forces a full CONTACT resync
+ * (`contactSyncState.forceFullContactResync`); this is the message equivalent
+ * that was missing.
+ *
+ * ## Why re-sending everything is safe
+ *
+ * `messageIdentity()` above keys on the content-provider row id and falls back
+ * to the `sender|timestamp|body` tuple the desktop hashes as
+ * `generateExternalId` (`electron/services/localSyncService.ts`). Anything the
+ * desktop still holds is therefore a no-op on arrival, and `enqueueMessages`
+ * is itself idempotent. The cost of an unnecessary reset is one slow sync, not
+ * duplicated history.
+ *
+ * ## Deliberately narrower than `resetAllSyncData`
+ *
+ * That function is the UNPAIR teardown: it also drops the queue, the stats and
+ * the contact fingerprints. This one removes the cursor and nothing else,
+ * because a re-pair must not discard messages that are queued and un-acked —
+ * BACKLOG-2199 exists precisely to stop history being dropped on the floor.
+ */
+export async function resetMessageCursor(): Promise<void> {
+  await AsyncStorage.removeItem(LAST_SYNC_TIMESTAMP_KEY);
+}
+
 // ============================================
 // SYNC LOCK (BACKLOG-2200)
 // ============================================

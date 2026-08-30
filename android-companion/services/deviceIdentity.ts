@@ -69,6 +69,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { registerDevice } from './syncService';
 import { forceFullContactResync } from './contactSyncState';
+import { resetMessageCursor } from './smsQueueService';
 import type { SyncResult } from '../types/sync';
 
 /**
@@ -182,6 +183,17 @@ export type RegisterWithIdentityResult = Awaited<ReturnType<typeof registerDevic
  * duplicate snapshots this item is about. The cost is one full address-book
  * send per pairing, which is what shipped before.
  *
+ * `resetMessageCursor()` is the MESSAGE half of the same idea, and it was
+ * missing until BACKLOG-2995. The SMS high-water mark is phone-owned and the
+ * desktop never asks for "everything after T", so a desktop whose database was
+ * wiped silently received only messages newer than whatever this phone had
+ * already sent — while sync reported success. Both resets now run on the same
+ * successful-register path, so a pairing surface cannot pick up one and miss
+ * the other.
+ *
+ * Both are AFTER the success check on purpose: a failed pairing attempt must
+ * not cost the phone its place in its own history.
+ *
  * Never throws — `registerDevice` maps every network/timeout/HTTP failure to a
  * result, and the storage writes here swallow their own errors.
  */
@@ -203,6 +215,23 @@ export async function registerWithStoredIdentity(
 
   const adopted = await adoptDeviceIdentity(result.deviceId);
   await forceFullContactResync();
+
+  // Guarded because this function promises never to throw, and the caller is a
+  // pairing screen. If clearing the cursor fails, the phone keeps its old
+  // high-water mark — it re-sends less than it should, which is the bug this
+  // item fixes — but the PAIRING still completes. Failing to pair would be the
+  // worse outcome, so the error is logged rather than propagated. It is logged
+  // loudly on purpose: a silently un-cleared cursor is exactly the shape of
+  // BACKLOG-1448/2206, where a swallowed failure read as an empty result.
+  try {
+    await resetMessageCursor();
+  } catch (err) {
+    console.error(
+      '[DeviceIdentity] BACKLOG-2995: failed to clear the SMS cursor on pair — ' +
+        'this desktop may not receive message history older than the last sync:',
+      err,
+    );
+  }
 
   return { ...result, claimedDeviceId, adopted };
 }
