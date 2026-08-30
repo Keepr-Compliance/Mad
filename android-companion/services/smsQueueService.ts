@@ -19,6 +19,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { SyncMessage } from "../types/sync";
 import { resetContactSyncState } from "./contactSyncState";
+import { clearSyncWindowCache } from "./syncWindow";
 
 // ============================================
 // CONSTANTS
@@ -575,6 +576,13 @@ export async function setBackgroundSyncEnabled(
  * BACKLOG-2208: also clears the contact fingerprint/diff state so a re-pair
  * sends the FULL address book once (rather than diffing against a stale map
  * from the previous pairing).
+ *
+ * BACKLOG-2800: also drops the cached import window. `UnpairReason` includes
+ * `account-switch`, so a cache surviving this teardown could apply the PREVIOUS
+ * user's window to the next user's phone on any cycle where their own fetch
+ * failed. The cached record is additionally STAMPED with its owner's user id
+ * (see `syncWindow.ts`), which is what actually makes the account switch safe —
+ * this removal keeps the store tidy rather than carrying the guarantee alone.
  */
 export async function resetAllSyncData(): Promise<void> {
   await Promise.all([
@@ -585,5 +593,6 @@ export async function resetAllSyncData(): Promise<void> {
     AsyncStorage.removeItem(BACKGROUND_SYNC_ENABLED_KEY),
     AsyncStorage.removeItem(SYNC_LOCK_KEY),
     resetContactSyncState(),
+    clearSyncWindowCache(),
   ]);
 }

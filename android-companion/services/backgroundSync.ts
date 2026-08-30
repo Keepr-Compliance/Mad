@@ -20,6 +20,7 @@ import * as BackgroundFetch from "expo-background-fetch";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { readSmsMessages } from "./smsReader";
 import type { SmsReadError } from "./smsReader";
+import { getSyncWindowStart } from "./syncWindow";
 import { checkSmsPermissions } from "./permissions";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
@@ -410,10 +411,62 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       );
     } else {
       const lastTimestamp = await getLastSyncTimestamp();
-      // Bound the per-box read so the combined inbox+sent read fits the
-      // remaining capacity. Split the budget across the two boxes (min 1 each).
-      const perBoxBudget = Math.max(1, Math.floor(remainingCapacity / 2));
-      const readResult = await readSmsMessages(lastTimestamp, perBoxBudget);
+
+      // BACKLOG-2800: the desktop's "Import messages from" setting now GOVERNS
+      // this read. `getSyncWindowStart` returns the oldest timestamp the window
+      // admits, or null for "All time" — and also null when no value could be
+      // obtained at all, because it fails OPEN (its docblock explains why the
+      // two failure directions are not symmetric).
+      //
+      // The read floor is the LATER of the cursor and the window edge. The
+      // cursor already carries the `+1`: it is STORED as `newest + 1` at
+      // advance time below, so `getLastSyncTimestamp()` is already the next
+      // timestamp to read from and must not be incremented again here.
+      //
+      // The window is ROLLING — recomputed every cycle rather than anchored at
+      // pairing. "Last 3 months" is a rolling window, so a message that ages
+      // out of it is outside what the user asked for rather than lost; and
+      // anchoring would freeze a stale edge across the BACKLOG-2995 cursor
+      // reset, making a re-pair meant to re-import history read from the edge
+      // computed at the PREVIOUS pairing.
+      //
+      // `forceRefresh` when the cursor is 0. That set is exactly {first-ever
+      // sync, first sync after pairing, force re-import}: BACKLOG-2995 resets
+      // the cursor on every successful pair, so those cycles read from epoch
+      // and are bounded by the WINDOW alone. Both pairing screens kick off a
+      // sync immediately after registering, so the pairing-time prime can lose
+      // that race — keying the refresh off the cursor makes correctness
+      // independent of it, and covers force re-import for free.
+      const windowStart = await getSyncWindowStart(Date.now(), {
+        forceRefresh: lastTimestamp === 0,
+      });
+      const readFrom =
+        windowStart === null
+          ? lastTimestamp
+          : Math.max(lastTimestamp, windowStart);
+
+      // The only field-visible signal that the window actually SKIPPED history,
+      // as opposed to trailing harmlessly below the cursor (its normal state
+      // once the first post-pairing cycle has run).
+      if (windowStart !== null && windowStart > lastTimestamp) {
+        console.log(
+          `[BackgroundSync] Import window raised the read floor: cursor=${lastTimestamp} -> windowStart=${windowStart} (${new Date(windowStart).toISOString()}) — older history is outside the configured window (BACKLOG-2800)`
+        );
+      }
+
+      // BACKLOG-2800: the 50/50 inbox/sent split is no longer POLICY (founder
+      // ruling: "the determining factor should be the date"). It wasted
+      // capacity as soon as a history was lopsided — which is the normal shape,
+      // since most people receive far more than they send. On the 2,200-message
+      // reference fixture (1,840 inbox / 360 sent) a 500 budget read 250 + 250
+      // and left half the capacity idle the moment the smaller box emptied.
+      //
+      // Each box now gets the FULL remaining capacity as its ceiling and the
+      // COMBINED result is trimmed back to that capacity below. The per-box
+      // budget becomes back-pressure only. The trim is not merely budget
+      // hygiene — it is what makes the shared cursor safe; see the proof at the
+      // trim site.
+      const readResult = await readSmsMessages(readFrom, remainingCapacity);
 
       if (!readResult.ok) {
         // BACKLOG-2206: a GENUINE read failure (permission revoked, native
@@ -435,12 +488,56 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
           }
         );
       } else {
-        const messages = readResult.messages;
+        // BACKLOG-2800 — TRIM THE COMBINED READ, AND WHY THE CURSOR NEEDS IT.
+        //
+        // Each box was read with the FULL remaining capacity as its ceiling, so
+        // the union can hold up to 2x capacity. `readSmsMessages` returns it
+        // sorted oldest-first, so taking the first `remainingCapacity` keeps a
+        // contiguous OLDEST prefix across BOTH boxes.
+        //
+        // The trim is what makes the shared cursor safe. Before it, each box was
+        // capped independently while the cursor was advanced from the newest
+        // message across the UNION — so a truncated inbox read (newest: 1 March)
+        // combined with a sparse-but-recent sent read (newest: 20 August) moved
+        // the cursor to 20 August and every unread inbox message in between was
+        // skipped permanently. That defect is recorded on BACKLOG-2800; the fix
+        // lands here because the founder's ruling puts the budget split in this
+        // item's scope.
+        //
+        // WHY THE TRIMMED WATERMARK IS COMPLETE: for any box truncated at the
+        // ceiling C, all C of its messages are <= that box's own max T_B, so the
+        // union holds at least C elements <= T_B, so the C-th smallest element
+        // of the union is <= T_B. The trim keeps exactly the C smallest, so its
+        // newest element T satisfies T <= T_B for EVERY truncated box; and any
+        // box that returned fewer than C was exhausted. Hence both boxes are
+        // complete over [readFrom, T], and the cursor may safely reach T.
+        //
+        // BACKLOG-3005 (page-chaining for throughput) MUST PRESERVE THIS: what
+        // it advances the cursor to has to be a timestamp below which BOTH boxes
+        // are known complete, not merely the newest message it happened to read.
+        // Evaluated PRE-trim, on the union. If any box returned exactly its
+        // ceiling (= remainingCapacity) the union necessarily reaches the
+        // ceiling too; and if the union is short of it, neither box hit its
+        // ceiling and both are exhausted. (Testing the KEPT set instead is
+        // equivalent — when the union exceeds the cap the kept set is exactly
+        // the cap — but the union reads directly off the proof.)
+        //
+        // Caveat, pre-existing and not fixed here: `readBoxPaged` bounds its
+        // collection by VALID messages while `indexFrom` advances by RAW rows,
+        // so the MAX_PAGES_PER_BOX valve could in principle return fewer than
+        // the ceiling with rows still unread. It needs ~100k consecutive
+        // invalid rows at the current page size to trigger.
+        const unionWasTruncated =
+          readResult.messages.length >= remainingCapacity;
+
+        const messages = readResult.messages.slice(0, remainingCapacity);
         newMessages = messages.length;
 
         if (messages.length > 0) {
           const enqueuedCount = await enqueueMessages(messages);
 
+          // Computed from the POST-trim set. Taking it from the raw union would
+          // collapse the proof above and reinstate the skip defect intact.
           const newestTimestamp = Math.max(...messages.map((m) => m.timestamp));
 
           // BOUNDARY-SAFE CURSOR ADVANCE (BACKLOG-2199, SR review Note D).
@@ -462,7 +559,13 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
           // (inclusive) and let the next cycle re-read that millisecond — the
           // idempotent enqueue makes the overlap free. As the queue drains, a
           // later un-truncated read finally clears the +1 hop.
-          const readWasTruncated = messages.length >= perBoxBudget; // a box may have capped
+          //
+          // BACKLOG-2800: computed on the pre-trim union (see above), because
+          // `readSmsMessages` returns one combined array and per-box counts are
+          // not visible here. It can only OVER-report (both boxes short but
+          // summing to exactly the ceiling), which costs one re-read
+          // millisecond and never loses a message.
+          const readWasTruncated = unionWasTruncated;
           const nextCursor = readWasTruncated
             ? newestTimestamp // inclusive: re-read the boundary ms next cycle
             : newestTimestamp + 1; // safe to skip past — full tail was read
