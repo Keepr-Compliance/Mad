@@ -166,13 +166,33 @@ const DB_PATH = process.argv[3];
 const KILL_AT = process.argv[4];
 const IDS = process.argv.slice(5);
 
-// 'electron' must be stubbed before anything imports it: under ELECTRON_RUN_AS_NODE
-// require('electron') yields the executable path string, so a module-scope
-// app.getPath() would throw on import.
+// Two modules must be stubbed before anything imports them. These are the SAME two
+// substitutions jest already makes for every other test in this repo (see the
+// moduleNameMapper entries for '^electron$' and '^@sentry/electron(.*)$'); the raw
+// child bypasses moduleNameMapper, so it has to make them itself. Neither module is
+// under test — the production code under test and the sqlite driver stay real.
+//
+//  - 'electron': under ELECTRON_RUN_AS_NODE, require('electron') yields the
+//    executable path string, so a module-scope app.getPath() throws on import.
+//  - '@sentry/electron/main': reads process.versions.electron.match(...) at import
+//    time. That is undefined under plain node, so the import dies with
+//    "Cannot read properties of undefined (reading 'match')". This is why the first
+//    version of this harness ran locally (child = the electron binary) and did NOT
+//    run in CI (child = plain node), leaving C1/C2/C6 silently vacuous there.
+//    jest.config.js documents the same crash as its reason for mocking Sentry.
+const noop = () => undefined;
+const SENTRY_STUB = {
+  captureException: noop, captureMessage: noop, init: noop, setTag: noop,
+  setUser: noop, addBreadcrumb: noop, flush: () => Promise.resolve(true),
+  withScope: (cb) => cb({ setTag: noop, setExtra: noop }),
+};
 const origLoad = Module._load;
 Module._load = function (request) {
   if (request === 'electron') {
     return { app: { getAppPath: () => REPO, getPath: () => path.dirname(DB_PATH) } };
+  }
+  if (request === '@sentry/electron' || request.indexOf('@sentry/electron/') === 0) {
+    return SENTRY_STUB;
   }
   return origLoad.apply(this, arguments);
 };
@@ -187,6 +207,13 @@ const Database = require(path.join(REPO, 'node_modules', 'better-sqlite3-multipl
 const realDb = new Database(DB_PATH);
 realDb.pragma('journal_mode = WAL');
 realDb.pragma('synchronous = NORMAL');
+
+// HARNESS MARKER. Written before any kill point and outside the transaction under
+// test, so it survives every SIGKILL. Its absence means the child never got here,
+// which is the ONLY thing that distinguishes a real pass from a vacuous one: every
+// crash control's assertions (trigger present, rows unsynced) are trivially true of
+// a database no child ever touched. user_version is 0 in schema.sql and unused.
+realDb.pragma('user_version = 4242');
 
 const kill = () => process.kill(process.pid, 'SIGKILL');
 
@@ -241,12 +268,52 @@ let childPath: string;
  * reports status 1 / signal null for these kills — so every assertion in this
  * file is made against the reopened database instead.
  */
-function runCrashChild(dbPath: string, killAt: string, ids: string[]): void {
-  spawnSync(process.execPath, [childPath, REPO_ROOT, dbPath, killAt, ...ids], {
+interface ChildRun {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  spawnError?: Error;
+}
+
+function runCrashChild(dbPath: string, killAt: string, ids: string[]): ChildRun {
+  const r = spawnSync(process.execPath, [childPath, REPO_ROOT, dbPath, killAt, ...ids], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", TS_NODE_TRANSPILE_ONLY: "true" },
     encoding: "utf8",
     timeout: 120_000,
   });
+  return {
+    status: r.status,
+    signal: r.signal,
+    stdout: r.stdout ?? "",
+    stderr: r.stderr ?? "",
+    spawnError: r.error,
+  };
+}
+
+/**
+ * THE VACUITY GUARD. Every crash control calls this FIRST.
+ *
+ * On 2026-08-30 this suite went green locally and red in CI, and the only red was
+ * the separate liveness test: in CI the child never started, so C1, C2 and C6
+ * "passed" against a database nothing had touched. Three controls reporting green
+ * while proving nothing is the exact failure this suite exists to prevent, so the
+ * check now runs inside each of them rather than beside them — and it prints the
+ * child's stderr, which the first version of this harness threw away, leaving the
+ * CI failure with no diagnosis at all.
+ */
+function assertHarnessRan(db: DatabaseType, run: ChildRun, killAt: string): void {
+  const marker = db.pragma("user_version", { simple: true }) as number;
+  if (marker !== 4242) {
+    throw new Error(
+      `CRASH HARNESS DID NOT RUN (killAt=${killAt}). This control proves NOTHING — ` +
+        `its other assertions are trivially true of an untouched database.\n` +
+        `  spawn error : ${run.spawnError ? run.spawnError.message : "none"}\n` +
+        `  exit status : ${String(run.status)}   signal: ${String(run.signal)}\n` +
+        `  child stdout: ${run.stdout.trim() || "(empty)"}\n` +
+        `  child stderr: ${run.stderr.trim() || "(empty)"}`,
+    );
+  }
 }
 
 beforeAll(() => {
@@ -411,9 +478,12 @@ describe("BACKLOG-2548 · a crash during the sync write", () => {
     const dbPath = dbPathFor("c1");
     seedDb(dbPath, ["a1", "a2"]).close();
 
-    runCrashChild(dbPath, "after-drop", ["a1"]);
+    const run = runCrashChild(dbPath, "after-drop", ["a1"]);
 
     const db = openDb(dbPath);
+    // Must come first: without it the assertions below pass on a database the child
+    // never opened. See assertHarnessRan.
+    assertHarnessRan(db, run, "after-drop");
     const sql = triggerSql(db);
     // RED before the fix: TRIGGER ABSENT — the append-only guarantee was simply off.
     expect(sql).not.toBeNull();
@@ -426,9 +496,12 @@ describe("BACKLOG-2548 · a crash during the sync write", () => {
     const dbPath = dbPathFor("c6");
     seedDb(dbPath, ["a1", "a2"]).close();
 
-    runCrashChild(dbPath, "after-update", ["a1"]);
+    const run = runCrashChild(dbPath, "after-update", ["a1"]);
 
     const db = openDb(dbPath);
+    // Must come first: without it the assertions below pass on a database the child
+    // never opened. See assertHarnessRan.
+    assertHarnessRan(db, run, "after-update");
     const sql = triggerSql(db);
     // RED before the fix: trigger ABSENT *and* synced_at WRITTEN — so the next sync
     // skips the row and nothing ever prompts a repair.
@@ -442,9 +515,12 @@ describe("BACKLOG-2548 · a crash during the sync write", () => {
     const dbPath = dbPathFor("c2");
     seedDb(dbPath, ["a1", "a2"]).close();
 
-    runCrashChild(dbPath, "before-drop", ["a1"]);
+    const run = runCrashChild(dbPath, "before-drop", ["a1"]);
 
     const db = openDb(dbPath);
+    // Must come first: without it the assertions below pass on a database the child
+    // never opened. See assertHarnessRan.
+    assertHarnessRan(db, run, "before-drop");
     const sql = triggerSql(db);
     expect(sql).not.toBeNull();
     expect(normalizeDdl(sql as string)).toBe(schemaTriggerDdl());
@@ -456,9 +532,18 @@ describe("BACKLOG-2548 · a crash during the sync write", () => {
     const dbPath = dbPathFor("harness");
     seedDb(dbPath, ["a1", "a2"]).close();
 
-    runCrashChild(dbPath, "none", ["a1"]);
+    const run = runCrashChild(dbPath, "none", ["a1"]);
 
     const db = openDb(dbPath);
+    assertHarnessRan(db, run, "none");
+    // An unkilled child must also EXIT CLEANLY — the marker only proves it started.
+    if (run.status !== 0) {
+      throw new Error(
+        `crash harness child exited ${String(run.status)} (signal ${String(run.signal)}).\n` +
+          `  stdout: ${run.stdout.trim() || "(empty)"}\n` +
+          `  stderr: ${run.stderr.trim() || "(empty)"}`,
+      );
+    }
     // If this fails, the child never reached markAuditLogsSynced and C1/C2/C6 are vacuous.
     expect(syncedAtOf(db, "a1")).not.toBeNull();
     expect(syncedAtOf(db, "a2")).toBeNull();
