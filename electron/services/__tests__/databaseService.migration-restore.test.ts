@@ -217,8 +217,8 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         // the only kind that can still reach a migration failure.
         return {
           get: jest.fn().mockReturnValue({
-            version: (service.constructor as { SCHEMA_BASELINE_VERSION: number })
-              .SCHEMA_BASELINE_VERSION,
+            version: (service.constructor as { BASELINE_VERSION: number })
+              .BASELINE_VERSION,
           }),
         };
       }
@@ -294,9 +294,9 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       // they treated the old chain.
       const klass = service.constructor as {
         MIGRATIONS: Array<{ version: number; description: string; migrate: (d: unknown) => void }>;
-        SCHEMA_BASELINE_VERSION: number;
+        BASELINE_VERSION: number;
       };
-      const baseline = klass.SCHEMA_BASELINE_VERSION;
+      const baseline = klass.BASELINE_VERSION;
       const original = klass.MIGRATIONS;
       klass.MIGRATIONS = [
         ...original,
@@ -318,8 +318,8 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       // Latest migration version, so no migration runs and no backup is needed
       // (previously every launch copied the DB and churned the 3-file window).
       // BACKLOG-2993: "latest" is the baseline — the chain is gone.
-      const latest = (service.constructor as { SCHEMA_BASELINE_VERSION: number })
-        .SCHEMA_BASELINE_VERSION;
+      const latest = (service.constructor as { BASELINE_VERSION: number })
+        .BASELINE_VERSION;
       seedOnDiskVersion(latest);
 
       const result = await service.initialize();
