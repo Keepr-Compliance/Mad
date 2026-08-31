@@ -262,6 +262,31 @@ describe("BACKLOG-2915 rows 37-42 — judging a failed backup before discarding 
     expect(ratio).toBeLessThan(MIN_BLOB_COVERAGE);
   });
 
+  it("ROW 41b — THE FLOOR IS 0.999 SPECIFICALLY, not merely 'some floor'", async () => {
+    // ROW 41 removes a quarter of the backup, which fails 0.999 AND 0.99 — so it pins
+    // that a floor exists and nothing about WHERE it is. The founder chose 0.999 over
+    // 0.99 on 2026-08-31, and a choice nothing can detect being changed is not pinned.
+    //
+    // 100 missing of 20,002 is 0.995 present: BELOW 0.999, ABOVE 0.99. Loosening the
+    // constant to 0.99 turns this row green-to-red in the only direction that matters.
+    // Both required files are present, so the identity check has nothing to say and the
+    // floor is unambiguously what decides it.
+    const { claimed } = founderShape(0);
+    const omit = claimed.slice(2, 102);
+    const dir = await build({ claimed, omit });
+
+    const verdict = await judgeFailedBackup(dir);
+
+    expect(verdict.salvageable).toBe(false);
+    if (verdict.salvageable) throw new Error("unreachable");
+    expect(verdict.coverage?.missingRequired).toEqual([]);
+    const ratio = verdict.coverage!.blobsPresent / verdict.coverage!.manifestFiles;
+    // The band this row occupies, stated so a later reader can see why 100 and not 5,000.
+    expect(ratio).toBeGreaterThan(0.99);
+    expect(ratio).toBeLessThan(0.999);
+    expect(MIN_BLOB_COVERAGE).toBe(0.999);
+  });
+
   it("ROW 42 — the device saying the snapshot did NOT finish outranks everything", async () => {
     // A complete-looking directory whose own `Status.plist` says it was still uploading.
     // BACKLOG-2911 established this reading; nothing measured afterwards may overrule it.
