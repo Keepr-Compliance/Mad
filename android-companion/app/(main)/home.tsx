@@ -508,24 +508,39 @@ export default function HomeScreen(): React.JSX.Element {
 
     // Step 3: Auto-trigger first sync immediately after pairing + permissions.
     //
-    // DELIBERATELY SINGLE-CYCLE (BACKLOG-3005). This races `first-sync.tsx` for
-    // the sync lock, and onboarding's patience budget is 5 x 1500ms = 7.5s.
-    // Finishing in seconds and YIELDING the lock is the point; a multi-cycle run
-    // here would blow through that budget and amplify BACKLOG-3003 from a 30ms
-    // window into minutes. Onboarding does the real drain.
-    try {
-      const syncResult = await performSync();
-      // BACKLOG-3003's shape: a `skipped` run transferred nothing, so reporting
-      // its zeros as "complete" describes work that never happened. One-liner, so
-      // taken here; the rest of 3003 is untouched.
-      console.log(
-        syncResult.skipped
-          ? '[Pairing] Auto-first-sync skipped — another sync already holds the lock'
-          : `[Pairing] Auto-first-sync complete: ${syncResult.sentMessages} msgs, ${syncResult.contactsSynced} contacts`,
-      );
-    } catch (error) {
-      console.warn('[Pairing] Auto-first-sync error (non-fatal):', error);
-    }
+    // FULL DRAIN, AND FIRE-AND-FORGET. Both halves are the founder's ruling
+    // (BACKLOG-3005, 2026-08-30): *"regardless of where you sync — onboarding or
+    // home screen — after you just scan the QR code... it should ALWAYS do
+    // everything based on the setting in Keepr desktop."* He paired from HERE
+    // with the window on All time and got 500 of 2,317; the identical binary had
+    // drained all 2,317 an hour earlier through onboarding.
+    //
+    // The previous comment here justified `maxCycles: 1` as yielding the lock to
+    // `first-sync.tsx` inside its 5 x 1500ms budget. That reasoning is now
+    // OBSOLETE, not merely overridden: with the depth-aware gate in
+    // `performSync`, onboarding JOINS this very run instead of racing it, so
+    // there is nothing left to yield to.
+    //
+    // NOT AWAITED, deliberately. `handleBarCodeScanned` awaits `savePairing`,
+    // and only then shows "Paired Successfully". Awaiting a full drain would
+    // leave the user staring at a closed camera for minutes with no confirmation
+    // that pairing worked. The drain's progress indicator is the Sync Now button,
+    // which greys out and spins for any in-flight sync.
+    performSync({ maxCycles: MAX_SYNC_CYCLES_PER_RUN })
+      .then((syncResult) => {
+        // BACKLOG-3003's shape: a `skipped` run transferred nothing, so
+        // reporting its zeros as "complete" describes work that never happened.
+        console.log(
+          syncResult.skipped
+            ? '[Pairing] Auto-first-sync skipped — another sync already holds the lock'
+            : `[Pairing] Auto-first-sync complete: ${syncResult.sentMessages} msgs, ${syncResult.contactsSynced} contacts (${syncResult.cyclesRun ?? 1} cycles)`,
+        );
+      })
+      .catch((error: unknown) => {
+        // An un-awaited rejection is an unhandled rejection, which crashes RN
+        // release builds. Never let this promise escape unhandled.
+        console.warn('[Pairing] Auto-first-sync error (non-fatal):', error);
+      });
     // --- END BACKLOG-1456 ---
 
     return true;

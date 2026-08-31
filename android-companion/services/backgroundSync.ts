@@ -53,6 +53,14 @@ import {
 } from "./smsQueueService";
 import type { SyncIntervalValue } from "./smsQueueService";
 import type { PairingInfo, SyncErrorType } from "../types/sync";
+// BACKLOG-3005: the depth vocabulary lives in a LEAF module so a test that
+// mocks this one can still `requireActual` the real ceiling without paying for
+// `defineTask`, AsyncStorage and the Supabase client. Re-exported here so every
+// existing import path keeps working unchanged.
+import { MAX_SYNC_CYCLES_PER_RUN } from "./syncDepth";
+import type { SyncRunOptions } from "./syncDepth";
+export { MAX_SYNC_CYCLES_PER_RUN };
+export type { SyncRunOptions };
 import {
   classifyAddress,
   classifySyncOutcome,
@@ -231,6 +239,120 @@ function reachabilityErrorMessage(errorType: SyncErrorType): string {
       "Can't reach Keepr on your computer. Make sure Keepr is open, then re-connect.";
 }
 
+// ============================================
+// DEPTH-AWARE COALESCING (BACKLOG-3005, founder ruling 2026-08-30)
+// ============================================
+
+/**
+ * The run currently in flight IN THIS JS RUNTIME, with the depth it targets.
+ *
+ * ## The defect this closes
+ *
+ * Founder: *"regardless of where you sync — onboarding or home screen — after
+ * you just scan the QR code, or a returning user syncing, it should ALWAYS do
+ * everything based on the setting in Keepr desktop."* He paired from the HOME
+ * screen with the window on All time and got 500 of 2,317; an hour earlier the
+ * identical binary drained all 2,317 because he had paired through ONBOARDING.
+ * Same phone, same setting, same build, different screen.
+ *
+ * The cause was that `home.tsx`'s auto-first-sync was pinned to one cycle so it
+ * would lose the lock race to onboarding quickly. Sound for that race, wrong as
+ * a rule: pairing from home has no onboarding to yield to, so the user simply
+ * kept a partial history.
+ *
+ * ## Why the fix is coalescing rather than raising the number
+ *
+ * Raising home's cycle count reinstates the race. The answer is that there is
+ * ONE drain and the other caller JOINS it. Modelled on
+ * `electron/services/messagesSyncTrigger.ts` (BACKLOG-2772, SR D1), which
+ * solved the same problem on the desktop.
+ *
+ * ## DEPTH-AWARENESS IS THE LOAD-BEARING PART
+ *
+ * "A sync is already running, join it" is WRONG here. A single-pass run in
+ * flight does not satisfy a caller that needs a full drain: joining it would
+ * hand back 500 messages and report success — the same silent partial this item
+ * exists to remove, reached by another road. So a run is reusable only when it
+ * is at least as DEEP as the caller needs.
+ *
+ * ## Why this registry is in memory, and what that does NOT cover
+ *
+ * It coalesces callers sharing one JS runtime. The cross-runtime case (Expo's
+ * headless task when the app process is dead) is still handled by the
+ * AsyncStorage lock exactly as before — this adds a layer, it replaces nothing.
+ */
+interface InflightRun {
+  promise: Promise<SyncOperationResult>;
+  /** Cycle budget this run targets. Larger = deeper. */
+  maxCycles: number;
+  /** Whether this run re-read the import window through a fresh cache. */
+  userInitiated: boolean;
+}
+
+let inflightRun: InflightRun | null = null;
+
+/**
+ * Test-only: drop the registry between cases.
+ *
+ * Without it a test that leaves a pending run makes the NEXT test silently join
+ * it, which presents as flake rather than as pollution. Precedent:
+ * `appStateCatchup.__resetCatchupState`.
+ */
+export function __resetInflightForTests(): void {
+  inflightRun = null;
+}
+
+/**
+ * The cycle budget a set of options asks for.
+ *
+ * MIRRORS the first line of `runSyncCycles`, which cannot be refactored to
+ * share this: that function was approved at `3adb4803f` and verified on
+ * hardware, and this item is explicitly forbidden from moving it. The two
+ * expressions are pinned equal over a value sweep by
+ * `backgroundSync.coalescing-3005.test.ts`.
+ */
+function resolveMaxCycles(options: SyncRunOptions): number {
+  return Math.max(1, Math.trunc(options.maxCycles ?? 1));
+}
+
+/**
+ * May this caller reuse the in-flight run?
+ *
+ * Three exclusions, each of which a naive "is a sync running?" check gets wrong:
+ *
+ * 1. **A depth-1 caller never joins and never waits.** After this item the only
+ *    depth-1 caller is the OS background task, and Expo documents a ~30 second
+ *    budget whose overrun terminates the app and delays future fetches. Joining
+ *    a drain would park that callback for minutes. Note this is deliberately
+ *    decided by the GATE and not by an assumption about which JS runtime the
+ *    task runs in: with the app alive, `defineTask` runs in the app's runtime
+ *    and CAN see this registry, so "it is a different runtime" would not be a
+ *    safe reason. It still RUNS (and the AsyncStorage lock turns it into a
+ *    `skipped`, byte-identical to today) — it simply never blocks.
+ *
+ * 2. **A `userInitiated` caller never joins.** That flag makes the run re-read
+ *    the import window through a fresh cache (BACKLOG-3017), so its window can
+ *    be WIDER than the in-flight run's. Handing back the older run would return
+ *    a scan that is shallower IN TIME even when it is deeper in cycles — the
+ *    same SR D1 violation one dimension over. Reachable: the busy-state poll is
+ *    3s, so a tap can land after the user widens the setting but before the
+ *    button greys. Such a caller chains instead, and the second run is cheap
+ *    because the cursor is already caught up.
+ *
+ * 3. **A shallower in-flight run never satisfies a deeper caller.** The
+ *    superset rule itself.
+ */
+function inflightCoversRequirement(
+  existing: InflightRun | null,
+  callerMaxCycles: number,
+  callerUserInitiated: boolean
+): boolean {
+  if (!existing) return false;
+  if (callerMaxCycles <= 1) return false;
+  if (callerUserInitiated) return false;
+  return existing.maxCycles >= callerMaxCycles;
+}
+
 /**
  * Perform a full sync cycle:
  * 1. Load pairing info
@@ -240,6 +362,23 @@ function reachabilityErrorMessage(errorType: SyncErrorType): string {
  * 5. Update sync stats
  *
  * This is called both by the background task and by the manual "Sync Now" button.
+ *
+ * ## Three outcomes, and why CHAINING is not a double-sync
+ *
+ *   - **JOIN** — an in-flight run is at least as deep and this caller is
+ *     neither depth-1 nor `userInitiated`. Returns that run's promise. One
+ *     sync, N callers, one outcome event.
+ *   - **CHAIN** — a run is in flight but does not cover this caller. We wait
+ *     for it to SETTLE and then run our own. BACKLOG-2200 forbids CONCURRENT
+ *     runs; two runs one after the other is what "waits for one that covers it,
+ *     or runs its own" means, and it is the only way a deeper caller can get
+ *     the depth it asked for without the shallower run's lock rejecting it.
+ *   - **RUN** — nothing in flight, or a depth-1 caller (which never waits).
+ *
+ * A chained run can still lose the AsyncStorage lock in the gap between the
+ * first run settling and its own `acquireSyncLock` — a headless task in another
+ * runtime can take it there. It then returns `skipped`, which is exactly the
+ * case `first-sync.tsx`'s retry loop still exists to cover.
  *
  * @param options.maxCycles - how many cycles this run may execute before it
  *   stops (BACKLOG-3005). DEFAULT 1, which is byte-identical to the pre-3005
@@ -252,14 +391,79 @@ function reachabilityErrorMessage(errorType: SyncErrorType): string {
  *   where an hour-old cache is visibly wrong; nothing else about the cycle
  *   changes, and the setting fetch still degrades exactly as it always did.
  */
-export async function performSync(
+export function performSync(
   options: SyncRunOptions = {}
 ): Promise<SyncOperationResult> {
-  // BACKLOG-2988: THE ONE EMISSION POINT. Every way this function can end —
-  // the lock skip, all five early returns inside the cycle, a clean finish and
-  // a throw — passes through exactly one of the two `emitOutcome` calls below.
-  // Emitting per-branch instead was the shape that produced the defect: the
-  // branches that reported nothing were the ones nobody remembered.
+  // 1. Resolve the required DEPTH before the coalesce decision, so a deeper
+  //    caller can never be handed back a shallower run.
+  const maxCycles = resolveMaxCycles(options);
+  const userInitiated = options.userInitiated === true;
+
+  // 2. Read the registry and decide. There is NO `await` between this read and
+  //    the assignment below — JS is single-threaded, so the whole prologue runs
+  //    to completion before any other caller can observe it. That is why this
+  //    function is deliberately NOT `async`.
+  const existing = inflightRun;
+
+  if (inflightCoversRequirement(existing, maxCycles, userInitiated)) {
+    // JOIN. One sync, N callers, one outcome event.
+    return (existing as InflightRun).promise;
+  }
+
+  // CHAIN when a run is in flight that does not cover us, or RUN NOW when
+  // nothing is. Chaining is sequential, never concurrent — see the docblock.
+  const shouldChain = existing !== null && maxCycles > 1;
+  const promise = shouldChain
+    ? (existing as InflightRun).promise.then(
+        () => runOnce(options),
+        // The in-flight run's failure is ITS caller's to report. We still need
+        // our own deeper run, so both settlements lead to the same place.
+        () => runOnce(options)
+      )
+    : runOnce(options);
+
+  // Register ONLY when we are the entry a later caller should find.
+  //
+  // A depth-1 caller that RUNS while a deeper run is in flight (the OS task
+  // firing mid-drain) must NOT overwrite it: the drain would become invisible,
+  // and the next deep caller would start a second run that the AsyncStorage
+  // lock then rejects as `skipped` — losing the join the drain was there to
+  // provide. A chained caller DOES register, because it is strictly deeper and
+  // settles later, so it is the right thing for a subsequent caller to await.
+  if (!existing || shouldChain) {
+    inflightRun = { promise, maxCycles, userInitiated };
+  }
+
+  // `then(cleanup, cleanup)`, never `finally`: `.finally()` returns a NEW
+  // promise that nobody holds, so a rejected run would surface as an unhandled
+  // rejection — which crashes React Native release builds. `then` with both
+  // handlers absorbs it into an orphan that is already settled.
+  const clear = (): void => {
+    // Identity guard: a later caller may have replaced us in the registry (it
+    // chains off our promise), and that entry must outlive ours.
+    if (inflightRun?.promise === promise) inflightRun = null;
+  };
+  promise.then(clear, clear);
+
+  return promise;
+}
+
+/**
+ * One actual sync run, start to finish.
+ *
+ * BACKLOG-2988 restated for coalescing: THE ONE EMISSION POINT is per RUN, not
+ * per CALL. Callers that join an in-flight run emit nothing of their own — they
+ * are the same run and would otherwise double-count it. A CHAINED caller is a
+ * second, sequential run and does emit its own event.
+ */
+async function runOnce(
+  options: SyncRunOptions
+): Promise<SyncOperationResult> {
+  // Every way this function can end — the lock skip, all five early returns
+  // inside the cycle, a clean finish and a throw — passes through exactly one
+  // of the two `emitOutcome` calls below. Emitting per-branch instead was the
+  // shape that produced the defect: the branches that reported nothing were the
+  // ones nobody remembered.
   const startedAt = Date.now();
   try {
     const result = await runSyncUnderLock(options);
@@ -355,26 +559,6 @@ async function emitOutcome(
   } catch (error) {
     console.warn("[BackgroundSync] Outcome report failed; sync unaffected:", error);
   }
-}
-
-/**
- * How many cycles ONE opted-in run may execute. ~10,000 messages per tap at
- * `MAX_QUEUE_SIZE = 500`.
- *
- * A ceiling, not a target: it exists so a pathological loop terminates, and
- * every real drain stops earlier on "the read was not truncated".
- */
-export const MAX_SYNC_CYCLES_PER_RUN = 20;
-
-/** Options for one `performSync` run. */
-export interface SyncRunOptions {
-  /**
-   * BACKLOG-3005. DEFAULT 1. Continuation is opt-in so that every existing
-   * caller keeps byte-identical behaviour without being edited.
-   */
-  maxCycles?: number;
-  /** BACKLOG-3017. Set only by the manual "Sync Now" button. */
-  userInitiated?: boolean;
 }
 
 /**

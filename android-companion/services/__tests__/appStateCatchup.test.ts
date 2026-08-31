@@ -10,7 +10,11 @@
  *   - an unexpected performSync throw is swallowed (never crashes foreground).
  */
 
-import { performSync, type SyncOperationResult } from '../backgroundSync';
+import {
+  performSync,
+  MAX_SYNC_CYCLES_PER_RUN,
+  type SyncOperationResult,
+} from '../backgroundSync';
 import {
   runCatchupSync,
   createCatchupHandler,
@@ -22,7 +26,20 @@ import {
 // performSync is the only real dependency — mock it so we observe invocations
 // without touching the SMS/queue/network layer. This also skips backgroundSync's
 // module-load TaskManager.defineTask side effect.
-jest.mock('../backgroundSync', () => ({ performSync: jest.fn() }));
+// BACKLOG-3005: `MAX_SYNC_CYCLES_PER_RUN` must come from the REAL module. A
+// mocked literal would make the call-site assertion below compare the mock
+// against itself, and omitting it entirely makes the catch-up silently pass
+// `maxCycles: undefined` — i.e. depth 1 — inside this suite only.
+jest.mock('../backgroundSync', () => ({
+  performSync: jest.fn(),
+  // The REAL ceiling, from the LEAF module (services/syncDepth) so this does
+  // not re-instantiate backgroundSync's native-dependent import graph. A
+  // literal written here would make the call-site assertion compare the mock
+  // against itself; omitting it entirely made the catch-up silently pass
+  // `maxCycles: undefined` — depth 1 — inside this suite only.
+  MAX_SYNC_CYCLES_PER_RUN: jest.requireActual('../syncDepth')
+    .MAX_SYNC_CYCLES_PER_RUN,
+}));
 jest.mock('@sentry/react-native', () => ({
   addBreadcrumb: jest.fn(),
   captureException: jest.fn(),
@@ -124,5 +141,47 @@ describe('runCatchupSync guards', () => {
     mockPerformSync.mockRejectedValueOnce(new Error('boom'));
     await expect(runCatchupSync(5_000)).resolves.toBeUndefined();
     expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3005 — THE CALL-SITE BINDING
+// ---------------------------------------------------------------------------
+
+describe('the foreground catch-up asks for a full drain', () => {
+  /**
+   * Founder ruling (2026-08-30): *"or a returning user syncing"* is one of the
+   * syncs that must honour the desktop's window in full. This suite previously
+   * asserted only THAT `performSync` was invoked, never with what — so the
+   * catch-up could silently go back to a single pass.
+   *
+   * The constant is imported from the module under mock, whose factory sources
+   * it from `requireActual` — so it is the real 20, not a literal written here.
+   * (A second in-test `requireActual` is deliberately avoided: it instantiates a
+   * second real Supabase client, whose auto-refresh timer breaks the suite.)
+   *
+   * Limitation, stated: because both the production import and this assertion
+   * resolve to the same real constant, this control cannot detect the constant
+   * itself being wrong. It detects the BINDING being wrong, which is the defect.
+   *
+   * MUTATION that must go red: drop `maxCycles` from the `performSync` call in
+   * `runCatchupSync`.
+   */
+  it('passes maxCycles = MAX_SYNC_CYCLES_PER_RUN', async () => {
+    mockPerformSync.mockResolvedValue({
+      newMessages: 0,
+      sentMessages: 0,
+      contactsSynced: 0,
+      newContacts: 0,
+      desktopReachable: true,
+      queueSize: 0,
+    } as SyncOperationResult);
+
+    await runCatchupSync(1_000_000);
+
+    expect(MAX_SYNC_CYCLES_PER_RUN).toBeGreaterThan(1);
+    expect(mockPerformSync).toHaveBeenCalledWith({
+      maxCycles: MAX_SYNC_CYCLES_PER_RUN,
+    });
   });
 });
