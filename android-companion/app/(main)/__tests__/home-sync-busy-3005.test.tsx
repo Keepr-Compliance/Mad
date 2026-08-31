@@ -107,7 +107,10 @@ jest.mock('../../../services/backgroundSync', () => ({
   stopBackgroundSync: jest.fn(async () => undefined),
   performSync: (opts?: unknown) => mockPerformSync(opts),
   isBackgroundSyncActive: jest.fn(async () => true),
-  MAX_SYNC_CYCLES_PER_RUN: 20,
+  // BACKLOG-3005: the REAL ceiling, from the leaf module, so the call-site
+  // control below cannot compare a literal against itself.
+  MAX_SYNC_CYCLES_PER_RUN: jest.requireActual('../../../services/syncDepth')
+    .MAX_SYNC_CYCLES_PER_RUN,
 }));
 
 // --- `syncWindow` reaches Supabase at import time via smsQueueService. ---
@@ -642,5 +645,38 @@ describe('the focused screen notices a sync it did not start', () => {
     });
     expect(lockReadCount()).toBeGreaterThan(whileBackgrounded);
     await waitFor(() => expect(syncButtonState().disabled).toBe(true));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. THE Sync Now CALL-SITE BINDING (BACKLOG-3005)
+// ---------------------------------------------------------------------------
+
+describe('the Sync Now button asks for a full, user-initiated drain', () => {
+  /**
+   * Every other control in this suite asserts what happens AFTER the sync — the
+   * button state, the alerts, the tiles. None asserted what `performSync` was
+   * CALLED WITH, which is why mutating the `maxCycles` binding here previously
+   * left all six home suites green while silently reinstating the bug.
+   *
+   * MUTATION that must go red: change `maxCycles` at `handleSyncNow` to 1, or
+   * drop `userInitiated`.
+   */
+  it('passes userInitiated and the real cycle ceiling', async () => {
+    const { MAX_SYNC_CYCLES_PER_RUN } = jest.requireActual<{
+      MAX_SYNC_CYCLES_PER_RUN: number;
+    }>('../../../services/syncDepth');
+
+    await renderHome();
+    await waitFor(() => expect(syncButtonState().disabled).toBe(false));
+
+    fireEvent.press(screen.getByTestId('button-Sync Now'));
+    await waitFor(() => expect(mockPerformSync).toHaveBeenCalled());
+
+    expect(MAX_SYNC_CYCLES_PER_RUN).toBeGreaterThan(1);
+    expect(mockPerformSync).toHaveBeenCalledWith({
+      userInitiated: true,
+      maxCycles: MAX_SYNC_CYCLES_PER_RUN,
+    });
   });
 });
