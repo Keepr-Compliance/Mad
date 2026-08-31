@@ -270,6 +270,19 @@ Agents in this repo have the following MCP servers available **in addition to** 
 - Exact MCP tool prefixes vary by session/connector (e.g. Supabase may appear as `mcp__supabase__*` or `mcp__claude_ai_Supabase__*` depending on how it is connected) — treat the names in this table as representative and resolve the live name via ToolSearch before calling.
 - **Bug / QA / fix work:** query **Sentry** for real error data *before* theorizing a root cause.
 
+### Diagnose Inward Before Outward (MANDATORY)
+
+When something you just built fails, **the thing you just built is the leading suspect.** Rule out
+your own artifact, environment and build before naming an external service, a third-party API, or
+the founder's configuration.
+
+An external error message is authoritative about the *symptom*, never the *cause*: `REQUEST_DENIED`
+means "the key I received is invalid", not "your Google account is misconfigured".
+
+**Before routing anything to the founder, state what you have already ruled out.** If you cannot
+list it, you have not earned the handoff. Full detail and worked examples: `.claude/docs/PR-SOP.md`
+§6.2j.
+
 ### Tool-First Rule: Exhaust Tools Before Asking the Founder (MANDATORY)
 
 **Never hand the founder a manual/UI step without FIRST verifying no authed tool on this machine can do it.** This gate applies at PLANNING time — before you draft any "your steps" list — not just at execution time.

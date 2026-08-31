@@ -762,3 +762,197 @@ describe("AuditService - Contact Handler Integration", () => {
     });
   });
 });
+
+/**
+ * BACKLOG-3008 — audit events raised BEFORE `AuditService.initialize()`.
+ *
+ * WHY THIS IS A SEPARATE TOP-LEVEL BLOCK, NOT AN EXTENSION OF THE 2149 ONE
+ * ----------------------------------------------------------------------
+ * `describe("DB-not-ready deferral (BACKLOG-2149)")` is nested inside
+ * `describe("AuditService - Contact Handler Integration")`, whose `beforeEach`
+ * calls `auditService.initialize(...)`. Every test in it therefore runs with
+ * `databaseService` ALREADY SET, which is precisely the state these controls
+ * must not have. 2149 covers "databaseService injected but not initialised";
+ * this block covers "initialize() never called", which took a different branch
+ * — a throw — and lost the entry.
+ *
+ * Observed in production once per phone-type selection during onboarding:
+ * `user:set-phone-type-cloud` writes to Supabase before the local DB exists,
+ * and its SETTINGS_CHANGE audit record was dropped. Not a race — deterministic.
+ *
+ * The `whenDbReady` spy is pinned to `{ready:false}` throughout ON PURPOSE.
+ * `bufferPendingWrite` arms its flush via `whenDbReady()`, and at init stage
+ * `idle` that fast-resolves not-ready by design (BACKLOG-2171), so the armed
+ * flush fires immediately, does nothing, and never re-arms. Pinning it false
+ * reproduces that and keeps `initialize()` the ONLY thing that can drain the
+ * buffer — without it these tests would pass on a fix that buffers and then
+ * still loses the record.
+ */
+describe("AuditService - pre-initialization buffering (BACKLOG-3008)", () => {
+  let whenDbReadySpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    // Fully uninitialized service: initialize() has never been called.
+    (auditService as any).initialized = false;
+    (auditService as any).databaseService = null;
+    (auditService as any).supabaseService = null;
+    (auditService as any).pendingSyncQueue = [];
+    (auditService as any).syncInProgress = false;
+    (auditService as any).pendingLocalWrites = [];
+    (auditService as any).flushingPendingWrites = false;
+
+    mockDatabaseService.isInitialized.mockReturnValue(true);
+    auditService.stopSyncInterval();
+
+    // Same singleton instance the service's dynamic import resolves.
+    const broadcaster = require("../initializationBroadcaster").initializationBroadcaster;
+    whenDbReadySpy = jest
+      .spyOn(broadcaster, "whenDbReady")
+      .mockResolvedValue({ ready: false, timedOut: false });
+  });
+
+  afterEach(() => {
+    whenDbReadySpy.mockRestore();
+    // initialize() starts the 60s periodic sync; don't leak it into other suites.
+    auditService.stopSyncInterval();
+  });
+
+  /** Let the flush that `initialize()` floats off settle. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const phoneTypeEvent = {
+    userId: "test-user-id",
+    action: "SETTINGS_CHANGE" as AuditAction,
+    resourceType: "SETTINGS" as ResourceType,
+    resourceId: "test-user-id",
+    success: true,
+    metadata: { setting: "mobile_phone_type_cloud", value: "iphone" },
+  };
+
+  it("preserves an event raised before initialize() and writes it once the service comes up", async () => {
+    await expect(auditService.log(phoneTypeEvent)).resolves.toBeUndefined();
+
+    // Nothing written yet — but the entry must still exist somewhere.
+    expect(mockDatabaseService.insertAuditLog).not.toHaveBeenCalled();
+    expect((auditService as any).pendingLocalWrites).toHaveLength(1);
+
+    auditService.initialize(
+      mockDatabaseService as any,
+      mockSupabaseService as any,
+    );
+    await settle();
+
+    expect(mockDatabaseService.insertAuditLog).toHaveBeenCalledTimes(1);
+    expect((auditService as any).pendingLocalWrites).toHaveLength(0);
+  });
+
+  it("flushes the record with its identity and its ORIGINAL timestamp, not the flush time", async () => {
+    await auditService.log(phoneTypeEvent);
+
+    const buffered = (auditService as any).pendingLocalWrites[0];
+    const originalId: string = buffered.id;
+    const originalTime: number = buffered.timestamp.getTime();
+    const loggedAtOrBefore = Date.now();
+
+    auditService.initialize(
+      mockDatabaseService as any,
+      mockSupabaseService as any,
+    );
+    await settle();
+
+    const written = mockDatabaseService.insertAuditLog.mock.calls[0][0];
+    // Identity, not a count: the right record, not merely one record.
+    expect(written.id).toBe(originalId);
+    expect(written.action).toBe("SETTINGS_CHANGE");
+    expect(written.resourceType).toBe("SETTINGS");
+    expect(written.resourceId).toBe("test-user-id");
+    expect(written.success).toBe(true);
+    expect(written.metadata).toEqual({
+      setting: "mobile_phone_type_cloud",
+      value: "iphone",
+    });
+    // Audit truth: the moment it happened, not the moment it was drained.
+    expect(written.timestamp.getTime()).toBe(originalTime);
+    expect(written.timestamp.getTime()).toBeLessThanOrEqual(loggedAtOrBefore);
+  });
+
+  it("drains the buffer from initialize() itself — not from a later successful write", async () => {
+    // VACUITY GUARD. `whenDbReady` stays not-ready, and NOTHING is logged after
+    // initialize(), so the only mechanism that can drain the buffer is
+    // initialize() calling flushPendingLocalWrites(). Delete that call and this
+    // test — and only this one — goes red.
+    await auditService.log(phoneTypeEvent);
+    expect((auditService as any).pendingLocalWrites).toHaveLength(1);
+
+    auditService.initialize(
+      mockDatabaseService as any,
+      mockSupabaseService as any,
+    );
+    await settle();
+
+    expect(mockDatabaseService.insertAuditLog).toHaveBeenCalledTimes(1);
+    expect(mockDatabaseService.insertAuditLog.mock.calls[0][0].action).toBe(
+      "SETTINGS_CHANGE",
+    );
+    expect((auditService as any).pendingLocalWrites).toHaveLength(0);
+  });
+
+  it("covers the LOGIN_FAILED site too — the fix is in writeToLocal, so it is call-site independent", async () => {
+    // microsoftAuthHandlers' catch writes LOGIN_FAILED exactly when the DB path
+    // failed, so on a deferred-init machine a failed login left no audit trail.
+    await auditService.log({
+      userId: "unknown",
+      action: "LOGIN_FAILED" as AuditAction,
+      resourceType: "SESSION" as ResourceType,
+      success: false,
+      errorMessage: "background processing failed",
+      metadata: { provider: "microsoft" },
+    });
+
+    auditService.initialize(
+      mockDatabaseService as any,
+      mockSupabaseService as any,
+    );
+    await settle();
+
+    const written = mockDatabaseService.insertAuditLog.mock.calls[0][0];
+    expect(written.action).toBe("LOGIN_FAILED");
+    expect(written.resourceType).toBe("SESSION");
+    expect(written.success).toBe(false);
+  });
+
+  it("writes straight through for an event logged AFTER initialize() (normal path unchanged)", async () => {
+    auditService.initialize(
+      mockDatabaseService as any,
+      mockSupabaseService as any,
+    );
+    await settle();
+
+    await auditService.log(phoneTypeEvent);
+
+    expect(mockDatabaseService.insertAuditLog).toHaveBeenCalledTimes(1);
+    expect(mockDatabaseService.insertAuditLog.mock.calls[0][0].action).toBe(
+      "SETTINGS_CHANGE",
+    );
+    expect((auditService as any).pendingLocalWrites).toHaveLength(0);
+  });
+
+  it("keeps the pre-init buffer bounded, dropping oldest and retaining the newest", async () => {
+    const max = (auditService as any).MAX_PENDING_LOCAL_WRITES as number;
+
+    for (let i = 0; i < max + 5; i++) {
+      await auditService.log({
+        ...phoneTypeEvent,
+        metadata: { setting: "mobile_phone_type_cloud", value: `n-${i}` },
+      });
+    }
+
+    const buffer = (auditService as any).pendingLocalWrites;
+    expect(buffer).toHaveLength(max);
+    // Oldest dropped, newest retained — identity, not just length.
+    expect(buffer[0].metadata.value).toBe("n-5");
+    expect(buffer[max - 1].metadata.value).toBe(`n-${max + 4}`);
+  });
+});
