@@ -376,7 +376,16 @@ describe("BACKLOG-2915 rows 37-42 — judging a failed backup before discarding 
     expect(verdict.reason).toContain("unreadable");
   });
 
-  it("ROW 43 — a corrupt Manifest.db fails its integrity check", async () => {
+  it("ROW 43 — a corrupt Manifest.db fails its INTEGRITY CHECK specifically", async () => {
+    // THE ASSERTION USED TO BE AN OR — `/integrity check|could not be examined/` — and
+    // that is why deleting the `quick_check` gate left this row green in round 5. With
+    // the gate gone the code walks on to `SELECT fileID FROM Files`, which throws on a
+    // corrupt b-tree and lands in the catch-all; the OR accepted that too. A control
+    // that accepts both branches cannot tell which one fired.
+    //
+    // Verified by probe on this exact fixture: the DB OPENS and `quick_check` returns
+    // `*** in database main *** Tree 2 page 34: btreeInitPage() returns error code 11`.
+    // So the integrity branch is genuinely reachable and is what must answer here.
     const { claimed } = founderShape(0);
     const dir = await build({ claimed, corruptManifest: true });
 
@@ -384,7 +393,23 @@ describe("BACKLOG-2915 rows 37-42 — judging a failed backup before discarding 
 
     expect(verdict.salvageable).toBe(false);
     if (verdict.salvageable) throw new Error("unreachable");
-    expect(verdict.reason).toMatch(/integrity check|could not be examined/);
+    expect(verdict.reason).toMatch(/integrity check/);
+    expect(verdict.reason).not.toMatch(/could not be examined/);
+  });
+
+  it("ROW 43b — a Manifest.db that will not open at all is reported as unexaminable", async () => {
+    // The other branch, pinned separately so ROW 43 above can be exact. Without this the
+    // catch-all would have no control of its own.
+    const { claimed } = founderShape(0);
+    const dir = await build({ claimed });
+    // Truncate the header: SQLite cannot open this at all.
+    await fs.writeFile(path.join(dir, "Manifest.db"), "not a database");
+
+    const verdict = await judgeFailedBackup(dir);
+
+    expect(verdict.salvageable).toBe(false);
+    if (verdict.salvageable) throw new Error("unreachable");
+    expect(verdict.reason).toMatch(/could not be examined/);
   });
 
   it("ROW 44 — directory rows are not counted as missing files", async () => {

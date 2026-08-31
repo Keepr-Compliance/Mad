@@ -1551,14 +1551,26 @@ describe("BACKLOG-2915 rows 30-34 — a cable pull is a fact, not a guess", () =
     service.attachDeviceDisconnectFeed();
 
     // Nothing is running. The phone is unplugged and plugged back in.
+    jest.clearAllMocks();
     service.noteDeviceDisconnected(TEST_UDID);
+
+    // THE OBSERVABLE EFFECT, and the only one there is today. With the per-run reset in
+    // place, an idle event cannot change any classification — SR said exactly that, and
+    // my first version of this row asserted the classification and stayed green when the
+    // guard was deleted. What the guard actually prevents is a support log claiming the
+    // device disconnected DURING A BACKUP when no backup was running, which is a false
+    // statement in the one artefact a support case is read from.
+    const spurious = mockLog.warn.mock.calls.filter(
+      (c) => typeof c[0] === "string" && c[0].includes("disconnected during this backup"),
+    );
+    expect(spurious).toHaveLength(0);
 
     spawnScripted((proc) => {
       proc.close(255);
     });
     const result = await service.startBackup({ udid: TEST_UDID });
 
-    // The next run must be judged on its OWN evidence, of which there is none.
+    // …and the next run is still judged on its OWN evidence, of which there is none.
     expect(result.failureCause?.linkDropEvidence).toBe("inferred");
     expect(result.error).toBe(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE);
   });
