@@ -253,9 +253,23 @@ export const BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE =
  * iPhone" as a fallback. **Do not add a restart step.** The exact string is pinned in
  * `backupService.connectionCopy-2913`.
  *
- * Note `errorCode` for this branch is still `CONNECTION_LOST`, which now contradicts the
- * sentence. Nothing consumes it, and renaming it is recorded as a separate item rather
- * than smuggled in here.
+ * ## THE `errorCode` FOR THIS BRANCH IS STILL `CONNECTION_LOST`, AND IT CONTRADICTS THIS
+ * ## SENTENCE. **FIX THE CODE, NEVER THE SENTENCE.**
+ *
+ * This paragraph is load-bearing and must not be weakened or deleted. It is the whole
+ * safety of a deliberate deferral (SR round 4, 2026-08-31), and the failure it prevents
+ * is specific: a future reader notices that a branch labelled `CONNECTION_LOST` tells the
+ * user it is *not* a connection problem, concludes the MESSAGE is the bug, and "fixes"
+ * it — putting cable advice back in front of a user whose iPhone never left. That is the
+ * exact defect this branch spent two rounds removing.
+ *
+ * The code is what is wrong. It stayed because renaming it is not the one-liner it looks
+ * like — `BackupErrorCode` feeds the Sentry tag vocabulary — because nothing outside
+ * tests consumes it, and because `cause.linkDropEvidence: "inferred"` already
+ * disambiguates in a support log. It is filed as its own item.
+ *
+ * So: if you are here to resolve the contradiction, change the CODE. The wording is the
+ * founder's and is pinned as an exact string.
  */
 export const BACKUP_STOPPED_STILL_CONNECTED_MESSAGE =
   "The backup stopped and your iPhone didn't tell us why. It's still connected, " +
@@ -1259,7 +1273,23 @@ export class BackupService extends EventEmitter {
    * Both usages require validation to prevent injection attacks.
    */
   async startBackup(options: BackupOptions): Promise<BackupResult> {
-    if (this.isRunning) {
+    // BACKLOG-2915 (round 5, SR F1): `isRunning` ALONE LEAVES A 3-SECOND HOLE.
+    //
+    // The close handler clears `isRunning` before it awaits the disconnect settle
+    // window, so for the length of that window a run is finished by this guard's
+    // reckoning and still reading its own state. SR measured it:
+    // `{ insideWindow: true, runningFlag: false, secondStartRejected: false }`.
+    //
+    // A second run admitted there does real damage, and it is not a crash — it is a
+    // wrong answer. Its synchronous reset block clears `deviceDisconnectedDuringRun`
+    // and overwrites `runDeviceUdid` while run 1's close handler is still waiting to
+    // read them, so a real disconnect latched for run 1 is erased (run 1 misclassified
+    // as "still connected"), and a disconnect matching run 2's UDID passes the guard,
+    // sets the shared latch and resolves run 1's window (run 1 classified from run 2's
+    // evidence).
+    //
+    // It is exactly what the founder did on 2026-08-31: cancel, then immediately retry.
+    if (this.isRunning || this.disconnectSettleResolver !== null) {
       throw new Error("Backup already in progress");
     }
 
@@ -1761,6 +1791,13 @@ export class BackupService extends EventEmitter {
             // change the answer — see DISCONNECT_SETTLE_MS.
             if (
               this.hasDisconnectFeed &&
+              // BACKLOG-2915 (round 5, SR F5): a cancel never needs this window, and
+              // ANSWER-PRESERVINGLY so — the cancel rung sits ABOVE the observed rung,
+              // so no disconnect arriving here could change the classification. All it
+              // could change is how long the user waits, and SR measured a cancel paying
+              // the full 3,035 ms for an event that cannot matter. That stacks on the
+              // up-to-30 s SIGKILL grace, so a cancel was taking ~35 s.
+              !this.cancelRequested &&
               !this.deviceDisconnectedDuringRun &&
               !this.mobilebackup2ReceiveFailure &&
               this.latchedDeviceError === null

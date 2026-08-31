@@ -1422,6 +1422,170 @@ describe("BACKLOG-2915 rows 30-34 — a cable pull is a fact, not a guess", () =
     expect(withBytes.result.error).toBe(withoutBytes.result.error);
   });
 
+  it("ROW 52 (F1) — a SECOND run cannot start inside the settle window", async () => {
+    // SR MEASURED THIS ONE: `{ insideWindow: true, runningFlag: false,
+    // secondStartRejected: false }`. The close handler clears `isRunning` before it
+    // awaits the window, so the guard was open for up to three seconds — and a run
+    // admitted there clears `deviceDisconnectedDuringRun` and overwrites
+    // `runDeviceUdid` while run 1 is still waiting to read them.
+    //
+    // Mutation: drop `|| this.disconnectSettleResolver !== null` from the guard.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    mockSpawn.mockImplementation((cmd: string) => {
+      const proc = new FakeProcess();
+      if (cmd.includes("ideviceinfo")) {
+        setTimeout(() => {
+          proc.stdout.emit("data", Buffer.from("false\n"));
+          proc.close(0);
+        }, 0);
+      } else {
+        setTimeout(() => proc.close(255), 0);
+      }
+      return proc;
+    });
+
+    const first = service.startBackup({ udid: TEST_UDID });
+    // Let run 1 close and reach the settle wait. It is now inside the window.
+    await new Promise((r) => setTimeout(r, 30));
+
+    await expect(service.startBackup({ udid: TEST_UDID })).rejects.toThrow(
+      /already in progress/i,
+    );
+
+    // …and run 1 is undisturbed: it still reaches its own classification.
+    service.noteDeviceDisconnected(TEST_UDID);
+    const result = await first;
+    expect(result.failureCause?.linkDropEvidence).toBe("device-disconnected");
+  });
+
+  it("ROW 53 (F2) — a FOREIGN disconnect during the settle window is ignored", async () => {
+    // The half of the UDID guard that mattered and had no control. ROW 34 drives its
+    // foreign disconnect while the run is ALIVE — which is when the guard matters least,
+    // because `currentDeviceUdid` is still set and the event is in-band. The case the
+    // guard exists for is the window: the run has ended, `currentDeviceUdid` is null,
+    // and `runDeviceUdid` is the only thing standing between a SECOND iPhone being
+    // unplugged and a stated "your connection dropped" on THIS backup.
+    //
+    // Measured by SR: scoping the guard to `isRunning` only left 372/372 green.
+    // Mutation: `if (!this.isRunning) return;` in place of the `runDeviceUdid` check.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    mockSpawn.mockImplementation((cmd: string) => {
+      const proc = new FakeProcess();
+      if (cmd.includes("ideviceinfo")) {
+        setTimeout(() => {
+          proc.stdout.emit("data", Buffer.from("false\n"));
+          proc.close(0);
+        }, 0);
+      } else {
+        setTimeout(() => proc.close(255), 0);
+      }
+      return proc;
+    });
+
+    const pending = service.startBackup({ udid: TEST_UDID });
+    await new Promise((r) => setTimeout(r, 30));
+
+    // A DIFFERENT iPhone leaves, while this run's window is open.
+    service.noteDeviceDisconnected("ffffffffffffffffffffffffffffffffffffffff");
+
+    const result = await pending;
+    // Not a link drop. The other device says nothing about this backup.
+    expect(result.failureCause?.linkDropEvidence).toBe("inferred");
+    expect(result.failureCause?.linkDropEvidence).not.toBe("device-disconnected");
+    expect(result.error).toBe(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE);
+  });
+
+  it("ROW 54 (F3) — the matching disconnect ENDS the window rather than waiting it out", async () => {
+    // Latency only — the latch is set either way — but it is a behaviour with no
+    // control, and it is the difference between a failed sync reporting in ~30 ms and in
+    // three seconds. Measured against the window itself rather than a wall-clock guess:
+    // the run must finish well inside DISCONNECT_SETTLE_MS.
+    //
+    // Mutation: delete `this.disconnectSettleResolver?.()` from noteDeviceDisconnected.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    mockSpawn.mockImplementation((cmd: string) => {
+      const proc = new FakeProcess();
+      if (cmd.includes("ideviceinfo")) {
+        setTimeout(() => {
+          proc.stdout.emit("data", Buffer.from("false\n"));
+          proc.close(0);
+        }, 0);
+      } else {
+        setTimeout(() => proc.close(255), 0);
+      }
+      return proc;
+    });
+
+    const pending = service.startBackup({ udid: TEST_UDID });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const releasedAt = Date.now();
+    service.noteDeviceDisconnected(TEST_UDID);
+    const result = await pending;
+    const waited = Date.now() - releasedAt;
+
+    expect(result.failureCause?.linkDropEvidence).toBe("device-disconnected");
+    // The full window is 3,000 ms. Half of it is a wide margin that still cannot pass
+    // if the early-resolve is gone.
+    expect(waited).toBeLessThan(1_500);
+  });
+
+  it("ROW 55 (F4) — a disconnect arriving between runs does not latch onto the next one", async () => {
+    // The idle-event guard. Benign today only because the latch is reset per run; it
+    // stops being benign the moment that reset moves, and nothing could detect it being
+    // removed. Measured by SR: deleting it left 372/372 green.
+    //
+    // Mutation: delete `if (!this.isRunning && this.disconnectSettleResolver === null)
+    // return;`.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    // Nothing is running. The phone is unplugged and plugged back in.
+    service.noteDeviceDisconnected(TEST_UDID);
+
+    spawnScripted((proc) => {
+      proc.close(255);
+    });
+    const result = await service.startBackup({ udid: TEST_UDID });
+
+    // The next run must be judged on its OWN evidence, of which there is none.
+    expect(result.failureCause?.linkDropEvidence).toBe("inferred");
+    expect(result.error).toBe(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE);
+  });
+
+  it("ROW 56 (F5) — a cancel does not pay the settle wait", async () => {
+    // Answer-preserving by construction: the cancel rung outranks the observed rung, so
+    // no event arriving in the window could change the classification. All the wait cost
+    // was time — SR measured 3,035 ms — and it stacked on the up-to-30 s SIGKILL grace.
+    //
+    // Mutation: drop `!this.cancelRequested` from the settle gate.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    spawnScripted((proc) => {
+      service.cancelBackup();
+      proc.close(255);
+    });
+
+    const started = Date.now();
+    const result = await service.startBackup({ udid: TEST_UDID });
+    const elapsed = Date.now() - started;
+
+    expect(result.errorCode).toBe("BACKUP_CANCELLED");
+    expect(elapsed).toBeLessThan(1_500);
+  });
+
   it("ROW 34b — a device-reported failure is never relabelled a link drop, even after a disconnect", async () => {
     // Ordering. The observed rung sits BELOW the device-code switch, so a phone that
     // said 208 and was then unplugged during teardown still reports a locked phone.

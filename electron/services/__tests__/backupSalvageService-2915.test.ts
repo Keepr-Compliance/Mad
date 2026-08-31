@@ -129,11 +129,35 @@ async function makeBackup(opts: {
     await fs.writeFile(p, buf);
   }
 
-  for (const id of opts.claimed) {
-    if (omit.has(id)) continue;
-    const shard = path.join(dir, id.slice(0, 2));
-    await fs.mkdir(shard, { recursive: true });
-    await fs.writeFile(path.join(shard, id), "blob");
+  // BACKLOG-2915 (round 5): built CONCURRENTLY, and the shard directories once each.
+  //
+  // This loop used to be one serial `await fs.mkdir` + `await fs.writeFile` per file
+  // across 20,002 files per row, eleven rows — on the order of 220,000 tiny creates and
+  // deletes per suite run. On macOS that is 2-3 s a row; on Windows, where per-file
+  // create/close on NTFS with a scanner in the path is roughly an order of magnitude
+  // slower, it put every row near or past jest's 30 s limit. **CI went red on
+  // windows-latest**: ROW 40, ROW 40b and the `afterAll` hook all timed out, and the
+  // margin was effectively zero for all eleven rows rather than just the three that
+  // failed.
+  //
+  // The suite only ever ran under the Electron-ABI runner, which nobody runs on Windows
+  // — so the platform where it breaks is the one that was never exercised.
+  const wanted = opts.claimed.filter((id) => !omit.has(id));
+  const shards = new Set(wanted.map((id) => id.slice(0, 2)));
+  await Promise.all(
+    [...shards].map((shard) =>
+      fs.mkdir(path.join(dir, shard), { recursive: true }),
+    ),
+  );
+  // Batched rather than one giant Promise.all: a few thousand simultaneous open file
+  // handles is its own way to be slow, and on Windows a way to hit EMFILE.
+  const BATCH = 256;
+  for (let i = 0; i < wanted.length; i += BATCH) {
+    await Promise.all(
+      wanted
+        .slice(i, i + BATCH)
+        .map((id) => fs.writeFile(path.join(dir, id.slice(0, 2), id), "blob")),
+    );
   }
 
   const state = opts.snapshotState === undefined ? "finished" : opts.snapshotState;
@@ -146,12 +170,21 @@ async function makeBackup(opts: {
   return dir;
 }
 
+/**
+ * BACKLOG-2915 (round 5): belt-and-braces AFTER the corpus shrink and the concurrent
+ * build, not instead of them. The Windows failure was a real cost problem; a bigger
+ * timeout alone would have hidden it rather than fixed it.
+ */
+jest.setTimeout(60_000);
+
 const cleanup: string[] = [];
 afterAll(async () => {
-  for (const dir of cleanup) {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-});
+  // Concurrent, and with its own timeout: this hook was one of the three Windows
+  // timeouts, because it recursively deleted eleven directories serially.
+  await Promise.all(
+    cleanup.map((dir) => fs.rm(dir, { recursive: true, force: true }).catch(() => {})),
+  );
+}, 60_000);
 
 async function build(opts: Parameters<typeof makeBackup>[0]): Promise<string> {
   const dir = await makeBackup(opts);
@@ -159,10 +192,20 @@ async function build(opts: Parameters<typeof makeBackup>[0]): Promise<string> {
   return dir;
 }
 
-/** The founder's shape: a large backup, a handful missing, both required files present. */
-function founderShape(missingCount: number) {
+/**
+ * The founder's shape: a large-ish backup, a handful missing, both required files present.
+ *
+ * **2,002 files, not 20,002 — shrunk in round 5 to unblock Windows CI.** None of the
+ * arguments below needs twenty thousand: what they need is a corpus big enough that
+ * ROW 41b lands strictly between 0.99 and 0.999, and 2,002 with 10 missing is 0.995,
+ * the same band with the same discrimination. See `makeBackup` for the measurement.
+ *
+ * The founder's real numbers (506,993 claimed, 14 missing) are a PROPORTION being
+ * modelled, not a size to reproduce — reproducing the size is what broke CI.
+ */
+function founderShape(missingCount: number, total = 2_000) {
   const claimed = [SMS_ID, ADDRESSBOOK_ID];
-  for (let i = 1; i <= 20_000; i += 1) claimed.push(fileId(i));
+  for (let i = 1; i <= total; i += 1) claimed.push(fileId(i));
   const omit = claimed.slice(2, 2 + missingCount);
   return { claimed, omit };
 }
@@ -199,11 +242,20 @@ describe("BACKLOG-2915 rows 37-42 — judging a failed backup before discarding 
     expect(verdict.coverage.blobsPresent).toBe(claimed.length - 1);
   });
 
-  it("ROW 39 — the founder's actual shape: 14 short of a large backup, and it is kept", async () => {
-    // Modelled on the real measurement — 506,993 claimed, 14 missing, 0.003%. The
-    // proportion is what matters here, not the absolute size, so the fixture is 20,002
-    // files rather than half a million.
-    const { claimed, omit } = founderShape(14);
+  it("ROW 39 — the founder's shape: SEVERAL files short of a sound backup, and it is kept", async () => {
+    // THE PROPORTION IS THE FIXTURE, NOT THE COUNT — and round 5 proved it by getting
+    // this wrong. This row carried 14 missing to match the founder's real measurement
+    // (506,993 claimed, 14 missing, 0.003% gone). When the corpus was shrunk from 20,002
+    // to 2,002 to unblock Windows CI, keeping the 14 turned it into 0.7% gone —
+    // **250x worse than the case being modelled** — and the row went red against the
+    // coverage floor. That red is the fixture-invalidation rule doing its job: a changed
+    // fixture invalidates its control, and the control said so.
+    //
+    // 3 missing of 5,002 is 0.9994 present: a multi-file miss (so it is not a duplicate
+    // of ROW 38's single-file case, and `describeSalvagedBackup` has to pluralise) with
+    // real margin above the 0.999 floor. The margin is asserted below rather than
+    // computed and trusted.
+    const { claimed, omit } = founderShape(3, 5_000);
     const dir = await build({ claimed, omit });
 
     const verdict = await judgeFailedBackup(dir);
@@ -212,8 +264,12 @@ describe("BACKLOG-2915 rows 37-42 — judging a failed backup before discarding 
     if (!verdict.salvageable) throw new Error("unreachable");
     // IDENTITY, and the whole set of it.
     expect(new Set(verdict.coverage.missingFileIds)).toEqual(new Set(omit));
-    expect(verdict.coverage.missingCount).toBe(14);
-    expect(describeSalvagedBackup(verdict.coverage)).toContain("14 files");
+    expect(verdict.coverage.missingCount).toBe(3);
+    expect(describeSalvagedBackup(verdict.coverage)).toContain("3 files");
+    // …and it clears the floor by a real margin, not by a rounding accident.
+    const ratio = verdict.coverage.blobsPresent / verdict.coverage.manifestFiles;
+    expect(ratio).toBeGreaterThan(MIN_BLOB_COVERAGE);
+    expect(ratio).toBeGreaterThan(0.9993);
   });
 
   it("ROW 40 — THE ROW A RATIO CANNOT SEE: one file short, and it is the messages database", async () => {
@@ -247,7 +303,7 @@ describe("BACKLOG-2915 rows 37-42 — judging a failed backup before discarding 
     // The belt-and-braces floor doing its job: the two files the sync reads are both
     // here, and the directory is still not a backup.
     const { claimed } = founderShape(0);
-    const omit = claimed.slice(2, 2 + 5_000); // a quarter of it gone
+    const omit = claimed.slice(2, 2 + 500); // a quarter of it gone
     const dir = await build({ claimed, omit });
 
     const verdict = await judgeFailedBackup(dir);
@@ -267,12 +323,17 @@ describe("BACKLOG-2915 rows 37-42 — judging a failed backup before discarding 
     // that a floor exists and nothing about WHERE it is. The founder chose 0.999 over
     // 0.99 on 2026-08-31, and a choice nothing can detect being changed is not pinned.
     //
-    // 100 missing of 20,002 is 0.995 present: BELOW 0.999, ABOVE 0.99. Loosening the
+    // 10 missing of 2,002 is 0.995 present: BELOW 0.999, ABOVE 0.99. Loosening the
     // constant to 0.99 turns this row green-to-red in the only direction that matters.
     // Both required files are present, so the identity check has nothing to say and the
     // floor is unambiguously what decides it.
+    //
+    // Round 5 rescaled this from 100-of-20,002 with the corpus. The BAND is what the row
+    // asserts, and the assertions below check the band rather than trusting the
+    // arithmetic — a rescaled fixture whose ratio silently left the band would be a
+    // control that no longer controls anything.
     const { claimed } = founderShape(0);
-    const omit = claimed.slice(2, 102);
+    const omit = claimed.slice(2, 12);
     const dir = await build({ claimed, omit });
 
     const verdict = await judgeFailedBackup(dir);
@@ -281,7 +342,9 @@ describe("BACKLOG-2915 rows 37-42 — judging a failed backup before discarding 
     if (verdict.salvageable) throw new Error("unreachable");
     expect(verdict.coverage?.missingRequired).toEqual([]);
     const ratio = verdict.coverage!.blobsPresent / verdict.coverage!.manifestFiles;
-    // The band this row occupies, stated so a later reader can see why 100 and not 5,000.
+    // The band this row occupies, asserted rather than computed and trusted. A rescale
+    // that silently moved the ratio out of the band would leave a control that no longer
+    // controls anything — which is exactly what happened to ROW 39 in round 5.
     expect(ratio).toBeGreaterThan(0.99);
     expect(ratio).toBeLessThan(0.999);
     expect(MIN_BLOB_COVERAGE).toBe(0.999);
