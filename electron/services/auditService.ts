@@ -165,6 +165,15 @@ class AuditService {
     this.supabaseService = supabaseService;
     this.initialized = true;
 
+    // BACKLOG-3008: drain entries raised before this moment. MANDATORY, not
+    // tidiness. `bufferPendingWrite` arms its flush via `whenDbReady()`, and at
+    // init stage `idle` that fast-resolves NOT-ready by design (BACKLOG-2171),
+    // so the armed flush fires immediately, finds a DB that isn't up, and never
+    // re-arms. Without this call a pre-init entry is buffered and then still
+    // lost -- unless some later successful write happens to drain it on its way
+    // out, which is luck, not a mechanism.
+    void this.flushPendingLocalWrites();
+
     // Start periodic sync
     this.startSyncInterval();
 
@@ -341,10 +350,27 @@ class AuditService {
    * Instead of throwing (and losing the entry + spamming Sentry), wait briefly
    * for the db-ready signal, and if it's still not ready, buffer the entry and
    * flush it once the DB comes up.
+   *
+   * BACKLOG-3008: that buffer covered "databaseService injected but not yet
+   * initialised" only. "AuditService.initialize() never called" threw one
+   * branch earlier and jumped straight over the buffer, so the entry was lost.
+   * Both states now take the same route.
    */
   private async writeToLocal(entry: AuditLogEntry): Promise<void> {
     if (!this.databaseService) {
-      throw new Error("AuditService not initialized - call initialize() first");
+      // BACKLOG-3008: initialize() has not run yet. Every IPC handler is
+      // registered and callable before the renderer asks for database init, and
+      // `user:set-phone-type-cloud` deliberately runs in that window (it writes
+      // only to Supabase), so its SETTINGS_CHANGE landed here on every
+      // onboarding phone-type selection and was discarded. Buffer it like the
+      // 2149 case below; initialize() flushes it.
+      logService.debug(
+        "Audit entry raised before initialize(); buffering until the service is up",
+        "AuditService",
+        { action: entry.action, resourceType: entry.resourceType },
+      );
+      this.bufferPendingWrite(entry);
+      return;
     }
 
     if (!this.databaseService.isInitialized()) {
