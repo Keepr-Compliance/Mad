@@ -65,6 +65,11 @@ class MockBackupService extends EventEmitter {
   private shouldSucceed = true;
   private isEncrypted = false;
 
+  // BACKLOG-2915: the orchestrator opens a sync scope where it builds a fresh
+  // AbortController, so the cancel latch is cleared per SYNC rather than per run. A
+  // mock without this throws — which is the wiring being pinned rather than assumed.
+  beginSyncScope = jest.fn();
+
   setMockBehavior(succeed: boolean, encrypted: boolean = false) {
     this.shouldSucceed = succeed;
     this.isEncrypted = encrypted;

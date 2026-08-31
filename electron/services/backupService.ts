@@ -744,7 +744,30 @@ export class BackupService extends EventEmitter {
     BackupFailureCause,
     "deviceErrorCode" | "deviceErrorDescription" | "source"
   > | null = null;
-  /** BACKLOG-2915: the user asked to stop. See {@link BackupFailureEvidence.cancelRequested}. */
+  /**
+   * BACKLOG-2915: the user asked to stop. See {@link BackupFailureEvidence.cancelRequested}.
+   *
+   * **SYNC-SCOPED, NOT RUN-SCOPED, AND THAT DISTINCTION IS THE BUG THIS FIELD HAD.**
+   * It is deliberately NOT in the per-run reset block; `beginSyncScope()` clears it,
+   * and the orchestrator calls that where it starts a sync.
+   *
+   * Found by the founder on 2026-08-31, in about forty minutes of real use, after three
+   * review rounds and 38 mutations. His cancels landed at 00:27:08.701 and 00:27:22.737
+   * against one run; a THIRD run then spawned fresh at 00:27:56.486 with this latch
+   * reset, died 16 ms later because the phone was unplugged, and was classified
+   * `CONNECTION_LOST` — a cancelled sync reported as a cable fault. The measurement that
+   * names the defect is in the same log: sync elapsed **37,299 ms** against backup
+   * elapsed **26 ms**. A sync outlives its runs, so a latch scoped to a run cannot
+   * answer a question about the sync.
+   *
+   * The user saw nothing wrong only because `deviceSyncOrchestrator` recorded
+   * `sync-end outcome=cancelled` one layer up and suppressed the message. Two defences
+   * were designed; one was live. Both are now pinned independently —
+   * `deviceSyncOrchestrator.cancelScope-2915` for the other one.
+   *
+   * Contrast the run-scoped latches in the per-run reset block. The two kinds sit in
+   * the same class and a reader must not assume they match.
+   */
   private cancelRequested: boolean = false;
   /** Cumulative bytes for the whole run: closed batches plus the open one. */
   private bytesTransferred: number = 0;
@@ -1186,7 +1209,8 @@ export class BackupService extends EventEmitter {
       this.deviceRequestedPasscode = false;
       this.deviceOutcomeLine = null;
       this.latchedDeviceError = null;
-      this.cancelRequested = false;
+      // NOTE: `cancelRequested` is deliberately NOT reset here. It is sync-scoped —
+      // see its docblock, and `beginSyncScope()`.
       this.bytesTransferred = 0;
       this.stdoutLineBuffer = "";
 
@@ -1639,6 +1663,25 @@ export class BackupService extends EventEmitter {
   }
 
   /**
+   * BACKLOG-2915: a NEW SYNC is beginning — forget anything the last one asked for.
+   *
+   * The only place `cancelRequested` is cleared. `deviceSyncOrchestrator` calls it where
+   * a sync starts, alongside the fresh `AbortController` that is the sync's own cancel
+   * scope. It used to be cleared in the per-RUN reset inside `startBackup`, which is why
+   * a cancel could not survive to the next run of the same sync.
+   *
+   * If a caller ever forgets to call this, the failure is loud and immediate — every
+   * subsequent backup reports "Backup was cancelled" — which is strictly better than the
+   * silent misclassification it replaces, and it is what ROW 28 and ROW 29c catch.
+   */
+  beginSyncScope(): void {
+    if (this.cancelRequested) {
+      log.info("[BackupService] New sync scope — clearing the pending cancel");
+    }
+    this.cancelRequested = false;
+  }
+
+  /**
    * Cancel an in-progress backup
    */
   cancelBackup(): void {
@@ -1675,7 +1718,10 @@ export class BackupService extends EventEmitter {
           /* already dead */
         }
       }
-    }, BackupService.SIGKILL_GRACE_MS);
+      // `unref` so a pending escalation cannot by itself hold the event loop open. In
+      // the Electron main process the loop is alive regardless, so the timer still
+      // fires; what it stops is a 30/45-second tail on a process otherwise finished.
+    }, BackupService.SIGKILL_GRACE_MS).unref?.();
 
     // BACKLOG-2915 (SR B1): `isRunning` is NOT cleared here any more.
     //
@@ -1694,7 +1740,7 @@ export class BackupService extends EventEmitter {
         this.currentProcess = null;
         this.currentDeviceUdid = null;
       }
-    }, BackupService.POST_KILL_STATE_RESET_MS);
+    }, BackupService.POST_KILL_STATE_RESET_MS).unref?.();
   }
 
   /**

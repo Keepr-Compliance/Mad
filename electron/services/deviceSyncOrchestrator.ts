@@ -653,6 +653,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-2915: a fresh sync scope, alongside the fresh AbortController that IS the
+    // sync's cancel scope. `BackupService.cancelRequested` is cleared here and nowhere
+    // else — a cancel has to outlive the run it was aimed at, because a sync can spawn
+    // another one (the founder's third run of 2026-08-31 did, 34 s after his cancel).
+    this.backupService.beginSyncScope();
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
 
@@ -2167,6 +2172,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-2915: a fresh sync scope, alongside the fresh AbortController that IS the
+    // sync's cancel scope. `BackupService.cancelRequested` is cleared here and nowhere
+    // else — a cancel has to outlive the run it was aimed at, because a sync can spawn
+    // another one (the founder's third run of 2026-08-31 did, 34 s after his cancel).
+    this.backupService.beginSyncScope();
     this.startTime = Date.now();
 
     // TASK-2110: Generate session ID for ACID rollback on cancel

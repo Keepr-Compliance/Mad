@@ -239,6 +239,22 @@ class FakeProcess extends EventEmitter {
   }
 }
 
+/** Arms `spawn` with a script for the next backup. Use when you drive the service yourself. */
+function spawnScripted(script: (proc: FakeProcess) => void): void {
+  mockSpawn.mockImplementation((cmd: string) => {
+    const proc = new FakeProcess();
+    if (cmd.includes("ideviceinfo")) {
+      setTimeout(() => {
+        proc.stdout.emit("data", Buffer.from("false\n"));
+        proc.close(0);
+      }, 0);
+    } else {
+      setTimeout(() => script(proc), 0);
+    }
+    return proc;
+  });
+}
+
 /** Runs one backup to completion and returns the result plus every progress event. */
 async function runBackup(script: (proc: FakeProcess) => void): Promise<{
   result: BackupResult;
@@ -1135,6 +1151,80 @@ describe("BACKLOG-2915 rows 16-20 — the classes that change when `-d` goes", (
     });
     expect(result.errorCode).not.toBe("DEVICE_LOCKED");
     expect(result.errorCode).toBe("CONNECTION_LOST");
+  });
+});
+
+// ===========================================================================
+// ROWS 27-28 — defence 1 of 2: the cancel latch is SYNC-scoped
+// ===========================================================================
+
+describe("BACKLOG-2915 rows 27-28 — a cancel outlives the run it was aimed at", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("ROW 27 — a SECOND run inside one cancelled sync is classified CANCELLED, not CONNECTION_LOST", async () => {
+    // THE FOUNDER'S DEFECT, EXPRESSED. This is the fixture shape that did not exist
+    // through three review rounds and 38 mutations, which is why none of them could
+    // fail on it: every cancel control drove cancel DURING an active run.
+    //
+    // His sequence, 2026-08-31: cancel at 00:27:08.701 and again at 00:27:22.737, then
+    // a THIRD run spawned at 00:27:56.486 and died 16 ms later with the phone
+    // unplugged. It came out `CONNECTION_LOST`. Sync elapsed 37,299 ms, backup elapsed
+    // 26 ms — the latch was scoped to the shorter lifetime.
+    //
+    // ONE service instance across both runs, because that is what the app has:
+    // `deviceSyncOrchestrator` constructs a BackupService per orchestrator, not per
+    // sync. A test that built a fresh service per run could not see this at all.
+    const service = new BackupService();
+    service.on("error", () => {});
+
+    // Run 1: the user cancels it.
+    spawnScripted((proc) => {
+      service.cancelBackup();
+      proc.close(255);
+    });
+    const first = await service.startBackup({ udid: TEST_UDID });
+    expect(first.errorCode).toBe("BACKUP_CANCELLED");
+
+    // Run 2, same sync, spawned after the cancel. The phone is gone, so it dies at
+    // once with no device code — the exact shape the D1 inference rung claims.
+    spawnScripted((proc) => {
+      proc.close(255);
+    });
+    const second = await service.startBackup({ udid: TEST_UDID });
+
+    // The cancel still applies: the user asked for this sync to stop, and nothing
+    // since has said otherwise.
+    expect(second.errorCode).toBe("BACKUP_CANCELLED");
+    expect(second.errorCode).not.toBe("CONNECTION_LOST");
+    expect(second.error).not.toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+  });
+
+  it("ROW 28 — `beginSyncScope()` clears it, so a NEW sync classifies on its own evidence", async () => {
+    // The other direction, and the one that makes the sticky latch safe. Without this
+    // the fix would trade a silent misclassification for a permanent one: every backup
+    // after any cancel would report "Backup was cancelled" forever.
+    const service = new BackupService();
+    service.on("error", () => {});
+
+    spawnScripted((proc) => {
+      service.cancelBackup();
+      proc.close(255);
+    });
+    expect((await service.startBackup({ udid: TEST_UDID })).errorCode).toBe(
+      "BACKUP_CANCELLED",
+    );
+
+    // A new sync begins — the orchestrator calls this where it builds a fresh
+    // AbortController, which is the sync's own cancel scope.
+    service.beginSyncScope();
+
+    spawnScripted((proc) => {
+      proc.close(255);
+    });
+    const fresh = await service.startBackup({ udid: TEST_UDID });
+
+    expect(fresh.errorCode).not.toBe("BACKUP_CANCELLED");
+    expect(fresh.errorCode).toBe("CONNECTION_LOST");
   });
 });
 

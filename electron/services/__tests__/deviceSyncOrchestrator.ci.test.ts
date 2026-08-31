@@ -60,6 +60,9 @@ jest.mock("../backupService", () => ({
     }),
     startBackup: jest.fn(),
     cancelBackup: jest.fn(),
+    // BACKLOG-2915: the orchestrator opens a sync scope here; a mock without it
+    // throws, which is the wiring being pinned rather than assumed.
+    beginSyncScope: jest.fn(),
   })),
 }));
 
