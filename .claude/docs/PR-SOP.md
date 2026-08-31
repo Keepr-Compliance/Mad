@@ -649,6 +649,28 @@ site was classified as it was.
 construct that state, the assertion is documentation, not a control. Prefer assertions on
 identity — which sites, classified how, and for what reason — over assertions on counts.
 
+### 6.2j Suspect your own change before you suspect the world
+
+A failure in something you just built is almost never the fault of the service it talks to.
+Rule out what you controlled before you name anything you didn't.
+
+**2026-08-30, three instances in one session, all the same shape:**
+
+| Symptom | Blamed | Actual cause |
+|---|---|---|
+| `REQUEST_DENIED` from Google Places | "the API key is restricted, or billing lapsed — check the Cloud console" | A locally-built app shipped `.env.production` containing the literal `${GOOGLE_MAPS_API_KEY}`. CI substitutes it from a secret; a local build does not. The shipped release was fine. |
+| `npm run dev` broken | reported as "dev is OK" three times | A packaging step run from a worktree with a symlinked `node_modules` had rebuilt the shared native module for the wrong architecture. |
+| "CI never runs `npm run build`" | asserted in three documents | It always has. Nobody opened `ci.yml`. |
+
+**The rule:**
+
+1. **What did I just build, change, or run?** Rule that out first. If the answer is "I produced this artifact minutes ago", it is the leading suspect, not the last resort.
+2. **Compare against a known-good artifact** before blaming a service. A shipped release, a previous build, the same call from a different binary. In the Places case the shipped release carried the real key — one comparison would have ended it.
+3. **An external error message is authoritative about the symptom, never about the cause.** `REQUEST_DENIED` means "the key I received is invalid". It says nothing about where that key came from, and it is not evidence about the far end's configuration.
+4. **Before routing anything to the founder, state what you have already ruled out.** If you cannot list it, you have not earned the handoff — see the Tool-First Rule in `CLAUDE.md`. Handing over a console to go check, while holding the file that contains the defect, is the failure this section exists to prevent.
+
+This is distinct from 6.2g. That one is about inheriting a claim without checking it. This one is about **ordering**: even when you check honestly, checking the far end first wastes the founder's attention and often ends in an accusation you have to withdraw.
+
 ### 6.3 Review Prompt Template
 
 Use this prompt to request a code review:
