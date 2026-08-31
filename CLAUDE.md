@@ -670,6 +670,60 @@ npm rebuild better-sqlite3-multiple-ciphers
 npx electron-rebuild
 ```
 
+### Building a Package Locally for Testing (READ BEFORE `npm run package`)
+
+`npm run package` is the CI path. Run it on this machine and three things go wrong, none of them
+obvious, all of them measured on 2026-08-30.
+
+**1. The build ships placeholder secrets.** A packaged app reads `.env.production` **from inside its
+own bundle at runtime** (`electron/main.ts`, via `process.resourcesPath`). The committed
+`.env.production` is a TEMPLATE — `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_MAPS_API_KEY`
+and `SENTRY_DSN` are unsubstituted `${...}` placeholders. `release.yml` overwrites the whole file
+from GitHub secrets before packaging; nothing does that locally.
+
+So a local package has **Google sign-in, address autofill and Sentry dead**, while Supabase and
+Microsoft work — login and sync succeed and nothing looks wrong. Google returns
+`REQUEST_DENIED / "The provided API key is invalid"`, which reads like an account problem and is not.
+
+Passing the values as environment variables does **not** help: the file is copied verbatim into the
+bundle, not substituted. Do what CI does — write a real `.env.production`, package, restore the
+template, and confirm `git status` is clean afterwards so no secret is left on disk.
+
+**2. The build replaces itself with the released version.** A branch build is numbered below the
+published release, so electron-updater downloads the release and installs it **on quit** —
+`autoInstallOnAppQuit` defaults to true and is not disabled. Same icon, same data directory, no
+notice. A build verified correct at launch can be the shipped binary an hour later.
+
+**Fix it with the version, not with code:** stamp the build **above** the current release
+(e.g. `2.99.0-test-<item>`) and the updater finds nothing to install.
+
+**3. It notarizes, which takes ~20 minutes and submits to Apple.** You almost never need this.
+**Signing is what matters** — the database key lives in the macOS Keychain and its ACL is tied to the
+signing identity, so an unsigned build cannot open an existing database and fails with a decrypt
+error that looks like a broken fix. Notarization only stops Gatekeeper warning on first launch.
+
+`scripts/notarize.js` skips itself when `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`
+are absent. Those come from `.env.local`, which `npm run package` loads via `dotenv`. So:
+
+```bash
+# signed, NOT notarized, minutes instead of half an hour, nothing sent to Apple
+npm run build && npx electron-builder --mac
+xattr -cr dist/mac-arm64/Keepr.app     # clear the Gatekeeper quarantine flag
+```
+
+**Verify the bundle before handing it to anyone** — all three failures above are silent:
+
+```bash
+A=dist/mac-arm64/Keepr.app
+grep -E "^GOOGLE_MAPS_API_KEY=" "$A/Contents/Resources/.env.production"   # must not be ${...}
+/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$A/Contents/Info.plist"
+codesign -dv "$A" 2>&1 | grep TeamIdentifier
+grep -ac "<a string your change adds>" "$A/Contents/Resources/app.asar"   # is your code even in it
+```
+
+That last line is the one that matters most: **confirm the build contains the change you are testing.**
+A stale or self-replaced bundle passes every other check.
+
 ### Native Module Errors
 
 If you see this error, rebuild native modules:
