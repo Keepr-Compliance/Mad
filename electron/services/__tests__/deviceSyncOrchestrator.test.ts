@@ -69,6 +69,8 @@ class MockBackupService extends EventEmitter {
   // AbortController, so the cancel latch is cleared per SYNC rather than per run. A
   // mock without this throws — which is the wiring being pinned rather than assumed.
   beginSyncScope = jest.fn();
+  attachDeviceDisconnectFeed = jest.fn();
+  noteDeviceDisconnected = jest.fn();
 
   setMockBehavior(succeed: boolean, encrypted: boolean = false) {
     this.shouldSucceed = succeed;

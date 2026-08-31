@@ -629,12 +629,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       this.emit("passcode-entered");
     });
 
+    // BACKLOG-2915 (round 4): declare the feed, so the backup service knows a late
+    // disconnect is worth waiting for. See DISCONNECT_SETTLE_MS.
+    this.backupService.attachDeviceDisconnectFeed();
+
     // Forward device events
     this.deviceService.on("device-connected", (device: iOSDevice) => {
       this.emit("device-connected", device);
     });
 
     this.deviceService.on("device-disconnected", (device: iOSDevice) => {
+      // BACKLOG-2915 (round 4): the OS already knows the cable was pulled, and this
+      // event has been flowing to the renderer all along. Handing it to BackupService
+      // turns the link-drop classification from an inference into an observation.
+      this.backupService.noteDeviceDisconnected(device.udid);
       this.emit("device-disconnected", device);
     });
   }

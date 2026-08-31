@@ -442,6 +442,18 @@ export interface BackupFailureEvidence {
    * ever been reachable from a direct call.
    */
   cancelRequested?: boolean;
+  /**
+   * BACKLOG-2915: the OS reported the device gone at some point during this run.
+   *
+   * A FACT, not an inference. See {@link BackupLinkDropEvidence}.
+   */
+  deviceDisconnected?: boolean;
+  /**
+   * BACKLOG-2915: idevicebackup2 printed `ERROR: Could not receive from mobilebackup2`.
+   *
+   * Its own report that the channel died, unconditional and immediate.
+   */
+  mobilebackup2ReceiveFailure?: boolean;
 }
 
 /** BACKLOG-2913: a classified backup failure — the sentence AND the data behind it. */
@@ -602,7 +614,7 @@ export function classifyBackupFailure(
         ? BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE
         : BACKUP_CONNECTION_LOST_MESSAGE,
       errorCode: "CONNECTION_LOST",
-      cause,
+      cause: { ...cause, linkDropEvidence: "broken-pipe-line" },
     };
   }
 
@@ -633,7 +645,58 @@ export function classifyBackupFailure(
     };
   }
 
+  // BACKLOG-2915 (round 4) — THE LINK DROP, OBSERVED RATHER THAN INFERRED.
+  //
+  // FOUNDER INSIGHT, 2026-08-31: *"for cable unplug we can probably see it from the OS
+  // if the phone is connected?"* He was right, and the signal was already on the wire —
+  // `deviceDetectionService` has polled `idevice_id -l` and emitted
+  // `device-connected` / `device-disconnected` all along. We had built an inference for
+  // a fact nobody was reading.
+  //
+  // This recovers, from a different direction, exactly what dropping `-d` cost: the
+  // `usbmuxd_send ... (Broken pipe)` discriminator. That loss was recorded as
+  // unavoidable. It was not.
+  //
+  // TWO signals feed it, and they have very different latencies — which is the whole
+  // reason this rung is written the way it is:
+  //
+  //   `ERROR: Could not receive from mobilebackup2 (%d)`  — stdout, IMMEDIATE.
+  //       `PRINT_VERBOSE(0, ...)`, so unconditional. On the founder's real cable pull
+  //       it printed at 00:27:01.651, ONE MILLISECOND before the process exited.
+  //
+  //   `device-disconnected` from the OS                    — LAGS BY UP TO ~2 s.
+  //       The poller runs every 2 s. On that same pull the event arrived at
+  //       00:27:02.121 — 468 ms AFTER this function had already answered. A latch read
+  //       at close time would have been FALSE for the exact run it was designed to
+  //       catch, and a synthetic test that drove the disconnect first would have passed.
+  //       See `DISCONNECT_SETTLE_MS` for how the close path waits for it.
+  if (
+    evidence.deviceDisconnected === true ||
+    evidence.mobilebackup2ReceiveFailure === true
+  ) {
+    return {
+      message: transferStarted
+        ? BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE
+        : BACKUP_CONNECTION_LOST_MESSAGE,
+      errorCode: "CONNECTION_LOST",
+      cause: {
+        ...cause,
+        // The OS's answer outranks the tool's when both are present.
+        linkDropEvidence:
+          evidence.deviceDisconnected === true
+            ? "device-disconnected"
+            : "mobilebackup2-receive-failure",
+      },
+    };
+  }
+
   // BACKLOG-2915 D1 — THE LINK-DROP INFERENCE RUNG. FOUNDER DECISION, 2026-08-30.
+  //
+  // ROUND 4: DEMOTED TO A LAST RESORT by the rung above. It now answers only
+  // "exited badly, phone still attached, nobody said why" — which is NOT a cable
+  // problem, and the founder's approved before-transfer copy ("plug it straight into
+  // your Mac") is wrong for it. A second sentence is needed here and is his call; the
+  // branch is implemented and tagged `inferred` so the change is a copy edit.
   //
   // `usbmuxd_send returned -N (Broken pipe)` was `debug_info()` output and existed
   // ONLY under `-d`. Removing the flag removes it, and with it the only direct
@@ -663,7 +726,7 @@ export function classifyBackupFailure(
         ? BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE
         : BACKUP_CONNECTION_LOST_MESSAGE,
       errorCode: "CONNECTION_LOST",
-      cause,
+      cause: { ...cause, linkDropEvidence: "inferred" },
     };
   }
 
@@ -771,6 +834,35 @@ export class BackupService extends EventEmitter {
   private cancelRequested: boolean = false;
   /** Cumulative bytes for the whole run: closed batches plus the open one. */
   private bytesTransferred: number = 0;
+  /**
+   * BACKLOG-2915 (round 4): the OS reported this device gone during this run.
+   *
+   * **RUN-SCOPED**, unlike {@link cancelRequested} directly above, which is sync-scoped.
+   * The question is "did the phone leave during THIS run", so it resets per run.
+   */
+  private deviceDisconnectedDuringRun: boolean = false;
+  /** BACKLOG-2915: idevicebackup2 said the mobilebackup2 channel died. Run-scoped. */
+  private mobilebackup2ReceiveFailure: boolean = false;
+  /** Set while the close path is waiting out {@link DISCONNECT_SETTLE_MS}. */
+  private disconnectSettleResolver: (() => void) | null = null;
+  /**
+   * BACKLOG-2915 (round 4): the UDID of the run being classified.
+   *
+   * SEPARATE from `currentDeviceUdid`, which the close handler nulls before it
+   * classifies. The whole point of the settle window is to accept an event that arrives
+   * AFTER the process exits, so the identity check cannot depend on state the exit has
+   * already torn down — that would have rejected exactly the late disconnect this was
+   * built for, silently, and the control below is what caught it.
+   */
+  private runDeviceUdid: string | null = null;
+  /**
+   * BACKLOG-2915: does anything actually report disconnects to this service?
+   *
+   * Only `deviceSyncOrchestrator` wires the feed, and only then is it worth waiting for
+   * a late event. Without this, every unexplained failure in every unit test would sit
+   * out the settle window for nothing.
+   */
+  private hasDisconnectFeed: boolean = false;
 
   // Passcode waiting detection
   private passcodeWaitingTimer: NodeJS.Timeout | null = null;
@@ -904,6 +996,28 @@ export class BackupService extends EventEmitter {
    * still given its hard kill, and its close, before the state is discarded.
    */
   private static readonly POST_KILL_STATE_RESET_MS = 45_000;
+
+  /**
+   * BACKLOG-2915 (round 4): how long the close path waits for a disconnect event that
+   * may still be in flight.
+   *
+   * MEASURED, on the founder's real cable pull of 2026-08-31:
+   *
+   *     00:27:01.652  Backup failed with code 255
+   *     00:27:01.653  Failure classified { errorCode: 'CONNECTION_LOST' }   <- decided
+   *     00:27:02.121  Device disconnected                                  <- 468 ms LATER
+   *
+   * `idevicebackup2` notices the dead channel and exits before the 2-second poller's
+   * next tick. So "was a disconnect observed between run start and run end" is a
+   * question that answers FALSE for the very runs it exists to catch. 3 s covers the
+   * 2 s poll interval plus the measured 468 ms with margin.
+   *
+   * It is waited out ONLY when the run failed, the device reported no code of its own,
+   * idevicebackup2 did not already say the channel died, and a disconnect feed is
+   * attached — i.e. only when a late event could still change the answer. Successful
+   * runs and device-coded failures are unaffected.
+   */
+  private static readonly DISCONNECT_SETTLE_MS = 3_000;
 
   /**
    * BACKLOG-2915: THE STDERR ACTIVITY-SIGNAL MECHANISM IS GONE, AND FIVE OF ITS SEVEN
@@ -1210,7 +1324,11 @@ export class BackupService extends EventEmitter {
       this.deviceOutcomeLine = null;
       this.latchedDeviceError = null;
       // NOTE: `cancelRequested` is deliberately NOT reset here. It is sync-scoped —
-      // see its docblock, and `beginSyncScope()`.
+      // see its docblock, and `beginSyncScope()`. The two below ARE run-scoped: the
+      // question they answer is about this run, not this sync.
+      this.deviceDisconnectedDuringRun = false;
+      this.mobilebackup2ReceiveFailure = false;
+      this.runDeviceUdid = options.udid;
       this.bytesTransferred = 0;
       this.stdoutLineBuffer = "";
 
@@ -1610,6 +1728,20 @@ export class BackupService extends EventEmitter {
               exitCode: code,
             };
           } else {
+            // BACKLOG-2915 (round 4): a disconnect event may still be in flight.
+            //
+            // The poller runs every 2 s and `idevicebackup2` exits the moment the
+            // channel dies, so on the founder's real cable pull the OS event arrived
+            // 468 ms AFTER this point. Waited out only when a late event could still
+            // change the answer — see DISCONNECT_SETTLE_MS.
+            if (
+              this.hasDisconnectFeed &&
+              !this.deviceDisconnectedDuringRun &&
+              !this.mobilebackup2ReceiveFailure &&
+              this.latchedDeviceError === null
+            ) {
+              await this.awaitDisconnectSettle();
+            }
             const classification = this.classifyFailure(
               code,
               stdoutBuffer,
@@ -1674,6 +1806,62 @@ export class BackupService extends EventEmitter {
    * subsequent backup reports "Backup was cancelled" — which is strictly better than the
    * silent misclassification it replaces, and it is what ROW 28 and ROW 29c catch.
    */
+  /**
+   * BACKLOG-2915 (round 4): the caller undertakes to report device disconnects.
+   *
+   * Called by `deviceSyncOrchestrator`, which already receives `device-disconnected`
+   * from `deviceDetectionService`. It gates the settle wait: without a feed there is no
+   * late event to wait for, so nothing waits.
+   */
+  attachDeviceDisconnectFeed(): void {
+    this.hasDisconnectFeed = true;
+  }
+
+  /**
+   * BACKLOG-2915 (round 4): the OS says this device is gone.
+   *
+   * Guarded on the UDID of the run in flight — another iPhone being unplugged says
+   * nothing about this backup, and latching it would turn an unrelated event into a
+   * stated fact.
+   *
+   * Verified safe by observation, not assumed: the founder's session log shows
+   * `Starting device polling (interval: 2000ms)` at 23:34:54.815 with no stop before the
+   * next app start, so `idevice_id -l` polled every 2 s throughout a 19-minute sync that
+   * transferred 5.8 GB at ~49 MB/s. Polling does not disturb the mobilebackup2 session.
+   */
+  noteDeviceDisconnected(udid: string): void {
+    // Accepted while the run is alive OR while the close path is still waiting for
+    // exactly this — see `runDeviceUdid`.
+    if (!this.isRunning && this.disconnectSettleResolver === null) return;
+    if (this.runDeviceUdid !== null && this.runDeviceUdid !== udid) return;
+    if (!this.deviceDisconnectedDuringRun) {
+      log.warn(
+        "[BackupService] The OS reported the device disconnected during this backup",
+      );
+    }
+    this.deviceDisconnectedDuringRun = true;
+    // If the close path is waiting for exactly this, stop waiting.
+    this.disconnectSettleResolver?.();
+  }
+
+  /**
+   * BACKLOG-2915 (round 4): wait out {@link DISCONNECT_SETTLE_MS}, or return the moment
+   * a disconnect arrives. See that constant for the measurement behind it.
+   */
+  private awaitDisconnectSettle(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        this.disconnectSettleResolver = null;
+        resolve();
+      }, BackupService.DISCONNECT_SETTLE_MS);
+      this.disconnectSettleResolver = () => {
+        clearTimeout(timer);
+        this.disconnectSettleResolver = null;
+        resolve();
+      };
+    });
+  }
+
   beginSyncScope(): void {
     if (this.cancelRequested) {
       log.info("[BackupService] New sync scope — clearing the pending cancel");
@@ -2360,7 +2548,13 @@ export class BackupService extends EventEmitter {
       return null;
     }
     if (line.includes("Could not receive from mobilebackup2")) {
-      // `PRINT_VERBOSE(0, ...)` — always on, and a genuine fault.
+      // `PRINT_VERBOSE(0, ...)` — always on, and a genuine fault: idevicebackup2 saying
+      // its own channel to the device died.
+      //
+      // BACKLOG-2915 (round 4): this was parsed, logged and DISCARDED. It fired on the
+      // founder's real cable pull at 00:27:01.651, one millisecond before the process
+      // exited — the only link signal fast enough to reach the classifier in time.
+      this.mobilebackup2ReceiveFailure = true;
       log.error(`[BackupService] ${line.trim()}`);
       return null;
     }
@@ -2483,6 +2677,10 @@ export class BackupService extends EventEmitter {
         // BACKLOG-2915: without this the inference rung below calls a user cancel a
         // dropped cable. See BackupFailureEvidence.cancelRequested.
         cancelRequested: this.cancelRequested,
+        // BACKLOG-2915 (round 4): observation, so the link-drop class stops being a
+        // guess. See BackupLinkDropEvidence.
+        deviceDisconnected: this.deviceDisconnectedDuringRun,
+        mobilebackup2ReceiveFailure: this.mobilebackup2ReceiveFailure,
       },
     );
     log.error("[BackupService] Failure classified", {
@@ -2492,6 +2690,9 @@ export class BackupService extends EventEmitter {
       // the 2026-08-30 capture, so it can only ever be read post-mortem.
       deviceRequestedPasscode: this.deviceRequestedPasscode,
       deviceOutcomeLine: this.deviceOutcomeLine,
+      // BACKLOG-2915 (round 4): a support log must be able to tell a fact from a guess.
+      linkDropEvidence: classification.cause.linkDropEvidence,
+      deviceDisconnectedDuringRun: this.deviceDisconnectedDuringRun,
       deviceErrorCode: classification.cause.deviceErrorCode,
       deviceErrorDescription: classification.cause.deviceErrorDescription,
       exitCode: classification.cause.exitCode,

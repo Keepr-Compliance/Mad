@@ -177,7 +177,48 @@ export interface BackupFailureCause {
   exitCode: number | null;
   /** Which stream the code came from, so a support log can say how much to trust it. */
   source: BackupFailureCauseSource;
+  /**
+   * BACKLOG-2915: for a CONNECTION_LOST classification only — HOW we know.
+   *
+   * The founder's point, 2026-08-31: *"for cable unplug we can probably see it from the
+   * OS if the phone is connected?"* He was right, and the signal was already on the
+   * wire. Until then this class was reached by an INFERENCE (non-zero exit, no device
+   * code, no version-exchange), which is also the shape produced by an untrusted phone,
+   * a service that will not start, a device refusing the backup, an invalid backup
+   * directory, and — as his testing proved — a cancel landing across a run boundary.
+   *
+   * Recording which one answered is what lets a support log tell a fact from a guess,
+   * and it is what makes the two branches separately testable while they still share a
+   * user-facing sentence. A second sentence for the still-attached case is a founder
+   * decision and is not made here.
+   *
+   * Absent on every classification that is not a link drop.
+   */
+  linkDropEvidence?: BackupLinkDropEvidence;
 }
+
+/**
+ * BACKLOG-2915: how a dropped link was established, strongest first.
+ *
+ * - `mobilebackup2-receive-failure` — idevicebackup2's own
+ *   `ERROR: Could not receive from mobilebackup2 (%d)`, a `PRINT_VERBOSE(0, ...)` that
+ *   is unconditional and therefore survived the `-d` removal. IMMEDIATE: on the
+ *   founder's real cable pull it printed at 00:27:01.651, one millisecond before the
+ *   process exited.
+ * - `device-disconnected` — the OS's own answer, from `deviceDetectionService` polling
+ *   `idevice_id -l`. The strongest evidence there is, but it LAGS: the poll interval is
+ *   2 s, and on that same cable pull the event arrived at 00:27:02.121 — **468 ms after
+ *   the classification had already been made**. See `DISCONNECT_SETTLE_MS`.
+ * - `broken-pipe-line` — `usbmuxd_send returned -N (Broken pipe)`. Unreachable under the
+ *   shipped argv; kept for the case where `-d` returns.
+ * - `inferred` — nothing observed it. The last-resort rung: exited badly, phone still
+ *   attached, nobody said why. This is a GUESS and the name says so.
+ */
+export type BackupLinkDropEvidence =
+  | "mobilebackup2-receive-failure"
+  | "device-disconnected"
+  | "broken-pipe-line"
+  | "inferred";
 
 /**
  * Where a {@link BackupFailureCause} code was read from.

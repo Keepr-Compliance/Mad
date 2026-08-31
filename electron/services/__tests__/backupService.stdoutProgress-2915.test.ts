@@ -1155,6 +1155,206 @@ describe("BACKLOG-2915 rows 16-20 — the classes that change when `-d` goes", (
 });
 
 // ===========================================================================
+// ROWS 30-34 — the link drop, OBSERVED instead of inferred (round 4)
+// ===========================================================================
+
+describe("BACKLOG-2915 rows 30-34 — a cable pull is a fact, not a guess", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("ROW 30 — idevicebackup2's own receive failure makes the link drop OBSERVED", async () => {
+    // TRANSCRIBED from the founder's real cable pull, 2026-08-31 00:27:01.651:
+    // `ERROR: Could not receive from mobilebackup2 (-256)`, printed ONE MILLISECOND
+    // before the process exited. `PRINT_VERBOSE(0, ...)`, so it survived the `-d`
+    // removal — and this PR parsed it, logged it and threw it away until now.
+    //
+    // Mutation: stop latching it. The run falls to the D1 inference rung, and
+    // `linkDropEvidence` reads `inferred` instead of the observation.
+    const { result } = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from("Requesting backup from device...\n"));
+      proc.stdout.emit(
+        "data",
+        Buffer.from("ERROR: Could not receive from mobilebackup2 (-256)\n"),
+      );
+      proc.stdout.emit("data", Buffer.from("Backup Aborted.\n"));
+      proc.close(255);
+    });
+
+    expect(result.errorCode).toBe("CONNECTION_LOST");
+    expect(result.failureCause?.linkDropEvidence).toBe(
+      "mobilebackup2-receive-failure",
+    );
+    expect(result.failureCause?.linkDropEvidence).not.toBe("inferred");
+  });
+
+  it("ROW 31 — the OS's disconnect event outranks it, and is recorded as the evidence", async () => {
+    // The founder's insight: the signal was already on the wire. `deviceDetectionService`
+    // has polled `idevice_id -l` and emitted `device-disconnected` all along.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    spawnScripted((proc) => {
+      proc.stdout.emit("data", Buffer.from("Requesting backup from device...\n"));
+      // The OS notices while the run is still alive — a mid-transfer unplug, where
+      // idevicebackup2 can take seconds to give up.
+      service.noteDeviceDisconnected(TEST_UDID);
+      proc.stdout.emit(
+        "data",
+        Buffer.from("ERROR: Could not receive from mobilebackup2 (-256)\n"),
+      );
+      proc.close(255);
+    });
+    const result = await service.startBackup({ udid: TEST_UDID });
+
+    expect(result.errorCode).toBe("CONNECTION_LOST");
+    // Both signals fired; the OS's answer is the stronger one and wins.
+    expect(result.failureCause?.linkDropEvidence).toBe("device-disconnected");
+  });
+
+  it("ROW 32 — THE OTHER DIRECTION: phone still attached ⇒ the class is INFERRED, not observed", async () => {
+    // The rung the founder is protecting the user from. Nothing observed a link drop,
+    // so this is a guess — and the D1 shape is also produced by an untrusted phone, a
+    // service that will not start, a device refusing the backup, and an invalid backup
+    // directory. None of those is a cable problem.
+    //
+    // The user-facing sentence is unchanged FOR NOW, deliberately: a second message for
+    // this branch is the founder's call. `linkDropEvidence` is what makes that a copy
+    // edit rather than a re-architecture, and what makes this row able to fail at all.
+    const { result } = await runBackup((proc) => {
+      proc.close(255);
+    });
+
+    expect(result.errorCode).toBe("CONNECTION_LOST");
+    expect(result.failureCause?.linkDropEvidence).toBe("inferred");
+    expect(result.failureCause?.linkDropEvidence).not.toBe("device-disconnected");
+  });
+
+  it("ROW 33 — a disconnect followed by a RECONNECT before the run ends is still a disconnect", async () => {
+    // Explicitly required, and it is why this is an EVENT latch and not a point-in-time
+    // check. Observed in the founder's log: disconnect 00:27:02.121, reconnect
+    // 00:27:18.234, disconnect again 00:27:30.149. Asking "is the phone here?" at any
+    // one of those moments gives a different answer; asking "did it leave during this
+    // run?" gives the same one.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    spawnScripted((proc) => {
+      service.noteDeviceDisconnected(TEST_UDID);
+      // …and it comes back. The latch does not un-set: it flapped, and that IS the
+      // fault.
+      proc.close(255);
+    });
+    const result = await service.startBackup({ udid: TEST_UDID });
+
+    expect(result.failureCause?.linkDropEvidence).toBe("device-disconnected");
+  });
+
+  it("ROW 34 — a DIFFERENT device disconnecting says nothing about this run", async () => {
+    // Guarded on the UDID of the run in flight. Without this an unrelated iPhone being
+    // unplugged would be latched as a stated fact about this backup — an inference
+    // dressed as an observation, which is worse than the inference it replaced.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    spawnScripted((proc) => {
+      service.noteDeviceDisconnected("ffffffffffffffffffffffffffffffffffffffff");
+      proc.close(255);
+    });
+    const result = await service.startBackup({ udid: TEST_UDID });
+
+    expect(result.failureCause?.linkDropEvidence).toBe("inferred");
+    expect(result.failureCause?.linkDropEvidence).not.toBe("device-disconnected");
+  });
+
+  it("ROW 35 — A DISCONNECT ARRIVING *AFTER* THE PROCESS EXITS IS STILL COUNTED", async () => {
+    // THE ROW THAT MATTERS MOST IN THIS BATCH, because the design as specified —
+    // "record whether a disconnect fired between run start and run end" — CANNOT WORK.
+    // Measured on the founder's real cable pull, 2026-08-31:
+    //
+    //     00:27:01.652  Backup failed with code 255
+    //     00:27:01.653  Failure classified { errorCode: 'CONNECTION_LOST' }
+    //     00:27:02.121  Device disconnected            <- 468 ms AFTER the answer
+    //
+    // `idevicebackup2` notices the dead channel and exits before the 2-second poller's
+    // next tick, so a latch read at close time is FALSE for the very runs it exists to
+    // catch. A synthetic fixture that fires the disconnect first passes; production
+    // does not. This row fires it LAST, which is the order that actually happens.
+    //
+    // Mutation: remove the settle wait from the close path. The classification falls
+    // back to `inferred` and this goes red.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    let backupProc: FakeProcess | null = null;
+    mockSpawn.mockImplementation((cmd: string) => {
+      const proc = new FakeProcess();
+      if (cmd.includes("ideviceinfo")) {
+        setTimeout(() => {
+          proc.stdout.emit("data", Buffer.from("false\n"));
+          proc.close(0);
+        }, 0);
+      } else {
+        backupProc = proc;
+        // No link evidence at all on the streams — the phone simply stopped answering.
+        setTimeout(() => proc.close(255), 0);
+      }
+      return proc;
+    });
+
+    const pending = service.startBackup({ udid: TEST_UDID });
+    // Let the process close and the close handler reach the settle wait.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(backupProc).not.toBeNull();
+
+    // …and only NOW does the poller notice, exactly as it did at 00:27:02.121.
+    service.noteDeviceDisconnected(TEST_UDID);
+
+    const result = await pending;
+    expect(result.errorCode).toBe("CONNECTION_LOST");
+    expect(result.failureCause?.linkDropEvidence).toBe("device-disconnected");
+    expect(result.failureCause?.linkDropEvidence).not.toBe("inferred");
+  });
+
+  it("ROW 35b — the settle wait is skipped when nothing feeds disconnects", async () => {
+    // The bound on the cost. Without a feed there is no late event to wait for, so an
+    // unexplained failure must classify immediately rather than sit out three seconds.
+    // Measured here rather than reasoned: the run has no feed attached and must return
+    // well inside the settle window.
+    const started = Date.now();
+    const { result } = await runBackup((proc) => {
+      proc.close(255);
+    });
+    const elapsed = Date.now() - started;
+
+    expect(result.failureCause?.linkDropEvidence).toBe("inferred");
+    expect(elapsed).toBeLessThan(1_000);
+  });
+
+  it("ROW 34b — a device-reported failure is never relabelled a link drop, even after a disconnect", async () => {
+    // Ordering. The observed rung sits BELOW the device-code switch, so a phone that
+    // said 208 and was then unplugged during teardown still reports a locked phone.
+    // This is the same ordering property the broken-pipe teardown line needed in
+    // BACKLOG-2913, met from the new direction.
+    const service = new BackupService();
+    service.on("error", () => {});
+    service.attachDeviceDisconnectFeed();
+
+    spawnScripted((proc) => {
+      proc.stdout.emit("data", Buffer.from(lockedDeviceStdout(true)));
+      service.noteDeviceDisconnected(TEST_UDID);
+      proc.close(48);
+    });
+    const result = await service.startBackup({ udid: TEST_UDID });
+
+    expect(result.errorCode).toBe("DEVICE_LOCKED");
+    expect(result.failureCause?.linkDropEvidence).toBeUndefined();
+  });
+});
+
+// ===========================================================================
 // ROWS 27-28 — defence 1 of 2: the cancel latch is SYNC-scoped
 // ===========================================================================
 
