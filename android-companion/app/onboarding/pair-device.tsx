@@ -10,18 +10,25 @@ import {
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { registerDevice } from '../../services/syncService';
-import { forceFullContactResync } from '../../services/contactSyncState';
+import { registerWithStoredIdentity } from '../../services/deviceIdentity';
 import {
   checkDesktopAccountMatch,
   accountMatchMessage,
 } from '../../services/accountMatch';
 import { pairFailureMessage } from '../../services/pairingFeedback';
-import { setOnboardingStep } from '../../services/onboardingProgress';
+import {
+  isPrivateLanIPv4,
+  lanAddressRejectionMessage,
+} from '../../services/lanAddress';
+import {
+  setOnboardingStep,
+  completeOnboarding,
+} from '../../services/onboardingProgress';
 import { colors } from '../../theme/colors';
 import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { Button } from '../../components/ui';
+import OnboardingSignOutLink from '../../components/ui/OnboardingSignOutLink';
 
 /** Data encoded in the QR code from the desktop app */
 interface PairingData {
@@ -78,17 +85,21 @@ export default function PairDeviceScreen(): React.JSX.Element {
     setPairing(true);
     try {
       // BACKLOG-2212: register with the desktop FIRST and surface any failure.
-      // `registerDevice` maps every network/timeout/HTTP error to a result (it
-      // never throws) and enforces its own bounded timeout, so a black-hole
-      // desktop cannot hang the scanner. We persist the pairing ONLY after the
-      // desktop acknowledges it — a failed attempt leaves no half-paired state
-      // and never advances onboarding into a first-sync that cannot work.
-      const regResult = await registerDevice({
-        ip: data.ip,
-        port: data.port,
-        secret: data.secret,
-        deviceId: data.deviceName,
-      });
+      // The register round trip maps every network/timeout/HTTP error to a
+      // result (it never throws) and enforces its own bounded timeout, so a
+      // black-hole desktop cannot hang the scanner. We persist the pairing ONLY
+      // after the desktop acknowledges it — a failed attempt leaves no
+      // half-paired state and never advances onboarding into a first-sync that
+      // cannot work.
+      //
+      // BACKLOG-2987: present the device identity this phone ALREADY holds so
+      // the desktop reuses it instead of minting a fresh one. This call used to
+      // send `data.deviceName`, which is never UUID-shaped, so every re-pair
+      // minted a new id and defeated the desktop's contact stale-delete.
+      const regResult = await registerWithStoredIdentity(
+        { ip: data.ip, port: data.port, secret: data.secret },
+        data.deviceName,
+      );
 
       if (!regResult.success) {
         // BACKLOG-2212: surface the failure instead of swallowing it and pushing
@@ -110,11 +121,12 @@ export default function PairDeviceScreen(): React.JSX.Element {
       }
 
       console.log('[Onboarding] Device registered with desktop');
-      // BACKLOG-2210: adopt the desktop-minted device identity so every phone is
-      // unique (no deviceName collision). Persist it as the pairing identity and
-      // force the next contact sync to be FULL so the desktop re-keys
-      // android_sync contacts under the new id (clean re-key; message dedup is
-      // content-hashed so it needs no reset).
+      // BACKLOG-2210: the desktop-minted device identity, so every phone is
+      // unique (no deviceName collision). BACKLOG-2987: adopting it into DURABLE
+      // storage and forcing the next contact sync to be FULL are both done by
+      // `registerWithStoredIdentity` now, so the two pairing screens cannot
+      // drift. It is still mirrored into the stored pairing because the sync
+      // layer reads its `deviceId` from there (`backgroundSync.loadPairingInfo`).
       const storedPairing: StoredPairing = {
         ...data,
         pairedAt: new Date().toISOString(),
@@ -124,9 +136,6 @@ export default function PairDeviceScreen(): React.JSX.Element {
         PAIRING_STORAGE_KEY,
         JSON.stringify(storedPairing),
       );
-      if (regResult.deviceId) {
-        await forceFullContactResync();
-      }
 
       // Move to the next onboarding step (first-sync)
       // BACKLOG-1473: pair-device is now step 2, next is first-sync (step 3)
@@ -167,6 +176,16 @@ export default function PairDeviceScreen(): React.JSX.Element {
           return;
         }
 
+        // BACKLOG-2956: the app permits cleartext HTTP app-wide (Android has no
+        // way to scope that to the LAN), so the DESTINATION is bounded here
+        // instead. A QR code naming a public host would otherwise get SMS
+        // bodies POSTed unencrypted to whoever printed it.
+        if (!isPrivateLanIPv4(data.ip)) {
+          const { title, body } = lanAddressRejectionMessage(data.ip);
+          Alert.alert(title, body);
+          return;
+        }
+
         await savePairing(data);
       } catch {
         Alert.alert(
@@ -177,6 +196,39 @@ export default function PairDeviceScreen(): React.JSX.Element {
     },
     [scanning, pairing],
   );
+
+  /**
+   * BACKLOG-2956: "Continue without a computer".
+   *
+   * Until now pair-device was the ONLY onboarding screen with no way forward and
+   * no way back — permissions and first-sync both already ship "Skip for Now".
+   * Three separate people hit the resulting dead end: a Play reviewer with only a
+   * phone (who can never see the app work, the most likely rejection), the
+   * founder after signing in with the wrong account, and a field tester whose
+   * pairing kept failing. Their only escape was clearing app storage.
+   *
+   * This lands the user in the REAL app, unpaired — no demo mode, no sample data,
+   * no fake content. `app/(main)/home.tsx` already renders a deliberate empty
+   * state for an unpaired phone ("Not Paired" / "Pair with Keepr" / a working
+   * Scan QR Code button), and that state is already exercised in production: a
+   * sign-out clears the pairing, so re-login lands an onboarded user there today.
+   * Pairing therefore stays one tap away from home.
+   *
+   * `completeOnboarding()` is AWAITED before navigating. The auth gate in
+   * app/_layout.tsx treats "reached (main)" as proof the complete flag is
+   * persisted; navigating first would race the gate, which would bounce the user
+   * back into onboarding at the resumed step.
+   */
+  const handleContinueWithoutComputer = useCallback(async (): Promise<void> => {
+    try {
+      await completeOnboarding();
+    } catch (error) {
+      // Non-fatal: the gate's own re-check settles it, and the user is not
+      // trapped either way. Never block the escape hatch on a storage write.
+      console.error('[Onboarding] Failed to mark onboarding complete:', error);
+    }
+    router.replace('/(main)/home');
+  }, [router]);
 
   const handleStartScanning = useCallback(async (): Promise<void> => {
     if (!permission?.granted) {
@@ -232,7 +284,7 @@ export default function PairDeviceScreen(): React.JSX.Element {
     <View style={styles.screen}>
       {/* Step indicator */}
       <View style={styles.stepIndicator}>
-        <Text style={styles.stepText}>Step 2 of 3</Text>
+        <Text style={styles.stepText}>Step 3 of 4</Text>
       </View>
 
       <View style={styles.content}>
@@ -268,6 +320,25 @@ export default function PairDeviceScreen(): React.JSX.Element {
           size="lg"
           fullWidth
         />
+
+        <View style={styles.buttonSpacer} />
+
+        {/* BACKLOG-2956: the escape hatch. Lands in the real app, unpaired. */}
+        <Button
+          title="Continue without a computer"
+          variant="secondary"
+          onPress={() => {
+            void handleContinueWithoutComputer();
+          }}
+          disabled={pairing}
+          size="sm"
+          fullWidth
+        />
+        <Text style={styles.skipNote}>
+          You can pair with your computer later from the home screen.
+        </Text>
+
+        <OnboardingSignOutLink />
       </View>
     </View>
   );
@@ -352,6 +423,15 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: colors.gray[100],
     marginLeft: 40,
+  },
+  buttonSpacer: {
+    height: spacing[3],
+  },
+  skipNote: {
+    ...textStyles.caption,
+    color: colors.gray[500],
+    textAlign: 'center',
+    marginTop: spacing[2],
   },
 
   // Scanner styles

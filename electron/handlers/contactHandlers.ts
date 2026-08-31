@@ -1244,11 +1244,30 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         // the *macOS* preference. See the long note at that deletion site for
         // why that was wrong but NOT, as first diagnosed, a Windows outage.
         //
-        // Default `true` on purpose, and it carries real weight: the key is only
-        // written when the user declared an Android phone (`phoneType:
-        // "android"` at ContactSourceStep.tsx:138 keeps it out of
-        // `visibleSources` otherwise), so for most users it is ABSENT. Absent
-        // must mean shown — the same reading the other four sources take.
+        // BACKLOG-2986 — ABSENT NO LONGER MEANS SHOWN. The paragraph that stood
+        // here argued the opposite ("Absent must mean shown — the same reading
+        // the other four sources take") and it was wrong in the way that
+        // mattered: because onboarding writes this key ONLY for a user who
+        // declared an Android phone (`ContactSourceStep.tsx:140`), absent is the
+        // state nearly every user is in, so "absent = shown" imported Android
+        // contacts for essentially everybody — with no Settings control able to
+        // stop it, since onboarding was the key's only writer. Founder,
+        // 2026-08-30: "contacts aren't auto imported."
+        //
+        // `androidContacts` is now the second member of
+        // BACKEND_DERIVED_DEFAULT_KEYS, so an absent key is answered by
+        // onboarding's own rule instead of by the argument below: FALSE unless
+        // the user declared an Android phone. Read that constant's docblock for
+        // the production row counts behind the change.
+        //
+        // THE 4th ARGUMENT STAYS `true`, and it is not vestigial. It is reached
+        // only by case 3 of `isContactSourceEnabled` — preferences could not be
+        // READ AT ALL (Supabase offline). Every source fails OPEN there by
+        // design, because a failed read cannot see `phone_type` either, so
+        // deriving would be guessing and guessing OFF silently breaks a working
+        // import on a network blip. Tightening it to `false` would do exactly
+        // that; the derived default already handles the readable-but-absent
+        // case, which is the one this item is about.
         const androidEnabled = await isContactSourceEnabled(validatedUserId, "direct", "androidContacts", true);
 
         // Convert Contacts app data to contact objects
@@ -1578,8 +1597,12 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
           // unrelated answer, and cost macOS its toggle.
           //
           // That Windows problem is now solved at its own layer: `iphoneContacts`
-          // is the sole member of BACKEND_DERIVED_DEFAULT_KEYS, so an absent key
-          // derives `!isMacOS` — true on Windows (`contactSourceDefaults.ts:140`).
+          // is in BACKEND_DERIVED_DEFAULT_KEYS — no longer alone there, since
+          // BACKLOG-2986 added `androidContacts` — so an absent key derives
+          // `!isMacOS`, true on Windows. The rule is the `iphoneContacts` arm of
+          // `isContactSourceOnByDefault` in `contactSourceDefaults.ts`, cited by
+          // NAME rather than by line: the number this comment used to give
+          // (`:140`) rotted the moment that file grew a docblock.
           // Windows keeps working without borrowing anything.
           if (extContact.source === "iphone" && !iphoneEnabled) {
             sourceDisabledCount++;
@@ -3506,33 +3529,82 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
     },
   );
 
-  // Force re-import: wipe ALL external contacts (all sources), then re-import from enabled sources
+  // Force re-import: empty the shadow rows for the sources the caller is about
+  // to refill, then let the orchestrator refill them.
+  //
+  // ==========================================================================
+  // BACKLOG-3029 — IT EMPTIED FIVE SOURCES AND REFILLED THE ONES IT COULD
+  // ==========================================================================
+  // Emptying `external_contacts` is the CORRECT behaviour for a re-import: it is
+  // staging for the picker, not the user's contacts, and nothing in the main
+  // `contacts` table is touched. What was wrong is that the emptying took every
+  // source while the refill only ever covers the phases a contacts sync runs —
+  // macOS address book, Outlook, Google — and only when they are switched on.
+  //
+  // From the founder's run on 2026-08-31: 1,175 macOS rows emptied and not
+  // refilled (`macosContacts` was off, so the phase was skipped) and 28
+  // `android_sync` rows emptied with no desktop path that could ever refill them
+  // — the phone pushes its contacts, so his route back was to re-pair. Those
+  // records silently stop being offered for import and the source card reads 0.
+  //
+  // The caller now names the sources it is about to refill, because that is a
+  // question about ITS plan — which phases it will run, given the preferences
+  // and the platform — and `SyncOrchestratorService` already computes exactly
+  // that to gate them. This handler adds the one thing the caller cannot know it
+  // is wrong about: whether the desktop can fetch the source at all.
   ipcMain.handle(
     "contacts:forceReimport",
     async (
       _event: IpcMainInvokeEvent,
       userId: string,
+      sources: string[],
     ): Promise<{
       success: boolean;
       cleared: number;
       error?: string;
     }> => {
       try {
-        logService.info("[Main] Force re-import requested — wiping all sources", "Contacts", { userId });
+        // Loud, never lenient. A caller that sends no list has a bug, and the
+        // two silent readings of it are both wrong: emptying everything is the
+        // defect this change closes, and emptying nothing makes Force Re-import
+        // a button that does nothing without saying so.
+        if (!Array.isArray(sources) || sources.some((s) => typeof s !== "string")) {
+          logService.error(
+            "[Main] Force re-import called without a list of sources to refill",
+            "Contacts",
+            { userId },
+          );
+          return {
+            success: false,
+            cleared: 0,
+            error: "Force re-import requires the list of contact sources to re-import",
+          };
+        }
+
+        logService.info(
+          "[Main] Force re-import requested",
+          "Contacts",
+          { userId, sources },
+        );
 
         const validatedUserId = await getValidUserId(userId, "Contacts");
         if (!validatedUserId) {
           return { success: false, cleared: 0, error: "No valid user found in database" };
         }
 
-        // Wipe ALL external contacts regardless of which sources are enabled
-        const countBefore = externalContactDb.getCount(validatedUserId);
-        externalContactDb.clearAllForUser(validatedUserId);
-        const totalCleared = countBefore;
+        // `cleared` is what the DELETE actually removed, NOT the table size
+        // before it. Those were the same number while the wipe took everything;
+        // now that it does not, `getCount()` would report the very rows this
+        // change exists to preserve as rows it had just destroyed.
+        const totalCleared = externalContactDb.clearRefetchableSourcesForUser(
+          validatedUserId,
+          sources,
+        );
 
         logService.info("[Main] Force re-import wipe complete", "Contacts", {
           userId: validatedUserId,
           cleared: totalCleared,
+          preserved: externalContactDb.getCount(validatedUserId),
         });
 
         return { success: true, cleared: totalCleared };

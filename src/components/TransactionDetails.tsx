@@ -971,6 +971,11 @@ function TransactionDetails({
         const emailsFetched = result.emailsFetched || 0;
         const emailsStored = result.emailsStored || 0;
         const totalLinked = (result.totalEmailsLinked || 0) + (result.totalMessagesLinked || 0);
+        // BACKLOG-2880: what this run sent to review rather than linking. Read
+        // from the sync result, which reports it separately from the linked
+        // counts precisely so a queued item can never be counted as a link.
+        const queuedForReview =
+          (result as { totalQueuedForReview?: number }).totalQueuedForReview || 0;
 
         // TASK-2070: Show warning toast if provider fetch failed (token expired, API error)
         // This takes priority over the green success message
@@ -996,6 +1001,22 @@ function TransactionDetails({
           // Refresh to show newly fetched/linked communications
           loadDetails();
           refreshMessages();
+        } else if (queuedForReview > 0) {
+          // BACKLOG-2880 (founder ruling, 2026-08-26): "maybe say 'sync
+          // completed'. the needs review popup anyway shows up".
+          //
+          // Once the Sync button QUEUES the ambiguous half instead of linking
+          // it, this run's work is invisible to every count above — nothing was
+          // stored, nothing was linked — so it used to fall through to "Checked
+          // 63 emails - all already in database" or "No new communications
+          // found", moments after nine emails landed in the review queue. Both
+          // told the founder that nothing had happened.
+          //
+          // Neutral, deliberately: the count belongs to the Needs Review popup,
+          // which this run now raises (the handler broadcasts on the review
+          // channel). Two surfaces reporting one number is how they start
+          // disagreeing about it.
+          showSuccess("Sync completed");
         } else if (emailsFetched > 0 && emailsStored === 0) {
           showSuccess(`Checked ${emailsFetched} emails - all already in database`);
         } else if (result.totalAlreadyLinked && result.totalAlreadyLinked > 0) {

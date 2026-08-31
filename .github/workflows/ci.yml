@@ -375,6 +375,58 @@ jobs:
       - name: Assert nothing under .husky/_ is tracked
         run: npm run check:hooks
 
+  # BACKLOG-2959: SQL text belongs in electron/services/db/** (the *Sql.ts
+  # pattern). This gate fails when a NEW site defines SQL text anywhere else.
+  #
+  # It matches .prepare(, .exec( AND .pragma(. A .prepare(-only gate is
+  # decorative: it would pass a file holding raw db.exec() DDL, which is the
+  # PR-SOP 6.2e failure this gate exists to end.
+  #
+  # Classification is an AST walk, not a grep: 41% of the tree's call sites put
+  # argument 0 on a following line, where a line-oriented grep cannot see it.
+  # It classifies argument 0's ORIGIN, not the receiver name, so RegExp.exec is
+  # green without a name blacklist, and SQL hoisted into a local const is red.
+  #
+  # Deliberately NOT gated on docs-only and carrying no `needs:`. The docs-only
+  # filter at the top of this file treats `.github/workflows/*` as
+  # documentation, so a workflow-only PR skips every job that depends on
+  # check-changes — which is precisely how a gate gets switched off without
+  # anyone noticing (cf. the test-drift and text-sources jobs, same shape, same
+  # reason). It must always run and always report a status.
+  #
+  # Unique job name + unique status-check name. Do NOT add a second job with
+  # this name.
+  sql-boundary:
+    name: SQL Boundary Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      # The gate parses TypeScript with the compiler API, so `typescript` must be
+      # installed. ignore-scripts skips the electron/native rebuild: parsing needs
+      # no native module and no app build.
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Assert no SQL text is defined outside the db layer
+        run: npm run check:sql-boundary
+
+      # The guard's own verification harness. A harness that never executes is
+      # indistinguishable from one that passes -- the failure this repo keeps
+      # filing (cf. "Verify the guard itself" on the fixture-pii job).
+      - name: Verify the guard itself
+        run: npm run verify:sql-boundary
+
   # BACKLOG-2637: a source file holding a raw NUL is classified as binary by the
   # search tools, which then omit it from every repo-wide sweep WITHOUT warning
   # and WITHOUT a non-zero exit. The result is not a slow search or a failed one
@@ -495,6 +547,65 @@ jobs:
     steps:
       - name: Skip (no android-companion changes)
         run: echo "Skipping android-companion checks - no android-companion changes detected"
+
+  # BACKLOG-2956: `expo.version` sat at "1.0.0" across 54 commits and
+  # `expo.android.versionCode` was never set at all. Expo silently defaults
+  # versionCode to 1, so EVERY companion build ever produced identified itself as
+  # version 1 — which is how a five-month-old debug APK reached a field tester
+  # with no way to tell it apart from a build made that morning (BACKLOG-2955).
+  #
+  # Setting the numbers once fixed that day. This gate is what stops it recurring
+  # when nobody remembers. It fails a PR that changes shipping code under
+  # android-companion/ without bumping versionCode. Docs, tests and lint/type
+  # config are exempt (see NON_SHIPPING in the script) so the rule stays narrow
+  # enough that nobody is tempted to reach for --no-verify (BACKLOG-2837).
+  #
+  # fetch-depth: 0 + the explicit base fetch are required: the check diffs against
+  # the MERGE BASE, so the branch is asked "do you bump it" rather than every
+  # individual commit being asked.
+  android-version-bump:
+    name: Android Version Bump Gate
+    needs: check-changes
+    if: needs.check-changes.outputs.android-changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Fetch base branch for comparison
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin ${{ github.base_ref }}
+          else
+            git fetch origin develop || true
+          fi
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+
+      # No npm install: the check reads git and two JSON files only.
+      - name: Assert expo.android.versionCode was bumped
+        env:
+          GATE_BASE_REF: ${{ github.event_name == 'pull_request' && github.base_ref || '' }}
+        run: npm run check:android-version
+
+  # Mirror of android-version-bump for PRs that do NOT touch android-companion/**,
+  # so the status check is always reported and can be made required without
+  # blocking unrelated PRs. Exactly one of the two runs. Same shape as
+  # android-companion / android-companion-skip above.
+  android-version-bump-skip:
+    name: Android Version Bump Gate
+    needs: check-changes
+    if: needs.check-changes.outputs.android-changed != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip (no android-companion changes)
+        run: echo "Skipping android version-bump gate - no android-companion changes detected"
 
   build:
     name: Build Application

@@ -31,7 +31,6 @@ import {
   setEncryptionKey,
   closeDb,
   vacuumDb,
-  dbTransaction,
 } from "./db/core/dbConnection";
 
 // Import types
@@ -58,34 +57,24 @@ import type {
   IgnoredCommunication,
   NewIgnoredCommunication,
   Message,
-  Attachment,
   ContactMessageThread,
   ContactInfoSource,
+  AutoRestoreStatus,
+  BackupIntegrity,
 } from "../types";
 
-import { DatabaseError } from "../types";
-// BACKLOG-2410 — the contact-identity DDL has exactly one definition, shared
-// with the test helper so the two cannot drift. See that file's header.
 import {
-  CONTACT_LINK_PROPOSALS_TABLE_SQL,
-  CONTACT_LINK_PROPOSALS_INDEX_SQL,
-  CONTACT_LINK_PROPOSALS_PRE_V69_COLUMNS,
-  CONTACT_LINK_VERDICTS_TABLE_SQL,
-  CONTACT_LINK_VERDICTS_INDEX_SQL,
-  CONTACT_LINK_VERDICTS_PRE_V69_COLUMNS,
-  CONTACT_SOURCE_LINKS_COLUMNS,
-  CONTACT_SOURCE_LINKS_INDEX_SQL,
-  contactLinkProposalsRebuildTableSql,
-  contactLinkVerdictsRebuildTableSql,
-  contactSourceLinksRebuildTableSql,
-} from "./db/contactIdentitySchemaSql";
-import {
-  relabelTypedContactValues,
-  type SyncSqliteDb,
-} from "./db/contactValueProvenanceBackfill";
+  DatabaseError,
+  SchemaBaselineRefusalError,
+  MigrationRecoveryFailedError,
+} from "../types";
+// BACKLOG-2993: the contactIdentitySchemaSql / contactValueProvenanceBackfill
+// imports lived here for the deleted migration chain (v57..v69). The identity
+// DDL's single definition (BACKLOG-2410) now reaches production through the
+// generated schema.sql; the modules remain for their other consumers.
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { initializationBroadcaster } from "./initializationBroadcaster";
-import type { AuditLogEntry, AuditLogDbRow } from "./auditService";
+import type { AuditLogEntry } from "./auditService";
 
 // Import domain services for delegation
 import * as userDb from "./db/userDbService";
@@ -147,8 +136,19 @@ class DatabaseService implements IDatabaseService {
   /**
    * Initialize database - creates DB file and tables if needed
    * Handles encryption and migration from unencrypted databases
+   *
+   * BACKLOG-2999: rejects with MigrationRecoveryFailedError when a migration
+   * failed AND the auto-restore recovered nothing. It previously returned
+   * `true` on that path, so the caller could not tell a good start from a
+   * failed one.
+   *
+   * @param options.quitOnUnrecoverableFailure - exit the app after telling the
+   *   user, on that unrecoverable path. DEFAULT FALSE, deliberately: only the
+   *   startup caller (authHandlers.initializeDatabase) passes `true`. See the
+   *   comment on the terminal branch for why the destructive outcome is the
+   *   one that must be opted into.
    */
-  async initialize(): Promise<boolean> {
+  async initialize(options?: { quitOnUnrecoverableFailure?: boolean }): Promise<boolean> {
     if (this.db) {
       await logService.debug("Database already initialized, skipping", "DatabaseService");
       return true;
@@ -212,7 +212,51 @@ class DatabaseService implements IDatabaseService {
         await this._migrateToEncryptedDatabase();
       }
 
-      this.db = this._openDatabase();
+      // ======================================================================
+      // BACKLOG-2993 — THE SCHEMA-BASELINE FENCE.
+      //
+      // The local migration chain was deleted; schema.sql IS the schema, at
+      // the baseline (70). A database below the baseline predates the reset
+      // and has no upgrade path: it must be REFUSED, UNTOUCHED, and EXPLAINED
+      // — never half-migrated (exec'ing today's schema.sql against an old
+      // file is BACKLOG-2751's corrupt-then-crash), and never routed through
+      // auto-restore (every restorable backup is also pre-baseline, so that
+      // path would restore-and-refuse in a loop).
+      //
+      // Two evaluations of the same predicate, both BEFORE this.db is
+      // assigned or setDb() is called — 21 call sites gate on
+      // databaseService.isInitialized() and 25 more on
+      // dbConnection.isInitialized(), so a refused database must never be
+      // exposed through either:
+      //
+      //  1. A separate READ-ONLY open. _openDatabase() runs
+      //     `journal_mode = WAL`, which rewrites the header of any
+      //     pre-WAL-era file — precisely the oldest databases the fence most
+      //     needs to refuse untouched. The readonly pre-open refuses them
+      //     with zero writes. (Verified empirically for this driver: a
+      //     readonly open+read SUCCEEDS against a crashed hot-WAL database,
+      //     with and without its -shm file, main file hash unchanged — so an
+      //     open/read failure here is NOT "pre-reset", it is "cannot open",
+      //     a different axis. Such failures defer to the read-write open
+      //     below, which reproduces today's canonical error behaviour.)
+      //  2. The same predicate against the read-write handle, before
+      //     assignment — closes the readonly→read-write gap and any future
+      //     driver-behaviour drift.
+      // ======================================================================
+      this._enforceSchemaBaselineReadonly();
+
+      const openedDb = this._openDatabase();
+      try {
+        this._evaluateSchemaBaseline(openedDb, "read-write");
+      } catch (fenceError) {
+        try {
+          openedDb.close();
+        } catch {
+          /* the refusal matters, not the close */
+        }
+        throw fenceError;
+      }
+      this.db = openedDb;
 
       // Share connection with dbConnection module for sub-services
       setDb(this.db);
@@ -273,6 +317,17 @@ class DatabaseService implements IDatabaseService {
         }
 
         if (restoreResult.restored) {
+          // BACKLOG-2999 — DELIBERATELY NON-TERMINAL, and this boundary is
+          // load-bearing. The restore recovered something: the backup was
+          // copied over the database, reopened and probe-verified, so the
+          // user's data is open and readable. What is STILL wrong is that
+          // migrations are never re-run against the restored file — that is
+          // BACKLOG-2834's subject, not this item's. Widening the terminal
+          // path to cover it here would change a user-visible outcome ("the
+          // app opens on your data" -> "the app quits") on a branch with no
+          // 2999 defect behind it, in the same commit. Do not "fix" 2834 by
+          // deleting this boundary: the no-quit assertion in
+          // databaseService.migration-restore.test.ts pins it.
           dialog.showMessageBox({
             type: "warning",
             title: "Database Update Notice",
@@ -281,19 +336,163 @@ class DatabaseService implements IDatabaseService {
             buttons: ["OK"],
           });
         } else {
-          dialog.showMessageBox({
+          // ==============================================================
+          // BACKLOG-2999 — THE TERMINAL BRANCH. Nothing was recovered.
+          //
+          // `restored === false` is reached by FOUR routes and the wreckage
+          // each leaves differs: no backup and corrupt backup (the original
+          // handle is still open), the restore copy throwing (`this.db` is
+          // already null and dbConnection still holds a CLOSED handle), and
+          // the post-restore connectivity probe failing (`this.db = newDb`
+          // AND `setDb(newDb)` have already run, so every isInitialized()
+          // call site sees a perfectly initialized database). Before this
+          // branch existed all four fell through to `return true` below.
+          //
+          // ORDER IS LOAD-BEARING, mirroring the BACKLOG-2993 refusal path:
+          // tear the handle down, TELL the user (dialog AWAITED), flush the
+          // telemetry, then exit. Dropping the await would exit mid-dialog
+          // and the user would never learn why.
+          // ==============================================================
+
+          // Nothing usable is open, so drop the handle through BOTH
+          // predicates the app gates on — databaseService.isInitialized()
+          // and dbConnection.isInitialized() — rather than leaving a
+          // condemned database readable.
+          try {
+            await closeDb();
+          } catch {
+            // Already closed on the copy-throw route (_attemptAutoRestore
+            // closes at the top and never reassigns), and close() is
+            // unguarded. Swallowed on purpose: a throw here would replace
+            // the terminal error with the wrong one and skip the dialog and
+            // the exit — strictly worse than the bug being fixed. This is a
+            // terminal fall-through, not a data fallback.
+          }
+          this.db = null;
+
+          // AWAITED — see the order note above. The copy deliberately does
+          // NOT point at the cleanup scripts the way the BACKLOG-2993
+          // refusal does: that database provably has no upgrade path,
+          // whereas this user's data may well be recoverable and those
+          // scripts would destroy it. The path is appended because it is the
+          // first thing support asks for.
+          await dialog.showMessageBox({
             type: "error",
             title: "Database Update Failed",
             message: "A database update failed and could not be automatically fixed.",
-            detail: "Please contact support. Your data may need manual recovery.",
+            detail:
+              "Please contact support. Your data may need manual recovery.\n\n" +
+              `Database: ${this.dbPath ?? "unknown"}`,
             buttons: ["OK"],
           });
+
+          // Flush before any exit path so the migration_failure event
+          // survives it (BACKLOG-1576 precedent).
+          await Sentry.flush(2000);
+
+          // THE FLAG IS NOT THE FIX — THE THROW IS. Quitting is a
+          // startup-specific remedy and it defaults OFF. Forgetting the
+          // argument at a non-startup call site (sqliteBackupService's
+          // restore calls initialize() at step 5 and AGAIN from its own
+          // safety-copy recovery) would tear the process down mid-recovery
+          // and cost a user who explicitly asked to restore the database
+          // they still had. Forgetting it at startup costs only the exit:
+          // initialize() still rejects, the handler still returns
+          // success:false, and the renderer still lands on its error screen.
+          // Destructive beats annoying, so the destructive outcome is the
+          // one that has to be opted into.
+          if (options?.quitOnUnrecoverableFailure) {
+            app.quit();
+          }
+
+          throw new MigrationRecoveryFailedError(
+            "Database migration failed and could not be recovered from a backup",
+            restoreResult.autoRestoreStatus,
+            restoreResult.backupIntegrity,
+          );
         }
       }
 
       await logService.debug("Database initialized successfully with encryption", "DatabaseService");
       return true;
     } catch (error) {
+      if (error instanceof MigrationRecoveryFailedError) {
+        // BACKLOG-2999 — already fully handled by the terminal branch above:
+        // handle torn down, dialog awaited, Sentry captured WITH the
+        // migration_failure tags by the inner catch, flushed, exited if the
+        // caller asked. Re-thrown untouched because the generic branch below
+        // would capture a SECOND Sentry event for one failure (untagged, so it
+        // would not even group with the first) and broadcast `retryable: true`
+        // for a state that is not retryable.
+        throw error;
+      }
+
+      if (error instanceof SchemaBaselineRefusalError) {
+        // BACKLOG-2993 — terminal refusal surface. The broadcast below is
+        // TELEMETRY ONLY: the renderer's reducer never reads `error` off the
+        // init broadcast (reducer.ts destructures {stage, progress, message}
+        // and documents the case as informational), and LoadingOrchestrator
+        // reads `retryable` only into a Sentry extra. What actually stops a
+        // retry loop on an unfixable database is the sequence below: the user
+        // is TOLD (dialog, awaited), and then the app EXITS (app.quit()) —
+        // quit makes renderer state moot. Do not "fix" a future retry bug by
+        // teaching the reducer about retryable; the dialog+quit is the
+        // load-bearing surface, by SR ruling on this item.
+        initializationBroadcaster.broadcast({
+          stage: "error",
+          error: { message: error.message, retryable: false },
+        });
+        await logService.error("Pre-baseline database refused (schema baseline fence)", "DatabaseService", {
+          error: error.message,
+          foundVersion: error.foundVersion,
+          path: this.dbPath,
+        });
+        Sentry.captureException(error, {
+          tags: {
+            service: "database-service",
+            operation: "initialize",
+            schema_baseline_refusal: "true",
+          },
+        });
+        // Flush before the quit path so the event survives the exit
+        // (BACKLOG-1576 precedent on the auto-restore path).
+        await Sentry.flush(2000);
+
+        if (!app.isReady()) {
+          await app.whenReady();
+        }
+        // ORDER IS LOAD-BEARING: the dialog is AWAITED, then quit. Dropping
+        // the await would exit mid-dialog — the user would never learn why
+        // the app won't start. The boundary-sweep suite pins this order.
+        // The in-app reset flow (Settings → Troubleshooting) is UNREACHABLE
+        // here — the app is about to quit — so the copy points at the cleanup
+        // scripts. They matter beyond convenience: the database is encrypted
+        // and its key lives outside the file (macOS Keychain "keepr Safe
+        // Storage" / Windows DPAPI), and the scripts remove BOTH; a
+        // hand-deleted folder leaves a stale key behind and produces a
+        // different, more confusing failure. No retry is offered — there is
+        // nothing to retry.
+        await dialog.showMessageBox({
+          type: "error",
+          title: "Database from an older version",
+          message: "This database was created by an older version of Keepr and cannot be opened.",
+          detail:
+            "Keepr reset its local database format, and older databases have no " +
+            "upgrade path.\n\n" +
+            "To start fresh, run the Keepr cleanup script for your platform, then " +
+            "reinstall:\n" +
+            "  \u2022 macOS:   scripts/cleanup-macos.sh\n" +
+            "  \u2022 Windows: scripts/cleanup-windows.ps1\n\n" +
+            "The script also removes the old encryption key, which deleting the " +
+            "database folder by hand would leave behind. Cloud data is unaffected " +
+            "and will re-sync.\n\n" +
+            `Database: ${this.dbPath ?? "unknown"}`,
+          buttons: ["Quit"],
+        });
+        app.quit();
+        throw error;
+      }
+
       // BACKLOG-1381: Broadcast error on initialization failure
       initializationBroadcaster.broadcast({
         stage: "error",
@@ -351,7 +550,141 @@ class DatabaseService implements IDatabaseService {
    * ships migrations regularly.
    */
   getLatestSchemaVersion(): number {
-    return DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
+    // BACKLOG-2993: with the chain empty the baseline IS the latest version a
+    // build ships. Unguarded, the last-element read is a TypeError that would
+    // silently void the ENTIRE support-ticket storage-diagnostics block
+    // (supportTicketService.ts catches and leaves it null).
+    const migrations = DatabaseService.MIGRATIONS;
+    if (migrations.length === 0) return DatabaseService.BASELINE_VERSION;
+    return migrations[migrations.length - 1].version;
+  }
+
+  /**
+   * BACKLOG-2993 — readonly half of the schema-baseline fence. See the block
+   * comment in initialize() for the full design.
+   *
+   * Refuses BEFORE any read-write open so a pre-WAL-era file is never touched
+   * (the read-write opener's `journal_mode = WAL` rewrites the main file's
+   * header). An open/read failure here is NOT a refusal — version and
+   * openability are independent axes (SR review addendum, BACKLOG-2993): it
+   * logs and defers to the read-write open, whose predicate re-check keeps
+   * the fence closed and whose failure modes are today's canonical ones.
+   */
+  private _enforceSchemaBaselineReadonly(): void {
+    if (!this.dbPath || !this.encryptionKey) return; // initialize() sets both first
+    // Load-bearing, not defensive: a readonly open of a MISSING file fails
+    // (SQLITE_CANTOPEN) — a fresh install must skip the fence entirely.
+    if (!fs.existsSync(this.dbPath)) return;
+
+    let ro: DatabaseType | null = null;
+    try {
+      ro = new Database(this.dbPath, { readonly: true });
+      ro.pragma(`key = "x'${this.encryptionKey}'"`);
+      ro.pragma("cipher_compatibility = 4");
+      ro.pragma("busy_timeout = 5000");
+    } catch (openError) {
+      try {
+        ro?.close();
+      } catch {
+        /* ignore */
+      }
+      log.warn(
+        "[BaselineFence] readonly open failed — deferring to the read-write open (cannot-open is not pre-reset):",
+        openError instanceof Error ? openError.message : String(openError),
+      );
+      return;
+    }
+    try {
+      this._evaluateSchemaBaseline(ro, "read-only");
+    } finally {
+      try {
+        ro.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /**
+   * BACKLOG-2993 — the schema-baseline predicate. Throws
+   * SchemaBaselineRefusalError on a positive pre-baseline determination;
+   * throws NOTHING else (a driver-level read failure is "could not evaluate",
+   * neither refusal nor acceptance — it logs and lets the existing pipeline
+   * produce its canonical error, and keeps heavily-mocked test harnesses
+   * transparent).
+   *
+   * The strictly-greater boundary is pinned on a real chain-built v69 file in
+   * databaseService.schemaBaselineRefusal.test.ts — the off-by-one guard (the
+   * wider 68/69/70/71 sweep was cut by founder ruling, 2026-08-30; see that
+   * suite's scope note). The predicate's cases:
+   *   - schema_version.version <  baseline → REFUSE (pre-reset)
+   *   - schema_version.version == baseline → accept
+   *   - schema_version.version >  baseline → accept, warn (a NEWER build
+   *     wrote it; refusing would brick a downgrade with no upside)
+   *   - user objects but NO schema_version table → REFUSE (pre-baseline
+   *     relic — made explicit so a later refactor cannot silently turn a
+   *     `?? 0` accident into "proceed")
+   *   - empty database (no user objects) → accept (fresh install)
+   *   - schema_version table present, row missing or non-numeric → REFUSE
+   *     (deliberately inverts the old runner's "unreadable → migrate"
+   *     default: the fence errs toward refusal)
+   */
+  private _evaluateSchemaBaseline(db: DatabaseType, via: "read-only" | "read-write"): void {
+    const baseline = DatabaseService.BASELINE_VERSION;
+    let refusal: string | null = null;
+    let foundVersion: number | undefined;
+
+    try {
+      const svTable = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+        .get();
+      if (!svTable) {
+        const userObjects = (
+          db
+            .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'")
+            .get() as { n: number }
+        ).n;
+        if (userObjects === 0) {
+          return; // fresh/empty file — nothing to refuse
+        }
+        refusal =
+          "This database has user tables but no schema_version table — it predates " +
+          `the schema baseline (version ${baseline}) and cannot be upgraded.`;
+      } else {
+        const row = db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as
+          | { version: unknown }
+          | undefined;
+        const version = row?.version;
+        if (typeof version !== "number" || !Number.isFinite(version)) {
+          refusal =
+            "This database has a schema_version table but no readable version row — " +
+            `it cannot be verified against the schema baseline (version ${baseline}).`;
+        } else if (version < baseline) {
+          foundVersion = version;
+          refusal =
+            `This database is at schema version ${version}, which predates the ` +
+            `schema baseline (version ${baseline}). The migration chain that could ` +
+            "have upgraded it no longer exists.";
+        } else {
+          if (version > baseline) {
+            log.warn(
+              `[BaselineFence] database schema_version ${version} is ABOVE this build's ` +
+                `baseline ${baseline} — written by a newer build; proceeding.`,
+            );
+          }
+          return;
+        }
+      }
+    } catch (readError) {
+      log.warn(
+        `[BaselineFence] could not evaluate the baseline predicate via ${via} — ` +
+          "neither refusing nor accepting; the existing open/migration pipeline decides:",
+        readError instanceof Error ? readError.message : String(readError),
+      );
+      return;
+    }
+
+    throw new SchemaBaselineRefusalError(refusal, foundVersion);
   }
 
   private _openDatabase(): DatabaseType {
@@ -462,6 +795,18 @@ class DatabaseService implements IDatabaseService {
 
       const newDb = new Database(encryptedPath);
       newDb.pragma(`key = "x'${this.encryptionKey}'"`);
+      // BACKLOG-2993: this build of better-sqlite3-multiple-ciphers compiles
+      // with foreign_keys ON by default (verified: `pragma foreign_keys` on a
+      // fresh connection returns 1). With enforcement on, this copy only works
+      // if sqlite_master order happens to put every FK parent before its
+      // children — true of the old hand-ordered schema.sql, NOT true of the
+      // regenerated (name-ordered) one, and never guaranteed for a real file
+      // whose tables were rebuilt by the old chain (DROP+CREATE moves a parent
+      // to the end). A clone must reproduce the source byte-for-byte, orphans
+      // included, not re-validate it mid-copy — so enforcement is off for the
+      // duration. The next real open re-enables it (_openDatabase pragmas
+      // foreign_keys = ON per session).
+      newDb.pragma("foreign_keys = OFF");
 
       for (const { name: tableName } of tables) {
         const tableInfo = oldDb.prepare(
@@ -583,8 +928,8 @@ class DatabaseService implements IDatabaseService {
     _migrationError: unknown
   ): Promise<{
     restored: boolean;
-    autoRestoreStatus: "succeeded" | "failed" | "no_backup";
-    backupIntegrity: "valid" | "corrupt" | "missing";
+    autoRestoreStatus: AutoRestoreStatus;
+    backupIntegrity: BackupIntegrity;
   }> {
     if (!this.dbPath || !this.encryptionKey) {
       return { restored: false, autoRestoreStatus: "no_backup", backupIntegrity: "missing" };
@@ -721,8 +1066,13 @@ class DatabaseService implements IDatabaseService {
     // rolling backup when it will. schema.sql is re-exec'd unconditionally below
     // but is fully IF NOT EXISTS (idempotent), so an up-to-date DB mutates
     // nothing and needs no snapshot.
+    // BACKLOG-2993: guarded — with the chain empty the baseline is the latest
+    // version. This line runs on EVERY open (fresh installs included), so an
+    // unguarded last-element read would be a startup crash for every user.
     const latestMigrationVersion =
-      DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
+      DatabaseService.MIGRATIONS.length === 0
+        ? DatabaseService.BASELINE_VERSION
+        : DatabaseService.MIGRATIONS[DatabaseService.MIGRATIONS.length - 1].version;
     let willRunMigration = true;
     if (this.dbPath && fs.existsSync(this.dbPath)) {
       try {
@@ -874,3538 +1224,35 @@ class DatabaseService implements IDatabaseService {
     }
   }
 
-  /** Baseline version -- schema.sql contains everything through migration 28 */
-  static readonly BASELINE_VERSION = 29;
-
-  static readonly MIGRATIONS: MigrationEntry[] = [
-    {
-      version: 30,
-      description: "Fix transaction_summary view to count from transaction_contacts instead of deprecated transaction_participants",
-      migrate: (d) => {
-        d.exec(`
-          DROP VIEW IF EXISTS transaction_summary;
-          CREATE VIEW IF NOT EXISTS transaction_summary AS
-          SELECT
-            t.id,
-            t.user_id,
-            t.property_address,
-            t.transaction_type,
-            t.status,
-            t.stage,
-            t.started_at,
-            t.closed_at,
-            t.message_count,
-            t.attachment_count,
-            t.confidence_score,
-            (SELECT COUNT(*) FROM transaction_contacts tc WHERE tc.transaction_id = t.id) as participant_count,
-            (SELECT COUNT(*) FROM audit_packages ap WHERE ap.transaction_id = t.id) as audit_count
-          FROM transactions t;
-        `);
-      },
-    },
-    {
-      version: 31,
-      description: "Add failure_log table for offline diagnostics (TASK-2058)",
-      migrate: (d) => {
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS failure_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-            operation TEXT NOT NULL,
-            error_message TEXT NOT NULL,
-            metadata TEXT,
-            acknowledged INTEGER NOT NULL DEFAULT 0
-          );
-          CREATE INDEX IF NOT EXISTS idx_failure_log_timestamp ON failure_log(timestamp);
-          CREATE INDEX IF NOT EXISTS idx_failure_log_acknowledged ON failure_log(acknowledged);
-        `);
-      },
-    },
-    {
-      version: 32,
-      description: "Add sync_session_id columns and indexes for ACID rollback on cancelled iPhone sync (TASK-2110)",
-      migrate: (d) => {
-        const columns: [string, string][] = [
-          ["messages", "sync_session_id"],
-          ["attachments", "sync_session_id"],
-          ["external_contacts", "sync_session_id"],
-        ];
-        for (const [table, col] of columns) {
-          const info = d.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-          if (!info.some((c) => c.name === col)) {
-            d.exec(`ALTER TABLE ${table} ADD COLUMN ${col} TEXT`);
-          }
-        }
-        d.exec(`
-          CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id);
-          CREATE INDEX IF NOT EXISTS idx_attachments_sync_session ON attachments(sync_session_id);
-          CREATE INDEX IF NOT EXISTS idx_external_contacts_sync_session ON external_contacts(user_id, sync_session_id);
-        `);
-      },
-    },
-    {
-      version: 33,
-      description: "Update audit_logs CHECK constraint to include all AuditAction values (BACKLOG-1347)",
-      migrate: (d) => {
-        // SQLite does not support ALTER CHECK, so we must recreate the table.
-        // 1. Create new table with updated CHECK constraint
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS audit_logs_new (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            session_id TEXT,
-            action TEXT NOT NULL CHECK (action IN (
-              'LOGIN', 'LOGOUT', 'LOGIN_FAILED', 'SESSION_REFRESH',
-              'TRANSACTION_CREATE', 'TRANSACTION_UPDATE', 'TRANSACTION_DELETE',
-              'TRANSACTION_SUBMIT',
-              'CONTACT_CREATE', 'CONTACT_UPDATE', 'CONTACT_DELETE',
-              'DATA_ACCESS', 'DATA_EXPORT', 'DATA_DELETE',
-              'EXPORT_START', 'EXPORT_COMPLETE', 'EXPORT_FAIL',
-              'MAILBOX_CONNECT', 'MAILBOX_DISCONNECT',
-              'SETTINGS_CHANGE', 'SETTINGS_UPDATE', 'TERMS_ACCEPT'
-            )),
-            resource_type TEXT,
-            resource_id TEXT,
-            details TEXT,
-            metadata TEXT,
-            ip_address TEXT,
-            user_agent TEXT,
-            success INTEGER DEFAULT 1,
-            error_message TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            synced_at DATETIME,
-            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-          );
-        `);
-
-        // 2. Copy existing data
-        /**
-         * BACKLOG-2371 — the SAME positional copy, on a second table.
-         *
-         * The item named only `contacts`. This one was found by enumerating
-         * every `SELECT *` in the migrations rather than sampling — which the
-         * item asked for explicitly, because v36 itself was missed once by
-         * checking one migration and generalising from it.
-         *
-         * `audit_logs_new` declares 14 columns and `schema.sql:audit_logs`
-         * declares 14. Same undocumented equality, same prepare-time failure on
-         * every fresh install the day someone adds a column.
-         */
-        d.exec(
-          "INSERT OR IGNORE INTO audit_logs_new (id, user_id, session_id, action, resource_type, resource_id, details, metadata, ip_address, user_agent, success, error_message, timestamp, synced_at) " +
-            "SELECT id, user_id, session_id, action, resource_type, resource_id, details, metadata, ip_address, user_agent, success, error_message, timestamp, synced_at FROM audit_logs;",
-        );
-
-        // 3. Drop old triggers (they reference audit_logs)
-        d.exec(`DROP TRIGGER IF EXISTS prevent_audit_update;`);
-        d.exec(`DROP TRIGGER IF EXISTS prevent_audit_delete;`);
-
-        // 4. Drop old table
-        d.exec(`DROP TABLE IF EXISTS audit_logs;`);
-
-        // 5. Rename new table
-        d.exec(`ALTER TABLE audit_logs_new RENAME TO audit_logs;`);
-
-        // 6. Recreate indexes
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_audit_logs_synced ON audit_logs(synced_at);`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_type ON audit_logs(resource_type);`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_audit_logs_session_id ON audit_logs(session_id);`);
-
-        // 7. Recreate triggers
-        d.exec(`
-          CREATE TRIGGER IF NOT EXISTS prevent_audit_update
-          BEFORE UPDATE ON audit_logs
-          BEGIN
-            SELECT RAISE(ABORT, 'Audit logs cannot be modified');
-          END;
-        `);
-        d.exec(`
-          CREATE TRIGGER IF NOT EXISTS prevent_audit_delete
-          BEFORE DELETE ON audit_logs
-          BEGIN
-            SELECT RAISE(ABORT, 'Audit logs cannot be deleted');
-          END;
-        `);
-      },
-    },
-    {
-      version: 34,
-      description: "Add skip_address_filter column to transactions (BACKLOG-1364)",
-      migrate: (d) => {
-        const info = d.prepare("PRAGMA table_info(transactions)").all() as { name: string }[];
-        if (!info.some((c) => c.name === "skip_address_filter")) {
-          d.exec("ALTER TABLE transactions ADD COLUMN skip_address_filter INTEGER DEFAULT 0");
-        }
-      },
-    },
-    {
-      version: 35,
-      description: "Add default_role column to contacts for auto-role feature (BACKLOG-1355)",
-      migrate: (d) => {
-        const info = d.prepare("PRAGMA table_info(contacts)").all() as { name: string }[];
-        if (!info.some((c) => c.name === "default_role")) {
-          d.exec("ALTER TABLE contacts ADD COLUMN default_role TEXT");
-        }
-      },
-    },
-    {
-      version: 36,
-      description: "Add 'android_sync' to contacts source CHECK constraint (BACKLOG-1470)",
-      migrate: (d) => {
-        // SQLite doesn't support ALTER CHECK, so recreate the table.
-        // 1. Create new table with updated CHECK constraint
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS contacts_new (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            display_name TEXT NOT NULL,
-            company TEXT,
-            title TEXT,
-            source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync')),
-            last_inbound_at DATETIME,
-            last_outbound_at DATETIME,
-            total_messages INTEGER DEFAULT 0,
-            tags TEXT,
-            is_imported INTEGER DEFAULT 1,
-            default_role TEXT,
-            metadata TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-          );
-        `);
-
-        // 2. Copy existing data
-        /**
-         * BACKLOG-2371 — NAMED COLUMNS, NOT `SELECT *`.
-         *
-         * This was `INSERT OR IGNORE INTO contacts_new SELECT * FROM contacts`.
-         * `contacts_new` above declares exactly 15 columns, and
-         * `schema.sql:contacts` declared exactly 15 — an equality that was
-         * undocumented and load-bearing.
-         *
-         * Fresh installs seed `schema_version = 32`, so they RUN this migration.
-         * Adding any column to `schema.sql:contacts` would make `SELECT *`
-         * supply 16 values into a 15-column table: a PREPARE-TIME parse error on
-         * every fresh install. `OR IGNORE` does not suppress it — it is not a
-         * row-level conflict — and an empty table does not save you.
-         *
-         * Latent since v36 shipped, and it never fired only because nobody had
-         * added a `contacts` column since. It is a live constraint on the whole
-         * contact-identity epic, which is about adding state to contacts.
-         *
-         * THE REPAIR TRAP, recorded because the wrong fix looks like the right
-         * one: folding a column in turns `databaseService.schema-parity.test.ts`
-         * Path A red, and the plausible-looking fix is bumping the seeded
-         * `schema_version` past 36 — which goes green while silently stripping
-         * v33-v56 from every fresh install.
-         *
-         * Named columns make the copy independent of both tables' widths.
-         * Migration v48 already does this correctly; v36 predates that lesson.
-         */
-        d.exec(
-          "INSERT OR IGNORE INTO contacts_new (id, user_id, display_name, company, title, source, last_inbound_at, last_outbound_at, total_messages, tags, is_imported, default_role, metadata, created_at, updated_at) " +
-            "SELECT id, user_id, display_name, company, title, source, last_inbound_at, last_outbound_at, total_messages, tags, is_imported, default_role, metadata, created_at, updated_at FROM contacts;",
-        );
-
-        // 3. Drop views and triggers referencing contacts
-        d.exec("DROP VIEW IF EXISTS contact_lookup;");
-        d.exec("DROP TRIGGER IF EXISTS update_contacts_timestamp;");
-
-        // 4. Drop old table
-        d.exec("DROP TABLE IF EXISTS contacts;");
-
-        // 5. Rename new table
-        d.exec("ALTER TABLE contacts_new RENAME TO contacts;");
-
-        // 6. Recreate indexes
-        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);");
-        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_display_name ON contacts(display_name);");
-        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_is_imported ON contacts(is_imported);");
-        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_user_imported ON contacts(user_id, is_imported);");
-
-        // 7. Recreate trigger
-        d.exec(`
-          CREATE TRIGGER IF NOT EXISTS update_contacts_timestamp
-          AFTER UPDATE ON contacts
-          BEGIN
-            UPDATE contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
-          END;
-        `);
-
-        // 8. Recreate contact_lookup view
-        d.exec(`
-          CREATE VIEW IF NOT EXISTS contact_lookup AS
-          SELECT
-            c.id as contact_id,
-            c.user_id,
-            c.display_name,
-            ce.email,
-            cp.phone_e164 as phone
-          FROM contacts c
-          LEFT JOIN contact_emails ce ON c.id = ce.contact_id
-          LEFT JOIN contact_phones cp ON c.id = cp.contact_id;
-        `);
-      },
-    },
-    {
-      version: 37,
-      description: "Add email_id and thread_id columns to ignored_communications for auto-link suppression (BACKLOG-1560)",
-      migrate: (d) => {
-        const info = d.prepare("PRAGMA table_info(ignored_communications)").all() as { name: string }[];
-        if (!info.some((c) => c.name === "email_id")) {
-          d.exec("ALTER TABLE ignored_communications ADD COLUMN email_id TEXT");
-        }
-        if (!info.some((c) => c.name === "thread_id")) {
-          d.exec("ALTER TABLE ignored_communications ADD COLUMN thread_id TEXT");
-        }
-        d.exec(`
-          CREATE INDEX IF NOT EXISTS idx_ignored_comms_email_id
-            ON ignored_communications(email_id, transaction_id)
-            WHERE email_id IS NOT NULL
-        `);
-        d.exec(`
-          CREATE INDEX IF NOT EXISTS idx_ignored_comms_thread_id
-            ON ignored_communications(thread_id, transaction_id)
-            WHERE thread_id IS NOT NULL
-        `);
-        // Backfill email_id from communications table (if it exists)
-        const tables = d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='communications'").all();
-        if (tables.length > 0) {
-          d.exec(`
-            UPDATE ignored_communications
-            SET email_id = (
-              SELECT c.email_id FROM communications c
-              WHERE c.id = ignored_communications.original_communication_id
-                AND c.email_id IS NOT NULL
-            )
-            WHERE email_id IS NULL
-              AND original_communication_id IS NOT NULL
-          `);
-        }
-      },
-    },
-    {
-      version: 38,
-      description: "No-op — Sentry verification moved to separate beta build (BACKLOG-1576)",
-      migrate: () => {
-        // Originally a deliberate-throw test for Sentry user attribution.
-        // Removed to unblock migration 39. Sentry verification will be done
-        // via a separate beta build with a standalone test migration.
-      },
-    },
-    {
-      version: 39,
-      description: "Migrate old provider-prefixed email IDs to UUIDs (BACKLOG-1579 Phase 2)",
-      migrate: (d) => {
-        // Old records have id like 'outlook:AQMk...' or 'gmail:abc123'
-        // New records already have UUID ids from fetchStoreAndDedup.
-        // This migration converts old records to UUIDs and updates all FK references.
-        const oldEmails = d.prepare(
-          "SELECT id, source, external_id FROM emails WHERE id LIKE 'gmail:%' OR id LIKE 'outlook:%'"
-        ).all() as { id: string; source: string | null; external_id: string | null }[];
-
-        if (oldEmails.length === 0) return;
-
-        const crypto = require("crypto");
-
-        const updateEmail = d.prepare("UPDATE emails SET id = ?, external_id = ?, source = ? WHERE id = ?");
-        const updateComm = d.prepare("UPDATE communications SET email_id = ? WHERE email_id = ?");
-        const updateAttach = d.prepare("UPDATE attachments SET email_id = ? WHERE email_id = ?");
-        const updateIgnored = d.prepare("UPDATE ignored_communications SET email_id = ? WHERE email_id = ?");
-
-        for (const email of oldEmails) {
-          const newId = crypto.randomUUID();
-          const colonIdx = email.id.indexOf(":");
-          const prefix = email.id.substring(0, colonIdx);   // 'outlook' or 'gmail'
-          const externalId = email.id.substring(colonIdx + 1); // the provider message ID
-
-          // Update emails table — set UUID id, ensure external_id and source are populated
-          updateEmail.run(
-            newId,
-            email.external_id || externalId,
-            email.source || prefix,
-            email.id
-          );
-
-          // Update all FK references
-          updateComm.run(newId, email.id);
-          updateAttach.run(newId, email.id);
-          updateIgnored.run(newId, email.id);
-        }
-      },
-    },
-    {
-      version: 40,
-      description: "Add normalized phone lookup columns (BACKLOG-1727)",
-      migrate: (d) => {
-        const { normalizePhoneLookupKey } = require("../utils/phoneLookupKey");
-
-        // contact_phones: add column + index, backfill from phone_e164
-        const cpCols = d.prepare("PRAGMA table_info(contact_phones)").all() as Array<{ name: string }>;
-        if (!cpCols.some((c) => c.name === "phone_normalized")) {
-          d.exec("ALTER TABLE contact_phones ADD COLUMN phone_normalized TEXT");
-        }
-
-        const cpRows = d.prepare(
-          "SELECT id, phone_e164 FROM contact_phones WHERE phone_normalized IS NULL"
-        ).all() as Array<{ id: string; phone_e164: string }>;
-        const cpUpdate = d.prepare("UPDATE contact_phones SET phone_normalized = ? WHERE id = ?");
-        for (const row of cpRows) {
-          cpUpdate.run(normalizePhoneLookupKey(row.phone_e164), row.id);
-        }
-
-        d.exec(
-          "CREATE INDEX IF NOT EXISTS idx_contact_phones_normalized ON contact_phones(phone_normalized)"
-        );
-
-        // external_contacts: add phones_normalized_json column, backfill from phones_json
-        const ecCols = d.prepare("PRAGMA table_info(external_contacts)").all() as Array<{ name: string }>;
-        if (!ecCols.some((c) => c.name === "phones_normalized_json")) {
-          d.exec("ALTER TABLE external_contacts ADD COLUMN phones_normalized_json TEXT");
-        }
-
-        const ecRows = d.prepare(
-          "SELECT id, phones_json FROM external_contacts WHERE phones_normalized_json IS NULL"
-        ).all() as Array<{ id: string; phones_json: string | null }>;
-        const ecUpdate = d.prepare(
-          "UPDATE external_contacts SET phones_normalized_json = ? WHERE id = ?"
-        );
-        for (const row of ecRows) {
-          let phones: string[] = [];
-          try {
-            phones = row.phones_json ? JSON.parse(row.phones_json) : [];
-            if (!Array.isArray(phones)) phones = [];
-          } catch {
-            phones = [];
-          }
-          const normalized = phones
-            .map((p: unknown) => (typeof p === "string" ? normalizePhoneLookupKey(p) : ""))
-            .filter((s: string) => s.length > 0);
-          ecUpdate.run(JSON.stringify(normalized), row.id);
-        }
-      },
-    },
-    {
-      version: 41,
-      description: "Add email_participants junction table + backfill (BACKLOG-1722)",
-      migrate: (d) => {
-        const {
-          parseEmailAddressList,
-          computeParticipantHash,
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-        } = require("../utils/emailAddress") as typeof import("../utils/emailAddress");
-
-        // ----- 1. Junction table -------------------------------------------
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS email_participants (
-            email_id TEXT NOT NULL,
-            role TEXT NOT NULL CHECK (role IN ('from', 'to', 'cc', 'bcc')),
-            position INTEGER NOT NULL,
-            participant_hash TEXT NOT NULL,
-            email_address TEXT NOT NULL,
-            display_name TEXT,
-            resolved_contact_id TEXT,
-            PRIMARY KEY (email_id, role, position),
-            FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
-          );
-        `);
-
-        // BACKLOG-1722: add nullable `classification` to emails as a
-        // forward-investment landing zone for future AI classifier output.
-        // No consumer today; this avoids a future ALTER. Idempotent via the
-        // same PRAGMA table_info pattern v40 uses. Skip silently if the
-        // `emails` table is not present (only happens in migration-runner
-        // unit tests that seed a partial v29-shape schema).
-        const emailsClassCols = d
-          .prepare("PRAGMA table_info(emails)")
-          .all() as Array<{ name: string }>;
-        if (emailsClassCols.length > 0 && !emailsClassCols.some((c) => c.name === "classification")) {
-          d.exec("ALTER TABLE emails ADD COLUMN classification TEXT");
-        }
-
-        d.exec(
-          "CREATE INDEX IF NOT EXISTS idx_email_participants_email_address ON email_participants(email_address);"
-        );
-        d.exec(
-          "CREATE INDEX IF NOT EXISTS idx_email_participants_address_role ON email_participants(email_address, role);"
-        );
-        d.exec(
-          "CREATE INDEX IF NOT EXISTS idx_email_participants_email_id ON email_participants(email_id);"
-        );
-
-        // ----- 2. Error table ----------------------------------------------
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS email_participants_backfill_errors (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            raw_value TEXT,
-            reason TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(email_id, role, raw_value)
-          );
-        `);
-
-        // ----- 3. Chunked backfill -----------------------------------------
-        // The whole migration already runs inside an outer transaction (see
-        // _runVersionedMigrations). We deliberately do NOT open inner
-        // transactions per chunk: if any chunk throws, the outer tx rolls back
-        // the entire migration and we stay at v40. Simpler + safer.
-        //
-        // Idempotency: INSERT OR IGNORE on PK (email_id, role, position).
-        // Chunk size: 500 rows fits the page cache + parser/insert overhead
-        // and keeps per-iteration memory bounded.
-        //
-        // Defensive: skip the backfill if the `emails` table does not exist
-        // in this DB. That only happens in migration-runner unit tests that
-        // seed a partial v29-shape schema without the emails table; real
-        // user DBs always have it.
-        const emailsTableExists = d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='emails'")
-          .get();
-        if (!emailsTableExists) {
-          // BACKLOG-1722 (SR follow-up): warn so a real-world hit on this
-          // silent-skip path is diagnosable (unit-test harnesses seed a
-          // partial v29-shape schema without `emails`, so this is expected
-          // there — but in production it would mean a corrupt DB).
-          // eslint-disable-next-line no-console
-          console.warn(
-            "[migration v41] skipping backfill: `emails` table not present (expected only in migration-runner unit tests)"
-          );
-          return;
-        }
-
-        const CHUNK_SIZE = 500;
-
-        const selectStmt = d.prepare(
-          `SELECT id, sender, recipients, cc, bcc FROM emails
-           WHERE id > ? ORDER BY id LIMIT ${CHUNK_SIZE}`
-        );
-        const insertParticipantStmt = d.prepare(
-          `INSERT OR IGNORE INTO email_participants
-             (email_id, role, position, participant_hash, email_address, display_name)
-           VALUES (?, ?, ?, ?, ?, ?)`
-        );
-        const insertErrorStmt = d.prepare(
-          `INSERT OR IGNORE INTO email_participants_backfill_errors
-             (email_id, role, raw_value, reason)
-           VALUES (?, ?, ?, ?)`
-        );
-
-        const FIELDS: Array<{ col: keyof EmailBackfillRow; role: "from" | "to" | "cc" | "bcc" }> = [
-          { col: "sender", role: "from" },
-          { col: "recipients", role: "to" },
-          { col: "cc", role: "cc" },
-          { col: "bcc", role: "bcc" },
-        ];
-
-        interface EmailBackfillRow {
-          id: string;
-          sender: string | null;
-          recipients: string | null;
-          cc: string | null;
-          bcc: string | null;
-        }
-
-        // I1 (BACKLOG-1722): log per-chunk progress so large mailboxes show
-        // activity during the startup migration. logService is async; use
-        // console.log inside this synchronous migrate() callback.
-        const totalRows = (d.prepare("SELECT COUNT(*) AS c FROM emails").get() as { c: number }).c;
-        // eslint-disable-next-line no-console
-        console.log(`[migration v41] email participants backfill: ${totalRows} emails to process`);
-
-        // I2 (BACKLOG-1722): keyset pagination — O(n) vs O(n²) for OFFSET.
-        let lastId = "";
-        let totalProcessed = 0;
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          const rows = selectStmt.all(lastId) as EmailBackfillRow[];
-          if (rows.length === 0) break;
-
-          totalProcessed += rows.length;
-          // eslint-disable-next-line no-console
-          console.log(
-            `[migration v41] email participants backfill: ${totalProcessed} / ${totalRows} rows processed`
-          );
-
-          for (const row of rows) {
-            for (const field of FIELDS) {
-              const raw = row[field.col];
-              if (!raw) continue;
-              const parsed = parseEmailAddressList(raw);
-              parsed.addresses.forEach((addr, idx) => {
-                insertParticipantStmt.run(
-                  row.id,
-                  field.role,
-                  idx,
-                  computeParticipantHash(row.id, field.role, idx, addr.email_address),
-                  addr.email_address,
-                  addr.display_name
-                );
-              });
-              for (const err of parsed.errors) {
-                insertErrorStmt.run(row.id, field.role, err.raw, err.reason);
-              }
-            }
-          }
-
-          lastId = rows[rows.length - 1].id;
-          if (rows.length < CHUNK_SIZE) break;
-        }
-        // eslint-disable-next-line no-console
-        console.log(`[migration v41] email participants backfill complete: ${totalProcessed} rows`);
-      },
-    },
-    {
-      version: 42,
-      description: "Backfill communications.thread_id from emails table for auto-linked rows (BACKLOG-1718 R3)",
-      migrate: (d) => {
-        // BACKLOG-1718 (R3): autoLinkService was inserting communications rows
-        // with email_id set but thread_id = NULL.  The unlink path gates
-        // thread-expansion on thread_id being present, so deleting one email
-        // only removed a single row.  This backfill resolves thread_id for
-        // every pre-fix row so that unlink now correctly expands to siblings.
-        //
-        // Idempotent: the WHERE clause skips rows that already have thread_id
-        // or whose joined email has no thread_id.
-        // Safe: UPDATE only, no schema changes.
-        d.exec(`
-          UPDATE communications
-          SET thread_id = (
-            SELECT e.thread_id
-            FROM emails e
-            WHERE e.id = communications.email_id
-          )
-          WHERE email_id IS NOT NULL
-            AND email_id != ''
-            AND (thread_id IS NULL OR thread_id = '')
-            AND (
-              SELECT e.thread_id
-              FROM emails e
-              WHERE e.id = communications.email_id
-            ) IS NOT NULL
-        `);
-        // eslint-disable-next-line no-console
-        console.log("[migration v42] communications.thread_id backfill complete (BACKLOG-1718 R3)");
-      },
-    },
-    {
-      version: 43,
-      description:
-        "Harden communications + ignored_communications: XOR CHECK, email thread_id trigger, real FK cascades, dedup unique index (BACKLOG-1768)",
-      migrate: (d) => {
-        // BACKLOG-1768 (DB hardening S1). SQLite cannot ALTER-in a CHECK/FK, so both
-        // tables are recreated (precedent: v36 contacts recreate).
-        //
-        // Design decisions (documented in the PR / BACKLOG-1768):
-        //  1. CHECK = "exactly one of message_id / email_id, OR thread_id alone". A strict
-        //     message XOR email would reject the LIVE thread-only link path
-        //     (autoLinkService.createThreadCommunicationReference — SMS thread batch links
-        //     carry neither message_id nor email_id), so thread-only rows stay valid.
-        //     It rejects both-set (message AND email) and neither-set (links to nothing).
-        //  2. "email rows must carry thread_id" cannot be a CHECK (no subqueries), so it is
-        //     a BEFORE INSERT trigger that fires only when the linked email actually has a
-        //     thread_id (NULLIF guards legacy '' thread_ids so the primary writer, which
-        //     inserts `emailRow.thread_id || null`, is never falsely rejected). Created
-        //     AFTER the historical copy so legacy rows are not re-validated; the backfill
-        //     below fixes them forward.
-        //  3. transaction_id FK becomes ON DELETE CASCADE (was SET NULL) so link rows die
-        //     with their transaction (deleteTransaction is a bare DELETE that relies on FK
-        //     actions). Nullable-at-insert is unchanged.
-        //  4. ignored_communications.email_id gains a real FK (was convention-only).
-        //
-        // defer_foreign_keys makes the multi-step recreate safe under foreign_keys=ON
-        // (auto-resets at COMMIT). CHECK is always immediate, so both-set garbage rows are
-        // filtered out of the copy explicitly.
-        d.pragma("defer_foreign_keys = ON");
-
-        // (1) Backfill thread_id for email rows FIRST (idempotent; same shape as v42) so no
-        // surviving email row violates the thread_id invariant after recreate.
-        d.exec(`
-          UPDATE communications
-          SET thread_id = (
-            SELECT e.thread_id FROM emails e WHERE e.id = communications.email_id
-          )
-          WHERE email_id IS NOT NULL
-            AND email_id != ''
-            AND (thread_id IS NULL OR thread_id = '')
-            AND (
-              SELECT e.thread_id FROM emails e WHERE e.id = communications.email_id
-            ) IS NOT NULL
-        `);
-
-        // (2) Null dangling ignored_communications.email_id refs (the column had no FK
-        // before, so it may point at deleted emails). Preserve the row + its display cache.
-        const danglingIgnored =
-          (
-            d
-              .prepare(
-                `SELECT COUNT(*) AS n FROM ignored_communications
-               WHERE email_id IS NOT NULL AND email_id NOT IN (SELECT id FROM emails)`
-              )
-              .get() as { n: number } | undefined
-          )?.n ?? 0;
-        if (danglingIgnored > 0) {
-          d.exec(
-            `UPDATE ignored_communications SET email_id = NULL
-             WHERE email_id IS NOT NULL AND email_id NOT IN (SELECT id FROM emails)`
-          );
-          // eslint-disable-next-line no-console
-          console.log(
-            `[migration v43] nulled ${danglingIgnored} dangling ignored_communications.email_id ref(s) (BACKLOG-1768)`
-          );
-        }
-
-        // (3) Count both-set garbage rows the new CHECK will drop (message AND email set).
-        const bothSet =
-          (
-            d
-              .prepare(
-                `SELECT COUNT(*) AS n FROM communications
-               WHERE message_id IS NOT NULL AND email_id IS NOT NULL`
-              )
-              .get() as { n: number } | undefined
-          )?.n ?? 0;
-        if (bothSet > 0) {
-          // eslint-disable-next-line no-console
-          console.log(
-            `[migration v43] dropping ${bothSet} garbage communications row(s) with BOTH message_id and email_id set (BACKLOG-1768)`
-          );
-        }
-
-        // (4) Recreate communications with the hardened shape.
-        //     CREATE body kept byte-for-byte in sync with electron/database/schema.sql.
-        d.exec(`ALTER TABLE communications RENAME TO communications_old`);
-        d.exec(`
-CREATE TABLE IF NOT EXISTS communications (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  transaction_id TEXT,                     -- Nullable: may link content before transaction exists
-
-  -- Link to content (exactly one of message_id / email_id; or thread_id alone)
-  message_id TEXT,                         -- FK to messages (for texts)
-  email_id TEXT,                           -- FK to emails (for emails)
-  thread_id TEXT,                          -- For batch-linking all texts in a thread
-
-  -- Link metadata
-  link_source TEXT CHECK (link_source IN ('auto', 'manual', 'scan')),
-  link_confidence REAL,
-  linked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-
-  -- Foreign keys (BACKLOG-1768: transaction_id CASCADE — link rows die with their transaction)
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
-  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
-  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
-  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
-
-  -- BACKLOG-1768: reject both-set (message AND email) and neither-set (links to nothing)
-  CHECK (
-    (message_id IS NOT NULL AND email_id IS NULL)
-    OR (email_id IS NOT NULL AND message_id IS NULL)
-    OR (message_id IS NULL AND email_id IS NULL AND thread_id IS NOT NULL)
-  )
-);`);
-        // Copy every row EXCEPT both-set garbage (all survivors satisfy the new CHECK).
-        d.exec(`
-          INSERT INTO communications (
-            id, user_id, transaction_id, message_id, email_id, thread_id,
-            link_source, link_confidence, linked_at, created_at
-          )
-          SELECT
-            id, user_id, transaction_id, message_id, email_id, thread_id,
-            link_source, link_confidence, linked_at, created_at
-          FROM communications_old
-          WHERE NOT (message_id IS NOT NULL AND email_id IS NOT NULL)
-        `);
-        d.exec(`DROP TABLE communications_old`);
-
-        // Recreate indexes (idx_comm_email_txn predicate tightened — BACKLOG-1768).
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_user_id ON communications(user_id)`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_transaction_id ON communications(transaction_id)`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_message_id ON communications(message_id)`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_email_id ON communications(email_id)`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_thread_id ON communications(thread_id)`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_communications_txn_msg ON communications(transaction_id, message_id)`);
-        d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_msg_txn ON communications(message_id, transaction_id) WHERE message_id IS NOT NULL`);
-        d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_email_txn ON communications(email_id, transaction_id) WHERE email_id IS NOT NULL AND transaction_id IS NOT NULL`);
-        d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_comm_thread_txn ON communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL AND message_id IS NULL AND email_id IS NULL`);
-
-        // Trigger created AFTER the copy so historical rows are not re-validated.
-        // Body kept byte-for-byte in sync with electron/database/schema.sql.
-        d.exec(`
-CREATE TRIGGER IF NOT EXISTS communications_email_thread_required
-BEFORE INSERT ON communications
-FOR EACH ROW
-WHEN NEW.email_id IS NOT NULL
-  AND NULLIF(NEW.thread_id, '') IS NULL
-  AND NULLIF((SELECT thread_id FROM emails WHERE id = NEW.email_id), '') IS NOT NULL
-BEGIN
-  SELECT RAISE(ABORT, 'communications.thread_id required: linked email has a thread_id (BACKLOG-1768)');
-END;`);
-
-        // (5) Recreate ignored_communications with the real email_id FK.
-        //     CREATE body kept byte-for-byte in sync with electron/database/schema.sql.
-        d.exec(`ALTER TABLE ignored_communications RENAME TO ignored_communications_old`);
-        d.exec(`
-CREATE TABLE IF NOT EXISTS ignored_communications (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  transaction_id TEXT NOT NULL,
-
-  -- Denormalized display/match cache (BACKLOG-1768): NOT authoritative — retained to
-  -- match incoming emails during scans. email_id below is the real reference.
-  email_subject TEXT,
-  email_sender TEXT,
-  email_sent_at TEXT,
-  email_thread_id TEXT,
-
-  -- BACKLOG-1560: Direct ID references for reliable suppression during auto-link
-  email_id TEXT,                          -- FK to emails table (for email suppression)
-  thread_id TEXT,                         -- Thread ID (for text message thread suppression)
-
-  -- Original communication reference (if available)
-  original_communication_id TEXT,
-
-  -- Reason for ignoring (optional user note)
-  reason TEXT,
-
-  ignored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-
-  -- BACKLOG-1768: email_id gains a real FK (was convention-only) so suppression rows
-  -- are cleaned up when their email is deleted.
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
-  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
-  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
-);`);
-        d.exec(`
-          INSERT INTO ignored_communications (
-            id, user_id, transaction_id, email_subject, email_sender, email_sent_at,
-            email_thread_id, email_id, thread_id, original_communication_id, reason, ignored_at
-          )
-          SELECT
-            id, user_id, transaction_id, email_subject, email_sender, email_sent_at,
-            email_thread_id, email_id, thread_id, original_communication_id, reason, ignored_at
-          FROM ignored_communications_old
-        `);
-        d.exec(`DROP TABLE ignored_communications_old`);
-
-        // Recreate ignored_communications indexes (base + BACKLOG-1560 suppression lookups).
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_user_email ON ignored_communications(user_id, email_sender, email_subject, email_sent_at)`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_transaction ON ignored_communications(transaction_id)`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_email_id ON ignored_communications(email_id, transaction_id) WHERE email_id IS NOT NULL`);
-        d.exec(`CREATE INDEX IF NOT EXISTS idx_ignored_comms_thread_id ON ignored_communications(thread_id, transaction_id) WHERE thread_id IS NOT NULL`);
-
-        // eslint-disable-next-line no-console
-        console.log("[migration v43] communications + ignored_communications hardened (BACKLOG-1768)");
-      },
-    },
-    {
-      version: 44,
-      description:
-        "Message-ID stable identity: ensure emails.message_id_header + convert its dedup index from UNIQUE to NON-unique (BACKLOG-1769)",
-      migrate: (d) => {
-        // BACKLOG-1769 (DB hardening S2). The RFC 5322 Message-ID is the identity
-        // that survives re-delivery: a re-delivered message gets a NEW provider id
-        // but keeps its Message-ID. That is the ghost-resurrection root cause
-        // (BACKLOG-1764) — dedup-by-external-id cannot catch it, dedup-by-Message-ID
-        // can. This migration makes the column + index reliable; emailSyncService
-        // (same PR) populates the column and dedups on it.
-        //
-        // The `message_id_header` column and a UNIQUE partial index on
-        // (user_id, message_id_header) both shipped in schema.sql when the emails
-        // table was created (TASK-1300). schema.sql is re-exec'd (IF NOT EXISTS) on
-        // every startup BEFORE the migration runner, so in production the column
-        // already exists and holds NULLs (ingest never wrote it). This migration is
-        // still required to:
-        //   1. Guarantee the column on any DB that reaches the runner without it
-        //      (the migration test harness's minimal emails fixture; drift safety).
-        //   2. DOWNGRADE the index from UNIQUE to NON-unique.
-        //
-        // Why NON-unique (documented per BACKLOG-1769):
-        //   - Legacy rows may hold TRUE duplicates (the known ghost pairs) — a UNIQUE
-        //     index cannot be built over them, and any header backfill would throw.
-        //   - (user_id, message_id_header) is the WRONG uniqueness scope for
-        //     multi-account: the same message fetched into two accounts of one user
-        //     shares a Message-ID and would collide. The Phase-2 lifecycle design
-        //     intentionally RE-SCOPES uniqueness per account
-        //     (UNIQUE(account_id, message_id_header)); account_id is hardcoded NULL
-        //     today, so per-account uniqueness cannot be enforced yet.
-        //   - Dedup is enforced at the WRITER instead (emailSyncService: same
-        //     Message-ID → update external_id in place rather than insert a 2nd row).
-        //
-        // No data backfill: a row's OWN Message-ID is not recoverable from anything
-        // stored locally (external_id is the provider id; in_reply_to/references_header
-        // are ancestors' IDs; raw headers are not retained). Existing NULL rows stay
-        // NULL; new ingests populate the column going forward. Index/CREATE body kept
-        // byte-for-byte in sync with electron/database/schema.sql.
-
-        const cols = d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>;
-        const hasHeaderCol = cols.some((c) => c.name === "message_id_header");
-        if (!hasHeaderCol) {
-          d.exec("ALTER TABLE emails ADD COLUMN message_id_header TEXT");
-          // eslint-disable-next-line no-console
-          console.log("[migration v44] added emails.message_id_header column (BACKLOG-1769)");
-        }
-
-        // Replace the schema-inception UNIQUE index with a NON-unique one. DROP is
-        // safe: the partial index is empty today (every row's message_id_header is
-        // NULL), so nothing is lost, and relaxing a constraint never fails.
-        d.exec("DROP INDEX IF EXISTS idx_emails_message_id_header");
-        d.exec(
-          "CREATE INDEX IF NOT EXISTS idx_emails_message_id_header ON emails(user_id, message_id_header) WHERE message_id_header IS NOT NULL"
-        );
-
-        // eslint-disable-next-line no-console
-        console.log("[migration v44] emails.message_id_header index is now NON-unique (BACKLOG-1769)");
-      },
-    },
-    {
-      version: 45,
-      description:
-        "Add emails(user_id, sent_at) composite index for per-user chronological reads (BACKLOG-1771, DB hardening S4)",
-      migrate: (d) => {
-        // BACKLOG-1771 (DB hardening S4). Email reads are overwhelmingly
-        // "this user's emails, newest first" (timeline/thread panes,
-        // transaction email lists). The single-column idx_emails_user_id and
-        // idx_emails_sent_at cannot serve `WHERE user_id = ? ORDER BY sent_at`
-        // without an extra sort; the (user_id, sent_at) composite lets SQLite
-        // satisfy both the filter and the ordering from one index.
-        //
-        // Purely additive — no data change, safe to re-run. The single-column
-        // idx_emails_user_id is intentionally KEPT (the item body lists no
-        // dead indexes to drop, and it still serves user_id-only lookups).
-        //
-        // Index/CREATE body kept byte-for-byte in sync with
-        // electron/database/schema.sql (fresh-install parity, enforced by the
-        // BACKLOG-1770 schema-parity CI test).
-        d.exec(
-          "CREATE INDEX IF NOT EXISTS idx_emails_user_sent ON emails(user_id, sent_at)"
-        );
-
-        // eslint-disable-next-line no-console
-        console.log("[migration v45] created idx_emails_user_sent composite index (BACKLOG-1771)");
-      },
-    },
-    {
-      version: 46,
-      description:
-        "Email lifecycle foundation (BACKLOG-1801, Phase 2 T1): email_tombstones + email_sync_state + data_clear_events tables; emails.validated_at/ingest_source; per-account identity re-scope UNIQUE(account_id, external_id) + UNIQUE(account_id, message_id_header)",
-      migrate: (d) => {
-        // BACKLOG-1801 — foundation migration for the Phase 2 "Validated Evidence
-        // Cache" (full design: BACKLOG-1767 §2 schema, §5 rollout, §8 dispositions
-        // B3/B4). Adds the three lifecycle tables, two emails provenance columns,
-        // and re-scopes email identity from per-user to per-account uniqueness.
-        //
-        // IDEMPOTENCY / ORDERING NOTE: electron/database/schema.sql is exec'd
-        // (IF NOT EXISTS) on every startup BEFORE this runner, so on a real upgrade
-        // the new tables/columns/indexes may already exist when this migration runs.
-        // Every step is therefore idempotent. Critically, schema.sql may have
-        // pre-created the account-scoped UNIQUE indexes over rows whose account_id
-        // is still NULL (safe — SQLite treats NULL as distinct, so no collision);
-        // but once the backfill below sets a real account_id, a colliding
-        // external_id / message_id_header would trip that UNIQUE constraint
-        // MID-UPDATE. So all identity indexes are DROPPED before the backfill and
-        // rebuilt only after de-duplication (see step 3).
-
-        // ---- 1. emails provenance columns -----------------------------------
-        // Kept byte-for-byte in sync with schema.sql. ingest_source is NOT NULL
-        // with a legacy default so existing rows are valid; the CHECK constrains
-        // the four ingest paths.
-        const emailCols = d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>;
-        const hasCol = (n: string) => emailCols.some((c) => c.name === n);
-
-        if (!hasCol("validated_at")) {
-          d.exec("ALTER TABLE emails ADD COLUMN validated_at TEXT");
-        }
-        if (!hasCol("ingest_source")) {
-          d.exec(
-            "ALTER TABLE emails ADD COLUMN ingest_source TEXT NOT NULL DEFAULT 'legacy' CHECK (ingest_source IN ('legacy', 'filter', 'search_validated', 'manual'))"
-          );
-        }
-
-        // ---- 2. Lifecycle tables (CREATE bodies structurally identical to
-        //         electron/database/schema.sql — enforced by the S3 parity CI). --
-        d.exec(`
-CREATE TABLE IF NOT EXISTS email_tombstones (
-  user_id TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  external_id TEXT NOT NULL,
-  message_id_header TEXT,
-  reason TEXT NOT NULL CHECK (reason IN ('server_gone', 'user_clear', 'reconcile')),
-  deleted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id, account_id, external_id),
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-);`);
-        d.exec(
-          "CREATE INDEX IF NOT EXISTS idx_email_tombstones_msgid ON email_tombstones(account_id, message_id_header) WHERE message_id_header IS NOT NULL"
-        );
-
-        d.exec(`
-CREATE TABLE IF NOT EXISTS email_sync_state (
-  user_id TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  provider TEXT NOT NULL CHECK (provider IN ('google', 'microsoft')),
-  phase TEXT NOT NULL DEFAULT 'active' CHECK (phase IN ('active', 'cleared', 'invalid')),
-  cursor TEXT,
-  newest_cached_at DATETIME,
-  oldest_cached_at DATETIME,
-  last_reconciled_at DATETIME,
-  last_error TEXT,
-  failure_count INTEGER NOT NULL DEFAULT 0,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id, account_id),
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-);`);
-
-        d.exec(`
-CREATE TABLE IF NOT EXISTS data_clear_events (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  scope TEXT NOT NULL CHECK (scope IN ('emails', 'messages', 'contacts', 'all')),
-  account_id TEXT,
-  counts_json TEXT,
-  app_version TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  cloud_synced_at DATETIME,
-  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-);`);
-        d.exec(
-          "CREATE INDEX IF NOT EXISTS idx_data_clear_events_pending ON data_clear_events(cloud_synced_at) WHERE cloud_synced_at IS NULL"
-        );
-
-        // ---- 3. Per-account identity re-scope --------------------------------
-        // Requires emails to carry account_id + external_id. Production always has
-        // them (schema.sql since TASK-1300); the minimal migration-test fixture is
-        // enriched to match. The guard is defensive drift-safety (mirrors v41's
-        // "skip when the table shape predates the change" pattern) — it never fires
-        // on a real database.
-        const hasAccountId = hasCol("account_id");
-        const hasExternalId = hasCol("external_id");
-        const hasMsgHeader = hasCol("message_id_header");
-
-        if (hasAccountId && hasExternalId) {
-          // (a) Drop EVERY identity index — the old user-scoped pair AND the new
-          //     account-scoped pair (which schema.sql may have pre-created) — so
-          //     the backfill UPDATE below runs with no UNIQUE index enforcing.
-          d.exec("DROP INDEX IF EXISTS idx_emails_user_external");
-          d.exec("DROP INDEX IF EXISTS idx_emails_message_id_header");
-          d.exec("DROP INDEX IF EXISTS idx_emails_account_external");
-          d.exec("DROP INDEX IF EXISTS idx_emails_account_message_id_header");
-
-          // (b) Backfill account_id (= oauth_tokens.id) from the connected mailbox
-          //     row, matched by provider so a user with BOTH Gmail and Outlook
-          //     connected keeps each provider's mail on its own account. The
-          //     oauth_tokens UNIQUE(user_id, provider, purpose) guarantees at most
-          //     one mailbox row per (user, provider) — no ambiguity. Guarded on the
-          //     table existing (the minimal fixture omits it → no-op over empty
-          //     emails). Rows whose provider has no connected mailbox stay
-          //     account_id = NULL (logged).
-          const hasOauthTokens = d
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='oauth_tokens'")
-            .get();
-          if (hasOauthTokens) {
-            d.exec(`
-              UPDATE emails
-              SET account_id = (
-                SELECT ot.id FROM oauth_tokens ot
-                WHERE ot.user_id = emails.user_id
-                  AND ot.purpose = 'mailbox'
-                  AND ot.provider = CASE emails.source
-                        WHEN 'gmail' THEN 'google'
-                        WHEN 'outlook' THEN 'microsoft'
-                        ELSE NULL
-                      END
-                LIMIT 1
-              )
-              WHERE account_id IS NULL
-            `);
-          }
-
-          const nullExternalId = (
-            d.prepare("SELECT COUNT(*) AS n FROM emails WHERE external_id IS NULL").get() as { n: number }
-          ).n;
-          const nullAccountId = (
-            d.prepare("SELECT COUNT(*) AS n FROM emails WHERE account_id IS NULL").get() as { n: number }
-          ).n;
-          // eslint-disable-next-line no-console
-          console.log(
-            `[migration v46] account_id backfill: ${nullExternalId} row(s) with NULL external_id (content_hash-keyed per design §5.1); ${nullAccountId} row(s) unresolved to a mailbox (account_id stays NULL) (BACKLOG-1801)`
-          );
-
-          // (c) De-duplicate BEFORE building the UNIQUE indexes. Only rows with a
-          //     RESOLVED (non-NULL) account_id and a non-NULL key can collide under
-          //     the partial UNIQUE indexes — SQLite treats NULL as distinct, so
-          //     NULL-account or NULL-key rows never collide and MUST NOT be touched
-          //     (a plain GROUP BY would wrongly fold all NULL-account rows together).
-          //     Resolution is NON-destructive: keep the first row (MIN rowid) and
-          //     NULL the losing duplicate's key. A nulled external_id row falls back
-          //     to content_hash keying (design §5.1); the email row and all its FK
-          //     links (communications, email_participants, ignored_communications)
-          //     survive — a DELETE would cascade-destroy linked evidence, which is
-          //     unacceptable for an audit app.
-          const extDupNulled = d
-            .prepare(
-              `UPDATE emails SET external_id = NULL
-               WHERE external_id IS NOT NULL AND account_id IS NOT NULL
-                 AND rowid NOT IN (
-                   SELECT MIN(rowid) FROM emails
-                   WHERE external_id IS NOT NULL AND account_id IS NOT NULL
-                   GROUP BY account_id, external_id
-                 )`
-            )
-            .run().changes;
-          if (extDupNulled > 0) {
-            // eslint-disable-next-line no-console
-            console.log(
-              `[migration v46] nulled external_id on ${extDupNulled} duplicate (account_id, external_id) row(s) before UNIQUE index build (BACKLOG-1801)`
-            );
-          }
-
-          if (hasMsgHeader) {
-            const msgDupNulled = d
-              .prepare(
-                `UPDATE emails SET message_id_header = NULL
-                 WHERE message_id_header IS NOT NULL AND account_id IS NOT NULL
-                   AND rowid NOT IN (
-                     SELECT MIN(rowid) FROM emails
-                     WHERE message_id_header IS NOT NULL AND account_id IS NOT NULL
-                     GROUP BY account_id, message_id_header
-                   )`
-              )
-              .run().changes;
-            if (msgDupNulled > 0) {
-              // eslint-disable-next-line no-console
-              console.log(
-                `[migration v46] nulled message_id_header on ${msgDupNulled} duplicate (account_id, message_id_header) row(s) before UNIQUE index build (BACKLOG-1801)`
-              );
-            }
-          }
-
-          // (d) Build the per-account UNIQUE partial indexes (replace the dropped
-          //     user-scoped ones). Bodies kept byte-for-byte in sync with schema.sql.
-          d.exec(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_external ON emails(account_id, external_id) WHERE external_id IS NOT NULL"
-          );
-          d.exec(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_emails_account_message_id_header ON emails(account_id, message_id_header) WHERE message_id_header IS NOT NULL"
-          );
-        }
-
-        // eslint-disable-next-line no-console
-        console.log("[migration v46] email lifecycle foundation applied (BACKLOG-1801)");
-      },
-    },
-    {
-      version: 47,
-      description:
-        "Legacy email dedup: collapse NULL-message_id_header ghost pairs from pre-BACKLOG-1769 engine (BACKLOG-1861)",
-      migrate: (d) => {
-        // BACKLOG-1861 — one-time dedup pass for 2.19-era ghost pairs.
-        //
-        // Mechanism: the 2.19 ingest engine stored emails with message_id_header=NULL
-        // (the column existed but wasn't populated by BACKLOG-1769). When the 2.20
-        // engine re-fetched those emails (with Message-ID headers now captured), the
-        // resurrection dedup path (planEmailWrites steps 1–4) missed them: step 1
-        // missed on external_id change (e.g. Outlook folder-specific ID change), step
-        // 2 missed because the stored row had NULL message_id_header. Result: a second
-        // row was INSERT-ed, producing visible duplicates in conversation cards.
-        //
-        // Fix: identify pairs (legacy row: NULL message_id_header, new row: non-NULL)
-        // matched by subject + sender + sent_at (within 2 seconds). For unambiguous
-        // 1-to-1 pairs, COLLAPSE: move communications links + ignored_communications
-        // removal entries from legacy to new (dedup same-transaction links), move
-        // email_participants if new has none, DELETE the legacy row.
-        //
-        // Conservative: ambiguous multi-match pairs are skipped; NULL-field rows skip.
-        // Founder policy 2026-07-06: links are APPEND-ONLY — all existing links
-        // (including legacy stray auto-links) are PRESERVED on the survivor row.
-
-        // ---- Precondition: required emails columns --------------------------
-        const emailCols = d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>;
-        const hasECol = (n: string) => emailCols.some((c) => c.name === n);
-        if (
-          !hasECol("message_id_header") ||
-          !hasECol("sent_at") ||
-          !hasECol("sender") ||
-          !hasECol("subject")
-        ) {
-          // eslint-disable-next-line no-console
-          console.log("[migration v47] skipping dedup — emails table missing required columns");
-          return;
-        }
-
-        const hasComms = !!d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='communications'")
-          .get();
-        const hasIgnored = !!d
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='ignored_communications'",
-          )
-          .get();
-        const hasParticipants = !!d
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='email_participants'",
-          )
-          .get();
-        const hasAttachments = !!d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='attachments'")
-          .get();
-
-        // ---- Find candidate pairs -------------------------------------------
-        const pairs = d
-          .prepare(
-            `SELECT leg.id AS legacy_id, nw.id AS new_id
-             FROM emails leg
-             JOIN emails nw ON
-               leg.user_id = nw.user_id
-               AND leg.id <> nw.id
-               AND leg.message_id_header IS NULL
-               AND nw.message_id_header IS NOT NULL
-               AND nw.external_id IS NOT NULL
-               AND leg.sent_at IS NOT NULL
-               AND nw.sent_at IS NOT NULL
-               AND leg.subject IS NOT NULL
-               AND nw.subject IS NOT NULL
-               AND leg.sender IS NOT NULL
-               AND nw.sender IS NOT NULL
-               AND LOWER(TRIM(leg.subject)) = LOWER(TRIM(nw.subject))
-               AND leg.sender = nw.sender
-               AND ABS(julianday(leg.sent_at) - julianday(nw.sent_at)) * 86400 <= 2`,
-          )
-          .all() as Array<{ legacy_id: string; new_id: string }>;
-
-        // Detect ambiguity — any id appearing in >1 pair is skipped.
-        const legacyFreq = new Map<string, number>();
-        const newFreq = new Map<string, number>();
-        for (const p of pairs) {
-          legacyFreq.set(p.legacy_id, (legacyFreq.get(p.legacy_id) ?? 0) + 1);
-          newFreq.set(p.new_id, (newFreq.get(p.new_id) ?? 0) + 1);
-        }
-
-        let collapsed = 0;
-        let skipped = 0;
-
-        for (const { legacy_id, new_id } of pairs) {
-          if ((legacyFreq.get(legacy_id) ?? 0) > 1 || (newFreq.get(new_id) ?? 0) > 1) {
-            skipped++;
-            continue;
-          }
-
-          // ---- Move communications links (before DELETE to avoid cascade) ---
-          if (hasComms) {
-            const legacyLinks = d
-              .prepare("SELECT id, transaction_id FROM communications WHERE email_id = ?")
-              .all(legacy_id) as Array<{ id: string; transaction_id: string | null }>;
-
-            for (const link of legacyLinks) {
-              const existsOnNew =
-                link.transaction_id !== null
-                  ? d
-                      .prepare(
-                        "SELECT id FROM communications WHERE email_id = ? AND transaction_id = ?",
-                      )
-                      .get(new_id, link.transaction_id)
-                  : null;
-
-              if (existsOnNew) {
-                d.prepare("DELETE FROM communications WHERE id = ?").run(link.id);
-              } else {
-                // Move link to survivor (all links preserved per founder policy).
-                d.prepare("UPDATE communications SET email_id = ? WHERE id = ?").run(
-                  new_id,
-                  link.id,
-                );
-              }
-            }
-          }
-
-          // ---- Move ignored_communications (removal/curation state) ---------
-          if (hasIgnored) {
-            const legacyIgnored = d
-              .prepare(
-                "SELECT id, transaction_id FROM ignored_communications WHERE email_id = ?",
-              )
-              .all(legacy_id) as Array<{ id: string; transaction_id: string }>;
-
-            for (const ig of legacyIgnored) {
-              const existsOnNew = d
-                .prepare(
-                  "SELECT id FROM ignored_communications WHERE email_id = ? AND transaction_id = ?",
-                )
-                .get(new_id, ig.transaction_id);
-
-              if (!existsOnNew) {
-                d.prepare(
-                  "UPDATE ignored_communications SET email_id = ? WHERE id = ?",
-                ).run(new_id, ig.id);
-              } else {
-                d.prepare("DELETE FROM ignored_communications WHERE id = ?").run(ig.id);
-              }
-            }
-          }
-
-          // ---- Move or abandon email_participants ---------------------------
-          if (hasParticipants) {
-            const newHasParticipants =
-              (
-                d
-                  .prepare("SELECT COUNT(*) AS n FROM email_participants WHERE email_id = ?")
-                  .get(new_id) as { n: number }
-              ).n > 0;
-
-            if (!newHasParticipants) {
-              d.prepare(
-                "UPDATE email_participants SET email_id = ? WHERE email_id = ?",
-              ).run(new_id, legacy_id);
-            }
-            // else: survivor already has participants; legacy's cascade on DELETE.
-          }
-
-          // ---- Re-parent attachments (before DELETE to avoid cascade) -------
-          // schema.sql:314 gives attachments.email_id ON DELETE CASCADE, so any
-          // downloaded attachment rows living only on the legacy row would be
-          // silently dropped without this step.
-          if (hasAttachments) {
-            const legacyAtts = d
-              .prepare(
-                "SELECT id, filename, file_size_bytes FROM attachments WHERE email_id = ?",
-              )
-              .all(legacy_id) as Array<{
-              id: string;
-              filename: string;
-              file_size_bytes: number | null;
-            }>;
-
-            for (const att of legacyAtts) {
-              // Check whether the survivor already has an equivalent attachment
-              // (same filename + file_size_bytes). Uses SQLite IS for NULL-safety.
-              const existsOnNew = d
-                .prepare(
-                  "SELECT id FROM attachments WHERE email_id = ? AND filename = ? AND file_size_bytes IS ?",
-                )
-                .get(new_id, att.filename, att.file_size_bytes);
-
-              if (existsOnNew) {
-                // Survivor already has this attachment — discard legacy duplicate.
-                d.prepare("DELETE FROM attachments WHERE id = ?").run(att.id);
-              } else {
-                // Move attachment to survivor.
-                d.prepare("UPDATE attachments SET email_id = ? WHERE id = ?").run(
-                  new_id,
-                  att.id,
-                );
-              }
-            }
-          }
-
-          // ---- Delete legacy row (cascades remaining linked data) -----------
-          d.prepare("DELETE FROM emails WHERE id = ?").run(legacy_id);
-          collapsed++;
-        }
-
-        // eslint-disable-next-line no-console
-        console.log(
-          `[migration v47] legacy dedup: collapsed ${collapsed} duplicate pair(s), skipped ${skipped} ambiguous (BACKLOG-1861)`,
-        );
-      },
-    },
-    {
-      version: 48,
-      description:
-        "Widen contacts source CHECK to distinct per-origin values: add 'iphone', 'outlook', 'google_contacts' (BACKLOG-1900 P0.1)",
-      migrate: (d) => {
-        // SQLite doesn't support ALTER CHECK, so recreate the table (v36 template).
-        // Adds 'iphone', 'outlook', 'google_contacts' on top of the v36 set
-        // ('manual','email','sms','contacts_app','inferred','android_sync') so the
-        // Source filter (BACKLOG-1898) can show friendly per-origin labels and the
-        // contactHandlers write paths that already emit 'outlook'/'google_contacts'
-        // stop being rejected by the CHECK.
-        //
-        // 'messages'/'is_message_derived' are deliberately EXCLUDED: they are
-        // SELECT-time synthetic labels in contactDbService.ts, not column values.
-        //
-        // Defensive guard (mirrors v37's communications guard): in a real install
-        // `contacts` always exists (schema.sql / earlier migrations), but a minimal
-        // partial-schema DB may lack it. Skip cleanly rather than throwing on the
-        // `SELECT * FROM contacts` copy step.
-        const contactsTable = d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'")
-          .get();
-        if (!contactsTable) {
-          return;
-        }
-
-        // NOTE: the migration runner disables foreign_keys for the whole migration
-        // loop (see _runVersionedMigrations), so the DROP TABLE step below does NOT
-        // cascade-delete the child rows (contact_emails / contact_phones /
-        // transaction_participants / transaction_contacts / classification_feedback).
-        // Their contact_id references are left intact by the rebuild (which only
-        // widens the CHECK; it does not touch ids), so they resolve again once FK
-        // enforcement is restored after the loop.
-
-        // 1. Create new table with the widened CHECK constraint (matches schema.sql).
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS contacts_new (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            display_name TEXT NOT NULL,
-            company TEXT,
-            title TEXT,
-            source TEXT DEFAULT 'manual' CHECK (source IN ('manual', 'email', 'sms', 'contacts_app', 'inferred', 'android_sync', 'iphone', 'outlook', 'google_contacts')),
-            last_inbound_at DATETIME,
-            last_outbound_at DATETIME,
-            total_messages INTEGER DEFAULT 0,
-            tags TEXT,
-            is_imported INTEGER DEFAULT 1,
-            default_role TEXT,
-            metadata TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-          );
-        `);
-
-        // 2. Copy existing data by the INTERSECTION of old + new columns.
-        //    In a real install the old `contacts` already has the full 15-column
-        //    v36 shape, so this copies every column. Using an explicit column list
-        //    (rather than `SELECT *`) makes the rebuild resilient to a source table
-        //    whose column set differs from the target — e.g. a partial-schema DB —
-        //    instead of failing with "N columns but M values were supplied".
-        const oldCols = (
-          d.prepare("PRAGMA table_info(contacts)").all() as Array<{ name: string }>
-        ).map((c) => c.name);
-        const newCols = (
-          d.prepare("PRAGMA table_info(contacts_new)").all() as Array<{ name: string }>
-        ).map((c) => c.name);
-        const sharedCols = newCols.filter((c) => oldCols.includes(c));
-        if (sharedCols.length > 0) {
-          const colList = sharedCols.map((c) => `"${c}"`).join(", ");
-          d.exec(
-            `INSERT OR IGNORE INTO contacts_new (${colList}) SELECT ${colList} FROM contacts;`,
-          );
-        }
-
-        // 3. Drop views and triggers referencing contacts
-        d.exec("DROP VIEW IF EXISTS contact_lookup;");
-        d.exec("DROP TRIGGER IF EXISTS update_contacts_timestamp;");
-
-        // 4. Drop old table
-        d.exec("DROP TABLE IF EXISTS contacts;");
-
-        // 5. Rename new table
-        d.exec("ALTER TABLE contacts_new RENAME TO contacts;");
-
-        // 6. Recreate indexes (all 4 — omitting any silently drops them)
-        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_user_id ON contacts(user_id);");
-        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_display_name ON contacts(display_name);");
-        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_is_imported ON contacts(is_imported);");
-        d.exec("CREATE INDEX IF NOT EXISTS idx_contacts_user_imported ON contacts(user_id, is_imported);");
-
-        // 7. Recreate trigger
-        d.exec(`
-          CREATE TRIGGER IF NOT EXISTS update_contacts_timestamp
-          AFTER UPDATE ON contacts
-          BEGIN
-            UPDATE contacts SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
-          END;
-        `);
-
-        // 8. Recreate contact_lookup view
-        d.exec(`
-          CREATE VIEW IF NOT EXISTS contact_lookup AS
-          SELECT
-            c.id as contact_id,
-            c.user_id,
-            c.display_name,
-            ce.email,
-            cp.phone_e164 as phone
-          FROM contacts c
-          LEFT JOIN contact_emails ce ON c.id = ce.contact_id
-          LEFT JOIN contact_phones cp ON c.id = cp.contact_id;
-        `);
-      },
-    },
-    {
-      version: 49,
-      description:
-        "Conservative best-effort backfill of existing contacts.source into distinct per-origin values from the external_contacts shadow table (BACKLOG-1900 P0.4)",
-      migrate: (d) => {
-        // BACKLOG-1900 P0.4 — CONSERVATIVE backfill.
-        //
-        // Pre-P0.2 imports collapsed every non-outlook/google origin (iPhone,
-        // Android, macOS address book, unknown) into contacts.source='contacts_app'
-        // (the old contactHandlers :608-610 ternary). P0.2 fixed the go-forward
-        // write path; this migration reclassifies EXISTING 'contacts_app' rows —
-        // but ONLY where the origin can be determined RELIABLY.
-        //
-        // The only trustworthy per-row provenance signal is the `external_contacts`
-        // shadow table, whose `source` column records the actual provider
-        // (macos | iphone | outlook | google_contacts | android_sync). Because we
-        // read a RECORDED origin, we never guess iPhone-vs-Gmail from an email
-        // domain — the locked conservative rule is satisfied structurally.
-        //
-        // Matching mirrors the app's own contacts<->external_contacts join
-        // (contactHandlers.ts:130-149): identity by user_id + display_name.
-        //
-        // SAFETY RULES:
-        //   - Only rows currently source='contacts_app' are candidates (the collapse
-        //     bucket). 'email' rows are message-derived and never appear in
-        //     external_contacts, so they are out of scope and untouched.
-        //   - Reclassify ONLY when the matched external rows resolve to EXACTLY ONE
-        //     distinct NEW source (iphone / android_sync / outlook / google_contacts).
-        //     'macos' maps back to 'contacts_app' (no change). Zero matches, a
-        //     macos-only match, or CONFLICTING sources (e.g. two people sharing a
-        //     display name across providers) => leave unchanged. A missed
-        //     reclassification is acceptable; a wrong one is not.
-        //   - Pure UPDATE of contacts.source; contact ids are untouched, so all
-        //     child rows (contact_emails/phones, transaction_participants/contacts,
-        //     classification_feedback) are unaffected. No table rebuild, so views /
-        //     triggers / indexes are left intact (nothing to recreate).
-        //   - Idempotent: reclassified rows are no longer 'contacts_app', so a
-        //     second run selects nothing and no-ops.
-
-        // Defensive guard: both tables must exist (a minimal/partial-schema DB may
-        // lack external_contacts). Skip cleanly rather than throwing.
-        const hasContacts = d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='contacts'")
-          .get();
-        const hasExternal = d
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='external_contacts'",
-          )
-          .get();
-        if (!hasContacts || !hasExternal) {
-          return;
-        }
-
-        // Map an external_contacts.source to the persisted contacts.source value.
-        // Mirrors contactHandlers.toPersistedContactSource: macos + unknown fold to
-        // 'contacts_app'; the four distinct origins pass through unchanged.
-        const NEW_DISTINCT = new Set(["iphone", "android_sync", "outlook", "google_contacts"]);
-        const mapExternalSource = (s: string | null): string => {
-          if (s && NEW_DISTINCT.has(s)) return s;
-          return "contacts_app"; // 'macos' and anything unknown/NULL
-        };
-
-        // Candidate contacts: currently in the collapse bucket, imported (never
-        // hand-created), with a usable name. is_imported = 1 excludes the rare
-        // manual contact that somehow carries source='contacts_app' — the origin
-        // these distinct values represent is always an address-book IMPORT, so a
-        // name-collision reclassify of a hand-made contact would be undesirable.
-        const candidates = d
-          .prepare(
-            `SELECT id, user_id, display_name
-               FROM contacts
-              WHERE source = 'contacts_app'
-                AND is_imported = 1
-                AND display_name IS NOT NULL
-                AND display_name <> ''`,
-          )
-          .all() as Array<{ id: string; user_id: string; display_name: string }>;
-
-        // Identity match against external_contacts of the SAME user, by EXACT
-        // (case-sensitive, no-trim) name equality.
-        //
-        // BACKLOG-2401 NOTE — the justification below is now HISTORICAL. This
-        // once mirrored "the app's own contacts<->external_contacts join", and
-        // that join is gone: both the handler and the worker now resolve through
-        // the `contact_source_links` crosswalk (source id, then email, then
-        // phone, never name). BEHAVIOUR HERE IS DELIBERATELY UNCHANGED — v49 is
-        // a one-shot, idempotent, already-shipped backfill, and rewriting a
-        // migration that has already run on real installs to use a table that
-        // did not exist when it ran would change history for no benefit. Left
-        // exactly as it shipped; only the comment is corrected, so the next
-        // reader does not take it as a live description of how the app matches
-        // contacts.
-        //
-        // (Original reasoning:) matching the app's notion of "same person"
-        // exactly was deliberate — broadening it (LOWER/TRIM) could pull in a
-        // row the app itself would treat as a different contact and risk a WRONG
-        // reclassification, the one outcome the locked rule forbids.
-        const findExternalSources = d.prepare(
-          `SELECT DISTINCT source
-             FROM external_contacts
-            WHERE user_id = ?
-              AND name IS NOT NULL
-              AND name <> ''
-              AND name = ?`,
-        );
-        const updateSource = d.prepare("UPDATE contacts SET source = ? WHERE id = ?");
-
-        // Per-target counters for QA review.
-        const counts: Record<string, number> = {
-          iphone: 0,
-          android_sync: 0,
-          outlook: 0,
-          google_contacts: 0,
-        };
-        let ambiguous = 0;
-        let noMatch = 0;
-
-        for (const c of candidates) {
-          const rows = findExternalSources.all(c.user_id, c.display_name) as Array<{
-            source: string | null;
-          }>;
-          if (rows.length === 0) {
-            noMatch++;
-            continue;
-          }
-
-          // Collapse to the DISTINCT set of MAPPED sources (macos/unknown -> contacts_app).
-          const mapped = [...new Set(rows.map((r) => mapExternalSource(r.source)))];
-
-          // Reclassify ONLY when EVERY matched row resolves to the SAME single new
-          // origin — i.e. the distinct mapped set is exactly {one new value}. This is
-          // strictly conservative:
-          //   - {iphone}                    -> reclassify to iphone
-          //   - {macos->contacts_app}       -> set is {contacts_app}, not a new value -> leave
-          //   - {macos->contacts_app, iphone} (same person in Mac book + iPhone)
-          //                                 -> set size 2 -> AMBIGUOUS -> leave (the row is
-          //                                    genuinely a desktop contact too; don't guess).
-          //   - {iphone, google_contacts}   -> set size 2 -> AMBIGUOUS -> leave.
-          // Any disagreement among recorded origins => unchanged. A missed
-          // reclassification is acceptable; a wrong one is not.
-          if (mapped.length === 1 && NEW_DISTINCT.has(mapped[0])) {
-            const target = mapped[0];
-            updateSource.run(target, c.id);
-            counts[target] = (counts[target] ?? 0) + 1;
-          } else if (mapped.length === 1) {
-            // Sole match is macos/unknown -> maps to contacts_app (== current) -> leave.
-            noMatch++;
-          } else {
-            // 2+ distinct mapped origins (incl. macos alongside a distinct provider)
-            // -> cannot safely attribute a single origin -> leave unchanged.
-            ambiguous++;
-          }
-        }
-
-        const reclassified =
-          counts.iphone + counts.android_sync + counts.outlook + counts.google_contacts;
-        // eslint-disable-next-line no-console
-        console.log(
-          `[migration v49] contact-source backfill (BACKLOG-1900 P0.4): reclassified ${reclassified} ` +
-            `(iphone=${counts.iphone}, android_sync=${counts.android_sync}, ` +
-            `outlook=${counts.outlook}, google_contacts=${counts.google_contacts}); ` +
-            `left unchanged: ${ambiguous} ambiguous, ${noMatch} no-distinct-match, ` +
-            `of ${candidates.length} contacts_app candidate(s)`,
-        );
-      },
-    },
-    {
-      version: 50,
-      description:
-        "Add transaction_unlocks_cache for offline reading of already-unlocked transactions (BACKLOG-2006a paywall)",
-      migrate: (d) => {
-        // BACKLOG-2006a — OFFLINE ENTITLEMENT CACHE.
-        //
-        // A LOCAL mirror of confirmed server `transaction_unlocks` rows, used
-        // ONLY to allow reading an ALREADY-purchased transaction while offline.
-        //
-        // SECURITY INVARIANT (enforced in unlockCacheDbService + entitlementService,
-        // NOT by this schema): the cache is a convenience mirror, never a grantor.
-        //   - A row is written here ONLY after a live server read confirms a
-        //     non-refunded unlock. A tampered/hand-inserted row can, at worst,
-        //     let a user read their OWN already-visible metadata offline — export
-        //     of the full record is separately gated in the main-process export
-        //     handler, which prefers the server truth when online.
-        //   - Cache MISS or empty = LOCKED. Absence never implies unlocked.
-        //
-        // Keyed by (local_transaction_id, user_id): local_transaction_id is the
-        // per-device Transaction.id (== transaction_unlocks.local_transaction_id);
-        // user_id scopes rows so a device shared across accounts never leaks an
-        // unlock across users.
-        //
-        // Idempotent: CREATE TABLE / INDEX IF NOT EXISTS.
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS transaction_unlocks_cache (
-            local_transaction_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            unlocked_at TEXT NOT NULL,
-            funding_source TEXT,
-            cached_at TEXT NOT NULL DEFAULT (datetime('now')),
-            PRIMARY KEY (local_transaction_id, user_id)
-          );
-          CREATE INDEX IF NOT EXISTS idx_transaction_unlocks_cache_user
-            ON transaction_unlocks_cache(user_id);
-        `);
-      },
-    },
-    {
-      version: 51,
-      description:
-        "Add transactions.first_exported_at freeze marker (BACKLOG-2013 unlock integrity)",
-      migrate: (d) => {
-        // BACKLOG-2013 — UNLOCK INTEGRITY / EXPORT FREEZE.
-        //
-        // `first_exported_at` records the timestamp of a transaction's FIRST
-        // successful export. It is the freeze boundary: once set, the identity
-        // ANCHORS (property address block, transaction type, and the audit start
-        // date) are frozen (BACKLOG-2150 narrowed this from the original wider
-        // set). Everything else — the end date, linked comms, and parties — stays
-        // editable. See transactionFreezePolicy.ts + the enforcement in
-        // transactionDbService.updateTransaction.
-        //
-        // Distinct from the existing `last_exported_at` / `last_exported_on` /
-        // `export_count` columns: those update on EVERY export (re-exports are
-        // allowed forever). `first_exported_at` is write-once (only set when
-        // NULL) and is what admin unfreeze clears.
-        //
-        // Nullable, no default: existing rows stay NULL = not-yet-exported =
-        // fully editable, which is the correct pre-export state. A best-effort
-        // backfill from already-exported rows is applied below so transactions
-        // exported before this migration are also protected.
-        //
-        // Defensive guard: `transactions` always exists in a real install, but
-        // a minimal/partial-schema DB may lack it — skip cleanly.
-        const hasTransactions = d
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='transactions'",
-          )
-          .get();
-        if (!hasTransactions) {
-          return;
-        }
-
-        // Idempotent ADD COLUMN: only add when the column is absent (a re-run or
-        // a schema.sql-created DB that already declares it must not throw).
-        const cols = (
-          d.prepare("PRAGMA table_info(transactions)").all() as Array<{ name: string }>
-        ).map((c) => c.name);
-        if (!cols.includes("first_exported_at")) {
-          d.exec("ALTER TABLE transactions ADD COLUMN first_exported_at DATETIME");
-        }
-
-        // Best-effort backfill: any transaction already marked exported before
-        // this migration should also be frozen. Prefer the most reliable
-        // existing timestamp (last_exported_at, then last_exported_on); fall
-        // back to updated_at only when the row is flagged exported but carries
-        // no export timestamp. Only touches rows where first_exported_at IS NULL,
-        // so it is idempotent and never overwrites a real first-export time.
-        //
-        // The export-tracking columns are ALL present in a real install, but a
-        // minimal/partial-schema DB (e.g. a legacy-dedup migration fixture) may
-        // lack some of them. Compose the SQL from only the columns that exist so
-        // the backfill degrades gracefully instead of erroring on "no such
-        // column". If NONE of the signal columns exist, skip the backfill (a DB
-        // with no export tracking at all has nothing to freeze retroactively).
-        const has = (c: string): boolean => cols.includes(c);
-        const tsCandidates = [
-          "last_exported_at",
-          "last_exported_on",
-          "updated_at",
-        ].filter(has);
-        const flagConditions: string[] = [];
-        if (has("export_status")) flagConditions.push("export_status = 'exported'");
-        if (has("export_count")) flagConditions.push("COALESCE(export_count, 0) > 0");
-        if (has("last_exported_at")) flagConditions.push("last_exported_at IS NOT NULL");
-        if (has("last_exported_on")) flagConditions.push("last_exported_on IS NOT NULL");
-
-        if (tsCandidates.length > 0 && flagConditions.length > 0) {
-          // BACKLOG-2750: SQLite's COALESCE requires AT LEAST TWO arguments —
-          // `COALESCE(x)` is not a one-element identity, it throws
-          // "wrong number of arguments to function COALESCE()". The guard above
-          // is `length > 0`, so a `transactions` table carrying EXACTLY ONE of
-          // the three candidate timestamps emitted a one-argument COALESCE and
-          // failed the entire migration with "Migration 51 ... failed", which
-          // the runner escalates to a restore-from-backup.
-          //
-          // WHERE IT IS AND IS NOT REACHABLE — measured, because the first
-          // version of this comment asserted a production crash and was WRONG.
-          //
-          // NOT reachable on any shipped database. The condition needs EXACTLY
-          // ONE of the three timestamps present, plus at least one export flag.
-          // Checked against every historical `schema.sql` state carrying a
-          // `transactions` table (70 of 70) by rebuilding each and reading
-          // `PRAGMA table_info`: ZERO match. No shipped route — neither the
-          // pre-consolidation heal paths nor the versioned chain — yields export
-          // flags without an export timestamp, because the flag and timestamp
-          // columns arrived together (6c0e67ed5, 2025-11-17).
-          //
-          // Reachable from the MIGRATION TEST HARNESS's minimal `transactions`
-          // table, which carries `updated_at` and an export flag but neither
-          // `last_exported_*`. v63 adds `last_exported_on` to exactly such a
-          // table, producing the single candidate — which is why the whole
-          // `migration-v43` suite went red the moment v63 landed.
-          //
-          // So this is a PREREQUISITE for v63, not an independent production
-          // bug fix. It remains a genuine latent defect — the guard says `> 0`
-          // where the SQL requires `>= 2` — and any future migration or schema
-          // re-baseline that adds one of these columns without the others would
-          // reach it for real. Directly regression-tested in
-          // `databaseService.migration-v51.coalesce.test.ts`.
-          //
-          // A single candidate is its own coalesce, so emit the bare column.
-          const tsExpr =
-            tsCandidates.length === 1
-              ? tsCandidates[0]
-              : `COALESCE(${tsCandidates.join(", ")})`;
-          d.exec(`
-            UPDATE transactions
-               SET first_exported_at = ${tsExpr}
-             WHERE first_exported_at IS NULL
-               AND (${flagConditions.join(" OR ")});
-          `);
-        }
-      },
-    },
-    {
-      version: 52,
-      description:
-        "Add messages.associated_message_type + associated_message_guid for iMessage reactions/tapbacks (BACKLOG-2280)",
-      migrate: (d) => {
-        // BACKLOG-2280 — IMPORT + DISPLAY + EXPORT REACTIONS.
-        //
-        // iMessage tapbacks (reactions) were previously dropped at import. They are
-        // now stored as ordinary `messages` rows tagged with:
-        //   - associated_message_type: Apple raw code (2000–2005 add / 3000–3005
-        //     remove). NULL for normal messages.
-        //   - associated_message_guid: the NORMALIZED guid of the target message
-        //     (matches the parent's external_id). NULL for normal messages.
-        // Reactions are partitioned to their parent and rendered as pills at read
-        // time (see utils/reactionUtils.ts). A non-null associated_message_type
-        // marks a row as a reaction.
-        //
-        // Defensive guard: `messages` always exists in a real install, but a
-        // minimal/partial-schema DB may lack it — skip cleanly.
-        const hasMessages = d
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'",
-          )
-          .get();
-        if (!hasMessages) {
-          return;
-        }
-
-        // Idempotent ADD COLUMN: only add when absent (a re-run or a
-        // schema.sql-created DB that already declares the columns must not throw).
-        const cols = (
-          d.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>
-        ).map((c) => c.name);
-        if (!cols.includes("associated_message_type")) {
-          d.exec("ALTER TABLE messages ADD COLUMN associated_message_type INTEGER");
-        }
-        if (!cols.includes("associated_message_guid")) {
-          d.exec("ALTER TABLE messages ADD COLUMN associated_message_guid TEXT");
-        }
-
-        // Partial index: reaction rows are a small fraction of all messages, so a
-        // partial index keyed on the target guid keeps parent→reaction lookups
-        // cheap without bloating the index for the (vast) non-reaction majority.
-        d.exec(
-          "CREATE INDEX IF NOT EXISTS idx_messages_assoc_guid " +
-            "ON messages(associated_message_guid) " +
-            "WHERE associated_message_type IS NOT NULL",
-        );
-      },
-    },
-    {
-      version: 53,
-      description:
-        "Add message_import_state (audit-window messages-completeness watermarks) + guarantee idx_messages_user_sent for the MIN(sent_at) floor (BACKLOG-2292)",
-      migrate: (d) => {
-        // BACKLOG-2292 — AUDIT-WINDOW MESSAGES COMPLETENESS ("an audit can never
-        // be silently incomplete"). The messages twin of the email lifecycle
-        // (email_sync_state + transactionSyncTrigger).
-        //
-        // (1) message_import_state — per-user watermarks. NOT the gap-detection
-        //     floor-of-record (that stays MIN(sent_at) over non-reaction rows —
-        //     SR-correction b). This table records only:
-        //       - last_import_at / last_expansion_at : import→expansion staleness
-        //       - deepest_import_start : the EARLIEST auditPeriodStart any targeted
-        //         import has actually SCANNED the device back to. The export
-        //         completeness gate requires deepest_import_start <= the audit
-        //         start (SR D2 fix) so a stale global "an import once ran" boolean
-        //         can never falsely report a widened window complete (e.g. FDA
-        //         lost after a prior shallow import, then start moved earlier).
-        //
-        //     CREATE body kept byte-for-byte in sync with
-        //     electron/database/schema.sql (BACKLOG-1770 schema-parity CI test).
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS message_import_state (
-            user_id TEXT PRIMARY KEY,
-            last_import_at DATETIME,
-            last_expansion_at DATETIME,
-            deepest_import_start DATETIME,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-          )
-        `);
-
-        // (2) idx_messages_user_sent — the MIN(sent_at) floor query
-        //     (auditCoverageService) relies on this composite index. It is
-        //     declared in schema.sql (idempotent, re-exec'd on startup), but was
-        //     otherwise only created inside maintenanceDbService.reindexDatabase()
-        //     — NOT guaranteed on a normal DB that never ran a manual reindex
-        //     (SR-correction b). Creating it here in the versioned chain
-        //     guarantees the index exists on every upgraded install.
-        //
-        //     Defensive guard (mirrors v52): `messages` always exists in a real
-        //     install, but a minimal/partial-schema DB (e.g. a migration fixture)
-        //     may lack the table OR the `sent_at` column — skip the index cleanly
-        //     rather than throwing "no such table" / "no such column". schema.sql
-        //     creates both the table and this index on a real install. Index body
-        //     kept byte-for-byte in sync with schema.sql.
-        const hasMessages = d
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'",
-          )
-          .get();
-        if (hasMessages) {
-          const messageCols = (
-            d.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>
-          ).map((c) => c.name);
-          if (messageCols.includes("sent_at")) {
-            d.exec(
-              "CREATE INDEX IF NOT EXISTS idx_messages_user_sent ON messages(user_id, sent_at)",
-            );
-          }
-        }
-      },
-    },
-    {
-      version: 54,
-      description:
-        "Recreate sync_session_id indexes in the versioned chain so fresh installs get them WITHOUT a schema.sql standalone index that crashes real <=v31 upgrades (BACKLOG-2300)",
-      migrate: (d) => {
-        // BACKLOG-2300 — SAME CLASS AS BACKLOG-2298 (no-such-column migration crash).
-        //
-        // The three sync_session_id indexes (TASK-2110 / migration v32) were "folded"
-        // into electron/database/schema.sql for fresh-install parity, but as STANDALONE
-        // `CREATE INDEX ... ON <table>(... sync_session_id)` statements. runMigrations()
-        // execs schema.sql BEFORE the versioned chain (schema.sql exec → then
-        // _runVersionedMigrations), so on a real UPGRADE from schema_version <= 31 —
-        // where messages / attachments / external_contacts already exist but predate the
-        // v32 column — exec(schema.sql) threw "no such column: sync_session_id" and
-        // aborted the whole migration (auto-restore → stuck on "Starting up your secure
-        // database"). The fix removes those standalone indexes from schema.sql; the
-        // `sync_session_id` COLUMNS stay in CREATE TABLE there for fresh-install parity.
-        //
-        // This migration recreates the indexes in the versioned chain so BOTH paths get
-        // them:
-        //   - UPGRADE THROUGH v32: v32 adds the columns + indexes; this re-ensures them
-        //     (idempotent no-op).
-        //   - FRESH install: schema.sql declares version 32, so the runner SKIPS v32 —
-        //     this migration (v54 > 32) is what actually creates the indexes.
-        //
-        // Defensive guard (mirrors v52 / v53): the column is guaranteed present by v32 in
-        // a real chain, but a minimal/partial-schema DB (e.g. a migration fixture) may
-        // lack the table OR the column — skip cleanly rather than throwing "no such
-        // table" / "no such column". Index bodies kept byte-for-byte in sync with the
-        // CREATE TABLE columns in electron/database/schema.sql.
-        const specs: Array<{ table: string; body: string }> = [
-          {
-            table: "messages",
-            body: "CREATE INDEX IF NOT EXISTS idx_messages_sync_session ON messages(user_id, sync_session_id)",
-          },
-          {
-            table: "attachments",
-            body: "CREATE INDEX IF NOT EXISTS idx_attachments_sync_session ON attachments(sync_session_id)",
-          },
-          {
-            table: "external_contacts",
-            body: "CREATE INDEX IF NOT EXISTS idx_external_contacts_sync_session ON external_contacts(user_id, sync_session_id)",
-          },
-        ];
-        for (const { table, body } of specs) {
-          const hasTable = d
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
-            .get(table);
-          if (!hasTable) continue;
-          const cols = (
-            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
-          ).map((c) => c.name);
-          if (!cols.includes("sync_session_id")) continue;
-          d.exec(body);
-        }
-      },
-    },
-    {
-      version: 55,
-      description:
-        "Add match_reason to communications + ignored_communications for the Needs-review surface (BACKLOG-2319)",
-      migrate: (d) => {
-        // BACKLOG-2319 — EMAIL MATCH TRANSPARENCY / "NEEDS REVIEW".
-        //
-        // `match_reason` records WHY an email is attached to a transaction so the
-        // Emails tab can surface contact-only (address-missing) emails for review
-        // instead of hiding them. Values written by the app:
-        //   'address_found'   — body mentions the property address (or no address
-        //                        to check, or the contact maps to a single deal)
-        //   'address_missing' — ambiguous: multiple deals share the contact and the
-        //                        body never names the address → Needs review
-        //   'manual'          — user attached it by hand
-        //   'user_confirmed'  — user confirmed a Needs-review email → Linked
-        //
-        // Existing rows stay NULL. The renderer treats NULL as 'address_found'
-        // (Linked), so nothing an already-linked user sees reclassifies on upgrade.
-        //
-        // The same column is added to ignored_communications so a removed email's
-        // classification survives removal and a restore returns it to the correct
-        // section (address_missing → Needs review, never auto-promoted to Linked).
-        //
-        // DELIBERATELY NO INDEX on match_reason. The set is read per-transaction
-        // (tiny) and — per the BACKLOG-2298 incident — a schema.sql top-level
-        // `CREATE INDEX ... ON t(match_reason)` would run BEFORE this migration on
-        // a real old→new upgrade and fail with "no such column". Column-only add
-        // + no standalone index means the upgrade path is safe.
-        //
-        // Idempotent: guarded ADD COLUMN so a re-run, or a fresh DB that already
-        // declares the column via schema.sql, does not throw.
-        const addMatchReason = (table: string): void => {
-          const exists = d
-            .prepare(
-              "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
-            )
-            .get(table);
-          if (!exists) {
-            return;
-          }
-          const cols = (
-            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
-          ).map((c) => c.name);
-          if (!cols.includes("match_reason")) {
-            d.exec(`ALTER TABLE ${table} ADD COLUMN match_reason TEXT`);
-          }
-        };
-
-        addMatchReason("communications");
-        addMatchReason("ignored_communications");
-      },
-    },
-    {
-      version: 56,
-      description:
-        "Add removed_at/removed_reason tombstone columns to contacts + transaction_contacts (BACKLOG-2364)",
-      migrate: (d) => {
-        // BACKLOG-2364 — SUBSTRATE ONLY. Nothing reads or writes these columns
-        // yet; BACKLOG-2365 (remove/restore) and BACKLOG-2366 (filtered reads)
-        // do. Every existing row keeps removed_at NULL = active, so no user sees
-        // anything change on upgrade.
-        //
-        // THIS MIGRATION IS THE ONLY SOURCE OF THESE COLUMNS ON BOTH INSTALL
-        // PATHS. schema.sql deliberately declares them on NEITHER table:
-        //   - contacts: migration v36 copies it positionally into a 15-column
-        //     contacts_new (see the DANGER block above CREATE TABLE contacts in
-        //     schema.sql), so a 16th column there breaks every fresh install.
-        //   - transaction_contacts: kept symmetrical with contacts so both
-        //     tables gain the columns from exactly one place — here.
-        // Fresh install: schema.sql creates both tables without the columns →
-        // chain replays from 32 → this ALTER appends them. Existing install:
-        // same ALTER. Both converge on an identical shape, so schema-parity
-        // needs no KNOWN_DRIFT pin.
-        //
-        // NO INDEX HERE — deliberate. Each candidate partial index duplicated the
-        // leading column of an index that already exists (idx_contacts_user_id,
-        // idx_transaction_contacts_transaction, idx_transaction_contacts_contact),
-        // so it would open no new access path while costing a B-tree on every
-        // write to two hot tables. The useful index shape is not knowable until
-        // BACKLOG-2366 defines the read (plausibly a covering
-        // contacts(user_id, display_name) WHERE removed_at IS NULL). Ship the
-        // index with the query, per v40/v52/v53/v54. Just as important: it must
-        // NEVER be added as a standalone CREATE INDEX in schema.sql — that file
-        // is exec'd BEFORE this chain, so an index on a not-yet-added column
-        // throws "no such column" on every real upgrade (BACKLOG-2298/2300).
-        //
-        // The column guard gives re-run idempotency (and lets BACKLOG-2373's
-        // planned blueprint re-baseline declare these columns in schema.sql
-        // without this ALTER then throwing "duplicate column name"). The table
-        // guard mirrors v48/v52/v53/v54/v55: a real install always has both
-        // tables, but a minimal partial-schema fixture may not.
-        const TOMBSTONE_COLUMNS: Array<{ name: string; ddl: string }> = [
-          { name: "removed_at", ddl: "removed_at DATETIME" },
-          { name: "removed_reason", ddl: "removed_reason TEXT" },
-        ];
-
-        for (const table of ["contacts", "transaction_contacts"]) {
-          const hasTable = d
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
-            .get(table);
-          if (!hasTable) continue;
-
-          const cols = (
-            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
-          ).map((c) => c.name);
-
-          for (const { name, ddl } of TOMBSTONE_COLUMNS) {
-            if (!cols.includes(name)) {
-              d.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
-            }
-          }
-        }
-      },
-    },
-    {
-      version: 57,
-      description:
-        "Add contact_source_links crosswalk (contact <-> external source record identity) (BACKLOG-2401)",
-      migrate: (d) => {
-        // BACKLOG-2401 — SOURCE IDENTITY SUBSTRATE.
-        //
-        // THE DEFECT THIS REPLACES. The only bridge from a saved contact back to
-        // the address book was display-name string equality
-        // (contactHandlers.ts: `... FROM external_contacts WHERE user_id = ? AND
-        // name = ?`). Rename yourself in Contacts.app and you become a different
-        // person to Keepr: the saved record orphans, stops receiving updates, and
-        // re-offers itself in the picker as new.
-        //
-        // WHY A TABLE AND NOT TWO COLUMNS ON `contacts`. One contact legitimately
-        // maps to MANY source records. There are five sources, and after
-        // BACKLOG-2392 the macOS reader returns EVERY address book, so one person
-        // in both iCloud and Exchange already yields two macOS records before any
-        // other source is considered. A single column keeps whichever import
-        // happened to run last and silently drops every other source's updates.
-        // It is also the shape the dedup rule (BACKLOG-2370) needs anyway: a merge
-        // becomes re-pointing crosswalk rows rather than destroying a link.
-        //
-        // IDENTITY IS THE PAIR (source_type, source_record_id) — never the id
-        // alone. Each source has its own id space and nothing prevents collisions
-        // between them:
-        //     macos            <UUID>:ABPerson       (ZUNIQUEID)
-        //     outlook          Microsoft Graph contact id
-        //     google_contacts  people/c123456
-        //     iphone           backup contact id
-        //     android_sync     companion-supplied id
-        // Hence UNIQUE(user_id, source_type, source_record_id), mirroring the
-        // constraint external_contacts already carries: one source record can
-        // never be claimed by two contacts.
-        //
-        // `source_type` REUSES the ExternalContactSource union
-        // (externalContactDbService.ts). It is deliberately NOT `contacts.source`,
-        // which is a different, display-facing vocabulary whose CHECK maps macOS
-        // to 'contacts_app'. Conflating the two is the mistake this CHECK exists
-        // to prevent.
-        //
-        // EVERY ROW RECORDS **HOW** IT WAS MADE, not merely that it exists. Today
-        // every link is deterministic; the auto-matching feature (BACKLOG-2273)
-        // will write scored guesses into this same table. If the row records only
-        // the fact, a certain link and a probabilistic one are indistinguishable
-        // the moment they are written and no later work can separate them — and
-        // this CANNOT be retrofitted, because you cannot determine after the fact
-        // how a link was made. `confidence` stays NULL for deterministic links.
-        // `evidence_ref` is the (currently unused) hook for BACKLOG-2269.
-        // NO SCORING IS IMPLEMENTED IN THIS TASK — only the shape that admits it.
-        //
-        // `external_uuid` CAPTURES ZEXTERNALUUID AND NOTHING READS IT YET. It is
-        // the macOS CardDAV server-side identity that sits beside the device-local
-        // ZUNIQUEID (measured 1125/1128 populated: the 3 nulls are a group, an
-        // info row and a container). ZUNIQUEID is device-local — two Macs on one
-        // iCloud account assign different values — so it must NEVER become a cloud
-        // sync key. external_uuid is the only candidate portable identifier, and
-        // capturing it is nearly free now and IMPOSSIBLE later for any user who
-        // changes machines or reinstalls: you cannot go back and read a store that
-        // no longer exists. Its portability is UNVERIFIED (it needs two Macs on one
-        // account to confirm), so nothing may depend on it until it is.
-        //
-        // NO BACKFILL HERE — DELIBERATE, founder decision 2026-08-02. Contacts
-        // imported before this ships get linked opportunistically on the next
-        // sync (email, then phone, NEVER name). That is less code than a batch
-        // job, self-healing, has no upgrade path to get wrong, and also covers
-        // contacts created after this ships that somehow lack a link. A one-time
-        // migration would cover none of that.
-        //
-        // schema.sql DOES NOT DECLARE THIS TABLE — this migration is its only
-        // source on BOTH install paths, exactly as v56 does for the tombstone
-        // columns. Fresh install: schema.sql seeds schema_version = 32, the chain
-        // replays and this CREATE TABLE runs. Existing install: same statement.
-        // Both converge on an identical shape, so schema-parity needs no
-        // KNOWN_DRIFT pin. It must NEVER be moved into schema.sql as a top-level
-        // CREATE INDEX either — that file is exec'd BEFORE this chain, so an index
-        // on a not-yet-created table throws on every real upgrade
-        // (BACKLOG-2298/2300).
-        //
-        // IF NOT EXISTS on both the table and the indexes gives re-run
-        // idempotency; the contacts table guard mirrors v48/v52..v56, where a
-        // minimal partial-schema fixture may not have the parent table.
-        const hasContacts = d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'contacts'")
-          .get();
-        if (!hasContacts) return;
-
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS contact_source_links (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            contact_id TEXT NOT NULL,
-            source_type TEXT NOT NULL CHECK (
-              source_type IN ('macos', 'iphone', 'outlook', 'google_contacts', 'android_sync')
-            ),
-            source_record_id TEXT NOT NULL,
-            external_uuid TEXT,
-            match_method TEXT NOT NULL CHECK (
-              match_method IN ('source_id', 'email', 'phone', 'manual', 'scored')
-            ),
-            confidence REAL,
-            matched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            evidence_ref TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
-            UNIQUE (user_id, source_type, source_record_id)
-          );
-        `);
-
-        // Two indexes, each shipped WITH the query that justifies it (the v56
-        // ruling), and neither duplicating an existing leading column:
-        //   - the UNIQUE constraint's auto-index already serves
-        //     source record -> contact, the hot resolution path.
-        //   - contact -> its source records has no other access path and is run by
-        //     the already-imported filter, which must treat a contact as imported
-        //     if ANY of its crosswalk rows matches, or the same person re-offers
-        //     itself once per source.
-        d.exec(`
-          CREATE INDEX IF NOT EXISTS idx_contact_source_links_contact
-            ON contact_source_links(contact_id);
-        `);
-
-        // ZEXTERNALUUID on the SHADOW ROW as well as on the link.
-        //
-        // The crosswalk only gains a row once a contact is imported, but the
-        // value has to survive from the moment the address book is READ — the
-        // opportunistic linker takes its candidates out of external_contacts, so
-        // without this column there is nowhere to hold the identifier between a
-        // sync and a link, and it would be discarded for every record the user
-        // has not imported yet. Those are exactly the records most likely to be
-        // imported on a FUTURE machine, which is the case the capture exists for.
-        //
-        // Guarded ADD COLUMN, the same pattern v40 used for
-        // phones_normalized_json. Safe here specifically because NOTHING copies
-        // external_contacts positionally — every migration that touches it names
-        // its columns. (`contacts` is the table with the 15-column `SELECT *`
-        // hazard; see the DANGER block in schema.sql.) Declared in schema.sql on
-        // NEITHER table, so this migration is the single source on both install
-        // paths and schema-parity needs no KNOWN_DRIFT pin.
-        const hasExternalContacts = d
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='external_contacts'",
-          )
-          .get();
-        if (hasExternalContacts) {
-          const cols = (
-            d.prepare("PRAGMA table_info(external_contacts)").all() as Array<{ name: string }>
-          ).map((c) => c.name);
-          if (!cols.includes("external_uuid")) {
-            d.exec("ALTER TABLE external_contacts ADD COLUMN external_uuid TEXT");
-          }
-        }
-      },
-    },
-    {
-      version: 58,
-      description:
-        "Add external_contacts.source_identity_json — capture stable per-source contact identifiers (BACKLOG-2407)",
-      migrate: (d) => {
-        // BACKLOG-2407 — CAPTURE THE IDENTIFIERS THAT CANNOT BE RECOVERED LATER.
-        //
-        // WHAT LANDS HERE. Source-specific identity read at import and stored
-        // beside `external_record_id`, which is UNCHANGED — this is not a re-key:
-        //   iphone        ABPerson.ExternalIdentifier, ExternalModificationTag,
-        //                 ModificationDate, CreationDate, StoreID
-        //   android_sync  ContactsContract LOOKUP_KEY
-        // ABPerson.ExternalUUID does NOT land here — it goes in `external_uuid`,
-        // the column v57 added for the macOS ZEXTERNALUUID, because it is the
-        // same concept (the server/CardDAV store identity sitting beside a
-        // device-local rowid) and putting it anywhere else would obscure that.
-        //
-        // WHY NOW, AND WHY IT CANNOT WAIT. Every one of these is free to read
-        // today and IMPOSSIBLE to read later: you cannot go back and read a phone
-        // the user no longer owns. Meanwhile `external_record_id` is a device-
-        // local row id on both paths — `ABPerson.ROWID` on iPhone, and on Android
-        // an `android-${deviceId}-${_ID}` whose deviceId is minted per pairing —
-        // so a device swap, a restore, or an address-book rebuild re-keys every
-        // contact. `external_contacts` is UNIQUE(user_id, source,
-        // external_record_id) with no re-key path: a changed id INSERTS a new row
-        // and the stale sweep removes the old one.
-        //
-        // NOTHING READS THIS COLUMN. It is written by upsertFromiPhone and
-        // upsertExternalContacts and read by no query, exactly as `external_uuid`
-        // was at v57. That is deliberate: portability is UNVERIFIED (ExternalUUID
-        // is expected to be NULL for contacts in the local "On My iPhone" store,
-        // and cross-device equality needs two devices on one iCloud account to
-        // confirm), so nothing may depend on it until it is measured. The parser
-        // reports its population rate at import for exactly that reason.
-        //
-        // WHY ONE JSON COLUMN. The fields share no shape across sources (iPhone
-        // five, Android one, macOS none). Six named columns growing per source
-        // would buy typing no query uses. Promotion stays cheap when one becomes
-        // a key: `json_extract(source_identity_json, '$.lookupKey')` in a later
-        // migration, safe because nothing copies `external_contacts` positionally
-        // — every migration touching it names its columns (the 15-column
-        // `SELECT *` hazard is on `contacts`; see the DANGER block in schema.sql).
-        // `SourceIdentity` + `serializeSourceIdentity` in externalContactDbService
-        // are the single typed writer, so the keys cannot drift between the two
-        // call sites.
-        //
-        // NO BACKFILL — there is nothing to backfill FROM. These values live on
-        // the device, not in our database; the only way to obtain them is the
-        // next sync, which captures them for free. A migration could not invent
-        // them.
-        //
-        // Guarded ADD COLUMN, the pattern v40 used for phones_normalized_json and
-        // v57 for external_uuid. NOT declared in schema.sql, so this migration is
-        // the single source on BOTH install paths (fresh: schema.sql seeds
-        // schema_version = 32 and the chain replays to here; existing: the same
-        // statement) — both converge on an identical shape, so schema-parity
-        // needs no KNOWN_DRIFT pin. It must NEVER gain a standalone CREATE INDEX
-        // in schema.sql either: that file is exec'd BEFORE this chain, so an index
-        // on a not-yet-added column throws on every real upgrade
-        // (BACKLOG-2298/2300). No index is added here at all — nothing queries
-        // this column, and an index shipped without its query is dead weight on a
-        // hot table (the v56 ruling).
-        const hasExternalContacts = d
-          .prepare(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='external_contacts'",
-          )
-          .get();
-        if (!hasExternalContacts) return;
-
-        const cols = (
-          d.prepare("PRAGMA table_info(external_contacts)").all() as Array<{ name: string }>
-        ).map((c) => c.name);
-        if (!cols.includes("source_identity_json")) {
-          d.exec("ALTER TABLE external_contacts ADD COLUMN source_identity_json TEXT");
-        }
-      },
-    },
-    {
-      version: 59,
-      description:
-        "Add the contact link review queue and its durable verdicts; admit the unique_name match method (BACKLOG-2410)",
-      migrate: (d) => {
-        // BACKLOG-2410 — WHERE A WITHHELD LINK GOES, AND WHAT A HUMAN ANSWER IS
-        // WORTH.
-        //
-        // v57 gave the linker the right instinct: a content match that would
-        // reassign a live identifier is WITHHELD rather than applied. But
-        // withheld meant counted-and-logged, and then nothing. There was no
-        // substrate to put the question on, so the middle band — the only band
-        // where a human adds information — was discarded on every sync.
-        //
-        // NUMBERED 59, NOT 58. BACKLOG-2407 (PR #2182) branched from the same
-        // base and claimed 58 first. `validateNoDuplicateVersions` turns a
-        // collision into a STARTUP failure for whoever merges second, so the
-        // number is not cosmetic — two migrations sharing a version is a crash,
-        // not a merge conflict.
-        //
-        // TWO TABLES, NOT ONE, AND THE SPLIT IS THE WHOLE POINT.
-        //
-        //   contact_link_proposals  — the QUEUE. Derived, recomputable, safe to
-        //                             lose. One row per (contact, source record)
-        //                             pair currently being asked about.
-        //   contact_link_verdicts   — the ANSWERS. Never derived, never
-        //                             recomputable, catastrophic to lose. One
-        //                             row per human decision, for all time.
-        //
-        // If they were one table, "re-run the matcher" and "forget what the user
-        // told us" would be the same operation. They must not be. A rules change
-        // legitimately rewrites every proposal; it may never touch a verdict.
-        //
-        // THE VERDICT IS KEYED ON THE PAIR, NOT ON THE REASON. A rejection means
-        // "this source record is not this person" — it does not mean "this
-        // source record is not this person BECAUSE of a phone-number collision".
-        // Keying on the reason would let a rules change (or a second matching
-        // rule reaching the same pair by another route) re-propose something the
-        // user has already answered, which is precisely the failure the durable
-        // store exists to prevent.
-        //
-        // TWO AXES, NOT ONE SCALE (founder decision, 2026-08-02). Identity and
-        // relationship are stored in separate columns with separate vocabularies:
-        //     identity      same_person | possibly_same_person | different_people
-        //     relationship  connected   | possibly_connected   | no_known_connection
-        // A buyer and a seller on one deal are `connected` + `different_people`.
-        // One collapsed 0..1 score cannot say that, and every product that tries
-        // ends up treating "strongly related" as "probably the same", which is
-        // the false-merge generator. Both columns are TEXT with CHECK
-        // constraints, never numbers: there is deliberately no score column here.
-        //
-        // WHY VERDICTS SNAPSHOT THEIR EVIDENCE. `evidence_json` is copied onto
-        // the verdict rather than being read back from the proposal. A verdict is
-        // a labelled training/regression example and a label is only usable with
-        // the features AS THEY WERE WHEN THE HUMAN SAW THEM. Recomputing the
-        // evidence later under changed rules would silently relabel history.
-        //
-        // THE DDL ITSELF IS NOT WRITTEN HERE — it is imported from
-        // `db/contactIdentitySchemaSql.ts`, which is its ONLY definition. It used
-        // to be inline, with a hand-written second copy in the test helper that
-        // every service suite actually ran against; the two could drift silently
-        // and did (dropping the proposals UNIQUE here changed no test). See that
-        // file's header for the full account.
-        const hasContacts = d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'contacts'")
-          .get();
-        if (!hasContacts) return;
-
-        // ------------------------------------------------------------------
-        // 1. THE QUEUE
-        // ------------------------------------------------------------------
-        // The pair UNIQUE is what makes a re-run idempotent: the linker writes
-        // proposals with INSERT OR IGNORE, so a pair that has already been
-        // answered keeps its resolved row and is never resurrected as pending.
-        d.exec(CONTACT_LINK_PROPOSALS_TABLE_SQL);
-
-        // The queue is read two ways and only two ways: "how many are waiting"
-        // (the button count) and "show me the waiting ones, grouped" (the modal).
-        // Both are user + status, then cluster. One index, shipped with the
-        // queries that justify it — the v56 ruling.
-        d.exec(CONTACT_LINK_PROPOSALS_INDEX_SQL);
-
-        // ------------------------------------------------------------------
-        // 2. THE VERDICTS — ground truth, and the only ground truth there is
-        // ------------------------------------------------------------------
-        d.exec(CONTACT_LINK_VERDICTS_TABLE_SQL);
-
-        // The hot read is the cannot-link consult, run once per candidate pair on
-        // every linking pass: "has this exact pair been answered, and what was
-        // the most recent answer?".
-        d.exec(CONTACT_LINK_VERDICTS_INDEX_SQL);
-
-        // ------------------------------------------------------------------
-        // 3. ADMIT `unique_name` TO contact_source_links.match_method
-        // ------------------------------------------------------------------
-        // The v57 CHECK lists source_id | email | phone | manual | scored. The
-        // unique-exact-name auto-link (founder decision, 2026-08-02) writes links
-        // that are none of those, and recording one as `email` or `phone` would
-        // be a lie told to the provenance screen — the screen whose entire job is
-        // to tell the user HOW a link was made so a wrong one can be found and
-        // undone. `manual` would be a worse lie: it would claim a human asserted
-        // something no human was asked about.
-        //
-        // SQLite cannot ALTER a CHECK, so this is the 12-step table rebuild.
-        //
-        // THE COPY IS BY NAME, NEVER POSITIONAL. Both sides of the
-        // INSERT ... SELECT list CONTACT_SOURCE_LINKS_COLUMNS explicitly. A
-        // positional `SELECT *` is what corrupted `audit_logs` in v33 and
-        // `contacts` in v36: every row survives, holding the neighbouring
-        // column's value, so no row count can detect it. The v59 test seeds a
-        // table whose columns are DECLARED IN A DIFFERENT ORDER and asserts the
-        // copy still lands field for field — that test fails under `SELECT *`.
-        //
-        // Guarded on the CHECK text so a re-run is a no-op: rebuilding an
-        // already-rebuilt table would work, but it would also churn every row's
-        // rowid for nothing.
-        const linksSql = d
-          .prepare(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='contact_source_links'",
-          )
-          .get() as { sql?: string | null } | undefined;
-
-        // `typeof === "string"`, NOT a truthiness check on the row.
-        // `sqlite_master.sql` is NULL for auto-created objects, and this
-        // migration also runs against partial-schema fixtures and fully mocked
-        // connections where the returned row is not the shape we asked for.
-        // Reading `.includes` off a non-string throws INSIDE a migration
-        // transaction, which the runner reports as a migration failure and
-        // escalates all the way to a restore-from-backup dialog — a
-        // catastrophic response to an absent table. Missing or unreadable DDL
-        // means "there is no rebuild to do", which is also the right answer for
-        // a database that has no crosswalk yet.
-        if (typeof linksSql?.sql === "string" && !linksSql.sql.includes("unique_name")) {
-          const TEMP_TABLE = "contact_source_links_v59";
-          const cols = CONTACT_SOURCE_LINKS_COLUMNS.join(", ");
-
-          d.exec(contactSourceLinksRebuildTableSql(TEMP_TABLE));
-          d.exec(
-            `INSERT INTO ${TEMP_TABLE} (${cols}) SELECT ${cols} FROM contact_source_links;`,
-          );
-          d.exec("DROP TABLE contact_source_links;");
-          d.exec(`ALTER TABLE ${TEMP_TABLE} RENAME TO contact_source_links;`);
-
-          // The rebuild dropped the table and with it its index. Recreate the
-          // one v57 shipped — contact -> its source records, which the
-          // already-imported filter and the provenance screen both run.
-          d.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
-        }
-      },
-    },
-    {
-      version: 60,
-      description:
-        "Recover which contact emails/phones were HAND-TYPED before provenance was recorded (BACKLOG-2427)",
-      migrate: (d) => {
-        // BACKLOG-2427 — THE PASS THAT STOPS THE UNLINK DELETING TYPED VALUES.
-        //
-        // BACKLOG-2427 lets "Not this person" remove the addresses a rejected
-        // source contributed, and it decides what a source contributed by
-        // reading `contact_emails.source = 'import'`.
-        //
-        // That column could not be trusted. Every value-level insert hard-coded
-        // 'import', INCLUDING the two the manual Add Contact form goes through
-        // (createContact's primary email/phone, and contacts:create's
-        // allEmails/allPhones). New writes now record the real provenance; this
-        // recovers it for rows already on disk, where a typed address and an
-        // address-book address are indistinguishable.
-        //
-        // The rule, and the direction it fails in, are in
-        // db/contactValueProvenanceBackfill.ts. In one line: a value that no
-        // currently-linked source record carries cannot have come from a
-        // source, so it is relabelled 'manual' and becomes non-removable — and
-        // anything ambiguous resolves the same way, because the cost of
-        // guessing wrong is a deleted client phone number.
-        //
-        // Data-only. No DDL, so there is none of the column/index ordering
-        // hazard BACKLOG-2298 hit on real upgrades.
-        const moved = relabelTypedContactValues(d as unknown as SyncSqliteDb);
-        if (moved.emails > 0 || moved.phones > 0) {
-          logService.info(
-            `[Migration v60] ${moved.emails} email(s) and ${moved.phones} phone(s) had no ` +
-              `linked source carrying them and were reclassified as hand-typed, so an ` +
-              `unlink can never remove them`,
-            "Database",
-          );
-        }
-      },
-    },
-    {
-      version: 61,
-      description:
-        "One source of truth for contact provenance: widen the crosswalk vocabulary so manual and message-derived contacts can have a link (BACKLOG-2473)",
-      migrate: (d) => {
-        // BACKLOG-2473 — THE MIGRATION THAT LETS `contact_source_links` ANSWER
-        // "WHERE DID THIS CONTACT COME FROM" FOR A CONTACT NOBODY IMPORTED.
-        //
-        // Until now it could only answer for contacts imported from an address
-        // book. A manual contact and a message-derived contact could not have a
-        // crosswalk row at all, because the v57 `source_type` CHECK admits only
-        // the five external sources. Provenance was therefore read from the
-        // crosswalk for some contacts and from the `contacts.source` scalar for
-        // others — one fact, two answers, which is the defect BACKLOG-2472 fixed
-        // one instance of.
-        //
-        // SCHEMA ONLY. This migration widens the vocabulary and writes NO ROWS.
-        // The rows are written going forward, at contact-create time, by
-        // `contactHandlers`. Founder decision 2026-08-04: the one user holding
-        // pre-crosswalk contacts is reinstalling onto a fresh instance, so a
-        // backfill would be a table-wide write inside a migration transaction
-        // for zero rows — risk with no beneficiary.
-        //
-        // The full rationale — including why an origin row must NOT suppress the
-        // content fallback in CONTACT_SOURCE_RECORDS_SQL, which is the way this
-        // change could break address resolution — is in db/contactOriginLink.ts.
-        // (BACKLOG-2669 has since deleted that content fallback, so the hazard is
-        // retired rather than merely avoided. The rationale is kept because it is
-        // the reason a reintroduced content branch would need the same care.)
-
-        // ------------------------------------------------------------------
-        // WIDEN THE VOCABULARY — the 12-step table rebuild, again
-        // ------------------------------------------------------------------
-        // SQLite cannot ALTER a CHECK, so admitting `manual`/`email`/`sms`/
-        // `inferred` as source types and `origin` as a match method means
-        // rebuilding the table. This is the same rebuild v59 did for
-        // `unique_name`; the shape is deliberately identical so the two can be
-        // compared line for line.
-        //
-        // THE COPY IS BY NAME, NEVER POSITIONAL. Both sides of the
-        // INSERT ... SELECT list CONTACT_SOURCE_LINKS_COLUMNS explicitly. A
-        // positional `SELECT *` is what corrupted `audit_logs` in v33 and
-        // `contacts` in v36: every row survives holding its neighbour's value,
-        // so no row count can detect it. `databaseService.migration-v61.test.ts`
-        // seeds a table whose columns are DECLARED IN A DIFFERENT ORDER and
-        // asserts the copy still lands field for field — that test fails under
-        // `SELECT *`, and it was confirmed to fail by running exactly that.
-        //
-        // Guarded on the CHECK text so a re-run is a no-op rather than churning
-        // every row's rowid for nothing. `typeof === "string"` and not a
-        // truthiness check on the row: `sqlite_master.sql` is NULL for
-        // auto-created objects, and this migration also runs against
-        // partial-schema fixtures where the table is absent entirely. Reading
-        // `.includes` off a non-string would throw INSIDE the migration
-        // transaction, which the runner escalates to a restore-from-backup
-        // dialog — a catastrophic response to an absent table.
-        const linksSql = d
-          .prepare(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='contact_source_links'",
-          )
-          .get() as { sql?: string | null } | undefined;
-
-        if (typeof linksSql?.sql !== "string") {
-          // No crosswalk on this database (pre-v57 partial fixture, or a mocked
-          // connection). Nothing to widen and nothing to backfill INTO.
-          return;
-        }
-
-        // `'origin'` is the marker v61 adds and nothing earlier can contain, so
-        // its presence is the exact test for "already rebuilt".
-        if (!linksSql.sql.includes("'origin'")) {
-          const TEMP_TABLE = "contact_source_links_v61";
-          const cols = CONTACT_SOURCE_LINKS_COLUMNS.join(", ");
-
-          d.exec(contactSourceLinksRebuildTableSql(TEMP_TABLE));
-          d.exec(
-            `INSERT INTO ${TEMP_TABLE} (${cols}) SELECT ${cols} FROM contact_source_links;`,
-          );
-          d.exec("DROP TABLE contact_source_links;");
-          d.exec(`ALTER TABLE ${TEMP_TABLE} RENAME TO contact_source_links;`);
-
-          // The rebuild dropped the table and with it its index. Recreate the
-          // one v57 shipped — contact -> its source records, which the
-          // already-imported filter and the provenance screen both run.
-          d.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
-
-          logService.info(
-            "[Migration v61] contact_source_links now admits manual and message-derived " +
-              "origins, so every newly created contact can record where it came from",
-            "Database",
-          );
-        }
-      },
-    },
-    {
-      version: 62,
-      description:
-        "Add emails.bulk_mail_headers to retain List-Unsubscribe/Precedence/Auto-Submitted/Authentication-Results (BACKLOG-2513)",
-      migrate: (d) => {
-        // BACKLOG-2513 — SUBSTRATE ONLY. Nothing reads this column yet, by
-        // design: it holds the raw bulk-mail headers that both providers send
-        // on every message and that were previously discarded at parse time.
-        //
-        // These are the negative-filter stage of the auto-detection design
-        // (BACKLOG-2500 §4.2) — the stage that exists because auto-detect
-        // manufactured transactions from commercial newsletters and bank mail
-        // and had to be switched off (BACKLOG-2499). Marketing mail announces
-        // itself in its headers; without them the only way to tell a newsletter
-        // from a person is to guess from content, which is what failed.
-        //
-        // Storing raw and deciding later is deliberate: a classifier written now
-        // would freeze a decision before scoring has measured anything
-        // (BACKLOG-2273). Do not add an is_bulk column here.
-        //
-        // NO BACKFILL — additive only. These are per-message facts that were
-        // never stored, so there is nothing on disk to derive them from; the
-        // only recovery would be re-reading every mailbox. Existing rows keep
-        // bulk_mail_headers NULL and no user sees anything change on upgrade.
-        //
-        // NO INDEX — deliberate, and load-bearing. Nothing reads the column, so
-        // an index would open no access path while costing a B-tree on every
-        // write to a hot table. Just as important, it must NEVER be added as a
-        // standalone CREATE INDEX in schema.sql: that file is exec'd BEFORE this
-        // chain, so an index on a not-yet-added column throws "no such column"
-        // on every real upgrade (BACKLOG-2298/2300, shipped broken in July and
-        // caught only by founder live QA). Ship the index with the query.
-        //
-        // schema.sql ALSO declares this column, matching the v46
-        // validated_at/ingest_source convention. That is readability, not
-        // necessity — schema-parity exec's schema.sql on both of its paths, so
-        // this ALTER alone would satisfy it (cf. v56, declared in neither
-        // table). It is safe only because `emails` is never positionally copied:
-        // the v36-era positional copies touched `contacts` and `audit_logs`
-        // only, and both were converted to explicit column lists by
-        // BACKLOG-2371.
-        //
-        // Consequence worth knowing: a fresh install gets the column mid-table
-        // (where schema.sql declares it) while a genuine upgrade appends it
-        // last, so physical column ordinals differ between the two. Harmless
-        // here — the emails INSERT binds named columns, EMAIL_COLUMNS in
-        // emailDbService is explicit, and the encryption rebuild is name-based —
-        // and pre-existing: v46's validated_at/ingest_source already do this.
-        //
-        // The table guard mirrors v48/v52/v53/v54/v55/v56 (a real install always
-        // has `emails`, but a minimal partial-schema fixture may not); the
-        // column guard gives re-run idempotency and lets a future schema
-        // re-baseline declare the column without this ALTER throwing
-        // "duplicate column name".
-        const hasTable = d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'emails'")
-          .get();
-        if (!hasTable) return;
-
-        const cols = (
-          d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>
-        ).map((c) => c.name);
-
-        if (!cols.includes("bulk_mail_headers")) {
-          d.exec("ALTER TABLE emails ADD COLUMN bulk_mail_headers TEXT");
-          console.log(
-            "[migration v62] added emails.bulk_mail_headers column (BACKLOG-2513)",
-          );
-        }
-      },
-    },
-    {
-      version: 63,
-      description:
-        "Add the 7 columns the pre-consolidation migration system used to add, and move their standalone schema.sql indexes into the chain, so a real pre-2026-02-17 upgrade does not die in exec(schema.sql) (BACKLOG-2750)",
-      migrate: (d) => {
-        // BACKLOG-2750 — SAME CLASS AS BACKLOG-2298 / BACKLOG-2300, seven more instances.
-        //
-        // WHAT BROKE, AND WHEN. Not TASK-1110. `847d6eec4` (2026-01-17) shipped
-        // `attachments.external_message_id` WITH a working upgrade path — a legacy
-        // `addMissingColumns('attachments', [...ALTER TABLE...])` plus a `runSafe`
-        // index create. `db3733343` (2026-02-17, "consolidate 28 migrations into
-        // schema.sql with version-based runner", shipped v2.4.1) DELETED that legacy
-        // system and left the standalone `CREATE INDEX` statements in schema.sql.
-        // `git log -S "addMissingColumns('attachments'"` returns exactly those two
-        // commits; `grep -rn "ALTER TABLE attachments" electron/` returns nothing.
-        //
-        // WHY IT IS FATAL. runMigrations() does `exec(schemaSql)` and THEN
-        // `_runVersionedMigrations()`. `CREATE TABLE IF NOT EXISTS` is a no-op on an
-        // existing table, so a DB created before a column's date keeps its old table
-        // shape forever — nothing at any version adds these columns. The standalone
-        // `CREATE INDEX ... ON <table>(<missing column>)` in schema.sql then throws
-        // "no such column" and aborts the ENTIRE migration before the chain starts
-        // (auto-restore → stuck on "Starting up your secure database").
-        //
-        // The consolidation's premise — BASELINE_VERSION's "schema.sql contains
-        // everything through migration 28" — holds for TABLES and for fresh installs,
-        // and is false for COLUMNS on pre-existing tables. That is the whole bug.
-        //
-        // MEASURED, NOT ASSUMED. A real pre-TASK-1110 DB built from git history
-        // (`git show 847d6eec4^:electron/database/schema.sql | sqlite3 old.db`) then
-        // fed today's schema.sql with the sqlite3 CLI (no `.bail`, so it enumerates
-        // every failure instead of stopping at the first) produces ELEVEN
-        // "no such column" errors. Seven are fixed here. The other four are on
-        // `communications` (email_id, thread_id and two composites) and are NOT the
-        // same shape: migration v43 rebuilds that table and recreates those indexes,
-        // so they need index-deferral only — and v43 itself throws on such a DB
-        // (its rebuild SELECTs email_id/thread_id from communications_old, which a
-        // pre-email DB does not have). Filed separately rather than half-fixed here.
-        //
-        // WHY THIS MIGRATION ADDS RATHER THAN SKIPS. v54, the nearest precedent,
-        // SKIPS when the column is absent because v32 guaranteed it. Here NOTHING
-        // adds these columns, so skipping would leave them absent forever. The column
-        // guard below is therefore an add-if-absent, not a skip-if-absent.
-        //
-        // BOTH PATHS. Fresh installs seed schema_version 32, so this migration (63)
-        // runs there too: it finds every column already present from CREATE TABLE and
-        // only creates the indexes — which is what preserves fresh-install index
-        // parity now that the standalone statements are gone from schema.sql.
-        //
-        // WHICH IS WHY THE `!cols.includes(column)` GUARD IS LOAD-BEARING FOR
-        // EVERY INSTALL, NOT AN EDGE CASE. Measured: delete the guard so the
-        // ALTER runs unconditionally, and the upgrade suite goes 9-of-11 RED with
-        //     Migration 63 ... failed: duplicate column name: license_type
-        // on the FIRST pass — including the FRESH INSTALL test, because a fresh
-        // `users_local` already carries every one of these columns from CREATE
-        // TABLE. Without the guard this migration bricks new installs and current
-        // ones, which is a far larger blast radius than the crash it fixes.
-        // (It is additionally required for the chain REPLAY that the baseline
-        // clamp at :3756 forces on below-baseline databases — BACKLOG-2752 — but
-        // that is the second reason, not the first.)
-        //
-        // ACCEPTED DIVERGENCE: `schema.sql` declares a table-level
-        // `FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE` on
-        // attachments. SQLite cannot add a table-level FK via ALTER TABLE ADD COLUMN
-        // without a full table rebuild, so an UPGRADED DB gets the column and index
-        // but not that FK clause. A rebuild of `attachments` is a much larger blast
-        // radius than the crash being fixed; this mirrors the cost accepted by v54.
-        // Column bodies (type, DEFAULT, CHECK) are kept byte-for-byte in sync with
-        // the CREATE TABLE declarations in electron/database/schema.sql.
-        const specs: Array<{
-          table: string;
-          column: string;
-          addSql: string;
-          indexSql: string;
-        }> = [
-          {
-            table: "users_local",
-            column: "license_type",
-            addSql:
-              "ALTER TABLE users_local ADD COLUMN license_type TEXT DEFAULT 'individual' CHECK (license_type IN ('individual', 'team', 'enterprise'))",
-            indexSql:
-              "CREATE INDEX IF NOT EXISTS idx_users_local_license_type ON users_local(license_type)",
-          },
-          {
-            table: "users_local",
-            column: "organization_id",
-            addSql: "ALTER TABLE users_local ADD COLUMN organization_id TEXT",
-            indexSql:
-              "CREATE INDEX IF NOT EXISTS idx_users_local_organization ON users_local(organization_id)",
-          },
-          {
-            table: "attachments",
-            column: "email_id",
-            addSql: "ALTER TABLE attachments ADD COLUMN email_id TEXT",
-            indexSql:
-              "CREATE INDEX IF NOT EXISTS idx_attachments_email_id ON attachments(email_id)",
-          },
-          {
-            table: "attachments",
-            column: "external_message_id",
-            addSql: "ALTER TABLE attachments ADD COLUMN external_message_id TEXT",
-            indexSql:
-              "CREATE INDEX IF NOT EXISTS idx_attachments_external_message_id ON attachments(external_message_id)",
-          },
-          {
-            table: "transactions",
-            column: "last_exported_on",
-            addSql: "ALTER TABLE transactions ADD COLUMN last_exported_on DATETIME",
-            indexSql:
-              "CREATE INDEX IF NOT EXISTS idx_transactions_last_exported_on ON transactions(last_exported_on)",
-          },
-          {
-            table: "transactions",
-            column: "submission_status",
-            addSql:
-              "ALTER TABLE transactions ADD COLUMN submission_status TEXT DEFAULT 'not_submitted' CHECK (submission_status IN ('not_submitted', 'submitted', 'under_review', 'needs_changes', 'resubmitted', 'approved', 'rejected'))",
-            indexSql:
-              "CREATE INDEX IF NOT EXISTS idx_transactions_submission_status ON transactions(submission_status)",
-          },
-          {
-            table: "transactions",
-            column: "submission_id",
-            addSql: "ALTER TABLE transactions ADD COLUMN submission_id TEXT",
-            indexSql:
-              "CREATE INDEX IF NOT EXISTS idx_transactions_submission_id ON transactions(submission_id)",
-          },
-        ];
-
-        for (const { table, column, addSql, indexSql } of specs) {
-          // Table guard mirrors v48/v52..v56/v62: a real install always has these
-          // three tables, but a minimal partial-schema fixture may not.
-          const hasTable = d
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
-            .get(table);
-          if (!hasTable) continue;
-
-          const cols = (
-            d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
-          ).map((c) => c.name);
-
-          if (!cols.includes(column)) {
-            d.exec(addSql);
-            console.log(
-              `[migration v63] added ${table}.${column} column (BACKLOG-2750)`,
-            );
-          }
-
-          // Idempotent, and reached whether or not the ALTER just ran — this is the
-          // statement that replaces the standalone CREATE INDEX removed from
-          // schema.sql, so it must run on the fresh-install path too.
-          d.exec(indexSql);
-        }
-      },
-    },
-    {
-      version: 64,
-      description:
-        "Re-key every persisted phone lookup key to the libphonenumber rule (BACKLOG-2630 slice 1)",
-      migrate: (d) => {
-        // BACKLOG-2630 slice 1. `toLookupKey` stopped being `digits.slice(-10)`
-        // and became the libphonenumber-parsed E.164 digits with a US default
-        // region. Every persisted key was written by the OLD rule, so without
-        // this migration the app computes "14155550109" and the database holds
-        // "4155550109" — and the two never meet again.
-        //
-        // WHAT ACTUALLY BREAKS WITHOUT IT, so the cost is concrete rather than
-        // theoretical: `contactDbService`'s recency JOIN is
-        // `plm.phone_normalized = cp.phone_normalized`, contact search is
-        // `cp.phone_normalized LIKE ?` against a needle built by the new rule,
-        // and `contactMatchIndex` probes `cp.phone_normalized IN (…)`. All three
-        // compare a freshly-computed key against a stored one. Leave the stores
-        // on the old rule and a contact becomes unfindable by his own phone
-        // number — a regression on a database that works today, which is the
-        // exact failure BACKLOG-2753 was filed to prevent.
-        //
-        // Like migration v40, this `require`s the LIVE helper rather than
-        // transcribing the rule, so it cannot drift from the function it exists
-        // to agree with. Same consequence as v40, stated rather than implied:
-        // this migration FLOATS. It is self-healing under BACKLOG-2752's chain
-        // replay, and it is NOT a substitute for a fresh re-key item if the rule
-        // ever changes again.
-        //
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { toLookupKey } = require("../utils/phoneNormalization") as {
-          toLookupKey: (raw: string | null | undefined) => string;
-        };
-
-        const hasTable = (name: string): boolean =>
-          !!d
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
-            .get(name);
-        const hasColumn = (table: string, column: string): boolean =>
-          (d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
-            (c) => c.name === column,
-          );
-
-        // ------------------------------------------------------------------
-        // 1. contact_phones.phone_normalized — recompute from phone_e164
-        // ------------------------------------------------------------------
-        // Recomputed from the SOURCE column, never from the old key. The old key
-        // is lossy: `slice(-10)` threw country codes away, so feeding a stored
-        // key back through any rule cannot recover what it dropped. `phone_e164`
-        // still holds the whole number.
-        //
-        // Recomputing from a stable source is also what makes this step
-        // idempotent for free — run it twice and the second run writes the same
-        // bytes, because its input never changed.
-        if (hasTable("contact_phones") && hasColumn("contact_phones", "phone_normalized")) {
-          const rows = d
-            .prepare("SELECT id, phone_e164 FROM contact_phones")
-            .all() as Array<{ id: string; phone_e164: string | null }>;
-          const update = d.prepare(
-            "UPDATE contact_phones SET phone_normalized = ? WHERE id = ?",
-          );
-          for (const row of rows) {
-            update.run(toLookupKey(row.phone_e164), row.id);
-          }
-          console.log(
-            `[migration v64] re-keyed ${rows.length} contact_phones rows (BACKLOG-2630)`,
-          );
-        }
-
-        // ------------------------------------------------------------------
-        // 2. external_contacts.phones_normalized_json — recompute from phones_json
-        // ------------------------------------------------------------------
-        // Keeps v40's conventions exactly, because `externalContactDbService`
-        // still writes them: map every phone, drop empty keys, and treat
-        // unparseable JSON as an empty array rather than throwing mid-migration.
-        if (
-          hasTable("external_contacts") &&
-          hasColumn("external_contacts", "phones_normalized_json")
-        ) {
-          const rows = d
-            .prepare("SELECT id, phones_json FROM external_contacts")
-            .all() as Array<{ id: string; phones_json: string | null }>;
-          const update = d.prepare(
-            "UPDATE external_contacts SET phones_normalized_json = ? WHERE id = ?",
-          );
-          for (const row of rows) {
-            let phones: unknown = [];
-            try {
-              phones = row.phones_json ? JSON.parse(row.phones_json) : [];
-            } catch {
-              phones = [];
-            }
-            if (!Array.isArray(phones)) phones = [];
-            const keys = (phones as unknown[])
-              .map((ph) => (typeof ph === "string" ? toLookupKey(ph) : ""))
-              .filter((k: string) => k.length > 0);
-            update.run(JSON.stringify(keys), row.id);
-          }
-          console.log(
-            `[migration v64] re-keyed ${rows.length} external_contacts rows (BACKLOG-2630)`,
-          );
-        }
-
-        // ------------------------------------------------------------------
-        // 3. phone_last_message.phone_normalized — the key IS (half of) the PK
-        // ------------------------------------------------------------------
-        // This table keeps NO raw phone, so there is no source column to
-        // recompute from. The key itself is the only input available, and that
-        // makes the rule below load-bearing in a way the two above are not.
-        //
-        // THE RULE: re-key a row only when its stored key is exactly ten digits
-        // AND parses as a VALID US number — then prepend the country code.
-        // Everything else is left untouched.
-        //
-        // WHY SO NARROW, when BACKLOG-2753 rebuilt this table from `messages`.
-        // That attempt had to: its hand-rolled rule re-mapped Israeli numbers,
-        // so a row keyed from an E.164 participant had been sliced beyond
-        // recovery and could only be rebuilt from raw `participants_flat`. The
-        // library rule re-maps only US numbers, and a US row's stored key is
-        // already the correct ten digits — prepending "1" IS the whole change.
-        // No rebuild, no re-derivation of another service's message predicate.
-        //
-        // WHY IT IS IDEMPOTENT, AND WHY THE OBVIOUS VERSION IS NOT. The obvious
-        // implementation — `toLookupKey(oldKey)` — is NOT idempotent under this
-        // rule, and the trap is easy to walk into: `toLookupKey("972525550123")`
-        // with a US default region does not parse, falls back, and slices to
-        // "2525550123". A second pass would therefore mangle every 11+-digit
-        // key the first pass wrote. That matters because BACKLOG-2752's baseline
-        // clamp REPLAYS the chain on below-baseline databases, so a second run
-        // is a real event and not a hypothetical. The ten-digits-and-valid-US
-        // gate makes f(f(x)) = f(x) by construction: an eleven-digit output
-        // fails the length gate on re-run, and a ten-digit key that failed the
-        // validity gate fails it identically every time.
-        //
-        // WHY NO COLLISION POLICY IS NEEDED, and why the fold is here anyway.
-        // Every key the old rule could produce is at most ten digits
-        // (`slice(-10)`), prepending "1" is injective, and no old key is eleven
-        // digits — so a re-keyed row cannot land on an existing one. That is a
-        // proof, not an expectation, but a hand-edited or third-party-written
-        // database is not bound by it, and a PK conflict here would abort the
-        // whole migration. So the write folds by MAX(last_message_at) — the same
-        // rule `messageDbService.backfillPhoneLastMessageTable` already applies
-        // when two raw phones share a key — and no row is ever dropped: the
-        // surviving row's value IS the larger of the two.
-        if (hasTable("phone_last_message")) {
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const { parsePhoneNumberFromString } = require("libphonenumber-js") as {
-            parsePhoneNumberFromString: (
-              text: string,
-              region: string,
-            ) => { isValid: () => boolean } | undefined;
-          };
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const { DEFAULT_PHONE_REGION } = require("../utils/phoneNormalization") as {
-            DEFAULT_PHONE_REGION: string;
-          };
-
-          const rekey = (key: string): string => {
-            if (!/^\d{10}$/.test(key)) return key;
-            const parsed = parsePhoneNumberFromString(key, DEFAULT_PHONE_REGION);
-            if (!parsed || !parsed.isValid()) return key;
-            return toLookupKey(key);
-          };
-
-          const rows = d
-            .prepare(
-              "SELECT phone_normalized, user_id, last_message_at FROM phone_last_message",
-            )
-            .all() as Array<{
-            phone_normalized: string;
-            user_id: string;
-            last_message_at: string;
-          }>;
-
-          // Fold to the winning row per (new key, user), keeping the later date.
-          const folded = new Map<
-            string,
-            { key: string; userId: string; at: string }
-          >();
-          let changed = 0;
-          for (const row of rows) {
-            const newKey = rekey(row.phone_normalized);
-            if (newKey !== row.phone_normalized) changed += 1;
-            const mapKey = `${newKey}\u0000${row.user_id}`;
-            const seen = folded.get(mapKey);
-            if (seen === undefined || row.last_message_at > seen.at) {
-              folded.set(mapKey, {
-                key: newKey,
-                userId: row.user_id,
-                at: row.last_message_at,
-              });
-            }
-          }
-
-          if (changed > 0) {
-            // Delete-then-insert rather than UPDATE: the key is half the primary
-            // key, and an in-place UPDATE would collide with a not-yet-rewritten
-            // row mid-pass.
-            d.prepare("DELETE FROM phone_last_message").run();
-            const insert = d.prepare(
-              "INSERT INTO phone_last_message (phone_normalized, user_id, last_message_at) VALUES (?, ?, ?)",
-            );
-            for (const row of folded.values()) {
-              insert.run(row.key, row.userId, row.at);
-            }
-            console.log(
-              `[migration v64] re-keyed ${changed} of ${rows.length} phone_last_message rows into ${folded.size} (BACKLOG-2630)`,
-            );
-          }
-        }
-      },
-    },
-    {
-      version: 65,
-      // BACKLOG-2791. Renumbered 64 -> 65 at merge time, exactly as planned:
-      // PR #2346 (BACKLOG-2630 phone re-key) merged first holding v64, this
-      // branch then merged develop and took 65. It could not have been written
-      // as 65 earlier — validateNoVersionGaps throws
-      // `Migration sequence error: Missing migration version 64` on EVERY
-      // database init when the chain skips a number, so a branch holding 65
-      // without 64 present will not boot and cannot run its own migration tests.
-      //
-      // The two are independent: 64 re-keys phone lookup keys, 65 adds a new
-      // table plus transactions.last_pending_scan_at. Disjoint objects, so the
-      // execution order between them does not matter.
-      //
-      // The head-version assertions that used to make a renumber expensive
-      // (nine files, 33 tests red on a single new migration — including the only
-      // two suites that upgrade a REAL shipped database file) now DERIVE the
-      // head via __tests__/helpers/chainHead.ts. Both branches hit that wall
-      // independently; develop re-typed the literal to 64, this branch derives
-      // it, and the derived form is what survived the merge because it is
-      // correct for either value. Mutating the helper to head-1 turns 31 tests
-      // red, so it is load-bearing rather than decorative.
-      description:
-        "Add pending_review_communications (the persistent Needs-Review queue) + transactions.last_pending_scan_at (the delta watermark) (BACKLOG-2791)",
-      migrate: (d) => {
-        // BACKLOG-2791. The queue holds communications the sync FOUND for a deal
-        // but that are NOT linked until the user approves them. It is a separate
-        // table BY DESIGN: every row in `communications` IS a link, and 41 read
-        // sites across 10 files treat it that way with no choke point, so a
-        // "pending" match_reason would have leaked unapproved mail into
-        // transaction search and into per-row Quick Export (which bypasses the
-        // details-screen Complete gate entirely).
-        //
-        // NO STANDALONE `CREATE INDEX` FOR ANY OF THIS IN schema.sql
-        // (BACKLOG-2298 / 2300): schema.sql is exec'd BEFORE the chain runs, so
-        // an index naming a not-yet-added column throws "no such column" on
-        // every real upgrade. Both indexes are created HERE, after their table
-        // exists, and are reached on the fresh-install path too (a fresh DB
-        // seeds schema_version at BASELINE_VERSION, so this migration still
-        // runs) — which is what keeps fresh and upgraded installs at parity.
-        //
-        // `communications` and `ignored_communications` are deliberately NOT
-        // touched: their `match_reason` must remain the LAST column (v55 parity
-        // guard), and adding to either would risk that ordering.
-        d.exec(`
-          CREATE TABLE IF NOT EXISTS pending_review_communications (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            transaction_id TEXT NOT NULL,
-            email_id TEXT,
-            thread_id TEXT,
-            found_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE,
-            FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE,
-            FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
-            CHECK (
-              (email_id IS NOT NULL AND thread_id IS NULL)
-              OR (thread_id IS NOT NULL AND email_id IS NULL)
-            )
-          );
-        `);
-
-        // The DB backstop for the sync's dedup predicate: even a racing second
-        // sync cannot queue the same item twice. MEASURED — drop both indexes
-        // and a repeated sync leaves 4 rows where 2 belong.
-        //
-        // PARTIAL (`WHERE <col> IS NOT NULL`) keeps each index to the rows that
-        // carry that column and states the intent. That is a size/readability
-        // choice, NOT a correctness one: SQLite treats every NULL as distinct,
-        // so the non-partial form enforces the same thing — a mutation to the
-        // non-partial form did NOT go red.
-        d.exec(
-          `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_email
-             ON pending_review_communications(transaction_id, email_id)
-           WHERE email_id IS NOT NULL`,
-        );
-        d.exec(
-          `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_thread
-             ON pending_review_communications(transaction_id, thread_id)
-           WHERE thread_id IS NOT NULL`,
-        );
-
-        // The delta watermark. Add-if-absent (not skip-if-absent): nothing else
-        // in the chain adds it, so skipping would leave it missing forever.
-        const hasTxn = d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'transactions'")
-          .get();
-        if (hasTxn) {
-          const cols = (
-            d.prepare("PRAGMA table_info(transactions)").all() as Array<{ name: string }>
-          ).map((c) => c.name);
-          if (!cols.includes("last_pending_scan_at")) {
-            d.exec("ALTER TABLE transactions ADD COLUMN last_pending_scan_at DATETIME");
-            console.log(
-              "[migration v65] added transactions.last_pending_scan_at (BACKLOG-2791)",
-            );
-          }
-        }
-      },
-    },
-    {
-      version: 66,
-      // BACKLOG-2814. Apple's group-chat name (`chat.display_name`) was read by
-      // nothing: the importer joined `chat_handle_join` for the participant list
-      // and queried `chat` only for `account_login`, so "Closing Team" was
-      // dropped at the door and every group text thread was identified by its
-      // participants.
-      //
-      // NO BACKFILL RUNS HERE, deliberately. The migration cannot invent names —
-      // they live in the user's chat.db, not in ours. The backfill IS the next
-      // import: `message_thread_names` is upserted from the `chat` table on every
-      // run, independent of message dedup, so an existing user's already-imported
-      // threads gain their names after ONE ordinary re-import. That is the whole
-      // reason this is a thread-keyed table rather than a `messages` column —
-      // `INSERT OR IGNORE` on the Apple GUID skips every row a re-import already
-      // has, so a column would have needed a force reimport to ever populate.
-      //
-      // Objects here are identical to the ones in schema.sql. A fresh install
-      // takes them from schema.sql and never runs this block; an upgrade runs
-      // this block and never reads schema.sql. Drift between the two passes all
-      // of CI and breaks only real upgrades.
-      description:
-        "Add message_thread_names (Apple group-chat display names, thread-keyed) (BACKLOG-2814)",
-      migrate: (d) => {
-        d.exec(
-          `CREATE TABLE IF NOT EXISTS message_thread_names (
-             user_id TEXT NOT NULL,
-             thread_id TEXT NOT NULL,
-             display_name TEXT NOT NULL,
-             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-
-             PRIMARY KEY (user_id, thread_id),
-             FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
-           )`,
-        );
-        d.exec(
-          `CREATE INDEX IF NOT EXISTS idx_message_thread_names_thread
-             ON message_thread_names(thread_id)`,
-        );
-        console.log(
-          "[migration v66] added message_thread_names (BACKLOG-2814)",
-        );
-      },
-    },
-    {
-      version: 67,
-      // BACKLOG-2857 — derivation provenance.
-      //
-      // RENUMBERED 66 -> 67 AT MERGE TIME on int/ui-polish-e, exactly as v65 was
-      // renumbered from 64 after PR #2346. This item was written against develop,
-      // where the chain head is 65, so 66 was correct on its own branch (PR #2379)
-      // and REMAINS 66 there. PR #2368 (BACKLOG-2814, Apple group-chat names)
-      // reached the integration branch first and holds 66 here.
-      //
-      // The two are independent: 66 creates `message_thread_names`, 67 adds a
-      // column plus a partial index to `emails`. Disjoint objects, so the
-      // execution order between them does not matter.
-      //
-      // It could NOT have been written as 67 on its own branch to dodge the
-      // collision: validateNoVersionGaps throws `Missing migration version 66` on
-      // EVERY database init when the chain skips a number, so a branch holding 67
-      // without 66 present will not boot and cannot run its own migration tests.
-      // Renumbering is cheap because the head-version assertions derive through
-      // __tests__/helpers/chainHead.ts rather than re-typing a literal.
-      //
-      // WHAT THIS IS FOR. BACKLOG-2855 fixed how `body_plain` is derived from
-      // Outlook HTML and could not touch a single row already stored. Nothing on
-      // disk recorded that existing rows came from superseded logic, so repairing
-      // history required a human to remember the fix existed — or a destructive
-      // force re-cache (BACKLOG-2856). This column makes it automatic: every row
-      // carries the derivation version that produced it, and the reprocess pass
-      // repairs anything below CURRENT_DERIVATION_VERSION.
-      //
-      // NO BACKFILL, and that is the whole point. DEFAULT 0 leaves every
-      // pre-existing row at version 0, which is precisely true: they were produced
-      // by the pre-2855 derivation. Backfilling to CURRENT would declare all of
-      // them already repaired and permanently strand the truncated bodies this
-      // exists to fix.
-      //
-      // THE INDEX SHIPS HERE, NOT IN schema.sql. The access path is
-      // `WHERE derived_version < ?`, so unlike v62's bulk_mail_headers (no reader,
-      // no index) this column earns one. It is written PARTIAL on
-      // `derived_version < CURRENT` so it stays near-empty in the steady state —
-      // once a mailbox is fully reprocessed the index holds no rows at all, which
-      // is the right cost profile for a hot write table.
-      //
-      // The partial predicate necessarily embeds the literal CURRENT value, so a
-      // future version bump must ship its own migration to REPLACE this index with
-      // one carrying the new literal (SQLite cannot parameterise an index
-      // predicate). That is deliberate: a version bump is already a code change,
-      // and pairing it with the index keeps the scan cheap forever. If a bump ever
-      // lands without that DROP/CREATE, the pass stays CORRECT — the planner just
-      // falls back to a table scan for rows between the old and new literal.
-      //
-      // Standalone CREATE INDEX on a migrated column must NEVER go in schema.sql:
-      // that file is exec'd BEFORE this chain, so it throws "no such column" on
-      // every real upgrade (BACKLOG-2298/2300/2750). Here it runs AFTER the ALTER,
-      // and covers fresh installs too because they seed schema_version at
-      // BASELINE_VERSION and replay the whole chain.
-      //
-      // The table guard mirrors v48/v52..v65 (a real install always has `emails`,
-      // a minimal partial-schema fixture may not); the column guard gives re-run
-      // idempotency.
-      description:
-        "Add emails.derived_version + partial index so a derivation fix can find and repair the rows produced by superseded logic (BACKLOG-2857)",
-      migrate: (d) => {
-        const hasTable = d
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'emails'")
-          .get();
-        if (!hasTable) return;
-
-        const cols = (
-          d.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string }>
-        ).map((c) => c.name);
-
-        if (!cols.includes("derived_version")) {
-          d.exec(
-            "ALTER TABLE emails ADD COLUMN derived_version INTEGER NOT NULL DEFAULT 0",
-          );
-          console.log(
-            "[migration v67] added emails.derived_version column (BACKLOG-2857)",
-          );
-        }
-
-        // Literal, not a binding: SQLite index predicates cannot be parameterised.
-        // Kept equal to CURRENT_DERIVATION_VERSION in
-        // electron/utils/derivationVersion.ts — a bump ships a new migration
-        // replacing this index (see the note above). A test asserts the two agree,
-        // so drift fails CI rather than silently degrading to a table scan.
-        d.exec(
-          `CREATE INDEX IF NOT EXISTS idx_emails_derived_version_stale
-             ON emails(derived_version) WHERE derived_version < 1`,
-        );
-        console.log(
-          "[migration v67] ensured idx_emails_derived_version_stale (BACKLOG-2857)",
-        );
-      },
-    },
-    {
-      version: 68,
-      // BACKLOG-2859. RENUMBERED 66 -> 68 ON int/ui-polish-e, exactly as the
-      // instruction this comment used to carry predicted. 2859 was written on
-      // feat/BACKLOG-2849-submit-screen, whose chain head is 65 — identical to
-      // develop, because 2849 adds no migration — so 66 was the correct number
-      // there and PR #2381 still holds it. Here 66 is BACKLOG-2814
-      // (message_thread_names) and 67 is BACKLOG-2857 (emails.derived_version).
-      // Only the number moved; the body below is byte-for-byte 2859's apart from
-      // the two `[migration v68]` log tags.
-      //
-      // Taking 68 pre-emptively on 2859's own branch would NOT have been the
-      // safe move, it would have been the broken one: validateNoVersionGaps runs
-      // on every _runVersionedMigrations call, so a branch holding 68 without 66
-      // and 67 present throws on every database init. Not one red test —
-      // initialize() fails, so every suite that opens a database goes red,
-      // including the one that would test this migration.
-      //
-      // The three migrations are disjoint: 66 creates a table, 67 adds a column
-      // to `emails`, 68 rewrites values in `transaction_contacts` and
-      // `contacts`. Execution order between them does not matter.
-      //
-      // PURE DML. No ALTER TABLE, no ADD COLUMN, no CREATE INDEX, and no
-      // schema.sql change, so the standalone-index trap (BACKLOG-2298/2300/2750)
-      // structurally cannot arise here — there is no new object for schema.sql
-      // to reference before the chain runs. `transaction_contacts.role`,
-      // `.specific_role` and `contacts.default_role` are all bare TEXT with no
-      // CHECK constraint, verified in schema.sql and in the shipped v2.27.0
-      // fixture, so rewriting their values needs no table rebuild.
-      //
-      // NOT TOUCHED: `transaction_participants.role`, which DOES carry a CHECK
-      // constraint enumerating the old vocabulary. That table is deprecated —
-      // migration v30 already moved transaction_summary off it, and it has zero
-      // read or write sites in electron/ or src/ (measured). Collapsing it would
-      // need a full 12-step table rebuild, because SQLite cannot alter a CHECK
-      // constraint and `CREATE TABLE IF NOT EXISTS` in schema.sql is a no-op on
-      // an existing table — which would give fresh installs the new vocabulary
-      // and leave every upgraded install on the old one forever. Not worth that
-      // for a table nothing reads; recorded so the omission is a decision.
-      description:
-        "Collapse buyer_agent/seller_agent/listing_agent into the single side-neutral 'agent' role, and remove the counterparty-principal assignments (BACKLOG-2859)",
-      migrate: (d) => {
-        const LEGACY_AGENT_ROLES = ["buyer_agent", "seller_agent", "listing_agent"];
-        const legacyList = LEGACY_AGENT_ROLES.map((r) => `'${r}'`).join(", ");
-
-        const tableExists = (name: string): boolean =>
-          !!d
-            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
-            .get(name);
-
-        const hasColumn = (table: string, column: string): boolean =>
-          (d.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some(
-            (c) => c.name === column,
-          );
-
-        // ---- 1. transaction_contacts: collapse the three agent values ----
-        //
-        // `role` and `specific_role` are updated SEPARATELY rather than in one
-        // statement. They are kept in sync on write (specific_role is canonical
-        // and is copied into role), but historical rows do not all honour that:
-        // in the shipped v2.27.0 database every transaction_contacts row carries
-        // a `role` with `specific_role` NULL. A combined UPDATE would have to
-        // pick one column to drive the predicate and would miss the other.
-        //
-        // LOWER() on the comparison because roles reach the database both ways.
-        if (tableExists("transaction_contacts")) {
-          const roleResult = d
-            .prepare(
-              `UPDATE transaction_contacts SET role = 'agent'
-               WHERE LOWER(role) IN (${legacyList})`,
-            )
-            .run();
-
-          const specificResult = hasColumn("transaction_contacts", "specific_role")
-            ? d
-                .prepare(
-                  `UPDATE transaction_contacts SET specific_role = 'agent'
-                   WHERE LOWER(specific_role) IN (${legacyList})`,
-                )
-                .run()
-            : { changes: 0 };
-
-          // ---- 2. Remove the counterparty-principal assignments ----
-          //
-          // Founder: "lets remove the Seller / other side, Buyer / other side
-          // completely. agents normally don't contact them." He then explicitly
-          // approved a SILENT drop — "it's ok to silently drop it" — after the
-          // write-loss concern was raised twice and overruled twice. No prompt,
-          // no preservation, no migration to 'other'.
-          //
-          // BOTH principals are deleted on EVERY transaction type, not just the
-          // counterparty side. The final role model leaves no `buyer`/`seller`
-          // offerable anywhere, so a same-side `seller` surviving on a Listing
-          // would be a stored value that no picker can render — a blank select
-          // over real data, which is the failure the deleted #2374 guard existed
-          // to prevent.
-          //
-          // COALESCE(specific_role, role): specific_role is canonical when
-          // present, role is the fallback — matching how every reader resolves
-          // these two columns.
-          const principalResult = d
-            .prepare(
-              `DELETE FROM transaction_contacts
-               WHERE LOWER(COALESCE(specific_role, role)) IN ('buyer', 'seller')`,
-            )
-            .run();
-
-          console.log(
-            `[migration v68] transaction_contacts: collapsed ${roleResult.changes} role + ` +
-              `${specificResult.changes} specific_role values to 'agent'; ` +
-              `deleted ${principalResult.changes} counterparty-principal assignments (BACKLOG-2859)`,
-          );
-        }
-
-        // ---- 3. contacts.default_role: same collapse ----
-        //
-        // default_role is a convenience ("most-recently-assigned role for
-        // auto-fill"), not an identity, but it feeds the picker's auto-fill and
-        // the contacts filter tree — so a stale `seller_agent` here would keep
-        // proposing a role no transaction offers.
-        //
-        // `buyer`/`seller` default_roles are deliberately LEFT ALONE. Unlike a
-        // transaction_contacts row, a default_role that is no longer offered
-        // degrades gracefully: resolveDefaultContactRole checks it against the
-        // offered set and falls back to the `client` baseline. Deleting data to
-        // fix something that already behaves correctly is not warranted.
-        if (tableExists("contacts") && hasColumn("contacts", "default_role")) {
-          const defaultRoleResult = d
-            .prepare(
-              `UPDATE contacts SET default_role = 'agent'
-               WHERE LOWER(default_role) IN (${legacyList})`,
-            )
-            .run();
-          console.log(
-            `[migration v68] contacts: collapsed ${defaultRoleResult.changes} default_role values to 'agent' (BACKLOG-2859)`,
-          );
-        }
-      },
-    },
-    {
-      version: 69,
-      description:
-        "The questions and the answers can name two records or two contacts, not only a record and a contact (BACKLOG-2630 D2 / 2665 / 2616)",
-      migrate: (d) => {
-        // BACKLOG-2630 slice 2 (board D2), piece 1 of 3 — THE SHAPE ONLY.
-        //
-        // `contact_link_proposals` (the questions) and `contact_link_verdicts`
-        // (the answers) can express exactly one kind of pair today: an external
-        // RECORD and a saved CONTACT. Both carry `contact_id NOT NULL` with an
-        // FK to `contacts`, plus `source_type` / `source_record_id`. So:
-        //
-        //   - a RECORD-TO-RECORD pair has no contact on either side, and
-        //   - a CONTACT-TO-CONTACT pair has no source record on either side,
-        //
-        // and `UNIQUE (user_id, contact_id, source_type, source_record_id)`
-        // cannot express either. This migration widens both tables to three
-        // pair shapes. The full vocabulary and every founder ruling it encodes
-        // are documented in `db/contactIdentitySchemaSql.ts`.
-        //
-        // NOTHING WRITES THE TWO NEW SHAPES. Founder decision 2026-08-27,
-        // "yeah i agree schema first split": the schema ships now, the matcher
-        // that generates such pairs waits on a measurement nobody has taken.
-        // A test may insert one directly to prove the shape holds; production
-        // code must not.
-        //
-        // WHY BOTH TABLES, AND WHY IN ONE MIGRATION. Widening the questions
-        // alone ships a question that can be asked and never answered durably —
-        // `recordVerdict` would be refused by the verdicts CHECK, and "a no
-        // holds until new evidence arrives" is unimplementable for a pair that
-        // cannot be stored. Verdicts are also the DURABLE table: proposals are
-        // recomputed by every linking pass and losing one costs a sync, while a
-        // verdict is a person's opinion and nothing can regenerate it. Two
-        // migrations over one territory in one train is the shape the record
-        // already rejected.
-        //
-        // ------------------------------------------------------------------
-        // THE 12-STEP TABLE REBUILD, TWICE — the v61 template, line for line
-        // ------------------------------------------------------------------
-        // SQLite cannot ALTER a CHECK or a NOT NULL. Guarded on `'pair_kind'`,
-        // a marker no earlier DDL can contain, so a re-run and a fresh chain
-        // replay both no-op.
-        //
-        // `typeof sql === "string"` and not a truthiness check on the row:
-        // `sqlite_master.sql` is NULL for auto-created objects, and this
-        // migration also meets partial-schema fixtures where the table is
-        // absent entirely. Reading `.includes` off a non-string would throw
-        // INSIDE the migration transaction, which the runner escalates to a
-        // restore-from-backup dialog — a catastrophic response to an absent
-        // table.
-        //
-        // THE COPY IS BY NAME, NEVER POSITIONAL. Both sides of the
-        // INSERT ... SELECT list the PRE-v69 columns explicitly. A positional
-        // `SELECT *` is what corrupted `audit_logs` in v33 and `contacts` in
-        // v36: every row survives holding its neighbour's value, so no row
-        // count can detect it. `databaseService.migration-v69.test.ts` seeds
-        // tables whose columns are DECLARED IN A DIFFERENT ORDER and asserts
-        // the copy still lands field for field.
-        //
-        // The READ side uses the PRE-v69 column lists rather than the full
-        // ones: on a v68 database the four new columns do not exist. The WRITE
-        // side lists the same names, so `pair_kind` ('record_contact'),
-        // `subject_side` ('a') and the generated `pair_key` come from the new
-        // table's DEFAULTs and its generated expression. Every existing row is
-        // a record-to-contact pair, so ZERO ROWS CHANGE MEANING.
-        //
-        // `pair_key` appears in NEITHER list — it is a generated column and
-        // cannot be written. Naming it is an immediate error, not a silent
-        // wrong answer.
-        const rebuild = (
-          table: string,
-          tempName: string,
-          createSql: string,
-          preV69Columns: readonly string[],
-          indexSql: string,
-          orderBy: string,
-        ): boolean => {
-          const existing = d
-            .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?")
-            .get(table) as { sql?: string | null } | undefined;
-
-          if (typeof existing?.sql !== "string") {
-            // No such table on this database (partial-schema fixture, or a
-            // mocked connection). Nothing to widen and nothing to copy INTO.
-            return false;
-          }
-
-          if (existing.sql.includes("pair_kind")) {
-            // Already rebuilt — a re-run, or a fresh install where v59 exec'd
-            // the current constants and produced this shape directly.
-            return false;
-          }
-
-          const cols = preV69Columns.join(", ");
-
-          d.exec(createSql);
-          // ORDER BY rowid: `contact_link_verdicts` resolves latest-wins by
-          // `decided_at DESC, rowid DESC`, and a rebuild REASSIGNS rowids.
-          // Copying in rowid order preserves the relative order two verdicts
-          // sharing a `decided_at` depend on, so the tiebreak still picks the
-          // same winner after the migration as before it.
-          d.exec(`INSERT INTO ${tempName} (${cols}) SELECT ${cols} FROM ${table} ORDER BY ${orderBy};`);
-          d.exec(`DROP TABLE ${table};`);
-          d.exec(`ALTER TABLE ${tempName} RENAME TO ${table};`);
-          // The DROP took the table's standalone index with it.
-          d.exec(indexSql);
-          return true;
-        };
-
-        const proposalsRebuilt = rebuild(
-          "contact_link_proposals",
-          "contact_link_proposals_v69",
-          contactLinkProposalsRebuildTableSql("contact_link_proposals_v69"),
-          CONTACT_LINK_PROPOSALS_PRE_V69_COLUMNS,
-          CONTACT_LINK_PROPOSALS_INDEX_SQL,
-          "rowid",
-        );
-
-        const verdictsRebuilt = rebuild(
-          "contact_link_verdicts",
-          "contact_link_verdicts_v69",
-          contactLinkVerdictsRebuildTableSql("contact_link_verdicts_v69"),
-          CONTACT_LINK_VERDICTS_PRE_V69_COLUMNS,
-          CONTACT_LINK_VERDICTS_INDEX_SQL,
-          "rowid",
-        );
-
-        if (proposalsRebuilt || verdictsRebuilt) {
-          logService.info(
-            "[Migration v69] contact_link_proposals and contact_link_verdicts now admit " +
-              "record-to-record and contact-to-contact pairs. Schema only — nothing writes " +
-              "either shape yet (BACKLOG-2630 D2)",
-            "Database",
-          );
-        }
-      },
-    },
-  ];
+  /**
+   * BACKLOG-2993 — THE schema baseline: the version schema.sql seeds on a
+   * fresh install, and the lowest version initialize() will open (the
+   * schema-baseline fence refuses anything below it — those databases predate
+   * the reset and the chain that could have upgraded them was deleted).
+   *
+   * THE RULE, NOT THE NUMBER: the baseline must be STRICTLY GREATER than any
+   * version any existing database can hold. At the reset, both develop and
+   * shipped main topped out at migration 69, so the baseline is 70 — 69 would
+   * be a bug (it would accept exactly the chain-built databases the reset
+   * exists to reject). Re-derive against the live artefacts if this is ever
+   * changed; never copy it forward.
+   */
+  static readonly BASELINE_VERSION = 70;
+
+  /**
+   * BACKLOG-2993 — EMPTY BY DESIGN. The v30..v69 chain (40 migrations, ~3,500
+   * lines) was deleted when schema.sql was regenerated as the full v69-shape
+   * baseline, seeded at version 70. Every database the chain could have acted
+   * on is refused by the schema-baseline fence in initialize(); fresh installs
+   * get the complete shape from schema.sql alone.
+   *
+   * A FUTURE migration goes here only for versions ABOVE the baseline (71+),
+   * and the preferred post-reset way to evolve the local schema is to edit
+   * schema.sql directly and record the change in ALLOWED_EVOLUTION
+   * (databaseService.schema-parity.test.ts) — see BACKLOG-2551 / BACKLOG-2807
+   * for the pattern.
+   */
+  static readonly MIGRATIONS: MigrationEntry[] = [];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
     const seen = new Set<number>();
@@ -4467,13 +1314,6 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
       currentDb.prepare("SELECT version FROM schema_version WHERE id = 1").get() as
         { version: number } | undefined
     )?.version || 0;
-
-    if (currentVersion > 0 && currentVersion < DatabaseService.BASELINE_VERSION) {
-      await logService.warn(
-        `DB version ${currentVersion} is below baseline ${DatabaseService.BASELINE_VERSION}. Schema.sql should handle this.`,
-        "DatabaseService"
-      );
-    }
 
     const pendingMigrations = migrations.filter((m) => m.version > currentVersion);
     const targetVersion = pendingMigrations.length > 0
@@ -4565,12 +1405,6 @@ CREATE TABLE IF NOT EXISTS data_clear_events (
       if (fkWasOn) {
         currentDb.pragma("foreign_keys = ON");
       }
-    }
-
-    if (currentVersion < DatabaseService.BASELINE_VERSION) {
-      currentDb.exec(
-        `UPDATE schema_version SET version = ${DatabaseService.BASELINE_VERSION}, updated_at = CURRENT_TIMESTAMP WHERE id = 1`
-      );
     }
 
     await logService.info("All database migrations completed successfully", "DatabaseService");

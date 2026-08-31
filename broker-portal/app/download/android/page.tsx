@@ -16,7 +16,25 @@ import { ArrowLeft, Download } from 'lucide-react';
 import { buttonClasses } from '@keepr/design-system';
 import { Wordmark } from '@keepr/ui';
 
-const APK_URL = 'https://github.com/5hdaniel/Mad/releases/download/v1.0.0-companion-beta/app-debug.apk';
+/**
+ * Signed release APK for the Keepr Companion.
+ *
+ * BACKLOG-2956 / BACKLOG-2340. Two things were wrong with the previous value
+ * (`5hdaniel/Mad` ... `v1.0.0-companion-beta/app-debug.apk`):
+ *
+ *  1. `5hdaniel/Mad` is the founder's OLD personal repo. The project lives at
+ *     `Keepr-Compliance/Mad`. It resolved only because GitHub redirects a
+ *     renamed owner — a redirect that stops working the moment anyone
+ *     re-creates that account or repo name.
+ *  2. It served `app-debug.apk` built 2026-03-31, 54 commits behind the
+ *     companion code on develop, and DEBUG-signed.
+ *
+ * Bump this on every companion release. The filename carries the version and
+ * versionCode, so a stale link 404s loudly instead of silently serving an old
+ * build — which is how the March APK kept shipping for five months.
+ */
+const APK_URL =
+  'https://github.com/Keepr-Compliance/Mad/releases/download/v1.1.0-companion/keepr-companion-1.1.0-5.apk';
 
 export default function AndroidDownloadPage() {
   const [autoStarted, setAutoStarted] = useState(false);
@@ -84,12 +102,29 @@ export default function AndroidDownloadPage() {
             </p>
             <ol className="text-sm text-gray-600 space-y-2 list-decimal list-inside text-left">
               <li>
+                <span className="font-medium text-gray-900">
+                  If you already have Keepr Companion installed, uninstall it
+                  first.
+                </span>{' '}
+                This release is signed with a new key, so Android will refuse to
+                install it over an older build. Uninstalling clears your pairing
+                and permissions, so you will pair with your desktop and re-allow
+                SMS and Contacts again after installing.
+              </li>
+              <li>
                 When prompted, tap{' '}
                 <span className="font-medium text-gray-900">Install</span>{' '}
                 (you may need to allow installing from this source)
               </li>
               <li>Open the app and sign in with your Keepr account</li>
               <li>Follow the setup to pair with your desktop</li>
+              <li>
+                To check which build you have, open{' '}
+                <span className="font-medium text-gray-900">
+                  Settings &rarr; About
+                </span>
+                . It is also shown at the bottom of the sign-in screen.
+              </li>
             </ol>
           </div>
 

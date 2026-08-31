@@ -191,6 +191,14 @@ jest.mock("../services/db/contactDbService", () => ({
 
 // Import after mocks are set up
 import { registerContactHandlers } from "../handlers/contactHandlers";
+// BACKLOG-2986: `withStoredPreferences` below delegates to the real rule rather
+// than re-implementing it, so the fixture cannot drift from the helper it stands
+// in for.
+import {
+  BACKEND_DERIVED_DEFAULT_KEYS,
+  isContactSourceKey,
+  isContactSourceOnByDefault,
+} from "../utils/contactSourceDefaults";
 // BACKLOG-2608: the REAL key builder, so a seeded claim and the handler's lookup
 // cannot be keyed differently.
 import { sourceKey } from "../services/db/contactSourceLinkDbService";
@@ -2694,24 +2702,55 @@ describe("Contact Handlers", () => {
      * never wrote is ABSENT, and `isContactSourceEnabled` returns the caller's
      * default for absent keys.
      *
-     * `withStoredPreferences` mirrors `preferenceHelper.ts:36-37` exactly, so
-     * these cases exercise the same fail-open path production does — and a
-     * change of the handler's default from `true` to `false` turns them red,
-     * which under `enableOnly()` it would not.
+     * `withStoredPreferences` mirrors the WHOLE of `isContactSourceEnabled`, so
+     * these cases exercise the same path production does — and a change of the
+     * handler's default turns them red, which under `enableOnly()` it would not.
      */
-    describe("real preference semantics (stored[key] ?? defaultValue)", () => {
-      /** Exactly `preferenceHelper.ts:36-37`. Honours the 4th argument. */
-      function withStoredPreferences(stored: Record<string, boolean>) {
+    describe("real preference semantics (stored value, else the derived default, else defaultValue)", () => {
+      /**
+       * The real `isContactSourceEnabled`, transcribed rather than approximated.
+       *
+       * This used to be one line — `stored[key] ?? defaultValue` — labelled
+       * "Exactly preferenceHelper.ts:36-37". That stopped being true when
+       * BACKLOG-2486 gave `iphoneContacts` a derived default and again when
+       * BACKLOG-2986 gave one to `androidContacts`: for those two keys the
+       * caller's 4th argument is no longer what an absent key resolves to. A
+       * fixture that keeps modelling the old rule describes a state the code
+       * cannot emit, and every case built on it would be asserting about a
+       * machine that does not exist.
+       *
+       * It now delegates to the SAME rule module the helper delegates to, so it
+       * cannot drift again — adding a key to `BACKEND_DERIVED_DEFAULT_KEYS`
+       * changes both sides at once.
+       */
+      function withStoredPreferences(
+        stored: Record<string, boolean>,
+        ctx: { platform?: "macos" | "windows"; phoneType?: "iphone" | "android" | null } = {},
+      ) {
+        const { platform = "macos", phoneType = "iphone" } = ctx;
         mockIsContactSourceEnabled.mockImplementation(
-          async (_u: string, _c: string, key: string, defaultValue: boolean) =>
-            typeof stored[key] === "boolean" ? stored[key] : defaultValue,
+          async (_u: string, _c: string, key: string, defaultValue: boolean) => {
+            if (typeof stored[key] === "boolean") return stored[key];
+            if (isContactSourceKey(key) && BACKEND_DERIVED_DEFAULT_KEYS.includes(key)) {
+              return isContactSourceOnByDefault(key, {
+                platform,
+                phoneType,
+                authProvider: null,
+              });
+            }
+            return defaultValue;
+          },
         );
       }
 
-      it("reads androidContacts with a default of TRUE", async () => {
-        // The default argument is the whole mechanism. If someone "tightens"
-        // this to false, every absent-key user loses their Android contacts —
-        // and no enableOnly()-based test would notice.
+      it("still passes a defaultValue of TRUE for androidContacts", async () => {
+        // BACKLOG-2986 — this argument no longer decides the absent case (the
+        // derived rule does), and it is still not vestigial: it is what case 3
+        // of `isContactSourceEnabled` returns when preferences cannot be READ
+        // AT ALL. Every source fails open there, because a failed read cannot
+        // see `phone_type` either, so deriving would be guessing — and guessing
+        // OFF silently breaks a working import on a network blip. Tighten this
+        // to `false` and that is what happens.
         withStoredPreferences({});
         await getAvailable();
 
@@ -2726,32 +2765,65 @@ describe("Contact Handlers", () => {
       it("shows Android for a Windows + Android user (exactly the keys onboarding writes)", async () => {
         // On Windows, `visibleSources` excludes macosContacts (platforms:
         // ["macos"]) and iphoneContacts (phoneType: "iphone"), so onboarding
-        // writes only these three. macos/iphone are ABSENT, not false — which
-        // is why they are shown too, and why the old catch-all never fired here.
-        withStoredPreferences({
-          androidContacts: true,
-          googleContacts: true,
-          outlookContacts: true,
-        });
+        // writes only these three. macos and iphone are ABSENT, not false.
+        //
+        // A DEFECT IN THIS TEST'S OWN FIXTURE, found while writing BACKLOG-2986
+        // and corrected here: it asserted `ALL_IDS`, i.e. that `ext-iphone` is
+        // SHOWN. It never could be. `iphoneContacts` has been in
+        // BACKEND_DERIVED_DEFAULT_KEYS since BACKLOG-2486, and its rule returns
+        // FALSE for a declared Android user on either platform
+        // (`contactSourceDefaults.ts`, the `if (isAndroid) return false` arm).
+        // The old `withStoredPreferences` collapsed every absent key onto the
+        // caller's `defaultValue`, which hid that — so this case was describing
+        // a machine that does not exist. It passes now because the fixture
+        // applies the real rule, and `ext-iphone` is correctly absent.
+        withStoredPreferences(
+          {
+            androidContacts: true,
+            googleContacts: true,
+            outlookContacts: true,
+          },
+          { platform: "windows", phoneType: "android" },
+        );
 
-        expect(await shownIds()).toEqual(ALL_IDS);
+        expect(await shownIds()).toEqual(
+          ALL_IDS.filter((id) => id !== "ext-iphone"),
+        );
       });
 
-      it("shows Android for a Windows + iPhone user who later pairs Android", async () => {
-        // THE DISPROOF OF THE "KNOWN LIMITATION" THIS PR ONCE CLAIMED.
+      it("HIDES Android for a Windows + iPhone user who later pairs Android", async () => {
+        // BACKLOG-2986 INVERTED THIS CASE, deliberately. It used to read
+        // "absent -> default true -> SHOWN", and that was the defect: an
+        // iPhone-declaring user never has `androidContacts` written, so the
+        // blanket `true` imported 389 Android contacts for a user who never
+        // asked and gave them no control to stop it. Founder, 2026-08-30:
+        // "contacts aren't auto imported."
         //
-        // androidContacts has `phoneType: "android"`, so an iPhone-declaring
-        // user never has it written. Absent -> default true -> SHOWN. There is
-        // no stored `false` to strand them, and zero production rows have one.
-        withStoredPreferences({
-          iphoneContacts: true,
-          outlookContacts: true,
-          googleContacts: false,
-        });
+        // The route back is now a real one: Settings > Contacts writes the key.
+        withStoredPreferences(
+          {
+            iphoneContacts: true,
+            outlookContacts: true,
+            googleContacts: false,
+          },
+          { platform: "windows", phoneType: "iphone" },
+        );
 
         const ids = await shownIds();
-        expect(ids).toContain("ext-android");
+        expect(ids).not.toContain("ext-android");
         expect(ids).not.toContain("ext-google");
+      });
+
+      it("shows Android for a Windows + Android user who stored nothing", async () => {
+        // The other side of the same rule, and why "default OFF" is derived
+        // rather than hardcoded: this user told us the companion is their
+        // address book, so an absent key still means ON for them.
+        withStoredPreferences(
+          { outlookContacts: true },
+          { platform: "windows", phoneType: "android" },
+        );
+
+        expect(await shownIds()).toContain("ext-android");
       });
 
       it("hides Android only when the preference is EXPLICITLY false", async () => {
@@ -2768,12 +2840,17 @@ describe("Contact Handlers", () => {
         expect(ids).toEqual(["ext-google", "ext-iphone", "ext-macos", "ext-outlook", "ext-unknown"]);
       });
 
-      it("shows Android when macOS is explicitly disabled but Android is absent", async () => {
-        // The only configuration in which the old catch-all actually fired:
-        // a user who deliberately turned the Mac address book off. Android is
-        // absent -> true -> shown. Base behaviour dropped it here.
+      it("decides Android on its own key when macOS is explicitly disabled", async () => {
+        // The only configuration in which the old BACKLOG-2478 catch-all ever
+        // fired: a user who deliberately turned the Mac address book off. The
+        // point of this case is unchanged — Android must answer to
+        // `androidContacts` and to nothing else — but its constant flipped with
+        // BACKLOG-2986: absent now derives FALSE for an iPhone-declaring user.
         withStoredPreferences({ macosContacts: false });
+        expect(await shownIds()).not.toContain("ext-android");
 
+        // Same macOS setting, Android switched on: still governed by its own key.
+        withStoredPreferences({ macosContacts: false, androidContacts: true });
         expect(await shownIds()).toContain("ext-android");
       });
     });

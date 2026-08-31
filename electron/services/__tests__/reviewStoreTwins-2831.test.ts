@@ -13,22 +13,34 @@
  *
  * WHAT EACH BLOCK PINS, and the mutation run to prove it can fail:
  *
- *  REACHABILITY (shipped code, not a hand-built fixture). The route is:
+ *  REACHABILITY — THE ROUTE IS NOW CLOSED (BACKLOG-2880). It used to be:
  *      open the deal   → the deal-surface sweep QUEUES the ambiguous email
  *      any message import/sync afterwards → autoLinkNewMessagesForUser sweeps
  *        EVERY live contact-transaction pair WITHOUT queueAmbiguousInsteadOfLinking,
- *        so it LINKS the same email as address_missing.
+ *        so it LINKED the same email as address_missing.
  *    `findCandidateEmailsWithMatch` excludes an email that already has a
  *    `communications` row for the deal — but NOT one that is merely pending, so
- *    the queued email is still a candidate for the linking sweep.
- *    This block asserts the two ROWS, not the rendered list, so it stays true
- *    after the read-side dedup and remains the standing proof of reachability.
+ *    the queued email was still a candidate for the linking sweep.
+ *
+ *    BACKLOG-2880 removed that writer: `linkEmailToTransaction` refuses to write
+ *    an AUTO link for an email holding a live pending row. The block runs the
+ *    SAME scenario with the assertion INVERTED rather than deleted, so it is now
+ *    a second control on that guard.
+ *
+ *    THE DEDUP BELOW IS NOT DEAD CODE. Every twin written before the guard
+ *    shipped is still sitting in a user's database and still has to be counted
+ *    once. So the twin is now built as DATA by `makeTwins`, and "the twin fixture
+ *    matches what the linker really writes" pins that fixture against the live
+ *    producer so it cannot drift from the shape it stands in for.
  *
  *  DEDUP — the union contains the twinned email ONCE, by exact ID set.
  *    Mutation: restore `const items = [...pending, ...legacy]` → RED, 2 of 14
  *    ("returns the twinned email ONCE" and "approving one twinned email does not
  *    touch another email's twin"). Only two tests can see it, because the
  *    approve/reject controls assert the STORES, which the dedup does not touch.
+ *    (Mutation counts in this header were measured when the suite had 14 tests
+ *    and then 18; it has 19. The FAILING SETS named are what matters and were
+ *    re-confirmed — the totals are historical.)
  *
  *  NO OVER-COLLAPSE — two genuinely different emails that merely share a
  *    `thread_id` stay two items; a pure-pending and a pure-legacy set are
@@ -102,7 +114,7 @@ import {
   approveReviewItems,
   rejectReviewItems,
 } from "../reviewStateService";
-import { autoLinkNewMessagesForUser } from "../autoLinkService";
+import { autoLinkNewMessagesForUser, linkEmailToTransaction } from "../autoLinkService";
 
 const USER = "u-2831";
 const TXN = "t-2831";
@@ -131,10 +143,6 @@ function seed(db: DatabaseType): void {
   // schema.sql. autoLinkService's candidate-transaction count reads
   // `tc.removed_at`; without them it throws into its own catch and reports
   // "found nothing", which would make this whole file pass for the wrong reason.
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
   db.prepare(
     "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, ?, 'google', 'oauth-1')",
   ).run(USER, "me@agent.com");
@@ -191,6 +199,32 @@ function addLegacyLink(db: DatabaseType, commId: string, emailId: string): void 
   ).run(commId, USER, TXN, emailId);
 }
 
+/**
+ * A TWIN, as it exists in a database written before BACKLOG-2880.
+ *
+ * The route that used to build one — queue on the deal surface, then let the
+ * next `autoLinkNewMessagesForUser` sweep link the same email as
+ * address_missing — is CLOSED: `linkEmailToTransaction` now refuses to write an
+ * auto link for an email that holds a live pending row. The REACHABILITY block
+ * below asserts that closure directly.
+ *
+ * The dedup this suite covers is therefore NOT dead code. Every twin written
+ * before the guard shipped is still sitting in a user's database, and
+ * `getReviewState` still has to count it once. So the twin is now constructed as
+ * DATA rather than by running the (fixed) producer.
+ *
+ * `addLegacyLink` is not invented for the purpose: it writes the exact row
+ * `linkEmailToTransaction` writes on the auto path — link_source 'auto',
+ * confidence 0.5, match_reason 'address_missing', thread_id NULL for these
+ * thread-less fixtures. "the twin fixture matches what the linker really
+ * writes" below pins that equivalence against the live producer, so this fixture
+ * cannot drift away from the shape it stands in for.
+ */
+async function makeTwins(db: DatabaseType, emailIds: string[]): Promise<void> {
+  await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
+  for (const id of emailIds) addLegacyLink(db, `comm-twin-${id}`, id);
+}
+
 const pendingEmailIds = (db: DatabaseType): string[] =>
   (
     db
@@ -235,7 +269,12 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
   });
 
   describe("REACHABILITY on the shipped code path", () => {
-    it("a queued email is LINKED as address_missing by the next message-sync sweep, landing in both stores", async () => {
+    it("the message-sync sweep no longer writes the twin — BACKLOG-2880 closed this route", async () => {
+      // THIS TEST USED TO ASSERT THE OPPOSITE, and was right to: it was the
+      // standing proof that the twin was reachable on shipped code. BACKLOG-2880
+      // removed the writer, so the same scenario now has the opposite outcome
+      // and the assertion is inverted rather than deleted — the scenario is what
+      // matters, and it must keep being run.
       addEmail(db, "e1", "Offer");
 
       // 1. The user opens the deal. The deal surface QUEUES the ambiguous half.
@@ -245,14 +284,42 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
 
       // 2. ANY later message import/sync — macOS Messages import, the Android
       //    companion, localSyncService's debounce — runs this sweep for every
-      //    live contact-transaction pair, WITHOUT the queue flag.
+      //    live contact-transaction pair, WITHOUT the queue flag. It reaches
+      //    `linkEmailToTransaction`, which now declines: an email a human has
+      //    been asked to rule on is not a background classifier's to decide.
       await autoLinkNewMessagesForUser(USER);
 
-      // The pending row is not a link, so the candidate query never excluded it:
-      // the same email is now in BOTH stores. This is the defect's precondition,
-      // asserted on ROWS so it survives the read-side dedup.
       expect(pendingEmailIds(db)).toEqual(["e1"]);
-      expect(legacyEmailIds(db)).toEqual(["e1"]);
+      expect(legacyEmailIds(db)).toEqual([]);
+    });
+
+    it("the twin fixture matches what the linker really writes (the control on the fixture)", async () => {
+      // `makeTwins` stands in for a producer that can no longer run. If its row
+      // drifts from the real one, every twin test below would be exercising a
+      // database state that never existed. So: write one row each way and
+      // compare the columns getReviewState and the approve/reject paths read.
+      addEmail(db, "e-fixture", "Offer");
+      addEmail(db, "e-producer", "Offer");
+
+      addLegacyLink(db, "comm-fixture", "e-fixture");
+      const outcome = await linkEmailToTransaction(
+        "e-producer",
+        TXN,
+        "auto",
+        0.5,
+        "address_missing",
+      );
+      expect(outcome).toBe("linked");
+
+      const shape = (emailId: string) =>
+        db
+          .prepare(
+            `SELECT user_id, transaction_id, link_source, link_confidence, match_reason, thread_id
+               FROM communications WHERE email_id = ?`,
+          )
+          .get(emailId);
+
+      expect(shape("e-fixture")).toEqual(shape("e-producer"));
     });
 
     it("ordering matters: link-first leaves the email in the legacy store ONLY", async () => {
@@ -275,8 +342,7 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
   describe("DEDUP — the union counts a twinned email once", () => {
     it("returns the twinned email ONCE, as an exact ID set", async () => {
       addEmail(db, "e1", "Offer");
-      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
-      await autoLinkNewMessagesForUser(USER);
+      await makeTwins(db, ["e1"]);
 
       // Precondition: genuinely in both stores (not a fixture that only claims to be).
       expect(pendingEmailIds(db)).toEqual(["e1"]);
@@ -291,8 +357,10 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
 
     it("the PENDING row wins, because it is the one carrying the review lifecycle", async () => {
       addEmail(db, "e1", "Offer");
-      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
-      await autoLinkNewMessagesForUser(USER);
+      await makeTwins(db, ["e1"]);
+      // Without the legacy half there is only one candidate and "the pending one
+      // wins" would be vacuously true, so the precondition is asserted.
+      expect(legacyEmailIds(db)).toEqual(["e1"]);
 
       const [survivor] = getReviewState(TXN).items;
       expect(survivor.origin).toBe("pending");
@@ -458,8 +526,7 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
   describe("TWIN SURVIVAL — acting on the survivor must resolve BOTH stores", () => {
     it("approve leaves NOTHING behind in either store, and the link reads user_confirmed", async () => {
       addEmail(db, "e1", "Offer");
-      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
-      await autoLinkNewMessagesForUser(USER);
+      await makeTwins(db, ["e1"]);
       expect(pendingEmailIds(db)).toEqual(["e1"]);
       expect(legacyEmailIds(db)).toEqual(["e1"]);
 
@@ -480,8 +547,9 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
 
     it("reject clears both stores and writes exactly ONE suppression row", async () => {
       addEmail(db, "e1", "Offer");
-      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
-      await autoLinkNewMessagesForUser(USER);
+      await makeTwins(db, ["e1"]);
+      // The reject path has to clear BOTH stores, so both must be populated.
+      expect(legacyEmailIds(db)).toEqual(["e1"]);
 
       const { rejected } = await rejectReviewItems([getReviewState(TXN).items[0].id]);
       expect(rejected).toBe(1);
@@ -505,8 +573,8 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
 
     it("a rejected twin is not resurrected by the next sweep of EITHER path", async () => {
       addEmail(db, "e1", "Offer");
-      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
-      await autoLinkNewMessagesForUser(USER);
+      await makeTwins(db, ["e1"]);
+      expect(legacyEmailIds(db)).toEqual(["e1"]);
       await rejectReviewItems([getReviewState(TXN).items[0].id]);
 
       // Clear the watermark so the deal-surface scan genuinely re-examines the
@@ -524,8 +592,7 @@ describe("BACKLOG-2831 — the same email in BOTH review stores", () => {
       // Identity, not count: approving e1 must leave e2 in BOTH its stores.
       addEmail(db, "e1", "Offer");
       addEmail(db, "e2", "Inspection");
-      await syncReviewQueueForTransaction({ transactionId: TXN, reason: "open" });
-      await autoLinkNewMessagesForUser(USER);
+      await makeTwins(db, ["e1", "e2"]);
       expect(pendingEmailIds(db)).toEqual(["e1", "e2"]);
       expect(legacyEmailIds(db)).toEqual(["e1", "e2"]);
 

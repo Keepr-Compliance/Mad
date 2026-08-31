@@ -44,10 +44,7 @@ const SCHEMA = fs.readFileSync(
 );
 /** Migration v56 — schema.sql deliberately declares these on neither table. */
 const V56 = `
-  ALTER TABLE contacts ADD COLUMN removed_at DATETIME;
-  ALTER TABLE contacts ADD COLUMN removed_reason TEXT;
-  ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;
-  ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;`;
+`;
 
 const USER = "u-collapse";
 const TXN = "t-collapse";

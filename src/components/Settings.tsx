@@ -264,6 +264,10 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
               initialPreferences={preferences}
               isMicrosoftConnected={isMicrosoftConnected}
               isGoogleConnected={isGoogleConnected}
+              /* BACKLOG-2986: the Android contact re-import note only offers to
+                 jump to the Android Companion panel when that panel is on the
+                 page, which is exactly when this source is active (see :210). */
+              androidCompanionActive={activeImportSource === 'android-companion'}
             />
 
             {/* AI Settings - Only visible with AI add-on (BACKLOG-462) */}

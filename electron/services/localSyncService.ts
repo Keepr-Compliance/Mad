@@ -23,8 +23,12 @@ import { normalizePhone } from "./messageMatchingService";
 import { pairingService } from "./pairingService";
 import * as externalContactDb from "./db/externalContactDbService";
 import type { ContactOrigin } from "./db/contactOriginLink";
+import { findClaimedSourceRecordIds } from "./db/contactOriginLink";
 import { autoLinkNewMessagesForUserDebounced } from "./autoLinkService";
 import { toMatchingKey } from "../utils/phoneNormalization";
+// BACKLOG-2986: the Android contact WRITE gate. Same helper the picker gate and
+// the iPhone write gate read.
+import { isContactSourceEnabled } from "../utils/preferenceHelper";
 import type {
   EncryptedPayload,
   SyncPayload,
@@ -524,6 +528,26 @@ class LocalSyncService {
 
   /**
    * Route incoming HTTP requests.
+   *
+   * ## BACKLOG-2956 — why this logs the way it does
+   *
+   * This server used to be effectively SILENT about traffic. The entry line
+   * below was `logService.debug`, and `logService`'s `minLevel` defaults to
+   * `"info"` (see logService.ts), so it was DROPPED in every normal run. The
+   * unknown-route branch at the bottom logged nothing at all. The consequence
+   * was measured on the founder's machine: his phone's BROWSER reached this
+   * server and got a 404, and the desktop log recorded **nothing** — leaving an
+   * Android cleartext block (which never opens a socket) and a genuine network
+   * fault indistinguishable from each other and from the server never having
+   * been contacted. That is what made the failure undiagnosable, here and on a
+   * field tester's machine.
+   *
+   * So: one `info` line per request with method, path and remote address, and
+   * one on completion with the status code and duration. The pair is what
+   * separates "nothing arrived" from "something arrived and we refused it" —
+   * the single most useful distinction when local sync is not working.
+   *
+   * NEVER log the request body or the bearer token. Bodies are SMS content.
    */
   private handleRequest(
     req: http.IncomingMessage,
@@ -531,11 +555,49 @@ class LocalSyncService {
   ): void {
     const urlPath = req.url?.split("?")[0] ?? "";
     const method = req.method?.toUpperCase() ?? "";
+    const remote = req.socket.remoteAddress ?? "unknown";
+    const startedAt = Date.now();
 
-    logService.debug(
-      `[LocalSync] ${method} ${urlPath}`,
+    logService.info(
+      `[LocalSync] --> ${method} ${urlPath} from ${remote}`,
       LOG_TAG
     );
+
+    // One completion line per request, whichever branch answered it — including
+    // branches added later, and including the `catch`-all 500s. Attaching to
+    // "finish" rather than instrumenting each `sendJSON` call site is what makes
+    // that coverage structural instead of a convention someone can forget.
+    res.on("finish", () => {
+      const status = res.statusCode;
+      const durationMs = Date.now() - startedAt;
+      const line = `[LocalSync] <-- ${status} ${method} ${urlPath} from ${remote} (${durationMs}ms)`;
+      if (status >= 400) {
+        logService.warn(line, LOG_TAG);
+      } else {
+        logService.info(line, LOG_TAG);
+      }
+
+      // A failed PAIRING is the outcome users report and the one we have been
+      // unable to see. Send a Sentry EVENT, not a breadcrumb: breadcrumbs are
+      // discarded unless some other event happens to be captured in the same
+      // session (BACKLOG-2913 / BACKLOG-2950), which is exactly why the pairing
+      // failures reported so far left no trace. Remote address is deliberately
+      // NOT sent — it stays in the local log.
+      if (urlPath === "/register" && status >= 400) {
+        Sentry.captureMessage(
+          `[LocalSync] Pairing request failed with ${status}`,
+          {
+            level: "warning",
+            tags: {
+              component: "localSyncService",
+              reason: "register_failed",
+              status: String(status),
+            },
+            extra: { method, durationMs },
+          }
+        );
+      }
+    });
 
     if (method === "GET" && urlPath === "/ping") {
       this.handlePing(res);
@@ -557,7 +619,13 @@ class LocalSyncService {
       return;
     }
 
-    // Unknown route
+    // Unknown route. Logged with the reason because this is the branch a
+    // browser (or a probe, or a companion built against a future API) lands on,
+    // and a bare 404 with no log is indistinguishable from silence.
+    logService.warn(
+      `[LocalSync] No route for ${method} ${urlPath} (from ${remote}) — responding 404`,
+      LOG_TAG
+    );
     sendJSON(res, 404, { error: "Not found" });
   }
 
@@ -1297,7 +1365,14 @@ class LocalSyncService {
       let storedCount = 0;
       if (this.userId && contactPayload.contacts.length > 0) {
         try {
-          storedCount = this.storeContacts(
+          // BACKLOG-2986: `storeContacts` became async when it grew the
+          // `androidContacts` gate — it reads the preference before writing.
+          // This handler was already async, so the await costs nothing
+          // structurally; it does mean the phone's POST now waits on one
+          // Supabase round trip. Worst case on a network blip is latency and
+          // then fail-open, and a phone retry is safe because BACKLOG-2987's
+          // record claims make promotion idempotent.
+          storedCount = await this.storeContacts(
             this.userId,
             contactPayload.deviceId,
             contactPayload.contacts,
@@ -1356,6 +1431,9 @@ class LocalSyncService {
    *
    * BACKLOG-1449: Android contacts sync
    * BACKLOG-2208: full snapshot vs incremental diff.
+   * BACKLOG-2986: the `androidContacts` preference now gates the PROMOTION at
+   *   the bottom of this method. It does NOT gate the shadow-table write above
+   *   it — see the gate for why, and note that this is why the method is async.
    *
    * @param userId - User ID for contact ownership
    * @param deviceId - Android device ID from pairing
@@ -1369,12 +1447,62 @@ class LocalSyncService {
    *   full sync, preserving the pre-2208 behavior.
    * @returns Number of contacts stored/upserted
    */
-  private storeContacts(
+  private async storeContacts(
     userId: string,
     deviceId: string,
     contacts: SyncContact[],
     isFullSync?: boolean
-  ): number {
+  ): Promise<number> {
+    /**
+     * =====================================================================
+     * BACKLOG-2986 — THE WRITE GATE. Read before moving it or narrowing it.
+     * =====================================================================
+     * Read at the TOP, used at the bottom, on purpose: the Supabase round trip
+     * happens BEFORE any DB work rather than interleaved between
+     * `syncContactsBySource` and `promoteToMainContacts`.
+     *
+     * WHY THE PREFERENCE IS READ HERE AND NOT PASSED IN. It could have been
+     * hoisted into `handleSyncContacts` and threaded down as a parameter,
+     * keeping this method synchronous. It is read here so that the read and the
+     * gate it feeds sit in the same function, which is the only arrangement a
+     * `storeContacts` test can observe: with the read hoisted, a mutation
+     * replacing it with a literal `true` stays green in every suite that drives
+     * this method. `handleSyncContacts` was already `async`, so nothing had to
+     * be restructured to allow this.
+     *
+     * The precedent is `iPhoneSyncStorageService.storeContacts`, which reads the
+     * same helper at the top of the method it gates, with the same fail-open
+     * default and the same info-level skip log.
+     *
+     * ONE DELIBERATE DIVERGENCE FROM THAT PRECEDENT: the iPhone gate skips the
+     * WHOLE store. This one skips only the promotion, and the shadow-table write
+     * below runs unconditionally. iPhone contacts are desktop-PULLED — a record
+     * we decline to store can be read off the backup again. Android contacts are
+     * phone-PUSHED and the companion sends a DIFF (BACKLOG-2411), so a record we
+     * refuse to store is one the desktop cannot ask for again on any INCREMENTAL
+     * cycle: `handleSyncContacts` answers 200 whatever the store did, and on a
+     * 200 the companion advances its fingerprint map for exactly what it sent
+     * (`android-companion/services/contactSyncState.ts` `commitContactSync`), so
+     * it has no reason to mention those contacts again. They return only on the
+     * next FULL snapshot — `FULL_RESYNC_INTERVAL_MS`, 24h — so gating the store
+     * would open a silent up-to-24h window in which the shadow ledger disagrees
+     * with the phone. Per the DECISION on BACKLOG-3001, no operation may treat
+     * `android_sync` as re-fetchable. `external_contacts` therefore stays LOSSLESS and only the
+     * automatic write into the main `contacts` table is gated — the user's route
+     * back is the picker, which the same key already governs.
+     *
+     * `defaultValue: true` is the picker's value, not a guess. It is reached
+     * only when preferences cannot be READ AT ALL, where a failed read cannot
+     * see `phone_type` either — so both gates fail open together and can never
+     * disagree about a user who is offline.
+     */
+    const androidEnabled = await isContactSourceEnabled(
+      userId,
+      "direct",
+      "androidContacts",
+      true,
+    );
+
     // Map SyncContact to ExternalContactInput for the generic upsert
     const externalContacts: externalContactDb.ExternalContactInput[] = contacts.map(
       (contact) => {
@@ -1491,13 +1619,47 @@ class LocalSyncService {
       LOG_TAG
     );
 
-    // BACKLOG-1469: Promote Android contacts to the main contacts table.
+    // BACKLOG-1469 / BACKLOG-2986: promote Android contacts to the main contacts
+    // table — ONLY when the user has the Android contact source switched on.
+    //
     // Outlook/Google contacts rely on user-initiated import from the "Available"
-    // list, but Android contacts should auto-promote so they appear immediately
-    // in the main contacts view. Match by phone number to avoid duplicates.
-    // On a partial diff this only promotes the new/changed contacts, which is
-    // correct — unchanged contacts were promoted on a prior sync (BACKLOG-2208).
-    this.promoteToMainContacts(userId, deviceId, contacts);
+    // list; Android auto-promotes so the phone's address book appears
+    // immediately in the main contacts view. Match by phone number to avoid
+    // duplicates. On a partial diff this only promotes the new/changed contacts,
+    // which is correct — unchanged contacts were promoted on a prior sync
+    // (BACKLOG-2208).
+    //
+    // BACKLOG-2986 ADDED THE CONDITION, and the paragraph above used to argue
+    // for it being unconditional. Until this change `androidContacts` gated the
+    // PICKER and nothing else, so a user who switched Android contacts off
+    // watched them disappear from the picker while this line kept writing new
+    // ones straight into their contacts table on every sync. Founder,
+    // 2026-08-30: "contacts aren't auto imported." A control that does not
+    // control the thing it names is the defect BACKLOG-2986 exists to fix, not a
+    // smaller version of the feature.
+    //
+    // NOT re-promoted on switch-on. Contacts that arrived while the switch was
+    // off stay unpromoted until the next FULL sync mentions them again — at most
+    // 24h away (`FULL_RESYNC_INTERVAL_MS` on the companion). They are NOT in the
+    // picker while the switch is off: `contactHandlers.ts:1619` gates
+    // `android_sync` on this same key, so an off switch hides them from both
+    // places. Switching it back ON opens the picker on the whole backlog
+    // immediately, and that is the user-driven route back. Auto-promoting a
+    // backlog the user had deliberately switched off would be the same
+    // auto-import this gate exists to stop.
+    if (androidEnabled) {
+      this.promoteToMainContacts(userId, deviceId, contacts);
+    } else {
+      // Info, not debug, and it names the reason: a silent skip is
+      // indistinguishable in the field from a sync that failed.
+      logService.info(
+        `[LocalSync] Android contact promotion skipped: the Android Phone Contacts source ` +
+          `is off for this user (${contacts.length} contacts stored in external_contacts, ` +
+          `none written to the contacts table, and none offered in the picker — the same ` +
+          `preference hides them there until the user switches the source back on)`,
+        LOG_TAG
+      );
+    }
 
     return inserted;
   }
@@ -1510,6 +1672,12 @@ class LocalSyncService {
    * BACKLOG-1469: Android contacts were only stored in external_contacts shadow
    * table but never promoted to the main contacts table, making them invisible.
    *
+   * BACKLOG-2986: THIS METHOD STILL READS NO PREFERENCE, and must not start —
+   * its caller decides. The gate lives at the top of `storeContacts`, which is
+   * where the read can be observed by the suites that drive the write path. Do
+   * not add a second read here: two gates on one decision is how they come to
+   * disagree.
+   *
    * BACKLOG-2556 — `deviceId` is a parameter because THE PROMOTED CONTACT MUST
    * CLAIM THE RECORD IT CAME FROM. See the origin below.
    */
@@ -1518,21 +1686,27 @@ class LocalSyncService {
     deviceId: string,
     contacts: SyncContact[],
   ): void {
-    // BACKLOG-2593 — TWO KNOWN DEFECTS LIVE IN THE SKIP BELOW. Read before
-    // relying on this method's claims.
+    // BACKLOG-2593 — KNOWN DEFECTS IN THE SKIP BELOW. Read before relying on
+    // this method's claims.
     //
-    // 1. The "already exists" test is a shared last-10-digits phone number with
-    //    NO NAME CHECK — the BACKLOG-2416 shape, on a create path. Two people on
-    //    one office line: the second is never created.
+    // 1. The PHONE test is a shared normalized number with NO NAME CHECK — the
+    //    BACKLOG-2416 shape, on a create path. Two people on one office line:
+    //    the second is never created. STILL OPEN (a person-identity rule, and
+    //    founder-decided; deliberately not touched by BACKLOG-2987).
     // 2. When it skips, NOTHING IS CLAIMED, while `storeContacts` has already
     //    written the record to `external_contacts`. The create path below claims
-    //    its record (BACKLOG-2556); this skip does not.
+    //    its record (BACKLOG-2556); this skip does not. STILL OPEN.
     //
-    // And the BACKLOG-2407 block in `storeContacts` makes the skip the COMMON
-    // case: a re-pairing mints a new `deviceId`, every record re-keys, the full
-    // sync deletes the old rows, and every contact then phone-matches its own
-    // previously-promoted twin. So once the consolidation guessing is deleted,
-    // every Android contact would show twice again by THIS route.
+    // The third — a contact with NO phone was re-created on EVERY sync, because
+    // it never entered the phone loop at all — is CLOSED by the record-claim
+    // probe below (BACKLOG-2987).
+    //
+    // The BACKLOG-2407 block in `storeContacts` used to make the skip the COMMON
+    // case: a re-pairing minted a new `deviceId`, every record re-keyed, and
+    // every contact then phone-matched its own previously-promoted twin. The
+    // companion now re-presents its identity at /register (BACKLOG-2987,
+    // android-companion/services/deviceIdentity.ts) so the id is stable across
+    // re-pairs and the record key no longer churns.
     //
     // Blocker-level for the BACKLOG-2556 deletion PR: claim on the skip path, or
     // have the founder accept it. Deliberately not decided here.
@@ -1548,6 +1722,39 @@ class LocalSyncService {
       origin: ContactOrigin;
     }> = [];
 
+    // =====================================================================
+    // BACKLOG-2987 — HAVE WE ALREADY IMPORTED THIS RECORD?
+    // =====================================================================
+    // Asked BEFORE the phone probe, and answered from our OWN bookkeeping
+    // rather than from a guess about who a person is.
+    //
+    // THE DEFECT IT CLOSES. The phone probe below is the only test this method
+    // had, so a contact carrying no phone number — an email-only address-book
+    // entry — never entered the loop, `alreadyExists` stayed false, and it was
+    // created again on every single sync. Measured on the founder's machine:
+    // the SAME 26 of 389 contacts re-created on three consecutive runs (log
+    // comparison across runs: 0 differing entries), 25 of them carrying an
+    // email and no matchable phone.
+    //
+    // WHY NOT "ALSO MATCH ON EMAIL". That is a new person-identity rule and it
+    // is not this fix's to make (BACKLOG-2416: two people on one shared address
+    // would collapse into one contact). The claim probe asks a bookkeeping
+    // question with a definite answer, so it carries no false-positive risk and
+    // needs no founder ruling.
+    //
+    // IT DEPENDS ON A STABLE deviceId, which is the other half of BACKLOG-2987:
+    // the claim key embeds the device id, so before the companion learned to
+    // re-present its identity at /register this probe would have missed on every
+    // re-pair exactly as the old code did. The two halves ship together.
+    //
+    // ONE QUERY FOR THE BATCH, not one per contact — this runs inside an HTTP
+    // handler against ~400 records.
+    const claimedRecordIds = findClaimedSourceRecordIds(
+      userId,
+      "android_sync",
+      contacts.map((contact) => this.androidExternalRecordId(deviceId, contact.id)),
+    );
+
     for (const contact of contacts) {
       const phones = contact.phones
         .map((p) => p.number)
@@ -1558,6 +1765,13 @@ class LocalSyncService {
 
       // Skip contacts with no phone numbers and no emails — nothing to match or display
       if (phones.length === 0 && emails.length === 0) {
+        continue;
+      }
+
+      // BACKLOG-2987: already promoted on an earlier sync — this exact external
+      // record is claimed by a contact we created. Skip before the phone probe,
+      // which cannot answer for a contact that has no matchable phone.
+      if (claimedRecordIds.has(this.androidExternalRecordId(deviceId, contact.id))) {
         continue;
       }
 

@@ -1,6 +1,6 @@
 {
   "name": "keepr",
-  "version": "2.32.0",
+  "version": "2.33.0",
   "description": "Keepr - Export and archive iMessage conversations and emails",
   "main": "electron/main.js",
   "engines": {
@@ -66,8 +66,11 @@
     "verify:pii": "node scripts/__tests__/check-fixture-pii.verify.js",
     "check:pii:list": "node scripts/ci/check-fixture-pii.mjs --list",
     "check:hooks": "node scripts/ci/check-hooks-tracking.mjs",
+    "check:sql-boundary": "node scripts/ci/check-sql-boundary.mjs",
+    "verify:sql-boundary": "node scripts/__tests__/check-sql-boundary.verify.js",
     "check:text-sources": "node scripts/ci/check-text-sources.mjs",
     "check:test-drift": "node scripts/ci/check-test-drift.mjs",
+    "check:android-version": "node scripts/ci/check-android-version-bump.mjs",
     "hooks:doctor": "node scripts/hooks-doctor.mjs",
     "prepare": "husky",
     "prestart": "node scripts/rebuild-native.js"

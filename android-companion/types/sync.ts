@@ -128,6 +128,14 @@ export type SyncErrorType =
   | "network_after_connect"
   | "phone_offline"
   | "server_error"
+  /**
+   * BACKLOG-2956: the STORED pairing names an address that is not on a private
+   * LAN, so the request was refused before it was issued. This is NOT a
+   * reachability failure — retrying, changing Wi-Fi, or opening the desktop app
+   * all change nothing. The only fix is to pair again, so it carries its own
+   * type rather than falling into the generic "can't reach your computer" copy.
+   */
+  | "invalid_address"
   | "unknown";
 
 // ============================================

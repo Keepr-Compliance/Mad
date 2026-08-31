@@ -56,6 +56,14 @@ jest.mock('expo-constants', () => ({
   __esModule: true,
   default: { expoConfig: { version: '9.9.9' }, manifest2: {} },
 }));
+// BACKLOG-2956: the About row reads the NATIVE package manifest. Values differ
+// from the expo-constants mock above so a regression to reading the JS config
+// shows up as a failed assertion instead of passing by coincidence.
+jest.mock('expo-application', () => ({
+  __esModule: true,
+  nativeApplicationVersion: '7.7.7',
+  nativeBuildVersion: '42',
+}));
 jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(async () => undefined),
   getItem: jest.fn(async () => null),
@@ -100,6 +108,10 @@ const mockGetSyncInterval = jest.fn();
 const mockGetBackgroundSyncEnabled = jest.fn();
 const mockSetBackgroundSyncEnabled = jest.fn(async (_v: boolean) => undefined);
 jest.mock('../../../services/smsQueueService', () => ({
+  // BACKLOG-3005 (busy-state fold): home reads the shared sync lock to grey the
+  // Sync Now button for syncs it did not start. An omitted method here reads as
+  // the feature not firing (the trap syncServiceLanGuard.test.ts documents).
+  isSyncInFlight: jest.fn(async () => false),
   getSyncInterval: () => mockGetSyncInterval(),
   setSyncInterval: jest.fn(async () => undefined),
   getBackgroundSyncEnabled: () => mockGetBackgroundSyncEnabled(),
@@ -184,5 +196,45 @@ describe('SettingsScreen — honest Background Sync toggle (BACKLOG-2216)', () =
       expect(mockStartBackgroundSync).toHaveBeenCalled();
     });
     expect(mockSetBackgroundSyncEnabled).toHaveBeenCalledWith(true);
+  });
+  // -------------------------------------------------------------------------
+  // BACKLOG-2956 — the About row must identify the BUILD, not just the version.
+  //
+  // The defect: every companion build ever produced reported "1.0.0" (version
+  // never bumped; versionCode never set, so Expo defaulted it to 1). A field
+  // tester on a five-month-old build and someone on today's build gave support
+  // the same answer, so no fix could be confirmed as installed.
+  // -------------------------------------------------------------------------
+
+  it('shows the version name AND the build number, read from the native package', async () => {
+    mockGetSyncInterval.mockResolvedValue(15);
+    mockGetBackgroundSyncEnabled.mockResolvedValue(false);
+
+    render(<SettingsScreen />);
+
+    const versionRow = await screen.findByTestId('app-version-value');
+
+    // Asserted VERBATIM, not by substring: this exact string is what a user
+    // reads back on a support call. "7.7.7" is the native versionName and "42"
+    // the native versionCode — neither comes from the expo-constants mock,
+    // which says 9.9.9, so this also pins the resolution ORDER.
+    expect(versionRow.props.children).toBe('7.7.7 (42)');
+  });
+
+  it('never renders a bare version name that cannot identify a build', async () => {
+    mockGetSyncInterval.mockResolvedValue(15);
+    mockGetBackgroundSyncEnabled.mockResolvedValue(false);
+
+    render(<SettingsScreen />);
+
+    const versionRow = await screen.findByTestId('app-version-value');
+    const rendered = String(versionRow.props.children);
+
+    // The pre-fix rendering was the version name alone. Assert the build number
+    // is present and parenthesised, so dropping it fails here.
+    expect(rendered).toMatch(/^\S+ \(\S+\)$/);
+    expect(rendered).not.toBe('7.7.7');
+    // And never the old hardcoded fallback.
+    expect(rendered).not.toContain('1.0.0');
   });
 });

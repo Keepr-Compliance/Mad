@@ -43,7 +43,16 @@ export interface RegisterFailure {
   error?: string;
 }
 
-export type PairFailureKind = 'account' | 'reachability' | 'generic';
+export type PairFailureKind =
+  | 'account'
+  | 'reachability'
+  /**
+   * BACKLOG-2956: the destination is not a private LAN address, so the LAN guard
+   * in syncService refused the request before it was sent. Never retryable —
+   * the same address will be refused again.
+   */
+  | 'address'
+  | 'generic';
 
 /**
  * Classify a FAILED `registerDevice` outcome so the UI can show the right
@@ -65,6 +74,10 @@ export function classifyPairFailure(result: RegisterFailure): PairFailureKind {
     case 'timeout':
     case 'network_after_connect':
       return 'reachability';
+    // BACKLOG-2956: the address itself is off-LAN and was refused before any
+    // request. Not reachability — retrying the same address cannot work.
+    case 'invalid_address':
+      return 'address';
     // A non-403 server error, or an error we could not classify.
     case 'server_error':
     case 'unknown':
@@ -92,7 +105,39 @@ export function pairFailureMessage(result: RegisterFailure): PairFailureMessage 
       const { title, body } = accountMatchMessage('account_mismatch');
       return { title, body, retryable: false };
     }
+    case 'address':
+      // Not a network problem: nothing was sent, and a retry sends nothing
+      // again. Reuse the lanAddress module's voice — name the real cause and
+      // point at the one action that fixes it.
+      return {
+        title: 'Not a Local Network Address',
+        body: "This pairing points at a computer that isn't on your local network. Keepr only syncs to a computer on your own Wi-Fi or wired network. Scan the QR code shown in the Keepr desktop app on your own computer.",
+        retryable: false,
+      };
     case 'reachability':
+      // BACKLOG-2956 — this copy was challenged and DELIBERATELY KEPT. The
+      // failure that prompted the challenge was an Android cleartext block
+      // (the OS refusing the request before a socket opens), which this message
+      // reports as a Wi-Fi problem — the same wrong-generic-message class as
+      // BACKLOG-2913. The reason it stays is that the client genuinely CANNOT
+      // tell the two apart:
+      //
+      //   node_modules/whatwg-fetch/dist/fetch.umd.js:567
+      //     xhr.onerror = ... reject(new TypeError('Network request failed'))
+      //
+      // React Native's `fetch` is whatwg-fetch (Libraries/Network/fetch.js is a
+      // side-effectful re-export), and that message is a HARDCODED constant.
+      // The native cause — 'java.io.IOException: Cleartext HTTP traffic to
+      // <ip> not permitted' vs a real ECONNREFUSED — never reaches JS, so
+      // `classifySyncError` sees one indistinguishable string for both. Writing
+      // a cleartext-specific branch would mean inventing a fixture for a string
+      // this layer can never observe.
+      //
+      // The cleartext cause is instead removed at the source (the release
+      // manifest now permits it — plugins/withLanCleartext.js), and the one
+      // related failure the app CAN identify precisely, a desktop address
+      // outside the local network, has its own distinct message in
+      // services/lanAddress.ts rather than being funnelled in here.
       return {
         title: "Couldn't Reach Keepr",
         body: "Couldn't reach Keepr on your computer. Make sure the Keepr app is open and your phone is on the same Wi-Fi network, then try again.",

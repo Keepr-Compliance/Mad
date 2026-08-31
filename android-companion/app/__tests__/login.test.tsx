@@ -39,6 +39,15 @@ jest.mock('expo-linear-gradient', () => {
 });
 
 // --- expo-web-browser: the screen warms/cools the in-app browser on mount. ---
+// BACKLOG-2956: the login screen shows the running build so support can get it
+// without the user signing in. Distinct native values prove the string is read
+// from the package manifest rather than the JS app config.
+jest.mock('expo-application', () => ({
+  __esModule: true,
+  nativeApplicationVersion: '7.7.7',
+  nativeBuildVersion: '42',
+}));
+
 jest.mock('expo-web-browser', () => ({
   warmUpAsync: jest.fn(),
   coolDownAsync: jest.fn(),
@@ -93,5 +102,30 @@ describe('LoginScreen — auth-error notice (BACKLOG-2215)', () => {
     expect(screen.queryByText(CALLBACK_COPY)).toBeNull();
     // The sign-in options still render.
     expect(screen.getByText('Continue with Google')).toBeTruthy();
+  });
+  // -------------------------------------------------------------------------
+  // BACKLOG-2956 — the build must be identifiable from the SIGN-IN screen.
+  //
+  // Settings > About shows the same string, but it is behind the login wall,
+  // and sign-in is itself one of the failures a field tester reported
+  // (BACKLOG-2955). A support call needs the build number exactly when the user
+  // is stuck here.
+  // -------------------------------------------------------------------------
+
+  it('shows the running build without requiring sign-in', () => {
+    mockAuthError = undefined;
+    render(<LoginScreen />);
+
+    const version = screen.getByTestId('login-version');
+    // Verbatim: this is the string a user reads back on a support call.
+    expect(version.props.children).toBe('7.7.7 (42)');
+  });
+
+  it('still shows the build when sign-in has failed', () => {
+    // The case that matters most — the user cannot get past this screen.
+    mockAuthError = 'callback';
+    render(<LoginScreen />);
+
+    expect(screen.getByTestId('login-version').props.children).toBe('7.7.7 (42)');
   });
 });

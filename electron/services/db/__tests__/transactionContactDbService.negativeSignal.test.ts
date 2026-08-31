@@ -97,17 +97,30 @@ let harness: MigrationHarness;
 let db: DatabaseType;
 
 beforeEach(async () => {
-  harness = createMigrationHarness({ seedV29Schema: true });
-  harness.seedSchemaVersion(55);
-  await harness.service._runVersionedMigrations();
+  harness = createMigrationHarness({ seedV29Schema: false });
+  // BACKLOG-2993: the chain that used to deliver v56's tombstone columns (and
+  // v62's participant view) is gone — the regenerated schema.sql IS the
+  // producer now: full shape, real UNIQUE constraint, version 70. Still no
+  // hand-rolled schema; still the artefact every install actually gets.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const fs = jest.requireActual("fs") as typeof import("fs");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodePath = jest.requireActual("path") as typeof import("path");
+  harness.db.exec(
+    fs.readFileSync(
+      nodePath.join(__dirname, "..", "..", "..", "database", "schema.sql"),
+      "utf8",
+    ),
+  );
   db = harness.db;
 
   // See the companion tombstone suite: the harness seeds `contacts` at its v29
   // shape, before these two real production columns.
-  db.exec(`ALTER TABLE contacts ADD COLUMN default_role TEXT`);
-  db.exec(`ALTER TABLE contacts ADD COLUMN updated_at DATETIME`);
 
-  db.prepare(`INSERT INTO users_local (id) VALUES (?)`).run(USER_ID);
+  db.prepare(
+    `INSERT INTO users_local (id, email, oauth_provider, oauth_id)
+     VALUES (?, 'owner@example.com', 'google', 'oauth-test')`,
+  ).run(USER_ID);
 
   const people: Array<[string, string, string, string]> = [
     [JANE, "Jane Example", JANE_EMAIL, JANE_PHONE],
@@ -133,10 +146,9 @@ beforeEach(async () => {
   // fixture leaving it NULL would show an empty fan-out and "prove" the filter
   // works for the wrong reason. The NULL behaviour is identical under both
   // spellings, so this fixture requirement is unchanged by the migration.
-  db.exec(`ALTER TABLE transactions ADD COLUMN status TEXT`);
   for (const txn of [TXN_A, TXN_B]) {
     db.prepare(
-      `INSERT INTO transactions (id, user_id, status) VALUES (?, ?, 'active')`,
+      `INSERT INTO transactions (id, user_id, property_address, status) VALUES (?, ?, '123 Test St', 'active')`,
     ).run(txn, USER_ID);
   }
 

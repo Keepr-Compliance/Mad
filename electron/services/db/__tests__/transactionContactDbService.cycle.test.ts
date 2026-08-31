@@ -154,14 +154,6 @@ interface JunctionRow {
 
 const SCHEMA_PATH = path.join(__dirname, "../../../database/schema.sql");
 
-/** Migration v56's exact DDL — see the file header for the source it came from. */
-const V56_TOMBSTONE_DDL = [
-  "ALTER TABLE contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE contacts ADD COLUMN removed_reason TEXT",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT",
-];
-
 /** Every junction row on a transaction, tombstoned or not — read RAW. */
 function allRows(transactionId = TXN_A): JunctionRow[] {
   return db
@@ -210,7 +202,10 @@ beforeEach(() => {
   db = openTestDb();
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(readFileSync(SCHEMA_PATH, "utf8"));
-  for (const ddl of V56_TOMBSTONE_DDL) db.exec(ddl);
+  // BACKLOG-2993: the v56 tombstone columns (and every other chain-added
+  // column) now come from the baseline schema.sql exec'd above — the
+  // per-migration DDL bolt-ons this fixture used to apply are gone with
+  // the chain.
   db.exec(CONTACT_SOURCE_LINKS_TABLE_SQL);
 
   db.prepare(

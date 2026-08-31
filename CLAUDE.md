@@ -127,6 +127,38 @@ When verifying a fix or process (sync jobs, reindexing, CI automations), confirm
 
 **Incident Reference:** BACKLOG-1875 — pm-task-sync ran "successfully" while every RPC call was rejected; the error was masked as "task not found".
 
+### Break it and watch it go red (MANDATORY for any PR)
+
+**A check is only worth what its inputs can distinguish. "It passed" says nothing until you have made it fail on purpose.**
+
+Before claiming a fix is verified, revert one line of it and confirm a test goes red. **State in your handoff which controls you ran and what failed** — an unstated control is an unrun control.
+
+Three ways a green signal carries no information. All three occurred on 2026-08-04 (BACKLOG-2439):
+
+| Shape | Example |
+|---|---|
+| The fixture describes a state the code **cannot emit** | A test helper forced preferences into a combination Windows never produces — making an entire root cause false. It was filed, briefed, built and decided on before anyone ran the real path. |
+| The verification set **omits the only check that would fail** | A PR passed `tsc`, eslint, 11,485 jest tests and a full SR review, then failed CI: the app would not build. Every green check reads *source*; none runs a bundler. |
+| The check's inputs **cannot separate pass from fail** | A parity test justifying a duplicated module was drifted and stayed green — the hand-picked corpus had no input at the boundary. |
+
+**Rules that follow:**
+
+1. **Transcribe fixtures, never invent them.** A fixture standing in for a real producer (a SQL projection, an IPC payload, a provider mapper) must come from that producer's actual output. Run it once, paste the shape, cite where it came from.
+2. **When a control does NOT go red, suspect the fixture before the control.**
+3. **A fixture missing an always-set field: add it and re-run.** Still passes → latent, record it, don't block. Fails → the test was proving something else, and it blocks.
+4. **Sweep boundaries, don't sample them.** One input per branch cannot catch an off-by-one.
+5. **A PR that moves a module across the main/renderer boundary MUST run `npm run build`** (CI also runs it — job "Build Application", `ci.yml`, in a step labelled "Build Vite app" which reads as renderer-only and has caused three separate documents to claim CI never builds; run it locally anyway so you find out in minutes, not after a push)**.** `electron/` cannot import from `src/` (`rootDir`), and the renderer cannot *value*-import from `electron/` (Vite parses it as JavaScript). Neither direction works; a shared module needs `src/` with a mirror, plus a parity test whose corpus covers every boundary.
+
+### Sequencing PR trains
+
+**Run them one at a time.** Worktrees isolate files, not facts — a review of PR A is only valid while PR B holds still, and a published branch is shared by definition.
+
+On 2026-08-04, nine PRs on one integration branch produced **four** merge-order conclusions, **two of them wrong**: one a stale measurement (a real conflict that dissolved when the other PR reverted), one that never existed (derived by grepping `git merge-tree` output for `changed in both` — informational, not a conflict marker).
+
+- **Stamp every cross-branch claim with the SHA it was measured at.**
+- **Re-verify merge order at merge time** by running the merge and the affected suites on the merged tree. Never inherit an ordering note.
+- **Textual conflicts announce themselves; semantic ones merge cleanly and produce broken code.** `git merge-tree` is silent on the second kind, which is the kind that matters.
+
 ### Prove the mutation applied before you count its result (MANDATORY)
 
 **An unverified mutation is an unrun control.** When you break your own code on purpose to prove a test can see the break, you apply the break as a text replacement — and **if the pattern does not match, nothing is replaced**. The code is untouched, the suite passes, and the green run gets written down as *"I broke it and the tests did not catch it."* Nothing was ever broken. The record then points at the wrong thing: it reads as a weak test when it is a broken harness, and the next person "fixes" a test that was fine.
@@ -237,6 +269,19 @@ Agents in this repo have the following MCP servers available **in addition to** 
 - If MCP tools are **deferred** (not preloaded in a session), discover them via ToolSearch (e.g. `select:mcp__sentry__search_issues`) before calling.
 - Exact MCP tool prefixes vary by session/connector (e.g. Supabase may appear as `mcp__supabase__*` or `mcp__claude_ai_Supabase__*` depending on how it is connected) — treat the names in this table as representative and resolve the live name via ToolSearch before calling.
 - **Bug / QA / fix work:** query **Sentry** for real error data *before* theorizing a root cause.
+
+### Diagnose Inward Before Outward (MANDATORY)
+
+When something you just built fails, **the thing you just built is the leading suspect.** Rule out
+your own artifact, environment and build before naming an external service, a third-party API, or
+the founder's configuration.
+
+An external error message is authoritative about the *symptom*, never the *cause*: `REQUEST_DENIED`
+means "the key I received is invalid", not "your Google account is misconfigured".
+
+**Before routing anything to the founder, state what you have already ruled out.** If you cannot
+list it, you have not earned the handoff. Full detail and worked examples: `.claude/docs/PR-SOP.md`
+§6.2j.
 
 ### Tool-First Rule: Exhaust Tools Before Asking the Founder (MANDATORY)
 
@@ -629,7 +674,8 @@ npm run build            # Build for production
 npx jest path/to/file.test.ts   # PREFERRED for single suites - never touches node_modules
 npm test                 # Full suite. Flips the shared native module for the duration
                          # of the run, then always restores it (see Native Module Errors)
-npm run type-check       # TypeScript check
+npm run type-check       # TypeScript check — PRODUCTION code ONLY
+npm run type-check:tests # TypeScript check for *.test.ts — SEPARATE CI step, easily missed
 npm run lint             # ESLint check
 
 # Native modules (REQUIRED after npm install or Node.js update)
@@ -646,8 +692,26 @@ NODE_MODULE_VERSION 127. This version of Node.js requires NODE_MODULE_VERSION 13
 
 **Symptoms**: Database fails to initialize, app stuck on loading/onboarding screens in an infinite loop.
 
-**Check which build is currently live** (a plain `require()` is NOT proof — `bindings` finds a
-cwd-relative copy and falsely succeeds, so use `dlopen` on the absolute path):
+**Check which build is currently live.** A plain `require()` is NOT proof — `bindings` finds a
+cwd-relative copy and falsely succeeds. **And `node -e` is not proof either**: node catches the
+error and any failure reads as "Electron build, dev OK", so an *architecture* mismatch
+(x86_64 binary, arm64 machine) reports SUCCESS. That gave three false all-clears on
+2026-08-30 while `npm run dev` was broken. **Check under the real Electron binary, and check
+the architecture separately:**
+
+```bash
+# 1. architecture — must say arm64 on Apple Silicon, NOT x86_64
+file /Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node
+
+# 2. does the Electron that dev actually runs load it?
+ELECTRON_RUN_AS_NODE=1 npx electron -e "try{process.dlopen({exports:{}},'/Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node');console.log('dev OK')}catch(e){console.log('BROKEN: '+e.message)}"
+```
+
+Repair: `npx electron-rebuild -f -w better-sqlite3-multiple-ciphers` in `~/Developer/Mad`,
+then re-run check 2.
+
+The older node-only check below distinguishes the two ABIs but **cannot see an architecture
+mismatch** — keep it only as a secondary signal:
 
 ```bash
 node -e "try{process.dlopen({exports:{}},'/Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node');console.log('NODE build -> dev WILL break')}catch(e){console.log('ELECTRON build -> dev OK')}"
@@ -675,6 +739,14 @@ it prints.
 
 **Still true, and not protected:**
 - **`npm install` / `npm rebuild` have the same hazard and no such protection.**
+- **`npm run package` has it too, and it is worse.** electron-builder runs `@electron/rebuild`
+  during packaging. Run from a worktree whose `node_modules` is a **symlink** to the main repo,
+  it rebuilds the SHARED binary — and it builds for the packaging target, so on an arm64 Mac it
+  writes an **x86_64** binary and `npm run dev` dies with
+  `incompatible architecture (have 'x86_64', need 'arm64')`. This broke the founder's dev app on
+  2026-08-30. **Before packaging from a worktree, replace the symlink with a hardlinked copy:**
+  `rm node_modules && cp -Rc /Users/daniel/Developer/Mad/node_modules ./node_modules` — instant,
+  no extra disk, and the rebuild can no longer reach the shared tree.
 - While any `npm test` run is in progress the shared binary is Node-ABI, so starting
   `npm run dev` mid-run can still fail. BACKLOG-2374 (worktree-local native module) is the
   durable fix.

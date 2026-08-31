@@ -26,7 +26,7 @@
 
 import { AppState, type AppStateStatus } from 'react-native';
 import * as Sentry from '@sentry/react-native';
-import { performSync } from './backgroundSync';
+import { performSync, MAX_SYNC_CYCLES_PER_RUN } from './backgroundSync';
 
 /**
  * Minimum spacing between AppState-triggered catch-up syncs.
@@ -70,7 +70,11 @@ export async function runCatchupSync(now: number = Date.now()): Promise<void> {
   state.inFlight = true;
   state.lastRunAt = now;
   try {
-    await performSync();
+    // BACKLOG-3005 (founder ruling): "a returning user syncing" is one of the
+    // user-triggered syncs that must honour the desktop's window in full, so
+    // this drains rather than doing a single pass. The depth-aware gate in
+    // `performSync` means a drain already in flight is JOINED, not duplicated.
+    await performSync({ maxCycles: MAX_SYNC_CYCLES_PER_RUN });
     Sentry.addBreadcrumb({
       category: 'sync',
       message: 'AppState catch-up sync ran',

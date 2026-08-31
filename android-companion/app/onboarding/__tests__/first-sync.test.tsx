@@ -66,7 +66,7 @@ jest.mock('../../../services/onboardingProgress', () => ({
 // its return shape drives which branch first-sync renders. `startBackgroundSync`
 // is awaited before performSync and must resolve. We swap `performSync`'s
 // implementation per-test. ---
-const mockPerformSync = jest.fn<Promise<SyncOperationResult>, []>();
+const mockPerformSync = jest.fn<Promise<SyncOperationResult>, [unknown?]>();
 // `stopBackgroundSync` is the cancel/unpair path. The first-sync screen must
 // NEVER call it (skipping only unblocks the UI — the sync keeps running), so we
 // expose it as a spy to assert it stays untouched (BACKLOG-2211).
@@ -74,7 +74,15 @@ const mockStopBackgroundSync = jest.fn(async () => undefined);
 jest.mock('../../../services/backgroundSync', () => ({
   startBackgroundSync: jest.fn(async () => undefined),
   stopBackgroundSync: () => mockStopBackgroundSync(),
-  performSync: () => mockPerformSync(),
+  // BACKLOG-3005: FORWARD the options. Dropping them is why mutating the
+  // `maxCycles` binding at either call site left this suite green.
+  performSync: (options?: unknown) => mockPerformSync(options),
+  // The REAL constant. Omitting it made the screen pass `maxCycles: undefined`
+  // — i.e. depth 1 — inside this suite only, so the very binding under test was
+  // neutralised by its own harness. Re-exporting the mock's own literal would
+  // be no better: the assertion would compare the mock against itself.
+  MAX_SYNC_CYCLES_PER_RUN: jest.requireActual('../../../services/syncDepth')
+    .MAX_SYNC_CYCLES_PER_RUN,
 }));
 
 // --- Mock the `components/ui` barrel (see permissions.test.tsx rationale). The
@@ -383,5 +391,82 @@ describe('FirstSyncScreen — skipped SMS permission gating (BACKLOG-2214)', () 
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/no longer has permission/i)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3005 — THE CALL-SITE BINDING ITSELF
+// ---------------------------------------------------------------------------
+
+describe('the onboarding first sync asks for a full drain', () => {
+  // WITHOUT THIS RESET THE RETRY CONTROL BELOW IS INERT.
+  //
+  // The three describe blocks above each reset this mock; this one did not, so
+  // `mockPerformSync.mock.calls` arrived carrying their residue — three prior
+  // invocations, all of the FIRST call site. `waitFor(calls.length > 1)` was
+  // then satisfied instantly by that leftover, the retry loop never ran, and
+  // the assertion iterated stale data. Mutating the retry binding went red
+  // NOWHERE, and the sibling test below reded under the first-site mutation for
+  // the wrong reason — off calls it had not made.
+  beforeEach(() => {
+    mockPerformSync.mockReset();
+  });
+
+  /**
+   * Every other control in this file asserts what the screen RENDERS for a
+   * given result. None asserted what `performSync` was CALLED WITH — so
+   * mutating `maxCycles` to 1 here left the whole suite green while silently
+   * reinstating the founder-reported bug for a first-time pairing, which is the
+   * exact path a new user's history arrives on.
+   *
+   * The constant is imported from the REAL module: comparing against the mock's
+   * own literal would assert the mock against itself.
+   *
+   * MUTATION that must go red: change `maxCycles` at either `performSync` call
+   * site in `first-sync.tsx` to 1.
+   */
+  it('passes maxCycles = MAX_SYNC_CYCLES_PER_RUN, not a single pass', async () => {
+    const { MAX_SYNC_CYCLES_PER_RUN } = jest.requireActual<{
+      MAX_SYNC_CYCLES_PER_RUN: number;
+    }>('../../../services/syncDepth');
+
+    mockPerformSync.mockResolvedValue(successResult);
+    render(<FirstSyncScreen />);
+
+    await waitFor(() => expect(mockPerformSync).toHaveBeenCalled());
+
+    expect(MAX_SYNC_CYCLES_PER_RUN).toBeGreaterThan(1);
+    for (const [options] of mockPerformSync.mock.calls) {
+      expect(options).toEqual({ maxCycles: MAX_SYNC_CYCLES_PER_RUN });
+    }
+  });
+
+  /**
+   * The RETRY call site is a separate binding and was equally unproven. A
+   * skipped first attempt drives the loop into it.
+   */
+  it('the skip-retry call site asks for a full drain too', async () => {
+    mockPerformSync
+      .mockResolvedValueOnce({ ...successResult, skipped: true })
+      .mockResolvedValue(successResult);
+
+    const { MAX_SYNC_CYCLES_PER_RUN } = jest.requireActual<{
+      MAX_SYNC_CYCLES_PER_RUN: number;
+    }>('../../../services/syncDepth');
+
+    render(<FirstSyncScreen />);
+
+    // 5s, not RNTL's 1000ms default: the retry loop deliberately sleeps
+    // SKIP_RETRY_DELAY_MS (1500ms) of REAL time before the second call, so the
+    // default budget expires before the call this control exists to inspect.
+    // The stale-call residue was masking that too — with it gone, the default
+    // timeout fails this test at baseline.
+    await waitFor(
+      () => expect(mockPerformSync.mock.calls.length).toBeGreaterThan(1),
+      { timeout: 5000 },
+    );
+    for (const [options] of mockPerformSync.mock.calls) {
+      expect(options).toEqual({ maxCycles: MAX_SYNC_CYCLES_PER_RUN });
+    }
   });
 });

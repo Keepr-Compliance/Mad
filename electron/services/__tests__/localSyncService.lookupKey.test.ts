@@ -25,7 +25,19 @@
 // Keep localSyncService importable under jest without touching the network/DB.
 jest.mock("../supabaseService", () => ({
   __esModule: true,
-  default: { getClient: () => ({ auth: { getUser: jest.fn() } }) },
+  default: {
+    getClient: () => ({ auth: { getUser: jest.fn() } }),
+    // BACKLOG-2986: `storeContacts` now reads `androidContacts` before it
+    // promotes, via the REAL `preferenceHelper`. Stated explicitly rather than
+    // left to the helper's catch: without this key the read would throw, the
+    // helper would fail open to `true`, and every case below would be green by
+    // accident instead of by design. `localSyncService.writeGate-2986.test.ts`
+    // is where the gate itself is swept.
+    getPreferences: jest.fn().mockResolvedValue({
+      phone_type: "android",
+      contactSources: { direct: { androidContacts: true } },
+    }),
+  },
 }));
 
 jest.mock("../db/externalContactDbService", () => ({
@@ -130,8 +142,8 @@ describe("promoteToMainContacts — the dedup probe uses the shared key (BACKLOG
     { id: "302", displayName: "Robin Marsh", phones: [{ number: "(415) 555-0177" }], emails: [] },
   ];
 
-  it("probes with the key the re-keyed column holds, not a hand-rolled last-ten", () => {
-    storeContacts(USER, DEVICE, PROMOTABLE, true);
+  it("probes with the key the re-keyed column holds, not a hand-rolled last-ten", async () => {
+    await storeContacts(USER, DEVICE, PROMOTABLE, true);
 
     const probed = findSpy.mock.calls.map((c) => c[1] as string);
 
@@ -155,11 +167,11 @@ describe("promoteToMainContacts — the dedup probe uses the shared key (BACKLOG
     expect(oldRule("+14155550188")).not.toBe(toLookupKey("+14155550188"));
   });
 
-  it("still skips a below-floor number rather than probing with it", () => {
+  it("still skips a below-floor number rather than probing with it", async () => {
     // The site carried its own `< 7` floor. Routing through `toMatchingKey`
     // keeps that behaviour in the shared helper instead of a second hand-rolled
     // copy of it — a below-floor value emits no key and is never probed.
-    storeContacts(USER, DEVICE, [
+    await storeContacts(USER, DEVICE, [
       { id: "303", displayName: "Test Contact", phones: [{ number: "40219" }], emails: [] },
     ], true);
 
@@ -175,8 +187,8 @@ describe("promoteToMainContacts — the dedup probe uses the shared key (BACKLOG
 });
 
 describe("storeContacts — lookupKey capture (BACKLOG-2407)", () => {
-  it("carries each contact's own lookupKey into source_identity", () => {
-    storeContacts(USER, DEVICE, CONTACTS, true);
+  it("carries each contact's own lookupKey into source_identity", async () => {
+    await storeContacts(USER, DEVICE, CONTACTS, true);
 
     const batch = writtenBatch();
     expect(
@@ -192,8 +204,8 @@ describe("storeContacts — lookupKey capture (BACKLOG-2407)", () => {
     );
   });
 
-  it("leaves external_record_id EXACTLY as it was — this is not a re-key", () => {
-    storeContacts(USER, DEVICE, CONTACTS, true);
+  it("leaves external_record_id EXACTLY as it was — this is not a re-key", async () => {
+    await storeContacts(USER, DEVICE, CONTACTS, true);
 
     // Asserted as the exact set. If a future change swapped the id component for
     // the lookup key, every existing android_sync row would orphan: a changed id
@@ -208,10 +220,10 @@ describe("storeContacts — lookupKey capture (BACKLOG-2407)", () => {
     );
   });
 
-  it("captures on the incremental path too, not only on a full snapshot", () => {
+  it("captures on the incremental path too, not only on a full snapshot", async () => {
     // A diff is the common case between full re-syncs; if capture only happened
     // on full snapshots, most contacts would go uncaptured for a day at a time.
-    storeContacts(USER, DEVICE, CONTACTS, false);
+    await storeContacts(USER, DEVICE, CONTACTS, false);
 
     expect(upsertSpy).toHaveBeenCalledTimes(1);
     expect(syncSpy).not.toHaveBeenCalled();
@@ -226,7 +238,7 @@ describe("storeContacts — lookupKey capture (BACKLOG-2407)", () => {
     );
   });
 
-  it("accepts a legacy companion that sends no lookupKey at all", () => {
+  it("accepts a legacy companion that sends no lookupKey at all", async () => {
     // Wire compatibility: an already-installed companion does not send this
     // field, and the contacts payload has no per-field validation. Every such
     // contact must still sync, with the capture simply absent.
@@ -234,7 +246,14 @@ describe("storeContacts — lookupKey capture (BACKLOG-2407)", () => {
       { id: "101", displayName: "Ada Lovelace", phones: [{ number: "+15555550104" }], emails: [] },
     ];
 
-    expect(() => storeContacts(USER, DEVICE, legacy, true)).not.toThrow();
+    // BACKLOG-2986: `storeContacts` is async now, so a synchronous
+    // `expect(fn).not.toThrow()` would pass without ever waiting on the work —
+    // it would assert that building the promise does not throw, which is
+    // vacuous. `.resolves` fails the test on a rejection and additionally pins
+    // that a count came back.
+    await expect(
+      storeContacts(USER, DEVICE, legacy, true),
+    ).resolves.toEqual(expect.any(Number));
     const batch = writtenBatch();
     expect(new Set(batch.map((c) => c.external_record_id))).toEqual(
       new Set([`android-${DEVICE}-101`])
@@ -242,12 +261,12 @@ describe("storeContacts — lookupKey capture (BACKLOG-2407)", () => {
     expect(batch[0].source_identity?.lookupKey).toBeNull();
   });
 
-  it("keeps a different deviceId in the key — the scoping is unchanged", () => {
+  it("keeps a different deviceId in the key — the scoping is unchanged", async () => {
     // Pins the behaviour the recorded deviceId decision describes: the same
     // contact re-keys under a new pairing. Documented as the known defect, and
     // asserted here so a later fix is a deliberate change to a failing test
     // rather than an accident.
-    storeContacts(USER, "device-xyz", [CONTACTS[0]], true);
+    await storeContacts(USER, "device-xyz", [CONTACTS[0]], true);
 
     expect(new Set(writtenBatch().map((c) => c.external_record_id))).toEqual(
       new Set(["android-device-xyz-101"])

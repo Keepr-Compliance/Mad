@@ -205,8 +205,17 @@ describe("getDefaultContactSourceSelection", () => {
 });
 
 describe("BACKEND_DERIVED_DEFAULT_KEYS", () => {
-  it("is exactly {iphoneContacts}", () => {
-    expect([...BACKEND_DERIVED_DEFAULT_KEYS].sort()).toEqual(["iphoneContacts"]);
+  it("is exactly {androidContacts, iphoneContacts}", () => {
+    // BACKLOG-2986 added `androidContacts`. Before it, an absent key was
+    // answered by the blanket `true` contactHandlers.ts passes as its 4th
+    // argument — and since onboarding writes the key ONLY for a user who
+    // declared an Android phone, absent is where nearly everyone is, so Android
+    // contacts imported for essentially every user with no way to switch them
+    // off. Founder, 2026-08-30: "contacts aren't auto imported."
+    expect([...BACKEND_DERIVED_DEFAULT_KEYS].sort()).toEqual([
+      "androidContacts",
+      "iphoneContacts",
+    ]);
   });
 
   it("excludes macosContacts — contactHandlers.ts:1294 gates Android contacts on it", () => {

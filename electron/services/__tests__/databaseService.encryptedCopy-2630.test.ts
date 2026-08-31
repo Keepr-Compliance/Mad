@@ -164,12 +164,6 @@ const SCHEMA_SQL_PATH = path.join(REPO_ROOT, "electron", "database", "schema.sql
 /** The version this PR's migration lands on. A literal: the claim is about 69. */
 const V69 = 69;
 /**
- * The last version before `contact_link_proposals` / `contact_link_verdicts`
- * exist at all — see the header note on why this is 58 and not 68.
- */
-const NO_GENERATED_COLUMN_VERSION = 58;
-
-/**
  * A 256-bit raw key, hex. `_openDatabase()` and the migration both interpolate
  * it into `PRAGMA key = "x'<hex>'"`, which requires exactly 64 hex characters.
  * Fixed rather than random so a failure is reproducible.
@@ -346,16 +340,58 @@ describe("_migrateToEncryptedDatabase — the whole-database copy (BACKLOG-2630)
     expect(fs.statSync(dbFile).size).toBeGreaterThan(0);
   });
 
-  it("PRECONDITION: the chain head is v69 or later, so the F1 fixture can contain pair_key", () => {
+  it("PRECONDITION: the install head is v69 or later, so the F1 fixture can contain pair_key", () => {
     expect(chainHeadVersion()).toBeGreaterThanOrEqual(V69);
   });
 
   // -------------------------------------------------------------------------
-  // F0 — CONTROL. Merge-base structure. No generated column exists.
+  // F0 — CONTROL. No generated column exists anywhere in the database.
+  //
+  // BACKLOG-2993 note: this control originally built "shipped v58" via the
+  // migration chain. The chain is gone and every shape the current artefacts
+  // produce carries the pair_key generated columns, so a no-generated-column
+  // database can no longer come from a real producer. The control's claim
+  // never depended on v58 though — it is "the copy does not depend on a
+  // generated column existing" — and a minimal hand-authored plaintext
+  // database carries that claim exactly. Its premise is still ASSERTED below,
+  // not assumed. The fixture is also deliberately parent-LAST in sqlite_master
+  // order (`contacts` REFERENCES `users_local` but sorts first), pinning the
+  // clone's independence from table order: this driver compiles foreign_keys
+  // ON by default, and the copy crashed on exactly this shape until
+  // _migrateToEncryptedDatabase disabled enforcement for the clone.
   // -------------------------------------------------------------------------
 
-  it("F0 (control): a database with NO generated column (<= v58) copies, and its rows land encrypted", async () => {
-    await buildPlaintextFixture(NO_GENERATED_COLUMN_VERSION);
+  async function buildNoGeneratedColumnFixture(): Promise<void> {
+    const db = new RealDatabase(dbFile) as DatabaseType;
+    db.exec(`
+      CREATE TABLE contacts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users_local(id),
+        display_name TEXT
+      );
+      CREATE TABLE users_local (id TEXT PRIMARY KEY, email TEXT);
+    `);
+    db.prepare("INSERT INTO users_local (id, email) VALUES (?, ?)").run(
+      USER_ID,
+      "copy-2630@example.invalid",
+    );
+    for (const id of [CONTACT_LOW, CONTACT_HIGH]) {
+      db.prepare("INSERT INTO contacts (id, user_id, display_name) VALUES (?, ?, ?)").run(
+        id,
+        USER_ID,
+        `Display ${id}`,
+      );
+    }
+    db.close();
+
+    service.dbPath = dbFile;
+    service.encryptionKey = KEY;
+    setDbPath(dbFile);
+    setEncryptionKey(KEY);
+  }
+
+  it("F0 (control): a database with NO generated column copies, and its rows land encrypted", async () => {
+    await buildNoGeneratedColumnFixture();
 
     // The control's premise, asserted rather than assumed: there is NOTHING
     // here for the defect to trip over. This is the line that caught the first
@@ -390,7 +426,7 @@ describe("_migrateToEncryptedDatabase — the whole-database copy (BACKLOG-2630)
   // F1 — the defect itself. RED before the fix, GREEN after.
   // -------------------------------------------------------------------------
 
-  it("F1: a v69 database — which HAS a stored generated column — copies without error", async () => {
+  it("F1: the baseline database — which HAS a stored generated column — copies without error", async () => {
     await buildPlaintextFixture(chainHeadVersion());
     seedReversedContactContactVerdict();
 

@@ -22,6 +22,7 @@ jest.mock("electron", () => ({
     getPath: jest.fn(() => "/mock/user/data"),
     isReady: jest.fn(() => true),
     whenReady: jest.fn().mockResolvedValue(undefined),
+    quit: jest.fn(),
   },
   dialog: {
     showMessageBox: mockShowMessageBox,
@@ -34,6 +35,7 @@ jest.mock("@sentry/electron/main", () => ({
   captureException: mockCaptureException,
   setUser: jest.fn(),
   addBreadcrumb: jest.fn(),
+  flush: jest.fn().mockResolvedValue(true),
 }));
 
 // Mock better-sqlite3-multiple-ciphers
@@ -56,10 +58,29 @@ interface MockDb {
   transaction: jest.Mock;
 }
 
+/**
+ * BACKLOG-2993: the schema-baseline fence reads schema_version before ANY
+ * migration machinery runs, and refuses (dialog + app.quit) on a hollow or
+ * pre-baseline answer. This suite's shared statement would answer it with
+ * whatever the current test seeded for OTHER queries, so the version read is
+ * intercepted and answered as a baseline database — keeping every test here
+ * pointed at what it was written to test. Refusal behaviour itself is covered
+ * by databaseService.schemaBaselineRefusal.test.ts on real files.
+ */
+const fenceVersionStatement = {
+  get: jest.fn(() => ({ version: 70 })),
+  all: jest.fn(() => []),
+  run: jest.fn(),
+};
+
 const mockDb: MockDb = {
   pragma: jest.fn(),
   exec: jest.fn(),
-  prepare: jest.fn(() => mockStatement),
+  prepare: jest.fn((sql: string) =>
+    typeof sql === "string" && sql.includes("SELECT version FROM schema_version")
+      ? fenceVersionStatement
+      : mockStatement,
+  ),
   close: jest.fn(),
   serialize: jest.fn((callback: () => void) => callback()),
   run: jest.fn(
@@ -1453,7 +1474,15 @@ describe("DatabaseService", () => {
       // Reset mock defaults on shared mocks (these survive resetModules)
       // CRITICAL: clearAllMocks() removes implementations from all mocks,
       // including mockDb members. Must re-set them here.
-      mockDb.prepare.mockImplementation(() => mockStatement);
+      // BACKLOG-2993: re-apply the fence's version interception too — a bare
+      // `() => mockStatement` here re-answers the baseline read with whatever
+      // a test seeded and turns the whole block into refusal tests.
+      mockDb.prepare.mockImplementation((sql: string) =>
+        typeof sql === "string" && sql.includes("SELECT version FROM schema_version")
+          ? fenceVersionStatement
+          : mockStatement,
+      );
+      fenceVersionStatement.get.mockImplementation(() => ({ version: 70 }));
       mockDb.exec.mockImplementation(() => {});
       mockDb.pragma.mockImplementation(() => undefined);
       mockDb.close.mockImplementation(() => {});
@@ -1498,6 +1527,31 @@ describe("DatabaseService", () => {
           throw new Error("Migration failed: syntax error");
         }
       });
+    }
+
+    /**
+     * BACKLOG-2999 -- the unrecoverable branch is now TERMINAL: initialize()
+     * rejects instead of reporting success over a database that was never
+     * recovered. Seven tests in this describe drove that branch with a bare
+     * `await databaseService.initialize()`; each KEEPS ALL OF ITS ORIGINAL
+     * ASSERTIONS and gains only this wrapper. Nothing was deleted or loosened.
+     *
+     * Asserted by NAME + CODE rather than `instanceof`: this describe calls
+     * jest.resetModules() in its beforeEach, so a class object imported here
+     * is not guaranteed to be the one the freshly-registered service module
+     * throws. Name + code still discriminates -- a leaked TypeError, or any
+     * uncontrolled crash out of the restore path, fails both checks.
+     */
+    async function initializeExpectingTerminalRejection(): Promise<void> {
+      let caught: unknown;
+      try {
+        await databaseService.initialize();
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).name).toBe("MigrationRecoveryFailedError");
+      expect((caught as { code?: string }).code).toBe("MIGRATION_RECOVERY_FAILED");
     }
 
     /** Helper: Setup for successful backup restore */
@@ -1582,7 +1636,7 @@ describe("DatabaseService", () => {
         const sentryCapture = await getFreshSentry();
         const showMessageBox = await getFreshDialog();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify Sentry tags show no_backup
         expect(sentryCapture).toHaveBeenCalledWith(
@@ -1604,11 +1658,16 @@ describe("DatabaseService", () => {
         );
       });
 
-      it("should not crash when no backups exist (app continues)", async () => {
+      // BACKLOG-2999 -- INVERTED IN PLACE (was: "should not crash when no
+      // backups exist (app continues)"). "App continues" was the product
+      // decision this item reverses: continuing meant running against a
+      // database whose migration had just failed with nothing recovered. The
+      // surviving half of the old intent -- that it must not fail in an
+      // UNCONTROLLED way -- is the typed assertion inside the helper.
+      it("refuses to report success when no backups exist -- rejects rather than continuing", async () => {
         setupMigrationFailure();
 
-        const result = await databaseService.initialize();
-        expect(result).toBe(true);
+        await initializeExpectingTerminalRejection();
       });
     });
 
@@ -1630,7 +1689,7 @@ describe("DatabaseService", () => {
         const sentryCapture = await getFreshSentry();
         const showMessageBox = await getFreshDialog();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify Sentry tags show corrupt backup
         expect(sentryCapture).toHaveBeenCalledWith(
@@ -1652,7 +1711,9 @@ describe("DatabaseService", () => {
         );
       });
 
-      it("should not crash when backup is corrupt (app continues)", async () => {
+      // BACKLOG-2999 -- INVERTED IN PLACE, same reasoning as the no-backup
+      // case above: a corrupt backup means nothing was recovered either.
+      it("refuses to report success when the backup is corrupt -- rejects rather than continuing", async () => {
         setupMigrationFailure();
 
         (freshFs.existsSync as jest.Mock).mockReturnValue(true);
@@ -1665,8 +1726,7 @@ describe("DatabaseService", () => {
           return undefined;
         });
 
-        const result = await databaseService.initialize();
-        expect(result).toBe(true);
+        await initializeExpectingTerminalRejection();
       });
     });
 
@@ -1699,7 +1759,7 @@ describe("DatabaseService", () => {
 
         const showMessageBox = await getFreshDialog();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify the error dialog was shown (restore reported as failed)
         expect(showMessageBox).toHaveBeenCalledWith(
@@ -1719,7 +1779,7 @@ describe("DatabaseService", () => {
         const { app } = await import("electron");
         (app.isReady as jest.Mock).mockReturnValue(false);
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify whenReady was called
         expect(app.whenReady).toHaveBeenCalled();
@@ -1767,7 +1827,7 @@ describe("DatabaseService", () => {
 
         const showMessageBox = await getFreshDialog();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify error dialog was shown
         expect(showMessageBox).toHaveBeenCalledWith(

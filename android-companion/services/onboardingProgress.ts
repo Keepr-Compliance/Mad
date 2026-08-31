@@ -31,10 +31,25 @@ export const ONBOARDING_STEP_KEY = '@keepr/onboarding-step';
  * The onboarding steps, in order. This is the resume-able unit: an interrupted
  * onboarding resumes at the last-persisted step rather than restarting at step 1.
  */
-export type OnboardingStep = 'permissions' | 'pair-device' | 'first-sync';
+export type OnboardingStep =
+  | 'disclosure'
+  | 'permissions'
+  | 'pair-device'
+  | 'first-sync';
 
-/** Ordered onboarding steps (source of truth for the sequence). */
+/**
+ * Ordered onboarding steps (source of truth for the sequence).
+ *
+ * BACKLOG-2956: `disclosure` is FIRST and must stay first. Google Play requires
+ * the prominent data disclosure to be shown immediately BEFORE the runtime
+ * permission prompt, so any reordering that puts `permissions` ahead of it
+ * breaks the Play requirement. The ordering here is documentation; the actual
+ * enforcement is the consent guard in `app/onboarding/permissions.tsx`, which
+ * refuses to request a permission without a recorded consent regardless of how
+ * the user arrived at the screen.
+ */
 export const ONBOARDING_STEPS: readonly OnboardingStep[] = [
+  'disclosure',
   'permissions',
   'pair-device',
   'first-sync',
@@ -45,16 +60,18 @@ export const ONBOARDING_STEPS: readonly OnboardingStep[] = [
  * satisfy expo-router's `Href` type at every call site.
  */
 export const ONBOARDING_ROUTES = {
+  disclosure: '/onboarding/disclosure',
   permissions: '/onboarding/permissions',
   'pair-device': '/onboarding/pair-device',
   'first-sync': '/onboarding/first-sync',
 } as const;
 
 /** The step to resume at when no valid progress is stored (fresh first run). */
-export const DEFAULT_ONBOARDING_STEP: OnboardingStep = 'permissions';
+export const DEFAULT_ONBOARDING_STEP: OnboardingStep = 'disclosure';
 
 function isOnboardingStep(value: string | null): value is OnboardingStep {
   return (
+    value === 'disclosure' ||
     value === 'permissions' ||
     value === 'pair-device' ||
     value === 'first-sync'
@@ -90,6 +107,22 @@ export async function getOnboardingStep(): Promise<OnboardingStep | null> {
 /** The step to resume onboarding at: the persisted step, or step 1 if none. */
 export async function getResumeStep(): Promise<OnboardingStep> {
   return (await getOnboardingStep()) ?? DEFAULT_ONBOARDING_STEP;
+}
+
+/**
+ * Clear the resume marker WITHOUT marking onboarding complete.
+ *
+ * BACKLOG-2956: used when a user signs out from inside onboarding. Without this
+ * the persisted step survives the sign-out, so the NEXT account to sign in on
+ * this phone resumes mid-flow — potentially landing on pair-device, past the
+ * disclosure it never saw. Clearing sends the next user back to step 1.
+ */
+export async function clearOnboardingStep(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(ONBOARDING_STEP_KEY);
+  } catch (error) {
+    console.error('[Onboarding] Failed to clear step:', error);
+  }
 }
 
 /** Whether onboarding has been completed. */
