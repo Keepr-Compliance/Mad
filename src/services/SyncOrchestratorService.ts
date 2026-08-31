@@ -316,21 +316,56 @@ class SyncOrchestratorServiceClass {
       logger.info('[SyncOrchestrator] Starting contacts sync, forceReimport:', !!options?.forceReimport);
       onProgress(0);
 
-      // TASK-2150: Handle force re-import by wiping contacts first
+      if (signal?.aborted) return;
+
+      // TASK-2098: Read the contact source preferences in one IPC call.
+      //
+      // BACKLOG-3029 MOVED THIS ABOVE THE WIPE. The force re-import used to
+      // empty the shadow table before anything had read the preferences, so it
+      // could not have known which sources it was about to refill — and emptied
+      // all of them. This read now serves both jobs, which is the point: the
+      // phases below and the wipe above must not be able to disagree about
+      // which sources are in play.
+      const { contactSources: sourcePrefs } = await this.getContactsSyncPreferences(userId);
+      logger.info('[SyncOrchestrator] Contact source preferences:', sourcePrefs);
+
+      // BACKLOG-3029 — ONE BOOLEAN PER PHASE, READ BY BOTH THE WIPE AND THE PHASE.
+      //
+      // Each of these used to be spelled out inline at its `if`, and the force
+      // re-import wipe ran before any of them existed. Naming them once is what
+      // makes "we only empty what we are about to refill" a fact about the code
+      // rather than a claim about two conditions that happen to match today: a
+      // change to a gate cannot move the phase without moving the wipe with it.
+      const willSyncMacOS = macOS && sourcePrefs.macosContacts;
+      const willSyncOutlook = sourcePrefs.outlookContacts;
+      const willSyncGoogle = sourcePrefs.googleContacts;
+
+      // TASK-2150 / BACKLOG-3029: handle force re-import by emptying the shadow
+      // rows for exactly the sources the phases below WILL refill.
+      //
+      // A source that is switched off, or a macOS address book on Windows, is
+      // not refilled and so must not be emptied. Sources the desktop cannot
+      // fetch at all (`android_sync`, `iphone`) have no phase here, so they are
+      // never named; the main process independently refuses to empty them
+      // (`CONTACT_SOURCE_REFETCHABILITY`).
       if (options?.forceReimport) {
         if (signal?.aborted) return;
-        const wipeResult = await window.api.contacts.forceReimport(userId);
+
+        const sourcesToRefill: string[] = [
+          ...(willSyncMacOS ? ['macos'] : []),
+          ...(willSyncOutlook ? ['outlook'] : []),
+          ...(willSyncGoogle ? ['google_contacts'] : []),
+        ];
+
+        const wipeResult = await window.api.contacts.forceReimport(userId, sourcesToRefill);
         if (!wipeResult.success) {
           throw new Error(wipeResult.error || 'Failed to clear contacts for re-import');
         }
-        logger.info('[SyncOrchestrator] Contacts wiped for force re-import');
+        logger.info(
+          '[SyncOrchestrator] Contacts wiped for force re-import:',
+          { sources: sourcesToRefill, cleared: wipeResult.cleared },
+        );
       }
-
-      if (signal?.aborted) return;
-
-      // TASK-2098: Read the contact source preferences in one IPC call
-      const { contactSources: sourcePrefs } = await this.getContactsSyncPreferences(userId);
-      logger.info('[SyncOrchestrator] Contact source preferences:', sourcePrefs);
 
       // Phase 1: macOS Contacts sync (macOS only, skip if the source is unticked)
       //
@@ -341,7 +376,7 @@ class SyncOrchestratorServiceClass {
       // onboarding phone-type step on Windows — stopped getting Mac contacts, with
       // nothing on screen saying so and no way to override it from the Contacts
       // checkboxes. `macosContacts` is now the only thing that decides.
-      if (macOS && sourcePrefs.macosContacts) {
+      if (willSyncMacOS) {
         const result = await window.api.contacts.syncExternal(userId);
         if (!result.success) {
           throw new Error(result.error || 'macOS Contacts sync failed');
@@ -367,7 +402,7 @@ class SyncOrchestratorServiceClass {
       // Phase 2: Outlook contacts sync (all platforms, non-fatal, skip if source disabled)
       // TASK-1953: Outlook contacts sync via Graph API
       // TASK-2098: Skip if user disabled Outlook contacts in onboarding/settings
-      if (!sourcePrefs.outlookContacts) {
+      if (!willSyncOutlook) {
         logger.info('[SyncOrchestrator] Skipping Outlook contacts (disabled by user preference)');
       } else {
         try {
@@ -402,7 +437,7 @@ class SyncOrchestratorServiceClass {
 
       // Phase 3: Google contacts sync (all platforms, non-fatal, skip if source disabled)
       // TASK-2303: Google contacts sync via People API
-      if (!sourcePrefs.googleContacts) {
+      if (!willSyncGoogle) {
         logger.info('[SyncOrchestrator] Skipping Google contacts (disabled by user preference)');
       } else {
         try {

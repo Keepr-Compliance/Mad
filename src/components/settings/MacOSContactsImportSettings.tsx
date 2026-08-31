@@ -1040,7 +1040,7 @@ export function ContactsImportSettings({
           onClick={() => setShowReimportConfirm(true)}
           disabled={anySyncing || isOtherSyncRunning || noSourcesSelected || forceReimporting}
           className="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          title="Wipe all cached contacts from every source and re-import from enabled sources"
+          title="Clear and download again the contacts Keepr can fetch itself — your Contacts app, Outlook and Google. Contacts synced from your phone are left alone."
         >
           {forceReimporting ? "Clearing..." : "Force Re-import"}
         </button>
@@ -1065,7 +1065,7 @@ export function ContactsImportSettings({
               <p className="font-medium text-gray-900 mb-1">Import Contacts</p>
               <p className="mb-2">Adds new contacts, updates existing ones, and removes contacts deleted from the source.</p>
               <p className="font-medium text-gray-900 mb-1">Force Re-import</p>
-              <p>Wipes all cached contacts from every source and imports fresh from enabled sources. Use if contacts look out of sync.</p>
+              <p>Clears the copy stored on this computer for the sources you have switched on, and downloads them again. Contacts synced from your phone are left alone — only the phone can send those. Use if contacts look out of sync.</p>
             </div>
           )}
         </div>
@@ -1078,6 +1078,25 @@ export function ContactsImportSettings({
         transaction-attached contacts, so the copy makes no unlink claim (unlike
         the Messages force re-import, which does cascade). Reuses the app's
         shared ResponsiveModal confirm pattern.
+
+        BACKLOG-3029 — THIS COPY IS A CLAIM ABOUT BEHAVIOUR, AND IT WENT FALSE.
+        Three strings here (this dialog, the button tooltip, the info popover)
+        all said the re-import clears EVERY source. That stopped being true when
+        the wipe was scoped to the sources that will actually be refilled, and
+        nothing caught the drift — no test read any of them.
+
+        The dialog was also wrong before that change: it listed "Messages",
+        which is not a contact source, and omitted the phone entirely.
+
+        DO NOT LIST THE SOURCES BY DERIVING THEM FROM THIS COMPONENT'S FLAGS.
+        It gates on connectedness (`hasOutlook = isMicrosoftConnected`) while
+        the orchestrator gates only on the preference, so a derived list can
+        disagree with what is actually emptied — a second way to be false. The
+        copy therefore states the RULE, which holds whatever the state is.
+
+        `MacOSContactsImportSettings.reimportCopy-3029.test.tsx` pins the two
+        claims that were false rather than the prose, so the wording stays free
+        to change and the falsehoods cannot come back.
       */}
       {showReimportConfirm && (
         <ResponsiveModal
@@ -1103,13 +1122,19 @@ export function ContactsImportSettings({
               </svg>
             </div>
             <h3 className="text-lg font-bold text-gray-900">
-              Re-import all contacts?
+              Re-import contacts?
             </h3>
           </div>
+          <p className="text-sm text-gray-600 mb-3">
+            This clears the copy stored on this computer for the sources you have
+            switched on — your Contacts app, Outlook and Google — and downloads
+            them again.
+          </p>
           <p className="text-sm text-gray-600 mb-6">
-            This clears the locally cached copy of every synced source (Contacts
-            App, Outlook, Google, Messages) and re-imports them fresh. Contacts
-            you added manually or attached to a transaction are kept.
+            Contacts synced from your phone stay as they are. Only the phone can
+            send those, so clearing them here would leave you without them until
+            you paired it again. Contacts you added yourself or attached to a
+            transaction are kept too.
           </p>
           <div className="flex items-center gap-3 justify-end">
             <button

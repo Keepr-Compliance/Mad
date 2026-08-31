@@ -172,7 +172,11 @@ export interface IpcChannels {
     response: { success: boolean; contacts?: Contact[]; error?: string };
   };
   "contacts:forceReimport": {
-    request: { userId: string };
+    /**
+     * BACKLOG-3029: `sources` is the set the CALLER is about to refill, not a
+     * filter. Only these are emptied, and only if the desktop can fetch them.
+     */
+    request: { userId: string; sources: string[] };
     response: { success: boolean; cleared: number; error?: string };
   };
   "contacts:syncOutlookContacts": {
