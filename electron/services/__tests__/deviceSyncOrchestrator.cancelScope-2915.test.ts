@@ -242,3 +242,53 @@ describe("BACKLOG-2915 — defence 2 of 2: the orchestrator's abort checkpoint",
     expect(svc.beginSyncScope).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * BACKLOG-2915 (round 4) — the disconnect feed is WIRED.
+ *
+ * Added because the mutation "remove the orchestrator's `noteDeviceDisconnected` call"
+ * left the whole suite green. The classification logic was pinned six ways over; the one
+ * line that delivers the evidence to it was not. A wiring nobody asserts is a wiring that
+ * can be deleted by a refactor, and the failure would be silent — every cable pull
+ * quietly demoted from an observed fact back to the guess this round exists to replace.
+ */
+describe("BACKLOG-2915 — the OS's disconnect reaches the backup service", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("ROW 36 — a device-disconnected event is handed to BackupService, with the UDID", () => {
+    const orchestrator = orchestratorWithFailingBackup("boom", "UNKNOWN_ERROR");
+    const svc = (orchestrator as unknown as {
+      backupService: {
+        noteDeviceDisconnected: jest.Mock;
+        attachDeviceDisconnectFeed: jest.Mock;
+      };
+    }).backupService;
+
+    // The feed is declared at construction, so the backup service knows a late event is
+    // worth waiting for (see DISCONNECT_SETTLE_MS).
+    expect(svc.attachDeviceDisconnectFeed).toHaveBeenCalled();
+
+    // `deviceDetectionService` is mocked as an EventEmitter this file already owns.
+    const detection = jest.requireMock("../deviceDetectionService")
+      .deviceDetectionService as { emit: (e: string, p: unknown) => void };
+    detection.emit("device-disconnected", { udid: UDID, name: "test" });
+
+    expect(svc.noteDeviceDisconnected).toHaveBeenCalledWith(UDID);
+  });
+
+  it("ROW 36b — and the orchestrator still forwards it to the renderer", () => {
+    // The pre-existing behaviour this round must not break: the renderer has listened
+    // for `sync:device-disconnected` all along.
+    const orchestrator = orchestratorWithFailingBackup("boom", "UNKNOWN_ERROR");
+    const seen: unknown[] = [];
+    orchestrator.on("device-disconnected", (d: unknown) => seen.push(d));
+
+    const detection = jest.requireMock("../deviceDetectionService")
+      .deviceDetectionService as { emit: (e: string, p: unknown) => void };
+    detection.emit("device-disconnected", { udid: UDID, name: "test" });
+
+    expect(seen).toHaveLength(1);
+  });
+});
