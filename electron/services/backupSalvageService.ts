@@ -72,12 +72,23 @@ export const REQUIRED_BACKUP_FILE_IDS: ReadonlyArray<{
 /**
  * The floor for overall blob coverage, as a fraction of what the manifest claims.
  *
- * **THIS NUMBER IS A POLICY CHOICE, NOT A MEASUREMENT, AND IT IS FLAGGED AS SUCH.** The
- * only real data point is the founder's run: 506,979 of 506,993, or 0.99997 present. The
- * gate that does the actual work is the required-file check above; this exists so a
- * directory missing a third of its blobs cannot slip through on the strength of two
- * surviving files. Chosen conservatively — a backup missing more than one file in a
- * thousand is not a backup this code should quietly accept.
+ * **THIS NUMBER IS A POLICY CHOICE, NOT A MEASUREMENT. DO NOT "TUNE" IT.**
+ *
+ * FOUNDER DECISION, 2026-08-31: 0.999, chosen over 0.99 and over identity-only. It is
+ * deliberate, not a placeholder someone left behind, and the reasoning is worth keeping
+ * because the next reader's instinct will be to adjust it:
+ *
+ *  - **The identity check above does the real work.** Whether the sync can proceed is
+ *    decided by whether the two databases it actually reads are present — by fileID. A
+ *    ratio cannot tell fourteen irrelevant files from fourteen carrying the messages,
+ *    which is the entire question. This floor is belt-and-braces: it stops a directory
+ *    that is broadly shredded but happens to hold those two files.
+ *  - **The margin is enormous.** The only real data point is the founder's backup of
+ *    2026-08-31: 506,979 of 506,993 present, or **0.99997** — thirty times clear of this
+ *    floor. A backup anywhere near 0.999 is not the case this feature was built for.
+ *  - Loosening it to 0.99 would admit a backup missing five thousand files out of half a
+ *    million on the strength of two surviving databases. Removing it entirely would admit
+ *    any directory at all with the right two files in it.
  */
 export const MIN_BLOB_COVERAGE = 0.999;
 

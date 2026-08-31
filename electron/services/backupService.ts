@@ -236,6 +236,32 @@ export const BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE =
   "to sleep.";
 
 /**
+ * BACKLOG-2915 (round 4): the backup stopped, nothing said why, AND THE PHONE IS STILL
+ * PLUGGED IN.
+ *
+ * The third sentence in this family, and it exists because the branch that reaches it
+ * stopped being a link drop. Until round 4 this case shared
+ * {@link BACKUP_CONNECTION_LOST_MESSAGE}, whose closing advice is "plug it straight into
+ * your Mac" — advice that is actively wrong for a device that never left.
+ *
+ * The rung it serves is the D1 inference: a non-zero exit, no device code, no
+ * version-exchange match, no disk-full, no cancel, and — new in round 4 — **no observed
+ * disconnect from either the OS or idevicebackup2 itself**. What is left is genuinely
+ * unexplained, and the honest thing is to say so and ask for one retry.
+ *
+ * FOUNDER-CHOSEN WORDING, 2026-08-31, picked over a variant that added "restart your
+ * iPhone" as a fallback. **Do not add a restart step.** The exact string is pinned in
+ * `backupService.connectionCopy-2913`.
+ *
+ * Note `errorCode` for this branch is still `CONNECTION_LOST`, which now contradicts the
+ * sentence. Nothing consumes it, and renaming it is recorded as a separate item rather
+ * than smuggled in here.
+ */
+export const BACKUP_STOPPED_STILL_CONNECTED_MESSAGE =
+  "The backup stopped and your iPhone didn't tell us why. It's still connected, " +
+  "so it isn't a cable problem — just try syncing again.";
+
+/**
  * BACKLOG-2913: the device's backup service would not negotiate. Exit 255 with
  * `version exchange failed, error -5` and NO disconnect events — repeated fast
  * retries are what produces this state, so the message must not invite another one.
@@ -718,13 +744,12 @@ export function classifyBackupFailure(
   // "killed by a signal, no status", which is us, not the cable.
   if (exitCode !== null && exitCode !== 0) {
     return {
-      // The split is preserved exactly as BACKLOG-2913 shipped it. `transferStarted`
-      // is the only thing separating "the cable never worked" from "it died eleven
-      // minutes and 616 MB in", and it is stdout-derived
-      // (`hasReceivedFileProgress`), so it survives the `-d` removal untouched.
-      message: transferStarted
-        ? BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE
-        : BACKUP_CONNECTION_LOST_MESSAGE,
+      // NO `transferStarted` SPLIT HERE, AND THAT IS THE ROUND-4 CHANGE. The split
+      // exists to separate "the cable never worked" from "it died eleven minutes and
+      // 616 MB in" — two shapes of the same LINK failure. This rung is no longer a link
+      // failure at all: the rung above observes those now, so reaching here means the
+      // phone is still attached and nobody said why. One sentence answers both.
+      message: BACKUP_STOPPED_STILL_CONNECTED_MESSAGE,
       errorCode: "CONNECTION_LOST",
       cause: { ...cause, linkDropEvidence: "inferred" },
     };

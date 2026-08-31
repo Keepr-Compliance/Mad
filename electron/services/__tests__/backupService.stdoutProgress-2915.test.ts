@@ -115,6 +115,7 @@ import {
   BACKUP_DEVICE_LOCKED_MESSAGE,
   BACKUP_CONNECTION_LOST_MESSAGE,
   BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE,
+  BACKUP_STOPPED_STILL_CONNECTED_MESSAGE,
   BACKUP_SERVICE_UNAVAILABLE_MESSAGE,
   BACKUP_HOST_DISK_FULL_MESSAGE,
 } from "../backupService";
@@ -987,11 +988,18 @@ describe("BACKLOG-2915 rows 16-20 — the classes that change when `-d` goes", (
   beforeEach(() => jest.clearAllMocks());
 
   it("ROW 16 — a link-drop shape gets the connection message (mutation: remove the inference rung)", async () => {
-    // The shape a real link drop now presents: a non-zero exit, nothing on stderr
-    // because `-d` is gone, and stdout that never reached a summary. Four of the five
-    // real failures of 2026-08-27 captured ZERO stdout for exactly this reason, and
-    // four of those five carried the broken-pipe line that no longer exists.
+    // The shape a real link drop presents AFTER round 4: idevicebackup2 says its channel
+    // died, nothing is on stderr because `-d` is gone, and no bytes had moved. Four of
+    // the five real failures of 2026-08-27 captured ZERO stdout, and four of those five
+    // carried the broken-pipe line that no longer exists — this is what replaced it.
+    //
+    // Round 4 note: the bare `close(255)` with NO evidence at all is no longer this
+    // case. It is the inference rung, and it has its own sentence — see ROW 51.
     const { result } = await runBackup((proc) => {
+      proc.stdout.emit(
+        "data",
+        Buffer.from("ERROR: Could not receive from mobilebackup2 (-256)\n"),
+      );
       proc.close(255);
     });
     expect(result.errorCode).toBe("CONNECTION_LOST");
@@ -1003,9 +1011,19 @@ describe("BACKLOG-2915 rows 16-20 — the classes that change when `-d` goes", (
     // 2026-08-28 — a drop after 616 MB is not a cable fault — is untouched by the flag
     // removal. Mutation: pass `false` for transferStarted and the cable sentence
     // returns, which row 16 already pins from the other side.
+    // Round 4: the split lives on the OBSERVED rung now, so the fixture carries the
+    // observation. Without it this is the inference rung, which has one sentence for
+    // both — see ROW 51.
     const { result } = await runBackup((proc) => {
       proc.stdout.emit("data", Buffer.from(byteRender(40, "246.4 MB", "616.0 MB")));
-      proc.stdout.emit("data", Buffer.from(byteRender(41, "252.5 MB", "616.0 MB")));
+      proc.stdout.emit(
+        "data",
+        Buffer.from(byteRender(41, "252.5 MB", "616.0 MB") + "\n"),
+      );
+      proc.stdout.emit(
+        "data",
+        Buffer.from("ERROR: Could not receive from mobilebackup2 (-256)\n"),
+      );
       proc.close(255);
     });
     expect(result.errorCode).toBe("CONNECTION_LOST");
@@ -1217,9 +1235,8 @@ describe("BACKLOG-2915 rows 30-34 — a cable pull is a fact, not a guess", () =
     // service that will not start, a device refusing the backup, and an invalid backup
     // directory. None of those is a cable problem.
     //
-    // The user-facing sentence is unchanged FOR NOW, deliberately: a second message for
-    // this branch is the founder's call. `linkDropEvidence` is what makes that a copy
-    // edit rather than a re-architecture, and what makes this row able to fail at all.
+    // The founder settled the wording on 2026-08-31 and it is asserted here: this
+    // branch gets its own sentence, which DENIES the cable rather than suggesting one.
     const { result } = await runBackup((proc) => {
       proc.close(255);
     });
@@ -1227,6 +1244,7 @@ describe("BACKLOG-2915 rows 30-34 — a cable pull is a fact, not a guess", () =
     expect(result.errorCode).toBe("CONNECTION_LOST");
     expect(result.failureCause?.linkDropEvidence).toBe("inferred");
     expect(result.failureCause?.linkDropEvidence).not.toBe("device-disconnected");
+    expect(result.error).toBe(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE);
   });
 
   it("ROW 33 — a disconnect followed by a RECONNECT before the run ends is still a disconnect", async () => {
@@ -1331,6 +1349,77 @@ describe("BACKLOG-2915 rows 30-34 — a cable pull is a fact, not a guess", () =
 
     expect(result.failureCause?.linkDropEvidence).toBe("inferred");
     expect(elapsed).toBeLessThan(1_000);
+  });
+
+  it("ROW 49 — SELECTION: device observed gone, NO bytes moved ⇒ the before-transfer message", async () => {
+    // Path 1 of 3. The evidence is an observed link drop and nothing had transferred, so
+    // the sentence is the founder's earlier one — the phone really did leave, so
+    // "plug it straight into your Mac" is sound advice here and only here.
+    //
+    // Mutation: swap the two link-drop constants at the observed rung's call site.
+    const { result } = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from("Requesting backup from device...\n"));
+      proc.stdout.emit(
+        "data",
+        Buffer.from("ERROR: Could not receive from mobilebackup2 (-256)\n"),
+      );
+      proc.close(255);
+    });
+
+    expect(result.error).toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+    expect(result.error).not.toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);
+    expect(result.error).not.toBe(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE);
+    expect(result.failureCause?.linkDropEvidence).toBe(
+      "mobilebackup2-receive-failure",
+    );
+  });
+
+  it("ROW 50 — SELECTION: device observed gone AFTER bytes moved ⇒ the untouched mid-transfer message", async () => {
+    // Path 2 of 3, and the one the founder corrected himself on 2026-08-28: a drop
+    // eleven minutes and 616 MB in is almost never a faulty cable. `transferStarted` is
+    // stdout-derived, so this split survives everything round 4 changed.
+    // The trailing `\n` on the last render is `print_progress`'s end-of-batch flush, and
+    // it is load-bearing: a render carries no terminator, so without it the ERROR line
+    // is CONCATENATED onto the render and swallowed by the render branch, which is
+    // checked first. The capture shows production terminating it —
+    // `...48% (2.1 GB/4.3 GB)     <LF>Discarding current data hunk.<LF>` — so the
+    // fixture carries the real byte rather than a convenient one. (This row failed on
+    // its first run for exactly that reason.)
+    const { result } = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from(byteRender(40, "246.4 MB", "616.0 MB")));
+      proc.stdout.emit(
+        "data",
+        Buffer.from(byteRender(41, "252.5 MB", "616.0 MB") + "\n"),
+      );
+      proc.stdout.emit(
+        "data",
+        Buffer.from("ERROR: Could not receive from mobilebackup2 (-256)\n"),
+      );
+      proc.close(255);
+    });
+
+    expect(result.error).toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);
+    expect(result.error).not.toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+    expect(result.error).not.toBe(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE);
+  });
+
+  it("ROW 51 — SELECTION: device STILL ATTACHED, nobody said why ⇒ the still-connected message", async () => {
+    // Path 3 of 3. Nothing observed a link drop, so this is the inference rung — and it
+    // must not offer cable advice for a phone that never left. The bytes-moved question
+    // is deliberately NOT asked on this path: the sentence answers both.
+    const withBytes = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from(byteRender(40, "246.4 MB", "616.0 MB")));
+      proc.stdout.emit("data", Buffer.from(byteRender(41, "252.5 MB", "616.0 MB")));
+      proc.close(255);
+    });
+    const withoutBytes = await runBackup((proc) => {
+      proc.close(255);
+    });
+
+    expect(withBytes.result.error).toBe(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE);
+    expect(withoutBytes.result.error).toBe(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE);
+    // One sentence for both, unlike the observed rung above it.
+    expect(withBytes.result.error).toBe(withoutBytes.result.error);
   });
 
   it("ROW 34b — a device-reported failure is never relabelled a link drop, even after a disconnect", async () => {

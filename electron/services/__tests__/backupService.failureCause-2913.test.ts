@@ -64,6 +64,7 @@ import {
   BACKUP_HOST_DISK_FULL_MESSAGE,
   BACKUP_DEVICE_LOCKED_MESSAGE,
   BACKUP_CONNECTION_LOST_MESSAGE,
+  BACKUP_STOPPED_STILL_CONNECTED_MESSAGE,
   BACKUP_SERVICE_UNAVAILABLE_MESSAGE,
   BACKUP_FILE_MISSING_MESSAGE,
 } from "../backupService";
@@ -513,9 +514,18 @@ describe("BACKLOG-2913: backup failures report the cause the device gave", () =>
       // version-exchange match. It is weaker than reading the line and it will also
       // catch a future unclassified non-zero exit — recorded on BACKLOG-2915 as the
       // accepted cost, which is also why the cancel rung sits above it.
+      //
+      // ROUND 4 (2026-08-31) CHANGED THE SENTENCE, NOT THE CLASSIFICATION. The link drop
+      // is now OBSERVED — from the OS's disconnect event and idevicebackup2's own
+      // channel-failure line — so this rung, reached with neither of those, means "the
+      // phone is still attached and nobody said why". It keeps `CONNECTION_LOST` (a
+      // naming inaccuracy filed separately) and gets its own founder-chosen sentence,
+      // which denies the cable instead of suggesting one. See ROW 49/50/51 in
+      // `backupService.stdoutProgress-2915` for the three selection paths.
       const result = classifyBackupFailure(255, STDOUT_NO_ERROR_LINE, mutexFlood(50));
       expect(result.errorCode).toBe("CONNECTION_LOST");
-      expect(result.message).toBe(BACKUP_CONNECTION_LOST_MESSAGE);
+      expect(result.message).toBe(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE);
+      expect(result.cause.linkDropEvidence).toBe("inferred");
       expect(result.message).not.toBe(BACKUP_DEVICE_LOCKED_MESSAGE);
       // The exit code is still carried, in the structured cause rather than the
       // sentence — BACKLOG-2950 reads it from there.

@@ -129,6 +129,7 @@ import {
   BackupService,
   classifyBackupFailure,
   BACKUP_CONNECTION_LOST_MESSAGE,
+  BACKUP_STOPPED_STILL_CONNECTED_MESSAGE,
   BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE,
 } from "../backupService";
 
@@ -337,6 +338,45 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
       expect(unlockAt).toBeGreaterThan(0);
       expect(trustAt).toBeGreaterThan(unlockAt);
       expect(plugAt).toBeGreaterThan(trustAt);
+    });
+
+    it("BACKLOG-2915 round 4 — the still-connected message is the founder's exact wording", () => {
+      // The third sentence in the family, and the newest. Founder-chosen 2026-08-31,
+      // picked over a variant that added "restart your iPhone" as a fallback — so the
+      // absence of a restart step is DELIBERATE and this pin is what protects it.
+      //
+      // Pinned whole, for the same reason the other two are: a clause-set assertion
+      // stays green while the sentence drifts.
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).toBe(
+        "The backup stopped and your iPhone didn't tell us why. " +
+          "It's still connected, so it isn't a cable problem — just try syncing again.",
+      );
+    });
+
+    it("BACKLOG-2915 round 4 — it denies the cable rather than suggesting one, and asks for one retry", () => {
+      // The semantic claims, separately from the string, so a future rewrite that keeps
+      // the shape has something to satisfy.
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).toMatch(/isn't a cable problem/i);
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).toMatch(/still connected/i);
+      // No restart step. The founder rejected the variant that had one.
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).not.toMatch(/restart/i);
+      // And it does not send anyone to a port or a hub either — the phone never left.
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).not.toMatch(/hub|dock|plug/i);
+    });
+
+    it("BACKLOG-2915 round 4 — the three messages are three DIFFERENT sentences", () => {
+      // They were two, sharing one branch, until the link drop became observable. If a
+      // later edit collapses any two of them back together, this is what says so.
+      const all = [
+        BACKUP_CONNECTION_LOST_MESSAGE,
+        BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE,
+        BACKUP_STOPPED_STILL_CONNECTED_MESSAGE,
+      ];
+      expect(new Set(all).size).toBe(3);
+      // …and they make three different claims about the connection.
+      expect(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE).toMatch(/connection .*dropped/i);
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).not.toMatch(/connection .*dropped/i);
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).toMatch(/still connected/i);
     });
 
     it("the mid-transfer message DOES still assert a dropped connection, and is unchanged", () => {
