@@ -270,16 +270,24 @@ export const contactBridge = {
   }> => ipcRenderer.invoke("contacts:getSourceStats", userId),
 
   /**
-   * Force re-import: wipes ALL external contacts (every source),
-   * then the caller triggers normal import to re-fetch from enabled sources.
+   * Force re-import: empties the shadow rows for the sources the caller is about
+   * to refill, then the caller triggers the normal import to refill them.
+   *
+   * BACKLOG-3029: `sources` is a declaration, not a filter — "these are the ones
+   * I am about to re-fetch". Anything not named keeps its rows, because emptying
+   * a source nothing will refill leaves its records silently missing from the
+   * picker with no signposted way back (`android_sync` needs a re-pair; a
+   * switched-off macOS needs the source turning back on).
+   *
    * @param userId - User ID to force re-import for
-   * @returns Wipe result (cleared count)
+   * @param sources - external contact sources the caller will re-fetch
+   * @returns Wipe result (`cleared` = rows actually deleted)
    */
-  forceReimport: (userId: string): Promise<{
+  forceReimport: (userId: string, sources: string[]): Promise<{
     success: boolean;
     cleared: number;
     error?: string;
-  }> => ipcRenderer.invoke("contacts:forceReimport", userId),
+  }> => ipcRenderer.invoke("contacts:forceReimport", userId, sources),
 
   /**
    * TASK-1921: Sync Outlook contacts to external_contacts table

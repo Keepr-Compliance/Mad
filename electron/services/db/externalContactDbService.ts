@@ -44,6 +44,99 @@ function normalizedPhonesJson(phones: string[] | null | undefined): string {
 export type ExternalContactSource = 'macos' | 'iphone' | 'outlook' | 'google_contacts' | 'android_sync';
 
 /**
+ * ===========================================================================
+ * BACKLOG-3029 — CAN THE DESKTOP FETCH THIS SOURCE AGAIN AT ALL?
+ * ===========================================================================
+ * Force Re-import empties the shadow table and then refills it. Emptying is
+ * correct — this table is staging for the picker, not the user's contacts, and
+ * a re-import that did not clear it would not be a re-import. The founder said
+ * so himself when he corrected the first filing of this item:
+ *
+ *   > "the force re-import didn't delete them... on force re-import we normally
+ *   >  delete the shadow db table don't we?"
+ *
+ * THE DEFECT IS THE REFILL, NOT THE EMPTYING. The emptying took all five
+ * sources; the refill only ever covers the ones a contacts sync goes and
+ * fetches. From his run on 2026-08-31:
+ *
+ *   21:42:56  Cleared all external contacts
+ *   21:42:57  Contact source preferences: {"macosContacts":false, ...}
+ *   21:42:57  Skipping macOS Contacts (disabled by user preference)
+ *   21:42:57  Upserted 7 external contacts from outlook
+ *   21:43:17  picker: 7 in (db 0 + external 7)
+ *
+ * 1,175 macOS rows and 28 Android rows emptied, 7 Outlook rows back. Nothing in
+ * the main `contacts` table was touched, so this is availability loss — records
+ * silently stop being offered for import and the source card reads 0 — and not
+ * data loss.
+ *
+ * TWO SEPARATE CONDITIONS DECIDE WHETHER A SOURCE MAY BE EMPTIED, and this map
+ * is only the second of them:
+ *
+ *   1. IS IT ABOUT TO BE REFILLED — enabled, and available on this platform.
+ *      Only the caller knows; `SyncOrchestratorService` already computes exactly
+ *      this to decide which of its three phases run, and now passes the answer
+ *      in. Deliberately NOT re-derived here: two reads of one preference is how
+ *      they come to disagree.
+ *
+ *   2. CAN THE DESKTOP EVER FETCH IT — the static property below. `android_sync`
+ *      and `iphone` are unfetchable whatever the preferences say, so this map is
+ *      the floor under (1) that no caller can talk its way past.
+ *
+ * `'desktop_refetch'` — a contacts sync re-reads it on demand. The three values
+ *   are exactly the three phases in `src/services/SyncOrchestratorService.ts`:
+ *   the macOS address book, Outlook via Graph, Google via People.
+ *
+ * `'device_push'` — the desktop has no code path that can ask for these records
+ *   again:
+ *     - `android_sync`: the companion POSTs its contacts and commits its diff
+ *       state on a successful send, so it believes the desktop still holds them
+ *       and the next ordinary sync computes an EMPTY diff. The only route back
+ *       is `forceFullContactResync()`, which runs on PAIRING — so a user has to
+ *       re-pair their phone, and nothing tells them that.
+ *     - `iphone`: read out of a local iPhone backup the user selected
+ *       (`iPhoneSyncStorageService`). The Force Re-import button fires
+ *       `requestSync(['contacts'])` (`MacOSContactsImportSettings.tsx`) and the
+ *       contacts sync has no iPhone phase, so nothing refills it either.
+ *
+ * WHY A MAP AND NOT `if (source !== 'android_sync')`. A name test states the
+ * symptom that happened to be reported. This states the property that made it a
+ * defect, and it is EXHAUSTIVE over `ExternalContactSource`, so a new member of
+ * the union does not compile until someone classifies it — a future push-based
+ * source cannot be caught silently by the same trap.
+ */
+export type ContactSourceRefetchability = 'desktop_refetch' | 'device_push';
+
+export const CONTACT_SOURCE_REFETCHABILITY: Record<
+  ExternalContactSource,
+  ContactSourceRefetchability
+> = {
+  macos: 'desktop_refetch',
+  outlook: 'desktop_refetch',
+  google_contacts: 'desktop_refetch',
+  android_sync: 'device_push',
+  iphone: 'device_push',
+};
+
+/**
+ * Answers for a RAW `source` string, which is why the parameter is not narrowed
+ * to `ExternalContactSource`: it is applied to a list that arrived over IPC.
+ *
+ * FAILS CLOSED. Anything this file does not recognise is reported as NOT
+ * refetchable, so an unknown value is preserved rather than emptied. The two
+ * mistakes are not symmetrical: emptying a source the desktop cannot refill
+ * leaves the user with no route back, while keeping rows for a source that
+ * could have been refilled leaves stale rows the next sync of that source
+ * prunes itself (`deleteStaleContactsBySource`).
+ */
+export function isDesktopRefetchableSource(source: string | null | undefined): boolean {
+  if (!source) return false;
+  return (
+    CONTACT_SOURCE_REFETCHABILITY[source as ExternalContactSource] === 'desktop_refetch'
+  );
+}
+
+/**
  * External contact as stored in database
  */
 export interface ExternalContact {
@@ -606,7 +699,8 @@ export function deleteBySessionId(userId: string, sessionId: string): number {
   // NOTE: THIS INVARIANT HOLDS ONLY HERE. The other four deletion paths in this
   // file — `deleteStaleContactsBySource` (which runs on EVERY full Outlook,
   // Google and Android sync), `deleteByMacOSRecordId`, `deleteBySource` and
-  // `clearAllForUser` — do no crosswalk cleanup and leave orphans behind. That
+  // `clearAllForUser` (since BACKLOG-3029, `clearRefetchableSourcesForUser`) —
+  // do no crosswalk cleanup and leave orphans behind. That
   // BACKLOG-2480 CLOSED THIS. When the note above was written this was the ONLY
   // path that cleaned up, and it warned against reading it as evidence the
   // invariant held globally. It now does: all five deletion paths go through
@@ -1055,11 +1149,89 @@ export function deleteBySource(userId: string, source: ExternalContactSource): n
 }
 
 /**
- * Clear all external contacts for a user
+ * BACKLOG-3029 — the emptying half of Force Re-import.
+ *
+ * Empties the shadow rows for the sources the CALLER says it is about to refill,
+ * intersected with the sources the desktop can actually fetch. It replaced
+ * `clearAllForUser`, which emptied every row the user had and left every source
+ * that was not about to be refilled with nothing to bring it back.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE CALLER SUPPLIES THE LIST
+ * ---------------------------------------------------------------------------
+ * "Is this source about to be refilled" is a question about the caller's own
+ * plan — which phases it will run, given the user's preferences and the
+ * platform. `SyncOrchestratorService` already computes it to gate those phases.
+ * Re-deriving it here would be a second read of one preference, and this
+ * codebase has watched two such gates drift apart before (BACKLOG-2986). So the
+ * orchestrator declares its plan and this function holds it to the one thing
+ * the orchestrator cannot know it is wrong about: whether the source is
+ * fetchable at all.
+ *
+ * ---------------------------------------------------------------------------
+ * THE PREDICATE IS AN `IN`, AND THAT IS THE WHOLE POINT
+ * ---------------------------------------------------------------------------
+ * `source IN (requested and fetchable)`, never `source NOT IN (preserved)`. The
+ * two read the same on today's five values and behave oppositely on the sixth:
+ * with `IN`, a source nobody has classified is not named by the DELETE and
+ * survives; with `NOT IN`, it is emptied the moment it exists. What made this a
+ * defect was a source nobody thought about when the DELETE was written.
+ *
+ * Goes through `deleteExternalContactsAndTheirLinks` like the other four
+ * deletion paths, so the crosswalk cleanup (BACKLOG-2480) and the single
+ * transaction (BACKLOG-2530) come with it rather than being written again.
+ *
+ * @param requested raw source names the caller is about to refill; anything
+ *                  unrecognised or push-based is dropped, not obeyed
+ * @returns the number of `external_contacts` rows actually deleted
  */
-export function clearAllForUser(userId: string): void {
-  deleteExternalContactsAndTheirLinks(userId, 'user_id = ?', [userId]);
-  logService.info('Cleared all external contacts', 'ExternalContactDbService', { userId });
+export function clearRefetchableSourcesForUser(
+  userId: string,
+  requested: readonly string[],
+): number {
+  // De-duplicated so a caller repeating a name cannot produce a longer
+  // placeholder list than there are distinct sources.
+  const sources = [...new Set(requested)].filter(isDesktopRefetchableSource).sort();
+  const dropped = [...new Set(requested)].filter((s) => !isDesktopRefetchableSource(s)).sort();
+
+  if (dropped.length > 0) {
+    // Warn rather than throw. Dropping fails safe — those rows stay — whereas
+    // rejecting the call would turn a defensive guard into a failed re-import.
+    logService.warn(
+      `Force re-import asked to empty ${dropped.length} source(s) the desktop cannot ` +
+        `re-fetch (${dropped.join(', ')}); their rows were left in place`,
+      'ExternalContactDbService',
+      { userId }
+    );
+  }
+
+  // `source IN ()` is a SQLite syntax error, and "refill nothing" is a real
+  // state — every contact source switched off.
+  if (sources.length === 0) {
+    logService.info(
+      'Force re-import emptied nothing: no re-fetchable source was named',
+      'ExternalContactDbService',
+      { userId }
+    );
+    return 0;
+  }
+
+  const placeholders = sources.map(() => '?').join(', ');
+
+  const changes = deleteExternalContactsAndTheirLinks(
+    userId,
+    `user_id = ? AND source IN (${placeholders})`,
+    [userId, ...sources],
+  );
+
+  logService.info(
+    `Cleared ${changes} external contacts from the sources about to be re-fetched ` +
+      `(${sources.join(', ')}); every other source was left in place`,
+    'ExternalContactDbService',
+    { userId }
+  );
+
+  return changes;
 }
 
 // ============================================

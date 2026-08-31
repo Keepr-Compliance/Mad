@@ -77,7 +77,7 @@ import {
   deleteStaleContactsBySource,
   deleteByMacOSRecordId,
   deleteBySource,
-  clearAllForUser,
+  clearRefetchableSourcesForUser,
   deleteBySessionId,
 } from "../externalContactDbService";
 
@@ -229,17 +229,31 @@ describe("every deletion path removes the crosswalk rows it orphans (BACKLOG-248
     expect(proposalIds()).toEqual(["prop-outlook"]);
   });
 
-  it("clearAllForUser — this user's rows go, ANOTHER user's are untouched", () => {
+  // BACKLOG-3029 replaced `clearAllForUser` with this. The suite's premise is
+  // that EVERY deletion path is driven, so the replacement takes the slot rather
+  // than the case being dropped — a path that stops being covered because it was
+  // renamed is how the four unguarded siblings stayed unguarded.
+  //
+  // The seed is MIXED on both axes this path now discriminates on: another
+  // user's row, and a row of a source that was NOT requested. `clearAllForUser`
+  // would have taken all three.
+  it("clearRefetchableSourcesForUser — the requested source goes; another user's and an unrequested source stay", () => {
     seedRecord("mine", "macos", "rec-mine");
+    seedRecord("unrequested", "outlook", "rec-unrequested");
     seedRecord("theirs", "macos", "rec-theirs", { userId: OTHER_USER });
 
-    clearAllForUser(USER);
+    // The fixture really does hold all three before the delete — otherwise
+    // "it survived" would pass for a row that was never there.
+    expect(recordIds()).toEqual(["mine", "theirs", "unrequested"]);
 
-    expect(recordIds()).toEqual(["theirs"]);
+    const deleted = clearRefetchableSourcesForUser(USER, ["macos"]);
+
+    expect(deleted).toBe(1);
+    expect(recordIds()).toEqual(["theirs", "unrequested"]);
     // The survivor assertion is the one that catches a cleanup which deletes
     // too much — the failure mode a "the orphan is gone" test cannot see.
-    expect(linkIds()).toEqual(["link-theirs"]);
-    expect(proposalIds()).toEqual(["prop-theirs"]);
+    expect(linkIds()).toEqual(["link-theirs", "link-unrequested"]);
+    expect(proposalIds()).toEqual(["prop-theirs", "prop-unrequested"]);
   });
 
   it("deleteBySessionId — still cleans up, now through the shared helper", () => {
