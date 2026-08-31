@@ -253,8 +253,25 @@ describe("DatabaseService - InitializationBroadcaster Integration", () => {
         }
       });
 
-      // initialize() should not throw — migration errors are caught internally
-      await databaseService.initialize();
+      // BACKLOG-2999: this comment used to read "initialize() should not throw
+      // — migration errors are caught internally". That is no longer true when
+      // the auto-restore recovers NOTHING: initialize() now rejects rather
+      // than reporting success over a database it could not repair. The
+      // BROADCAST assertion below is unchanged and still passes, because it
+      // fires at the top of the catch, BEFORE the restore is attempted.
+      //
+      // Note what that means: on the terminal path this `retryable: true` is
+      // already stale by the time the outcome is known. It is telemetry only
+      // (the renderer's reducer never reads `error` off the init broadcast),
+      // so it is left as-is rather than widening this item's scope; recorded
+      // here so the next reader knows it is a known, deliberate leftover.
+      let caught: unknown;
+      try {
+        await databaseService.initialize();
+      } catch (e) {
+        caught = e;
+      }
+      expect((caught as Error).name).toBe("MigrationRecoveryFailedError");
 
       expect(mockBroadcast).toHaveBeenCalledWith(
         expect.objectContaining({

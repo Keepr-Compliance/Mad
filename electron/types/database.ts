@@ -320,6 +320,44 @@ export class SchemaBaselineRefusalError extends DatabaseError {
   }
 }
 
+/**
+ * BACKLOG-2999 — the outcome of the post-migration-failure auto-restore
+ * attempt. Declared here so `_attemptAutoRestore()`'s return type and
+ * `MigrationRecoveryFailedError` share ONE definition: the error is built
+ * from that return value, and two independent copies of these unions would
+ * drift the moment a fourth status is added.
+ */
+export type AutoRestoreStatus = "succeeded" | "failed" | "no_backup";
+export type BackupIntegrity = "valid" | "corrupt" | "missing";
+
+/**
+ * BACKLOG-2999 — thrown by initialize() when a migration failed AND the
+ * auto-restore recovered nothing (`restored === false`, by any of its four
+ * routes: no backup, corrupt backup, the restore copy throwing, or the
+ * post-restore connectivity probe failing).
+ *
+ * Before this existed, initialize() showed a dismissible "your data may need
+ * manual recovery" dialog and then ran `return true` — so the caller could not
+ * tell a good start from a failed one and the app opened on a half-migrated,
+ * or entirely unopened, database.
+ *
+ * Deliberately a DISTINCT class, for the same reason as
+ * SchemaBaselineRefusalError: initialize()'s outer catch re-throws it
+ * untouched instead of capturing it to Sentry a second time (the inner catch
+ * already did, tagged `migration_failure`) and instead of broadcasting
+ * `retryable: true` for a state that is not retryable.
+ */
+export class MigrationRecoveryFailedError extends DatabaseError {
+  constructor(
+    message: string,
+    public autoRestoreStatus: AutoRestoreStatus,
+    public backupIntegrity: BackupIntegrity,
+  ) {
+    super(message, "MIGRATION_RECOVERY_FAILED");
+    this.name = "MigrationRecoveryFailedError";
+  }
+}
+
 export class ValidationError extends Error {
   constructor(
     message: string,
