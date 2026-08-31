@@ -89,6 +89,10 @@ jest.mock('../../../services/backgroundSync', () => ({
 }));
 
 jest.mock('../../../services/smsQueueService', () => ({
+  // BACKLOG-3005 (busy-state fold): home reads the shared sync lock to grey the
+  // Sync Now button for syncs it did not start. An omitted method here reads as
+  // the feature not firing (the trap syncServiceLanGuard.test.ts documents).
+  isSyncInFlight: jest.fn(async () => false),
   resetAllSyncData: jest.fn(async () => undefined),
   getSyncStats: jest.fn(async () => null),
   getQueueSize: jest.fn(async () => 0),

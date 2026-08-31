@@ -30,6 +30,7 @@ import {
   getSyncStats,
   getQueueSize,
   getBackgroundSyncEnabled,
+  isSyncInFlight,
 } from '../../services/smsQueueService';
 import type { SyncStats } from '../../services/smsQueueService';
 import { getSyncFreshness, formatRelativeTime } from '../../services/syncStaleness';
@@ -120,6 +121,14 @@ const PAIRING_STORAGE_KEY = '@keepr/pairing';
  */
 const SMS_GRANTED_ONCE_KEY = '@keepr/sms-granted-once';
 
+/**
+ * How often the focused home screen re-checks whether a sync holds the lock
+ * (BACKLOG-3005). Three seconds: one AsyncStorage read per tick, cleared on
+ * blur. Long enough not to be a busy loop, short enough that a background sync
+ * starting under the user's nose greys the button before they reach for it.
+ */
+const SYNC_BUSY_POLL_MS = 3_000;
+
 export default function HomeScreen(): React.JSX.Element {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -128,6 +137,14 @@ export default function HomeScreen(): React.JSX.Element {
   const [pairing, setPairing] = useState<StoredPairing | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  // BACKLOG-3005 (busy-state fold): whether ANY sync holds the shared lock right
+  // now — including ones this component did not start (the post-pair auto-sync,
+  // `appStateCatchup` on foregrounding, the OS background task). `syncing` above
+  // is still the immediate-feedback path for a tap on THIS screen; this is the
+  // additional source, and the button reads the two combined. Founder: *"why are
+  // we not graying it out or showing some spinner and gray out to let them know
+  // it's running?"*
+  const [syncInFlight, setSyncInFlight] = useState(false);
   const [syncStats, setSyncStats] = useState<SyncStats | null>(null);
   const [queueSize, setQueueSize] = useState(0);
   const [bgSyncActive, setBgSyncActive] = useState(false);
@@ -262,7 +279,7 @@ export default function HomeScreen(): React.JSX.Element {
 
   const loadAllData = useCallback(async (): Promise<void> => {
     try {
-      const [stored, stats, queue, bgActive, smsPerm, grantedOnce] =
+      const [stored, stats, queue, bgActive, smsPerm, grantedOnce, inFlight] =
         await Promise.all([
           AsyncStorage.getItem(PAIRING_STORAGE_KEY),
           getSyncStats(),
@@ -270,11 +287,16 @@ export default function HomeScreen(): React.JSX.Element {
           isBackgroundSyncActive(),
           checkSmsPermissions(),
           AsyncStorage.getItem(SMS_GRANTED_ONCE_KEY),
+          // BACKLOG-3005: rides the refresh that already runs on mount, on focus
+          // and on every AppState background->active transition, so returning to
+          // the app mid-drain shows the button correctly with no extra plumbing.
+          isSyncInFlight(),
         ]);
       setPairing(stored ? (JSON.parse(stored) as StoredPairing) : null);
       setSyncStats(stats);
       setQueueSize(queue);
       setBgSyncActive(bgActive);
+      setSyncInFlight(inFlight);
       // BACKLOG-2301 (SR N1): this refresh runs on mount, focus AND every
       // AppState background->active transition (see the AppState effect below), so
       // it is the foreground re-probe. Clear a stale 2296 disconnected banner if a
@@ -320,6 +342,23 @@ export default function HomeScreen(): React.JSX.Element {
     }, [loadAllData]),
   );
 
+  // BACKLOG-3005 (busy-state fold): mount/focus/AppState refreshes cover arriving
+  // at the screen mid-sync, but not a sync that STARTS while the user is already
+  // looking at it — the OS background task and `appStateCatchup` both do that.
+  //
+  // A modest poll, deliberately: this is a UI affordance, not a correctness
+  // mechanism (the lock itself still serialises runs), so a few seconds of lag is
+  // acceptable and a tight loop is not. One AsyncStorage read per tick, scoped to
+  // the focused screen and cleared on blur, so a backgrounded app polls nothing.
+  useFocusEffect(
+    useCallback(() => {
+      const id = setInterval(() => {
+        void isSyncInFlight().then(setSyncInFlight);
+      }, SYNC_BUSY_POLL_MS);
+      return () => clearInterval(id);
+    }, []),
+  );
+
   // BACKLOG-2209: re-check SMS permission (and refresh sync stats) whenever the
   // app returns to the foreground. useFocusEffect does NOT fire on an AppState
   // background→active transition (the home screen stays "focused"), so returning
@@ -341,6 +380,12 @@ export default function HomeScreen(): React.JSX.Element {
   // the early returns) so both the render AND the dismiss-reset effect below can
   // key off it. Prefer the "reached-desktop" timestamp; fall back to the
   // message-send timestamp for installs upgraded before lastSuccessfulSyncAt.
+  // BACKLOG-3005: the button is busy when THIS screen started a sync (immediate,
+  // no round trip) OR when anyone else holds the lock. Combined, not replaced —
+  // the local flag is what makes a tap feel instant, and the lock is what makes
+  // the affordance honest about syncs this component never started.
+  const syncBusy = syncing || syncInFlight;
+
   const lastSyncAt =
     syncStats?.lastSuccessfulSyncAt ?? syncStats?.lastSyncTime ?? null;
   const freshness = getSyncFreshness(lastSyncAt);
@@ -451,8 +496,13 @@ export default function HomeScreen(): React.JSX.Element {
     // window into minutes. Onboarding does the real drain.
     try {
       const syncResult = await performSync();
+      // BACKLOG-3003's shape: a `skipped` run transferred nothing, so reporting
+      // its zeros as "complete" describes work that never happened. One-liner, so
+      // taken here; the rest of 3003 is untouched.
       console.log(
-        `[Pairing] Auto-first-sync complete: ${syncResult.sentMessages} msgs, ${syncResult.contactsSynced} contacts`,
+        syncResult.skipped
+          ? '[Pairing] Auto-first-sync skipped — another sync already holds the lock'
+          : `[Pairing] Auto-first-sync complete: ${syncResult.sentMessages} msgs, ${syncResult.contactsSynced} contacts`,
       );
     } catch (error) {
       console.warn('[Pairing] Auto-first-sync error (non-fatal):', error);
@@ -565,6 +615,27 @@ export default function HomeScreen(): React.JSX.Element {
         userInitiated: true,
         maxCycles: MAX_SYNC_CYCLES_PER_RUN,
       });
+      // BACKLOG-3005 (busy-state fold): another sync held the lock, so THIS call
+      // did nothing. It must never be adopted as a result:
+      //   - the old code fell through to `Alert('Up to Date', 'Nothing new to
+      //     sync.')`, which is the founder-reported lie;
+      //   - `setLastSyncResult` would zero the stat tiles from a run that never
+      //     read anything;
+      //   - `syncDisconnection(result)` would CLEAR a legitimate 2296
+      //     disconnected banner on the strength of a run that never reached the
+      //     desktop (a skipped result carries `desktopReachable: true`).
+      // `first-sync.tsx` already treats `skipped` as an issue rather than a
+      // success (its `isSyncError`, and its "A sync is already running" copy);
+      // this is the same treatment on the home screen.
+      if (result.skipped) {
+        setSyncInFlight(true);
+        Alert.alert(
+          'Sync Already Running',
+          'A sync is already in progress. Give it a moment — this button will be available again when it finishes.',
+        );
+        return;
+      }
+
       setLastSyncResult(result);
 
       // BACKLOG-2301: derive the persistent 2296 disconnected banner from THIS
@@ -642,6 +713,11 @@ export default function HomeScreen(): React.JSX.Element {
       );
     } finally {
       setSyncing(false);
+      // BACKLOG-3005: re-read the lock rather than assuming idle. Our own run has
+      // released it, but a background cycle may have taken it in the meantime —
+      // and this is immediate, so the button does not stay greyed for up to
+      // SYNC_BUSY_POLL_MS after a sync the user watched finish.
+      setSyncInFlight(await isSyncInFlight());
     }
   }, [syncing]);
 
@@ -1022,8 +1098,8 @@ export default function HomeScreen(): React.JSX.Element {
             <Button
               title="Sync Now"
               onPress={handleSyncNow}
-              loading={syncing}
-              disabled={syncing}
+              loading={syncBusy}
+              disabled={syncBusy}
               fullWidth
             />
           </View>

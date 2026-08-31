@@ -440,6 +440,42 @@ export async function acquireSyncLock(
 }
 
 /**
+ * Is a sync running RIGHT NOW, by any caller?
+ *
+ * BACKLOG-3005 (the Sync Now busy-state fold). The home screen's spinner was
+ * driven by a local `useState` that only ever knew about syncs that screen
+ * started itself. A sync started by the post-pair auto-sync, `appStateCatchup`
+ * on foregrounding, or the OS background task takes THIS lock and never touches
+ * that state, so the button rendered idle, the user tapped, `performSync`
+ * returned `skipped`, and the tap was reported as "Up to Date".
+ *
+ * Before BACKLOG-3005 that was a ~30 ms race. Now that one tap can drain for
+ * minutes, a lock being held is the NORMAL state for the whole drain, which is
+ * what makes the missing affordance worth a UI change.
+ *
+ * ## The staleness predicate is deliberately the SAME EXPRESSION as acquire's
+ *
+ * `now - acquiredAt < SYNC_LOCK_TTL_MS`, copied from `acquireSyncLock` above.
+ * A lock older than the TTL is one `acquireSyncLock` would force-break, so
+ * reporting it as busy would grey the button out FOREVER after a crash mid-sync
+ * — a permanently unusable button, worse than the defect being fixed. The two
+ * must agree, so they are written the same way; `isSyncInFlight` answering
+ * "busy" where `acquireSyncLock` would answer "take it" is the bug to avoid.
+ *
+ * READ-ONLY: never acquires, never breaks, never writes. It is a UI affordance,
+ * not a correctness mechanism — the lock itself is still what serialises runs.
+ *
+ * @param now - injectable clock for tests (defaults to Date.now())
+ */
+export async function isSyncInFlight(
+  now: number = Date.now()
+): Promise<boolean> {
+  const existing = await readSyncLock();
+  if (!existing) return false;
+  return now - existing.acquiredAt < SYNC_LOCK_TTL_MS;
+}
+
+/**
  * Refresh the timestamp on a lock we still hold, WITHOUT changing its nonce.
  *
  * ## The landmine this defuses (BACKLOG-3005)
