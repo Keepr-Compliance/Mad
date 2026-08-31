@@ -1161,10 +1161,98 @@ describe('SyncOrchestratorService', () => {
       const syncFn = (syncOrchestrator as any).syncFunctions.get('contacts');
       await syncFn('test-user', jest.fn(), { forceReimport: true });
 
-      // forceReimport should be called first
-      expect((window as any).api.contacts.forceReimport).toHaveBeenCalledWith('test-user');
+      // forceReimport should be called first, and it must NAME what it is about
+      // to refill (BACKLOG-3029). With no stored preferences all three sources
+      // default on, and `isMacOS()` is mocked true, so all three are in play.
+      expect((window as any).api.contacts.forceReimport).toHaveBeenCalledWith(
+        'test-user',
+        ['macos', 'outlook', 'google_contacts'],
+      );
       // Then normal sync should proceed
       expect((window as any).api.contacts.syncExternal).toHaveBeenCalledWith('test-user');
+    });
+
+    /**
+     * =======================================================================
+     * BACKLOG-3029 — THE WIPE MAY ONLY NAME SOURCES THAT WILL BE REFILLED
+     * =======================================================================
+     * FIXTURE PROVENANCE: this preference bag is the founder's own, transcribed
+     * from the log line his 2026-08-31 run emitted, not invented:
+     *
+     *   [SyncOrchestrator] Contact source preferences:
+     *     {"macosContacts":false,"outlookContacts":true,"googleContacts":true}
+     *   [SyncOrchestrator] Skipping macOS Contacts (disabled by user preference)
+     *
+     * On that run the wipe had already emptied all five sources one second
+     * earlier, and 1,175 macOS rows were never refilled because the phase was
+     * skipped. The assertion is the exact SET the wipe is allowed to name, so a
+     * regression that adds `macos` back is red here rather than in the field.
+     *
+     * MUTATION THAT MUST GO RED (executed; results in the PR body): put `'macos'`
+     * into `sourcesToRefill` unconditionally in `SyncOrchestratorService`.
+     */
+    it('a DISABLED source is neither refilled nor emptied (the founder 1,175-row case)', async () => {
+      (window as any).api.preferences.get = jest.fn().mockResolvedValue({
+        success: true,
+        preferences: {
+          contactSources: {
+            direct: { macosContacts: false, outlookContacts: true, googleContacts: true },
+          },
+        },
+      });
+
+      syncOrchestrator.initializeSyncFunctions();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const syncFn = (syncOrchestrator as any).syncFunctions.get('contacts');
+      await syncFn('test-user', jest.fn(), { forceReimport: true });
+
+      expect((window as any).api.contacts.forceReimport).toHaveBeenCalledWith(
+        'test-user',
+        ['outlook', 'google_contacts'],
+      );
+      // The other half of the same fact: the phase really did not run, so had
+      // `macos` been named there would have been nothing to refill it.
+      expect((window as any).api.contacts.syncExternal).not.toHaveBeenCalled();
+    });
+
+    it('with every source switched off the wipe names nothing at all', async () => {
+      (window as any).api.preferences.get = jest.fn().mockResolvedValue({
+        success: true,
+        preferences: {
+          contactSources: {
+            direct: { macosContacts: false, outlookContacts: false, googleContacts: false },
+          },
+        },
+      });
+
+      syncOrchestrator.initializeSyncFunctions();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const syncFn = (syncOrchestrator as any).syncFunctions.get('contacts');
+      await syncFn('test-user', jest.fn(), { forceReimport: true });
+
+      // An empty list, not a skipped call: the handler still runs, still logs,
+      // and still returns a `cleared` of 0. `source IN ()` never gets built.
+      expect((window as any).api.contacts.forceReimport).toHaveBeenCalledWith('test-user', []);
+    });
+
+    it('on Windows the macOS address book is not named, whatever the preference says', async () => {
+      // `macosContacts` defaults ON with no stored preferences, so without the
+      // platform half of the gate this would name a source Windows can never
+      // refill — the same defect wearing a different hat.
+      require('../../utils/platform').isMacOS.mockReturnValue(false);
+
+      syncOrchestrator.initializeSyncFunctions();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const syncFn = (syncOrchestrator as any).syncFunctions.get('contacts');
+      await syncFn('test-user', jest.fn(), { forceReimport: true });
+
+      expect((window as any).api.contacts.forceReimport).toHaveBeenCalledWith(
+        'test-user',
+        ['outlook', 'google_contacts'],
+      );
     });
 
     it('should NOT call forceReimport when option is not set', async () => {

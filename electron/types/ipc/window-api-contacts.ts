@@ -209,8 +209,18 @@ export interface WindowApiContacts {
     tokenExpired?: boolean;
     error?: string;
   }>;
-  /** Force re-import: wipe ALL external contacts then return */
-  forceReimport: (userId: string) => Promise<{
+  /**
+   * Force re-import: empty the shadow rows for the sources the caller is about
+   * to refill, then return.
+   *
+   * BACKLOG-3029: `sources` names what the caller WILL re-fetch — a source that
+   * is switched off, or that the desktop cannot fetch at all (`android_sync`,
+   * `iphone`), must not be emptied, because nothing would bring it back and its
+   * records silently stop being offered for import.
+   *
+   * `cleared` is the number of rows actually deleted.
+   */
+  forceReimport: (userId: string, sources: string[]) => Promise<{
     success: boolean;
     cleared: number;
     error?: string;

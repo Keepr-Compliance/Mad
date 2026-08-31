@@ -97,7 +97,19 @@ jest.mock("../../workers/contactWorkerPool", () => ({
 
 jest.mock("../supabaseService", () => ({
   __esModule: true,
-  default: { getClient: () => ({ auth: { getUser: jest.fn() } }) },
+  default: {
+    getClient: () => ({ auth: { getUser: jest.fn() } }),
+    // BACKLOG-2986: `storeContacts` now reads `androidContacts` before it
+    // promotes, via the REAL `preferenceHelper`. Stated explicitly rather than
+    // left to the helper's catch: without this key the read would throw, the
+    // helper would fail open to `true`, and every case below would be green by
+    // accident instead of by design. `localSyncService.writeGate-2986.test.ts`
+    // is where the gate itself is swept.
+    getPreferences: jest.fn().mockResolvedValue({
+      phone_type: "android",
+      contactSources: { direct: { androidContacts: true } },
+    }),
+  },
 }));
 
 // The shadow-table write is not what this suite is about; `promoteToMainContacts`
@@ -212,17 +224,17 @@ afterEach(() => {
 });
 
 describe("promoting the same Android address book twice (BACKLOG-2987)", () => {
-  it("the FIRST sync creates all three, whatever their shape", () => {
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+  it("the FIRST sync creates all three, whatever their shape", async () => {
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
 
     expect(displayNames()).toEqual(["22395", "Fixture One", "Fixture Two"]);
   });
 
-  it("the SECOND sync of an unchanged address book creates NOTHING", () => {
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+  it("the SECOND sync of an unchanged address book creates NOTHING", async () => {
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
     const afterFirst = displayNames();
 
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
 
     // Exact set, duplicates included. A count would pass on a run that deleted
     // one contact and created another.
@@ -230,21 +242,21 @@ describe("promoting the same Android address book twice (BACKLOG-2987)", () => {
     expect(displayNames()).toEqual(["22395", "Fixture One", "Fixture Two"]);
   });
 
-  it("nor a THIRD, which is where the founder's log had already produced 78 duplicate rows", () => {
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+  it("nor a THIRD, which is where the founder's log had already produced 78 duplicate rows", async () => {
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
 
     expect(displayNames()).toEqual(["22395", "Fixture One", "Fixture Two"]);
   });
 
-  it("the two shapes the PHONE probe cannot answer for are the ones that repeated", () => {
+  it("the two shapes the PHONE probe cannot answer for are the ones that repeated", async () => {
     // Named precisely so a regression says WHICH shape came back, and so the
     // suite records what actually distinguished the founder's 26 from his 363.
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
     const idByName = new Map(contactsOnDisk().map((c) => [c.display_name, c.id]));
 
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
 
     // The same ROWS, not merely the same number of rows — nothing was replaced.
     for (const [name, id] of idByName) {
@@ -254,9 +266,9 @@ describe("promoting the same Android address book twice (BACKLOG-2987)", () => {
     }
   });
 
-  it("each promoted contact claims its record exactly once", () => {
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+  it("each promoted contact claims its record exactly once", async () => {
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
 
     // Two kinds of row live under `android_sync`, both written by
     // `writeContactOriginInTransaction`: the RECORD claim (what this item's
@@ -274,7 +286,7 @@ describe("promoting the same Android address book twice (BACKLOG-2987)", () => {
     expect(all.filter((c) => c.startsWith("android_sync|origin:"))).toHaveLength(3);
   });
 
-  it("a phone that presents a DIFFERENT device id re-creates everything — the other half of this item", () => {
+  it("a phone that presents a DIFFERENT device id re-creates everything — the other half of this item", async () => {
     // This is the state BEFORE the companion fix: every re-pair minted a new
     // UUID, so the claim key changed and no probe could match. It is asserted
     // rather than described so that "the desktop fix alone is not sufficient"
@@ -282,8 +294,8 @@ describe("promoting the same Android address book twice (BACKLOG-2987)", () => {
     // pii-allow-uuid: a hand-written placeholder device id, not a real record — the digits are a visible pattern, never generated
     const OTHER_DEVICE = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 
-    storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
-    storeContacts(USER, OTHER_DEVICE, ADDRESS_BOOK, true);
+    await storeContacts(USER, DEVICE, ADDRESS_BOOK, true);
+    await storeContacts(USER, OTHER_DEVICE, ADDRESS_BOOK, true);
 
     // The phone-bearing contact is still caught by the phone probe. The two the
     // phone probe cannot see come back — exactly the founder's shape.

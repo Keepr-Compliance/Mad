@@ -9,6 +9,7 @@ import { useRouter } from 'expo-router';
 import {
   startBackgroundSync,
   performSync,
+  MAX_SYNC_CYCLES_PER_RUN,
 } from '../../services/backgroundSync';
 import type { SyncOperationResult } from '../../services/backgroundSync';
 import {
@@ -120,16 +121,29 @@ export default function FirstSyncScreen({
 
       // Then perform the initial sync.
       //
-      // BACKLOG-2200/2201: performSync now returns `skipped: true` when another
-      // sync already holds the cross-context lock (during onboarding, the
-      // auto-sync-on-pair fired from the home screen can be that holder). A
-      // skipped result carries zeros and is NOT a completed sync — rendering it
-      // would show a false "Sync Complete / Sent 0 messages". So we wait briefly
-      // for the in-flight run to release the lock and re-attempt, up to a small
-      // bound, instead of surfacing the skip as a terminal state.
+      // BACKLOG-2200/2201: performSync returns `skipped: true` when another sync
+      // holds the cross-context lock. A skipped result carries zeros and is NOT
+      // a completed sync — rendering it would show a false "Sync Complete /
+      // Sent 0 messages" — so we wait briefly and re-attempt, up to a small
+      // bound, rather than surfacing the skip as a terminal state.
+      //
+      // BACKLOG-3005: THE CASE THIS LOOP WAS WRITTEN FOR NO LONGER REACHES IT.
+      // Its original holder was the auto-sync-on-pair fired from the home
+      // screen — same JS runtime — and `performSync`'s depth-aware gate now
+      // JOINS that run instead of racing it, so this call returns the real
+      // drain result however long the drain takes. Waiting for a join is not
+      // retrying a skip: there is no 7.5-second budget on it, which is the
+      // point, because a large first pairing legitimately takes minutes.
+      //
+      // The loop STAYS because a genuine cross-runtime skip is still possible:
+      // Expo's headless task runs in a runtime that cannot see the in-memory
+      // registry and is serialised only by the AsyncStorage lock. That run is
+      // single-pass and short, so a bounded retry is the right response to it.
       const MAX_SKIP_RETRIES = 5;
       const SKIP_RETRY_DELAY_MS = 1500;
-      let result = await performSync();
+      // BACKLOG-3005: THIS is the first-pairing path — a new user's history
+      // arrives here, not through the home screen's button — so it drains.
+      let result = await performSync({ maxCycles: MAX_SYNC_CYCLES_PER_RUN });
       for (
         let attempt = 0;
         result.skipped && attempt < MAX_SKIP_RETRIES;
@@ -139,7 +153,7 @@ export default function FirstSyncScreen({
           `[Onboarding] First sync skipped (another sync in progress) — retrying (${attempt + 1}/${MAX_SKIP_RETRIES})`,
         );
         await new Promise((r) => setTimeout(r, SKIP_RETRY_DELAY_MS));
-        result = await performSync();
+        result = await performSync({ maxCycles: MAX_SYNC_CYCLES_PER_RUN });
       }
 
       // If the user already skipped into the app the screen is unmounted — do

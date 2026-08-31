@@ -325,12 +325,27 @@ describe('same-millisecond boundary safety', () => {
       Array.from({ length: MAX_QUEUE_SIZE - 2 }, (_, i) => msg(i, 500 + i)),
     );
 
-    // Two messages share timestamp 9_000. With perBoxBudget=1 the read is
-    // truncated, so the cursor must stay at (not past) 9_000 to re-read the
-    // twin next cycle. Simulate the reader returning the single oldest twin.
+    // Two messages share timestamp 9_000. The read is capacity-truncated, so
+    // the cursor must stay at (not past) 9_000 to re-read the twin next cycle.
+    //
+    // BACKLOG-2800 updated this FIXTURE — never the assertion below, which is
+    // unchanged. The budget rule changed: each box is now read with the FULL
+    // remaining capacity as its ceiling and the combined result is trimmed back
+    // to it, so truncation is `union.length >= remainingCapacity` rather than
+    // `>= capacity/2`. With 2 slots free the ceiling is 2, so returning ONE
+    // message no longer DESCRIBES a truncated read — a box with a ceiling of 2
+    // would have returned the twin if it existed, and advancing to newest+1 is
+    // then correct. Returning `maxCount` twins at the same millisecond is what
+    // expresses truncation under the new rule, which is the state this test has
+    // always been about.
+    // THREE twins into a ceiling of two, so the slice genuinely CUTS one: 9003
+    // is really left unread at the boundary millisecond. Two twins into a
+    // ceiling of two severs nothing — it would exercise the conservative
+    // predicate without ever splitting a same-millisecond group, so the
+    // inclusive advance would be merely cautious rather than necessary.
     mockReadSmsMessages.mockImplementation(async (_since, maxCount) => {
-      // budget is small (truncating). Return exactly `maxCount` msgs at 9000.
-      return okRead([msg(9001, 9_000)].slice(0, Math.max(0, maxCount ?? 0)));
+      const twins = [msg(9001, 9_000), msg(9002, 9_000), msg(9003, 9_000)];
+      return okRead(twins.slice(0, Math.max(0, maxCount ?? 0)));
     });
 
     await performSync();

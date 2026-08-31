@@ -20,6 +20,12 @@ import * as BackgroundFetch from "expo-background-fetch";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { readSmsMessages } from "./smsReader";
 import type { SmsReadError } from "./smsReader";
+import {
+  resolveSyncWindow,
+  readAppliedWindow,
+  recordAppliedWindow,
+  isWidening,
+} from "./syncWindow";
 import { checkSmsPermissions } from "./permissions";
 import { readContacts } from "./contactReader";
 import { sendMessages, sendContacts, pingDesktop } from "./syncService";
@@ -43,9 +49,18 @@ import {
   getBackgroundSyncEnabled,
   acquireSyncLock,
   releaseSyncLock,
+  renewSyncLock,
 } from "./smsQueueService";
 import type { SyncIntervalValue } from "./smsQueueService";
 import type { PairingInfo, SyncErrorType } from "../types/sync";
+// BACKLOG-3005: the depth vocabulary lives in a LEAF module so a test that
+// mocks this one can still `requireActual` the real ceiling without paying for
+// `defineTask`, AsyncStorage and the Supabase client. Re-exported here so every
+// existing import path keeps working unchanged.
+import { MAX_SYNC_CYCLES_PER_RUN } from "./syncDepth";
+import type { SyncRunOptions } from "./syncDepth";
+export { MAX_SYNC_CYCLES_PER_RUN };
+export type { SyncRunOptions };
 import {
   classifyAddress,
   classifySyncOutcome,
@@ -127,6 +142,23 @@ export interface SyncOperationResult {
   newContacts: number;
   /** Whether the desktop was reachable */
   desktopReachable: boolean;
+  /**
+   * BACKLOG-3005: this cycle's read was cut short by the queue's remaining
+   * capacity, so there is MORE history above the cursor right now.
+   *
+   * The single-cycle code already computed this fact and threw it away; only
+   * the 15-minute timer or another tap resumed the drain. Defaulting it to
+   * FALSE (absent) is the safety property: every path that does not read —
+   * permission revoked, queue at capacity, read failure, zero messages, the LAN
+   * guard and ping early returns — stops a continuation loop for free, without
+   * each one having to remember to say so.
+   */
+  readWasTruncated?: boolean;
+  /**
+   * BACKLOG-3005: how many cycles this run executed. 1 for every caller that
+   * does not opt in to continuation.
+   */
+  cyclesRun?: number;
   /** Current queue size after this operation */
   queueSize: number;
   /** Error message if sync failed */
@@ -207,6 +239,120 @@ function reachabilityErrorMessage(errorType: SyncErrorType): string {
       "Can't reach Keepr on your computer. Make sure Keepr is open, then re-connect.";
 }
 
+// ============================================
+// DEPTH-AWARE COALESCING (BACKLOG-3005, founder ruling 2026-08-30)
+// ============================================
+
+/**
+ * The run currently in flight IN THIS JS RUNTIME, with the depth it targets.
+ *
+ * ## The defect this closes
+ *
+ * Founder: *"regardless of where you sync — onboarding or home screen — after
+ * you just scan the QR code, or a returning user syncing, it should ALWAYS do
+ * everything based on the setting in Keepr desktop."* He paired from the HOME
+ * screen with the window on All time and got 500 of 2,317; an hour earlier the
+ * identical binary drained all 2,317 because he had paired through ONBOARDING.
+ * Same phone, same setting, same build, different screen.
+ *
+ * The cause was that `home.tsx`'s auto-first-sync was pinned to one cycle so it
+ * would lose the lock race to onboarding quickly. Sound for that race, wrong as
+ * a rule: pairing from home has no onboarding to yield to, so the user simply
+ * kept a partial history.
+ *
+ * ## Why the fix is coalescing rather than raising the number
+ *
+ * Raising home's cycle count reinstates the race. The answer is that there is
+ * ONE drain and the other caller JOINS it. Modelled on
+ * `electron/services/messagesSyncTrigger.ts` (BACKLOG-2772, SR D1), which
+ * solved the same problem on the desktop.
+ *
+ * ## DEPTH-AWARENESS IS THE LOAD-BEARING PART
+ *
+ * "A sync is already running, join it" is WRONG here. A single-pass run in
+ * flight does not satisfy a caller that needs a full drain: joining it would
+ * hand back 500 messages and report success — the same silent partial this item
+ * exists to remove, reached by another road. So a run is reusable only when it
+ * is at least as DEEP as the caller needs.
+ *
+ * ## Why this registry is in memory, and what that does NOT cover
+ *
+ * It coalesces callers sharing one JS runtime. The cross-runtime case (Expo's
+ * headless task when the app process is dead) is still handled by the
+ * AsyncStorage lock exactly as before — this adds a layer, it replaces nothing.
+ */
+interface InflightRun {
+  promise: Promise<SyncOperationResult>;
+  /** Cycle budget this run targets. Larger = deeper. */
+  maxCycles: number;
+  /** Whether this run re-read the import window through a fresh cache. */
+  userInitiated: boolean;
+}
+
+let inflightRun: InflightRun | null = null;
+
+/**
+ * Test-only: drop the registry between cases.
+ *
+ * Without it a test that leaves a pending run makes the NEXT test silently join
+ * it, which presents as flake rather than as pollution. Precedent:
+ * `appStateCatchup.__resetCatchupState`.
+ */
+export function __resetInflightForTests(): void {
+  inflightRun = null;
+}
+
+/**
+ * The cycle budget a set of options asks for.
+ *
+ * MIRRORS the first line of `runSyncCycles`, which cannot be refactored to
+ * share this: that function was approved at `3adb4803f` and verified on
+ * hardware, and this item is explicitly forbidden from moving it. The two
+ * expressions are pinned equal over a value sweep by
+ * `backgroundSync.coalescing-3005.test.ts`.
+ */
+function resolveMaxCycles(options: SyncRunOptions): number {
+  return Math.max(1, Math.trunc(options.maxCycles ?? 1));
+}
+
+/**
+ * May this caller reuse the in-flight run?
+ *
+ * Three exclusions, each of which a naive "is a sync running?" check gets wrong:
+ *
+ * 1. **A depth-1 caller never joins and never waits.** After this item the only
+ *    depth-1 caller is the OS background task, and Expo documents a ~30 second
+ *    budget whose overrun terminates the app and delays future fetches. Joining
+ *    a drain would park that callback for minutes. Note this is deliberately
+ *    decided by the GATE and not by an assumption about which JS runtime the
+ *    task runs in: with the app alive, `defineTask` runs in the app's runtime
+ *    and CAN see this registry, so "it is a different runtime" would not be a
+ *    safe reason. It still RUNS (and the AsyncStorage lock turns it into a
+ *    `skipped`, byte-identical to today) — it simply never blocks.
+ *
+ * 2. **A `userInitiated` caller never joins.** That flag makes the run re-read
+ *    the import window through a fresh cache (BACKLOG-3017), so its window can
+ *    be WIDER than the in-flight run's. Handing back the older run would return
+ *    a scan that is shallower IN TIME even when it is deeper in cycles — the
+ *    same SR D1 violation one dimension over. Reachable: the busy-state poll is
+ *    3s, so a tap can land after the user widens the setting but before the
+ *    button greys. Such a caller chains instead, and the second run is cheap
+ *    because the cursor is already caught up.
+ *
+ * 3. **A shallower in-flight run never satisfies a deeper caller.** The
+ *    superset rule itself.
+ */
+function inflightCoversRequirement(
+  existing: InflightRun | null,
+  callerMaxCycles: number,
+  callerUserInitiated: boolean
+): boolean {
+  if (!existing) return false;
+  if (callerMaxCycles <= 1) return false;
+  if (callerUserInitiated) return false;
+  return existing.maxCycles >= callerMaxCycles;
+}
+
 /**
  * Perform a full sync cycle:
  * 1. Load pairing info
@@ -216,16 +362,111 @@ function reachabilityErrorMessage(errorType: SyncErrorType): string {
  * 5. Update sync stats
  *
  * This is called both by the background task and by the manual "Sync Now" button.
+ *
+ * ## Three outcomes, and why CHAINING is not a double-sync
+ *
+ *   - **JOIN** — an in-flight run is at least as deep and this caller is
+ *     neither depth-1 nor `userInitiated`. Returns that run's promise. One
+ *     sync, N callers, one outcome event.
+ *   - **CHAIN** — a run is in flight but does not cover this caller. We wait
+ *     for it to SETTLE and then run our own. BACKLOG-2200 forbids CONCURRENT
+ *     runs; two runs one after the other is what "waits for one that covers it,
+ *     or runs its own" means, and it is the only way a deeper caller can get
+ *     the depth it asked for without the shallower run's lock rejecting it.
+ *   - **RUN** — nothing in flight, or a depth-1 caller (which never waits).
+ *
+ * A chained run can still lose the AsyncStorage lock in the gap between the
+ * first run settling and its own `acquireSyncLock` — a headless task in another
+ * runtime can take it there. It then returns `skipped`, which is exactly the
+ * case `first-sync.tsx`'s retry loop still exists to cover.
+ *
+ * @param options.maxCycles - how many cycles this run may execute before it
+ *   stops (BACKLOG-3005). DEFAULT 1, which is byte-identical to the pre-3005
+ *   behaviour — continuation is strictly opt-in, so the OS background task and
+ *   the AppState catch-up are untouched by construction rather than by review.
+ * @param options.userInitiated - set ONLY by the manual "Sync Now" button. It
+ *   makes the cycle re-read the import setting from Supabase even when the
+ *   cached copy is still inside its TTL (BACKLOG-3017). A user who has just
+ *   changed the setting on the desktop and tapped Sync Now is the one case
+ *   where an hour-old cache is visibly wrong; nothing else about the cycle
+ *   changes, and the setting fetch still degrades exactly as it always did.
  */
-export async function performSync(): Promise<SyncOperationResult> {
-  // BACKLOG-2988: THE ONE EMISSION POINT. Every way this function can end —
-  // the lock skip, all five early returns inside the cycle, a clean finish and
-  // a throw — passes through exactly one of the two `emitOutcome` calls below.
-  // Emitting per-branch instead was the shape that produced the defect: the
-  // branches that reported nothing were the ones nobody remembered.
+export function performSync(
+  options: SyncRunOptions = {}
+): Promise<SyncOperationResult> {
+  // 1. Resolve the required DEPTH before the coalesce decision, so a deeper
+  //    caller can never be handed back a shallower run.
+  const maxCycles = resolveMaxCycles(options);
+  const userInitiated = options.userInitiated === true;
+
+  // 2. Read the registry and decide. There is NO `await` between this read and
+  //    the assignment below — JS is single-threaded, so the whole prologue runs
+  //    to completion before any other caller can observe it. That is why this
+  //    function is deliberately NOT `async`.
+  const existing = inflightRun;
+
+  if (inflightCoversRequirement(existing, maxCycles, userInitiated)) {
+    // JOIN. One sync, N callers, one outcome event.
+    return (existing as InflightRun).promise;
+  }
+
+  // CHAIN when a run is in flight that does not cover us, or RUN NOW when
+  // nothing is. Chaining is sequential, never concurrent — see the docblock.
+  const shouldChain = existing !== null && maxCycles > 1;
+  const promise = shouldChain
+    ? (existing as InflightRun).promise.then(
+        () => runOnce(options),
+        // The in-flight run's failure is ITS caller's to report. We still need
+        // our own deeper run, so both settlements lead to the same place.
+        () => runOnce(options)
+      )
+    : runOnce(options);
+
+  // Register ONLY when we are the entry a later caller should find.
+  //
+  // A depth-1 caller that RUNS while a deeper run is in flight (the OS task
+  // firing mid-drain) must NOT overwrite it: the drain would become invisible,
+  // and the next deep caller would start a second run that the AsyncStorage
+  // lock then rejects as `skipped` — losing the join the drain was there to
+  // provide. A chained caller DOES register, because it is strictly deeper and
+  // settles later, so it is the right thing for a subsequent caller to await.
+  if (!existing || shouldChain) {
+    inflightRun = { promise, maxCycles, userInitiated };
+  }
+
+  // `then(cleanup, cleanup)`, never `finally`: `.finally()` returns a NEW
+  // promise that nobody holds, so a rejected run would surface as an unhandled
+  // rejection — which crashes React Native release builds. `then` with both
+  // handlers absorbs it into an orphan that is already settled.
+  const clear = (): void => {
+    // Identity guard: a later caller may have replaced us in the registry (it
+    // chains off our promise), and that entry must outlive ours.
+    if (inflightRun?.promise === promise) inflightRun = null;
+  };
+  promise.then(clear, clear);
+
+  return promise;
+}
+
+/**
+ * One actual sync run, start to finish.
+ *
+ * BACKLOG-2988 restated for coalescing: THE ONE EMISSION POINT is per RUN, not
+ * per CALL. Callers that join an in-flight run emit nothing of their own — they
+ * are the same run and would otherwise double-count it. A CHAINED caller is a
+ * second, sequential run and does emit its own event.
+ */
+async function runOnce(
+  options: SyncRunOptions
+): Promise<SyncOperationResult> {
+  // Every way this function can end — the lock skip, all five early returns
+  // inside the cycle, a clean finish and a throw — passes through exactly one
+  // of the two `emitOutcome` calls below. Emitting per-branch instead was the
+  // shape that produced the defect: the branches that reported nothing were the
+  // ones nobody remembered.
   const startedAt = Date.now();
   try {
-    const result = await runSyncUnderLock();
+    const result = await runSyncUnderLock(options);
     await emitOutcome(startedAt, result, false);
     return result;
   } catch (error) {
@@ -235,7 +476,9 @@ export async function performSync(): Promise<SyncOperationResult> {
 }
 
 /** The lock discipline, unchanged — extracted so `performSync` has one exit. */
-async function runSyncUnderLock(): Promise<SyncOperationResult> {
+async function runSyncUnderLock(
+  options: SyncRunOptions
+): Promise<SyncOperationResult> {
   // BACKLOG-2200: serialize the whole cycle across UI + background contexts.
   // If another run holds a fresh lock, return early with `skipped: true` and a
   // benign, non-error result so no caller renders a false "Sync Complete" or a
@@ -257,7 +500,7 @@ async function runSyncUnderLock(): Promise<SyncOperationResult> {
   }
 
   try {
-    return await runSyncCycle();
+    return await runSyncCycles(options, lockNonce);
   } finally {
     // Always release our lock, even on throw, so a failed cycle can't deadlock.
     await releaseSyncLock(lockNonce);
@@ -319,11 +562,154 @@ async function emitOutcome(
 }
 
 /**
+ * Run cycles back-to-back until the history above the cursor is exhausted.
+ *
+ * ## The defect (BACKLOG-3005)
+ *
+ * `MAX_QUEUE_SIZE = 500` is back-pressure on a queue held as ONE JSON blob in
+ * AsyncStorage, and it stays. The bug was never the cap: each cycle ESTABLISHED
+ * that more history sat above the cursor and then threw that fact away, so only
+ * the 15-minute timer or another tap resumed the drain. Founder: *"we can have
+ * a cap for pagination reason but we can't ask the user to keep clicking
+ * sync... who does that? no one."*
+ *
+ * ## Why the loop lives HERE and not around `performSync`
+ *
+ * `runSyncUnderLock` acquires the lock once and releases it in `finally`.
+ * Re-entering `performSync` per iteration would re-take a lock this run already
+ * holds — the BACKLOG-3003 failure mode. So the loop sits INSIDE the lock, and
+ * each iteration is exactly the cycle a timer tick would have run.
+ *
+ * ## Why the BACKLOG-2800 watermark proof survives
+ *
+ * By induction. Nothing inside `runSyncCycle` changes: the per-box ceiling, the
+ * combined trim, `newestTimestamp` and the inclusive-vs-`+1` advance are
+ * untouched. Each iteration re-enters from the top with the same inputs a
+ * 15-minute timer cycle would have supplied — a cursor and a queue. Compressing
+ * the wait between cycles changes when they run, not what they read.
+ *
+ * ## The five stops, and the ONE that deviates from the written spec
+ *
+ *   1. lock stolen     — `renewSyncLock` false. Break, NEVER re-acquire: the
+ *                        thief is mid-run on the same queue and cursor.
+ *   2. interruption    — an error, a read error, or an unreachable desktop.
+ *   3. exhausted       — the read was not capacity-truncated, so nothing is
+ *                        left above the cursor. This is how a real drain ends.
+ *   4. no cursor MOVE  — see below.
+ *   5. the ceiling     — `maxCycles`.
+ *
+ * **Deviation, stated rather than silent.** The spec for stop 4 was
+ * `cursorAfter <= cursorBefore`. That is wrong on this branch, because
+ * BACKLOG-3017 (same PR) makes a widening cycle LOWER the cursor deliberately:
+ * a phone at 26 Aug that widens to 9 months rewinds to 30 Nov and reads its
+ * first 500, ending around January — `cursorAfter < cursorBefore`, so `<=`
+ * would stop the run after one cycle with months of backlog left. That is the
+ * 3005 defect re-created for exactly the founder''s "widen, then tap Sync Now"
+ * procedure, in the PR that ships both fixes. The condition stop 4 actually
+ * guards is a SPIN, i.e. the cursor not moving at all: when at least
+ * `remainingCapacity` messages share one millisecond the advance is inclusive,
+ * `nextCursor === cursorBefore`, and the next read is byte-identical forever.
+ * `===` catches that and lets a legitimate rewind proceed.
+ *
+ * A pathological *repeated* lowering (a persistently failing
+ * `recordAppliedWindow` re-detecting the same widening every cycle) is bounded
+ * by `maxCycles` and costs re-reads the desktop dedupes, never loss.
+ *
+ * ## Merging
+ *
+ * Counts are SUMMED; state fields take the last cycle''s value. Summing
+ * `contactsSynced` is required, not cosmetic: cycle 1 sends the contact diff
+ * and later cycles send 0, and `home.tsx` renders
+ * `result.contactsSynced > 0 ? result.newContacts : 0` — last-cycle-wins would
+ * announce "0 new contacts" after successfully syncing hundreds. The merged
+ * shape (messages sent AND a trailing error) is already in the single-cycle
+ * vocabulary — batch 1 succeeds, batch 2 fails — so `classifySyncOutcome`
+ * needs no change.
+ */
+async function runSyncCycles(
+  options: SyncRunOptions,
+  lockNonce: string
+): Promise<SyncOperationResult> {
+  const maxCycles = Math.max(1, Math.trunc(options.maxCycles ?? 1));
+  const userInitiated = options.userInitiated === true;
+
+  let last: SyncOperationResult | undefined;
+  let cyclesRun = 0;
+  let newMessages = 0;
+  let sentMessages = 0;
+  let contactsSynced = 0;
+  let newContacts = 0;
+
+  for (let cycle = 0; cycle < maxCycles; cycle++) {
+    // Stop 1, checked BEFORE any shared state is touched. Cycle 0 already holds
+    // a lock stamped moments ago by `acquireSyncLock`.
+    if (cycle > 0 && !(await renewSyncLock(lockNonce))) {
+      console.warn(
+        `[BackgroundSync] Sync lock was taken by another run after ${cyclesRun} cycle(s) — stopping (BACKLOG-3005)`
+      );
+      break;
+    }
+
+    const cursorBefore = await getLastSyncTimestamp();
+
+    // `userInitiated` applies to the FIRST cycle only. Letting every cycle
+    // bypass the window cache would put up to `maxCycles` Supabase round trips,
+    // each a 5s timeout surface, on the one path a user is watching — and would
+    // let a setting changed mid-drain re-widen inside the loop.
+    const result = await runSyncCycle(userInitiated && cycle === 0);
+
+    cyclesRun += 1;
+    newMessages += result.newMessages;
+    sentMessages += result.sentMessages;
+    contactsSynced += result.contactsSynced;
+    newContacts += result.newContacts;
+    last = result;
+
+    // Stop 2 — an interruption. Continuing would retry a failure in a tight
+    // loop rather than at the next scheduled cycle.
+    if (result.error || result.readError || !result.desktopReachable) break;
+
+    // Stop 3 — nothing is left above the cursor. Absent means false, so every
+    // path that never reached a read stops here for free.
+    if (!result.readWasTruncated) break;
+
+    // Stop 4 — a spin. See the deviation note above: `===`, never `<=`.
+    const cursorAfter = await getLastSyncTimestamp();
+    if (cursorAfter === cursorBefore) {
+      console.warn(
+        `[BackgroundSync] Cursor did not move at ${cursorBefore} — stopping to avoid a spin (BACKLOG-3005)`
+      );
+      break;
+    }
+  }
+
+  // `maxCycles >= 1`, so the body ran at least once and `last` is set.
+  const finalResult = last as SyncOperationResult;
+
+  if (cyclesRun > 1) {
+    console.log(
+      `[BackgroundSync] Drained ${cyclesRun} cycles in one run: ${newMessages} read, ${sentMessages} sent (BACKLOG-3005)`
+    );
+  }
+
+  return {
+    ...finalResult,
+    newMessages,
+    sentMessages,
+    contactsSynced,
+    newContacts,
+    cyclesRun,
+  };
+}
+
+/**
  * The actual sync cycle. Only ever invoked by performSync while holding the
  * sync lock (BACKLOG-2200), so its queue/cursor mutations are atomic across
  * contexts.
  */
-async function runSyncCycle(): Promise<SyncOperationResult> {
+async function runSyncCycle(
+  userInitiated: boolean
+): Promise<SyncOperationResult> {
   Sentry.addBreadcrumb({
     category: "sync",
     message: "Sync cycle started",
@@ -362,6 +748,9 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
   //     move at all.
   let newMessages = 0;
   let readError: SmsReadError | undefined;
+  // BACKLOG-3005: hoisted so the fact reaches the caller. It stays FALSE on
+  // every path that does not reach a truncated read.
+  let readWasTruncated = false;
   try {
     // BACKLOG-2209: PROACTIVELY re-check the READ_SMS runtime permission at the
     // START of every cycle, BEFORE issuing any read. If the user revoked SMS
@@ -410,10 +799,122 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       );
     } else {
       const lastTimestamp = await getLastSyncTimestamp();
-      // Bound the per-box read so the combined inbox+sent read fits the
-      // remaining capacity. Split the budget across the two boxes (min 1 each).
-      const perBoxBudget = Math.max(1, Math.floor(remainingCapacity / 2));
-      const readResult = await readSmsMessages(lastTimestamp, perBoxBudget);
+
+      // BACKLOG-2800: the desktop's "Import messages from" setting now GOVERNS
+      // this read. `resolveSyncWindow` returns the oldest timestamp the window
+      // admits (`null` for an explicit "All time"), or `unknown` when no value
+      // could be obtained at all, because it fails OPEN (its docblock explains
+      // why the two failure directions are not symmetric).
+      //
+      // The read floor is the LATER of the cursor and the window edge. The
+      // cursor already carries the `+1`: it is STORED as `newest + 1` at
+      // advance time below, so `getLastSyncTimestamp()` is already the next
+      // timestamp to read from and must not be incremented again here.
+      //
+      // The window is ROLLING — recomputed every cycle rather than anchored at
+      // pairing. "Last 3 months" is a rolling window, so a message that ages
+      // out of it is outside what the user asked for rather than lost; and
+      // anchoring would freeze a stale edge across the BACKLOG-2995 cursor
+      // reset, making a re-pair meant to re-import history read from the edge
+      // computed at the PREVIOUS pairing.
+      //
+      // `forceRefresh` when the cursor is 0. That set is exactly {first-ever
+      // sync, first sync after pairing, force re-import}: BACKLOG-2995 resets
+      // the cursor on every successful pair, so those cycles read from epoch
+      // and are bounded by the WINDOW alone. Both pairing screens kick off a
+      // sync immediately after registering, so the pairing-time prime can lose
+      // that race — keying the refresh off the cursor makes correctness
+      // independent of it, and covers force re-import for free.
+      //
+      // `userInitiated` on a manual "Sync Now" (BACKLOG-3017): a widening is
+      // useless if the phone cannot SEE it for up to the cache TTL, and "change
+      // the setting, then hit Sync Now" is the procedure this is accepted by.
+      const resolution = await resolveSyncWindow(Date.now(), {
+        forceRefresh: lastTimestamp === 0,
+        userInitiated,
+      });
+
+      // BACKLOG-3017 — WIDENING LOWERS THE READ FLOOR.
+      //
+      // `max(cursor, windowStart)` governs narrowing and is INERT for widening:
+      // once the cursor is past the edge, moving the edge further back changes
+      // nothing, so "All time" brought nothing older and the setting appeared to
+      // work while doing nothing. Telling "the user widened" apart from "the
+      // cursor is simply ahead" needs the edge we LAST READ FROM, which is state
+      // that did not exist before this record.
+      //
+      // Only a KNOWN window may move the cursor. An `unknown` resolution is a
+      // Supabase outage, not a user decision: it keeps today's behaviour (read
+      // from the cursor) and records nothing, so a failure can never claim
+      // All-time coverage and blind every future widening.
+      let effectiveCursor = lastTimestamp;
+      const windowStart =
+        resolution.kind === "known" ? resolution.start : null;
+
+      if (resolution.kind === "known") {
+        const applied = await readAppliedWindow();
+        const widened = isWidening(resolution.start, applied);
+
+        if (widened) {
+          // `null` ("All time") is -Infinity, hence a floor of 0. `min` is not
+          // decoration: after a BACKLOG-2995 re-pair the cursor is already 0,
+          // and writing the edge over it would RAISE the floor and skip the very
+          // history the widening asked for.
+          const floor = resolution.start ?? 0;
+          if (floor < effectiveCursor) {
+            // ORDER IS LOAD-BEARING: lower the cursor BEFORE recording the new
+            // applied window. A crash between the two costs a repeated re-read,
+            // which the desktop dedupes (`INSERT OR IGNORE` on the unique
+            // `(user_id, external_id)`); the other order records the claim,
+            // loses the rewind, and the re-read never happens again.
+            await setLastSyncTimestamp(floor);
+            effectiveCursor = floor;
+            console.log(
+              `[BackgroundSync] Import window WIDENED: read floor lowered ${lastTimestamp} -> ${floor}${
+                resolution.start === null
+                  ? " (All time)"
+                  : ` (${new Date(floor).toISOString()})`
+              } — re-reading history the previous window excluded (BACKLOG-3017)`
+            );
+          }
+        }
+
+        // Recorded on a widening EVEN WHEN the cursor needed no lowering.
+        // Skipping it there leaves the record bounded while the phone is now
+        // reading All time, so every later cycle re-detects the same widening
+        // and rewinds the cursor forever.
+        if (widened || !applied.present) {
+          await recordAppliedWindow(resolution.start);
+        }
+      }
+
+      const readFrom =
+        windowStart === null
+          ? effectiveCursor
+          : Math.max(effectiveCursor, windowStart);
+
+      // The only field-visible signal that the window actually SKIPPED history,
+      // as opposed to trailing harmlessly below the cursor (its normal state
+      // once the first post-pairing cycle has run).
+      if (windowStart !== null && windowStart > effectiveCursor) {
+        console.log(
+          `[BackgroundSync] Import window raised the read floor: cursor=${effectiveCursor} -> windowStart=${windowStart} (${new Date(windowStart).toISOString()}) — older history is outside the configured window (BACKLOG-2800)`
+        );
+      }
+
+      // BACKLOG-2800: the 50/50 inbox/sent split is no longer POLICY (founder
+      // ruling: "the determining factor should be the date"). It wasted
+      // capacity as soon as a history was lopsided — which is the normal shape,
+      // since most people receive far more than they send. On the 2,200-message
+      // reference fixture (1,840 inbox / 360 sent) a 500 budget read 250 + 250
+      // and left half the capacity idle the moment the smaller box emptied.
+      //
+      // Each box now gets the FULL remaining capacity as its ceiling and the
+      // COMBINED result is trimmed back to that capacity below. The per-box
+      // budget becomes back-pressure only. The trim is not merely budget
+      // hygiene — it is what makes the shared cursor safe; see the proof at the
+      // trim site.
+      const readResult = await readSmsMessages(readFrom, remainingCapacity);
 
       if (!readResult.ok) {
         // BACKLOG-2206: a GENUINE read failure (permission revoked, native
@@ -435,12 +936,65 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
           }
         );
       } else {
-        const messages = readResult.messages;
+        // BACKLOG-2800 — TRIM THE COMBINED READ, AND WHY THE CURSOR NEEDS IT.
+        //
+        // Each box was read with the FULL remaining capacity as its ceiling, so
+        // the union can hold up to 2x capacity. `readSmsMessages` returns it
+        // sorted oldest-first, so taking the first `remainingCapacity` keeps a
+        // contiguous OLDEST prefix across BOTH boxes.
+        //
+        // The trim is what makes the shared cursor safe. Before it, each box was
+        // capped independently while the cursor was advanced from the newest
+        // message across the UNION — so a truncated inbox read (newest: 1 March)
+        // combined with a sparse-but-recent sent read (newest: 20 August) moved
+        // the cursor to 20 August and every unread inbox message in between was
+        // skipped permanently. That defect is recorded on BACKLOG-2800; the fix
+        // lands here because the founder's ruling puts the budget split in this
+        // item's scope.
+        //
+        // WHY THE TRIMMED WATERMARK IS COMPLETE: for any box truncated at the
+        // ceiling C, all C of its messages are <= that box's own max T_B, so the
+        // union holds at least C elements <= T_B, so the C-th smallest element
+        // of the union is <= T_B. The trim keeps exactly the C smallest, so its
+        // newest element T satisfies T <= T_B for EVERY truncated box; and any
+        // box that returned fewer than C was exhausted (the ONE exception to
+        // that clause is BACKLOG-3018, noted at the predicate below). Hence both
+        // boxes are complete over [readFrom, T], and the cursor may safely
+        // reach T.
+        //
+        // BACKLOG-3005 (page-chaining for throughput) MUST PRESERVE THIS: what
+        // it advances the cursor to has to be a timestamp below which BOTH boxes
+        // are known complete, not merely the newest message it happened to read.
+
+        // TRUNCATION, evaluated PRE-trim on the union. If any box returned
+        // exactly its ceiling (= remainingCapacity) the union necessarily
+        // reaches the ceiling too; and if the union is short of it, neither box
+        // hit its ceiling and both are exhausted. (Testing the KEPT set instead
+        // is equivalent — when the union exceeds the cap the kept set is
+        // exactly the cap — but the union reads directly off the proof.)
+        //
+        // THE ONE EXCEPTION to the proof above, filed as BACKLOG-3018 and
+        // deliberately NOT fixed here: `readBoxPaged` bounds its collection by
+        // VALID messages while `indexFrom` advances by RAW rows, so the
+        // MAX_PAGES_PER_BOX valve can end a read with fewer than the ceiling
+        // collected AND rows still unread. That falsifies the proof's second
+        // clause — "any box that returned fewer than C was exhausted" — which
+        // makes this predicate false and lets the cursor advance past them.
+        // Triggering it needs fewer than `remainingCapacity` valid messages
+        // inside the first ~100,000 raw rows above the cursor, so it is
+        // pathological today. BACKLOG-3005 sits directly on that valve and must
+        // not make it reachable.
+        const unionWasTruncated =
+          readResult.messages.length >= remainingCapacity;
+
+        const messages = readResult.messages.slice(0, remainingCapacity);
         newMessages = messages.length;
 
         if (messages.length > 0) {
           const enqueuedCount = await enqueueMessages(messages);
 
+          // Computed from the POST-trim set. Taking it from the raw union would
+          // collapse the proof above and reinstate the skip defect intact.
           const newestTimestamp = Math.max(...messages.map((m) => m.timestamp));
 
           // BOUNDARY-SAFE CURSOR ADVANCE (BACKLOG-2199, SR review Note D).
@@ -462,7 +1016,13 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
           // (inclusive) and let the next cycle re-read that millisecond — the
           // idempotent enqueue makes the overlap free. As the queue drains, a
           // later un-truncated read finally clears the +1 hop.
-          const readWasTruncated = messages.length >= perBoxBudget; // a box may have capped
+          //
+          // BACKLOG-2800: computed on the pre-trim union (see above), because
+          // `readSmsMessages` returns one combined array and per-box counts are
+          // not visible here. It can only OVER-report (both boxes short but
+          // summing to exactly the ceiling), which costs one re-read
+          // millisecond and never loses a message.
+          readWasTruncated = unionWasTruncated;
           const nextCursor = readWasTruncated
             ? newestTimestamp // inclusive: re-read the boundary ms next cycle
             : newestTimestamp + 1; // safe to skip past — full tail was read
@@ -517,6 +1077,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
         "This pairing is no longer valid — it points at a computer that isn't on your local network. Pair with your computer again from the home screen.",
       errorType: "invalid_address",
       readError,
+      readWasTruncated,
       stoppedAt: "lan_guard",
     };
   }
@@ -545,6 +1106,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
       // early return already records a failed attempt (reachedDesktop=false), so
       // the read failure correctly extends the 2203 streak here too.
       readError,
+      readWasTruncated,
       stoppedAt: "ping",
     };
   }
@@ -699,6 +1261,7 @@ async function runSyncCycle(): Promise<SyncOperationResult> {
     error: sendError,
     errorType: sendErrorType,
     readError,
+    readWasTruncated,
     contactsFailed,
     // BACKLOG-2988: name the step this run actually got to. A send failure ends
     // it at the message step; a read failure at the read; otherwise it finished.
