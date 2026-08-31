@@ -8,8 +8,27 @@
  * reported `IsFullBackup: 1`. It was, in every sense that matters, a first sync.
  *
  * The flag came from `previousBackupExists && !forceFullBackup` — whether a DIRECTORY
- * existed. `idevicebackup2` had printed the answer on stderr and it was logged and
- * discarded.
+ * existed. `idevicebackup2` had printed the answer and it was logged and discarded.
+ *
+ * ## BACKLOG-2915: THIS FILE WAS GREEN AGAINST AN INPUT THE TOOL CANNOT PRODUCE
+ *
+ * Until 2026-08-30 every case below drove the mode line in on **`proc.stderr`**, and
+ * the docblock asserted that idevicebackup2 "had printed the answer on stderr". It
+ * does not. `PRINT_VERBOSE(1, "Incremental backup mode.\n")` at idevicebackup2.c:
+ * 2051-2053 is a `printf` — STDOUT — and `-d` does not change that: the flag maps to
+ * `case 'd': idevice_set_debug_level(1);` and never touches `verbose`.
+ *
+ * The consequence is not academic. `deviceReportedBackupMode` had **never once been
+ * set in production**, so `resolveIsIncremental` always fell through to the very
+ * directory heuristic whose failure this file documents, and seventeen tests reported
+ * that it did not. Confirmed live: the 2026-08-30 capture shows `Incremental backup
+ * mode.` on stdout, in the first chunk, and 11 bytes of stderr in the whole 20-minute
+ * run.
+ *
+ * Every case now drives the line on the stream the tool actually writes it on, and the
+ * PROVENANCE CONTROL at the end of this file asserts the other half: the same bytes on
+ * stderr must have NO effect. Without that control the next stream mix-up is invisible
+ * again.
  *
  * This is the single most damaging error possible for the duration model: first-sync
  * and incremental are the two distributions it exists to separate, and a 52-minute
@@ -145,7 +164,7 @@ describe("BACKLOG-2914: idevicebackup2's own backup-mode line", () => {
 
   it("THE CONTROL — the device says FULL while a directory exists: the result says full", async () => {
     const result = await runBackup((proc) => {
-      proc.stderr.emit("data", Buffer.from(FULL_MODE_LINE));
+      proc.stdout.emit("data", Buffer.from(FULL_MODE_LINE));
       proc.stdout.emit("data", Buffer.from("Backup Successful.\n"));
       proc.emit("close", 0);
     });
@@ -156,7 +175,7 @@ describe("BACKLOG-2914: idevicebackup2's own backup-mode line", () => {
 
   it("the device saying INCREMENTAL is recorded as reported", async () => {
     const result = await runBackup((proc) => {
-      proc.stderr.emit("data", Buffer.from(INCREMENTAL_MODE_LINE));
+      proc.stdout.emit("data", Buffer.from(INCREMENTAL_MODE_LINE));
       proc.stdout.emit("data", Buffer.from("Backup Successful.\n"));
       proc.emit("close", 0);
     });
@@ -189,7 +208,7 @@ describe("BACKLOG-2914: idevicebackup2's own backup-mode line", () => {
     const service = new BackupService();
 
     const first = await runBackup((proc) => {
-      proc.stderr.emit("data", Buffer.from(FULL_MODE_LINE));
+      proc.stdout.emit("data", Buffer.from(FULL_MODE_LINE));
       proc.emit("close", 0);
     }, service);
     expect(first.deviceReportedBackupMode).toBe("full");
@@ -198,5 +217,75 @@ describe("BACKLOG-2914: idevicebackup2's own backup-mode line", () => {
       proc.emit("close", 0);
     }, service);
     expect(second.deviceReportedBackupMode).toBeNull();
+  });
+});
+
+/**
+ * BACKLOG-2915 (SR blocker B5) — STREAM PROVENANCE.
+ *
+ * A pattern is only re-homed if it stopped working on the stream it was wrongly
+ * attached to. Asserting that stdout works, without asserting that stderr does not,
+ * would leave a parser reading both — which is how the mix-up survived seventeen green
+ * tests in the first place.
+ */
+describe("BACKLOG-2915: the mode line counts on STDOUT and nowhere else", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    const fsPromises = jest.requireMock("fs").promises as { stat: jest.Mock };
+    fsPromises.stat.mockResolvedValue({ isDirectory: () => true, mtime: new Date() });
+  });
+
+  it("THE PROVENANCE CONTROL — the same bytes on stderr have NO effect", async () => {
+    // This is the state the tree was in before BACKLOG-2915: the exact line, on the
+    // exact stream the old tests used, changing nothing. If a future edit re-adds an
+    // stderr parser for this line, this test is what goes red.
+    const result = await runBackup((proc) => {
+      proc.stderr.emit("data", Buffer.from(FULL_MODE_LINE));
+      proc.stdout.emit("data", Buffer.from("Backup Successful.\n"));
+      proc.emit("close", 0);
+    });
+
+    expect(result.deviceReportedBackupMode).toBeNull();
+    // …and with no device answer the old directory heuristic takes over, which — a
+    // backup directory existing — says incremental. That is exactly the wrong answer
+    // this file exists to stop, and it is what shipped for as long as the line was
+    // read on the wrong stream.
+    expect(result.isIncremental).toBe(true);
+  });
+
+  it("a mode line split across two stdout chunks is still read", async () => {
+    // Renders are `\r`-delimited and stdout is fully buffered on a pipe, so chunk
+    // boundaries fall wherever the 64 KB pipe read lands — not on line boundaries.
+    const result = await runBackup((proc) => {
+      proc.stdout.emit("data", Buffer.from("Incremental bac"));
+      proc.stdout.emit("data", Buffer.from("kup mode.\nBackup Successful.\n"));
+      proc.emit("close", 0);
+    });
+
+    expect(result.deviceReportedBackupMode).toBe("incremental");
+    expect(result.isIncremental).toBe(true);
+  });
+
+  it("the mode line arriving in the SAME buffered chunk as everything else is still read", async () => {
+    // Transcribed shape: the 2026-08-30 capture's first chunk was 826 bytes and held
+    // eleven lines printed across 9.4 minutes, the mode line among them.
+    const result = await runBackup((proc) => {
+      proc.stdout.emit(
+        "data",
+        Buffer.from(
+          "Requesting backup from device...\n" +
+            "Full backup mode.\n" +
+            "*** Waiting for passcode to be entered on the device ***\n" +
+            "Sending '<UDID>/Manifest.db' (869.3 MB)\n" +
+            "\r[=                                                 ]   0% Finished\n" +
+            "Receiving files\n",
+        ),
+      );
+      proc.stdout.emit("data", Buffer.from("Backup Successful.\n"));
+      proc.emit("close", 0);
+    });
+
+    expect(result.deviceReportedBackupMode).toBe("full");
+    expect(result.isIncremental).toBe(false);
   });
 });

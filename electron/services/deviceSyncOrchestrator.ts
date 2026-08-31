@@ -26,6 +26,10 @@ import {
   deviceDetectionService,
 } from "./deviceDetectionService";
 import { BackupService } from "./backupService";
+import {
+  judgeFailedBackup,
+  describeSalvagedBackup,
+} from "./backupSalvageService";
 import type { PriorBackupState } from "../types/ipc/window-api-platform";
 import { BackupDecryptionService } from "./backupDecryptionService";
 import { iOSMessagesParser } from "./iosMessagesParser";
@@ -446,6 +450,15 @@ export interface SyncResult {
   needsCleanup?: boolean;
   /** Unique session ID for ACID rollback on cancel (TASK-2110) */
   sessionId?: string;
+  /**
+   * BACKLOG-2915: the sync SUCCEEDED, but there is something the user should be told.
+   *
+   * Set only when a backup that the iPhone reported as failed was judged sound enough to
+   * use anyway — see `backupSalvageService`. It is deliberately not `error`: the sync
+   * did not fail, and reporting it as a failure is what discarded 61.9 GB of good data
+   * on 2026-08-31.
+   */
+  notice?: string;
 }
 
 /**
@@ -629,12 +642,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       this.emit("passcode-entered");
     });
 
+    // BACKLOG-2915 (round 4): declare the feed, so the backup service knows a late
+    // disconnect is worth waiting for. See DISCONNECT_SETTLE_MS.
+    this.backupService.attachDeviceDisconnectFeed();
+
     // Forward device events
     this.deviceService.on("device-connected", (device: iOSDevice) => {
       this.emit("device-connected", device);
     });
 
     this.deviceService.on("device-disconnected", (device: iOSDevice) => {
+      // BACKLOG-2915 (round 4): the OS already knows the cable was pulled, and this
+      // event has been flowing to the renderer all along. Handing it to BackupService
+      // turns the link-drop classification from an inference into an observation.
+      this.backupService.noteDeviceDisconnected(device.udid);
       this.emit("device-disconnected", device);
     });
   }
@@ -653,6 +674,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-2915: a fresh sync scope, alongside the fresh AbortController that IS the
+    // sync's cancel scope. `BackupService.cancelRequested` is cleared here and nowhere
+    // else — a cancel has to outlive the run it was aimed at, because a sync can spawn
+    // another one (the founder's third run of 2026-08-31 did, 34 s after his cancel).
+    this.backupService.beginSyncScope();
     this.startTime = Date.now();
     this.estimatedBackupSize = 0;
 
@@ -1423,7 +1449,68 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           : { backupBytes: backupResult.backupSize }),
       });
 
-      if (!backupResult.success || !backupResult.backupPath) {
+      // BACKLOG-2915 (round 4, absorbing BACKLOG-3035): JUDGE THE DATA BEFORE
+      // DISCARDING IT.
+      //
+      // On 2026-08-31 the founder's sync ran 19 minutes, transferred at ~49 MB/s, grew
+      // this folder from 59.1 GB to 61.9 GB — and the iPhone then reported MBErrorDomain
+      // 205 and the app threw all of it away. Measured on that exact directory:
+      // 506,993 files claimed, 506,979 present, **14 missing (0.003%)**, `Manifest.db`
+      // `quick_check` ok, `Status.plist` finished, and both databases the sync actually
+      // reads present. Nothing here examined any of that: the check below went straight
+      // to the error path.
+      //
+      // THIS DOES NOT RELAX THE ERROR CHECK. `backupResult.success` is still false and
+      // still leads here; `judgeFailedBackup` is never told whether the run succeeded
+      // and cannot be used to soften it. The gate is evidence about the DATA — the
+      // device's own SnapshotState, the manifest's integrity, and blob coverage as a set
+      // comparison whose required-file half is decided by IDENTITY, because a ratio
+      // cannot tell fourteen irrelevant files from fourteen carrying the messages.
+      let salvagedNotice: string | null = null;
+      if (!backupResult.success && backupResult.backupPath) {
+        const verdict = await judgeFailedBackup(backupResult.backupPath);
+        if (verdict.salvageable) {
+          salvagedNotice = describeSalvagedBackup(verdict.coverage);
+          log.warn(
+            "[DeviceSyncOrchestrator] The backup failed but its data is sound — continuing",
+            {
+              deviceError: backupResult.error,
+              manifestFiles: verdict.coverage.manifestFiles,
+              missingCount: verdict.coverage.missingCount,
+              snapshotState: verdict.snapshotState,
+            },
+          );
+          this.emitProgress({
+            phase: "backup",
+            phaseProgress: 100,
+            overallProgress: this.calculateOverallProgress("backup", 100),
+            message: salvagedNotice,
+          });
+          syncTimeline.annotate(this.backupTimelinePhase, {
+            salvagedDespiteFailure: true,
+            missingFileCount: verdict.coverage.missingCount,
+            manifestFileCount: verdict.coverage.manifestFiles,
+          });
+          Sentry.captureMessage("Backup salvaged despite a device-reported failure", {
+            level: "info",
+            tags: { service: "sync-orchestrator", outcome: "salvaged" },
+            extra: {
+              missingCount: verdict.coverage.missingCount,
+              manifestFiles: verdict.coverage.manifestFiles,
+              deviceError: backupResult.error,
+            },
+          });
+        } else {
+          log.info(
+            `[DeviceSyncOrchestrator] The failed backup was examined and is not usable: ${verdict.reason}`,
+          );
+        }
+      }
+
+      // A missing path is fatal whatever the data says — there is nothing to examine and
+      // nothing to parse. Written first so the narrowing below is real rather than
+      // asserted.
+      if (!backupResult.backupPath || (salvagedNotice === null && !backupResult.success)) {
         const error = backupResult.error || "Backup failed";
         const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
         if (isDiskSpaceError) {
@@ -1458,7 +1545,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       });
 
 
-      let backupPath = backupResult.backupPath;
+      let backupPath: string = backupResult.backupPath;
 
       // Step 2: Decrypt if needed
       if (backupResult.isEncrypted) {
@@ -1651,6 +1738,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         conversations: resolvedConversations,
         error: null,
         duration,
+        ...(salvagedNotice ? { notice: salvagedNotice } : {}),
         backupPath,  // SPRINT-068: Pass for attachment extraction
         needsCleanup, // SPRINT-068: Caller should cleanup after persistence
         sessionId,   // TASK-2110: For ACID rollback on cancel
@@ -2167,6 +2255,11 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.priorBackup = "unknown";
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
+    // BACKLOG-2915: a fresh sync scope, alongside the fresh AbortController that IS the
+    // sync's cancel scope. `BackupService.cancelRequested` is cleared here and nowhere
+    // else — a cancel has to outlive the run it was aimed at, because a sync can spawn
+    // another one (the founder's third run of 2026-08-31 did, 34 s after his cancel).
+    this.backupService.beginSyncScope();
     this.startTime = Date.now();
 
     // TASK-2110: Generate session ID for ACID rollback on cancel

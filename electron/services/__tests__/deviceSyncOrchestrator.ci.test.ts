@@ -60,6 +60,11 @@ jest.mock("../backupService", () => ({
     }),
     startBackup: jest.fn(),
     cancelBackup: jest.fn(),
+    // BACKLOG-2915: the orchestrator opens a sync scope here; a mock without it
+    // throws, which is the wiring being pinned rather than assumed.
+    beginSyncScope: jest.fn(),
+    attachDeviceDisconnectFeed: jest.fn(),
+    noteDeviceDisconnected: jest.fn(),
   })),
 }));
 
@@ -476,6 +481,10 @@ describe("DeviceSyncOrchestrator - Progress Calculation", () => {
         totalFiles: null,
         bytesTransferred: 500 * 1024 * 1024,
         totalBytes: null,
+        // BACKLOG-2915: per-batch byte figures and the device's own overall percent.
+        batchBytesTransferred: null,
+        batchTotalBytes: null,
+        deviceOverallPercent: null,
         estimatedTimeRemaining: null,
       },
     };

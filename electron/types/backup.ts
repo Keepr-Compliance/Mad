@@ -29,8 +29,52 @@ export interface BackupProgress {
   totalFiles: number | null;
   /** Bytes transferred so far */
   bytesTransferred: number;
-  /** Total bytes to transfer, if known */
+  /**
+   * Total bytes for the WHOLE backup, if known.
+   *
+   * BACKLOG-2915: still `null` for the entire transfer, and deliberately so. The
+   * only total idevicebackup2 ever prints is the CURRENT BATCH's — see
+   * `batchTotalBytes` — and writing a batch total here would be read downstream as a
+   * whole-run denominator. It is set only on the close-handler paths, from the
+   * measured size of the finished backup.
+   */
   totalBytes: number | null;
+  /**
+   * BACKLOG-2915: bytes moved so far WITHIN the batch idevicebackup2 is currently
+   * receiving, straight from its own progress render. `null` before the first render.
+   *
+   * The render reads `[====] 48% (24.2 MB/50.8 MB)`, and both numbers are
+   * per-BATCH: `backup_real_size` / `backup_total_size` are function-locals of
+   * `mb2_handle_receive_files()`, reset on every `DLMessageUploadFiles` message, with
+   * the total taken from `message[3]`. The 2026-08-30 capture saw **36 distinct batch
+   * totals** in one 20-minute run, from 63.5 KB to 10.5 GB.
+   *
+   * The code this replaced called the same pair "per-file" and built a file-completion
+   * heuristic on it, which is why `filesTransferred` never matched the device's own
+   * `Received N files from device.` — that heuristic was counting batches. On the
+   * captured run it would have reported 29 files against the device's 4,604.
+   */
+  batchBytesTransferred: number | null;
+  /** BACKLOG-2915: total bytes in the batch currently being received. See above. */
+  batchTotalBytes: number | null;
+  /**
+   * BACKLOG-2915: the overall percentage the DEVICE itself authored, from
+   * idevicebackup2's `[====] 62% Finished` render. `null` until the device says.
+   *
+   * This is the honest progress number and it is a different quantity from the byte
+   * render above: the 2026-08-30 capture recorded a byte bar reading 48% while the
+   * overall bar read 94%. Parsing the two as one number is the bug this field exists
+   * to end.
+   *
+   * It is SPARSE and bursty — 37 samples against 76,024 byte renders in 20 minutes,
+   * with the distinct sequence 0,1,2,3,4,5,6,8,9,10,11,12,17,62,75,94 (no 7) —
+   * because `print_progress_real(overall_progress, 0)` passes `flush = 0`, so a value
+   * only reaches us on the next byte render's flush. Any consumer must HOLD the last
+   * value rather than wait for the next one.
+   *
+   * Nothing in the renderer reads it yet: BACKLOG-1925 owns that wiring.
+   */
+  deviceOverallPercent: number | null;
   /** Estimated time remaining in seconds, if calculable */
   estimatedTimeRemaining: number | null;
   /**
@@ -133,7 +177,48 @@ export interface BackupFailureCause {
   exitCode: number | null;
   /** Which stream the code came from, so a support log can say how much to trust it. */
   source: BackupFailureCauseSource;
+  /**
+   * BACKLOG-2915: for a CONNECTION_LOST classification only — HOW we know.
+   *
+   * The founder's point, 2026-08-31: *"for cable unplug we can probably see it from the
+   * OS if the phone is connected?"* He was right, and the signal was already on the
+   * wire. Until then this class was reached by an INFERENCE (non-zero exit, no device
+   * code, no version-exchange), which is also the shape produced by an untrusted phone,
+   * a service that will not start, a device refusing the backup, an invalid backup
+   * directory, and — as his testing proved — a cancel landing across a run boundary.
+   *
+   * Recording which one answered is what lets a support log tell a fact from a guess,
+   * and it is what makes the two branches separately testable while they still share a
+   * user-facing sentence. A second sentence for the still-attached case is a founder
+   * decision and is not made here.
+   *
+   * Absent on every classification that is not a link drop.
+   */
+  linkDropEvidence?: BackupLinkDropEvidence;
 }
+
+/**
+ * BACKLOG-2915: how a dropped link was established, strongest first.
+ *
+ * - `mobilebackup2-receive-failure` — idevicebackup2's own
+ *   `ERROR: Could not receive from mobilebackup2 (%d)`, a `PRINT_VERBOSE(0, ...)` that
+ *   is unconditional and therefore survived the `-d` removal. IMMEDIATE: on the
+ *   founder's real cable pull it printed at 00:27:01.651, one millisecond before the
+ *   process exited.
+ * - `device-disconnected` — the OS's own answer, from `deviceDetectionService` polling
+ *   `idevice_id -l`. The strongest evidence there is, but it LAGS: the poll interval is
+ *   2 s, and on that same cable pull the event arrived at 00:27:02.121 — **468 ms after
+ *   the classification had already been made**. See `DISCONNECT_SETTLE_MS`.
+ * - `broken-pipe-line` — `usbmuxd_send returned -N (Broken pipe)`. Unreachable under the
+ *   shipped argv; kept for the case where `-d` returns.
+ * - `inferred` — nothing observed it. The last-resort rung: exited badly, phone still
+ *   attached, nobody said why. This is a GUESS and the name says so.
+ */
+export type BackupLinkDropEvidence =
+  | "mobilebackup2-receive-failure"
+  | "device-disconnected"
+  | "broken-pipe-line"
+  | "inferred";
 
 /**
  * Where a {@link BackupFailureCause} code was read from.
@@ -143,10 +228,22 @@ export interface BackupFailureCause {
  * - `stderr-plist` — the `DLMessageProcessMessage` plist in the `-d` debug stream.
  *   Only present when `-d` is passed, and can be pushed out of the tail cap by the
  *   debug flood, so it is the fallback rather than the primary.
+ * - `stdout-summary` — BACKLOG-2915. The number inside idevicebackup2's closing
+ *   `Backup Failed (Error Code %d).` line. It carries no description, so it ranks
+ *   BELOW `stdout-line` and is latched only when no richer line was seen. It exists
+ *   because the two lines co-occurring is OBSERVED, not proven: the founder's
+ *   2026-08-27 log shows both for code 208, and idevicebackup2 1.4.0 was not traced
+ *   far enough to establish that they always do. Without this, a run that printed only
+ *   the summary would lose its code entirely and fall to the inference rung — telling
+ *   a user with a device-reported file-missing error to try a different cable.
  * - `none` — no code was reported; the failure was classified from exit code and
  *   idevicebackup2's own stdout, or not at all.
  */
-export type BackupFailureCauseSource = "stdout-line" | "stderr-plist" | "none";
+export type BackupFailureCauseSource =
+  | "stdout-line"
+  | "stderr-plist"
+  | "stdout-summary"
+  | "none";
 
 /**
  * BACKLOG-2917: the result of measuring a backup directory.

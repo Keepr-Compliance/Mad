@@ -133,6 +133,10 @@ jest.mock("../backupService", () => ({
     checkBackupStatus: (...args: unknown[]) => mockCheckBackupStatus(...args),
     startBackup: (...args: unknown[]) => mockStartBackup(...args),
     cancelBackup: (...args: unknown[]) => mockCancelBackup(...args),
+    // BACKLOG-2915: the sync scope the orchestrator opens; see backupService.ts.
+    beginSyncScope: jest.fn(),
+    attachDeviceDisconnectFeed: jest.fn(),
+    noteDeviceDisconnected: jest.fn(),
     deleteBackup: (...args: unknown[]) => mockDeleteBackup(...args),
   })),
 }));

@@ -33,6 +33,7 @@
  *   `usbmuxd_send returned -32 (Broken pipe)` at 12:08:53.319.
  * - **line 11607** — the renderer printing the defect itself: `Sync failed: The
  *   connection to your iPhone dropped during the backup. Try a different cable...`
+ *   (HISTORICAL. BACKLOG-2915 replaced that sentence — see the copy tests below.)
  *
  * The progress-bar lines are the ONE fixture here that is not a capture, and it is
  * not one because it cannot be: backupService filters progress bars out of the log
@@ -128,6 +129,7 @@ import {
   BackupService,
   classifyBackupFailure,
   BACKUP_CONNECTION_LOST_MESSAGE,
+  BACKUP_STOPPED_STILL_CONNECTED_MESSAGE,
   BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE,
 } from "../backupService";
 
@@ -139,6 +141,18 @@ import {
  * TRANSCRIBED verbatim from main.log lines 11551-11558, the founder's 2026-08-28
  * unplug at 12:08:53.319. This is the whole evidence the classifier gets: the device
  * never answers once the link is gone, so there is no plist and no `ErrorCode` line.
+ *
+ * BACKLOG-2915 — **PRODUCTION CAN NO LONGER PRODUCE THIS INPUT.** Every line here is
+ * `debug_info()` output, gated on `debug_level`, which only `-d` sets, and
+ * `buildBackupArgs` no longer passes `-d`. It is kept as a historical fixture because
+ * the file's real subject — WHICH SENTENCE a link drop gets, and that the split turns
+ * on `transferStarted` rather than on a byte count — is unchanged and still worth
+ * pinning. But the classification these tests exercise is now reached by the D1
+ * INFERENCE RUNG (non-zero exit, no device code, no version-exchange), not by matching
+ * the broken-pipe line: measured, replacing `CONNECTION_DROPPED_PATTERN` with a
+ * never-matching regex leaves this whole suite green.
+ *
+ * Do not read this fixture as evidence that the stderr path is live. It is not.
  */
 const UNPLUGGED_MID_TRANSFER_STDERR = [
   "12:08:53.318 notification_proxy.c:278 np_get_notification(): NotificationProxy: error -256 occurred!",
@@ -288,12 +302,90 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
   });
 
   describe("the two cases are different faults", () => {
-    it("a drop before any transfer keeps the hardware-first advice", () => {
-      // Correct here: a link that dies before the first progress bar died during
-      // enumeration, pairing or the passcode wait, and hardware really is the
-      // likeliest cause at that stage.
-      expect(BACKUP_CONNECTION_LOST_MESSAGE).toMatch(/try a different cable/i);
-      expect(BACKUP_CONNECTION_LOST_MESSAGE.split(". ")[1]).toMatch(/cable/i);
+    it("BACKLOG-2915 — the before-transfer message is the founder's exact wording", () => {
+      // PINNED WHOLE, on purpose. This is founder-chosen copy of 2026-08-30, picked
+      // knowingly over a longer variant that kept the cable advice, so the control is
+      // the string itself rather than a set of clauses that a later edit could satisfy
+      // while drifting the sentence.
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).toBe(
+        "We couldn't get the backup going, and your iPhone didn't tell us why. " +
+          "Start by unlocking it and tapping Trust This Computer if you're asked. " +
+          "If that's not it, plug it straight into your Mac and try again.",
+      );
+    });
+
+    it("BACKLOG-2915 — it no longer asserts a dropped connection, and no longer sends anyone after a cable", () => {
+      // THE ASSERTION THIS FILE USED TO MAKE HERE WAS THE OPPOSITE, AND IT WAS RIGHT
+      // AT THE TIME. This arm was reached only by reading
+      // `usbmuxd_send returned -32 (Broken pipe)` off the `-d` debug stream, so it
+      // really was a dropped USB link and hardware-first advice was correct.
+      //
+      // BACKLOG-2915 removed `-d`, so that line no longer exists and the arm is now
+      // reached by INFERENCE — a non-zero exit with no device code. Causes that land
+      // in that shape and are NOT link drops, from the binary's own string table:
+      // `Could not connect to lockdownd` (not trusted, not paired, or locked — the
+      // common one), `Could not start service com.apple.mobilebackup2`, `device
+      // refused to start the backup process`, `backup protocol version mismatch`, and
+      // an invalid backup directory. All of them happen before a byte moves, so all of
+      // them take this arm.
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).not.toMatch(/cable/i);
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).not.toMatch(/connection .*dropped/i);
+      // It says what is actually known, and leads with the two likeliest causes.
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).toMatch(/didn't tell us why/i);
+      const unlockAt = BACKUP_CONNECTION_LOST_MESSAGE.indexOf("unlocking it");
+      const trustAt = BACKUP_CONNECTION_LOST_MESSAGE.indexOf("Trust This Computer");
+      const plugAt = BACKUP_CONNECTION_LOST_MESSAGE.indexOf("plug it straight");
+      expect(unlockAt).toBeGreaterThan(0);
+      expect(trustAt).toBeGreaterThan(unlockAt);
+      expect(plugAt).toBeGreaterThan(trustAt);
+    });
+
+    it("BACKLOG-2915 round 4 — the still-connected message is the founder's exact wording", () => {
+      // The third sentence in the family, and the newest. Founder-chosen 2026-08-31,
+      // picked over a variant that added "restart your iPhone" as a fallback — so the
+      // absence of a restart step is DELIBERATE and this pin is what protects it.
+      //
+      // Pinned whole, for the same reason the other two are: a clause-set assertion
+      // stays green while the sentence drifts.
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).toBe(
+        "The backup stopped and your iPhone didn't tell us why. " +
+          "It's still connected, so it isn't a cable problem — just try syncing again.",
+      );
+    });
+
+    it("BACKLOG-2915 round 4 — it denies the cable rather than suggesting one, and asks for one retry", () => {
+      // The semantic claims, separately from the string, so a future rewrite that keeps
+      // the shape has something to satisfy.
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).toMatch(/isn't a cable problem/i);
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).toMatch(/still connected/i);
+      // No restart step. The founder rejected the variant that had one.
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).not.toMatch(/restart/i);
+      // And it does not send anyone to a port or a hub either — the phone never left.
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).not.toMatch(/hub|dock|plug/i);
+    });
+
+    it("BACKLOG-2915 round 4 — the three messages are three DIFFERENT sentences", () => {
+      // They were two, sharing one branch, until the link drop became observable. If a
+      // later edit collapses any two of them back together, this is what says so.
+      const all = [
+        BACKUP_CONNECTION_LOST_MESSAGE,
+        BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE,
+        BACKUP_STOPPED_STILL_CONNECTED_MESSAGE,
+      ];
+      expect(new Set(all).size).toBe(3);
+      // …and they make three different claims about the connection.
+      expect(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE).toMatch(/connection .*dropped/i);
+      expect(BACKUP_CONNECTION_LOST_MESSAGE).not.toMatch(/connection .*dropped/i);
+      expect(BACKUP_STOPPED_STILL_CONNECTED_MESSAGE).toMatch(/still connected/i);
+    });
+
+    it("the mid-transfer message DOES still assert a dropped connection, and is unchanged", () => {
+      // The other arm is untouched, and the asymmetry is the point: once bytes have
+      // moved the link demonstrably worked, so "the connection dropped" is a true
+      // statement there and a claim we cannot support before any byte moves.
+      expect(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE).toMatch(
+        /connection to your iPhone dropped/i,
+      );
     });
 
     it("the two cases produce different messages", () => {
@@ -352,11 +444,24 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
         orchestratorDiskPattern.test(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE),
       ).toBe(false);
 
-      // Both variants keep the same opening sentence, so anything that ever keys on
-      // "the connection dropped" sees both.
-      expect(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE.split(". ")[0]).toBe(
-        BACKUP_CONNECTION_LOST_MESSAGE.split(". ")[0],
-      );
+      // BACKLOG-2915 — THE SHARED-OPENING-SENTENCE CONTROL WAS REMOVED HERE, AND IT
+      // MUST NOT BE RESTORED.
+      //
+      // It asserted that both variants open with the same sentence, so that anything
+      // keying on "the connection dropped" would see both. That was sound while the
+      // two described the SAME event reached by the SAME evidence — the broken-pipe
+      // line — and differed only in advice.
+      //
+      // They no longer describe the same event. After the `-d` removal the
+      // before-transfer arm is reached by inference and says we do not know why; the
+      // mid-transfer arm still reads a demonstrably-worked link and says it dropped.
+      // Asserting a shared opening would now be asserting something false, and the
+      // only way to satisfy it would be to bend the founder's chosen wording back
+      // toward a claim the code cannot support.
+      //
+      // What replaced it: the exact-string pin and the two directional controls above,
+      // plus rows 16/16b in `backupService.stdoutProgress-2915` which prove each
+      // sentence is routed to the right shape through the real service.
     });
 
     it("defaults to the before-transfer message when the caller cannot say", () => {
@@ -370,9 +475,11 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
   });
 
   describe("wired to the transfer signal, not to a byte count", () => {
-    it("replays the founder's unplug: one file done, then the cable out", async () => {
-      // 616 MB completes (95% -> 5% is what parseProgress reads as a file boundary),
-      // the next file starts, then the link dies.
+    it("replays the founder's unplug: one batch done, then the cable out", async () => {
+      // 95% -> 5% on the same total: BACKLOG-2915 reads the regression in `current` as
+      // a batch boundary, folds 585.2 MB into the run total and opens a new batch.
+      // (Before 2915 the same drop was read as a FILE boundary, which is what made
+      // `filesTransferred` disagree with the device's own count by 159x.)
       const { result, state } = await runBackup((proc) =>
         unplug(proc, [
           progressBar(10, 61.6),
@@ -382,7 +489,14 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
       );
 
       expect(state.hasReceivedFileProgress).toBe(true);
-      expect(state.bytesTransferred).toBeGreaterThan(0);
+      // BACKLOG-2915 (SR C1): THIS ASSERTION USED TO READ `toBeGreaterThan(0)`, AND IT
+      // COULD NOT SEE THE THING THE COMMENT ABOVE PROMISES. The fold produces 597.2 MB
+      // (585.2 banked + 12.0 in the newly-opened batch); a `bytesTransferred = current`
+      // regression produces 12.0 MB. Both are greater than zero, so four separate
+      // mutations to the batch-fold logic left the entire suite green. A test comment
+      // that promises a future red is a second claim needing its own control, and the
+      // control has to be the VALUE, never a floor.
+      expect(state.bytesTransferred).toBeCloseTo(597.2 * 1024 * 1024, 0);
       expect(result.success).toBe(false);
       expect(result.errorCode).toBe("CONNECTION_LOST");
       expect(result.error).toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);
@@ -397,18 +511,27 @@ describe("BACKLOG-2913 — a mid-transfer drop is not a cable fault", () => {
       expect(result.error).toBe(BACKUP_CONNECTION_LOST_MESSAGE);
     });
 
-    it("a drop inside the FIRST file counts as transfer started, though zero bytes are banked", async () => {
-      // This is why the signal is `hasReceivedFileProgress` and not
-      // `bytesTransferred`. The byte counter only advances when a whole file
-      // COMPLETES, so a link that dies 40% into the first file has banked nothing —
-      // and a `bytesTransferred > 0` discriminator would hand this user the cable
-      // message for what is almost certainly sleep or power management.
+    it("a drop inside the FIRST batch counts as transfer started, and now banks the real bytes", async () => {
+      // BACKLOG-2915 CHANGED THIS TEST'S PREMISE, AND THE OLD PREMISE WAS THE BUG.
+      //
+      // It used to assert `bytesTransferred === 0` here and call the two signals
+      // "genuinely disagreeing". They only disagreed because the byte counter was a
+      // file-completion HEURISTIC: it advanced when the render's percentage dropped by
+      // more than 50 from above 90, on the belief that the render was per-file. The
+      // render is per-BATCH — `backup_real_size` / `backup_total_size` are locals of
+      // `mb2_handle_receive_files()` — so 40% into a 616 MB batch, 246.4 MB really had
+      // moved and the counter reported none of it.
+      //
+      // The claim this test exists for is unchanged and is still pinned below: the
+      // DISCRIMINATOR is `hasReceivedFileProgress`, never a byte count. What is gone is
+      // the artefact that made the two look like different signals.
       const { result, state } = await runBackup((proc) =>
         unplug(proc, [progressBar(10, 61.6), progressBar(40, 246.4)]),
       );
 
       expect(state.hasReceivedFileProgress).toBe(true);
-      expect(state.bytesTransferred).toBe(0); // the two signals genuinely disagree
+      // 246.4 MB, 1024-based, as `string_format_size` prints it.
+      expect(state.bytesTransferred).toBeCloseTo(246.4 * 1024 * 1024, 0);
       expect(result.error).toBe(BACKUP_CONNECTION_LOST_MID_TRANSFER_MESSAGE);
       expect(result.error).not.toBe(BACKUP_CONNECTION_LOST_MESSAGE);
     });
