@@ -29,7 +29,15 @@ import { registerSharedAuthHandlers } from "./sharedAuthHandlers";
  */
 export const initializeDatabase = async (): Promise<void> => {
   try {
-    await databaseService.initialize();
+    // BACKLOG-2999: startup is the ONE context where quitting on an
+    // unrecoverable migration failure is the right outcome — there is no
+    // half-working app to fall back to, and the alternative is the user
+    // working against a half-migrated or unopened database. The option
+    // defaults to false precisely so the other call sites
+    // (sqliteBackupService's restore, which calls initialize() mid-recovery)
+    // cannot quit by accident. Note the FIX is initialize() rejecting; this
+    // flag only upgrades the outcome from "error screen" to "clean exit".
+    await databaseService.initialize({ quitOnUnrecoverableFailure: true });
     await logService.debug("Database initialized", "AuthHandlers");
 
     // Initialize audit service with dependencies

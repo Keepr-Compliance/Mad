@@ -1529,6 +1529,31 @@ describe("DatabaseService", () => {
       });
     }
 
+    /**
+     * BACKLOG-2999 -- the unrecoverable branch is now TERMINAL: initialize()
+     * rejects instead of reporting success over a database that was never
+     * recovered. Seven tests in this describe drove that branch with a bare
+     * `await databaseService.initialize()`; each KEEPS ALL OF ITS ORIGINAL
+     * ASSERTIONS and gains only this wrapper. Nothing was deleted or loosened.
+     *
+     * Asserted by NAME + CODE rather than `instanceof`: this describe calls
+     * jest.resetModules() in its beforeEach, so a class object imported here
+     * is not guaranteed to be the one the freshly-registered service module
+     * throws. Name + code still discriminates -- a leaked TypeError, or any
+     * uncontrolled crash out of the restore path, fails both checks.
+     */
+    async function initializeExpectingTerminalRejection(): Promise<void> {
+      let caught: unknown;
+      try {
+        await databaseService.initialize();
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).name).toBe("MigrationRecoveryFailedError");
+      expect((caught as { code?: string }).code).toBe("MIGRATION_RECOVERY_FAILED");
+    }
+
     /** Helper: Setup for successful backup restore */
     function setupSuccessfulRestore() {
       (freshFs.existsSync as jest.Mock).mockReturnValue(true);
@@ -1611,7 +1636,7 @@ describe("DatabaseService", () => {
         const sentryCapture = await getFreshSentry();
         const showMessageBox = await getFreshDialog();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify Sentry tags show no_backup
         expect(sentryCapture).toHaveBeenCalledWith(
@@ -1633,11 +1658,16 @@ describe("DatabaseService", () => {
         );
       });
 
-      it("should not crash when no backups exist (app continues)", async () => {
+      // BACKLOG-2999 -- INVERTED IN PLACE (was: "should not crash when no
+      // backups exist (app continues)"). "App continues" was the product
+      // decision this item reverses: continuing meant running against a
+      // database whose migration had just failed with nothing recovered. The
+      // surviving half of the old intent -- that it must not fail in an
+      // UNCONTROLLED way -- is the typed assertion inside the helper.
+      it("refuses to report success when no backups exist -- rejects rather than continuing", async () => {
         setupMigrationFailure();
 
-        const result = await databaseService.initialize();
-        expect(result).toBe(true);
+        await initializeExpectingTerminalRejection();
       });
     });
 
@@ -1659,7 +1689,7 @@ describe("DatabaseService", () => {
         const sentryCapture = await getFreshSentry();
         const showMessageBox = await getFreshDialog();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify Sentry tags show corrupt backup
         expect(sentryCapture).toHaveBeenCalledWith(
@@ -1681,7 +1711,9 @@ describe("DatabaseService", () => {
         );
       });
 
-      it("should not crash when backup is corrupt (app continues)", async () => {
+      // BACKLOG-2999 -- INVERTED IN PLACE, same reasoning as the no-backup
+      // case above: a corrupt backup means nothing was recovered either.
+      it("refuses to report success when the backup is corrupt -- rejects rather than continuing", async () => {
         setupMigrationFailure();
 
         (freshFs.existsSync as jest.Mock).mockReturnValue(true);
@@ -1694,8 +1726,7 @@ describe("DatabaseService", () => {
           return undefined;
         });
 
-        const result = await databaseService.initialize();
-        expect(result).toBe(true);
+        await initializeExpectingTerminalRejection();
       });
     });
 
@@ -1728,7 +1759,7 @@ describe("DatabaseService", () => {
 
         const showMessageBox = await getFreshDialog();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify the error dialog was shown (restore reported as failed)
         expect(showMessageBox).toHaveBeenCalledWith(
@@ -1748,7 +1779,7 @@ describe("DatabaseService", () => {
         const { app } = await import("electron");
         (app.isReady as jest.Mock).mockReturnValue(false);
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify whenReady was called
         expect(app.whenReady).toHaveBeenCalled();
@@ -1796,7 +1827,7 @@ describe("DatabaseService", () => {
 
         const showMessageBox = await getFreshDialog();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify error dialog was shown
         expect(showMessageBox).toHaveBeenCalledWith(

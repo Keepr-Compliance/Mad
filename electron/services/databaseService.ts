@@ -59,9 +59,15 @@ import type {
   Message,
   ContactMessageThread,
   ContactInfoSource,
+  AutoRestoreStatus,
+  BackupIntegrity,
 } from "../types";
 
-import { DatabaseError, SchemaBaselineRefusalError } from "../types";
+import {
+  DatabaseError,
+  SchemaBaselineRefusalError,
+  MigrationRecoveryFailedError,
+} from "../types";
 // BACKLOG-2993: the contactIdentitySchemaSql / contactValueProvenanceBackfill
 // imports lived here for the deleted migration chain (v57..v69). The identity
 // DDL's single definition (BACKLOG-2410) now reaches production through the
@@ -130,8 +136,19 @@ class DatabaseService implements IDatabaseService {
   /**
    * Initialize database - creates DB file and tables if needed
    * Handles encryption and migration from unencrypted databases
+   *
+   * BACKLOG-2999: rejects with MigrationRecoveryFailedError when a migration
+   * failed AND the auto-restore recovered nothing. It previously returned
+   * `true` on that path, so the caller could not tell a good start from a
+   * failed one.
+   *
+   * @param options.quitOnUnrecoverableFailure - exit the app after telling the
+   *   user, on that unrecoverable path. DEFAULT FALSE, deliberately: only the
+   *   startup caller (authHandlers.initializeDatabase) passes `true`. See the
+   *   comment on the terminal branch for why the destructive outcome is the
+   *   one that must be opted into.
    */
-  async initialize(): Promise<boolean> {
+  async initialize(options?: { quitOnUnrecoverableFailure?: boolean }): Promise<boolean> {
     if (this.db) {
       await logService.debug("Database already initialized, skipping", "DatabaseService");
       return true;
@@ -300,6 +317,17 @@ class DatabaseService implements IDatabaseService {
         }
 
         if (restoreResult.restored) {
+          // BACKLOG-2999 — DELIBERATELY NON-TERMINAL, and this boundary is
+          // load-bearing. The restore recovered something: the backup was
+          // copied over the database, reopened and probe-verified, so the
+          // user's data is open and readable. What is STILL wrong is that
+          // migrations are never re-run against the restored file — that is
+          // BACKLOG-2834's subject, not this item's. Widening the terminal
+          // path to cover it here would change a user-visible outcome ("the
+          // app opens on your data" -> "the app quits") on a branch with no
+          // 2999 defect behind it, in the same commit. Do not "fix" 2834 by
+          // deleting this boundary: the no-quit assertion in
+          // databaseService.migration-restore.test.ts pins it.
           dialog.showMessageBox({
             type: "warning",
             title: "Database Update Notice",
@@ -308,19 +336,97 @@ class DatabaseService implements IDatabaseService {
             buttons: ["OK"],
           });
         } else {
-          dialog.showMessageBox({
+          // ==============================================================
+          // BACKLOG-2999 — THE TERMINAL BRANCH. Nothing was recovered.
+          //
+          // `restored === false` is reached by FOUR routes and the wreckage
+          // each leaves differs: no backup and corrupt backup (the original
+          // handle is still open), the restore copy throwing (`this.db` is
+          // already null and dbConnection still holds a CLOSED handle), and
+          // the post-restore connectivity probe failing (`this.db = newDb`
+          // AND `setDb(newDb)` have already run, so every isInitialized()
+          // call site sees a perfectly initialized database). Before this
+          // branch existed all four fell through to `return true` below.
+          //
+          // ORDER IS LOAD-BEARING, mirroring the BACKLOG-2993 refusal path:
+          // tear the handle down, TELL the user (dialog AWAITED), flush the
+          // telemetry, then exit. Dropping the await would exit mid-dialog
+          // and the user would never learn why.
+          // ==============================================================
+
+          // Nothing usable is open, so drop the handle through BOTH
+          // predicates the app gates on — databaseService.isInitialized()
+          // and dbConnection.isInitialized() — rather than leaving a
+          // condemned database readable.
+          try {
+            await closeDb();
+          } catch {
+            // Already closed on the copy-throw route (_attemptAutoRestore
+            // closes at the top and never reassigns), and close() is
+            // unguarded. Swallowed on purpose: a throw here would replace
+            // the terminal error with the wrong one and skip the dialog and
+            // the exit — strictly worse than the bug being fixed. This is a
+            // terminal fall-through, not a data fallback.
+          }
+          this.db = null;
+
+          // AWAITED — see the order note above. The copy deliberately does
+          // NOT point at the cleanup scripts the way the BACKLOG-2993
+          // refusal does: that database provably has no upgrade path,
+          // whereas this user's data may well be recoverable and those
+          // scripts would destroy it. The path is appended because it is the
+          // first thing support asks for.
+          await dialog.showMessageBox({
             type: "error",
             title: "Database Update Failed",
             message: "A database update failed and could not be automatically fixed.",
-            detail: "Please contact support. Your data may need manual recovery.",
+            detail:
+              "Please contact support. Your data may need manual recovery.\n\n" +
+              `Database: ${this.dbPath ?? "unknown"}`,
             buttons: ["OK"],
           });
+
+          // Flush before any exit path so the migration_failure event
+          // survives it (BACKLOG-1576 precedent).
+          await Sentry.flush(2000);
+
+          // THE FLAG IS NOT THE FIX — THE THROW IS. Quitting is a
+          // startup-specific remedy and it defaults OFF. Forgetting the
+          // argument at a non-startup call site (sqliteBackupService's
+          // restore calls initialize() at step 5 and AGAIN from its own
+          // safety-copy recovery) would tear the process down mid-recovery
+          // and cost a user who explicitly asked to restore the database
+          // they still had. Forgetting it at startup costs only the exit:
+          // initialize() still rejects, the handler still returns
+          // success:false, and the renderer still lands on its error screen.
+          // Destructive beats annoying, so the destructive outcome is the
+          // one that has to be opted into.
+          if (options?.quitOnUnrecoverableFailure) {
+            app.quit();
+          }
+
+          throw new MigrationRecoveryFailedError(
+            "Database migration failed and could not be recovered from a backup",
+            restoreResult.autoRestoreStatus,
+            restoreResult.backupIntegrity,
+          );
         }
       }
 
       await logService.debug("Database initialized successfully with encryption", "DatabaseService");
       return true;
     } catch (error) {
+      if (error instanceof MigrationRecoveryFailedError) {
+        // BACKLOG-2999 — already fully handled by the terminal branch above:
+        // handle torn down, dialog awaited, Sentry captured WITH the
+        // migration_failure tags by the inner catch, flushed, exited if the
+        // caller asked. Re-thrown untouched because the generic branch below
+        // would capture a SECOND Sentry event for one failure (untagged, so it
+        // would not even group with the first) and broadcast `retryable: true`
+        // for a state that is not retryable.
+        throw error;
+      }
+
       if (error instanceof SchemaBaselineRefusalError) {
         // BACKLOG-2993 — terminal refusal surface. The broadcast below is
         // TELEMETRY ONLY: the renderer's reducer never reads `error` off the
@@ -822,8 +928,8 @@ class DatabaseService implements IDatabaseService {
     _migrationError: unknown
   ): Promise<{
     restored: boolean;
-    autoRestoreStatus: "succeeded" | "failed" | "no_backup";
-    backupIntegrity: "valid" | "corrupt" | "missing";
+    autoRestoreStatus: AutoRestoreStatus;
+    backupIntegrity: BackupIntegrity;
   }> {
     if (!this.dbPath || !this.encryptionKey) {
       return { restored: false, autoRestoreStatus: "no_backup", backupIntegrity: "missing" };
