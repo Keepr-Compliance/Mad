@@ -399,6 +399,19 @@ describe('FirstSyncScreen — skipped SMS permission gating (BACKLOG-2214)', () 
 // ---------------------------------------------------------------------------
 
 describe('the onboarding first sync asks for a full drain', () => {
+  // WITHOUT THIS RESET THE RETRY CONTROL BELOW IS INERT.
+  //
+  // The three describe blocks above each reset this mock; this one did not, so
+  // `mockPerformSync.mock.calls` arrived carrying their residue — three prior
+  // invocations, all of the FIRST call site. `waitFor(calls.length > 1)` was
+  // then satisfied instantly by that leftover, the retry loop never ran, and
+  // the assertion iterated stale data. Mutating the retry binding went red
+  // NOWHERE, and the sibling test below reded under the first-site mutation for
+  // the wrong reason — off calls it had not made.
+  beforeEach(() => {
+    mockPerformSync.mockReset();
+  });
+
   /**
    * Every other control in this file asserts what the screen RENDERS for a
    * given result. None asserted what `performSync` was CALLED WITH — so
@@ -443,7 +456,15 @@ describe('the onboarding first sync asks for a full drain', () => {
 
     render(<FirstSyncScreen />);
 
-    await waitFor(() => expect(mockPerformSync.mock.calls.length).toBeGreaterThan(1));
+    // 5s, not RNTL's 1000ms default: the retry loop deliberately sleeps
+    // SKIP_RETRY_DELAY_MS (1500ms) of REAL time before the second call, so the
+    // default budget expires before the call this control exists to inspect.
+    // The stale-call residue was masking that too — with it gone, the default
+    // timeout fails this test at baseline.
+    await waitFor(
+      () => expect(mockPerformSync.mock.calls.length).toBeGreaterThan(1),
+      { timeout: 5000 },
+    );
     for (const [options] of mockPerformSync.mock.calls) {
       expect(options).toEqual({ maxCycles: MAX_SYNC_CYCLES_PER_RUN });
     }
