@@ -1,0 +1,1274 @@
+{
+  "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
+  "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
+  "backlog": "BACKLOG-2959",
+  "measuredAt": "2775c8519158704d610eaafe366941f777b4cc74",
+  "totalSites": 178,
+  "entryCount": 158,
+  "entries": [
+    {
+      "file": "electron/handlers/attachmentHandlers.ts",
+      "verb": "prepare",
+      "match": "text:37cbf467b0d0",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/attachmentHandlers.ts",
+      "verb": "prepare",
+      "match": "text:3a298d7ba7af",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/attachmentHandlers.ts",
+      "verb": "prepare",
+      "match": "text:afd29f27e134",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/attachmentHandlers.ts",
+      "verb": "prepare",
+      "match": "text:daa54f2f8b73",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/attachmentHandlers.ts",
+      "verb": "prepare",
+      "match": "text:fd1ee402faab",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/diagnosticHandlers.ts",
+      "verb": "prepare",
+      "match": "text:6b6102b3de10",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/diagnosticHandlers.ts",
+      "verb": "prepare",
+      "match": "text:9ec8520585e5",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/diagnosticHandlers.ts",
+      "verb": "prepare",
+      "match": "text:f1e55b3c17d3",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/messageImportHandlers.ts",
+      "verb": "prepare",
+      "match": "text:480871c2d2ec",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/messageImportHandlers.ts",
+      "verb": "prepare",
+      "match": "text:e37e12ba8b64",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/handlers/sessionHandlers.ts",
+      "verb": "prepare",
+      "match": "text:0ab42fc28b31",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2765"
+    },
+    {
+      "file": "electron/handlers/sessionHandlers.ts",
+      "verb": "prepare",
+      "match": "text:7a1e6f2a6525",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2765"
+    },
+    {
+      "file": "electron/handlers/sessionHandlers.ts",
+      "verb": "prepare",
+      "match": "text:b8895fc382b5",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2765"
+    },
+    {
+      "file": "electron/handlers/sharedAuthHandlers.ts",
+      "verb": "prepare",
+      "match": "text:80d92c86efb9",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2765"
+    },
+    {
+      "file": "electron/services/attachmentTextExtractionBackfillService.ts",
+      "verb": "prepare",
+      "match": "text:0e1c9f352c4e",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/attachmentTextExtractionBackfillService.ts",
+      "verb": "prepare",
+      "match": "text:7e464bc8dac6",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/backupDecryptionService.ts",
+      "verb": "prepare",
+      "match": "text:62a2c5cc887c",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "exec",
+      "match": "expr:4ec7c53222c8",
+      "bucket": "UNRESOLVABLE",
+      "count": 2,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "exec",
+      "match": "expr:76c8b0d4a7f0",
+      "bucket": "UNRESOLVABLE",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "exec",
+      "match": "expr:e14300b1bc54",
+      "bucket": "UNRESOLVABLE",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "exec",
+      "match": "text:08a4efd605a7",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "exec",
+      "match": "text:62b614d52f65",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "exec",
+      "match": "text:ef462730545f",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:0714a80681d3",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:0f0e04dbc3f4",
+      "bucket": "VIOLATION",
+      "count": 2,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:0fc838414ff3",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:1c0ca2137233",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:30b356b3dc46",
+      "bucket": "VIOLATION",
+      "count": 2,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:36f2e424e0d4",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:54e748bcbbfd",
+      "bucket": "VIOLATION",
+      "count": 2,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:5f5fc3de1e56",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:6325dd41f3ba",
+      "bucket": "VIOLATION",
+      "count": 2,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:63ded0474aca",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:7f750dfa9104",
+      "bucket": "VIOLATION",
+      "count": 3,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:8f650e23e898",
+      "bucket": "VIOLATION",
+      "count": 3,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:9b8f0c9586d1",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "pragma",
+      "match": "text:c0cb1abd22e5",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:00b445d23efa",
+      "bucket": "VIOLATION",
+      "count": 4,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:1828558d046a",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:3ec048032a5a",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:6c40e930f78d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:6d902201ed9e",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:7769905c56b6",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:80043b7e1ac3",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:978057dda398",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:a73cb4792d87",
+      "bucket": "VIOLATION",
+      "count": 4,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:b75a3f362d4d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:b7bdb2cd7ab3",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:c925b5ab6c5f",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:d3391dc656b6",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/databaseService.ts",
+      "verb": "prepare",
+      "match": "text:e7cfa358be7f",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2991"
+    },
+    {
+      "file": "electron/services/emailAttachmentBackfillService.ts",
+      "verb": "prepare",
+      "match": "text:1bad3000d7b2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailAttachmentBackfillService.ts",
+      "verb": "prepare",
+      "match": "text:59ec41dd73eb",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailDeduplicationService.ts",
+      "verb": "prepare",
+      "match": "text:3a4806f92011",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailDeduplicationService.ts",
+      "verb": "prepare",
+      "match": "text:79c2c7914b51",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailDeduplicationService.ts",
+      "verb": "prepare",
+      "match": "text:b43cb4601f26",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailDeduplicationService.ts",
+      "verb": "prepare",
+      "match": "text:f628be6f97af",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailDerivationReprocessService.ts",
+      "verb": "prepare",
+      "match": "text:05e859938d36",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailDerivationReprocessService.ts",
+      "verb": "prepare",
+      "match": "text:0e9cb93f571d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailDerivationReprocessService.ts",
+      "verb": "prepare",
+      "match": "text:44178634916a",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailDerivationReprocessService.ts",
+      "verb": "prepare",
+      "match": "text:7cbe62933de7",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailDerivationReprocessService.ts",
+      "verb": "prepare",
+      "match": "text:d280ed65e8bf",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "exec",
+      "match": "expr:2394cf8691a7",
+      "bucket": "UNRESOLVABLE",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "exec",
+      "match": "expr:b9297005a758",
+      "bucket": "UNRESOLVABLE",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "exec",
+      "match": "text:231e9831a7e2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "exec",
+      "match": "text:77369d6bfdd8",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "exec",
+      "match": "text:b5239abc64d0",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:160d29c30a32",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:501789ebc0fb",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:6351de1d0249",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:748ed647e002",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:81373bf4317c",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:9b532957dcbe",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:a27f2248b7e8",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:ba27d02e70ad",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:c0984832e43d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:d48cbaeeca14",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailForceStaging.ts",
+      "verb": "prepare",
+      "match": "text:ed4ad5d94f9f",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailSyncService.ts",
+      "verb": "prepare",
+      "match": "text:160d29c30a32",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailSyncService.ts",
+      "verb": "prepare",
+      "match": "text:8b164cb4812d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/emailSyncService.ts",
+      "verb": "prepare",
+      "match": "text:be5ac26b150f",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/folderExport/attachmentHelpers.ts",
+      "verb": "prepare",
+      "match": "text:024784cb3c92",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/folderExport/attachmentHelpers.ts",
+      "verb": "prepare",
+      "match": "text:e5229c83804f",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/iosContactsParser.ts",
+      "verb": "prepare",
+      "match": "text:71149b2e37ed",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosContactsParser.ts",
+      "verb": "prepare",
+      "match": "text:c0c9b4dd0600",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosContactsParser.ts",
+      "verb": "prepare",
+      "match": "text:e6fa34a34292",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosContactsParser.ts",
+      "verb": "prepare",
+      "match": "text:efa52c822298",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosContactsParser.ts",
+      "verb": "prepare",
+      "match": "text:f07cf208408f",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:09fbd8dc7937",
+      "bucket": "VIOLATION",
+      "count": 2,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:11707995df47",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:15d1539e0c8d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:28401b59de2d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:49d8ddaa6101",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:51195f0cdf7b",
+      "bucket": "VIOLATION",
+      "count": 2,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:95de39509dc8",
+      "bucket": "VIOLATION",
+      "count": 2,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:dfb3511d1162",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:f01f8883f65e",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/iosMessagesParser.ts",
+      "verb": "prepare",
+      "match": "text:f149ba6a18bf",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "exec",
+      "match": "expr:2394cf8691a7",
+      "bucket": "UNRESOLVABLE",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "exec",
+      "match": "expr:2fc2293d0a69",
+      "bucket": "UNRESOLVABLE",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "exec",
+      "match": "text:0b00275cdaa6",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "exec",
+      "match": "text:4e3ed1422277",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "exec",
+      "match": "text:77369d6bfdd8",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:13a9b4986e6c",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:31e74ff051b1",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:40e82adfb98f",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:5f6605ce5943",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:748ed647e002",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:8ef915c78f05",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:914755e56d0b",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:92d9e0d3c72e",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:9b532957dcbe",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:a27f2248b7e8",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:d972d8f978b2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
+      "verb": "prepare",
+      "match": "text:ed4ad5d94f9f",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/importHelpers.ts",
+      "verb": "prepare",
+      "match": "text:4cd24570da4c",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/importHelpers.ts",
+      "verb": "prepare",
+      "match": "text:ab0f0a80877a",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/importHelpers.ts",
+      "verb": "prepare",
+      "match": "text:d0b18b56b3cf",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/importHelpers.ts",
+      "verb": "prepare",
+      "match": "text:ece08a520a0d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:06a2bcd43cce",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:0d3a2ef3d9a5",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:2415ceda83e5",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:245f8dfb84a8",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:2d9b8df130ab",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:39dfb8fff374",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:3bd2ab1255be",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:3e770567523d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:4154df3018e2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:4557fbcead09",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:4dc3ad6f50c2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:579ccd089cbf",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:63016d6f16dc",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:914755e56d0b",
+      "bucket": "VIOLATION",
+      "count": 2,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:9d46be22fa00",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:a69f63dfc469",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:a6b04053a23d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:afd73ed89175",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:b520cae7bbfc",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:baef18928013",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:bbfb074c570d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:c1a0124ba601",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:f22c35527a52",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "prepare",
+      "match": "text:fc929ef58a82",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/sqliteBackupService.ts",
+      "verb": "prepare",
+      "match": "text:ec146917d073",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/storageDiagnostics.ts",
+      "verb": "pragma",
+      "match": "text:3ce8a5648b7e",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/storageDiagnostics.ts",
+      "verb": "prepare",
+      "match": "expr:4ec7c53222c8",
+      "bucket": "UNRESOLVABLE",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/storageDiagnostics.ts",
+      "verb": "prepare",
+      "match": "text:00b445d23efa",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/storageDiagnostics.ts",
+      "verb": "prepare",
+      "match": "text:0e09c891553d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/storageDiagnostics.ts",
+      "verb": "prepare",
+      "match": "text:286a38bf9f53",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/storageDiagnostics.ts",
+      "verb": "prepare",
+      "match": "text:71d74561875c",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/storageDiagnostics.ts",
+      "verb": "prepare",
+      "match": "text:cddf99d976ee",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/storageDiagnostics.ts",
+      "verb": "prepare",
+      "match": "text:fcc4b4cb20de",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/services/submissionService.ts",
+      "verb": "prepare",
+      "match": "text:d7061f35bd88",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/utils/userIdHelper.ts",
+      "verb": "prepare",
+      "match": "text:ae88b2ae96f2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/utils/userIdHelper.ts",
+      "verb": "prepare",
+      "match": "text:e37e12ba8b64",
+      "bucket": "VIOLATION",
+      "count": 2,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/workers/contactQueryWorker.ts",
+      "verb": "prepare",
+      "match": "text:722ee263cdc2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/workers/contactQueryWorker.ts",
+      "verb": "prepare",
+      "match": "text:7d68d5f04274",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    },
+    {
+      "file": "electron/workers/contactQueryWorker.ts",
+      "verb": "prepare",
+      "match": "text:f5e0321e2623",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2989"
+    }
+  ]
+}

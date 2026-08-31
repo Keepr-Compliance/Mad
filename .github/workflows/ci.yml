@@ -375,6 +375,58 @@ jobs:
       - name: Assert nothing under .husky/_ is tracked
         run: npm run check:hooks
 
+  # BACKLOG-2959: SQL text belongs in electron/services/db/** (the *Sql.ts
+  # pattern). This gate fails when a NEW site defines SQL text anywhere else.
+  #
+  # It matches .prepare(, .exec( AND .pragma(. A .prepare(-only gate is
+  # decorative: it would pass a file holding raw db.exec() DDL, which is the
+  # PR-SOP 6.2e failure this gate exists to end.
+  #
+  # Classification is an AST walk, not a grep: 41% of the tree's call sites put
+  # argument 0 on a following line, where a line-oriented grep cannot see it.
+  # It classifies argument 0's ORIGIN, not the receiver name, so RegExp.exec is
+  # green without a name blacklist, and SQL hoisted into a local const is red.
+  #
+  # Deliberately NOT gated on docs-only and carrying no `needs:`. The docs-only
+  # filter at the top of this file treats `.github/workflows/*` as
+  # documentation, so a workflow-only PR skips every job that depends on
+  # check-changes — which is precisely how a gate gets switched off without
+  # anyone noticing (cf. the test-drift and text-sources jobs, same shape, same
+  # reason). It must always run and always report a status.
+  #
+  # Unique job name + unique status-check name. Do NOT add a second job with
+  # this name.
+  sql-boundary:
+    name: SQL Boundary Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      # The gate parses TypeScript with the compiler API, so `typescript` must be
+      # installed. ignore-scripts skips the electron/native rebuild: parsing needs
+      # no native module and no app build.
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Assert no SQL text is defined outside the db layer
+        run: npm run check:sql-boundary
+
+      # The guard's own verification harness. A harness that never executes is
+      # indistinguishable from one that passes -- the failure this repo keeps
+      # filing (cf. "Verify the guard itself" on the fixture-pii job).
+      - name: Verify the guard itself
+        run: npm run verify:sql-boundary
+
   # BACKLOG-2637: a source file holding a raw NUL is classified as binary by the
   # search tools, which then omit it from every repo-wide sweep WITHOUT warning
   # and WITHOUT a non-zero exit. The result is not a slow search or a failed one
