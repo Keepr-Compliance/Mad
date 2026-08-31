@@ -52,14 +52,6 @@ import {
   syncContactPhones,
 } from "../db/contactDbService";
 import { createLink } from "../db/contactSourceLinkDbService";
-import {
-  CONTACT_SOURCE_LINKS_TABLE_SQL,
-  CONTACT_SOURCE_LINKS_INDEX_SQL,
-  CONTACT_LINK_PROPOSALS_TABLE_SQL,
-  CONTACT_LINK_PROPOSALS_INDEX_SQL,
-  CONTACT_LINK_VERDICTS_TABLE_SQL,
-  CONTACT_LINK_VERDICTS_INDEX_SQL,
-} from "../db/contactIdentitySchemaSql";
 
 const SCHEMA_SQL = fs.readFileSync(
   path.join(__dirname, "..", "..", "database", "schema.sql"),
@@ -76,12 +68,6 @@ const SCHEMA_SQL = fs.readFileSync(
  */
 const V40_INDEX_SQL =
   "CREATE INDEX IF NOT EXISTS idx_contact_phones_normalized ON contact_phones(phone_normalized)";
-const V57_EXTERNAL_UUID_SQL = "ALTER TABLE external_contacts ADD COLUMN external_uuid TEXT";
-/** Migration v56's tombstone columns — what `deleteContact`/`restoreContact` write. */
-const V56_TOMBSTONE_SQL = [
-  "ALTER TABLE contacts ADD COLUMN removed_at DATETIME",
-  "ALTER TABLE contacts ADD COLUMN removed_reason TEXT",
-];
 
 const USER_ID = "user-2620";
 
@@ -95,14 +81,10 @@ function makeDb(): DatabaseType {
   const db = new Database(":memory:");
   db.exec(SCHEMA_SQL);
   db.exec(V40_INDEX_SQL);
-  db.exec(V57_EXTERNAL_UUID_SQL);
-  for (const sql of V56_TOMBSTONE_SQL) db.exec(sql);
-  db.exec(CONTACT_SOURCE_LINKS_TABLE_SQL);
-  db.exec(CONTACT_SOURCE_LINKS_INDEX_SQL);
-  db.exec(CONTACT_LINK_PROPOSALS_TABLE_SQL);
-  db.exec(CONTACT_LINK_PROPOSALS_INDEX_SQL);
-  db.exec(CONTACT_LINK_VERDICTS_TABLE_SQL);
-  db.exec(CONTACT_LINK_VERDICTS_INDEX_SQL);
+  // BACKLOG-2993: schema.sql is now the full baseline — external_uuid, the
+  // v56 tombstone columns, and contact_source_links (+ its indexes) are all
+  // declared there; the per-migration bolt-ons this fixture used to apply are
+  // gone with the chain.
   db.pragma("foreign_keys = ON");
   db.prepare(
     `INSERT INTO users_local (id, email, oauth_provider, oauth_id)

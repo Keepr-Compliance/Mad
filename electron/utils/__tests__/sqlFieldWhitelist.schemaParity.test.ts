@@ -169,12 +169,11 @@ describe("sqlFieldWhitelist — TABLE_FIELDS vs the real database (BACKLOG-2739)
   // -------------------------------------------------------------------------
 
   it("migrated a real on-disk database all the way to the head migration", () => {
+    // BACKLOG-2993: the install head is schema.sql's own seed (the chain is
+    // gone); chainHeadVersion() derives it from the artefacts.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const DatabaseService = require("../../services/databaseService").DatabaseService ??
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require("../../services/databaseService").default.constructor;
-    const migrations = DatabaseService.MIGRATIONS as Array<{ version: number }>;
-    const head = migrations[migrations.length - 1].version;
+    const { chainHeadVersion } = require("../../services/__tests__/helpers/chainHead") as typeof import("../../services/__tests__/helpers/chainHead");
+    const head = chainHeadVersion();
 
     const version = (
       db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }

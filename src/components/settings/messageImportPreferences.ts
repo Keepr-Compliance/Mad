@@ -24,6 +24,24 @@
  * the process boundary; the suites named on each constant are what hold it to
  * the resolver.
  *
+ * ## There is now a THIRD copy, in the Android companion (BACKLOG-2800)
+ *
+ * `android-companion/services/syncWindow.ts` restates
+ * `resolveAndroidImportFilters` + `resolveStoredLookbackMonths` so the PHONE can
+ * apply the same window this panel displays. The companion is a separate npm
+ * package with its own lockfile and its own `node_modules`, and
+ * `android-companion/metro.config.js` roots Metro at that directory with no
+ * `watchFolders` — so `src/` is unreachable from it at bundle time. A
+ * cross-package import would pass jest and then fail the bundler, which is the
+ * "every green check reads source, none runs a bundler" trap. It is a
+ * restatement, not shared code, and it cannot be anything else.
+ *
+ * What holds the three copies together is tests, on both sides:
+ *   - here: `__tests__/AndroidMessagesSettings.allTime-2561.test.tsx`
+ *   - companion: `android-companion/services/__tests__/syncWindow.mirror-2800.test.ts`
+ *
+ * If you change the absent-vs-explicit-null rules below, change them there too.
+ *
  * @module settings/messageImportPreferences
  */
 

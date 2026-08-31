@@ -1,7 +1,35 @@
-
-import { chainHeadVersion } from "./helpers/chainHead";/**
+/**
  * @jest-environment node
  */
+
+
+/**
+ * BACKLOG-2993: the shipped chain is EMPTY. The runner machinery stays for
+ * future post-baseline migrations, so the tests that drive it inject
+ * SYNTHETIC migrations ABOVE the baseline — the only versions a real
+ * migration can ever hold again — and restore the empty chain afterwards.
+ */
+interface FakeMigration {
+  version: number;
+  description: string;
+  migrate: (d: unknown) => void;
+}
+function injectFakeMigrations(
+  klass: { MIGRATIONS: FakeMigration[]; BASELINE_VERSION?: number },
+  count: 1 | 2,
+): () => void {
+  const base = (klass as unknown as { BASELINE_VERSION: number }).BASELINE_VERSION;
+  const original = klass.MIGRATIONS;
+  const fakes: FakeMigration[] = [
+    { version: base + 1, description: "synthetic post-baseline migration A", migrate: jest.fn() },
+    { version: base + 2, description: "synthetic post-baseline migration B", migrate: jest.fn() },
+  ].slice(0, count);
+  (klass as { MIGRATIONS: FakeMigration[] }).MIGRATIONS = fakes;
+  return () => {
+    (klass as { MIGRATIONS: FakeMigration[] }).MIGRATIONS = original;
+  };
+}
+
 
 /**
  * Unit tests for DatabaseService migration runner robustness
@@ -287,10 +315,12 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: schema_version table exists, current version = 29
+      // Setup: schema_version table exists, current version = the baseline;
+      // one synthetic migration above it is pending (BACKLOG-2993).
+      const restoreChain = injectFakeMigrations(DatabaseServiceClass, 1);
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" }) // schema_version exists check
-        .mockReturnValueOnce({ version: 29 }); // current version
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION }); // current version
 
       // migrated_at column present
       mockStatement.all.mockReturnValueOnce([
@@ -312,9 +342,13 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
         };
       });
 
-      await expect(
-        databaseService._runVersionedMigrations()
-      ).rejects.toThrow(/Migration 30.*failed.*SQLITE_ERROR/);
+      try {
+        await expect(
+          databaseService._runVersionedMigrations()
+        ).rejects.toThrow(/Migration 71.*failed.*SQLITE_ERROR/);
+      } finally {
+        restoreChain();
+      }
     });
 
     it("should include recovery info in error message", async () => {
@@ -322,9 +356,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
+      const restoreChain = injectFakeMigrations(DatabaseServiceClass, 1);
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 29 });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
         { name: "version" },
@@ -340,9 +375,13 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
         };
       });
 
-      await expect(
-        databaseService._runVersionedMigrations()
-      ).rejects.toThrow("Database remains at version 29");
+      try {
+        await expect(
+          databaseService._runVersionedMigrations()
+        ).rejects.toThrow("Database remains at version 70");
+      } finally {
+        restoreChain();
+      }
     });
   });
 
@@ -357,10 +396,11 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       svc.db = mockDb;
       svc.dbPath = "/mock/user/data/mad.db";
 
-      // schema_version table exists, current version = 29
+      // schema_version table exists, at the baseline with one pending fake
+      const restoreChain = injectFakeMigrations(DatabaseServiceClass, 1);
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 29 });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
 
       // Has migrated_at column
       mockStatement.all.mockReturnValueOnce([
@@ -374,9 +414,13 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       (getFs().existsSync as jest.Mock).mockReturnValue(true);
       (getFs().readdirSync as jest.Mock).mockReturnValue([]);
 
-      await expect(
-        databaseService._runVersionedMigrations()
-      ).rejects.toThrow("Pre-migration backup required but not found");
+      try {
+        await expect(
+          databaseService._runVersionedMigrations()
+        ).rejects.toThrow("Pre-migration backup required but not found");
+      } finally {
+        restoreChain();
+      }
     });
 
     it("should proceed when no pending migrations (backup not checked)", async () => {
@@ -415,10 +459,12 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // Setup: current version = 29, so migration 30 is pending
+      // BACKLOG-2993: the shipped chain is empty, so the plan is exercised
+      // over two synthetic post-baseline migrations.
+      const restoreChain = injectFakeMigrations(DatabaseServiceClass, 2);
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 29 });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -427,195 +473,31 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
         { name: "migrated_at" },
       ]);
 
-      const plan = await databaseService._runVersionedMigrations(true);
+      try {
+        const plan = await databaseService._runVersionedMigrations(true);
 
-      expect(plan).toBeDefined();
-      expect(plan).toEqual({
-        currentVersion: 29,
-        // BACKLOG-2791: derived. A literal here re-breaks on every new migration.
-        targetVersion: chainHeadVersion(),
-        pendingMigrations: [
-          {
-            version: 30,
-            description: expect.stringContaining("transaction_summary"),
-          },
-          {
-            version: 31,
-            description: expect.stringContaining("failure_log"),
-          },
-          {
-            version: 32,
-            description: expect.stringContaining("sync_session_id"),
-          },
-          {
-            version: 33,
-            description: expect.stringContaining("audit_logs CHECK"),
-          },
-          {
-            version: 34,
-            description: expect.stringContaining("skip_address_filter"),
-          },
-          {
-            version: 35,
-            description: expect.stringContaining("default_role"),
-          },
-          {
-            version: 36,
-            description: expect.stringContaining("android_sync"),
-          },
-          {
-            version: 37,
-            description: expect.stringContaining("BACKLOG-1560"),
-          },
-          {
-            version: 38,
-            description: expect.stringContaining("BACKLOG-1576"),
-          },
-          {
-            version: 39,
-            description: expect.stringContaining("BACKLOG-1579"),
-          },
-          {
-            version: 40,
-            description: expect.stringContaining("BACKLOG-1727"),
-          },
-          {
-            version: 41,
-            description: expect.stringContaining("BACKLOG-1722"),
-          },
-          {
-            version: 42,
-            description: expect.stringContaining("BACKLOG-1718"),
-          },
-          {
-            version: 43,
-            description: expect.stringContaining("BACKLOG-1768"),
-          },
-          {
-            version: 44,
-            description: expect.stringContaining("BACKLOG-1769"),
-          },
-          {
-            version: 45,
-            description: expect.stringContaining("BACKLOG-1771"),
-          },
-          {
-            version: 46,
-            description: expect.stringContaining("BACKLOG-1801"),
-          },
-          {
-            version: 47,
-            description: expect.stringContaining("BACKLOG-1861"),
-          },
-          {
-            version: 48,
-            description: expect.stringContaining("BACKLOG-1900"),
-          },
-          {
-            version: 49,
-            description: expect.stringContaining("BACKLOG-1900"),
-          },
-          {
-            version: 50,
-            description: expect.stringContaining("BACKLOG-2006a"),
-          },
-          {
-            version: 51,
-            description: expect.stringContaining("BACKLOG-2013"),
-          },
-          {
-            version: 52,
-            description: expect.stringContaining("BACKLOG-2280"),
-          },
-          {
-            version: 53,
-            description: expect.stringContaining("BACKLOG-2292"),
-          },
-          {
-            version: 54,
-            description: expect.stringContaining("BACKLOG-2300"),
-          },
-          {
-            version: 55,
-            description: expect.stringContaining("BACKLOG-2319"),
-          },
-          {
-            version: 56,
-            description: expect.stringContaining("BACKLOG-2364"),
-          },
-          {
-            version: 57,
-            description: expect.stringContaining("BACKLOG-2401"),
-          },
-          {
-            version: 58,
-            description: expect.stringContaining("BACKLOG-2407"),
-          },
-          {
-            version: 59,
-            description: expect.stringContaining("BACKLOG-2410"),
-          },
-          {
-            version: 60,
-            description: expect.stringContaining("BACKLOG-2427"),
-          },
-          {
-            version: 61,
-            description: expect.stringContaining("BACKLOG-2473"),
-          },
-          {
-            version: 62,
-            description: expect.stringContaining("BACKLOG-2513"),
-          },
-          {
-            version: 63,
-            description: expect.stringContaining("BACKLOG-2750"),
-          },
-          {
-            version: 64,
-            description: expect.stringContaining("BACKLOG-2630"),
-          },
-          {
-            version: 65,
-            description: expect.stringContaining("BACKLOG-2791"),
-          },
-          {
-            version: 66,
-            description: expect.stringContaining("BACKLOG-2814"),
-          },
-          {
-            // BACKLOG-2857, renumbered 66 -> 67 on int/ui-polish-e because
-            // BACKLOG-2814 reached this branch first and holds 66. On 2857's own
-            // branch (PR #2379) this entry is still 66; see the migration's own
-            // comment in databaseService.ts.
-            version: 67,
-            description: expect.stringContaining("BACKLOG-2857"),
-          },
-          {
-            // BACKLOG-2859, renumbered 66 -> 68 on int/ui-polish-e for the same
-            // reason one step further along: 2814 holds 66 and 2857 holds 67. On
-            // 2859's own branch (PR #2381) this entry is still 66.
-            version: 68,
-            description: expect.stringContaining("BACKLOG-2859"),
-          },
-          {
-            // BACKLOG-2630 slice 2 (board D2), piece 1: the three pair shapes.
-            // Written as 69 because develop's chain head was measured at 68 and
-            // no open PR held 69; under the standing protocol whoever merges
-            // second renumbers.
-            version: 69,
-            description: expect.stringContaining("BACKLOG-2630"),
-          },
-        ],
-        // BACKLOG-2791: derived — the plan seeds at 29, so this is "every
-        // migration above 29", not a literal that needs re-typing each time.
-        wouldRunCount: (
-          databaseService.constructor as unknown as { MIGRATIONS: Array<{ version: number }> }
-        ).MIGRATIONS.filter((m) => m.version > 29).length,
-      });
+        expect(plan).toBeDefined();
+        expect(plan).toEqual({
+          currentVersion: DatabaseServiceClass.BASELINE_VERSION,
+          targetVersion: DatabaseServiceClass.BASELINE_VERSION + 2,
+          pendingMigrations: [
+            {
+              version: DatabaseServiceClass.BASELINE_VERSION + 1,
+              description: expect.stringContaining("synthetic post-baseline migration A"),
+            },
+            {
+              version: DatabaseServiceClass.BASELINE_VERSION + 2,
+              description: expect.stringContaining("synthetic post-baseline migration B"),
+            },
+          ],
+          wouldRunCount: 2,
+        });
 
-      // Verify no transaction was started (migration wasn't executed)
-      expect(mockDb.transaction).not.toHaveBeenCalled();
+        // Verify no transaction was started (migration wasn't executed)
+        expect(mockDb.transaction).not.toHaveBeenCalled();
+      } finally {
+        restoreChain();
+      }
     });
 
     it("should report zero pending when all applied", async () => {
@@ -623,11 +505,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // BACKLOG-2791: DERIVED head — "all applied" must keep meaning that as the
-      // chain grows, rather than quietly becoming "one behind".
+      // BACKLOG-2993: with the chain empty, "all applied" IS the baseline.
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: chainHeadVersion() });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -639,8 +520,8 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       const plan = await databaseService._runVersionedMigrations(true);
 
       expect(plan).toEqual({
-        currentVersion: chainHeadVersion(),
-        targetVersion: chainHeadVersion(),
+        currentVersion: DatabaseServiceClass.BASELINE_VERSION,
+        targetVersion: DatabaseServiceClass.BASELINE_VERSION,
         pendingMigrations: [],
         wouldRunCount: 0,
       });
@@ -732,9 +613,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       jest.clearAllMocks();
 
       // version = 29, migration 30 is pending
+      const restoreChain = injectFakeMigrations(DatabaseServiceClass, 2);
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 29 });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -749,38 +631,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
 
       await databaseService._runVersionedMigrations();
 
-      // Transaction should have been called twenty-nine times (for migrations 30-58;
-      // BACKLOG-1722 adds v41, BACKLOG-1718 R3 adds v42, BACKLOG-1768 adds v43,
-      // BACKLOG-1769 adds v44, BACKLOG-1771 adds v45, BACKLOG-1801 adds v46,
-      // BACKLOG-1861 adds v47, BACKLOG-1900 adds v48 (P0.1) + v49 (P0.4),
-      // BACKLOG-2006a adds v50 (transaction_unlocks_cache),
-      // BACKLOG-2013 adds v51 (transactions.first_exported_at freeze marker),
-      // BACKLOG-2280 adds v52 (messages reaction columns),
-      // BACKLOG-2292 adds v53 (message_import_state + idx_messages_user_sent),
-      // BACKLOG-2300 adds v54 (sync_session_id indexes),
-      // BACKLOG-2319 adds v55 (communications/ignored_communications match_reason),
-      // BACKLOG-2364 adds v56 (contacts/transaction_contacts tombstone columns),
-      // BACKLOG-2401 adds v57 (contact_source_links crosswalk),
-      // BACKLOG-2407 adds v58 (external_contacts.source_identity_json),
-      // BACKLOG-2410 adds v59 (contact link review queue + verdicts),
-      // BACKLOG-2427 adds v60 (recover hand-typed contact value provenance),
-      // BACKLOG-2473 adds v61 (crosswalk origin vocabulary),
-      // BACKLOG-2513 adds v62 (emails.bulk_mail_headers),
-      // BACKLOG-2750 adds v63 (the seven legacy columns nothing migrated, plus
-      // the standalone schema.sql indexes deferred into the chain)).
-      //
-      // BACKLOG-2571 briefly added a DIFFERENT v63 (emails.sent_at_source) and
-      // took it out again — founder decision, 2026-08-09 — which is why the
-      // count once went back to 33. BACKLOG-2791 adds v64 (the Needs-Review
-      // queue table + transactions.last_pending_scan_at).
-      //
-      // BACKLOG-2791: DERIVED from the chain rather than re-typed. The literal
-      // here was one of nine that turned red together when a migration landed;
-      // this seeds at 29, so the count is simply "every migration above 29".
-      const expectedRuns = (
-        databaseService.constructor as unknown as { MIGRATIONS: Array<{ version: number }> }
-      ).MIGRATIONS.filter((m) => m.version > 29).length;
-      expect(mockDb.transaction).toHaveBeenCalledTimes(expectedRuns);
+      // BACKLOG-2993: the chain is empty; the two synthetic post-baseline
+      // migrations injected above are the whole pending set.
+      expect(mockDb.transaction).toHaveBeenCalledTimes(2);
+      restoreChain();
     });
 
     it("should skip already-applied migrations", async () => {
@@ -788,12 +642,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
-      // BACKLOG-2791: the DERIVED chain head, so "all applied" keeps meaning
-      // "all applied" when the chain grows instead of silently becoming
-      // "one behind".
+      // BACKLOG-2993: with the chain empty, "all applied" IS the baseline.
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: chainHeadVersion() });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -819,9 +671,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
+      const restoreChain = injectFakeMigrations(DatabaseServiceClass, 1);
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 29 });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -839,6 +692,7 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       expect(mockDb.prepare).toHaveBeenCalledWith(
         expect.stringContaining("migrated_at = datetime('now')")
       );
+      restoreChain();
     });
   });
 
@@ -847,8 +701,27 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
   // ============================================
 
   describe("production migration list integrity", () => {
-    it("BASELINE_VERSION should be 29", () => {
-      expect(DatabaseServiceClass.BASELINE_VERSION).toBe(29);
+    it("BASELINE_VERSION is the schema baseline (70) — re-derive, never bump casually", () => {
+      // BACKLOG-2993: the rule is "strictly greater than any version any
+      // existing database can hold" — 70 because develop and shipped main
+      // both topped out at migration 69 at the reset.
+      expect(DatabaseServiceClass.BASELINE_VERSION).toBe(70);
+    });
+
+    it("MIGRATIONS is empty — the chain was deleted with the baseline reset", () => {
+      expect(DatabaseServiceClass.MIGRATIONS).toEqual([]);
+    });
+
+    it("getLatestSchemaVersion() answers the baseline with the chain empty — the guard that keeps diagnostics.storage alive", () => {
+      // SR review D1 (BACKLOG-2993): unguarded, the last-element read is a
+      // TypeError inside supportTicketService's try, whose catch only warns —
+      // silently voiding the ENTIRE storage-diagnostics block of every
+      // support ticket. The companion test in
+      // supportTicketService.contactsStorage.test.ts pins what that void
+      // looks like when the accessor throws.
+      expect(databaseService.getLatestSchemaVersion()).toBe(
+        DatabaseServiceClass.BASELINE_VERSION,
+      );
     });
 
     it("should have no duplicate versions in MIGRATIONS", () => {
@@ -875,41 +748,13 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
   });
 
   // ============================================
-  // BELOW-BASELINE WARNING
+  // BELOW-BASELINE HANDLING
   // ============================================
-
-  describe("below-baseline version warning", () => {
-    it("should warn when DB version is below baseline", async () => {
-      (getFs().existsSync as jest.Mock).mockReturnValue(false);
-      await databaseService.initialize();
-      jest.clearAllMocks();
-
-      const logService = (await import("../logService")).default;
-
-      // version = 10, below baseline of 29
-      mockStatement.get
-        .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 10 });
-
-      mockStatement.all.mockReturnValueOnce([
-        { name: "id" },
-        { name: "version" },
-        { name: "updated_at" },
-        { name: "migrated_at" },
-      ]);
-
-      // Need backup for pending migrations
-      (getFs().existsSync as jest.Mock).mockReturnValue(true);
-      (getFs().readdirSync as jest.Mock).mockReturnValue(["mad-backup-20260222T120000.db"]);
-
-      await databaseService._runVersionedMigrations();
-
-      expect(logService.warn).toHaveBeenCalledWith(
-        expect.stringContaining("below baseline"),
-        "DatabaseService"
-      );
-    });
-  });
+  // BACKLOG-2993: the old "warn and let schema.sql handle it" branch is gone.
+  // A below-baseline database never reaches the runner at all — the schema-
+  // baseline fence in initialize() refuses it terminally. That behaviour is
+  // pinned on real files by databaseService.schemaBaselineRefusal.test.ts and
+  // databaseService.schemaBaselineSweep.test.ts.
 
   // ============================================
   // ERROR MESSAGE QUALITY
@@ -921,9 +766,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
+      const restoreChain = injectFakeMigrations(DatabaseServiceClass, 1);
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 29 });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -943,9 +789,13 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
         };
       });
 
-      await expect(
-        databaseService._runVersionedMigrations()
-      ).rejects.toThrow(/Migration 30/);
+      try {
+        await expect(
+          databaseService._runVersionedMigrations()
+        ).rejects.toThrow(/Migration 71/);
+      } finally {
+        restoreChain();
+      }
     });
 
     it("should include previous version in error for recovery guidance", async () => {
@@ -953,9 +803,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
+      const restoreChain = injectFakeMigrations(DatabaseServiceClass, 1);
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 29 });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -974,9 +825,13 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
         };
       });
 
-      await expect(
-        databaseService._runVersionedMigrations()
-      ).rejects.toThrow("Database remains at version 29");
+      try {
+        await expect(
+          databaseService._runVersionedMigrations()
+        ).rejects.toThrow("Database remains at version 70");
+      } finally {
+        restoreChain();
+      }
     });
 
     it("should mention pre-migration backup in error", async () => {
@@ -984,9 +839,10 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
       await databaseService.initialize();
       jest.clearAllMocks();
 
+      const restoreChain = injectFakeMigrations(DatabaseServiceClass, 1);
       mockStatement.get
         .mockReturnValueOnce({ name: "schema_version" })
-        .mockReturnValueOnce({ version: 29 });
+        .mockReturnValueOnce({ version: DatabaseServiceClass.BASELINE_VERSION });
 
       mockStatement.all.mockReturnValueOnce([
         { name: "id" },
@@ -1005,9 +861,13 @@ describe("DatabaseService Migration Robustness (TASK-2048)", () => {
         };
       });
 
-      await expect(
-        databaseService._runVersionedMigrations()
-      ).rejects.toThrow("Pre-migration backup available");
+      try {
+        await expect(
+          databaseService._runVersionedMigrations()
+        ).rejects.toThrow("Pre-migration backup available");
+      } finally {
+        restoreChain();
+      }
     });
   });
 

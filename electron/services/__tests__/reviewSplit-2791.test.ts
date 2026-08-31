@@ -70,10 +70,6 @@ function seed(db: DatabaseType, propertyAddress: string): void {
   // its own catch, so it silently returned "found nothing" and every email fell
   // through to the queue. The fixture was describing a shape the code cannot
   // meet; adding them is what makes this suite test the real predicate.
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
   db.prepare(
     "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?,?,'google','o1')",
   ).run(USER, "me@agent.com");

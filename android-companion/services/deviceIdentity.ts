@@ -70,6 +70,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { registerDevice } from './syncService';
 import { forceFullContactResync } from './contactSyncState';
 import { resetMessageCursor } from './smsQueueService';
+import { primeSyncWindow } from './syncWindow';
 import type { SyncResult } from '../types/sync';
 
 /**
@@ -229,6 +230,34 @@ export async function registerWithStoredIdentity(
     console.error(
       '[DeviceIdentity] BACKLOG-2995: failed to clear the SMS cursor on pair — ' +
         'this desktop may not receive message history older than the last sync:',
+      err,
+    );
+  }
+
+  // BACKLOG-2800: fetch the user's import window while we are still online.
+  //
+  // `resetMessageCursor()` above has just put the cursor at zero, so the next
+  // sync cycle is bounded by the WINDOW and nothing else. `resolveSyncWindow`
+  // fails OPEN, so a phone that cannot reach Supabase on that cycle would read
+  // its entire history — the defect BACKLOG-2800 exists to fix. Priming here,
+  // while the user is on Wi-Fi completing an online pairing, makes that rung
+  // rare rather than routine.
+  //
+  // This is an OPTIMISATION, not the correctness mechanism. Both pairing
+  // screens start a sync immediately after registering, so this call can lose
+  // that race. Correctness comes from `performSync` passing
+  // `{ forceRefresh: lastTimestamp === 0 }`, which covers every cursor-at-zero
+  // cycle regardless of whether this prime landed.
+  //
+  // Hooked here rather than in the screens because `savePairing` is duplicated
+  // across `app/(main)/home.tsx` and `app/onboarding/pair-device.tsx`; this is
+  // the shared path BACKLOG-2987 introduced so the two cannot drift.
+  try {
+    await primeSyncWindow();
+  } catch (err) {
+    console.error(
+      '[DeviceIdentity] BACKLOG-2800: failed to prime the import window on pair — ' +
+        'the first sync falls back to the cached/unwindowed ladder:',
       err,
     );
   }

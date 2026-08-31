@@ -69,10 +69,6 @@ function seed(db: DatabaseType): void {
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_review_txn_thread
              ON pending_review_communications(transaction_id, thread_id) WHERE thread_id IS NOT NULL;`);
   // v56 tombstones live only in the migration chain, never in schema.sql.
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE transaction_contacts ADD COLUMN removed_reason TEXT;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_at DATETIME;");
-  db.exec("ALTER TABLE contacts ADD COLUMN removed_reason TEXT;");
 
   db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?,?,'google','o1')")
     .run(USER, "agent@example.com");

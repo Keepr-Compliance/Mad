@@ -19,6 +19,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { SyncMessage } from "../types/sync";
 import { resetContactSyncState } from "./contactSyncState";
+import { clearSyncWindowCache, clearAppliedWindow } from "./syncWindow";
 
 // ============================================
 // CONSTANTS
@@ -335,9 +336,23 @@ export async function setLastSyncTimestamp(timestamp: number): Promise<void> {
  * the contact fingerprints. This one removes the cursor and nothing else,
  * because a re-pair must not discard messages that are queued and un-acked —
  * BACKLOG-2199 exists precisely to stop history being dropped on the floor.
+ *
+ * ## Why the APPLIED WINDOW goes with the cursor (BACKLOG-3017)
+ *
+ * That record claims "this phone has already read from edge E", and the claim
+ * is only true OF A PAIRING — the desktop on the other end can change, and this
+ * function exists precisely for the case where it has been wiped. Left behind,
+ * it breaks the recovery it was meant to serve: an All-time era records
+ * `null`, the user narrows to 3 months, the desktop database is wiped, the
+ * phone re-pairs, and the user widens back to All time to get their history
+ * back — `null` against a recorded `null` is not a widening, so nothing older
+ * is ever read and there is no recourse short of another re-pair. Clearing it
+ * makes the next cycle a first observation, which (with the cursor at 0) does
+ * not lower anything and simply records the new baseline.
  */
 export async function resetMessageCursor(): Promise<void> {
   await AsyncStorage.removeItem(LAST_SYNC_TIMESTAMP_KEY);
+  await clearAppliedWindow();
 }
 
 // ============================================
@@ -422,6 +437,83 @@ export async function acquireSyncLock(
   }
 
   return nonce;
+}
+
+/**
+ * Is a sync running RIGHT NOW, by any caller?
+ *
+ * BACKLOG-3005 (the Sync Now busy-state fold). The home screen's spinner was
+ * driven by a local `useState` that only ever knew about syncs that screen
+ * started itself. A sync started by the post-pair auto-sync, `appStateCatchup`
+ * on foregrounding, or the OS background task takes THIS lock and never touches
+ * that state, so the button rendered idle, the user tapped, `performSync`
+ * returned `skipped`, and the tap was reported as "Up to Date".
+ *
+ * Before BACKLOG-3005 that was a ~30 ms race. Now that one tap can drain for
+ * minutes, a lock being held is the NORMAL state for the whole drain, which is
+ * what makes the missing affordance worth a UI change.
+ *
+ * ## The staleness predicate is deliberately the SAME EXPRESSION as acquire's
+ *
+ * `now - acquiredAt < SYNC_LOCK_TTL_MS`, copied from `acquireSyncLock` above.
+ * A lock older than the TTL is one `acquireSyncLock` would force-break, so
+ * reporting it as busy would grey the button out FOREVER after a crash mid-sync
+ * — a permanently unusable button, worse than the defect being fixed. The two
+ * must agree, so they are written the same way; `isSyncInFlight` answering
+ * "busy" where `acquireSyncLock` would answer "take it" is the bug to avoid.
+ *
+ * READ-ONLY: never acquires, never breaks, never writes. It is a UI affordance,
+ * not a correctness mechanism — the lock itself is still what serialises runs.
+ *
+ * @param now - injectable clock for tests (defaults to Date.now())
+ */
+export async function isSyncInFlight(
+  now: number = Date.now()
+): Promise<boolean> {
+  const existing = await readSyncLock();
+  if (!existing) return false;
+  return now - existing.acquiredAt < SYNC_LOCK_TTL_MS;
+}
+
+/**
+ * Refresh the timestamp on a lock we still hold, WITHOUT changing its nonce.
+ *
+ * ## The landmine this defuses (BACKLOG-3005)
+ *
+ * `acquireSyncLock` stamps `acquiredAt` once and nothing ever updated it, so
+ * the TTL below was really "the maximum a run may take", not "the maximum a
+ * CRASHED run may block for". That was invisible while every run was a single
+ * cycle. A multi-cycle drain holding the lock past `SYNC_LOCK_TTL_MS` would
+ * have it force-broken mid-run by the OS background task or the AppState
+ * catch-up, reintroducing precisely the concurrent read-modify-write race on
+ * the queue and cursor that BACKLOG-2200 exists to prevent.
+ *
+ * Renewing between cycles bounds the stale-recovery window to ONE cycle rather
+ * than one whole run, so a genuinely crashed run is still recovered on time.
+ *
+ * ## What this does NOT fix, deliberately
+ *
+ * Intra-cycle overrun is untouched and pre-existing: a single cycle can already
+ * exceed 90s today (the send loop is unbounded batches, each with its own
+ * timeout), and nothing renews inside it. Out of scope here.
+ *
+ * @returns false when the lock is gone or now carries a DIFFERENT nonce — i.e.
+ *   it was stolen. A caller that gets false MUST abort; it must never
+ *   re-acquire, because the thief is mid-run on the same shared state.
+ * @param now - injectable clock for tests (defaults to Date.now())
+ */
+export async function renewSyncLock(
+  nonce: string,
+  now: number = Date.now()
+): Promise<boolean> {
+  const existing = await readSyncLock();
+  if (!existing || existing.nonce !== nonce) return false;
+  // Same nonce, so `releaseSyncLock`'s ownership check still matches.
+  await AsyncStorage.setItem(
+    SYNC_LOCK_KEY,
+    JSON.stringify({ nonce, acquiredAt: now } satisfies SyncLock)
+  );
+  return true;
 }
 
 /**
@@ -575,6 +667,13 @@ export async function setBackgroundSyncEnabled(
  * BACKLOG-2208: also clears the contact fingerprint/diff state so a re-pair
  * sends the FULL address book once (rather than diffing against a stale map
  * from the previous pairing).
+ *
+ * BACKLOG-2800: also drops the cached import window. `UnpairReason` includes
+ * `account-switch`, so a cache surviving this teardown could apply the PREVIOUS
+ * user's window to the next user's phone on any cycle where their own fetch
+ * failed. The cached record is additionally STAMPED with its owner's user id
+ * (see `syncWindow.ts`), which is what actually makes the account switch safe —
+ * this removal keeps the store tidy rather than carrying the guarantee alone.
  */
 export async function resetAllSyncData(): Promise<void> {
   await Promise.all([
@@ -585,5 +684,6 @@ export async function resetAllSyncData(): Promise<void> {
     AsyncStorage.removeItem(BACKGROUND_SYNC_ENABLED_KEY),
     AsyncStorage.removeItem(SYNC_LOCK_KEY),
     resetContactSyncState(),
+    clearSyncWindowCache(),
   ]);
 }

@@ -7,6 +7,9 @@
 # electron/services/appCleanupService.ts; keep in sync.
 # Prefer the in-app flow (Settings → Troubleshooting) whenever the app launches:
 # it clears secrets in-process and logs the event to app_lifecycle_events.
+# EXCEPTION (BACKLOG-2993): a pre-baseline database makes the app QUIT at
+# startup with a dialog pointing HERE — the in-app flow is unreachable in
+# exactly that case, and this script is the supported path.
 #
 # Usage: Double-click this file or run: ./cleanup-macos.sh
 #
