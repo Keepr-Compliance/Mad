@@ -296,6 +296,10 @@ async function forceReimport(sources: unknown): Promise<{ success: boolean; clea
 }
 
 beforeEach(() => {
+  // Calls only, not implementations. Without this the log assertion in the
+  // empty-list case could be satisfied by a LINE AN EARLIER TEST LOGGED, which
+  // is the same vacuous green the `toContain` assertions guard against.
+  jest.clearAllMocks();
   mockDb = openTestDb();
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   registeredHandlers.clear();
@@ -400,14 +404,24 @@ describe("Force Re-import empties only the sources about to be refilled (BACKLOG
     expect(shadowIds()).toContain("ext-future");
   });
 
-  it("an empty list empties nothing and does not build `IN ()`", async () => {
-    // Every contact source switched off. This is a real state, and `source IN ()`
-    // is a SQLite syntax error, so the early return is load-bearing rather than
-    // defensive: without it the handler throws and the sync reports a failure.
+  it("an empty list empties nothing, and says so in its own words", async () => {
+    // Every contact source switched off — a real state, not a defensive branch.
+    //
+    // The first version of this test asserted only the two lines below, and a
+    // mutation proved that worthless: DELETING the early return left it fully
+    // green, because `source IN ()` is legal SQLite that evaluates false. The
+    // early return's whole effect is the LOG, so the log is what pins it. Without
+    // the third assertion the branch is untested and the mutation is invisible.
     const result = await forceReimport([]);
 
     expect(result).toEqual({ success: true, cleared: 0 });
     expect(shadowIds()).toEqual(ALL_SEEDED_IDS);
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { logService } = require("../services/logService");
+    expect(
+      (logService.info as jest.Mock).mock.calls.map((c: unknown[]) => String(c[0])),
+    ).toContain("Force re-import emptied nothing: no re-fetchable source was named");
   });
 
   it("a missing list is a loud error, not a full wipe and not a silent no-op", async () => {

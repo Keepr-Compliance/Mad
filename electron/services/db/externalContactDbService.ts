@@ -1205,8 +1205,17 @@ export function clearRefetchableSourcesForUser(
     );
   }
 
-  // `source IN ()` is a SQLite syntax error, and "refill nothing" is a real
-  // state — every contact source switched off.
+  // "Refill nothing" is a real state — every contact source switched off — and it
+  // gets its own log line rather than falling through.
+  //
+  // NOT a correctness guard, and the first version of this comment claimed it
+  // was. `source IN ()` is legal SQLite and evaluates false, deleting nothing;
+  // measured on both engines this repo runs (better-sqlite3-multiple-ciphers,
+  // SQLite 3.53.2, and the `node:sqlite` fallback on Node 22): `IN ()` accepted,
+  // changes = 0, rows left = 2. So the early return is about the LOG: without it
+  // the field sees "Cleared 0 external contacts from the sources about to be
+  // re-fetched ()", which reads like a failed delete rather than an empty
+  // request.
   if (sources.length === 0) {
     logService.info(
       'Force re-import emptied nothing: no re-fetchable source was named',
