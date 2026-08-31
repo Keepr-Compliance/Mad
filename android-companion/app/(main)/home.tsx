@@ -348,11 +348,30 @@ export default function HomeScreen(): React.JSX.Element {
   //
   // A modest poll, deliberately: this is a UI affordance, not a correctness
   // mechanism (the lock itself still serialises runs), so a few seconds of lag is
-  // acceptable and a tight loop is not. One AsyncStorage read per tick, scoped to
-  // the focused screen and cleared on blur, so a backgrounded app polls nothing.
+  // acceptable and a tight loop is not.
+  //
+  // THE TICK IS GATED ON AppState, AND THE `useFocusEffect` CLEANUP IS NOT
+  // ENOUGH ON ITS OWN. An earlier version of this comment claimed the interval
+  // was "cleared on blur, so a backgrounded app polls nothing". That is false,
+  // and the refutation is in this same file: the BACKLOG-2209 note directly
+  // below records that `useFocusEffect` does NOT fire on an AppState
+  // background→active transition, because the home screen stays FOCUSED while
+  // the app is backgrounded. No blur means no cleanup, so the interval survives
+  // backgrounding and would keep reading AsyncStorage roughly 1,200 times an
+  // hour on an idle phone — on an app whose own onboarding asks the user to
+  // exempt it from battery optimization.
+  //
+  // So the cleanup stays (it is still right for a genuine navigation blur) and
+  // the tick additionally checks that the app is actually in the foreground.
+  // Nothing restarts the interval on return: the tick is a no-op while
+  // backgrounded rather than being torn down, and the BACKLOG-2209 AppState
+  // listener below already calls `loadAllData` on the way back to `active`,
+  // which refreshes this same flag immediately. That is why this needs no second
+  // AppState listener of its own.
   useFocusEffect(
     useCallback(() => {
       const id = setInterval(() => {
+        if (AppState.currentState !== 'active') return;
         void isSyncInFlight().then(setSyncInFlight);
       }, SYNC_BUSY_POLL_MS);
       return () => clearInterval(id);

@@ -34,7 +34,7 @@ import {
   fireEvent,
   act,
 } from '@testing-library/react-native';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 import type { SyncOperationResult } from '../../../services/backgroundSync';
 
 jest.mock('expo-router', () => ({
@@ -68,18 +68,11 @@ jest.mock('@react-native-async-storage/async-storage', () => {
       pairedAt: new Date().toISOString(),
     }),
   };
-  return {
-    __esModule: true,
-    __store: store,
-    default: {
-      getItem: jest.fn(async (k: string) => store[k] ?? null),
-      setItem: jest.fn(async (k: string, v: string) => {
-        store[k] = v;
-      }),
-      removeItem: jest.fn(async (k: string) => {
-        delete store[k];
-      }),
-    },
+  // ONE set of spies, shared by `default` and the namespace. Two separate sets
+  // is a silent trap: the code under test imports the DEFAULT export, so a
+  // counter reading the namespace copy sees zero calls forever — which makes a
+  // "no reads happened" assertion pass for the wrong reason.
+  const api = {
     getItem: jest.fn(async (k: string) => store[k] ?? null),
     setItem: jest.fn(async (k: string, v: string) => {
       store[k] = v;
@@ -88,6 +81,7 @@ jest.mock('@react-native-async-storage/async-storage', () => {
       delete store[k];
     }),
   };
+  return { __esModule: true, __store: store, default: api, ...api };
 });
 
 jest.mock('../../../services/permissions', () => ({
@@ -297,7 +291,23 @@ beforeEach(() => {
 afterEach(() => {
   jest.restoreAllMocks();
   jest.useRealTimers();
+  setAppState('active');
 });
+
+/** Drive the foreground/background state the poll gate reads. */
+function setAppState(next: 'active' | 'background'): void {
+  (AppState as unknown as { currentState: string }).currentState = next;
+}
+
+/** How many times the REAL `isSyncInFlight` has read the lock record. */
+function lockReadCount(): number {
+  const mod = jest.requireMock('@react-native-async-storage/async-storage') as {
+    getItem: jest.Mock;
+  };
+  return mod.getItem.mock.calls.filter(
+    ([k]: [string]) => k === '@keepr/sync-lock',
+  ).length;
+}
 
 // ---------------------------------------------------------------------------
 // 1. THE FOUNDER'S COMPLAINT
@@ -569,6 +579,68 @@ describe('the focused screen notices a sync it did not start', () => {
     await act(async () => {
       jest.advanceTimersByTime(3_000);
     });
+    await waitFor(() => expect(syncButtonState().disabled).toBe(true));
+  });
+
+  /**
+   * THE BATTERY CONTROL (SR delta review on `39aa8359b`).
+   *
+   * The `useFocusEffect` cleanup does NOT run when the app is backgrounded:
+   * `home.tsx`'s own BACKLOG-2209 note records that `useFocusEffect` does not
+   * fire on an AppState background→active transition, because the home screen
+   * stays FOCUSED throughout. So the interval survives backgrounding, and
+   * without a gate it reads AsyncStorage ~1,200 times an hour on an idle phone
+   * — on an app whose onboarding asks the user to disable battery optimization
+   * for it.
+   *
+   * MUTATION that must go red: delete
+   * `if (AppState.currentState !== 'active') return;` from the tick.
+   */
+  it('performs NO lock reads while the app is backgrounded', async () => {
+    await renderHome();
+    await waitFor(() => expect(syncButtonState().disabled).toBe(false));
+
+    setAppState('background');
+    const before = lockReadCount();
+
+    // Ten ticks' worth of wall clock.
+    await act(async () => {
+      jest.advanceTimersByTime(10 * 3_000);
+    });
+
+    expect(lockReadCount()).toBe(before);
+  });
+
+  /**
+   * The gate must not be a one-way door — returning to the foreground has to
+   * resume the polling, or the button goes permanently blind to other syncs.
+   */
+  it('resumes polling once the app is active again', async () => {
+    await renderHome();
+    await waitFor(() => expect(syncButtonState().disabled).toBe(false));
+
+    setAppState('background');
+    await act(async () => {
+      jest.advanceTimersByTime(3 * 3_000);
+    });
+
+    // A background cycle takes the lock while the app is not in front.
+    await act(async () => {
+      await acquireSyncLock(NOW);
+    });
+    const whileBackgrounded = lockReadCount();
+    await act(async () => {
+      jest.advanceTimersByTime(3 * 3_000);
+    });
+    expect(lockReadCount()).toBe(whileBackgrounded);
+    expect(syncButtonState().disabled).toBe(false);
+
+    // Back to the foreground: the very next tick reads and greys the button.
+    setAppState('active');
+    await act(async () => {
+      jest.advanceTimersByTime(3_000);
+    });
+    expect(lockReadCount()).toBeGreaterThan(whileBackgrounded);
     await waitFor(() => expect(syncButtonState().disabled).toBe(true));
   });
 });
