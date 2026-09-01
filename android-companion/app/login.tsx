@@ -347,7 +347,10 @@ export default function LoginScreen(): React.JSX.Element {
                 the only point at which the product can be seen with no account
                 AND no permission granted. Reads nothing, sends nothing, and
                 cannot start a sign-in. */}
-            <DemoPreview label="See how Keepr works — no account needed" />
+            <DemoPreview
+              label="See how Keepr works — no account needed"
+              color={colors.login.primary}
+            />
 
             {/* BACKLOG-2956: the running build, readable WITHOUT signing in.
                 Settings > About carries the same string, but it sits behind the

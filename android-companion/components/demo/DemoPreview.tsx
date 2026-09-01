@@ -383,6 +383,17 @@ export function DemoPreviewModal({
 interface DemoPreviewProps {
   /** Optional override so a cramped host can shorten the link. */
   label?: string;
+  /**
+   * Optional link colour.
+   *
+   * Defaults to the app's primary blue, which is what every onboarding screen
+   * and the home screen already use. The LOGIN screen is the exception: it is
+   * matched pixel-for-pixel to the broker portal and has its own palette
+   * (`colors.login.*`, BACKLOG-2253, marked "do NOT substitute these values").
+   * Dropping a Tailwind-blue link onto that card would read as foreign, so
+   * login passes its own indigo instead of this default.
+   */
+  color?: string;
 }
 
 /**
@@ -393,6 +404,7 @@ interface DemoPreviewProps {
  */
 export default function DemoPreview({
   label = DEMO_LINK_TEXT,
+  color,
 }: DemoPreviewProps): React.JSX.Element {
   const [visible, setVisible] = useState(false);
 
@@ -404,7 +416,9 @@ export default function DemoPreview({
         accessibilityLabel={label}
         style={styles.link}
       >
-        <Text style={styles.linkText}>{label}</Text>
+        <Text style={[styles.linkText, color != null && { color }]}>
+          {label}
+        </Text>
       </TouchableOpacity>
       <DemoPreviewModal
         visible={visible}

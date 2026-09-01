@@ -73,6 +73,7 @@ jest.mock('../../components/ui', () => {
 
 import LoginScreen from '../login';
 import { DEMO_BANNER_TEXT } from '../../components/demo/DemoPreview';
+import { colors } from '../../theme/colors';
 import { DEMO_CONVERSATIONS } from '../../components/demo/sampleConversations';
 
 const EXPIRED_COPY = 'Your session expired. Please sign in again.';
@@ -164,6 +165,30 @@ describe('login — sample preview entry point (BACKLOG-3027)', () => {
     expect(
       screen.getByText(DEMO_CONVERSATIONS[0].messages[0].body),
     ).toBeTruthy();
+  });
+
+  // BACKLOG-2253 marks the login palette "do NOT substitute these values" — this
+  // screen is matched pixel-for-pixel to the broker portal, and the app's default
+  // primary (Tailwind blue) is not in it. The preview link therefore takes this
+  // screen's own indigo rather than the default every other host uses.
+  //
+  // MUTATION THAT MUST GO RED: drop the `color` prop from <DemoPreview /> in
+  // app/login.tsx — the link falls back to colors.primary[600] and this fails.
+  it('draws the sample link in the LOGIN palette, not the app default', () => {
+    mockAuthError = undefined;
+    render(<LoginScreen />);
+
+    const link = screen.getByText(/See how Keepr works/i);
+    const flat = [link.props.style].flat(Infinity).filter(Boolean) as Array<{
+      color?: string;
+    }>;
+    const applied = flat.reduce<string | undefined>(
+      (acc, s) => (s && s.color ? s.color : acc),
+      undefined,
+    );
+
+    expect(applied).toBe(colors.login.primary);
+    expect(applied).not.toBe(colors.primary[600]);
   });
 
   it('opening the sample starts no sign-in', () => {
