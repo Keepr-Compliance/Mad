@@ -239,6 +239,77 @@ describe('DemoPreview — the host-facing link', () => {
     assertNothingRealWasTouched();
   });
 
+  // Two promises, two tests, and the second draft of both.
+  //
+  // Written first as ONE test named "...stops the timers and restarts clean on
+  // reopen". Removing `setStepsDone(0)` from `handleClose` left it GREEN — the
+  // reopen half was an unchecked claim, because closing mid-transfer leaves
+  // stepsDone below the completion threshold either way.
+  //
+  // Splitting it exposed a second, worse problem. The timer test had asserted
+  // `expect(console.error calls).toEqual([])`, on the theory that a timer firing
+  // into a torn-down subtree would be reported there. It would not: `DemoPreview`
+  // renders `DemoPreviewModal` unconditionally and only toggles `visible`, so
+  // nothing unmounts on close and a stale timer sets state on a LIVE component
+  // in perfect silence. That assertion could not fail, and the original combined
+  // test had been going red for the OTHER reason — the reopen assertion seeing a
+  // transfer that had advanced while closed.
+  //
+  // So both tests now assert the observable consequence rather than a proxy for
+  // it, and each one has its own mutation recorded next to it.
+  it('closing mid-transfer stops the clock: reopening is back at the start', () => {
+    const { getByText, queryByText, getAllByText } = render(<DemoPreview />);
+
+    fireEvent.press(getByText(DEMO_LINK_TEXT));
+    fireEvent.press(getByText('Send to my computer'));
+
+    // Close one step in, while the remaining steps are still scheduled.
+    act(() => {
+      jest.advanceTimersByTime(800);
+    });
+    fireEvent.press(getAllByText('Close')[0]);
+
+    // Let every timer that WAS scheduled come due while the sample is closed.
+    act(() => {
+      jest.advanceTimersByTime(10000);
+    });
+
+    fireEvent.press(getByText(DEMO_LINK_TEXT));
+
+    // Uncleared, those timers would have run the transfer to completion behind a
+    // closed sheet, and this reopen would land on a finished result nobody
+    // watched happen.
+    // MUTATION THAT GOES RED: drop `clearTimers()` from `handleClose`.
+    expect(getByText('Send to my computer')).toBeTruthy();
+    expect(queryByText(`${DEMO_MESSAGE_COUNT} messages delivered`)).toBeNull();
+
+    assertNothingRealWasTouched();
+  });
+
+  it('reopening after a FINISHED transfer starts over, not on the result', () => {
+    const { getByText, queryByText, getAllByText } = render(<DemoPreview />);
+
+    // Run it all the way to the result box. This is the state that can persist
+    // across a close, and the reason `handleClose` resets `stepsDone`.
+    fireEvent.press(getByText(DEMO_LINK_TEXT));
+    fireEvent.press(getByText('Send to my computer'));
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+    expect(getByText(`${DEMO_MESSAGE_COUNT} messages delivered`)).toBeTruthy();
+
+    fireEvent.press(getAllByText('Close')[0]);
+    fireEvent.press(getByText(DEMO_LINK_TEXT));
+
+    // The next person to open it sees the whole sequence, not someone else's
+    // finished result.
+    // MUTATION THAT GOES RED: drop `setStepsDone(0)` from `handleClose`.
+    expect(getByText('Send to my computer')).toBeTruthy();
+    expect(queryByText(`${DEMO_MESSAGE_COUNT} messages delivered`)).toBeNull();
+
+    assertNothingRealWasTouched();
+  });
+
   it('accepts a host-supplied label without changing what it does', () => {
     const { getByText, queryByText } = render(
       <DemoPreview label="See how Keepr works — no account needed" />,
