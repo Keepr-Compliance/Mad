@@ -189,6 +189,15 @@ const OWNERS = {
   "electron/services/iosContactsParser.ts": "BACKLOG-2990",
   "electron/handlers/sessionHandlers.ts": "BACKLOG-2765",
   "electron/handlers/sharedAuthHandlers.ts": "BACKLOG-2765",
+  // BACKLOG-3043. The worker's DECLARED_EXCEPTIONS entry above is `pragma`-only
+  // (BACKLOG-2959 ruling 3) and never covered query text. Three of its six
+  // `prepare` sites (:106, :139, :144) AUTHOR their SQL: the file imports
+  // fragments from db/ and then interpolates them into a template AT THE CALL
+  // SITE, which classifies LITERAL. BACKLOG-2989's brief excludes this file by
+  // name, so without this line the three entries default to BACKLOG-2989 and
+  // that owner can never reach zero. Naming 3043 makes the owner a decision
+  // rather than a fall-through.
+  "electron/workers/contactQueryWorker.ts": "BACKLOG-3043",
 };
 const DEFAULT_OWNER = "BACKLOG-2989";
 const ILLEGAL_OWNER = "UNOWNED";

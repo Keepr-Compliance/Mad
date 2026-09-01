@@ -20,6 +20,7 @@ import logService from "./logService";
 import databaseService from "./databaseService";
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { ensureDb } from "./db/core/dbConnection";
+import { BACKUP_TABLE_COUNT_SQL } from "./db/backupVerificationSql";
 
 /** Result of a backup operation */
 export interface BackupResult {
@@ -198,9 +199,7 @@ export async function verifyBackup(backupPath: string): Promise<boolean> {
 
     // Verify we can read data (tables exist)
     const tables = testDb
-      .prepare(
-        "SELECT count(*) as count FROM sqlite_master WHERE type='table'"
-      )
+      .prepare(BACKUP_TABLE_COUNT_SQL)
       .get() as { count: number };
 
     if (tables.count === 0) {
