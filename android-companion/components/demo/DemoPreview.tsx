@@ -40,6 +40,30 @@
  *    AsyncStorage, so it cannot disturb the pairing record, the device identity
  *    or the sync cursor — the three pieces of state a stray write would corrupt.
  *
+ * ## The one factual claim in here, and where it was checked
+ *
+ * The "In the real app" card says "Nothing is read until you allow it and pair
+ * a computer". Both halves were traced before they were written, because this
+ * is Play-facing copy and the disclosure screen (BACKLOG-2956) set the
+ * precedent that every claim on it cites its source:
+ *
+ *   - "until you allow it" — the runtime permission gate in
+ *     `services/permissions.ts`, plus the consent guard in
+ *     `app/onboarding/permissions.tsx`.
+ *   - "and pair a computer" — `runSyncCycle` in `services/backgroundSync.ts`
+ *     returns at its `loadPairingInfo()` gate (`stoppedAt: "pairing"`) BEFORE
+ *     the SMS read and BEFORE the contacts read further down the same function.
+ *     Those two call sites are the ONLY callers of `readSmsMessages` and
+ *     `readContacts` outside tests, and `getUnreadSmsCount` has no callers at
+ *     all — so an unpaired phone, including one that took BACKLOG-2956's
+ *     "Continue without a computer", reads nothing even with permission granted.
+ *
+ * If a future change adds a reader call that is NOT behind that pairing gate,
+ * this sentence becomes false and must be split into two independently true
+ * clauses ("nothing is read until you allow it, and nothing leaves this phone
+ * until you pair a computer" — the second half is true by construction, since
+ * `syncService` cannot address a desktop without a pairing record).
+ *
  * `DemoPreview` is the whole thing (link + modal) so a host screen adds one
  * line. `DemoPreviewModal` is exported separately so its content can be tested
  * without going through a host.
