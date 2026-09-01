@@ -1,0 +1,16 @@
+// keepr-mms — local Expo module (BACKLOG-2973).
+//
+// `expo-module-gradle-plugin` supplies compileSdk/minSdk/targetSdk, the Kotlin
+// toolchain and the expo-modules-core dependency from the app's own version
+// catalog, so this file only declares what is specific to this module. Keeping
+// those values OUT of here is deliberate: pinning them locally is how a module
+// silently drifts from the app's SDK on the next Expo upgrade.
+apply plugin: 'com.android.library'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'com.keepr.companion.keeprmms'
+version = '1.0.0'
+
+android {
+  namespace 'expo.modules.keeprmms'
+}
