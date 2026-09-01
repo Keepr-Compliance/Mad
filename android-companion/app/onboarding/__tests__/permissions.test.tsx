@@ -119,6 +119,8 @@ import {
   checkContactsPermissions,
 } from '../../../services/permissions';
 import PermissionsScreen from '../permissions';
+import { DEMO_BANNER_TEXT } from '../../../components/demo/DemoPreview';
+import { DEMO_CONVERSATIONS } from '../../../components/demo/sampleConversations';
 
 const mockRequestSms = requestSmsPermissions as jest.Mock;
 const mockRequestContacts = requestContactsPermissions as jest.Mock;
@@ -341,5 +343,54 @@ describe('PermissionsScreen — disclosure precedes the prompt (BACKLOG-2956)', 
       expect(mockReplace).toHaveBeenCalledWith('/onboarding/disclosure');
     });
     expect(mockRequestSms).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3027 — the sample preview is reachable BEFORE the READ_SMS prompt.
+//
+// This is the strongest position the preview can occupy, and the reason it is
+// not hosted on pair-device alone. The forward path off this screen is the
+// `!attempted` branch: one button, "Grant Permissions", which fires the OS
+// dialog. "Skip for Now" exists only in the denied branches — i.e. only AFTER
+// the dialog has already been shown. So this screen is the last point at which
+// a Play reviewer can see what the app does with NOTHING granted.
+//
+// The suite therefore asserts BOTH halves: the preview opens, AND opening it
+// requests no permission. A preview that tripped the very prompt it exists to
+// justify would be worse than no preview.
+//
+// MUTATION THAT MUST GO RED: delete `<DemoPreview />` from
+// app/onboarding/permissions.tsx — all three tests below fail.
+// ---------------------------------------------------------------------------
+describe('permissions — sample preview entry point (BACKLOG-3027)', () => {
+  it('offers the sample, and does not show it unasked', () => {
+    render(<PermissionsScreen />);
+
+    expect(screen.getByText(/See how Keepr works/i)).toBeTruthy();
+    expect(screen.queryByText(DEMO_BANNER_TEXT)).toBeNull();
+  });
+
+  it('shows real sample content when tapped', () => {
+    render(<PermissionsScreen />);
+
+    fireEvent.press(screen.getByText(/See how Keepr works/i));
+
+    expect(screen.getByText(DEMO_BANNER_TEXT)).toBeTruthy();
+    expect(
+      screen.getByText(DEMO_CONVERSATIONS[0].messages[0].body),
+    ).toBeTruthy();
+  });
+
+  it('opening the sample requests NO permission', () => {
+    render(<PermissionsScreen />);
+
+    fireEvent.press(screen.getByText(/See how Keepr works/i));
+
+    // Positive first: the sample really is on screen, so the negatives below
+    // are not passing because nothing rendered.
+    expect(screen.getByText(DEMO_BANNER_TEXT)).toBeTruthy();
+    expect(mockRequestSms).not.toHaveBeenCalled();
+    expect(mockRequestContacts).not.toHaveBeenCalled();
   });
 });

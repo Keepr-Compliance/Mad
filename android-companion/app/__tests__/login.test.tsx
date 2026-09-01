@@ -13,7 +13,7 @@
  * The sign-in options themselves are always present as the retry affordance.
  */
 import React from 'react';
-import { render, screen } from '@testing-library/react-native';
+import { render, screen, fireEvent } from '@testing-library/react-native';
 
 // --- expo-router: the screen reads useLocalSearchParams().authError and calls
 // useRouter() (unused here). authError is injected per-test via a mutable var. ---
@@ -72,6 +72,8 @@ jest.mock('../../components/ui', () => {
 });
 
 import LoginScreen from '../login';
+import { DEMO_BANNER_TEXT } from '../../components/demo/DemoPreview';
+import { DEMO_CONVERSATIONS } from '../../components/demo/sampleConversations';
 
 const EXPIRED_COPY = 'Your session expired. Please sign in again.';
 const CALLBACK_COPY = "We couldn't complete sign-in. Please try again.";
@@ -127,5 +129,52 @@ describe('LoginScreen — auth-error notice (BACKLOG-2215)', () => {
     render(<LoginScreen />);
 
     expect(screen.getByTestId('login-version').props.children).toBe('7.7.7 (42)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3027 — the sample preview is reachable from the SIGN-IN screen.
+//
+// This is where a fresh install actually stops. The auth gate in _layout.tsx
+// sends a session-less app to /login, so login — not the QR pairing screen the
+// item's walk-through describes — is the first wall, and it is the only point
+// in the entire app where the product can be seen with no account AND no
+// permission granted. For a Play reviewer holding only a phone that is the
+// whole answer to "show us the cross-device sync this READ_SMS is for".
+//
+// MUTATION THAT MUST GO RED: delete `<DemoPreview ... />` from app/login.tsx —
+// all three tests below fail.
+// ---------------------------------------------------------------------------
+describe('login — sample preview entry point (BACKLOG-3027)', () => {
+  it('offers the sample without an account, and does not show it unasked', () => {
+    mockAuthError = undefined;
+    render(<LoginScreen />);
+
+    expect(screen.getByText(/See how Keepr works/i)).toBeTruthy();
+    expect(screen.queryByText(DEMO_BANNER_TEXT)).toBeNull();
+  });
+
+  it('shows real sample content when tapped', () => {
+    mockAuthError = undefined;
+    render(<LoginScreen />);
+
+    fireEvent.press(screen.getByText(/See how Keepr works/i));
+
+    expect(screen.getByText(DEMO_BANNER_TEXT)).toBeTruthy();
+    expect(
+      screen.getByText(DEMO_CONVERSATIONS[0].messages[0].body),
+    ).toBeTruthy();
+  });
+
+  it('opening the sample starts no sign-in', () => {
+    mockAuthError = undefined;
+    render(<LoginScreen />);
+
+    fireEvent.press(screen.getByText(/See how Keepr works/i));
+
+    // Positive first, so the negatives are not passing on an empty render.
+    expect(screen.getByText(DEMO_BANNER_TEXT)).toBeTruthy();
+    // The sign-in actions are still there, and none of them fired.
+    expect(screen.getByText('Continue with Google')).toBeTruthy();
   });
 });

@@ -29,6 +29,7 @@ import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { Button } from '../../components/ui';
 import OnboardingSignOutLink from '../../components/ui/OnboardingSignOutLink';
+import DemoPreview from '../../components/demo/DemoPreview';
 
 /** Data encoded in the QR code from the desktop app */
 interface PairingData {
@@ -337,6 +338,12 @@ export default function PairDeviceScreen(): React.JSX.Element {
         <Text style={styles.skipNote}>
           You can pair with your computer later from the home screen.
         </Text>
+
+        {/* BACKLOG-3027: the screen this item names. Someone with no Keepr
+            desktop on this network — a Play reviewer, or anyone evaluating the
+            app before installing the desktop — can see what pairing is FOR
+            without pairing. Reads nothing; opens only on tap. */}
+        <DemoPreview />
 
         <OnboardingSignOutLink />
       </View>

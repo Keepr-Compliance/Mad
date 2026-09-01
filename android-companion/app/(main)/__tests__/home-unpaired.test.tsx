@@ -8,6 +8,14 @@
  * deliberate rather than broken. This suite pins that home renders that state
  * without throwing when AsyncStorage holds NO `@keepr/pairing` entry.
  *
+ * BACKLOG-3027 NARROWED THAT CLAIM, and the tests below say exactly how. The
+ * screen still renders NO sample data of its own — no fake message counts, no
+ * fake desktop, nothing a user could mistake for their own — and the assertions
+ * pinning that are unchanged. What is new is a LINK offering a labelled sample
+ * behind an explicit tap, because 2956 removed the wall and this empty state is
+ * what it escapes TO: a Play reviewer who took the escape hatch arrived here and
+ * still learned nothing about why the app asked to read their texts.
+ *
  * Note this is not a new state invented for the skip: it is already reachable in
  * production, because a sign-out clears the pairing (`reconcilePairingForAuthChange`)
  * and re-login lands an already-onboarded user on an unpaired home. The skip
@@ -23,7 +31,7 @@
  * the AsyncStorage store starts EMPTY, so home takes the Not-Paired branch.
  */
 import React from 'react';
-import { render, waitFor, screen } from '@testing-library/react-native';
+import { render, waitFor, screen, fireEvent } from '@testing-library/react-native';
 import type { SmsPermissionResult } from '../../../services/permissions';
 
 jest.mock('expo-router', () => ({
@@ -173,6 +181,8 @@ jest.mock('../../../components/ui', () => {
 });
 
 import HomeScreen from '../home';
+import { DEMO_BANNER_TEXT } from '../../../components/demo/DemoPreview';
+import { DEMO_CONVERSATIONS } from '../../../components/demo/sampleConversations';
 
 describe('home — unpaired empty state after "Continue without a computer" (BACKLOG-2956)', () => {
   beforeEach(() => {
@@ -221,5 +231,64 @@ describe('home — unpaired empty state after "Continue without a computer" (BAC
     expect(screen.queryByText(/^Desktop /)).toBeNull();
     expect(screen.queryByText(/^Sent to Desktop /)).toBeNull();
     expect(screen.queryByText('Sync Results')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3027 — the sample preview is reachable from the state BACKLOG-2956's
+// escape hatch actually lands on.
+//
+// This is the dead end as it exists TODAY. 2956 already removed the hard wall
+// the item describes ("no skip, no demo mode, no way past the pairing screen"),
+// so the reviewer is no longer stuck on the QR screen — they are here, on an
+// empty state that answers none of their questions. The entry point has to be
+// on this screen or the fix misses where people actually end up.
+//
+// MUTATION THAT MUST GO RED: delete `<DemoPreview />` from the `if (!pairing)`
+// branch of app/(main)/home.tsx — both tests below fail.
+// ---------------------------------------------------------------------------
+describe('home (unpaired) — sample preview entry point (BACKLOG-3027)', () => {
+  it('offers the sample, and does not show it unasked', async () => {
+    render(<HomeScreen />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Not Paired')).toBeTruthy();
+    });
+
+    expect(screen.getByText(/See how Keepr works/i)).toBeTruthy();
+    // Still an empty state until asked: no sample content on screen.
+    expect(screen.queryByText(DEMO_BANNER_TEXT)).toBeNull();
+    expect(
+      screen.queryByText(DEMO_CONVERSATIONS[0].messages[0].body),
+    ).toBeNull();
+  });
+
+  it('shows real sample content when tapped, and never writes a pairing', async () => {
+    const storage = jest.requireMock(
+      '@react-native-async-storage/async-storage',
+    ) as { setItem: jest.Mock; removeItem: jest.Mock };
+    storage.setItem.mockClear();
+    storage.removeItem.mockClear();
+
+    render(<HomeScreen />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Not Paired')).toBeTruthy();
+    });
+
+    fireEvent.press(screen.getByText(/See how Keepr works/i));
+
+    // POSITIVE FIRST: the sample is genuinely on screen.
+    expect(screen.getByText(DEMO_BANNER_TEXT)).toBeTruthy();
+    expect(
+      screen.getByText(DEMO_CONVERSATIONS[0].messages[0].body),
+    ).toBeTruthy();
+
+    // NEGATIVE SECOND: viewing the sample left the phone unpaired. `setItem` /
+    // `removeItem` between them cover the pairing record, the device identity
+    // and the sync cursor.
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(storage.removeItem).not.toHaveBeenCalled();
+    expect(screen.getByText('Not Paired')).toBeTruthy();
   });
 });

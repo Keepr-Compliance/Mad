@@ -24,6 +24,7 @@ import { colors } from '../theme/colors';
 import { textStyles } from '../theme/typography';
 import { borderRadius, spacing } from '../theme/spacing';
 import { BrandMark, GoogleIcon, MicrosoftIcon } from '../components/ui';
+import DemoPreview from '../components/demo/DemoPreview';
 
 // External legal links (open in the device browser) — BACKLOG-2253.
 const TERMS_URL = 'https://keeprcompliance.com/terms';
@@ -339,6 +340,14 @@ export default function LoginScreen(): React.JSX.Element {
               </Text>
               .
             </Text>
+
+            {/* BACKLOG-3027: this screen is where a fresh install actually
+                stops. The auth gate in `_layout.tsx` sends a session-less app
+                here, so login — not the QR screen — is the FIRST wall, and it is
+                the only point at which the product can be seen with no account
+                AND no permission granted. Reads nothing, sends nothing, and
+                cannot start a sign-in. */}
+            <DemoPreview label="See how Keepr works — no account needed" />
 
             {/* BACKLOG-2956: the running build, readable WITHOUT signing in.
                 Settings > About carries the same string, but it sits behind the
