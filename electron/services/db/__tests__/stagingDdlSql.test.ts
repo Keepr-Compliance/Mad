@@ -84,10 +84,22 @@ describe("checkedStagingTable — anchored at both ends", () => {
     expect(() => checkedStagingTable(messageName, "email-recache")).toThrow(/anchored/);
   });
 
-  it("rejects a token of the wrong length or alphabet", () => {
-    expect(() =>
-      checkedStagingTable(`${STAGING_PREFIX["email-recache"]}deadbeef_emails`, "email-recache"),
-    ).toThrow(/anchored/);
+  it("ACCEPTS a token of a different length — the sweep must reclaim old orphans", () => {
+    /**
+     * Regression pin. The first revision demanded exactly 12 hex characters,
+     * and `sweepStaleStaging` then THREW on an orphan table left by a build
+     * with a shorter token instead of dropping it — turning a cleanup path
+     * into a hard failure. Caught by
+     * `emailSyncService.forceRecache-2856.test.ts`, not by this suite.
+     *
+     * The safety property is the prefix, the anchoring and the charset. Length
+     * contributes nothing to it and only stops old tables being tidied away.
+     */
+    const shortToken = `${STAGING_PREFIX["email-recache"]}deadbeef_emails`;
+    expect(checkedStagingTable(shortToken, "email-recache")).toBe(shortToken);
+  });
+
+  it("rejects a non-hex token", () => {
     expect(() =>
       checkedStagingTable(`${STAGING_PREFIX["email-recache"]}NOTHEXNOTHEX_emails`, "email-recache"),
     ).toThrow(/anchored/);

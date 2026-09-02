@@ -72,10 +72,23 @@ export type StagingTableName = string & {
  * Unanchored, the pattern would accept
  * `x staging_emailrecache_deadbeefcafe_emails; DROP TABLE emails --`
  * as a "valid" staging table, which is the whole hazard.
+ *
+ * ## The token is `[0-9a-f]+`, not `{12}` — and that is a correction
+ *
+ * An earlier revision demanded exactly twelve hex characters, which is what
+ * today's generator emits. `sweepStaleStaging` then threw on an orphan left by
+ * a build whose token was a different length: the sweep DISCOVERS names from
+ * `sqlite_master` rather than constructing them, so a constructor-grade check
+ * on a discovery path turns "reclaim a crashed run's leftovers" into "refuse to
+ * clean up, loudly". `emailSyncService.forceRecache-2856.test.ts` caught it.
+ *
+ * The security property is the PREFIX, the ANCHORING and the CHARSET — none of
+ * which the length contributes to. `staging_emailrecache_deadbeef_emails` is a
+ * table this code made; a length rule only stops it being tidied away.
  */
 const STAGING_NAME_PATTERN: Readonly<Record<StagingKind, RegExp>> = {
-  "email-recache": /^staging_emailrecache_[0-9a-f]{12}_[A-Za-z0-9_]+$/,
-  "message-import": /^staging_msgimport_[0-9a-f]{12}_[A-Za-z0-9_]+$/,
+  "email-recache": /^staging_emailrecache_[0-9a-f]+_[A-Za-z0-9_]+$/,
+  "message-import": /^staging_msgimport_[0-9a-f]+_[A-Za-z0-9_]+$/,
 };
 
 /**
@@ -127,6 +140,28 @@ export function tableDdl(
     );
   }
   return row.sql;
+}
+
+/**
+ * The columns of a live table, in declaration order, quoted for reuse on both
+ * sides of the swap.
+ *
+ * ONE COPY, for the same reason as `tableDdl` in commit A1: the email force
+ * re-cache and the macOS messages force re-import carried byte-identical
+ * definitions, and its statement (`text:9b532957dcbe`) was baselined under BOTH
+ * BACKLOG-2989 and BACKLOG-2990. Moving it closes that key in both files, which
+ * is a second early 2990 ratchet — declared, not incidental.
+ *
+ * Executes, but takes a table NAME as an interpolated identifier, never SQL
+ * text from a caller. The name is a literal at every call site (`emails`,
+ * `email_participants`, `messages`, `attachments`).
+ */
+export function columnList(db: DatabaseType, table: string): string {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.length === 0) {
+    throw new Error(`Cannot swap: table "${table}" has no columns`);
+  }
+  return columns.map((c) => `"${c.name}"`).join(", ");
 }
 
 /**

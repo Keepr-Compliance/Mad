@@ -64,6 +64,17 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import * as crypto from "crypto";
+import { UPDATE_EMAIL_IDENTITY_SQL } from "./db/emailSyncSql";
+import {
+  createStagingTable,
+  deleteStagedProviderRows,
+  dropStagingTable,
+  insertStagedEmails,
+  insertStagedParticipants,
+  mirrorStagingIndexes,
+  selectStagedIdsBySource,
+  STALE_STAGING_TABLES_SQL,
+} from "./db/emailStagingSql";
 import {
   assertRebuildableProviders,
   deleteLiveForceSet as dbDeleteLiveForceSet,
@@ -71,6 +82,7 @@ import {
   type EmailForceSet,
 } from "./db/emailForceSetSql";
 import {
+  columnList,
   deriveStagingIndexDdl,
   deriveStagingTableDdl,
   checkedStagingTable,
@@ -176,11 +188,14 @@ export function sweepStaleEmailStaging(db: DatabaseType): string[] {
   // caller, not of this function.
   const escapedPrefix = EMAIL_STAGING_TABLE_PREFIX.replace(/[\\%_]/g, "\\$&");
   const stale = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ? ESCAPE '\\'`)
+    .prepare(STALE_STAGING_TABLES_SQL)
     .all(`${escapedPrefix}%`) as Array<{ name: string }>;
 
   for (const { name } of stale) {
-    db.exec(`DROP TABLE IF EXISTS "${name}"`);
+    // A swept name came from `sqlite_master` filtered on this module's own
+    // prefix, so it is checked rather than trusted — the brand is not a
+    // formality here, this line is a DROP.
+    dropStagingTable(db, checkedStagingTable(name, "email-recache"));
   }
   return stale.map((r) => r.name);
 }
@@ -267,15 +282,6 @@ export interface EmailForceSwapCounts {
   attachmentMetaApplied: number;
 }
 
-/** The columns of a live table, in declaration order, quoted for reuse on both sides of the swap. */
-function columnList(db: DatabaseType, table: string): string {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (columns.length === 0) {
-    throw new Error(`Cannot swap: table "${table}" has no columns`);
-  }
-  return columns.map((c) => `"${c.name}"`).join(", ");
-}
-
 export const emailForceStagingLifecycle = {
   /**
    * Create this run's staging tables. Cheap: two `CREATE TABLE`s and a handful of
@@ -319,29 +325,8 @@ export const emailForceStagingLifecycle = {
       // would store NULL where live stores 0 — and the swap would carry those
       // NULLs into live. Deriving the real DDL also means a future migration's
       // new column arrives in staging on its own.
-      db.exec(deriveStagingTableDdl(tableDdl(db, live), live, staging));
-
-      const indexes = db
-        .prepare(
-          `SELECT name, sql FROM sqlite_master
-           WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL`,
-        )
-        .all(live) as Array<{ name: string; sql: string }>;
-
-      for (const index of indexes) {
-        db.exec(
-          deriveStagingIndexDdl(
-            index.sql,
-            index.name,
-            live,
-            staging,
-            checkedStagingTable(
-              `${EMAIL_STAGING_TABLE_PREFIX}${token}_${index.name}`,
-              "email-recache",
-            ),
-          ),
-        );
-      }
+      createStagingTable(db, live, staging);
+      mirrorStagingIndexes(db, live, staging, `${EMAIL_STAGING_TABLE_PREFIX}${token}_`);
     }
 
     let dropped = false;
@@ -355,8 +340,8 @@ export const emailForceStagingLifecycle = {
       drop(): void {
         if (dropped) return;
         dropped = true;
-        db.exec(`DROP TABLE IF EXISTS "${participantsTable}"`);
-        db.exec(`DROP TABLE IF EXISTS "${emailsTable}"`);
+        dropStagingTable(db, participantsTable);
+        dropStagingTable(db, emailsTable);
       },
     };
   },
@@ -433,11 +418,7 @@ export function restrictForceSetToRebuiltProviders(
     // `REFERENCES emails(id)` foreign key, aborting a re-cache that is otherwise
     // perfectly valid for the provider that DID succeed.
     const orphanedIds = new Set(
-      (
-        db
-          .prepare(`SELECT id FROM "${staging.emailsTable}" WHERE source = ?`)
-          .all(provider) as Array<{ id: string }>
-      ).map((r) => r.id),
+      selectStagedIdsBySource(db, staging.emailsTable, provider).map((r) => r.id),
     );
     for (let i = staging.attachmentMeta.length - 1; i >= 0; i--) {
       if (orphanedIds.has(staging.attachmentMeta[i].emailId)) {
@@ -445,12 +426,9 @@ export function restrictForceSetToRebuiltProviders(
       }
     }
 
-    // Participants first: they reference the staged email rows.
-    db.prepare(
-      `DELETE FROM "${staging.participantsTable}" WHERE email_id IN ` +
-        `(SELECT id FROM "${staging.emailsTable}" WHERE source = ?)`,
-    ).run(provider);
-    db.prepare(`DELETE FROM "${staging.emailsTable}" WHERE source = ?`).run(provider);
+    // Participants first: they reference the staged email rows. Both deletes
+    // travel together in db/ so a caller cannot do half of the pair.
+    deleteStagedProviderRows(db, staging.emailsTable, staging.participantsTable, provider);
   }
 
   const restricted = buildEmailForceSet({
@@ -512,34 +490,19 @@ export const emailForceSwapSteps = {
     db: DatabaseType,
     staging: EmailForceStaging,
   ): { emailsInserted: number; participantsInserted: number } {
-    const emailColumns = columnList(db, "emails");
-    const participantColumns = columnList(db, "email_participants");
-
-    const emails = db
-      .prepare(
-        `INSERT INTO emails (${emailColumns}) ` +
-          `SELECT ${emailColumns} FROM "${staging.emailsTable}"`,
-      )
-      .run();
-    const participants = db
-      .prepare(
-        `INSERT INTO email_participants (${participantColumns}) ` +
-          `SELECT ${participantColumns} FROM "${staging.participantsTable}"`,
-      )
-      .run();
-
     return {
-      emailsInserted: emails.changes,
-      participantsInserted: participants.changes,
+      emailsInserted: insertStagedEmails(db, staging.emailsTable),
+      participantsInserted: insertStagedParticipants(db, staging.participantsTable),
     };
   },
 
   /** BACKLOG-1769 resurrection remaps against live rows the rebuild left alone. */
   applyResurrectionRepairs(db: DatabaseType, staging: EmailForceStaging): number {
     if (staging.resurrectionRepairs.length === 0) return 0;
-    const update = db.prepare(
-      `UPDATE emails SET external_id = ?, message_id_header = COALESCE(message_id_header, ?) WHERE id = ?`,
-    );
+    // The same statement the incremental sync path uses — one const in db/,
+    // imported by both, so a change to the resurrection remap cannot reach one
+    // caller and not the other.
+    const update = db.prepare(UPDATE_EMAIL_IDENTITY_SQL);
     let repaired = 0;
     for (const repair of staging.resurrectionRepairs) {
       repaired += update.run(repair.newExternalId, repair.messageIdHeader, repair.existingId).changes;

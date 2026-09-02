@@ -51,6 +51,7 @@
 import type { Database as DatabaseType } from "better-sqlite3";
 import * as crypto from "crypto";
 import {
+  columnList,
   deriveStagingIndexDdl,
   deriveStagingTableDdl,
   checkedStagingTable,
@@ -392,15 +393,6 @@ export function forceReadView(
 /** How many rows a staging table holds, so a yielded row can be counted rather than inferred. */
 function countRows(db: DatabaseType, table: string): number {
   return (db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get() as { c: number }).c;
-}
-
-/** The columns of a live table, in declaration order, quoted for reuse on both sides of the swap. */
-function columnList(db: DatabaseType, table: string): string {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (columns.length === 0) {
-    throw new Error(`Cannot swap: table "${table}" has no columns`);
-  }
-  return columns.map((c) => `"${c.name}"`).join(", ");
 }
 
 /**
