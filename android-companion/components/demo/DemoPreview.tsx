@@ -84,6 +84,49 @@
  * That is also the more defensible position for review: a reviewer who exercises
  * the desktop cannot falsify a sentence that was only ever about the phone.
  *
+ * ## Why the card says "background syncing", not "syncing"
+ *
+ * The Settings control is labelled "Background Sync" and it gates exactly that.
+ * Traced rather than assumed:
+ *
+ *   - `getBackgroundSyncEnabled()` has ONE service-side reader,
+ *     `backgroundSync.startBackgroundSync()`, which registers/unregisters the
+ *     expo-background-fetch task. Nothing else in `services/` consults it;
+ *     home and settings read it only to render state.
+ *   - The sync itself is `performSync` -> `runOnce` -> `runSyncUnderLock` ->
+ *     `runSyncCycle`, and NO step in that chain checks the flag. Its only gate
+ *     is `loadPairingInfo()`.
+ *   - `appStateCatchup.runCatchupSync()` calls `performSync()` directly, and
+ *     `registerAppStateCatchup()` is armed on session + onboarded only.
+ *     `backgroundSync.ts` says so in its own words: "an immediate sync every
+ *     time the user foregrounds the app, so a killed background task self-heals
+ *     on next open."
+ *
+ * So with the toggle OFF, opening the app still reads texts and sends them. An
+ * unqualified "you can turn syncing off" would be false for a user doing nothing
+ * unusual — a worse failure than the servers claim above, which needed a
+ * deliberate submit. One word fixes it, and it also settles a contradiction with
+ * the result box ("this repeats in the background"), which describes the thing
+ * the toggle really does control.
+ *
+ * ## Two desktop-side claims that are deliberately KEPT
+ *
+ * `DEMO_SYNC_STEPS[3]` ("Filed on your computer / Attached to 148 Alder Court")
+ * and the result box ("where they can be reviewed and exported") also describe
+ * the desktop. They are the same SHAPE as the promise deleted above and they are
+ * staying, by decision, not by oversight.
+ *
+ * The difference is register. Those two sit inside labelled sample fiction, next
+ * to an invented desktop at an invented address, describing what happens to
+ * invented messages — a reviewer reads them as "here is what the product is
+ * for". The deleted sentence sat under a heading that said "In the real app",
+ * which is the app speaking about the user's own data. Removing these would also
+ * gut the thing the preview exists to show: that texts become part of a
+ * transaction record, which is the READ_SMS justification itself.
+ *
+ * Do not "finish the job" by deleting them, and do not read them as promises
+ * that were checked. They are illustration.
+ *
  * If you are here because `app/onboarding/disclosure.tsx` still carries the
  * stronger version of this claim — yes, and it is knowingly out of scope. That
  * screen is the shipped prominent disclosure; its rewrite is BACKLOG-3045.
@@ -374,8 +417,8 @@ export function DemoPreviewModal({
               pair with, over your own Wi-Fi.
             </Text>
             <Text style={styles.fact}>
-              Nothing is read until you allow it and pair a computer, and you can
-              turn syncing off at any time in Settings.
+              Nothing is read until you allow it and pair a computer, and you
+              can turn background syncing off at any time in Settings.
             </Text>
             <Text style={styles.fact}>
               Keepr Companion never sends, forwards or replies to a text message.

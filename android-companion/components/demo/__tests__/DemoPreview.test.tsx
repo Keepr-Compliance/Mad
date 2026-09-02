@@ -233,6 +233,18 @@ describe('DemoPreviewModal — the sample itself', () => {
 
     // POSITIVE FIRST — the card is really rendered, with its real content.
     expect(getByText('In the real app')).toBeTruthy();
+
+    // The Settings control is labelled "Background Sync" and gates only the
+    // expo-background-fetch task: `getBackgroundSyncEnabled()`'s one service-side
+    // reader is `startBackgroundSync()`, and the sync chain itself (performSync
+    // -> runOnce -> runSyncUnderLock -> runSyncCycle) never consults it, while
+    // `appStateCatchup` calls `performSync()` on every foreground. So with the
+    // toggle OFF, opening the app still reads and sends. An unqualified "turn
+    // syncing off" would be false for a user doing nothing unusual.
+    //
+    // MUTATION THAT MUST GO RED: drop the word "background" from that sentence.
+    expect(getByText(/turn background syncing off at any time in Settings/i))
+      .toBeTruthy();
     expect(
       getByText(/Your texts go from this phone to the Keepr app on the computer/i),
     ).toBeTruthy();
@@ -262,7 +274,10 @@ describe('DemoPreviewModal — the sample itself', () => {
     expect(onScreen.length).toBeGreaterThan(20); // the sweep actually swept
 
     const offending = onScreen.filter((s) =>
-      /servers|the cloud|never uploaded|not uploaded/i.test(s),
+      /servers|the cloud|never uploaded|not uploaded/i.test(s) ||
+      // An unqualified "turn syncing off" overstates what the Settings toggle
+      // controls — see the note above. "turn BACKGROUND syncing off" is fine.
+      /turn syncing off/i.test(s),
     );
     expect(offending).toEqual([]);
   });
