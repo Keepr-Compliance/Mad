@@ -229,7 +229,22 @@ const DECLARED_EXCEPTIONS = [
  */
 const OWNERS = {
   "electron/services/databaseService.ts": "BACKLOG-2991",
-  "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts": "BACKLOG-2990",
+  // BACKLOG-3062, re-owned by BACKLOG-2990 chunk 5 — the commit that made the
+  // work someone else's is the commit that moves the ownership.
+  //
+  // 2990 moved every statement it could. The SIX that remain are 3062's and
+  // cannot close before it: four sit immediately after `buildMessageWindowSql(plan)`
+  // and splice the window predicate as TEXT, and two are the `dbGet`/`dbAllSizes`
+  // wrapper conduits those four consume. Leaving them owned by 2990 would hold a
+  // finished item open against work it does not own — a false NOT-DONE, and the
+  // mirror of the false DONE that 3062 was filed to name.
+  //
+  // `expr:4ec7c53222c8` is the same hash as `storageDiagnostics.ts:281` from
+  // BACKLOG-2989: a `(sql: string) => db.verb(sql)` conduit, UNRESOLVABLE because
+  // argument 0 is a parameter. Third appearance across two items, so the hash is
+  // now a signature for the shape — a match on it is the conduit, without
+  // re-deriving.
+  "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts": "BACKLOG-3062",
   "electron/services/macOSMessagesImportService/forceStaging.ts": "BACKLOG-2990",
   "electron/services/macOSMessagesImportService/importHelpers.ts": "BACKLOG-2990",
   "electron/services/iosMessagesParser.ts": "BACKLOG-2990",

@@ -2,7 +2,7 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "231f05140c562c0567dc2af417f01391389e72d6",
+  "measuredAt": "e7601d1a870652bc6f451ffce2d5ffccce89137a",
   "totalSites": 68,
   "entryCount": 53,
   "entries": [
@@ -364,7 +364,7 @@
       "match": "expr:4ec7c53222c8",
       "bucket": "UNRESOLVABLE",
       "count": 1,
-      "owner": "BACKLOG-2990"
+      "owner": "BACKLOG-3062"
     },
     {
       "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
@@ -372,7 +372,7 @@
       "match": "text:1181d2d81366",
       "bucket": "VIOLATION",
       "count": 1,
-      "owner": "BACKLOG-2990"
+      "owner": "BACKLOG-3062"
     },
     {
       "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
@@ -380,7 +380,7 @@
       "match": "text:1cc9212929f9",
       "bucket": "VIOLATION",
       "count": 1,
-      "owner": "BACKLOG-2990"
+      "owner": "BACKLOG-3062"
     },
     {
       "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
@@ -388,7 +388,7 @@
       "match": "text:61cd0a2df1af",
       "bucket": "VIOLATION",
       "count": 1,
-      "owner": "BACKLOG-2990"
+      "owner": "BACKLOG-3062"
     },
     {
       "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
@@ -396,7 +396,7 @@
       "match": "expr:4ec7c53222c8",
       "bucket": "UNRESOLVABLE",
       "count": 1,
-      "owner": "BACKLOG-2990"
+      "owner": "BACKLOG-3062"
     },
     {
       "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
@@ -404,7 +404,7 @@
       "match": "text:5908cab70a8d",
       "bucket": "VIOLATION",
       "count": 1,
-      "owner": "BACKLOG-2990"
+      "owner": "BACKLOG-3062"
     },
     {
       "file": "electron/workers/contactQueryWorker.ts",
