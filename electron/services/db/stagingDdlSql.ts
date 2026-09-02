@@ -104,17 +104,26 @@ export function checkedStagingTable(
 ): StagingTableName {
   if (!STAGING_NAME_PATTERN[kind].test(name)) {
     throw new Error(
-      `Refusing to use "${name}" as a ${kind} staging table: it does not match ` +
-        `the anchored ${STAGING_PREFIX[kind]}<12 hex>_<suffix> pattern.`,
+      `Refusing to use "${name}" as a staging table: it does not match the ` +
+        `anchored ${STAGING_PREFIX[kind]}<hex>_<suffix> pattern for ${kind}.`,
     );
   }
   return name as StagingTableName;
 }
 
-/** What each family calls the operation, so neither caller loses its wording. */
+/**
+ * What each family calls the operation, so neither caller loses its wording.
+ *
+ * The indefinite article lives INSIDE the value rather than in the template.
+ * `Cannot stage a ${STAGING_OPERATION[kind]}` renders correctly for both of
+ * today's values, but it is the shape BACKLOG-2673's guard rejects — because
+ * whether "a" or "an" is right depends on a value the template cannot see, so
+ * the next entry added here would silently produce "a inbox re-scan". Rendered
+ * output is unchanged.
+ */
 const STAGING_OPERATION: Readonly<Record<StagingKind, string>> = {
-  "email-recache": "force re-cache",
-  "message-import": "force re-import",
+  "email-recache": "a force re-cache",
+  "message-import": "a force re-import",
 };
 
 /**
@@ -136,7 +145,7 @@ export function tableDdl(
     .get(table) as { sql: string | null } | undefined;
   if (!row?.sql) {
     throw new Error(
-      `Cannot stage a ${STAGING_OPERATION[kind]}: table "${table}" does not exist`,
+      `Cannot stage ${STAGING_OPERATION[kind]}: table "${table}" does not exist`,
     );
   }
   return row.sql;
