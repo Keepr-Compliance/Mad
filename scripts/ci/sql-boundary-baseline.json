@@ -2,10 +2,34 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "87b827871b1ff4191a3ae7f9fe5301b7ddfcaf44",
-  "totalSites": 118,
-  "entryCount": 99,
+  "measuredAt": "bb2640f1d32a78946eb60c73bc185181cab3c257",
+  "totalSites": 137,
+  "entryCount": 118,
   "entries": [
+    {
+      "file": "electron/handlers/conversationHandlers.ts",
+      "verb": "all",
+      "match": "text:75b9cf492c6b",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
+    {
+      "file": "electron/handlers/conversationHandlers.ts",
+      "verb": "all",
+      "match": "text:93168f45a827",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
+    {
+      "file": "electron/handlers/conversationHandlers.ts",
+      "verb": "all",
+      "match": "text:c03ad31232e5",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
     {
       "file": "electron/handlers/sessionHandlers.ts",
       "verb": "prepare",
@@ -37,6 +61,30 @@
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2765"
+    },
+    {
+      "file": "electron/services/contactsService.ts",
+      "verb": "all",
+      "match": "text:099b7b2187fe",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
+    {
+      "file": "electron/services/contactsService.ts",
+      "verb": "all",
+      "match": "text:e6c64b744d5d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
+    {
+      "file": "electron/services/contactsService.ts",
+      "verb": "all",
+      "match": "text:f33c88684ad2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
     },
     {
       "file": "electron/services/databaseService.ts",
@@ -578,6 +626,110 @@
       "file": "electron/services/macOSMessagesImportService/importHelpers.ts",
       "verb": "prepare",
       "match": "text:ece08a520a0d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "expr:4ec7c53222c8",
+      "bucket": "UNRESOLVABLE",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:065a7402fe75",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:1080607bf8d4",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:1181d2d81366",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:1cc9212929f9",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:213b3fa79ce2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:61cd0a2df1af",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:9411d05cec46",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:9541590e804d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:e00f53f48fba",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "get",
+      "match": "expr:4ec7c53222c8",
+      "bucket": "UNRESOLVABLE",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "get",
+      "match": "text:5908cab70a8d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-2990"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "get",
+      "match": "text:e00f53f48fba",
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2990"
