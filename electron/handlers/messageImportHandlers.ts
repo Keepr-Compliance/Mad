@@ -4,6 +4,8 @@
 // ============================================
 
 import { ipcMain, BrowserWindow } from "electron";
+import { LOCAL_USER_ID_SQL } from "../services/db/localUserSql";
+import { MESSAGE_IMPORT_SUMMARY_SQL } from "../services/db/messageImportStatsSql";
 import type { IpcMainInvokeEvent } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import logService from "../services/logService";
@@ -159,7 +161,7 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
         });
         // Try to find any user in the database (single-user app)
         const db = databaseService.getRawDatabase();
-        const anyUser = db.prepare("SELECT id FROM users_local LIMIT 1").get() as { id: string } | undefined;
+        const anyUser = db.prepare(LOCAL_USER_ID_SQL).get() as { id: string } | undefined;
         if (anyUser) {
           validUserId = anyUser.id;
           logService.info("[MessageImport] Using migrated user ID", "MessageImportHandlers", {
@@ -670,14 +672,9 @@ export function registerMessageImportHandlers(mainWindow: BrowserWindow): void {
       const db = databaseService.getRawDatabase();
 
       // Get count and most recent created_at for iMessage/SMS
-      const result = db.prepare(`
-        SELECT
-          COUNT(*) as count,
-          MAX(created_at) as last_import_at
-        FROM messages
-        WHERE user_id = ?
-          AND channel IN ('sms', 'imessage')
-      `).get(userId) as { count: number; last_import_at: string | null } | undefined;
+      const result = db
+        .prepare(MESSAGE_IMPORT_SUMMARY_SQL)
+        .get(userId) as { count: number; last_import_at: string | null } | undefined;
 
       return {
         success: true,

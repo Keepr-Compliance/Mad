@@ -36,7 +36,6 @@ jest.mock("../attachmentTextExtractionService", () => {
 });
 
 import { backfillAttachmentTextContent } from "../attachmentTextExtractionBackfillService";
-import { EXTRACTABLE_MIME_SQL_LIST } from "../attachmentTextExtractionService";
 
 interface PendingRow {
   id: string;
@@ -61,7 +60,16 @@ function setup(pending: PendingRow[]): { sqlSeen: string[] } {
         return { get: () => ({ n: remaining().length }) };
       }
       if (sql.includes("SELECT id")) {
-        return { all: (limit: number) => remaining().slice(0, limit) };
+        // BACKLOG-2989 chunk 3: the MIME types are now BOUND rather than
+        // interpolated, so the page size is the LAST parameter, not the first.
+        // This fake previously read `all(limit)` positionally — a binding
+        // assumption it never stated, and the kind of thing a fake encodes
+        // silently. The real driver is exercised in
+        // db/__tests__/chunk3TextExtraction.test.ts.
+        return {
+          all: (...params: unknown[]) =>
+            remaining().slice(0, params[params.length - 1] as number),
+        };
       }
       throw new Error(`Unexpected SQL: ${sql}`);
     },
@@ -153,7 +161,11 @@ describe("BACKLOG-2257 backfillAttachmentTextContent", () => {
     mockGetRawDatabase.mockReturnValue({
       prepare(sql: string) {
         if (sql.includes("COUNT(*)")) return { get: () => ({ n: remaining().length }) };
-        return { all: (limit: number) => remaining().slice(0, limit) };
+        // Page size is the LAST bound parameter — see the note in setup().
+        return {
+          all: (...params: unknown[]) =>
+            remaining().slice(0, params[params.length - 1] as number),
+        };
       },
     });
     mockExtract
@@ -174,14 +186,26 @@ describe("BACKLOG-2257 backfillAttachmentTextContent", () => {
     expect(mockExtract).not.toHaveBeenCalled();
   });
 
-  it("the pending query filters on the extractable MIME allowlist", async () => {
-    const { sqlSeen } = setup([
-      { id: "a1", storage_path: "/p/1.pdf", mime_type: "application/pdf" },
-    ]);
-    await backfillAttachmentTextContent();
-    const joined = sqlSeen.join("\n");
-    expect(joined).toContain("storage_path IS NOT NULL");
-    expect(joined).toContain("text_content IS NULL");
-    expect(joined).toContain(EXTRACTABLE_MIME_SQL_LIST);
-  });
+  /**
+   * REMOVED, and deliberately not replaced in this file — BACKLOG-2989 chunk 3.
+   *
+   * This test asserted that the pending query's TEXT contained three
+   * substrings. It could only ever do that, because this suite's `setup()`
+   * hands `prepare` a fake that records `sqlSeen` and never touches a
+   * database: matching a substring asserts the test's own model of the
+   * statement, not the database's answer to it. That is the BACKLOG-2848
+   * shape, and it is what the corrigendum on BACKLOG-2989 classified as
+   * "partial, not coverage".
+   *
+   * The behaviour it was groping at — that the pending set is exactly the
+   * downloaded, not-yet-extracted, extractable-type rows — is now asserted on
+   * a REAL database, per branch of the WHERE clause, in
+   * `electron/services/db/__tests__/chunk3TextExtraction.test.ts`. That suite
+   * also runs the pre-move statement side by side and requires an identical
+   * exact ID set, which is the control that replaces byte-identity for the one
+   * statement in this item that deliberately changed.
+   *
+   * Deleting assertions during a refactor is normally how coverage silently
+   * drops, so it is recorded here rather than left to a diff.
+   */
 });

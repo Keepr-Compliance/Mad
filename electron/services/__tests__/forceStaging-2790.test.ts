@@ -22,7 +22,6 @@ const Database = require(
 import type { Database as DatabaseType } from "better-sqlite3";
 
 import {
-  deriveStagingTableDdl,
   FORCE_SET_MESSAGES,
   forceStagingLifecycle,
   sweepStaleStaging,
@@ -30,6 +29,10 @@ import {
   SURVIVING_ATTACHMENTS,
   SURVIVING_MESSAGES,
 } from "../macOSMessagesImportService/forceStaging";
+// BACKLOG-2989 commit A: `deriveStagingTableDdl` moved to the db layer, where
+// it is now the single copy shared by the messages force re-import and the
+// email force re-cache. Import re-pointed; no assertion in this suite changed.
+import { checkedStagingTable, deriveStagingTableDdl } from "../db/stagingDdlSql";
 
 const USER = "user-2790";
 
@@ -352,8 +355,17 @@ describe("BACKLOG-2790 — a derived staging table", () => {
     // A silent no-op rename would produce a staging table named `messages` —
     // i.e. writes going straight to live, which is the one outcome this whole
     // design exists to prevent. It must throw instead.
+    // BACKLOG-2989 commit A: the staging name is now a BRANDED type, so the
+    // literal `"staging_x"` this used to pass no longer compiles. It is
+    // replaced with a real checked name — which is strictly closer to what the
+    // caller does. The assertion is unchanged: the derive must still throw when
+    // it cannot rename the live table.
     expect(() =>
-      deriveStagingTableDdl("CREATE TABLE somethingelse (id TEXT)", "messages", "staging_x")
+      deriveStagingTableDdl(
+        "CREATE TABLE somethingelse (id TEXT)",
+        "messages",
+        checkedStagingTable(`${STAGING_TABLE_PREFIX}0123456789ab_messages`, "message-import")
+      )
     ).toThrow(/staging table/i);
   });
 });

@@ -64,11 +64,31 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import * as crypto from "crypto";
+import { UPDATE_EMAIL_IDENTITY_SQL } from "./db/emailSyncSql";
 import {
-  deriveStagingTableDdl,
+  createStagingTable,
+  deleteStagedProviderRows,
+  dropStagingTable,
+  insertStagedEmails,
+  insertStagedParticipants,
+  mirrorStagingIndexes,
+  selectStagedIdsBySource,
+  STALE_STAGING_TABLES_SQL,
+} from "./db/emailStagingSql";
+import {
+  assertRebuildableProviders,
+  deleteLiveForceSet as dbDeleteLiveForceSet,
+  emailForceReadView as dbEmailForceReadView,
+  type EmailForceSet,
+} from "./db/emailForceSetSql";
+import {
+  columnList,
   deriveStagingIndexDdl,
-  forceReadView,
-} from "./macOSMessagesImportService/forceStaging";
+  deriveStagingTableDdl,
+  checkedStagingTable,
+  type StagingTableName,
+  emailTableDdl as tableDdl,
+} from "./db/stagingDdlSql";
 
 /** Prefix every ephemeral table shares, so a crashed run's leftovers are findable. */
 export const EMAIL_STAGING_TABLE_PREFIX = "staging_emailrecache_";
@@ -121,50 +141,27 @@ const ALLOWED_PROVIDERS: readonly EmailForceProvider[] = ["gmail", "outlook"];
  * checked against `ALLOWED_PROVIDERS` first, and a value that fails that check
  * throws rather than reaching the SQL.
  */
-export interface EmailForceSetPredicate {
-  /** The predicate SQL, with one `?` for userId and one for the cache-window floor. */
-  readonly sql: string;
-  /** `NOT (sql)`, NULL-safe — the rows the force set leaves in place. */
-  readonly survivingSql: string;
-  /** Positional bindings for either predicate, in order of appearance. */
-  readonly params: readonly string[];
-}
+export type { EmailForceSet } from "./db/emailForceSetSql";
 
+/**
+ * Build a force set.
+ *
+ * BACKLOG-2989 commit A2: this used to return an `EmailForceSetPredicate`
+ * carrying `sql`, `survivingSql` and `params` — so a predicate built here
+ * travelled as TEXT into a read view, a DELETE and a UNION source, three files
+ * away from the guard that made it safe. It now returns DATA, and every
+ * statement is built in `db/emailForceSetSql` from that data.
+ *
+ * The provider allow-list moved with the construction it protects.
+ */
 export function buildEmailForceSet(params: {
   userId: string;
   providers: readonly EmailForceProvider[];
   cacheSinceIso: string;
-}): EmailForceSetPredicate {
+}): EmailForceSet {
   const { userId, providers, cacheSinceIso } = params;
-
-  for (const provider of providers) {
-    if (!ALLOWED_PROVIDERS.includes(provider)) {
-      throw new Error(`Refusing to build an email force set for unknown source "${provider}"`);
-    }
-  }
-  if (providers.length === 0) {
-    throw new Error("Refusing to build an email force set with no rebuildable provider");
-  }
-
-  const sourceList = providers.map((p) => `'${p}'`).join(", ");
-  const sql =
-    `user_id = ? AND external_id IS NOT NULL ` +
-    `AND source IN (${sourceList}) ` +
-    `AND sent_at >= ?`;
-
-  return {
-    sql,
-    // NULL-safe by hand, exactly as `SURVIVING_MESSAGES` is. `source` is nullable
-    // past its CHECK constraint and `sent_at` is nullable outright, so the force
-    // predicate CAN evaluate to NULL. For such a row a plain `NOT (…)` is NULL —
-    // the row would survive the DELETE (correct: a DELETE removes a row only
-    // when its WHERE is TRUE) and then drop out of the rebuild's survivor read
-    // (wrong), which is exactly how a surviving row stops being deduplicated
-    // against and gets staged a second time. COALESCE spells out what "survived"
-    // means: the force set was not TRUE.
-    survivingSql: `COALESCE(${sql}, 0) = 0`,
-    params: [userId, cacheSinceIso],
-  };
+  assertRebuildableProviders(providers);
+  return { userId, providers, cacheSinceIso };
 }
 
 /**
@@ -191,11 +188,14 @@ export function sweepStaleEmailStaging(db: DatabaseType): string[] {
   // caller, not of this function.
   const escapedPrefix = EMAIL_STAGING_TABLE_PREFIX.replace(/[\\%_]/g, "\\$&");
   const stale = db
-    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ? ESCAPE '\\'`)
+    .prepare(STALE_STAGING_TABLES_SQL)
     .all(`${escapedPrefix}%`) as Array<{ name: string }>;
 
   for (const { name } of stale) {
-    db.exec(`DROP TABLE IF EXISTS "${name}"`);
+    // A swept name came from `sqlite_master` filtered on this module's own
+    // prefix, so it is checked rather than trusted — the brand is not a
+    // formality here, this line is a DROP.
+    dropStagingTable(db, checkedStagingTable(name, "email-recache"));
   }
   return stale.map((r) => r.name);
 }
@@ -233,8 +233,21 @@ export interface PendingAttachmentMeta {
 
 export interface EmailForceStaging {
   readonly userId: string;
-  readonly emailsTable: string;
-  readonly participantsTable: string;
+  /**
+   * BACKLOG-2989 commit A2 fix: these are `StagingTableName`, not `string`.
+   *
+   * `checkedStagingTable` produces a branded value below, and declaring these
+   * two as `string` threw the brand away before anything downstream could
+   * demand it — so `emailForceReadView` could interpolate an unchecked name
+   * into `FROM "${stagingTable}"` under a docstring claiming it was checked.
+   *
+   * That is the same widening the compiler caught during A1 at
+   * `pairs: Array<[live: string, staging: string]>`, one commit later. The
+   * brand only holds if EVERY declaration between construction and use keeps
+   * it; branding the parameters alone is not enough.
+   */
+  readonly emailsTable: StagingTableName;
+  readonly participantsTable: StagingTableName;
   /**
    * The force-set predicate; the swap deletes exactly it.
    *
@@ -243,7 +256,7 @@ export interface EmailForceStaging {
    * set (every connected provider) so the rebuild's dedup reads treat those rows
    * as "about to be replaced" and stage their re-fetched copies.
    */
-  forceSet: EmailForceSetPredicate;
+  forceSet: EmailForceSet;
   /**
    * Resurrection remaps (BACKLOG-1769) that target rows in the REAL `emails`
    * table rather than in staging — i.e. SURVIVORS, since a force-set row is no
@@ -269,25 +282,6 @@ export interface EmailForceSwapCounts {
   attachmentMetaApplied: number;
 }
 
-function tableDdl(db: DatabaseType, table: string): string {
-  const row = db
-    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
-    .get(table) as { sql: string | null } | undefined;
-  if (!row?.sql) {
-    throw new Error(`Cannot stage a force re-cache: table "${table}" does not exist`);
-  }
-  return row.sql;
-}
-
-/** The columns of a live table, in declaration order, quoted for reuse on both sides of the swap. */
-function columnList(db: DatabaseType, table: string): string {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (columns.length === 0) {
-    throw new Error(`Cannot swap: table "${table}" has no columns`);
-  }
-  return columns.map((c) => `"${c.name}"`).join(", ");
-}
-
 export const emailForceStagingLifecycle = {
   /**
    * Create this run's staging tables. Cheap: two `CREATE TABLE`s and a handful of
@@ -302,13 +296,22 @@ export const emailForceStagingLifecycle = {
    */
   create(
     db: DatabaseType,
-    args: { userId: string; forceSet: EmailForceSetPredicate },
+    args: { userId: string; forceSet: EmailForceSet },
   ): EmailForceStaging {
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    const emailsTable = `${EMAIL_STAGING_TABLE_PREFIX}${token}_emails`;
-    const participantsTable = `${EMAIL_STAGING_TABLE_PREFIX}${token}_participants`;
+    // Checked at CONSTRUCTION, not at use: the branded type then travels with
+    // the name, so every function that splices it into DDL demands the checked
+    // form and the compiler refuses an unchecked one.
+    const emailsTable = checkedStagingTable(
+      `${EMAIL_STAGING_TABLE_PREFIX}${token}_emails`,
+      "email-recache",
+    );
+    const participantsTable = checkedStagingTable(
+      `${EMAIL_STAGING_TABLE_PREFIX}${token}_participants`,
+      "email-recache",
+    );
 
-    const pairs: Array<[live: string, staging: string]> = [
+    const pairs: Array<[live: string, staging: StagingTableName]> = [
       ["emails", emailsTable],
       ["email_participants", participantsTable],
     ];
@@ -322,26 +325,8 @@ export const emailForceStagingLifecycle = {
       // would store NULL where live stores 0 — and the swap would carry those
       // NULLs into live. Deriving the real DDL also means a future migration's
       // new column arrives in staging on its own.
-      db.exec(deriveStagingTableDdl(tableDdl(db, live), live, staging));
-
-      const indexes = db
-        .prepare(
-          `SELECT name, sql FROM sqlite_master
-           WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL`,
-        )
-        .all(live) as Array<{ name: string; sql: string }>;
-
-      for (const index of indexes) {
-        db.exec(
-          deriveStagingIndexDdl(
-            index.sql,
-            index.name,
-            live,
-            staging,
-            `${EMAIL_STAGING_TABLE_PREFIX}${token}_${index.name}`,
-          ),
-        );
-      }
+      createStagingTable(db, live, staging);
+      mirrorStagingIndexes(db, live, staging, `${EMAIL_STAGING_TABLE_PREFIX}${token}_`);
     }
 
     let dropped = false;
@@ -355,8 +340,8 @@ export const emailForceStagingLifecycle = {
       drop(): void {
         if (dropped) return;
         dropped = true;
-        db.exec(`DROP TABLE IF EXISTS "${participantsTable}"`);
-        db.exec(`DROP TABLE IF EXISTS "${emailsTable}"`);
+        dropStagingTable(db, participantsTable);
+        dropStagingTable(db, emailsTable);
       },
     };
   },
@@ -387,10 +372,11 @@ export function emailForceReadView(
   staging: EmailForceStaging,
   columns: string,
 ): { sql: string; params: readonly string[] } {
-  return {
-    sql: forceReadView("emails", staging.emailsTable, staging.forceSet.survivingSql, columns),
-    params: staging.forceSet.params,
-  };
+  // The surviving predicate is built inside db/ from the force SET, so it never
+  // travels as text. `forceReadView` is left alone here: BACKLOG-2990's
+  // macOSMessagesImportService calls it in three places, and its signature is
+  // that item's to change.
+  return dbEmailForceReadView(staging.forceSet, staging.emailsTable, columns);
 }
 
 /**
@@ -422,7 +408,7 @@ export function restrictForceSetToRebuiltProviders(
   staging: EmailForceStaging,
   rebuiltProviders: readonly EmailForceProvider[],
   cacheSinceIso: string,
-): EmailForceSetPredicate | null {
+): EmailForceSet | null {
   if (rebuiltProviders.length === 0) return null;
 
   const dropped = ALLOWED_PROVIDERS.filter((p) => !rebuiltProviders.includes(p));
@@ -432,11 +418,7 @@ export function restrictForceSetToRebuiltProviders(
     // `REFERENCES emails(id)` foreign key, aborting a re-cache that is otherwise
     // perfectly valid for the provider that DID succeed.
     const orphanedIds = new Set(
-      (
-        db
-          .prepare(`SELECT id FROM "${staging.emailsTable}" WHERE source = ?`)
-          .all(provider) as Array<{ id: string }>
-      ).map((r) => r.id),
+      selectStagedIdsBySource(db, staging.emailsTable, provider).map((r) => r.id),
     );
     for (let i = staging.attachmentMeta.length - 1; i >= 0; i--) {
       if (orphanedIds.has(staging.attachmentMeta[i].emailId)) {
@@ -444,12 +426,9 @@ export function restrictForceSetToRebuiltProviders(
       }
     }
 
-    // Participants first: they reference the staged email rows.
-    db.prepare(
-      `DELETE FROM "${staging.participantsTable}" WHERE email_id IN ` +
-        `(SELECT id FROM "${staging.emailsTable}" WHERE source = ?)`,
-    ).run(provider);
-    db.prepare(`DELETE FROM "${staging.emailsTable}" WHERE source = ?`).run(provider);
+    // Participants first: they reference the staged email rows. Both deletes
+    // travel together in db/ so a caller cannot do half of the pair.
+    deleteStagedProviderRows(db, staging.emailsTable, staging.participantsTable, provider);
   }
 
   const restricted = buildEmailForceSet({
@@ -483,9 +462,7 @@ export const emailForceSwapSteps = {
    * confirmation dialog has to say so before the run starts.
    */
   deleteLiveForceSet(db: DatabaseType, staging: EmailForceStaging): number {
-    return db
-      .prepare(`DELETE FROM emails WHERE ${staging.forceSet.sql}`)
-      .run(...staging.forceSet.params).changes;
+    return dbDeleteLiveForceSet(db, staging.forceSet);
   },
 
   /**
@@ -513,34 +490,19 @@ export const emailForceSwapSteps = {
     db: DatabaseType,
     staging: EmailForceStaging,
   ): { emailsInserted: number; participantsInserted: number } {
-    const emailColumns = columnList(db, "emails");
-    const participantColumns = columnList(db, "email_participants");
-
-    const emails = db
-      .prepare(
-        `INSERT INTO emails (${emailColumns}) ` +
-          `SELECT ${emailColumns} FROM "${staging.emailsTable}"`,
-      )
-      .run();
-    const participants = db
-      .prepare(
-        `INSERT INTO email_participants (${participantColumns}) ` +
-          `SELECT ${participantColumns} FROM "${staging.participantsTable}"`,
-      )
-      .run();
-
     return {
-      emailsInserted: emails.changes,
-      participantsInserted: participants.changes,
+      emailsInserted: insertStagedEmails(db, staging.emailsTable),
+      participantsInserted: insertStagedParticipants(db, staging.participantsTable),
     };
   },
 
   /** BACKLOG-1769 resurrection remaps against live rows the rebuild left alone. */
   applyResurrectionRepairs(db: DatabaseType, staging: EmailForceStaging): number {
     if (staging.resurrectionRepairs.length === 0) return 0;
-    const update = db.prepare(
-      `UPDATE emails SET external_id = ?, message_id_header = COALESCE(message_id_header, ?) WHERE id = ?`,
-    );
+    // The same statement the incremental sync path uses — one const in db/,
+    // imported by both, so a change to the resurrection remap cannot reach one
+    // caller and not the other.
+    const update = db.prepare(UPDATE_EMAIL_IDENTITY_SQL);
     let repaired = 0;
     for (const repair of staging.resurrectionRepairs) {
       repaired += update.run(repair.newExternalId, repair.messageIdHeader, repair.existingId).changes;

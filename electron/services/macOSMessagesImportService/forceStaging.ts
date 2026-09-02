@@ -50,6 +50,14 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import * as crypto from "crypto";
+import {
+  columnList,
+  deriveStagingIndexDdl,
+  deriveStagingTableDdl,
+  checkedStagingTable,
+  type StagingTableName,
+  messageTableDdl as tableDdl,
+} from "../db/stagingDdlSql";
 
 /** Prefix every ephemeral table shares, so a crashed run's leftovers are findable. */
 export const STAGING_TABLE_PREFIX = "staging_msgimport_";
@@ -217,96 +225,6 @@ export interface ForceSwapCounts {
 }
 
 /**
- * Rewrite one table's `CREATE TABLE` statement to define a staging clone.
- *
- * Derived from `sqlite_master` rather than hand-written, and NOT built with
- * `CREATE TABLE … AS SELECT * … WHERE 0`. The reason is column DEFAULTS: the
- * import's INSERTs name roughly sixteen of `messages`' forty columns and let the
- * table supply the rest (`has_attachments INTEGER DEFAULT 0`,
- * `is_false_positive INTEGER DEFAULT 0`, …). `CREATE TABLE … AS SELECT` copies
- * column names and types and drops every default, so staging would store NULL
- * where live stores 0 — and the swap would carry those NULLs into live. Deriving
- * the real DDL also means a future migration's new column arrives in staging on
- * its own, and that the simplified schema the real-driver test suites create is
- * mirrored just as faithfully as the production one.
- *
- * FOREIGN KEY clauses are stripped. Copied verbatim under `foreign_keys = ON`,
- * `attachments`' `REFERENCES messages(id)` would reject every staging insert:
- * the row it points at is in the staging messages table, not in live. The
- * constraint is not lost, only deferred to where it belongs — the swap inserts
- * into LIVE, where the real foreign keys apply to the real final state.
- */
-export function deriveStagingTableDdl(
-  liveDdl: string,
-  liveTable: string,
-  stagingTable: string
-): string {
-  const renamed = liveDdl.replace(
-    new RegExp(
-      `^\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?["'\`\\[]?${liveTable}["'\`\\]]?`,
-      "i"
-    ),
-    `CREATE TABLE ${stagingTable}`
-  );
-  if (renamed === liveDdl) {
-    throw new Error(
-      `Could not derive a staging table from the definition of "${liveTable}"`
-    );
-  }
-
-  const referencesClause =
-    `REFERENCES\\s+["'\`\\[]?\\w+["'\`\\]]?\\s*\\([^)]*\\)` +
-    `(?:\\s+ON\\s+(?:DELETE|UPDATE)\\s+(?:NO\\s+ACTION|RESTRICT|SET\\s+NULL|SET\\s+DEFAULT|CASCADE))*` +
-    `(?:\\s+(?:NOT\\s+)?DEFERRABLE(?:\\s+INITIALLY\\s+(?:DEFERRED|IMMEDIATE))?)?`;
-
-  return (
-    renamed
-      // table-level: `, FOREIGN KEY (x) REFERENCES y(z) ON DELETE CASCADE`
-      .replace(
-        new RegExp(`,?\\s*FOREIGN\\s+KEY\\s*\\([^)]*\\)\\s*${referencesClause}`, "gi"),
-        ""
-      )
-      // column-level: `x TEXT REFERENCES y(z)`
-      .replace(new RegExp(`\\s+${referencesClause}`, "gi"), "")
-      // tidy up whatever the removals left behind
-      .replace(/,(\s*)\)/g, "$1)")
-      .replace(/\((\s*),/g, "($1")
-  );
-}
-
-/** Mirror one index definition onto the staging table, under a unique name. */
-export function deriveStagingIndexDdl(
-  liveDdl: string,
-  liveIndexName: string,
-  liveTable: string,
-  stagingTable: string,
-  stagingIndexName: string
-): string {
-  return liveDdl
-    .replace(
-      new RegExp(
-        `(CREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)["'\`\\[]?${liveIndexName}["'\`\\]]?`,
-        "i"
-      ),
-      `$1${stagingIndexName}`
-    )
-    .replace(
-      new RegExp(`(\\sON\\s+)["'\`\\[]?${liveTable}["'\`\\]]?`, "i"),
-      `$1${stagingTable}`
-    );
-}
-
-function tableDdl(db: DatabaseType, table: string): string {
-  const row = db
-    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
-    .get(table) as { sql: string | null } | undefined;
-  if (!row?.sql) {
-    throw new Error(`Cannot stage a force re-import: table "${table}" does not exist`);
-  }
-  return row.sql;
-}
-
-/**
  * Drop every staging table left behind by a previous run.
  *
  * A process that dies between the rebuild and the swap leaves its staging tables
@@ -365,10 +283,17 @@ export const forceStagingLifecycle = {
    */
   create(db: DatabaseType, userId: string): ForceStaging {
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    const messagesTable = `${STAGING_TABLE_PREFIX}${token}_messages`;
-    const attachmentsTable = `${STAGING_TABLE_PREFIX}${token}_attachments`;
+    // Checked at CONSTRUCTION — see the branded type in db/stagingDdlSql.
+    const messagesTable = checkedStagingTable(
+      `${STAGING_TABLE_PREFIX}${token}_messages`,
+      "message-import",
+    );
+    const attachmentsTable = checkedStagingTable(
+      `${STAGING_TABLE_PREFIX}${token}_attachments`,
+      "message-import",
+    );
 
-    const pairs: Array<[live: string, staging: string]> = [
+    const pairs: Array<[live: string, staging: StagingTableName]> = [
       ["messages", messagesTable],
       ["attachments", attachmentsTable],
     ];
@@ -395,7 +320,10 @@ export const forceStagingLifecycle = {
             index.name,
             live,
             staging,
-            `${STAGING_TABLE_PREFIX}${token}_${index.name}`
+            checkedStagingTable(
+              `${STAGING_TABLE_PREFIX}${token}_${index.name}`,
+              "message-import",
+            )
           )
         );
       }
@@ -430,6 +358,25 @@ export const forceStagingLifecycle = {
  *
  * Columns are always listed explicitly. `SELECT *` here would drag `body_text`
  * for every row of a six-figure rebuild through a query that wants two columns.
+ *
+ * ## Duplicated with `db/emailForceSetSql.ts:emailForceReadView` — DELIBERATE
+ *
+ * BACKLOG-2989 commit A2 built a second union-view builder for the email force
+ * re-cache instead of reusing this one, and did NOT move this one into `db/`.
+ * That is not an oversight and the duplicate is not dead code — both are live.
+ *
+ * The two are not the same function yet. The email one builds its predicate
+ * INSIDE `db/` from an `EmailForceSet` (data). This one RECEIVES its predicate
+ * as TEXT — `SURVIVING_MESSAGES` / `SURVIVING_ATTACHMENTS`, authored here in
+ * `services/`. Moving this signature into `db/` unchanged would freeze
+ * predicate-as-text into the layer, which is precisely the design A2 exists to
+ * remove; and changing it here would rewrite three call sites in
+ * `macOSMessagesImportService.ts` (:1410, :1862, :1866) that belong to
+ * BACKLOG-2990.
+ *
+ * **The collapse is BACKLOG-2990's**, once it builds its force set from data
+ * too. `emailForceReadView` is the target shape. Until then, an edit to either
+ * builder should be considered for both.
  */
 export function forceReadView(
   liveTable: string,
@@ -446,15 +393,6 @@ export function forceReadView(
 /** How many rows a staging table holds, so a yielded row can be counted rather than inferred. */
 function countRows(db: DatabaseType, table: string): number {
   return (db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get() as { c: number }).c;
-}
-
-/** The columns of a live table, in declaration order, quoted for reuse on both sides of the swap. */
-function columnList(db: DatabaseType, table: string): string {
-  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (columns.length === 0) {
-    throw new Error(`Cannot swap: table "${table}" has no columns`);
-  }
-  return columns.map((c) => `"${c.name}"`).join(", ");
 }
 
 /**
