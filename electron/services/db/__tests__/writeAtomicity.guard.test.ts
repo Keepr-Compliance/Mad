@@ -70,6 +70,27 @@ const EXEMPT: Record<string, string> = {
   // touching, and are already wrapped one level up by the migration runner.
   runMigrations: "migration runner wraps the whole migration in its own transaction",
   applyMigration: "invoked by runMigrations, inside its transaction",
+  // BACKLOG-2990 chunk 5. Three DELETEs, and they ARE atomic — the guard cannot
+  // see it because the transaction is one module away, in `services/`, and
+  // `namesCalledInsideATransaction` only scans `db/` for `dbTransaction(`.
+  //
+  // Its ONE caller is `forceStaging.forceSwapSteps.deleteLiveForceSet`, itself
+  // called only from inside the `db.transaction()` callback in
+  // `swapStagingIntoLive` (forceStaging.ts:453). Verified by enumerating every
+  // reference to the symbol, not by reading the nearest one.
+  //
+  // WRAPPING IT WOULD BE WRONG, not merely redundant. better-sqlite3 implements
+  // a nested `db.transaction()` as a SAVEPOINT, so a failure inside these
+  // deletes would roll back to the savepoint and let the outer swap CONTINUE —
+  // where today it aborts the whole swap and leaves the corpus untouched. That
+  // changes the failure semantics of the one path whose job is not to lose the
+  // user's messages, and transaction shape belongs to item 6, not to a text move.
+  //
+  // These three writes existed in `services/` before this chunk and were
+  // invisible to this guard, which enumerates only `db/`. The move did not
+  // create the exposure; it made it visible.
+  deleteLiveForceSet:
+    "macosForceSetSql: atomic via swapStagingIntoLive's db.transaction() at forceStaging.ts:453, its only call path; nesting would convert a swap-aborting failure into a savepoint rollback",
   relabelTypedContactValues:
     "called only from a migration — inside migration v60's migrate() at databaseService.ts:3276 — and EVERY migration is run by `const runInTransaction = currentDb.transaction(...)` at databaseService.ts:3513, verified by reading the caller, not inferred (BACKLOG-2569 re-checked these; they had drifted from :3231/:3468)",
 };

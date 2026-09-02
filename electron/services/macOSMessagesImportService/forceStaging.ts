@@ -49,12 +49,25 @@
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
+
+import {
+  deleteLiveForceSet as dbDeleteLiveForceSet,
+  insertStagedRows,
+  macOSForceSetFor,
+  selectYieldedMessageIds,
+} from "../db/macosForceSetSql";
+import { UPDATE_ATTACHMENT_MESSAGE_ID_SQL } from "../db/messageImportSql";
 import * as crypto from "crypto";
 import {
   columnList,
   deriveStagingIndexDdl,
   deriveStagingTableDdl,
   checkedStagingTable,
+  countStagingRows,
+  createStagingTable,
+  dropStagingTable,
+  mirrorStagingIndexes,
+  sweepStaleStagingTables,
   type StagingTableName,
   messageTableDdl as tableDdl,
 } from "../db/stagingDdlSql";
@@ -62,127 +75,10 @@ import {
 /** Prefix every ephemeral table shares, so a crashed run's leftovers are findable. */
 export const STAGING_TABLE_PREFIX = "staging_msgimport_";
 
-/**
- * The provenance stamp the macOS importer writes into every row's `metadata`.
- *
- * `macOSMessagesImportService.storeMessages` builds
- * `JSON.stringify({ source: "macos_messages", originalId, service })` and passes
- * it as the `metadata` column of its one INSERT. `git log -S'source:
- * "macos_messages"'` over both the current path and the pre-split one returns a
- * single commit — `84c841252`, the commit that ADDED this service — so there is
- * no historical version of this importer that wrote a row without it.
- *
- * Nor is scoping a force delete by it a new convention. The ANDROID force
- * re-import already does exactly this: `localSyncService.clearAndroidData` calls
- * `syncDbService.deleteMessagesByMetadataSource(userId, "android_wifi_sync")`,
- * which is `DELETE FROM messages WHERE user_id = ? AND
- * json_extract(metadata, '$.source') = ?` (BACKLOG-1468). The macOS path was the
- * one that never got it.
- */
-export const MACOS_IMPORT_METADATA_SOURCE = "macos_messages";
 
-/**
- * The force set, as ONE definition: the rows a macOS Force Re-import replaces.
- *
- * Both the swap's DELETEs and the rebuild's "what will still be there" reads are
- * built from these constants. Two spellings of this predicate would be two
- * different answers to "what does a force re-import replace", and the drift
- * would be silent — the swap would delete rows the rebuild had assumed were
- * still there, or keep rows it had assumed were gone.
- *
- * `@userId` is the run's user throughout: the force set belongs to the user
- * whose import is running, so one bound parameter serves every use.
- *
- * ---------------------------------------------------------------------------
- * BACKLOG-2796 — WHY THIS IS SCOPED, AND WHY IT MUST STAY SCOPED
- * ---------------------------------------------------------------------------
- * This predicate used to be `user_id = @userId AND external_id IS NOT NULL` and
- * nothing more, which made a force re-import delete every row this user had from
- * ANY source and then rebuild only what chat.db could supply. A user with the
- * Android companion paired lost their Android SMS; an iPhone-sync user lost
- * their synced messages; `channel = 'email'` rows went with them. That predates
- * stage-and-swap — the old `clearMacOSMessages` deleted the same set — so the
- * set itself was the defect, not the machinery around it.
- *
- * The scope is the answer to one question: what can a chat.db rebuild put back?
- * Each clause is one half of that answer.
- *
- *   - `channel IN ('sms','imessage')` — chat.db holds texts. It cannot produce
- *     an email row, so a force re-import must not delete one.
- *   - the provenance clause — chat.db holds THIS Mac's texts. Channel alone is
- *     not enough, because the Android companion writes `channel: "sms"` too
- *     (`localSyncService.storeMessages`); the id shape is not enough either,
- *     because iPhone sync writes the SAME Apple GUID space into `external_id`
- *     (`iPhoneSyncStorageService`). What does separate them is the
- *     `metadata.$.source` each writer stamps on its own rows: `macos_messages`,
- *     `android_wifi_sync`, `iphone_sync`.
- *
- * ALLOW-LIST, NOT DENY-LIST, deliberately. Listing the sources to SPARE would
- * re-plant this bug for the fourth writer somebody adds. Naming the one source
- * this importer can rebuild means an unrecognised row survives by default, which
- * is the only defensible default for a predicate whose failure mode is deleting
- * the user's messages.
- *
- * `json_valid` is a guard, not decoration. `json_extract` THROWS `malformed
- * JSON` if it meets a single non-JSON `metadata` value among the rows it scans,
- * and a throw here aborts the entire swap. Measured on the real driver (sqlite
- * 3.53.2) over a table holding one `{"source":"macos_messages"}`, one
- * `not json at all` and one NULL: the bare form throws, the guarded form returns
- * exactly the one match. `json_valid(NULL)` is NULL, so a NULL-metadata row is
- * not in the force set — it survives, and `SURVIVING_MESSAGES` below is what
- * keeps the rebuild able to see it.
- */
-export const FORCE_SET_MESSAGES =
-  `user_id = @userId AND external_id IS NOT NULL ` +
-  `AND channel IN ('sms', 'imessage') ` +
-  `AND json_valid(metadata) ` +
-  `AND json_extract(metadata, '$.source') = '${MACOS_IMPORT_METADATA_SOURCE}'`;
-const FORCE_SET_MESSAGE_IDS = `SELECT id FROM messages WHERE ${FORCE_SET_MESSAGES}`;
-const FORCE_SET_MESSAGE_EXTERNAL_IDS = `SELECT external_id FROM messages WHERE ${FORCE_SET_MESSAGES}`;
-export const FORCE_SET_ATTACHMENTS_BY_MESSAGE_ID = `message_id IN (${FORCE_SET_MESSAGE_IDS})`;
-export const FORCE_SET_ATTACHMENTS_BY_EXTERNAL_ID = `external_message_id IN (${FORCE_SET_MESSAGE_EXTERNAL_IDS})`;
 
-/**
- * Rows of `messages` that a force re-import does NOT replace.
- *
- * NOT NULL-safe by hand, exactly like `SURVIVING_ATTACHMENTS` below — and it had
- * to become so when BACKLOG-2796 scoped the force set. It used to be a plain
- * `NOT (…)`, which was correct while the predicate could only be TRUE or FALSE:
- * `user_id` is NOT NULL and `external_id IS NOT NULL` is never itself NULL. The
- * scoped predicate CAN evaluate to NULL — `channel` is nullable past its CHECK
- * constraint, and `json_valid(NULL)` returns NULL rather than 0. For such a row
- * `NOT (force set)` is NULL, so the row would survive the DELETE (correct: a
- * DELETE removes a row only when its WHERE is TRUE) and then drop out of the
- * rebuild's survivor read (wrong) — which is precisely how a surviving row stops
- * being deduplicated against and has its GUID staged a second time. COALESCE
- * spells out what "survived" means: the force set was not TRUE.
- */
-export const SURVIVING_MESSAGES = `COALESCE(${FORCE_SET_MESSAGES}, 0) = 0`;
 
-/**
- * The `external_id`s of THIS USER's rows that a force re-import leaves in place.
- *
- * Scoped to `@userId` on purpose. `idx_messages_user_external_id` is UNIQUE on
- * `(user_id, external_id)`, so another user holding the same GUID is not a
- * conflict and must not make this run yield to it.
- */
-const SURVIVING_MESSAGE_EXTERNAL_IDS = `SELECT external_id FROM messages WHERE user_id = @userId AND external_id IS NOT NULL AND ${SURVIVING_MESSAGES}`;
 
-/**
- * Rows of `attachments` that a force re-import does NOT replace.
- *
- * NOT NULL-safe by hand, deliberately. `message_id IN (…)` evaluates to NULL —
- * not false — when `message_id` is NULL, which is exactly the shape of every
- * EMAIL attachment (they carry `email_id` instead). A plain
- * `NOT (a OR b)` would therefore evaluate to NULL for every email attachment and
- * silently drop the lot out of the rebuild's dedup sets, so a force re-import
- * would stop recognising files it had already copied for an email. A DELETE
- * removes a row only when its WHERE is TRUE, so "survived" is "neither predicate
- * was TRUE" — which is what COALESCE spells out.
- */
-export const SURVIVING_ATTACHMENTS =
-  `COALESCE(${FORCE_SET_ATTACHMENTS_BY_MESSAGE_ID}, 0) = 0 ` +
-  `AND COALESCE(${FORCE_SET_ATTACHMENTS_BY_EXTERNAL_ID}, 0) = 0`;
 
 /** A stale `message_id` on a LIVE attachment row, held back for the swap (TASK-1122). */
 export interface PendingMessageIdRepair {
@@ -192,8 +88,21 @@ export interface PendingMessageIdRepair {
 
 export interface ForceStaging {
   readonly userId: string;
-  readonly messagesTable: string;
-  readonly attachmentsTable: string;
+  /**
+   * BRANDED, not `string` — BACKLOG-2990 chunk 5.
+   *
+   * These were plain strings, and the compiler caught it the moment the swap
+   * helpers moved into `db/` and demanded `StagingTableName`. A staging table
+   * name reaches SQL by interpolation (a table name cannot be bound), so the
+   * ONE thing standing between it and an injection is that it came from
+   * `checkedStagingTable`. `string` lets any caller supply any name and lets a
+   * later edit widen the field back without anything noticing — which is
+   * BACKLOG-2989 A2's finding, where the brand was dropped one commit after it
+   * was introduced. Branded here, the check is enforced by the type system
+   * rather than by whoever remembers.
+   */
+  readonly messagesTable: StagingTableName;
+  readonly attachmentsTable: StagingTableName;
   /**
    * TASK-1122 repairs aimed at rows that live in the REAL `attachments` table
    * rather than in staging. Applied as the swap's last step: today that UPDATE
@@ -264,16 +173,7 @@ export function sweepStaleStaging(db: DatabaseType): string[] {
   // "the input happens to be safe" is a property of a caller, not of this
   // function, and the next caller does not inherit the comment.
   const escapedPrefix = STAGING_TABLE_PREFIX.replace(/[\\%_]/g, "\\$&");
-  const stale = db
-    .prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ? ESCAPE '\\'`
-    )
-    .all(`${escapedPrefix}%`) as Array<{ name: string }>;
-
-  for (const { name } of stale) {
-    db.exec(`DROP TABLE IF EXISTS "${name}"`);
-  }
-  return stale.map((r) => r.name);
+  return sweepStaleStagingTables(db, `${escapedPrefix}%`);
 }
 
 export const forceStagingLifecycle = {
@@ -299,34 +199,19 @@ export const forceStagingLifecycle = {
     ];
 
     for (const [live, staging] of pairs) {
-      db.exec(deriveStagingTableDdl(tableDdl(db, live), live, staging));
+      createStagingTable(db, live, staging);
 
       // Indexes are mirrored, not skipped. `INSERT OR IGNORE`'s dedup depends on
       // one of them — the partial unique index on (user_id, external_id) is what
       // makes a repeated GUID within a run an ignored no-op rather than a second
       // row — and carrying the rest keeps the rebuild's write cost the same shape
       // as writing to live, which is what it used to be.
-      const indexes = db
-        .prepare(
-          `SELECT name, sql FROM sqlite_master
-           WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL`
+      mirrorStagingIndexes(db, live, staging, (indexName: string) =>
+        checkedStagingTable(
+          `${STAGING_TABLE_PREFIX}${token}_${indexName}`,
+          "message-import",
         )
-        .all(live) as Array<{ name: string; sql: string }>;
-
-      for (const index of indexes) {
-        db.exec(
-          deriveStagingIndexDdl(
-            index.sql,
-            index.name,
-            live,
-            staging,
-            checkedStagingTable(
-              `${STAGING_TABLE_PREFIX}${token}_${index.name}`,
-              "message-import",
-            )
-          )
-        );
-      }
+      );
     }
 
     let dropped = false;
@@ -338,62 +223,15 @@ export const forceStagingLifecycle = {
       drop(): void {
         if (dropped) return;
         dropped = true;
-        db.exec(`DROP TABLE IF EXISTS "${attachmentsTable}"`);
-        db.exec(`DROP TABLE IF EXISTS "${messagesTable}"`);
+        dropStagingTable(db, attachmentsTable);
+        dropStagingTable(db, messagesTable);
       },
     };
   },
 };
 
-/**
- * A read that must see what the live table WOULD look like at this point in a
- * force run: everything the swap will not delete, plus everything this run has
- * staged so far.
- *
- * This is the exact equivalence that makes the rebuild behaviour-preserving. The
- * old design cleared the live table first, so every dedup read inside the run
- * returned "survivors of the clear ∪ rows written so far". Reading only staging
- * would lose the survivors — most visibly the email attachments, whose copied
- * files the content-hash dedup must keep recognising.
- *
- * Columns are always listed explicitly. `SELECT *` here would drag `body_text`
- * for every row of a six-figure rebuild through a query that wants two columns.
- *
- * ## Duplicated with `db/emailForceSetSql.ts:emailForceReadView` — DELIBERATE
- *
- * BACKLOG-2989 commit A2 built a second union-view builder for the email force
- * re-cache instead of reusing this one, and did NOT move this one into `db/`.
- * That is not an oversight and the duplicate is not dead code — both are live.
- *
- * The two are not the same function yet. The email one builds its predicate
- * INSIDE `db/` from an `EmailForceSet` (data). This one RECEIVES its predicate
- * as TEXT — `SURVIVING_MESSAGES` / `SURVIVING_ATTACHMENTS`, authored here in
- * `services/`. Moving this signature into `db/` unchanged would freeze
- * predicate-as-text into the layer, which is precisely the design A2 exists to
- * remove; and changing it here would rewrite three call sites in
- * `macOSMessagesImportService.ts` (:1410, :1862, :1866) that belong to
- * BACKLOG-2990.
- *
- * **The collapse is BACKLOG-2990's**, once it builds its force set from data
- * too. `emailForceReadView` is the target shape. Until then, an edit to either
- * builder should be considered for both.
- */
-export function forceReadView(
-  liveTable: string,
-  stagingTable: string,
-  survivingRows: string,
-  columns: string
-): string {
-  return (
-    `(SELECT ${columns} FROM ${liveTable} WHERE ${survivingRows}` +
-    ` UNION ALL SELECT ${columns} FROM "${stagingTable}")`
-  );
-}
 
-/** How many rows a staging table holds, so a yielded row can be counted rather than inferred. */
-function countRows(db: DatabaseType, table: string): number {
-  return (db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get() as { c: number }).c;
-}
+
 
 /**
  * The swap, as three named steps.
@@ -418,22 +256,7 @@ export const forceSwapSteps = {
     db: DatabaseType,
     staging: ForceStaging
   ): { messagesDeleted: number; attachmentsDeleted: number } {
-    const params = { userId: staging.userId };
-
-    const byMessageId = db
-      .prepare(`DELETE FROM attachments WHERE ${FORCE_SET_ATTACHMENTS_BY_MESSAGE_ID}`)
-      .run(params);
-    const byExternalId = db
-      .prepare(`DELETE FROM attachments WHERE ${FORCE_SET_ATTACHMENTS_BY_EXTERNAL_ID}`)
-      .run(params);
-    const messages = db
-      .prepare(`DELETE FROM messages WHERE ${FORCE_SET_MESSAGES}`)
-      .run(params);
-
-    return {
-      messagesDeleted: messages.changes,
-      attachmentsDeleted: byMessageId.changes + byExternalId.changes,
-    };
+    return dbDeleteLiveForceSet(db, macOSForceSetFor(staging.userId));
   },
 
   /**
@@ -513,47 +336,41 @@ export const forceSwapSteps = {
     // whole rebuild's attachments. Ask before either write, and the answer
     // cannot drift. Normally the list is EMPTY and both statements are the ones
     // this function has always run.
-    const yieldedMessageIds = (
-      db
-        .prepare(
-          `SELECT id FROM "${staging.messagesTable}" ` +
-            `WHERE external_id IN (${SURVIVING_MESSAGE_EXTERNAL_IDS})`
-        )
-        .all({ userId: staging.userId }) as Array<{ id: string }>
-    ).map((row) => row.id);
+    const yieldedMessageIds = selectYieldedMessageIds(
+      db,
+      macOSForceSetFor(staging.userId),
+      staging.messagesTable
+    );
 
-    const stagedAttachments = countRows(db, staging.attachmentsTable);
-    const placeholders = yieldedMessageIds.map(() => "?").join(", ");
+    const stagedAttachments = countStagingRows(db, staging.attachmentsTable);
 
-    const messages = db
-      .prepare(
-        `INSERT INTO messages (${messageColumns}) ` +
-          `SELECT ${messageColumns} FROM "${staging.messagesTable}"` +
-          (yieldedMessageIds.length > 0 ? ` WHERE id NOT IN (${placeholders})` : "")
-      )
-      .run(...yieldedMessageIds);
-    const attachments = db
-      .prepare(
-        `INSERT INTO attachments (${attachmentColumns}) ` +
-          `SELECT ${attachmentColumns} FROM "${staging.attachmentsTable}"` +
-          (yieldedMessageIds.length > 0
-            ? ` WHERE message_id IS NULL OR message_id NOT IN (${placeholders})`
-            : "")
-      )
-      .run(...yieldedMessageIds);
+    const messagesInserted = insertStagedRows(
+      db,
+      "messages",
+      staging.messagesTable,
+      messageColumns,
+      yieldedMessageIds
+    );
+    const attachmentsInserted = insertStagedRows(
+      db,
+      "attachments",
+      staging.attachmentsTable,
+      attachmentColumns,
+      yieldedMessageIds
+    );
 
     return {
-      messagesInserted: messages.changes,
-      attachmentsInserted: attachments.changes,
+      messagesInserted,
+      attachmentsInserted,
       messagesYieldedToSurvivors: yieldedMessageIds.length,
-      attachmentsYieldedToSurvivors: stagedAttachments - attachments.changes,
+      attachmentsYieldedToSurvivors: stagedAttachments - attachmentsInserted,
     };
   },
 
   /** TASK-1122 repairs against live rows the rebuild deliberately left alone. */
   applyMessageIdRepairs(db: DatabaseType, staging: ForceStaging): number {
     if (staging.messageIdRepairs.length === 0) return 0;
-    const update = db.prepare(`UPDATE attachments SET message_id = ? WHERE id = ?`);
+    const update = db.prepare(UPDATE_ATTACHMENT_MESSAGE_ID_SQL);
     let repaired = 0;
     for (const repair of staging.messageIdRepairs) {
       repaired += update.run(repair.messageId, repair.attachmentId).changes;
