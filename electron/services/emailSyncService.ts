@@ -18,6 +18,9 @@ import type { AutoLinkResult } from "./autoLinkService";
 // granted a support window covering the email-sync scope.
 import { supportTrace } from "./supportAccess/trace";
 import { countEmailsByUser, getEmailByExternalId } from "./db/emailDbService";
+// BACKLOG-3056: the two ends of the locally cached window, read together. See
+// the gap comment in `precacheEmails`.
+import { getCachedEmailSentAtBounds } from "./db/emailCacheWindow";
 import type { BulkMailHeaders } from "../utils/bulkMailHeaders";
 import { CURRENT_DERIVATION_VERSION } from "../utils/derivationVersion";
 import { reprocessEmailDerivations } from "./emailDerivationReprocessService";
@@ -2079,25 +2082,75 @@ class EmailSyncService {
     //
     // So a force run reads from `cacheSinceDate` — the user's full configured
     // window — and the clamp is simply not applied.
-    const latestCachedRow = isForce
-      ? null
-      : dbGet<{ latest: string | null }>(
-          "SELECT MAX(sent_at) as latest FROM emails WHERE user_id = ?",
-          [userId],
-        );
+    //
+    // BACKLOG-3056: the bounds are read in ONE pass (`MIN`/`MAX`) and the force
+    // path still reads NEITHER. `isForce ? null : …` is unchanged in meaning —
+    // a force run has no high-water mark to clamp to and no gap to backfill,
+    // because it re-fetches the entire configured window by construction.
+    const cachedBounds = isForce ? null : getCachedEmailSentAtBounds(userId);
     let fetchSinceDate = cacheSinceDate;
-    if (latestCachedRow?.latest) {
-      const latestCached = new Date(latestCachedRow.latest);
+    if (cachedBounds?.newest) {
+      const latestCached = new Date(cachedBounds.newest);
       if (latestCached > cacheSinceDate) {
         fetchSinceDate = latestCached;
       }
     }
 
+    // ---------------------------------------------------------------------
+    // BACKLOG-3056 — THE GAP THE CLAMP ABOVE CANNOT REACH
+    // ---------------------------------------------------------------------
+    // The clamp only ever moves the fetch start FORWARD. So when the user
+    // widens Email History — 3 months to 6 to 12 — `cacheSinceDate` travels
+    // backwards, the clamp overrides it, and the run fetches from today
+    // regardless. The founder measured exactly that: the configured floor moved
+    // back nine months while `fetchSinceDate` never moved at all, and each run
+    // reported "Cached 0 new emails" in about two seconds.
+    //
+    // The span between the newly-configured floor and the OLDEST row already
+    // cached is mail the app has never fetched. One incremental run now asks
+    // for both ranges:
+    //
+    //     [cacheSinceDate .. oldestCached)   this backfill
+    //     [latestCached   .. now]            the usual incremental
+    //
+    // Backfilling rather than telling the user to press Force re-cache is the
+    // founder's decision, and the reason is `communications`: a force run
+    // deletes every email row and the link rows die with them by ON DELETE
+    // CASCADE, so "use Force re-cache to get your own history" would unlink
+    // every email from its transaction. A backfill only inserts.
+    //
+    // STRICTLY EARLIER, and that matters: when the floor EQUALS the oldest
+    // cached row there is no gap, and a `<=` here would make every ordinary
+    // re-cache issue a second, always-empty round trip per provider.
+    //
+    // KNOWN COST, stated rather than hidden: the gap is derived from the DATA
+    // (the oldest cached row) and not from a stored "floor already swept". So a
+    // mailbox holding nothing older than the configured floor — a new agent
+    // with a young mailbox and a 1-year window — re-asks for that empty older
+    // range on every run. Correct, but not free. Recording a durable
+    // floor-of-record would remove the repeat; it adds per-user state, so it is
+    // a founder decision and is deliberately not smuggled in here.
+    const oldestCached = cachedBounds?.oldest ? new Date(cachedBounds.oldest) : null;
+    const backfillWindow =
+      oldestCached && cacheSinceDate < oldestCached
+        ? { after: cacheSinceDate, before: oldestCached }
+        : null;
+
     logService.info("Email pre-cache date range computed", "EmailSyncService", {
       cacheDurationMonths,
       cacheSinceDate: cacheSinceDate.toISOString(),
       fetchSinceDate: fetchSinceDate.toISOString(),
-      isIncremental: !!latestCachedRow?.latest,
+      isIncremental: !!cachedBounds?.newest,
+      // BACKLOG-3056: this bug was found in the founder's own dev log, by
+      // reading `cacheSinceDate` against `fetchSinceDate`. The gap decision is
+      // logged beside them so the same reading answers "and did it backfill?".
+      oldestCached: cachedBounds?.oldest ?? null,
+      backfill: backfillWindow
+        ? {
+            after: backfillWindow.after.toISOString(),
+            before: backfillWindow.before.toISOString(),
+          }
+        : "none",
       force: isForce,
     });
 
@@ -2349,6 +2402,179 @@ class EmailSyncService {
             message: classifyProviderError(gmailError),
             tokenExpired: true,
           };
+        }
+      }
+    }
+
+    // -------------------------------------------------------------------
+    // BACKLOG-3056 — THE BACKFILL ROUND: [cacheSinceDate .. oldestCached)
+    // -------------------------------------------------------------------
+    // Everything above fetched forward from the high-water mark. This fetches
+    // the span the widened Email History setting just opened up BEHIND the
+    // cache, which the clamp can never reach.
+    //
+    // SECOND, NOT FIRST. New mail is what the user sees on the screen they
+    // pressed the button from, and a backfill over a year of history is the
+    // long part of the run. Running it after the incremental rounds means a
+    // cancel half way through the backfill still leaves today's mail cached.
+    //
+    // NON-FORCE ONLY, structurally: `backfillWindow` is derived from
+    // `cachedBounds`, and `cachedBounds` is null on a force run. Nothing here
+    // touches `forceStaging` or `rebuiltProviders` — a force run's rebuilt set
+    // must describe the FULL-window rounds above and nothing else.
+    //
+    // Rounds mirror the incremental ones exactly (inbox + all folders, search +
+    // all labels), because the coverage question is identical; only the window
+    // differs. `before` is inclusive on Graph (`receivedDateTime le`) and
+    // exclusive on Gmail (`before:` epoch seconds), so Outlook may hand back the
+    // oldest already-cached message again — `fetchStoreAndDedup` recognises it
+    // as a duplicate and stores nothing. That asymmetry is provider behaviour,
+    // not a bound to "fix" here.
+    if (backfillWindow && !isCancelled()) {
+      logService.info("Email pre-cache backfilling the widened window", "EmailSyncService", {
+        userId,
+        after: backfillWindow.after.toISOString(),
+        before: backfillWindow.before.toISOString(),
+      });
+
+      // Progress holds at the same percent while `current` climbs — the idiom
+      // the repair pass already uses. The bar must not go backwards, and a
+      // backfill over a year of mail must not look like a frozen run.
+      emitProgress({
+        phase: "fetching",
+        current: totalFetched,
+        total: totalFetched,
+        percent: EMAIL_PRECACHE_PERCENT.FETCH_SECOND_PROVIDER,
+      });
+
+      if (microsoftToken && !isCancelled()) {
+        try {
+          await retryOnNetwork(async () => {
+            const outlookReady = await outlookFetchService.initialize(userId);
+            if (!outlookReady) return;
+
+            const inboxBackfill = await fetchStoreAndDedup({
+              provider: "outlook",
+              fetchFn: () => outlookFetchService.searchEmails({
+                maxResults: EMAIL_FETCH_SAFETY_CAP,
+                after: backfillWindow.after,
+                before: backfillWindow.before,
+                signal: abort.signal,
+              }),
+              userId,
+              seenIds: seenEmailIds,
+              getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
+            });
+
+            let folderBackfill = { fetched: 0, stored: 0, errors: 0 };
+            try {
+              if (!isCancelled()) {
+                folderBackfill = await fetchStoreAndDedup({
+                  provider: "outlook",
+                  fetchFn: () => outlookFetchService.searchAllFolders({
+                    maxResults: EMAIL_FETCH_SAFETY_CAP,
+                    after: backfillWindow.after,
+                    before: backfillWindow.before,
+                    signal: abort.signal,
+                  }),
+                  userId,
+                  seenIds: seenEmailIds,
+                  getAttachmentsFn: (msgId) => outlookFetchService.getAttachments(msgId),
+                });
+              }
+            } catch (folderError) {
+              if (isNetworkError(folderError)) throw folderError;
+              // A failed backfill sweep costs the user history, never their
+              // cache: nothing has been deleted, and the next run recomputes
+              // the same gap and tries again.
+              logService.warn("Pre-cache backfill: all-folders fetch failed, continuing", "EmailSyncService", {
+                error: folderError instanceof Error ? folderError.message : "Unknown",
+              });
+            }
+
+            totalFetched += inboxBackfill.fetched + folderBackfill.fetched;
+            totalStored += inboxBackfill.stored + folderBackfill.stored;
+
+            logService.info("Outlook window backfill complete", "EmailSyncService", {
+              inboxFetched: inboxBackfill.fetched,
+              allFoldersFetched: folderBackfill.fetched,
+              totalStored: inboxBackfill.stored + folderBackfill.stored,
+            });
+          }, undefined, "OutlookBackfill");
+        } catch (outlookError) {
+          logService.warn("Outlook window backfill failed", "EmailSyncService", {
+            error: outlookError instanceof Error ? outlookError.message : "Unknown",
+          });
+          if (isTokenExpiryError(outlookError) && !providerError) {
+            providerError = {
+              provider: "microsoft",
+              message: classifyProviderError(outlookError),
+              tokenExpired: true,
+            };
+          }
+        }
+      }
+
+      if (googleToken && !isCancelled()) {
+        try {
+          await retryOnNetwork(async () => {
+            const gmailReady = await gmailFetchService.initialize(userId);
+            if (!gmailReady) return;
+
+            const searchBackfill = await fetchStoreAndDedup({
+              provider: "gmail",
+              fetchFn: () => gmailFetchService.searchEmails({
+                maxResults: EMAIL_FETCH_SAFETY_CAP,
+                after: backfillWindow.after,
+                before: backfillWindow.before,
+                signal: abort.signal,
+              }),
+              userId,
+              seenIds: seenEmailIds,
+            });
+
+            let labelBackfill = { fetched: 0, stored: 0, errors: 0 };
+            try {
+              if (!isCancelled()) {
+                labelBackfill = await fetchStoreAndDedup({
+                  provider: "gmail",
+                  fetchFn: () => gmailFetchService.searchAllLabels({
+                    maxResults: EMAIL_FETCH_SAFETY_CAP,
+                    after: backfillWindow.after,
+                    before: backfillWindow.before,
+                    signal: abort.signal,
+                  }),
+                  userId,
+                  seenIds: seenEmailIds,
+                });
+              }
+            } catch (labelError) {
+              if (isNetworkError(labelError)) throw labelError;
+              logService.warn("Pre-cache backfill: all-labels fetch failed, continuing", "EmailSyncService", {
+                error: labelError instanceof Error ? labelError.message : "Unknown",
+              });
+            }
+
+            totalFetched += searchBackfill.fetched + labelBackfill.fetched;
+            totalStored += searchBackfill.stored + labelBackfill.stored;
+
+            logService.info("Gmail window backfill complete", "EmailSyncService", {
+              searchFetched: searchBackfill.fetched,
+              allLabelsFetched: labelBackfill.fetched,
+              totalStored: searchBackfill.stored + labelBackfill.stored,
+            });
+          }, undefined, "GmailBackfill");
+        } catch (gmailError) {
+          logService.warn("Gmail window backfill failed", "EmailSyncService", {
+            error: gmailError instanceof Error ? gmailError.message : "Unknown",
+          });
+          if (isTokenExpiryError(gmailError) && !providerError) {
+            providerError = {
+              provider: "google",
+              message: classifyProviderError(gmailError),
+              tokenExpired: true,
+            };
+          }
         }
       }
     }

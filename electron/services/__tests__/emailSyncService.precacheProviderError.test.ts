@@ -76,8 +76,13 @@ const TOKEN = { access_token: "at", connected_email_address: "me@example.com" };
 describe("precacheEmails providerError surfacing (BACKLOG-2127)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    // No previously-cached email → incremental starts from the cache window.
-    mockDbGet.mockReturnValue({ latest: null });
+    // No previously-cached email → incremental starts from the cache window,
+    // and (BACKLOG-3056) there is no older gap to backfill either. This is the
+    // shape `getCachedEmailSentAtBounds` returns for an empty cache. It read
+    // `{ latest: null }` until 3056 replaced that query with a MIN/MAX pair; a
+    // fixture still describing the old shape would describe a row the code can
+    // no longer produce.
+    mockDbGet.mockReturnValue({ oldest: null, newest: null });
     mockOutlookSearchAll.mockResolvedValue([]);
     mockGmailSearchAll.mockResolvedValue([]);
     mockOutlookAttachments.mockResolvedValue([]);
