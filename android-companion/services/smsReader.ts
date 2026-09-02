@@ -98,29 +98,46 @@ function classifyListFailure(fail: string): SmsReadError {
  * source of truth. Deliberately actionable — the common cause is a revoked SMS
  * permission.
  */
+/**
+ * The one place a read-failure reason becomes words, as an EXHAUSTIVE map.
+ *
+ * A `Record` keyed by the union rather than a `switch` with a `default:`
+ * deliberately: with a default branch, adding a fifth reason compiles clean and
+ * silently inherits the generic copy — so the union's docblock promise that a
+ * new reason "will not compile until every surface has decided what to say
+ * about it" would have been false. It is true of this shape, and only of this
+ * shape. Verified by adding a fifth member and watching `tsc` go red.
+ */
+const SMS_READ_ERROR_COPY: Record<
+  SmsReadErrorReason,
+  { title: string; body: string }
+> = {
+  permission_denied: {
+    title: "Couldn't read messages",
+    body: "Keepr Companion no longer has permission to read SMS. Open Settings and allow SMS access so your texts can keep syncing.",
+  },
+  module_unavailable: {
+    title: "Couldn't read messages",
+    body: "The SMS reader isn't available on this device. Reopen Keepr Companion — if it keeps happening, reinstall the app.",
+  },
+  // A query failure and an unparseable payload are the same story to a user:
+  // the sync did not complete and reopening is the action. Written out per
+  // reason rather than collapsed so the map stays exhaustive by construction.
+  query_failed: {
+    title: "Couldn't read messages",
+    body: "Keepr Companion hit an error reading your messages, so this sync didn't complete. Reopen the app to try again, and check that SMS permission is still granted.",
+  },
+  parse_failed: {
+    title: "Couldn't read messages",
+    body: "Keepr Companion hit an error reading your messages, so this sync didn't complete. Reopen the app to try again, and check that SMS permission is still granted.",
+  },
+};
+
 export function smsReadErrorMessage(error: SmsReadError): {
   title: string;
   body: string;
 } {
-  switch (error.reason) {
-    case "permission_denied":
-      return {
-        title: "Couldn't read messages",
-        body: "Keepr Companion no longer has permission to read SMS. Open Settings and allow SMS access so your texts can keep syncing.",
-      };
-    case "module_unavailable":
-      return {
-        title: "Couldn't read messages",
-        body: "The SMS reader isn't available on this device. Reopen Keepr Companion — if it keeps happening, reinstall the app.",
-      };
-    case "parse_failed":
-    case "query_failed":
-    default:
-      return {
-        title: "Couldn't read messages",
-        body: "Keepr Companion hit an error reading your messages, so this sync didn't complete. Reopen the app to try again, and check that SMS permission is still granted.",
-      };
-  }
+  return SMS_READ_ERROR_COPY[error.reason];
 }
 
 /**

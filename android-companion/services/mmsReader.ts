@@ -271,29 +271,44 @@ function classifyNativeError(err: unknown): MmsReadError {
  * SMS module is not modified by this item; BACKLOG-2974 wires the MMS read into
  * the sync cycle and can unify the two call sites then.
  */
+/**
+ * MMS read-failure copy, as an EXHAUSTIVE map — see the note on
+ * `SMS_READ_ERROR_COPY`. A `switch` with a `default:` would let a fifth reason
+ * compile straight into the generic wording without anyone deciding.
+ *
+ * The wording differs from the SMS map on purpose: the same permission
+ * (`READ_SMS`) and the same recovery, but naming what the user actually lost —
+ * picture and group messages. Kept here rather than imported so this item does
+ * not modify the SMS surface; BACKLOG-2974 wires the MMS read into the sync
+ * cycle and can unify the call sites then.
+ */
+const MMS_READ_ERROR_COPY: Record<
+  MmsReadErrorReason,
+  { title: string; body: string }
+> = {
+  permission_denied: {
+    title: "Couldn't read messages",
+    body: "Keepr Companion no longer has permission to read your messages. Open Settings and allow SMS access so your picture and group messages can keep syncing.",
+  },
+  module_unavailable: {
+    title: "Couldn't read messages",
+    body: "The picture-message reader isn't available on this device. Reopen Keepr Companion — if it keeps happening, reinstall the app.",
+  },
+  query_failed: {
+    title: "Couldn't read messages",
+    body: "Keepr Companion hit an error reading your picture and group messages, so this sync didn't complete. Reopen the app to try again, and check that SMS permission is still granted.",
+  },
+  parse_failed: {
+    title: "Couldn't read messages",
+    body: "Keepr Companion hit an error reading your picture and group messages, so this sync didn't complete. Reopen the app to try again, and check that SMS permission is still granted.",
+  },
+};
+
 export function mmsReadErrorMessage(error: MmsReadError): {
   title: string;
   body: string;
 } {
-  switch (error.reason) {
-    case "permission_denied":
-      return {
-        title: "Couldn't read messages",
-        body: "Keepr Companion no longer has permission to read your messages. Open Settings and allow SMS access so your picture and group messages can keep syncing.",
-      };
-    case "module_unavailable":
-      return {
-        title: "Couldn't read messages",
-        body: "The picture-message reader isn't available on this device. Reopen Keepr Companion — if it keeps happening, reinstall the app.",
-      };
-    case "parse_failed":
-    case "query_failed":
-    default:
-      return {
-        title: "Couldn't read messages",
-        body: "Keepr Companion hit an error reading your picture and group messages, so this sync didn't complete. Reopen the app to try again, and check that SMS permission is still granted.",
-      };
-  }
+  return MMS_READ_ERROR_COPY[error.reason];
 }
 
 /**

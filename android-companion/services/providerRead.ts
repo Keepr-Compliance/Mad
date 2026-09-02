@@ -51,8 +51,16 @@
  * one, and lets the UI show an actionable state.
  *
  * Adding a member here is deliberately breaking: each reader maps its copy with
- * an exhaustive `Record`, so a new reason will not compile until every surface
- * has decided what to say about it.
+ * an exhaustive `Record` (`SMS_READ_ERROR_COPY` / `MMS_READ_ERROR_COPY`), so a
+ * new reason will not compile until every surface has decided what to say about
+ * it.
+ *
+ * That is a claim with a control, not an aspiration: adding a fifth member here
+ * fails `npx tsc --noEmit` with TS2741 in BOTH readers. It was false when first
+ * written — the readers used a `switch` with a `default:`, which would have let
+ * a new reason compile clean and silently inherit the generic copy. If either
+ * `Record` is ever turned back into a defaulted `switch`, this paragraph becomes
+ * a lie again and nothing will say so.
  */
 export type ProviderReadErrorReason =
   | "module_unavailable"
