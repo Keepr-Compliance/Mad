@@ -21,6 +21,16 @@
 import { Platform, NativeModules } from "react-native";
 import type { SyncMessage } from "../types/sync";
 import { normalizePhoneNumber } from "./phoneNormalization";
+import {
+  readPaged,
+  DEFAULT_PROVIDER_READ_BUDGET,
+  PROVIDER_READ_PAGE_SIZE,
+  type ProviderPageResult,
+  type ProviderReadError,
+  type ProviderReadErrorReason,
+  type ProviderReadResult,
+  MAX_PROVIDER_READ_PAGES,
+} from "./providerRead";
 
 /** Raw SMS record from react-native-get-sms-android */
 export interface RawSmsRecord {
@@ -55,17 +65,9 @@ interface SmsFilter {
  * the sync cycle count the cycle as a FAILED reach (so it never masquerades as a
  * healthy idle sync) and lets the UI show an actionable read-error state.
  */
-export type SmsReadErrorReason =
-  | "module_unavailable"
-  | "permission_denied"
-  | "query_failed"
-  | "parse_failed";
+export type SmsReadErrorReason = ProviderReadErrorReason;
 
-export interface SmsReadError {
-  reason: SmsReadErrorReason;
-  /** Diagnostic detail (native failure string / exception message). */
-  message: string;
-}
+export type SmsReadError = ProviderReadError;
 
 /**
  * Outcome of an SMS read. A discriminated union so callers MUST distinguish an
@@ -73,9 +75,7 @@ export interface SmsReadError {
  * FAILURE (`{ ok: false, error }`) — BACKLOG-2206. The read path NEVER swallows a
  * failure into an empty array.
  */
-export type SmsReadResult =
-  | { ok: true; messages: SyncMessage[] }
-  | { ok: false; error: SmsReadError };
+export type SmsReadResult = ProviderReadResult<SyncMessage>;
 
 /**
  * Map a native `SmsModule.list` failure string to a read-error reason. The
@@ -177,7 +177,7 @@ export function smsPermissionBannerCopy(cause: SmsPermissionCause): {
 const SMS_SORT_OLDEST_FIRST = "date ASC";
 
 /** Default per-box read budget when a caller does not supply `maxCount`. */
-const DEFAULT_MAX_COUNT = 100;
+const DEFAULT_MAX_COUNT = DEFAULT_PROVIDER_READ_BUDGET;
 
 /**
  * Rows to request from the content provider in a SINGLE native `list()` call.
@@ -191,7 +191,7 @@ const DEFAULT_MAX_COUNT = 100;
  * Exported so tests can reason about expected page counts without hard-coding
  * this value.
  */
-export const SMS_READ_PAGE_SIZE = 200;
+export const SMS_READ_PAGE_SIZE = PROVIDER_READ_PAGE_SIZE;
 
 /**
  * Absolute safety cap on native page reads per box per cycle (BACKLOG-2207).
@@ -203,7 +203,7 @@ export const SMS_READ_PAGE_SIZE = 200;
  * always bounded (anti-loop). Sized far above any realistic device backlog
  * (SMS_READ_PAGE_SIZE * MAX_PAGES_PER_BOX raw rows scanned per box).
  */
-const MAX_PAGES_PER_BOX = 500;
+const MAX_PAGES_PER_BOX = MAX_PROVIDER_READ_PAGES;
 
 /**
  * Internal outcome of reading ONE page from a box (BACKLOG-2207).
@@ -215,9 +215,7 @@ const MAX_PAGES_PER_BOX = 500;
  * of VALID mapped messages, which may be smaller when the page contains
  * address/body-less rows (carrier alerts, voicemail notifications).
  */
-type SmsPageResult =
-  | { ok: true; messages: SyncMessage[]; rawCount: number }
-  | { ok: false; error: SmsReadError };
+type SmsPageResult = ProviderPageResult<SyncMessage>;
 
 /** Android SMS type constants */
 const SMS_TYPE_INBOX = "1";
@@ -358,53 +356,24 @@ function readBox(filter: SmsFilter): Promise<SmsReadResult> {
 }
 
 /**
- * The pagination loop backing {@link readBox}. Bounds the VALID messages
- * collected at `budget` (the per-box back-pressure ceiling) and the size of any
- * single native payload at {@link SMS_READ_PAGE_SIZE}.
+ * The pagination loop backing {@link readBox}.
+ *
+ * The loop itself lives in `providerRead.ts` and is SHARED with the MMS reader:
+ * the walk, the budget ceiling, the exhaustion rule and the fail-the-whole-read
+ * behaviour are one implementation, not two copies that drift. What stays here
+ * is the part that is genuinely SMS — the box filter and the native call shape.
  */
-async function readBoxPaged(
+function readBoxPaged(
   filter: SmsFilter,
   budget: number
 ): Promise<SmsReadResult> {
-  const collected: SyncMessage[] = [];
-  let indexFrom = 0;
-  let page = 0;
-
-  for (; page < MAX_PAGES_PER_BOX; page++) {
-    const remaining = budget - collected.length;
-    // Reached the per-cycle back-pressure ceiling — stop; the remainder stays
-    // in the provider and the caller holds the cursor for next cycle.
-    if (remaining <= 0) break;
-
-    const pageSize = Math.min(SMS_READ_PAGE_SIZE, remaining);
-    const pageResult = await readBoxPage(filter, indexFrom, pageSize);
-
-    // BACKLOG-2206: a failed page fails the whole read (cursor held upstream).
-    if (!pageResult.ok) return pageResult;
-
-    for (const m of pageResult.messages) {
-      if (collected.length >= budget) break; // never exceed the budget
-      collected.push(m);
-    }
-
-    // A page shorter than we asked for means the since-cursor backlog is
-    // exhausted — stop (the caller can safely advance the cursor past it).
-    if (pageResult.rawCount < pageSize) break;
-
-    // Advance the offset over the raw rows we just consumed and page again.
-    indexFrom += pageResult.rawCount;
-  }
-
-  if (page >= MAX_PAGES_PER_BOX) {
-    // Pathological safety-valve hit (see MAX_PAGES_PER_BOX). Return what we have;
-    // the caller's truncation logic re-reads the remainder next cycle.
-    console.warn(
-      `[SmsReader] ${filter.box}: reached MAX_PAGES_PER_BOX (${MAX_PAGES_PER_BOX}); ` +
-        "remainder deferred to next cycle."
-    );
-  }
-
-  return { ok: true, messages: collected };
+  return readPaged<SyncMessage>({
+    budget,
+    label: `SmsReader ${filter.box}`,
+    pageSize: SMS_READ_PAGE_SIZE,
+    maxPages: MAX_PAGES_PER_BOX,
+    readPage: (indexFrom, pageSize) => readBoxPage(filter, indexFrom, pageSize),
+  });
 }
 
 /**

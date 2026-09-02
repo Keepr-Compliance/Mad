@@ -43,6 +43,16 @@
 
 import { Platform } from "react-native";
 import { requireOptionalNativeModule } from "expo";
+import {
+  readPaged,
+  DEFAULT_PROVIDER_READ_BUDGET,
+  MAX_PROVIDER_READ_PAGES,
+  PROVIDER_READ_PAGE_SIZE,
+  type ProviderPageResult,
+  type ProviderReadError,
+  type ProviderReadErrorReason,
+  type ProviderReadResult,
+} from "./providerRead";
 
 /**
  * One row of `content://mms/{id}/part`, raw.
@@ -117,17 +127,9 @@ export interface RawMmsRecord {
  * trust the read at all; it must never be indistinguishable from "no new
  * messages", or a broken reader looks like a quiet one.
  */
-export type MmsReadErrorReason =
-  | "module_unavailable"
-  | "permission_denied"
-  | "query_failed"
-  | "parse_failed";
+export type MmsReadErrorReason = ProviderReadErrorReason;
 
-export interface MmsReadError {
-  reason: MmsReadErrorReason;
-  /** Diagnostic detail (native failure string / exception message). */
-  message: string;
-}
+export type MmsReadError = ProviderReadError;
 
 /**
  * Outcome of an MMS read. A discriminated union so callers MUST distinguish an
@@ -135,9 +137,7 @@ export interface MmsReadError {
  * FAILURE (`{ ok: false, error }`). The read path NEVER swallows a failure into
  * an empty array.
  */
-export type MmsReadResult =
-  | { ok: true; messages: RawMmsRecord[] }
-  | { ok: false; error: MmsReadError };
+export type MmsReadResult = ProviderReadResult<RawMmsRecord>;
 
 /** The native module's registered name (`Name("KeeprMms")` in the Kotlin). */
 export const KEEPR_MMS_MODULE_NAME = "KeeprMms";
@@ -149,17 +149,17 @@ export const KEEPR_MMS_MODULE_NAME = "KeeprMms";
  * budget is reached. Exported so tests can reason about page counts without
  * hard-coding it.
  */
-export const MMS_READ_PAGE_SIZE = 200;
+export const MMS_READ_PAGE_SIZE = PROVIDER_READ_PAGE_SIZE;
 
 /**
  * Absolute safety cap on native page reads per cycle (anti-loop). Mirrors
  * `MAX_PAGES_PER_BOX`. The loop normally ends by exhausting the backlog or
  * reaching the budget; this guarantees it is bounded regardless.
  */
-const MAX_PAGES = 500;
+const MAX_PAGES = MAX_PROVIDER_READ_PAGES;
 
 /** Default read budget when a caller does not supply `maxCount`. */
-const DEFAULT_MAX_COUNT = 100;
+const DEFAULT_MAX_COUNT = DEFAULT_PROVIDER_READ_BUDGET;
 
 /**
  * Rows at or above this magnitude are milliseconds; below it, seconds.
@@ -181,9 +181,7 @@ interface MmsPagePayload {
   rows: RawMmsRecord[];
 }
 
-type MmsPageResult =
-  | { ok: true; messages: RawMmsRecord[]; rawCount: number }
-  | { ok: false; error: MmsReadError };
+type MmsPageResult = ProviderPageResult<RawMmsRecord>;
 
 /**
  * Get a reference to the native MMS module.
@@ -346,40 +344,25 @@ export async function readMmsMessages(
     `[MmsReader] Reading MMS since=${sinceTimestamp} (${sinceTimestamp > 0 ? new Date(sinceTimestamp).toISOString() : "epoch"}) maxCount=${maxCount}`
   );
 
-  const collected: RawMmsRecord[] = [];
-  let indexFrom = 0;
-  let page = 0;
+  // The walk, the budget ceiling, the exhaustion rule and the
+  // fail-the-whole-read behaviour are SHARED with the SMS reader
+  // (`providerRead.ts`) rather than restated here. What stays MMS-specific is
+  // the native call and the row shape, which is where the two genuinely differ.
+  const result = await readPaged<RawMmsRecord>({
+    budget: maxCount,
+    label: "MmsReader",
+    pageSize: MMS_READ_PAGE_SIZE,
+    maxPages: MAX_PAGES,
+    readPage: (indexFrom, pageSize) =>
+      readMmsPage(sinceTimestamp, indexFrom, pageSize),
+  });
 
-  for (; page < MAX_PAGES; page++) {
-    const remaining = maxCount - collected.length;
-    if (remaining <= 0) break;
-
-    const pageSize = Math.min(MMS_READ_PAGE_SIZE, remaining);
-    const pageResult = await readMmsPage(sinceTimestamp, indexFrom, pageSize);
-
-    // BACKLOG-2206: a failed page fails the whole read (cursor held upstream).
-    if (!pageResult.ok) return pageResult;
-
-    for (const record of pageResult.messages) {
-      if (collected.length >= maxCount) break;
-      collected.push(record);
-    }
-
-    // A page shorter than requested means the since-cursor backlog is exhausted.
-    if (pageResult.rawCount < pageSize) break;
-
-    indexFrom += pageResult.rawCount;
+  if (result.ok) {
+    console.log(`[MmsReader] Read ${result.messages.length} MMS rows`);
   }
-
-  if (page >= MAX_PAGES) {
-    console.warn(
-      `[MmsReader] reached MAX_PAGES (${MAX_PAGES}); remainder deferred to next cycle.`
-    );
-  }
-
-  console.log(`[MmsReader] Read ${collected.length} MMS rows`);
-  return { ok: true, messages: collected };
+  return result;
 }
+
 
 /**
  * Read ONE page from the native module.
