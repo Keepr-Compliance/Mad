@@ -5,6 +5,13 @@
  */
 
 import crypto from "crypto";
+import {
+  capFetchPredicate,
+  countUnprotectedInWindow,
+  resolveCapWindowStartRowId,
+  type MessageWindow,
+  type SqlFragment,
+} from "../db/macosMessageWindowSql";
 import path from "path";
 import fs from "fs";
 import cliProgress from "cli-progress";
@@ -778,50 +785,19 @@ export async function processItemsInChunks<TInput, TOutput>(
 // ============================================================================
 
 /**
- * The SQL a plan's window and protection compile to.
+ * `MessageWindowSql` and `buildMessageWindowSql` were DELETED by BACKLOG-3062.
  *
- * Built in one place because the strings are shared by FIVE queries across two
- * methods — the filtered count, the unprotected count, the Nth-newest OFFSET
- * query, the message fetch, and the attachment sizing. Any drift between them
- * does not merely miscount: the fetch loop runs
- * `while (fetchedCount < totalMessageCount)`, so a mismatch terminates the walk
- * early and silently drops the NEWEST rows.
+ * They turned plan data into SQL TEXT — `AND message.date > ${cutoffNano}` — and
+ * returned it for callers to splice. Because they called no database verb, the
+ * SQL boundary gate could not see them, and this file passed BACKLOG-2990 chunk
+ * 1's completion criterion at baseline zero while still authoring SQL in six
+ * places.
+ *
+ * The window is now DATA (`MessageWindow` in `db/macosMessageWindowSql.ts`) and
+ * every predicate is built there with its numbers BOUND. There is no text to
+ * hand around, so there is nothing left for a builder to build.
  */
-export interface MessageWindowSql {
-  /** `""` or `AND message.date > N`. */
-  dateFilterClause: string;
-  /**
-   * "inside a protected period" — `"0"` when nothing is protected.
-   *
-   * TOTAL by construction: a NULL `message.date` yields FALSE, never NULL, so
-   * this clause and its negation partition the filtered set exactly and
-   * `protectedCount + unprotectedCount` always equals `filteredMessageCount`.
-   * Without the explicit NULL test, `NOT (date > A)` would be NULL for a
-   * null-dated row and it would fall out of BOTH buckets.
-   */
-  protectedClause: string;
-}
 
-/** Compile a plan's window and protected periods to SQL. */
-export function buildMessageWindowSql(plan: {
-  cutoffNano: number | null;
-  protectedSpans: ReadonlyArray<{ startNano: number; endNano: number | null }>;
-}): MessageWindowSql {
-  return {
-    dateFilterClause:
-      plan.cutoffNano !== null ? `AND message.date > ${plan.cutoffNano}` : "",
-    protectedClause:
-      plan.protectedSpans.length === 0
-        ? "0"
-        : plan.protectedSpans
-            .map((span) =>
-              span.endNano === null
-                ? `(message.date IS NOT NULL AND message.date > ${span.startNano})`
-                : `(message.date IS NOT NULL AND message.date > ${span.startNano} AND message.date <= ${span.endNano})`
-            )
-            .join(" OR "),
-  };
-}
 
 /** What a plan will actually admit, in numbers and in SQL. */
 export interface AdmittedMessageSet {
@@ -845,7 +821,11 @@ export interface AdmittedMessageSet {
    * is no longer a contiguous ROWID tail — protected messages can be
    * arbitrarily old.
    */
-  capFetchClause: string;
+  /**
+   * BACKLOG-3062: SQL and its bound values together, not a spliced string.
+   * `{ sql: "", params: [] }` when the cap does not bite.
+   */
+  capFetch: SqlFragment;
 }
 
 /**
@@ -870,7 +850,7 @@ export interface AdmittedMessageSet {
  *
  * @param all - `(sql, params?) => rows`, bound to the open chat.db handle
  * @param plan - the resolved plan's cap and protected periods
- * @param sql - the compiled window clauses (`buildMessageWindowSql`)
+ * @param window - the run's window, as DATA (BACKLOG-3062)
  * @param filteredMessageCount - messages in the window, already counted
  */
 export async function resolveAdmittedMessageSet(
@@ -879,10 +859,9 @@ export async function resolveAdmittedMessageSet(
     effectiveCap: number | null;
     protectedSpans: ReadonlyArray<{ startNano: number; endNano: number | null }>;
   },
-  sql: MessageWindowSql,
+  window: MessageWindow,
   filteredMessageCount: number
 ): Promise<AdmittedMessageSet> {
-  const { dateFilterClause, protectedClause } = sql;
   const maxMessages = plan.effectiveCap;
 
   // The cap acts on the UNPROTECTED remainder, so that is the number to
@@ -896,11 +875,7 @@ export async function resolveAdmittedMessageSet(
   // `filteredMessageCount`.
   let unprotectedCount = filteredMessageCount;
   if (plan.protectedSpans.length > 0) {
-    const rows = await all<{ count: number }>(`
-      SELECT COUNT(*) as count FROM message
-      WHERE message.guid IS NOT NULL ${dateFilterClause} AND NOT (${protectedClause})
-    `);
-    unprotectedCount = rows[0]?.count || 0;
+    unprotectedCount = await countUnprotectedInWindow(all, window);
   }
   const protectedCount = filteredMessageCount - unprotectedCount;
 
@@ -930,19 +905,11 @@ export async function resolveAdmittedMessageSet(
   // rows — reproducing the exact defect it existed to fix.
   let capWindowStartRowId: number | null = null;
   if (capWouldTruncate) {
-    const rows = await all<{ start_rowid: number }>(
-      `
-      SELECT message.ROWID as start_rowid
-      FROM message
-      WHERE message.guid IS NOT NULL
-        ${dateFilterClause}
-        AND NOT (${protectedClause})
-      ORDER BY message.ROWID DESC
-      LIMIT 1 OFFSET ?
-    `,
-      [(maxMessages as number) - 1]
+    capWindowStartRowId = await resolveCapWindowStartRowId(
+      all,
+      window,
+      maxMessages as number
     );
-    capWindowStartRowId = rows[0]?.start_rowid ?? null;
   }
 
   // The cap is honoured only when we know where its window starts. If it cannot
@@ -966,8 +933,6 @@ export async function resolveAdmittedMessageSet(
     targetMessageCount: importWasCapped
       ? protectedCount + (maxMessages as number)
       : filteredMessageCount,
-    capFetchClause: importWasCapped
-      ? `AND (message.ROWID >= ${capWindowStartRowId} OR (${protectedClause}))`
-      : "",
+    capFetch: capFetchPredicate(window, importWasCapped ? capWindowStartRowId : null),
   };
 }

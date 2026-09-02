@@ -29,6 +29,12 @@ import logService from "../logService";
 // BACKLOG-2403: the single sanctioned sqlite3 open — a bare
 // `new sqlite3.Database(path, mode)` crashes the main process on a failed open.
 import { openSqliteReadOnly } from "../db/readOnlySqlite";
+import {
+  countMessagesInWindow,
+  selectAttachmentSizes,
+  selectMessageBatch,
+  type MessageWindow,
+} from "../db/macosMessageWindowSql";
 import { macOSForceSetFor } from "../db/macosForceSetSql";
 import {
   type ImportTarget,
@@ -118,7 +124,6 @@ import {
   isSupportedMediaType,
   getMimeTypeFromFilename,
   generateContentHash,
-  buildMessageWindowSql,
   resolveAdmittedMessageSet,
   shouldRetainMessageContent,
   isReactionAssociationType,
@@ -650,8 +655,12 @@ class MacOSMessagesImportService {
         // BACKLOG-2772: the window's SQL is compiled ONCE, by the same builder
         // the estimate uses, so the five queries that share these strings
         // cannot drift.
-        const windowSql = buildMessageWindowSql(plan);
-        const { dateFilterClause } = windowSql;
+        // BACKLOG-3062: the window is DATA now, not compiled SQL text. Every
+        // predicate is built in db/ with its numbers BOUND.
+        const window: MessageWindow = {
+          cutoffNano: plan.cutoffNano,
+          protectedSpans: plan.protectedSpans,
+        };
 
         // BACKLOG-2280: Reactions ARE imported now (stored + attached at render).
         // The counts and the SELECT must therefore cover the SAME scope, INCLUDING
@@ -667,10 +676,7 @@ class MacOSMessagesImportService {
         const totalAvailableCount = totalCountResult[0]?.count || 0;
 
         // Get filtered count (with date filter applied)
-        const filteredCountResult = await dbAll<{ count: number }>(`
-          SELECT COUNT(*) as count FROM message WHERE guid IS NOT NULL ${dateFilterClause}
-        `);
-        const filteredMessageCount = filteredCountResult[0]?.count || 0;
+        const filteredMessageCount = await countMessagesInWindow(dbAll, window);
 
         // ------------------------------------------------------------------
         // BACKLOG-2772 — Cap', resolved by the SAME function the estimate uses.
@@ -693,7 +699,7 @@ class MacOSMessagesImportService {
         const admitted = await resolveAdmittedMessageSet(
           dbAll,
           plan,
-          windowSql,
+          window,
           filteredMessageCount
         );
         const {
@@ -703,7 +709,7 @@ class MacOSMessagesImportService {
           capWindowUnresolved,
           importWasCapped,
           targetMessageCount,
-          capFetchClause,
+          capFetch,
         } = admitted;
 
         if (protectedCount > 0) {
@@ -882,29 +888,13 @@ class MacOSMessagesImportService {
 
           // Fetch next batch using cursor-based pagination (ROWID for efficient indexing)
           // TASK-1952: Added date filter clause when lookback filter is active
-          const messageBatch = await dbAll<RawMacMessage>(`
-            SELECT
-              message.ROWID as id,
-              message.guid,
-              message.text,
-              message.attributedBody,
-              message.date,
-              message.is_from_me,
-              handle.id as handle_id,
-              message.service,
-              chat_message_join.chat_id,
-              message.cache_has_attachments,
-              message.associated_message_type,
-              message.associated_message_guid
-            FROM message
-            LEFT JOIN handle ON message.handle_id = handle.ROWID
-            LEFT JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-            WHERE message.guid IS NOT NULL AND message.ROWID > ?
-              ${dateFilterClause}
-              ${capFetchClause}
-            ORDER BY message.ROWID ASC
-            LIMIT ?
-          `, [lastRowId, batchLimit]);
+          const messageBatch = await selectMessageBatch<RawMacMessage>(
+            dbAll,
+            window,
+            capFetch.params.length > 0 ? capWindowStartRowId : null,
+            lastRowId,
+            batchLimit
+          );
 
           if (messageBatch.length === 0) {
             break; // No more messages
@@ -2300,8 +2290,12 @@ class MacOSMessagesImportService {
       // BACKLOG-2403: see openSqliteReadOnly — a bare construction here crashed
       // the app whenever chat.db could not be opened.
       const db = await openSqliteReadOnly(messagesDbPath, MacOSMessagesImportService.SERVICE_NAME);
-      const dbGet = (sql: string) => db.get<{ count: number }>(sql);
-      const dbAllSizes = (sql: string) => db.all<AttachmentSizeRow>(sql);
+      // BACKLOG-3062: the `(sql: string) => db.verb(sql)` conduits are gone. They
+      // took SQL text as a parameter and executed it, so the gate could resolve
+      // nothing about them (expr:4ec7c53222c8 — the same shape as
+      // storageDiagnostics.ts:281). Their consumers now build their own
+      // statements in db/, so the handle's accessor is used directly.
+      const dbAll = db.all;
       /**
        * BACKLOG-2784: closing the macOS Messages handle, at most once.
        *
@@ -2341,8 +2335,8 @@ class MacOSMessagesImportService {
 
       try {
         // Total count (importable rows, unfiltered by date)
-        const totalResult = await dbGet(MACOS_MESSAGE_TOTAL_COUNT_SQL);
-        const totalCount = totalResult?.count || 0;
+        const totalRows = await dbAll<{ count: number }>(MACOS_MESSAGE_TOTAL_COUNT_SQL);
+        const totalCount = totalRows[0]?.count || 0;
 
         // TASK-1952 / BACKLOG-2276: Calculate filtered count when a date filter is
         // active. Uses the same audit-period-aware cutoff as the import itself.
@@ -2350,16 +2344,14 @@ class MacOSMessagesImportService {
         // and the run that follows it are the same decision object, so they
         // cannot describe different windows — which is what they did when each
         // assembled its own filters from whatever the renderer had sent.
-        const windowSql = buildMessageWindowSql(plan);
-        const { dateFilterClause } = windowSql;
+        const window: MessageWindow = {
+          cutoffNano: plan.cutoffNano,
+          protectedSpans: plan.protectedSpans,
+        };
 
         let windowCount = totalCount;
         if (plan.cutoffNano !== null) {
-          const filteredResult = await dbGet(`
-            SELECT COUNT(*) as count FROM message
-            WHERE message.guid IS NOT NULL ${dateFilterClause}
-          `);
-          windowCount = filteredResult?.count || 0;
+          windowCount = await countMessagesInWindow(dbAll, window);
         }
 
         // BACKLOG-2772: apply Cap' HERE TOO, through the same function the run
@@ -2374,7 +2366,7 @@ class MacOSMessagesImportService {
         const admitted = await resolveAdmittedMessageSet(
           db.all,
           plan,
-          windowSql,
+          window,
           windowCount
         );
         const filteredCount = admitted.targetMessageCount;
@@ -2403,21 +2395,11 @@ class MacOSMessagesImportService {
         // GROUP BY attachment.ROWID: one source file counts ONCE even when it is
         // joined to several messages. Same ROWID = same source path = same
         // content hash = a single copy on disk.
-        const attachmentWhere =
-          `WHERE message.guid IS NOT NULL AND attachment.filename IS NOT NULL ` +
-          `${dateFilterClause} ${admitted.capFetchClause}`;
-        const attachmentRows = await dbAllSizes(`
-          SELECT
-            attachment.filename as filename,
-            attachment.transfer_name as transfer_name,
-            attachment.total_bytes as total_bytes,
-            message.guid as message_guid
-          FROM attachment
-          JOIN message_attachment_join ON attachment.ROWID = message_attachment_join.attachment_id
-          JOIN message ON message.ROWID = message_attachment_join.message_id
-          ${attachmentWhere}
-          GROUP BY attachment.ROWID
-        `);
+        const attachmentRows = await selectAttachmentSizes<AttachmentSizeRow>(
+          dbAll,
+          window,
+          admitted.capFetch.params.length > 0 ? admitted.capWindowStartRowId : null
+        );
 
         await dbClose();
 
