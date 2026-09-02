@@ -53,6 +53,8 @@ import * as crypto from "crypto";
 import {
   deriveStagingIndexDdl,
   deriveStagingTableDdl,
+  checkedStagingTable,
+  type StagingTableName,
   messageTableDdl as tableDdl,
 } from "../db/stagingDdlSql";
 
@@ -280,10 +282,17 @@ export const forceStagingLifecycle = {
    */
   create(db: DatabaseType, userId: string): ForceStaging {
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    const messagesTable = `${STAGING_TABLE_PREFIX}${token}_messages`;
-    const attachmentsTable = `${STAGING_TABLE_PREFIX}${token}_attachments`;
+    // Checked at CONSTRUCTION — see the branded type in db/stagingDdlSql.
+    const messagesTable = checkedStagingTable(
+      `${STAGING_TABLE_PREFIX}${token}_messages`,
+      "message-import",
+    );
+    const attachmentsTable = checkedStagingTable(
+      `${STAGING_TABLE_PREFIX}${token}_attachments`,
+      "message-import",
+    );
 
-    const pairs: Array<[live: string, staging: string]> = [
+    const pairs: Array<[live: string, staging: StagingTableName]> = [
       ["messages", messagesTable],
       ["attachments", attachmentsTable],
     ];
@@ -310,7 +319,10 @@ export const forceStagingLifecycle = {
             index.name,
             live,
             staging,
-            `${STAGING_TABLE_PREFIX}${token}_${index.name}`
+            checkedStagingTable(
+              `${STAGING_TABLE_PREFIX}${token}_${index.name}`,
+              "message-import",
+            )
           )
         );
       }

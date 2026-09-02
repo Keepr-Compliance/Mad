@@ -21,6 +21,8 @@ const RealDatabase = require(
 import {
   STAGING_PREFIX,
   checkedStagingTable,
+  deriveStagingIndexDdl,
+  deriveStagingTableDdl,
   emailTableDdl,
   messageTableDdl,
   tableDdl,
@@ -120,5 +122,42 @@ describe("tableDdl — one copy, both callers keep their wording", () => {
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'emails'").get()).toEqual({
       name: "emails",
     });
+  });
+});
+
+describe("the brand is load-bearing, not decorative", () => {
+  /**
+   * These assertions are for the COMPILER, and they are the point of the brand.
+   *
+   * An earlier revision of this module exported `checkedStagingTable` and the
+   * `StagingTableName` type, and then had both `derive*` functions take plain
+   * `string`. Everything type-checked, every runtime test passed, and
+   * `deriveStagingTableDdl(ddl, "emails", '; DROP TABLE emails --')` was still
+   * a legal call. The mechanism existed; the door it was built for was open.
+   *
+   * `@ts-expect-error` FAILS THE BUILD IF THE ERROR STOPS HAPPENING, so these
+   * lines are a real control: delete the brand from either signature and
+   * `npm run type-check:tests` goes red. That is what makes the compiler-facing
+   * half testable rather than merely asserted.
+   */
+  const LIVE_DDL = "CREATE TABLE emails (id TEXT PRIMARY KEY)";
+  const checked = checkedStagingTable(
+    `${STAGING_PREFIX["email-recache"]}deadbeefcafe_emails`,
+    "email-recache",
+  );
+
+  it("refuses a raw string where a checked staging table is required", () => {
+    // @ts-expect-error a hostile raw string is not a StagingTableName
+    expect(() => deriveStagingTableDdl(LIVE_DDL, "emails", '; DROP TABLE emails --')).toBeDefined();
+
+    // @ts-expect-error even a well-formed name is refused until it is checked
+    expect(() => deriveStagingTableDdl(LIVE_DDL, "emails", "staging_emailrecache_deadbeefcafe_emails")).toBeDefined();
+
+    // @ts-expect-error the index name is spliced into DDL too, so it is branded as well
+    expect(() => deriveStagingIndexDdl("CREATE INDEX i ON emails (id)", "i", "emails", checked, "i_staging")).toBeDefined();
+  });
+
+  it("accepts the checked form, so the brand is satisfiable and not just obstructive", () => {
+    expect(deriveStagingTableDdl(LIVE_DDL, "emails", checked)).toContain(checked);
   });
 });

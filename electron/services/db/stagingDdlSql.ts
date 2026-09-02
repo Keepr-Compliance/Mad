@@ -166,7 +166,7 @@ export const messageTableDdl = (db: DatabaseType, table: string): string =>
 export function deriveStagingTableDdl(
   liveDdl: string,
   liveTable: string,
-  stagingTable: string
+  stagingTable: StagingTableName
 ): string {
   const renamed = liveDdl.replace(
     new RegExp(
@@ -206,8 +206,8 @@ export function deriveStagingIndexDdl(
   liveDdl: string,
   liveIndexName: string,
   liveTable: string,
-  stagingTable: string,
-  stagingIndexName: string
+  stagingTable: StagingTableName,
+  stagingIndexName: StagingTableName
 ): string {
   return liveDdl
     .replace(

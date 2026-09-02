@@ -2,7 +2,7 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "d7f4d2597de2d35777bca1d0e2853df7fff9fcfe",
+  "measuredAt": "51387fcb1b753364c23fec9e619fd2fabc599b31",
   "totalSites": 137,
   "entryCount": 118,
   "entries": [
@@ -321,7 +321,7 @@
     {
       "file": "electron/services/emailForceStaging.ts",
       "verb": "exec",
-      "match": "expr:b9297005a758",
+      "match": "expr:6577adc2a954",
       "bucket": "UNRESOLVABLE",
       "count": 1,
       "owner": "BACKLOG-2989"
@@ -585,7 +585,7 @@
     {
       "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
       "verb": "exec",
-      "match": "expr:2fc2293d0a69",
+      "match": "expr:60ed10f7d55c",
       "bucket": "UNRESOLVABLE",
       "count": 1,
       "owner": "BACKLOG-2990"

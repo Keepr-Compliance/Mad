@@ -68,6 +68,8 @@ import { forceReadView } from "./macOSMessagesImportService/forceStaging";
 import {
   deriveStagingIndexDdl,
   deriveStagingTableDdl,
+  checkedStagingTable,
+  type StagingTableName,
   emailTableDdl as tableDdl,
 } from "./db/stagingDdlSql";
 
@@ -296,10 +298,19 @@ export const emailForceStagingLifecycle = {
     args: { userId: string; forceSet: EmailForceSetPredicate },
   ): EmailForceStaging {
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-    const emailsTable = `${EMAIL_STAGING_TABLE_PREFIX}${token}_emails`;
-    const participantsTable = `${EMAIL_STAGING_TABLE_PREFIX}${token}_participants`;
+    // Checked at CONSTRUCTION, not at use: the branded type then travels with
+    // the name, so every function that splices it into DDL demands the checked
+    // form and the compiler refuses an unchecked one.
+    const emailsTable = checkedStagingTable(
+      `${EMAIL_STAGING_TABLE_PREFIX}${token}_emails`,
+      "email-recache",
+    );
+    const participantsTable = checkedStagingTable(
+      `${EMAIL_STAGING_TABLE_PREFIX}${token}_participants`,
+      "email-recache",
+    );
 
-    const pairs: Array<[live: string, staging: string]> = [
+    const pairs: Array<[live: string, staging: StagingTableName]> = [
       ["emails", emailsTable],
       ["email_participants", participantsTable],
     ];
@@ -329,7 +340,10 @@ export const emailForceStagingLifecycle = {
             index.name,
             live,
             staging,
-            `${EMAIL_STAGING_TABLE_PREFIX}${token}_${index.name}`,
+            checkedStagingTable(
+              `${EMAIL_STAGING_TABLE_PREFIX}${token}_${index.name}`,
+              "email-recache",
+            ),
           ),
         );
       }
