@@ -22,7 +22,6 @@ const Database = require(
 import type { Database as DatabaseType } from "better-sqlite3";
 
 import {
-  deriveStagingTableDdl,
   FORCE_SET_MESSAGES,
   forceStagingLifecycle,
   sweepStaleStaging,
@@ -30,6 +29,10 @@ import {
   SURVIVING_ATTACHMENTS,
   SURVIVING_MESSAGES,
 } from "../macOSMessagesImportService/forceStaging";
+// BACKLOG-2989 commit A: `deriveStagingTableDdl` moved to the db layer, where
+// it is now the single copy shared by the messages force re-import and the
+// email force re-cache. Import re-pointed; no assertion in this suite changed.
+import { deriveStagingTableDdl } from "../db/stagingDdlSql";
 
 const USER = "user-2790";
 

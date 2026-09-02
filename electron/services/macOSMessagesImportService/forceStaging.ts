@@ -50,6 +50,11 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import * as crypto from "crypto";
+import {
+  deriveStagingIndexDdl,
+  deriveStagingTableDdl,
+  messageTableDdl as tableDdl,
+} from "../db/stagingDdlSql";
 
 /** Prefix every ephemeral table shares, so a crashed run's leftovers are findable. */
 export const STAGING_TABLE_PREFIX = "staging_msgimport_";
@@ -214,96 +219,6 @@ export interface ForceSwapCounts {
   messagesYieldedToSurvivors: number;
   /** Staged attachments dropped with the messages that yielded above. */
   attachmentsYieldedToSurvivors: number;
-}
-
-/**
- * Rewrite one table's `CREATE TABLE` statement to define a staging clone.
- *
- * Derived from `sqlite_master` rather than hand-written, and NOT built with
- * `CREATE TABLE … AS SELECT * … WHERE 0`. The reason is column DEFAULTS: the
- * import's INSERTs name roughly sixteen of `messages`' forty columns and let the
- * table supply the rest (`has_attachments INTEGER DEFAULT 0`,
- * `is_false_positive INTEGER DEFAULT 0`, …). `CREATE TABLE … AS SELECT` copies
- * column names and types and drops every default, so staging would store NULL
- * where live stores 0 — and the swap would carry those NULLs into live. Deriving
- * the real DDL also means a future migration's new column arrives in staging on
- * its own, and that the simplified schema the real-driver test suites create is
- * mirrored just as faithfully as the production one.
- *
- * FOREIGN KEY clauses are stripped. Copied verbatim under `foreign_keys = ON`,
- * `attachments`' `REFERENCES messages(id)` would reject every staging insert:
- * the row it points at is in the staging messages table, not in live. The
- * constraint is not lost, only deferred to where it belongs — the swap inserts
- * into LIVE, where the real foreign keys apply to the real final state.
- */
-export function deriveStagingTableDdl(
-  liveDdl: string,
-  liveTable: string,
-  stagingTable: string
-): string {
-  const renamed = liveDdl.replace(
-    new RegExp(
-      `^\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?["'\`\\[]?${liveTable}["'\`\\]]?`,
-      "i"
-    ),
-    `CREATE TABLE ${stagingTable}`
-  );
-  if (renamed === liveDdl) {
-    throw new Error(
-      `Could not derive a staging table from the definition of "${liveTable}"`
-    );
-  }
-
-  const referencesClause =
-    `REFERENCES\\s+["'\`\\[]?\\w+["'\`\\]]?\\s*\\([^)]*\\)` +
-    `(?:\\s+ON\\s+(?:DELETE|UPDATE)\\s+(?:NO\\s+ACTION|RESTRICT|SET\\s+NULL|SET\\s+DEFAULT|CASCADE))*` +
-    `(?:\\s+(?:NOT\\s+)?DEFERRABLE(?:\\s+INITIALLY\\s+(?:DEFERRED|IMMEDIATE))?)?`;
-
-  return (
-    renamed
-      // table-level: `, FOREIGN KEY (x) REFERENCES y(z) ON DELETE CASCADE`
-      .replace(
-        new RegExp(`,?\\s*FOREIGN\\s+KEY\\s*\\([^)]*\\)\\s*${referencesClause}`, "gi"),
-        ""
-      )
-      // column-level: `x TEXT REFERENCES y(z)`
-      .replace(new RegExp(`\\s+${referencesClause}`, "gi"), "")
-      // tidy up whatever the removals left behind
-      .replace(/,(\s*)\)/g, "$1)")
-      .replace(/\((\s*),/g, "($1")
-  );
-}
-
-/** Mirror one index definition onto the staging table, under a unique name. */
-export function deriveStagingIndexDdl(
-  liveDdl: string,
-  liveIndexName: string,
-  liveTable: string,
-  stagingTable: string,
-  stagingIndexName: string
-): string {
-  return liveDdl
-    .replace(
-      new RegExp(
-        `(CREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?)["'\`\\[]?${liveIndexName}["'\`\\]]?`,
-        "i"
-      ),
-      `$1${stagingIndexName}`
-    )
-    .replace(
-      new RegExp(`(\\sON\\s+)["'\`\\[]?${liveTable}["'\`\\]]?`, "i"),
-      `$1${stagingTable}`
-    );
-}
-
-function tableDdl(db: DatabaseType, table: string): string {
-  const row = db
-    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
-    .get(table) as { sql: string | null } | undefined;
-  if (!row?.sql) {
-    throw new Error(`Cannot stage a force re-import: table "${table}" does not exist`);
-  }
-  return row.sql;
 }
 
 /**

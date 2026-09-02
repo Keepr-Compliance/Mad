@@ -64,11 +64,12 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import * as crypto from "crypto";
+import { forceReadView } from "./macOSMessagesImportService/forceStaging";
 import {
-  deriveStagingTableDdl,
   deriveStagingIndexDdl,
-  forceReadView,
-} from "./macOSMessagesImportService/forceStaging";
+  deriveStagingTableDdl,
+  emailTableDdl as tableDdl,
+} from "./db/stagingDdlSql";
 
 /** Prefix every ephemeral table shares, so a crashed run's leftovers are findable. */
 export const EMAIL_STAGING_TABLE_PREFIX = "staging_emailrecache_";
@@ -267,16 +268,6 @@ export interface EmailForceSwapCounts {
   participantsInserted: number;
   resurrectionsRepaired: number;
   attachmentMetaApplied: number;
-}
-
-function tableDdl(db: DatabaseType, table: string): string {
-  const row = db
-    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
-    .get(table) as { sql: string | null } | undefined;
-  if (!row?.sql) {
-    throw new Error(`Cannot stage a force re-cache: table "${table}" does not exist`);
-  }
-  return row.sql;
 }
 
 /** The columns of a live table, in declaration order, quoted for reuse on both sides of the swap. */
