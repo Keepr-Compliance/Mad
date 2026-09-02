@@ -2,9 +2,9 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "650094a55b43592a4324438b0f7d650e340b06c8",
-  "totalSites": 148,
-  "entryCount": 129,
+  "measuredAt": "a301bba9e206f39ef2a37dab2dce5f9eb6019944",
+  "totalSites": 139,
+  "entryCount": 120,
   "entries": [
     {
       "file": "electron/handlers/sessionHandlers.ts",
@@ -309,78 +309,6 @@
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2991"
-    },
-    {
-      "file": "electron/services/emailDeduplicationService.ts",
-      "verb": "prepare",
-      "match": "text:3a4806f92011",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailDeduplicationService.ts",
-      "verb": "prepare",
-      "match": "text:79c2c7914b51",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailDeduplicationService.ts",
-      "verb": "prepare",
-      "match": "text:b43cb4601f26",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailDeduplicationService.ts",
-      "verb": "prepare",
-      "match": "text:f628be6f97af",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailDerivationReprocessService.ts",
-      "verb": "prepare",
-      "match": "text:05e859938d36",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailDerivationReprocessService.ts",
-      "verb": "prepare",
-      "match": "text:0e9cb93f571d",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailDerivationReprocessService.ts",
-      "verb": "prepare",
-      "match": "text:44178634916a",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailDerivationReprocessService.ts",
-      "verb": "prepare",
-      "match": "text:7cbe62933de7",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailDerivationReprocessService.ts",
-      "verb": "prepare",
-      "match": "text:d280ed65e8bf",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
     },
     {
       "file": "electron/services/emailForceStaging.ts",
