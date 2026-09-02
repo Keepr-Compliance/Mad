@@ -64,6 +64,30 @@
  * until you pair a computer" — the second half is true by construction, since
  * `syncService` cannot address a desktop without a pairing record).
  *
+ * ## The claim this screen deliberately does NOT make
+ *
+ * An earlier draft said "They are not sent to Keepr's servers", and the sync
+ * step said "never to Keepr's servers". Both were FALSE and both are gone.
+ * Submitting a transaction uploads message bodies to Supabase
+ * (`submissionService.ts` sets `body_text` and inserts `submission_messages`);
+ * measured against live data there are 2,483 message bodies up there, 221 of
+ * them SMS.
+ *
+ * They were not replaced with a more accurate version of the same promise, and
+ * a future edit should not add one. Founder's call, 2026-09-01: **the phone does
+ * not control the desktop, so the phone does not get to promise anything on the
+ * desktop's behalf.** This app's job is to say what THIS PHONE does — it reads
+ * your texts and sends them to the computer you pair with. What that computer
+ * then does with them (store, export, submit to a brokerage) belongs to the
+ * desktop's own disclosure and to the privacy policy, not to a screen here.
+ *
+ * That is also the more defensible position for review: a reviewer who exercises
+ * the desktop cannot falsify a sentence that was only ever about the phone.
+ *
+ * If you are here because `app/onboarding/disclosure.tsx` still carries the
+ * stronger version of this claim — yes, and it is knowingly out of scope. That
+ * screen is the shipped prominent disclosure; its rewrite is BACKLOG-3045.
+ *
  * `DemoPreview` is the whole thing (link + modal) so a host screen adds one
  * line. `DemoPreviewModal` is exported separately so its content can be tested
  * without going through a host.
@@ -346,8 +370,8 @@ export function DemoPreviewModal({
           <View style={styles.factsCard}>
             <Text style={styles.factsHeading}>In the real app</Text>
             <Text style={styles.fact}>
-              Your texts go to the Keepr app on your own computer, over your own
-              Wi-Fi. They are not sent to Keepr&apos;s servers.
+              Your texts go from this phone to the Keepr app on the computer you
+              pair with, over your own Wi-Fi.
             </Text>
             <Text style={styles.fact}>
               Nothing is read until you allow it and pair a computer, and you can

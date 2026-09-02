@@ -202,6 +202,71 @@ describe('DemoPreviewModal — the sample itself', () => {
     assertNothingRealWasTouched();
   });
 
+  // BACKLOG-3027 / SR review — the screen must not promise anything about what
+  // the DESKTOP does with the messages.
+  //
+  // Two earlier lines did: the card's "They are not sent to Keepr's servers" and
+  // the sync step's "never to Keepr's servers". Both were false — submitting a
+  // transaction uploads message bodies to Supabase (2,483 up there, 221 of them
+  // SMS). Neither was rewritten into a softer version of the same promise; both
+  // were deleted, because the phone does not control the desktop and so does not
+  // get to speak for it.
+  //
+  // Asserted in the order the SR asked for. The card and the finished transfer
+  // are proven ON SCREEN first — a "the copy does not say X" test is at its
+  // happiest when nothing rendered at all, and this suite is already carrying a
+  // lot of negatives.
+  //
+  // MUTATION THAT MUST GO RED: restore either sentence.
+  it('describes what the PHONE does, and promises nothing about the desktop', () => {
+    const { getByText, queryAllByText, toJSON } = render(
+      <DemoPreviewModal visible onClose={jest.fn()} />,
+    );
+
+    // Run the transfer so the step details are on screen too — one of the two
+    // deleted sentences lived there, so a check that never renders the finished
+    // steps would only be covering half of what it claims to cover.
+    fireEvent.press(getByText('Send to my computer'));
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+
+    // POSITIVE FIRST — the card is really rendered, with its real content.
+    expect(getByText('In the real app')).toBeTruthy();
+    expect(
+      getByText(/Your texts go from this phone to the Keepr app on the computer/i),
+    ).toBeTruthy();
+    // And the transfer story it exists to tell is intact: still phone -> a named
+    // computer over a local network. Deleting the promise must not have
+    // flattened the point of the screen.
+    expect(queryAllByText(/over your own Wi-Fi/i).length).toBeGreaterThan(0);
+    expect(
+      getByText(new RegExp(`Straight to ${DEMO_DESKTOP_NAME}`, 'i')),
+    ).toBeTruthy();
+    expect(queryAllByText(/over your local network/i).length).toBeGreaterThan(0);
+
+    // NEGATIVE SECOND — swept over EVERY text node on the rendered screen, not
+    // just the two strings that were removed, so the claim cannot reappear
+    // somewhere else on this screen and go unnoticed.
+    const collect = (node: unknown, out: string[] = []): string[] => {
+      if (node == null) return out;
+      if (typeof node === 'string') {
+        out.push(node);
+        return out;
+      }
+      const kids = (node as { children?: unknown[] }).children;
+      if (Array.isArray(kids)) kids.forEach((k) => collect(k, out));
+      return out;
+    };
+    const onScreen = collect(toJSON());
+    expect(onScreen.length).toBeGreaterThan(20); // the sweep actually swept
+
+    const offending = onScreen.filter((s) =>
+      /servers|the cloud|never uploaded|not uploaded/i.test(s),
+    );
+    expect(offending).toEqual([]);
+  });
+
   it('names the destination computer as an example, never a real one', () => {
     const { getByText, getAllByText } = render(
       <DemoPreviewModal visible onClose={jest.fn()} />,

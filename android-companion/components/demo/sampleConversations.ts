@@ -216,7 +216,7 @@ export const DEMO_SYNC_STEPS: DemoSyncStep[] = [
   {
     id: 'send',
     label: 'Sent over your own Wi-Fi',
-    detail: `Straight to ${DEMO_DESKTOP_NAME} — never to Keepr's servers`,
+    detail: `Straight to ${DEMO_DESKTOP_NAME}, over your local network`,
   },
   {
     id: 'filed',
