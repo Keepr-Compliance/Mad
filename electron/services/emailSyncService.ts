@@ -1834,7 +1834,10 @@ class EmailSyncService {
    * Unlike syncTransactionEmails (which fetches per-contact for a transaction),
    * this fetches ALL emails within the user's configured cache window
    * (emailCache.durationMonths). It is incremental: if the local cache already
-   * has emails, only emails newer than the latest cached email are fetched.
+   * has emails, it fetches only emails newer than the latest cached one —
+   * PLUS, since BACKLOG-3056, the older span a widened cache window has just
+   * opened up behind the cache (`[cacheSinceDate .. oldestCached)`). Widening
+   * the window used to change nothing at all.
    *
    * Called:
    * - After onboarding email connection (via SyncOrchestrator)
@@ -1844,7 +1847,8 @@ class EmailSyncService {
    *
    * BACKLOG-2856: `options.force` runs the same fetch as a FORCE RE-CACHE —
    * every provider row in the cache window is re-downloaded and replaces what is
-   * stored, rather than only mail newer than the newest cached row. Parity with
+   * stored, rather than the incremental run's newer-mail-plus-any-widened-gap.
+   * Parity with
    * the macOS messages Force Re-import, link loss included (founder decision,
    * 2026-08-24). Written through stage-and-swap, so an interrupted force run
    * leaves the live table exactly as it was.

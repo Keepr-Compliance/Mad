@@ -6,7 +6,11 @@
  * ---------------------------------------------------------------------------
  * `precacheEmails` was incremental only — its own UI copy said "Only downloads
  * emails newer than what is already cached" — so no importer fix could ever
- * reach a row that was already stored. Messages (`importMacOSMessages(userId,
+ * reach a row that was already stored. (That sentence is quoted as it stood in
+ * August 2026 and is no longer on screen: BACKLOG-3056 made an incremental run
+ * also backfill the older span a widened cache window opens up, and rewrote the
+ * copy with it. The paragraph below still holds — a backfill reaches mail that
+ * was never fetched, never a row that is already stored.) Messages (`importMacOSMessages(userId,
  * forceReimport)`) and contacts (`contacts:forceReimport`) both had a force
  * option; emails had none.
  *

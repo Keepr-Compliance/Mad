@@ -695,9 +695,18 @@ export function EmailSettings({
               <h4 className="text-sm font-medium text-gray-900">
                 Re-cache Emails
               </h4>
+              {/* BACKLOG-3056: this used to promise "Only downloads emails newer
+                  than what is already cached." That became false when the run
+                  started filling in the older mail a widened Email History
+                  setting opens up — and it was the sentence that made the
+                  founder's "0 new emails" look like correct behaviour. The two
+                  claims it must carry now: older mail arrives too, and nothing
+                  is unlinked (which is what separates this from Force re-cache
+                  below). */}
               <p className="text-xs text-gray-600 mt-1">
-                Fetch latest emails from your connected provider into the local cache.
-                Only downloads emails newer than what is already cached.
+                Fetches new mail from your connected provider — and older mail too,
+                if you have increased Email History. Your emails stay linked to
+                their transactions.
               </p>
             </div>
             <button
