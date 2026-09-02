@@ -2,66 +2,10 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "e157b2cf4146c27d790a7e90bc1e046857d3c8f9",
-  "totalSites": 164,
-  "entryCount": 144,
+  "measuredAt": "650094a55b43592a4324438b0f7d650e340b06c8",
+  "totalSites": 148,
+  "entryCount": 129,
   "entries": [
-    {
-      "file": "electron/handlers/attachmentHandlers.ts",
-      "verb": "prepare",
-      "match": "text:37cbf467b0d0",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/handlers/attachmentHandlers.ts",
-      "verb": "prepare",
-      "match": "text:3a298d7ba7af",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/handlers/attachmentHandlers.ts",
-      "verb": "prepare",
-      "match": "text:afd29f27e134",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/handlers/attachmentHandlers.ts",
-      "verb": "prepare",
-      "match": "text:daa54f2f8b73",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/handlers/attachmentHandlers.ts",
-      "verb": "prepare",
-      "match": "text:fd1ee402faab",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/handlers/messageImportHandlers.ts",
-      "verb": "prepare",
-      "match": "text:480871c2d2ec",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/handlers/messageImportHandlers.ts",
-      "verb": "prepare",
-      "match": "text:e37e12ba8b64",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
     {
       "file": "electron/handlers/sessionHandlers.ts",
       "verb": "prepare",
@@ -93,22 +37,6 @@
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2765"
-    },
-    {
-      "file": "electron/services/attachmentTextExtractionBackfillService.ts",
-      "verb": "prepare",
-      "match": "text:0e1c9f352c4e",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/attachmentTextExtractionBackfillService.ts",
-      "verb": "prepare",
-      "match": "text:7e464bc8dac6",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
     },
     {
       "file": "electron/services/databaseService.ts",
@@ -383,22 +311,6 @@
       "owner": "BACKLOG-2991"
     },
     {
-      "file": "electron/services/emailAttachmentBackfillService.ts",
-      "verb": "prepare",
-      "match": "text:1bad3000d7b2",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailAttachmentBackfillService.ts",
-      "verb": "prepare",
-      "match": "text:59ec41dd73eb",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
       "file": "electron/services/emailDeduplicationService.ts",
       "verb": "prepare",
       "match": "text:3a4806f92011",
@@ -618,22 +530,6 @@
       "file": "electron/services/emailSyncService.ts",
       "verb": "prepare",
       "match": "text:be5ac26b150f",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/folderExport/attachmentHelpers.ts",
-      "verb": "prepare",
-      "match": "text:024784cb3c92",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/folderExport/attachmentHelpers.ts",
-      "verb": "prepare",
-      "match": "text:e5229c83804f",
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2989"
@@ -1117,22 +1013,6 @@
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/utils/userIdHelper.ts",
-      "verb": "prepare",
-      "match": "text:ae88b2ae96f2",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/utils/userIdHelper.ts",
-      "verb": "prepare",
-      "match": "text:e37e12ba8b64",
-      "bucket": "VIOLATION",
-      "count": 2,
-      "owner": "BACKLOG-2989"
     },
     {
       "file": "electron/workers/contactQueryWorker.ts",

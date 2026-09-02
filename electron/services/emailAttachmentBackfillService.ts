@@ -33,6 +33,10 @@
  */
 
 import * as Sentry from "@sentry/electron/main";
+import {
+  COUNT_EMAILS_MISSING_ATTACHMENTS_SQL,
+  SELECT_EMAILS_MISSING_ATTACHMENTS_SQL,
+} from "./db/emailAttachmentBackfillSql";
 import databaseService from "./databaseService";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
@@ -200,28 +204,17 @@ export async function backfillAttachmentMetadata(
   try {
     const db = databaseService.getRawDatabase();
 
-    // Emails with attachments but no attachment rows yet (the search gap).
-    const MISSING_WHERE = `
-      FROM emails e
-      WHERE e.user_id = ?
-        AND e.has_attachments = 1
-        AND e.external_id IS NOT NULL
-        AND e.source IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.email_id = e.id)
-    `;
-
+    // The statement and its shared WHERE fragment live in db/ — see
+    // db/emailAttachmentBackfillSql.ts for why the fragment had to move with
+    // the statements rather than be imported and composed here.
     const totalRow = db
-      .prepare(`SELECT COUNT(*) AS n ${MISSING_WHERE}`)
+      .prepare(COUNT_EMAILS_MISSING_ATTACHMENTS_SQL)
       .get(userId) as { n: number } | undefined;
     result.totalMissing = totalRow?.n ?? 0;
     if (result.totalMissing === 0) return result;
 
     const emails = db
-      .prepare(
-        `SELECT e.id, e.external_id, e.source ${MISSING_WHERE}
-         ORDER BY e.received_at DESC
-         LIMIT ?`,
-      )
+      .prepare(SELECT_EMAILS_MISSING_ATTACHMENTS_SQL)
       .all(userId, maxEmails) as MissingEmailRow[];
 
     result.remaining = Math.max(0, result.totalMissing - emails.length);
