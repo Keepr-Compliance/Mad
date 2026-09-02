@@ -29,6 +29,30 @@ import logService from "../logService";
 // BACKLOG-2403: the single sanctioned sqlite3 open — a bare
 // `new sqlite3.Database(path, mode)` crashes the main process on a failed open.
 import { openSqliteReadOnly } from "../db/readOnlySqlite";
+import {
+  ALL_ATTACHMENT_STORAGE_PATHS_SQL,
+  ALL_MESSAGE_EXTERNAL_IDS_SQL,
+  ATTACHMENT_COUNT_SQL,
+  ATTACHMENT_FILENAME_BY_ID_SQL,
+  ATTACHMENT_STORED_KEYS_SQL,
+  ATTACHMENTS_BY_EXTERNAL_MESSAGE_ID_SQL,
+  ATTACHMENTS_BY_MESSAGE_ID_SQL,
+  MESSAGE_EXISTS_SQL,
+  MESSAGE_EXTERNAL_ID_BY_ID_SQL,
+  selectAttachmentsByExternalMessageIds,
+  selectAttachmentsByMessageIds,
+  selectMessageExternalIds,
+  UPDATE_ATTACHMENT_MESSAGE_ID_BY_EXTERNAL_SQL,
+  UPDATE_ATTACHMENT_MESSAGE_ID_SQL,
+} from "../db/messageImportSql";
+import {
+  MACOS_ATTACHMENT_FILENAME_GUIDS_SQL,
+  MACOS_CHAT_ACCOUNT_LOGINS_SQL,
+  MACOS_CHAT_DISPLAY_NAMES_SQL,
+  MACOS_CHAT_MEMBER_HANDLES_SQL,
+  MACOS_MESSAGE_ATTACHMENTS_SQL,
+  MACOS_MESSAGE_TOTAL_COUNT_SQL,
+} from "../db/appleChatDbSql";
 import { getMessageText } from "../../utils/messageParser";
 import { macTimestampToDate } from "../../utils/dateUtils";
 import { detectMessageType } from "../../utils/messageTypeDetector";
@@ -628,9 +652,7 @@ class MacOSMessagesImportService {
 
         // First, get total message count (importable rows, unfiltered by date, for
         // "X of Y" display)
-        const totalCountResult = await dbAll<{ count: number }>(`
-          SELECT COUNT(*) as count FROM message WHERE guid IS NOT NULL
-        `);
+        const totalCountResult = await dbAll<{ count: number }>(MACOS_MESSAGE_TOTAL_COUNT_SQL);
         const totalAvailableCount = totalCountResult[0]?.count || 0;
 
         // Get filtered count (with date filter applied)
@@ -729,13 +751,7 @@ class MacOSMessagesImportService {
 
         // Query actual chat members from chat_handle_join (small table, load all at once)
         // This gives us the real participant list for group chats
-        const chatMemberRows = await dbAll<ChatMemberRow>(`
-          SELECT
-            chat_handle_join.chat_id,
-            handle.id as handle_id
-          FROM chat_handle_join
-          JOIN handle ON chat_handle_join.handle_id = handle.ROWID
-        `);
+        const chatMemberRows = await dbAll<ChatMemberRow>(MACOS_CHAT_MEMBER_HANDLES_SQL);
 
         // Build a map of chat_id -> array of member handles
         const chatMembersMap = new Map<number, string[]>();
@@ -754,13 +770,7 @@ class MacOSMessagesImportService {
 
         // Query chat account_login to get user's identifier (phone/Apple ID) for each chat
         // This tells us which of the user's identifiers they're using in each conversation
-        const chatAccountRows = await dbAll<ChatAccountRow>(`
-          SELECT
-            ROWID as chat_id,
-            account_login
-          FROM chat
-          WHERE account_login IS NOT NULL
-        `);
+        const chatAccountRows = await dbAll<ChatAccountRow>(MACOS_CHAT_ACCOUNT_LOGINS_SQL);
 
         // Build a map of chat_id -> user's account_login (phone number or email)
         // account_login has prefixes: "P:" for phone, "E:" for email - strip them
@@ -796,13 +806,7 @@ class MacOSMessagesImportService {
         // Apple uses BOTH for "unnamed", and against a real chat.db the empty
         // string outnumbers NULL more than ten to one (2,564 vs 234 of 2,886),
         // so treating only NULL as absent would name almost every chat "".
-        const chatNameRows = await dbAll<ChatDisplayNameRow>(`
-          SELECT
-            ROWID as chat_id,
-            display_name
-          FROM chat
-          WHERE display_name IS NOT NULL
-        `);
+        const chatNameRows = await dbAll<ChatDisplayNameRow>(MACOS_CHAT_DISPLAY_NAMES_SQL);
         const chatNamesMap = buildChatNameMap(chatNameRows);
 
         // Counts only — a group name is user content and never goes to a log.
@@ -928,23 +932,7 @@ class MacOSMessagesImportService {
         // and the message text still imports.
         const attachments = !plan.fetchAttachments
           ? []
-          : await dbAll<RawMacAttachment>(`
-          SELECT
-            attachment.ROWID as attachment_id,
-            message.ROWID as message_id,
-            message.guid as message_guid,
-            attachment.guid,
-            attachment.filename,
-            attachment.mime_type,
-            attachment.transfer_name,
-            attachment.total_bytes,
-            attachment.is_outgoing
-          FROM attachment
-          JOIN message_attachment_join ON attachment.ROWID = message_attachment_join.attachment_id
-          JOIN message ON message.ROWID = message_attachment_join.message_id
-          WHERE message.guid IS NOT NULL
-            AND attachment.filename IS NOT NULL
-        `);
+          : await dbAll<RawMacAttachment>(MACOS_MESSAGE_ATTACHMENTS_SQL);
 
         await dbClose();
 
@@ -2416,9 +2404,7 @@ class MacOSMessagesImportService {
 
       try {
         // Total count (importable rows, unfiltered by date)
-        const totalResult = await dbGet(`
-          SELECT COUNT(*) as count FROM message WHERE guid IS NOT NULL
-        `);
+        const totalResult = await dbGet(MACOS_MESSAGE_TOTAL_COUNT_SQL);
         const totalCount = totalResult?.count || 0;
 
         // TASK-1952 / BACKLOG-2276: Calculate filtered count when a date filter is
@@ -2508,7 +2494,7 @@ class MacOSMessagesImportService {
           const appDb = databaseService.getRawDatabase();
           for (const row of appDb
             .prepare(
-              `SELECT external_message_id, filename FROM attachments WHERE external_message_id IS NOT NULL`
+              ATTACHMENT_STORED_KEYS_SQL
             )
             .all() as { external_message_id: string; filename: string }[]) {
             const key = attachmentStoredKey(row.external_message_id, row.filename);
@@ -2563,11 +2549,7 @@ class MacOSMessagesImportService {
     // First try direct message_id lookup
     let rows = db
       .prepare(
-        `
-        SELECT id, message_id, filename, mime_type, file_size_bytes, storage_path
-        FROM attachments
-        WHERE message_id = ?
-      `
+        ATTACHMENTS_BY_MESSAGE_ID_SQL
       )
       .all(messageId) as MessageAttachment[];
 
@@ -2576,17 +2558,13 @@ class MacOSMessagesImportService {
     if (rows.length === 0) {
       // Look up the message's external_id (macOS GUID)
       const message = db
-        .prepare(`SELECT external_id FROM messages WHERE id = ?`)
+        .prepare(MESSAGE_EXTERNAL_ID_BY_ID_SQL)
         .get(messageId) as { external_id: string } | undefined;
 
       if (message?.external_id) {
         rows = db
           .prepare(
-            `
-            SELECT id, message_id, filename, mime_type, file_size_bytes, storage_path
-            FROM attachments
-            WHERE external_message_id = ?
-          `
+            ATTACHMENTS_BY_EXTERNAL_MESSAGE_ID_SQL
           )
           .all(message.external_id) as MessageAttachment[];
 
@@ -2596,7 +2574,7 @@ class MacOSMessagesImportService {
             `[Attachments] Found ${rows.length} attachments via external_message_id fallback, updating message_id`,
             MacOSMessagesImportService.SERVICE_NAME
           );
-          const updateStmt = db.prepare(`UPDATE attachments SET message_id = ? WHERE external_message_id = ?`);
+          const updateStmt = db.prepare(UPDATE_ATTACHMENT_MESSAGE_ID_BY_EXTERNAL_SQL);
           updateStmt.run(messageId, message.external_id);
           // Update the returned rows to reflect the corrected message_id
           rows = rows.map(row => ({ ...row, message_id: messageId }));
@@ -2620,23 +2598,14 @@ class MacOSMessagesImportService {
     const result = new Map<string, MessageAttachment[]>();
 
     // Debug: Log total attachments in DB and sample message_ids
-    const totalCount = db.prepare(`SELECT COUNT(*) as count FROM attachments`).get() as { count: number };
+    const totalCount = db.prepare(ATTACHMENT_COUNT_SQL).get() as { count: number };
     logService.debug(
       `[Attachments Debug] Total: ${totalCount.count}, Querying: ${messageIds.length} IDs`,
       MacOSMessagesImportService.SERVICE_NAME
     );
 
     // First, try direct message_id lookup
-    const placeholders = messageIds.map(() => "?").join(", ");
-    const directRows = db
-      .prepare(
-        `
-        SELECT id, message_id, filename, mime_type, file_size_bytes, storage_path
-        FROM attachments
-        WHERE message_id IN (${placeholders})
-      `
-      )
-      .all(...messageIds) as MessageAttachment[];
+    const directRows = selectAttachmentsByMessageIds<MessageAttachment>(db, messageIds);
 
     // Group direct results by message_id
     for (const row of directRows) {
@@ -2650,26 +2619,17 @@ class MacOSMessagesImportService {
 
     if (missingMessageIds.length > 0) {
       // Look up external_ids for messages that didn't have direct matches
-      const missingPlaceholders = missingMessageIds.map(() => "?").join(", ");
-      const messageExternalIds = db
-        .prepare(
-          `SELECT id, external_id FROM messages WHERE id IN (${missingPlaceholders}) AND external_id IS NOT NULL`
-        )
-        .all(...missingMessageIds) as { id: string; external_id: string }[];
+      const messageExternalIds = selectMessageExternalIds<{ id: string; external_id: string }>(
+        db,
+        missingMessageIds
+      );
 
       if (messageExternalIds.length > 0) {
         // Query attachments by external_message_id
         const externalIds = messageExternalIds.map(m => m.external_id);
-        const externalPlaceholders = externalIds.map(() => "?").join(", ");
-        const fallbackRows = db
-          .prepare(
-            `
-            SELECT id, message_id, external_message_id, filename, mime_type, file_size_bytes, storage_path
-            FROM attachments
-            WHERE external_message_id IN (${externalPlaceholders})
-          `
-          )
-          .all(...externalIds) as (MessageAttachment & { external_message_id: string })[];
+        const fallbackRows = selectAttachmentsByExternalMessageIds<
+          MessageAttachment & { external_message_id: string }
+        >(db, externalIds);
 
         // Build a map of external_id -> internal message id for updating
         const externalToInternalMap = new Map<string, string>();
@@ -2712,7 +2672,7 @@ class MacOSMessagesImportService {
             `[Attachments] Found ${attachmentsToUpdate.length} attachments via external_message_id fallback, updating message_ids`,
             MacOSMessagesImportService.SERVICE_NAME
           );
-          const updateStmt = db.prepare(`UPDATE attachments SET message_id = ? WHERE id = ?`);
+          const updateStmt = db.prepare(UPDATE_ATTACHMENT_MESSAGE_ID_SQL);
           const updateMany = db.transaction((updates: typeof attachmentsToUpdate) => {
             for (const update of updates) {
               updateStmt.run(update.newMessageId, update.attachmentId);
@@ -2767,7 +2727,7 @@ class MacOSMessagesImportService {
 
     // Get all attachments with their storage paths
     const attachments = db
-      .prepare(`SELECT id, message_id, storage_path FROM attachments`)
+      .prepare(ALL_ATTACHMENT_STORAGE_PATHS_SQL)
       .all() as { id: string; message_id: string; storage_path: string | null }[];
 
     stats.total = attachments.length;
@@ -2783,7 +2743,7 @@ class MacOSMessagesImportService {
     // Build message external_id -> internal id map
     const messageMap = new Map<string, string>();
     const messageRows = db
-      .prepare(`SELECT id, external_id FROM messages WHERE external_id IS NOT NULL`)
+      .prepare(ALL_MESSAGE_EXTERNAL_IDS_SQL)
       .all() as { id: string; external_id: string }[];
     for (const row of messageRows) {
       messageMap.set(row.external_id, row.id);
@@ -2813,15 +2773,7 @@ class MacOSMessagesImportService {
       const dbAll = macDb.all;
 
       // Build attachment filename -> message_guid map from macOS Messages DB
-      const macAttachments = await dbAll<{ filename: string; message_guid: string }>(`
-        SELECT
-          attachment.filename,
-          message.guid as message_guid
-        FROM attachment
-        JOIN message_attachment_join ON attachment.ROWID = message_attachment_join.attachment_id
-        JOIN message ON message.ROWID = message_attachment_join.message_id
-        WHERE attachment.filename IS NOT NULL AND message.guid IS NOT NULL
-      `);
+      const macAttachments = await dbAll<{ filename: string; message_guid: string }>(MACOS_ATTACHMENT_FILENAME_GUIDS_SQL);
 
       // Map by basename for matching (our storage uses content hash, but original filename is in the path)
       const filenameToGuid = new Map<string, string>();
@@ -2840,13 +2792,13 @@ class MacOSMessagesImportService {
       await macDb.close();
 
       // Prepare update statement
-      const updateStmt = db.prepare(`UPDATE attachments SET message_id = ? WHERE id = ?`);
+      const updateStmt = db.prepare(UPDATE_ATTACHMENT_MESSAGE_ID_SQL);
 
       // Check each attachment
       for (const att of attachments) {
         // First check if current message_id is valid
         const currentMsgExists = db
-          .prepare(`SELECT 1 FROM messages WHERE id = ?`)
+          .prepare(MESSAGE_EXISTS_SQL)
           .get(att.message_id);
 
         if (currentMsgExists) {
@@ -2858,7 +2810,7 @@ class MacOSMessagesImportService {
         // Extract original filename from storage path (stored files keep original name in metadata)
         // Our storage uses hash as filename, so we need to look at the attachment record's original filename
         const originalFilename = db
-          .prepare(`SELECT filename FROM attachments WHERE id = ?`)
+          .prepare(ATTACHMENT_FILENAME_BY_ID_SQL)
           .get(att.id) as { filename: string } | undefined;
 
         if (!originalFilename?.filename) {
