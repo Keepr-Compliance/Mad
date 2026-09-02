@@ -140,6 +140,11 @@
  *   node scripts/ci/check-sql-boundary.mjs --update-baseline [--allow-growth]
  *   node scripts/ci/check-sql-boundary.mjs --root <dir> --baseline <file>
  *        [--expect-sites N] [--expect-reasons in-layer=1,regex=2] [--json]
+ *
+ * A `--root` tree that contains a `.git` is enumerated through the SAME git
+ * enumeration the real repository uses; one without is walked on the
+ * filesystem. That is what lets the verification harness exercise the shipped
+ * enumeration rather than a copy of it (BACKLOG-3049).
  */
 
 import { execFileSync } from "node:child_process";
@@ -280,7 +285,34 @@ const ownerFor = (file) => OWNERS[file] ?? DEFAULT_OWNER;
 // A `git ls-files 'electron/**/*.ts'` pathspec silently skips top-level
 // `electron/*.ts` (git's `**` must span a directory), and a bare `electron/`
 // pathspec pulls in non-TS files. Both traps were hit while measuring this
-// item. Enumerate the tracked set, then filter on extension.
+// item. Enumerate the file set, then filter on extension.
+//
+// THE WORKING TREE, NOT THE INDEX (BACKLOG-3049).
+//
+// This enumeration used a bare `git ls-files`, which lists TRACKED files only.
+// A module that exists on disk but has never been `git add`-ed was invisible to
+// the gate: measured on one tree with two new `db/` modules present, unstaged
+// gave 782 sites / 123 keys and staged gave 784 / 127. Same working tree, same
+// command, two answers, and the only variable was `git add`.
+//
+// It failed in the safe-looking direction — the baseline was unaffected, so
+// nothing went red — which is exactly why it survived. The author of a brand
+// new `db/*Sql.ts` ran the gate, read green, and had verified NOTHING about the
+// file they had just written. A new file is when this gate has the most to say.
+//
+// CI never saw it: a fresh checkout is fully tracked by definition, so both
+// enumerations agree there. It appeared only in the local loop, which is the
+// one place an author is supposed to catch their own mistake.
+//
+// `--cached --others --exclude-standard` is tracked PLUS untracked-but-not-
+// ignored: the set the author actually has in front of them. `.gitignore` stays
+// respected, so build output, `dist/` and `node_modules` stay out — and git
+// never descends into a symlinked directory, which matters here because every
+// worktree symlinks `node_modules` at the main repo.
+//
+// The Set dedupes. `--cached` lists a path once PER STAGE during a merge
+// conflict, so an unmerged tree would otherwise scan (and count) the same file
+// up to three times.
 // ---------------------------------------------------------------------------
 
 const isScannable = (rel) =>
@@ -288,14 +320,35 @@ const isScannable = (rel) =>
   !/(^|\/)__tests__\//.test(rel) &&
   !/\.(test|spec)\.tsx?$/.test(rel);
 
-function enumerateRepo() {
-  const out = execFileSync("git", ["ls-files", "--", ...SCAN_SPEC], {
-    cwd: REPO_ROOT,
+const GIT_ENUMERATE_ARGS = [
+  "ls-files",
+  "--cached",
+  "--others",
+  "--exclude-standard",
+  "--",
+  ...SCAN_SPEC,
+];
+
+function enumerateRepo(root = REPO_ROOT) {
+  const out = execFileSync("git", GIT_ENUMERATE_ARGS, {
+    cwd: root,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
-  return out.split("\n").filter(Boolean).filter(isScannable).sort();
+  const rels = out.split("\n").filter(Boolean).filter(isScannable);
+  return [...new Set(rels)].sort();
 }
+
+/**
+ * Does `dir` hold its own git repository?
+ *
+ * `existsSync`, never `statSync().isDirectory()`: inside a git WORKTREE `.git`
+ * is a FILE holding a `gitdir:` pointer, and a directory check would misroute
+ * every worktree to the non-git enumerator. Deliberately does not walk parents
+ * (`git rev-parse --git-dir` would), so a fixture tree created under a path that
+ * happens to sit inside some other repository cannot silently attach to it.
+ */
+const isGitRoot = (dir) => existsSync(path.join(dir, ".git"));
 
 function enumerateDir(root) {
   const found = [];
@@ -897,7 +950,15 @@ function main() {
   const baselineFile = args.baseline ? path.resolve(args.baseline) : DEFAULT_BASELINE;
   const fixtureMode = Boolean(args.root);
 
-  const files = fixtureMode ? enumerateDir(root) : enumerateRepo();
+  // A fixture tree that IS a git repo is enumerated through the REAL
+  // `enumerateRepo`, so the harness can exercise the git enumeration itself
+  // rather than a copy of it (BACKLOG-3049). Non-git fixture trees — every
+  // pre-existing control — keep the plain filesystem walk.
+  const files = fixtureMode
+    ? isGitRoot(root)
+      ? enumerateRepo(root)
+      : enumerateDir(root)
+    : enumerateRepo(REPO_ROOT);
 
   const sites = [];
   const layerFindings = [];
