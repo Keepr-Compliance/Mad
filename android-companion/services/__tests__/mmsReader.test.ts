@@ -226,14 +226,34 @@ describe('readMmsMessages — a failed read is never an empty read', () => {
     expect(result.error.reason).toBe('parse_failed');
   });
 
-  it('a payload of the WRONG SHAPE is parse_failed, not a successful empty read', async () => {
-    // Valid JSON, no `rows` array. Read naively this reports zero messages —
-    // a failure wearing a successful read's clothes.
-    installMms(listReturnsRaw('{"unexpected":true}'));
-    const result = await readMmsMessages(0, 100);
-    if (result.ok) throw new Error('expected a read failure');
-    expect(result.error.reason).toBe('parse_failed');
-  });
+  // Each malformed shape isolates ONE clause of the payload check. Sampling one
+  // input for the whole guard is not enough: a mutation removing the
+  // `Array.isArray(rows)` clause left this suite fully green, because the single
+  // fixture used ({"unexpected":true}) was already being caught by the
+  // `rawCount` clause. The guard's branches are swept, not sampled.
+  const malformedPayloads: Array<[label: string, payload: string]> = [
+    ['no rows and no rawCount', '{"unexpected":true}'],
+    ['rawCount present, rows MISSING', '{"rawCount":3}'],
+    ['rawCount present, rows not an array', '{"rawCount":0,"rows":{"0":{}}}'],
+    ['rows present, rawCount MISSING', '{"rows":[]}'],
+    ['rows present, rawCount not a number', '{"rows":[],"rawCount":"3"}'],
+    ['JSON null', 'null'],
+    ['JSON array instead of an object', '[]'],
+  ];
+
+  it.each(malformedPayloads)(
+    'a payload with %s is parse_failed, not a successful empty read',
+    async (_label, payload) => {
+      // Read naively every one of these reports zero messages — a failure
+      // wearing a successful read's clothes.
+      installMms(listReturnsRaw(payload));
+      const result = await readMmsMessages(0, 100);
+      if (result.ok) throw new Error('expected a read failure');
+      expect(result.error.reason).toBe('parse_failed');
+      // The native call genuinely happened — otherwise this asserts nothing.
+      expect(listCalls.length).toBe(1);
+    }
+  );
 
   it('a genuinely empty store is an explicit empty-SUCCESS', async () => {
     installMms(listReturnsPage([]));

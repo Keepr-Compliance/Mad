@@ -406,6 +406,17 @@ async function readMmsPage(
       // A payload of the wrong SHAPE is as untrustworthy as one that will not
       // parse. Accepting it would mean reading `rows` off undefined and
       // reporting zero — a failure wearing a successful read's clothes.
+      //
+      // The `rows` and `rawCount` clauses each have their own isolating fixture
+      // in the test suite and each goes red when removed. The `null` /
+      // `typeof !== "object"` clause does NOT: every input it catches (`null`,
+      // a bare array) is already caught a line later or throws into the
+      // surrounding catch, and the outcome is `parse_failed` either way. It is
+      // kept for the clearer message, not for behaviour — so do not add a test
+      // promising it can fail. Recorded rather than removed because a guard that
+      // reads clearly at the top of a validation block is worth a redundant
+      // branch; recorded rather than left silent because an assertion that
+      // cannot fail is the defect this codebase keeps filing.
       throw new Error(
         `Native payload is not { rawCount, rows }: ${json.slice(0, 120)}`
       );

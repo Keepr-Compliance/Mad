@@ -519,6 +519,27 @@ describe('readSmsMessages — sort order (BACKLOG-3046 / 2199)', () => {
     expect(new Set(calls.map((c) => c.sortOrder))).toEqual(new Set(['date ASC']));
   });
 
+  it('asks the provider for the BUDGET, not a full page, when the budget is smaller', async () => {
+    // Found by a control on the shared paging loop: replacing
+    // `Math.min(pageSize, remaining)` with the raw page size left this suite
+    // 42/42 GREEN, because every case asserted the RESULT and none asserted the
+    // page size REQUESTED. The result stays correct — the loop still stops at
+    // the budget — so the only visible symptom is the provider being asked to
+    // materialize 200 rows to satisfy a budget of 3, on the exact path
+    // back-pressure exists to keep small. Same family as BACKLOG-3046: a
+    // parameter the reader passes that nothing reads back.
+    const { calls } = installPagingSms({ inbox: makeRows(10), sent: makeRows(10, { startId: 500 }) });
+
+    const result = await readSmsMessages(0, 3);
+
+    // Non-vacuous: the read ran and was genuinely truncated by the budget.
+    if (!result.ok) throw new Error('expected a successful read');
+    expect(result.messages.filter((m) => m.direction === 'inbound').length).toBe(3);
+    expect(calls.length).toBeGreaterThan(0);
+    // Exact SET of requested page sizes — every call asked for 3, not 200.
+    expect(new Set(calls.map((c) => c.maxCount))).toEqual(new Set([3]));
+  });
+
   it('a bounded read returns the OLDEST slice, by exact ID set', async () => {
     // 10 rows available, budget 3. Oldest-first => 1,2,3. Newest-first => 10,9,8,
     // and the cursor then advances past 4..10, stranding them permanently.
