@@ -2,9 +2,9 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "50ba1b14e79c75a7d1527868bccdf71068882c84",
-  "totalSites": 175,
-  "entryCount": 155,
+  "measuredAt": "e157b2cf4146c27d790a7e90bc1e046857d3c8f9",
+  "totalSites": 164,
+  "entryCount": 144,
   "entries": [
     {
       "file": "electron/handlers/attachmentHandlers.ts",
@@ -42,30 +42,6 @@
       "file": "electron/handlers/attachmentHandlers.ts",
       "verb": "prepare",
       "match": "text:fd1ee402faab",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/handlers/diagnosticHandlers.ts",
-      "verb": "prepare",
-      "match": "text:6b6102b3de10",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/handlers/diagnosticHandlers.ts",
-      "verb": "prepare",
-      "match": "text:9ec8520585e5",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/handlers/diagnosticHandlers.ts",
-      "verb": "prepare",
-      "match": "text:f1e55b3c17d3",
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2989"
@@ -1141,70 +1117,6 @@
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/storageDiagnostics.ts",
-      "verb": "pragma",
-      "match": "text:3ce8a5648b7e",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/storageDiagnostics.ts",
-      "verb": "prepare",
-      "match": "expr:4ec7c53222c8",
-      "bucket": "UNRESOLVABLE",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/storageDiagnostics.ts",
-      "verb": "prepare",
-      "match": "text:00b445d23efa",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/storageDiagnostics.ts",
-      "verb": "prepare",
-      "match": "text:0e09c891553d",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/storageDiagnostics.ts",
-      "verb": "prepare",
-      "match": "text:286a38bf9f53",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/storageDiagnostics.ts",
-      "verb": "prepare",
-      "match": "text:71d74561875c",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/storageDiagnostics.ts",
-      "verb": "prepare",
-      "match": "text:cddf99d976ee",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/storageDiagnostics.ts",
-      "verb": "prepare",
-      "match": "text:fcc4b4cb20de",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
     },
     {
       "file": "electron/utils/userIdHelper.ts",
