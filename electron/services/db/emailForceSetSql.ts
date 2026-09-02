@@ -35,6 +35,8 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 
+import type { StagingTableName } from "./stagingDdlSql";
+
 export type EmailForceProvider = "gmail" | "outlook";
 
 const ALLOWED_PROVIDERS: readonly EmailForceProvider[] = ["gmail", "outlook"];
@@ -116,12 +118,25 @@ function predicateFor(set: EmailForceSet): ForceSetPredicate {
  * A pure text builder — it executes nothing, so its callers keep their verbs
  * and the gate keeps seeing them.
  *
- * `stagingTable` is quoted here; it is a runtime-generated name and is checked
- * by `checkedStagingTable` at construction (see `db/stagingDdlSql`).
+ * `stagingTable` is `StagingTableName`, not `string`. An earlier revision took a
+ * plain string and asserted in this very docstring that it "is checked at
+ * construction" — a comment, not a constraint, and exactly the shape
+ * guardrail (ii) exists to reject. The compiler now refuses an unchecked name
+ * on the one surface where a runtime-generated identifier reaches SQL.
+ *
+ * ## Duplicated with `macOSMessagesImportService/forceStaging.ts:forceReadView`
+ *
+ * DELIBERATE, and not yet collapsible. The two are not the same function: this
+ * one builds its predicate INSIDE `db/` from an `EmailForceSet`, while
+ * `forceReadView` RECEIVES a predicate as text (`SURVIVING_MESSAGES`, authored
+ * in `services/`). Moving that one into `db/` unchanged would freeze a
+ * predicate-as-text signature into the layer — importing the design this commit
+ * exists to eliminate. They converge when BACKLOG-2990 builds its predicate
+ * from data too; the collapse is in 2990's scope, with this shape as the target.
  */
 export function emailForceReadView(
   set: EmailForceSet,
-  stagingTable: string,
+  stagingTable: StagingTableName,
   columns: string,
 ): { sql: string; params: readonly string[] } {
   const predicate = predicateFor(set);

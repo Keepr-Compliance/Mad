@@ -357,6 +357,25 @@ export const forceStagingLifecycle = {
  *
  * Columns are always listed explicitly. `SELECT *` here would drag `body_text`
  * for every row of a six-figure rebuild through a query that wants two columns.
+ *
+ * ## Duplicated with `db/emailForceSetSql.ts:emailForceReadView` — DELIBERATE
+ *
+ * BACKLOG-2989 commit A2 built a second union-view builder for the email force
+ * re-cache instead of reusing this one, and did NOT move this one into `db/`.
+ * That is not an oversight and the duplicate is not dead code — both are live.
+ *
+ * The two are not the same function yet. The email one builds its predicate
+ * INSIDE `db/` from an `EmailForceSet` (data). This one RECEIVES its predicate
+ * as TEXT — `SURVIVING_MESSAGES` / `SURVIVING_ATTACHMENTS`, authored here in
+ * `services/`. Moving this signature into `db/` unchanged would freeze
+ * predicate-as-text into the layer, which is precisely the design A2 exists to
+ * remove; and changing it here would rewrite three call sites in
+ * `macOSMessagesImportService.ts` (:1410, :1862, :1866) that belong to
+ * BACKLOG-2990.
+ *
+ * **The collapse is BACKLOG-2990's**, once it builds its force set from data
+ * too. `emailForceReadView` is the target shape. Until then, an edit to either
+ * builder should be considered for both.
  */
 export function forceReadView(
   liveTable: string,

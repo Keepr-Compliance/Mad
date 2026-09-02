@@ -24,6 +24,7 @@ import {
   emailForceReadView,
   type EmailForceSet,
 } from "../emailForceSetSql";
+import { STAGING_PREFIX, checkedStagingTable } from "../stagingDdlSql";
 
 const SCHEMA = path.join(__dirname, "..", "..", "..", "database", "schema.sql");
 const USER = "user-2989-force";
@@ -144,7 +145,10 @@ describe("deleteLiveForceSet — the ROW READ BACK, one case per predicate arm",
 });
 
 describe("emailForceReadView — live survivors UNION what this run staged", () => {
-  const STAGING = "staging_emailrecache_deadbeefcafe_emails";
+  const STAGING = checkedStagingTable(
+    `${STAGING_PREFIX["email-recache"]}deadbeefcafe_emails`,
+    "email-recache",
+  );
 
   beforeEach(() => {
     db.exec(`CREATE TABLE "${STAGING}" (id TEXT PRIMARY KEY, user_id TEXT, external_id TEXT, source TEXT, sent_at TEXT)`);
@@ -192,5 +196,43 @@ describe("emailForceReadView — live survivors UNION what this run staged", () 
 
   it("binds the same parameters the predicate needs, in order", () => {
     expect(emailForceReadView(SET, STAGING, "id").params).toEqual([USER, SINCE]);
+  });
+});
+
+describe("the staging name is branded here too, not just in stagingDdlSql", () => {
+  /**
+   * A2's first revision took `stagingTable: string` and interpolated it into
+   * `FROM "${stagingTable}"` under a docstring saying it "is checked at
+   * construction". A comment is not a constraint, and the brand A1 spent two
+   * rounds establishing was dropped one commit later — including on
+   * `EmailForceStaging.emailsTable`, which widened it back to `string` between
+   * a correct construction and a correct use.
+   *
+   * These directives fail the build if the brand is ever removed again, the
+   * same control A1 uses. `type-check:tests` is where they bite; `type-check`
+   * skips test files.
+   */
+  const SET2: EmailForceSet = {
+    userId: "u",
+    providers: ["gmail"],
+    cacheSinceIso: "2026-01-01T00:00:00Z",
+  };
+
+  it("refuses an unchecked staging table at the type level", () => {
+    // @ts-expect-error a hostile raw string is not a StagingTableName
+    expect(() => emailForceReadView(SET2, 'x"; DROP TABLE emails; --', "id")).toBeDefined();
+
+    // @ts-expect-error even a well-formed name is refused until it is checked
+    expect(() => emailForceReadView(SET2, "staging_emailrecache_deadbeefcafe_emails", "id")).toBeDefined();
+  });
+
+  it("accepts the checked form, so the brand is satisfiable and not merely obstructive", () => {
+    // Without this, a brand so tight that nothing could satisfy it would also
+    // pass the expect-error block above.
+    const ok = checkedStagingTable(
+      `${STAGING_PREFIX["email-recache"]}0123456789ab_emails`,
+      "email-recache",
+    );
+    expect(emailForceReadView(SET2, ok, "id").sql).toContain(ok);
   });
 });

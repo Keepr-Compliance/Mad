@@ -218,8 +218,21 @@ export interface PendingAttachmentMeta {
 
 export interface EmailForceStaging {
   readonly userId: string;
-  readonly emailsTable: string;
-  readonly participantsTable: string;
+  /**
+   * BACKLOG-2989 commit A2 fix: these are `StagingTableName`, not `string`.
+   *
+   * `checkedStagingTable` produces a branded value below, and declaring these
+   * two as `string` threw the brand away before anything downstream could
+   * demand it — so `emailForceReadView` could interpolate an unchecked name
+   * into `FROM "${stagingTable}"` under a docstring claiming it was checked.
+   *
+   * That is the same widening the compiler caught during A1 at
+   * `pairs: Array<[live: string, staging: string]>`, one commit later. The
+   * brand only holds if EVERY declaration between construction and use keeps
+   * it; branding the parameters alone is not enough.
+   */
+  readonly emailsTable: StagingTableName;
+  readonly participantsTable: StagingTableName;
   /**
    * The force-set predicate; the swap deletes exactly it.
    *
