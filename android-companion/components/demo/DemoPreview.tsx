@@ -91,8 +91,11 @@
  *
  *   - `getBackgroundSyncEnabled()` has ONE service-side reader,
  *     `backgroundSync.startBackgroundSync()`, which registers/unregisters the
- *     expo-background-fetch task. Nothing else in `services/` consults it;
- *     home and settings read it only to render state.
+ *     expo-background-fetch task. Nothing else in `services/` consults it. The
+ *     two screens that read it do not gate syncing on it either: settings uses
+ *     it to render the Switch, and home passes it to
+ *     `shouldPromptBatteryOptimization` to decide whether to raise the
+ *     battery-optimisation Alert.
  *   - The sync itself is `performSync` -> `runOnce` -> `runSyncUnderLock` ->
  *     `runSyncCycle`, and NO step in that chain checks the flag. Its only gate
  *     is `loadPairingInfo()`.
