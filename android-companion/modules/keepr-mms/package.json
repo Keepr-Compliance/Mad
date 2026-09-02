@@ -1,0 +1,7 @@
+{
+  "name": "keepr-mms",
+  "version": "1.0.0",
+  "description": "Local Expo module: a bounded, oldest-first read of the Android MMS store (BACKLOG-2973).",
+  "private": true,
+  "platforms": ["android"]
+}

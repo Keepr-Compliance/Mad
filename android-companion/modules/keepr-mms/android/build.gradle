@@ -1,0 +1,27 @@
+// keepr-mms — local Expo module (BACKLOG-2973).
+//
+// `expo-module-gradle-plugin` supplies compileSdk/minSdk/targetSdk, the Kotlin
+// toolchain and the expo-modules-core dependency from the app's own version
+// catalog, so this file declares only what is specific to this module. Keeping
+// the SDK levels OUT of here is deliberate: pinning them locally is how a module
+// silently drifts from the app on the next Expo upgrade.
+//
+// `versionCode` / `versionName` are NOT optional despite being unused by the
+// consuming app: the plugin fails configuration outright with
+// "'android.defaultConfig.versionName' is not defined" (observed, not guessed).
+// They identify this library only — the APK's version is `expo.android.versionCode`
+// in app.json.
+apply plugin: 'com.android.library'
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'com.keepr.companion.keeprmms'
+version = '1.0.0'
+
+android {
+  namespace 'expo.modules.keeprmms'
+
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+  }
+}

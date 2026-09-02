@@ -36,9 +36,16 @@ yarn-error.*
 # typescript
 *.tsbuildinfo
 
-# generated native folders
-ios/
-android/
+# generated native folders (prebuild output at the COMPANION ROOT only).
+#
+# Anchored with a leading slash on purpose. Unanchored, `android/` matches a
+# directory of that name at ANY depth -- which silently swallowed the Kotlin
+# source of the local Expo module at `modules/keepr-mms/android/`
+# (BACKLOG-2973). `git add` reported success and committed nothing; the
+# module would have been missing from every clone and every CI build, with
+# autolinking simply not finding it. Same trap for `ios/`.
+/ios/
+/android/
 
 # build output
 build/
