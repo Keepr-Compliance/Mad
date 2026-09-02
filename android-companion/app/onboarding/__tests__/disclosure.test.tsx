@@ -71,6 +71,8 @@ jest.mock('../../../components/ui/OnboardingSignOutLink', () => {
 });
 
 import DisclosureScreen from '../disclosure';
+import { DEMO_BANNER_TEXT } from '../../../components/demo/DemoPreview';
+import { DEMO_CONVERSATIONS } from '../../../components/demo/sampleConversations';
 
 const CONSENT_BUTTON = 'Agree and Continue';
 
@@ -158,5 +160,47 @@ describe('DisclosureScreen — affirmative consent (BACKLOG-2956)', () => {
     expect(
       screen.getByText(/does not read picture or group messages \(MMS\)/i),
     ).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3027 — the sample preview is reachable from the disclosure screen.
+//
+// Deliberately hosted BELOW the consent action, so it competes with nothing
+// Play requires here: it only lets someone SEE what they are being asked to
+// consent to before they consent to it. Opening it must not record consent —
+// consent the user did not actively give is not consent (the rule this screen's
+// own mount effect already keeps).
+//
+// MUTATION THAT MUST GO RED: delete `<DemoPreview />` from
+// app/onboarding/disclosure.tsx — all three tests below fail.
+// ---------------------------------------------------------------------------
+describe('disclosure — sample preview entry point (BACKLOG-3027)', () => {
+  it('offers the sample, and does not show it unasked', () => {
+    render(<DisclosureScreen />);
+
+    expect(screen.getByText(/See how Keepr works/i)).toBeTruthy();
+    expect(screen.queryByText(DEMO_BANNER_TEXT)).toBeNull();
+  });
+
+  it('shows real sample content when tapped', () => {
+    render(<DisclosureScreen />);
+
+    fireEvent.press(screen.getByText(/See how Keepr works/i));
+
+    expect(screen.getByText(DEMO_BANNER_TEXT)).toBeTruthy();
+    expect(
+      screen.getByText(DEMO_CONVERSATIONS[0].messages[0].body),
+    ).toBeTruthy();
+  });
+
+  it('opening the sample records NO consent and does not advance the flow', () => {
+    render(<DisclosureScreen />);
+
+    fireEvent.press(screen.getByText(/See how Keepr works/i));
+
+    expect(screen.getByText(DEMO_BANNER_TEXT)).toBeTruthy();
+    expect(mockRecordDisclosureConsent).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
   });
 });

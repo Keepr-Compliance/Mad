@@ -52,6 +52,7 @@ import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { Button } from '../../components/ui';
 import OnboardingSignOutLink from '../../components/ui/OnboardingSignOutLink';
+import DemoPreview from '../../components/demo/DemoPreview';
 
 export default function DisclosureScreen(): React.JSX.Element {
   const router = useRouter();
@@ -172,6 +173,11 @@ export default function DisclosureScreen(): React.JSX.Element {
           You choose which computer to pair with in the next steps, and you can
           turn syncing off at any time in Settings.
         </Text>
+
+        {/* BACKLOG-3027: below the consent action on purpose — it must not
+            compete with the disclosure Play requires, only offer a way to SEE
+            what is being consented to before consenting. */}
+        <DemoPreview />
 
         <OnboardingSignOutLink />
       </ScrollView>

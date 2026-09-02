@@ -24,6 +24,7 @@ import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { Button } from '../../components/ui';
 import OnboardingSignOutLink from '../../components/ui/OnboardingSignOutLink';
+import DemoPreview from '../../components/demo/DemoPreview';
 
 export default function PermissionsScreen(): React.JSX.Element {
   const router = useRouter();
@@ -262,6 +263,15 @@ export default function PermissionsScreen(): React.JSX.Element {
             />
           </View>
         )}
+
+        {/* BACKLOG-3027: hosted HERE, and not only on pair-device, because the
+            forward path off this screen is the `!attempted` branch above — a
+            single "Grant Permissions" button. "Skip for Now" appears only in the
+            denied branches, i.e. only AFTER the OS dialog has fired. So this is
+            the last screen where the product can be seen with NOTHING granted,
+            which is the strongest form of the answer to "why does this app want
+            to read my texts". */}
+        <DemoPreview />
 
         {/* BACKLOG-2956: the only escape from onboarding before this existed was
             clearing app storage in Android Settings. */}

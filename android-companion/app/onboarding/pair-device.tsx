@@ -29,6 +29,7 @@ import { textStyles } from '../../theme/typography';
 import { borderRadius, spacing } from '../../theme/spacing';
 import { Button } from '../../components/ui';
 import OnboardingSignOutLink from '../../components/ui/OnboardingSignOutLink';
+import DemoPreview from '../../components/demo/DemoPreview';
 
 /** Data encoded in the QR code from the desktop app */
 interface PairingData {
@@ -208,7 +209,11 @@ export default function PairDeviceScreen(): React.JSX.Element {
    * pairing kept failing. Their only escape was clearing app storage.
    *
    * This lands the user in the REAL app, unpaired — no demo mode, no sample data,
-   * no fake content. `app/(main)/home.tsx` already renders a deliberate empty
+   * no fake content. (Still true of THIS button. BACKLOG-3027 later added a
+   * labelled sample behind a SEPARATE link on this screen and on the unpaired
+   * home screen this button lands on; it is opt-in and reads nothing. Do not
+   * read the sentence above as "no sample data exists anywhere".)
+   * `app/(main)/home.tsx` already renders a deliberate empty
    * state for an unpaired phone ("Not Paired" / "Pair with Keepr" / a working
    * Scan QR Code button), and that state is already exercised in production: a
    * sign-out clears the pairing, so re-login lands an onboarded user there today.
@@ -337,6 +342,12 @@ export default function PairDeviceScreen(): React.JSX.Element {
         <Text style={styles.skipNote}>
           You can pair with your computer later from the home screen.
         </Text>
+
+        {/* BACKLOG-3027: the screen this item names. Someone with no Keepr
+            desktop on this network — a Play reviewer, or anyone evaluating the
+            app before installing the desktop — can see what pairing is FOR
+            without pairing. Reads nothing; opens only on tap. */}
+        <DemoPreview />
 
         <OnboardingSignOutLink />
       </View>
