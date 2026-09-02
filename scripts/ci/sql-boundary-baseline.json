@@ -2,9 +2,9 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "60a3843d2052ee37f835d93ddd746115600c604c",
-  "totalSites": 136,
-  "entryCount": 117,
+  "measuredAt": "f989e9e1dcdd654ffae467bc1cee15bdae4114f8",
+  "totalSites": 133,
+  "entryCount": 114,
   "entries": [
     {
       "file": "electron/handlers/sessionHandlers.ts",
@@ -418,30 +418,6 @@
       "file": "electron/services/emailForceStaging.ts",
       "verb": "prepare",
       "match": "text:ed4ad5d94f9f",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailSyncService.ts",
-      "verb": "prepare",
-      "match": "text:160d29c30a32",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailSyncService.ts",
-      "verb": "prepare",
-      "match": "text:8b164cb4812d",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2989"
-    },
-    {
-      "file": "electron/services/emailSyncService.ts",
-      "verb": "prepare",
-      "match": "text:be5ac26b150f",
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2989"

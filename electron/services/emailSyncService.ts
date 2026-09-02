@@ -11,6 +11,19 @@
 // ============================================
 
 import * as Sentry from "@sentry/electron/main";
+import {
+  UPDATE_EMAIL_IDENTITY_SQL,
+  clearSyncCursor,
+  prepareEmailInsert,
+  prepareParticipantInsert,
+  selectEarliestByParticipants,
+  selectLatestSentAt,
+  selectExistingByMessageIdHeader,
+  selectExistingExternalIds,
+  selectLegacyCandidatesBySubject,
+  type EmailReadSource,
+  type EmailWriteTarget,
+} from "./db/emailSyncSql";
 import logService from "./logService";
 import { autoLinkCommunicationsForContact } from "./autoLinkService";
 import type { AutoLinkResult } from "./autoLinkService";
@@ -487,12 +500,20 @@ async function fetchStoreAndDedup(params: {
   // and never be staged — staging would finish empty and the swap would delete
   // the user's corpus and put nothing back. `emailForceReadView` substitutes
   // "rows the swap will keep ∪ rows staged so far" for the table name.
-  const emailsSource = (columns: string): { sql: string; params: readonly string[] } =>
-    force
-      ? emailForceReadView(force, columns)
-      : { sql: "emails", params: [] };
-  const writeEmailsTable = force ? `"${force.emailsTable}"` : "emails";
-  const writeParticipantsTable = force ? `"${force.participantsTable}"` : "email_participants";
+  // BACKLOG-2989 chunk 4: what crosses into db/ is a DISCRIMINATED TARGET
+  // carrying the branded staging names, never a pre-quoted identifier. The
+  // previous `force ? `"${force.emailsTable}"` : "emails"` destroyed the
+  // StagingTableName brand with a template literal and no annotation to notice.
+  const writeTarget: EmailWriteTarget = force
+    ? {
+        mode: "force",
+        emailsTable: force.emailsTable,
+        participantsTable: force.participantsTable,
+      }
+    : { mode: "live" };
+  const readSource: EmailReadSource = force
+    ? { mode: "force", set: force.forceSet, emailsTable: force.emailsTable }
+    : { mode: "live" };
 
   // BACKLOG-1549: Look up the user's connected email address to compute direction
   const oauthProvider = provider === "outlook" ? "microsoft" : "google";
@@ -527,11 +548,10 @@ async function fetchStoreAndDedup(params: {
     const CHUNK_SIZE = 500;
     for (let i = 0; i < newEmails.length; i += CHUNK_SIZE) {
       const chunk = newEmails.slice(i, i + CHUNK_SIZE);
-      const placeholders = chunk.map(() => "?").join(",");
-      const src = emailsSource("external_id, user_id");
-      const rows = dbAll<{ external_id: string }>(
-        `SELECT external_id FROM ${src.sql} WHERE user_id = ? AND external_id IN (${placeholders})`,
-        [...src.params, userId, ...chunk.map((e) => e.id)],
+      const rows = selectExistingExternalIds(
+        readSource,
+        userId,
+        chunk.map((e) => e.id),
       );
       for (const row of rows) {
         existingExternalIds.add(row.external_id);
@@ -550,12 +570,7 @@ async function fetchStoreAndDedup(params: {
     const CHUNK_SIZE = 500;
     for (let i = 0; i < headersToCheck.length; i += CHUNK_SIZE) {
       const chunk = headersToCheck.slice(i, i + CHUNK_SIZE);
-      const placeholders = chunk.map(() => "?").join(",");
-      const src = emailsSource("id, external_id, message_id_header, user_id");
-      const rows = dbAll<{ id: string; external_id: string | null; message_id_header: string }>(
-        `SELECT id, external_id, message_id_header FROM ${src.sql} WHERE user_id = ? AND message_id_header IN (${placeholders})`,
-        [...src.params, userId, ...chunk],
-      );
+      const rows = selectExistingByMessageIdHeader(readSource, userId, chunk);
       for (const row of rows) {
         existingByMessageId.set(row.message_id_header, { id: row.id, externalId: row.external_id });
       }
@@ -583,27 +598,7 @@ async function fetchStoreAndDedup(params: {
       const LEGACY_CHUNK = 500;
       for (let i = 0; i < subjectsToCheck.length; i += LEGACY_CHUNK) {
         const chunk = subjectsToCheck.slice(i, i + LEGACY_CHUNK);
-        const placeholders = chunk.map(() => "?").join(",");
-        const legacySrc = emailsSource(
-          "id, external_id, subject, sender, sent_at, user_id, message_id_header",
-        );
-        const legacyRows = dbAll<{
-          id: string;
-          external_id: string | null;
-          subject: string;
-          sender: string;
-          sent_at: string;
-        }>(
-          `SELECT id, external_id, subject, sender, sent_at
-           FROM ${legacySrc.sql}
-           WHERE user_id = ?
-             AND message_id_header IS NULL
-             AND sent_at IS NOT NULL
-             AND sender IS NOT NULL
-             AND subject IS NOT NULL
-             AND LOWER(TRIM(subject)) IN (${placeholders})`,
-          [...legacySrc.params, userId, ...chunk],
-        );
+        const legacyRows = selectLegacyCandidatesBySubject(readSource, userId, chunk);
         // Build key → row map and frequency count for ambiguity detection.
         const keyCount = new Map<string, number>();
         const keyToRow = new Map<string, { id: string; external_id: string | null }>();
@@ -658,34 +653,10 @@ async function fetchStoreAndDedup(params: {
     try {
       const db = getRawDatabase();
       const crypto = await import("crypto");
-      const insertStmt = db.prepare(`
-        INSERT INTO ${writeEmailsTable} (
-          id, user_id, external_id, source, account_id, direction,
-          subject, body_plain, body_html,
-          sender, recipients, cc, bcc,
-          thread_id, in_reply_to, references_header,
-          sent_at, received_at,
-          has_attachments, attachment_count,
-          message_id_header, content_hash, labels,
-          bulk_mail_headers,
-          ingest_source, validated_at,
-          -- BACKLOG-2857: stamped at write time so a later derivation fix can
-          -- tell this row apart from one produced by superseded logic.
-          -- APPENDED after every other bound parameter on purpose:
-          -- emailSyncService.retainedHeaders.test.ts transcribes positional
-          -- indices into this list, so inserting mid-list would silently
-          -- re-point its assertions at the wrong columns.
-          derived_version,
-          created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `);
+      const insertStmt = prepareEmailInsert(db, writeTarget);
 
       // BACKLOG-1722: Junction participant INSERT, prepared once and reused.
-      const insertParticipantStmt = db.prepare(`
-        INSERT INTO ${writeParticipantsTable}
-          (email_id, role, position, participant_hash, email_address, display_name)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `);
+      const insertParticipantStmt = prepareParticipantInsert(db, writeTarget);
 
       // BACKLOG-1769: resurrection remap — point an already-stored row at the new
       // provider id when the same Message-ID was re-delivered under a fresh id.
@@ -694,7 +665,7 @@ async function fetchStoreAndDedup(params: {
       // requiring the forward guard again. COALESCE is a no-op for rows that
       // already have a message_id_header (standard BACKLOG-1769 resurrections).
       const updateExternalIdStmt = db.prepare(
-        `UPDATE emails SET external_id = ?, message_id_header = COALESCE(message_id_header, ?) WHERE id = ?`,
+        UPDATE_EMAIL_IDENTITY_SQL,
       );
 
       // Map of external_id -> generated internal id for attachment processing
@@ -1653,18 +1624,7 @@ class EmailSyncService {
     // LOWER(sender) IN (...) OR LOWER(recipients) LIKE ... scan, which
     // could miss BCC-only and Outlook display-name-only matches and was
     // unindexed for the LIKE clause.
-    const placeholders = contactEmails.map(() => "?").join(", ");
-    const sql = `
-      SELECT MIN(e.sent_at) as earliest, COUNT(DISTINCT e.id) as total
-      FROM email_participants ep
-      JOIN emails e ON e.id = ep.email_id
-      WHERE e.user_id = ?
-        AND ep.email_address IN (${placeholders})
-    `;
-    const lowerEmails = contactEmails.map((e) => e.toLowerCase().trim());
-    const params = [userId, ...lowerEmails];
-
-    const row = dbGet<{ earliest: string | null; total: number }>(sql, params);
+    const row = selectEarliestByParticipants(userId, contactEmails);
 
     if (!row || row.total === 0 || !row.earliest) {
       return false;
@@ -2081,10 +2041,7 @@ class EmailSyncService {
     // window — and the clamp is simply not applied.
     const latestCachedRow = isForce
       ? null
-      : dbGet<{ latest: string | null }>(
-          "SELECT MAX(sent_at) as latest FROM emails WHERE user_id = ?",
-          [userId],
-        );
+      : selectLatestSentAt(userId);
     let fetchSinceDate = cacheSinceDate;
     if (latestCachedRow?.latest) {
       const latestCached = new Date(latestCachedRow.latest);
@@ -2553,10 +2510,7 @@ class EmailSyncService {
    * swallowed rather than allowed to fail the run.
    */
   private clearShadowDeltaCursors(userId: string): void {
-    dbRun(
-      `UPDATE email_sync_state SET cursor = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`,
-      [userId],
-    );
+    clearSyncCursor(userId);
   }
 
   /**
