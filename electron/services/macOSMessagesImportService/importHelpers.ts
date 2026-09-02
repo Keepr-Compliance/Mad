@@ -26,6 +26,12 @@ import {
 } from "./types";
 import { MAC_EPOCH } from "../../constants";
 import type { MessageImportFilters } from "./types";
+import {
+  DELETE_MACOS_THREAD_NAMES_SQL,
+  SELECT_MACOS_THREAD_IDS_SQL,
+  UPSERT_THREAD_NAME_SQL,
+  deleteThreadNamesByIds,
+} from "../db/messageThreadNameSql";
 
 /**
  * Nanoseconds per millisecond — macOS Messages stores dates as nanoseconds
@@ -410,11 +416,7 @@ export function syncMacChatThreadNames(
   chatNames: Map<number, string>
 ): ThreadNameSyncCounts {
   const upsert = db.prepare(
-    `INSERT INTO message_thread_names (user_id, thread_id, display_name, updated_at)
-     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-     ON CONFLICT(user_id, thread_id) DO UPDATE SET
-       display_name = excluded.display_name,
-       updated_at = CURRENT_TIMESTAMP`
+    UPSERT_THREAD_NAME_SQL
   );
 
   const run = db.transaction((): ThreadNameSyncCounts => {
@@ -435,8 +437,7 @@ export function syncMacChatThreadNames(
     if (keep.length === 0) {
       cleared = db
         .prepare(
-          `DELETE FROM message_thread_names
-            WHERE user_id = ? AND thread_id LIKE 'macos-chat-%'`
+          DELETE_MACOS_THREAD_NAMES_SQL
         )
         .run(userId).changes;
     } else {
@@ -444,8 +445,7 @@ export function syncMacChatThreadNames(
       // by chunk A would be deleted by chunk B), so collect the doomed ids first.
       const existing = db
         .prepare(
-          `SELECT thread_id FROM message_thread_names
-            WHERE user_id = ? AND thread_id LIKE 'macos-chat-%'`
+          SELECT_MACOS_THREAD_IDS_SQL
         )
         .all(userId) as Array<{ thread_id: string }>;
       const keepSet = new Set(keep);
@@ -454,13 +454,8 @@ export function syncMacChatThreadNames(
         .filter((t) => !keepSet.has(t));
       for (let i = 0; i < doomed.length; i += CHUNK) {
         const slice = doomed.slice(i, i + CHUNK);
-        const placeholders = slice.map(() => "?").join(",");
-        cleared += db
-          .prepare(
-            `DELETE FROM message_thread_names
-              WHERE user_id = ? AND thread_id IN (${placeholders})`
-          )
-          .run(userId, ...slice).changes;
+        // Width derived from the array that is bound, inside db/.
+        cleared += deleteThreadNamesByIds(db, userId, slice);
       }
     }
 

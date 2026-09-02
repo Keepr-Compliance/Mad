@@ -266,3 +266,85 @@ export function deriveStagingIndexDdl(
       `$1${stagingTable}`
     );
 }
+
+// ---------------------------------------------------------------------------
+// Staging lifecycle execution — BACKLOG-2990 chunk 5
+// ---------------------------------------------------------------------------
+//
+// These moved out of `services/macOSMessagesImportService/forceStaging.ts` with
+// the SQL they run. They EXECUTE, and they take table names and a prefix —
+// never SQL text — so none has the combination the layer rule forbids.
+//
+// Moving the execution here is also what lets `deriveStagingTableDdl` and
+// `deriveStagingIndexDdl` stop being exported: their only outside callers were
+// the two `db.exec(derive…())` sites in `forceStaging.ts`, which were
+// UNRESOLVABLE to the gate precisely because a call expression as argument 0
+// cannot be resolved to text.
+
+/** Staging tables left behind by a previous run — matched by prefix, then dropped. */
+export const STALE_STAGING_TABLES_SQL = `SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ? ESCAPE '\\'`;
+
+/** Index definitions on a live table, so staging can mirror them. */
+export const TABLE_INDEXES_SQL = `SELECT name, sql FROM sqlite_master
+           WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL`;
+
+/**
+ * Drop a staging table.
+ *
+ * The name is BRANDED, which is the whole safety story: a table name cannot be
+ * bound as a parameter, so it reaches SQL by interpolation and the only thing
+ * standing between it and an injection is that it came from
+ * `checkedStagingTable`.
+ */
+export function dropStagingTable(db: DatabaseType, table: StagingTableName): void {
+  db.exec(`DROP TABLE IF EXISTS "${table}"`);
+}
+
+/**
+ * Drop every staging table left over from an interrupted run, and name them.
+ *
+ * Returns what it dropped rather than a count: a caller that has to log which
+ * tables were swept cannot do it from a number, and the previous shape made the
+ * caller re-derive the list.
+ */
+export function sweepStaleStagingTables(db: DatabaseType, likePattern: string): string[] {
+  const stale = db.prepare(STALE_STAGING_TABLES_SQL).all(likePattern) as Array<{ name: string }>;
+  for (const row of stale) db.exec(`DROP TABLE IF EXISTS "${row.name}"`);
+  return stale.map((r) => r.name);
+}
+
+/** Create the staging mirror of a live table. */
+export function createStagingTable(
+  db: DatabaseType,
+  live: string,
+  staging: StagingTableName,
+): void {
+  db.exec(deriveStagingTableDdl(messageTableDdl(db, live), live, staging));
+}
+
+/**
+ * Mirror the live table's indexes onto staging.
+ *
+ * Indexes are mirrored, not skipped: `INSERT OR IGNORE`'s dedup depends on one
+ * of them — the partial unique index on `(user_id, external_id)` is what makes
+ * the staged insert ignore a duplicate rather than store it twice.
+ */
+export function mirrorStagingIndexes(
+  db: DatabaseType,
+  live: string,
+  staging: StagingTableName,
+  stagingIndexName: (indexName: string) => StagingTableName,
+): void {
+  const indexes = db.prepare(TABLE_INDEXES_SQL).all(live) as Array<{
+    name: string;
+    sql: string;
+  }>;
+  for (const index of indexes) {
+    db.exec(deriveStagingIndexDdl(index.sql, index.name, live, staging, stagingIndexName(index.name)));
+  }
+}
+
+/** How many rows a staging table holds, so a yielded row can be counted rather than inferred. */
+export function countStagingRows(db: DatabaseType, table: StagingTableName): number {
+  return (db.prepare(`SELECT COUNT(*) AS c FROM "${table}"`).get() as { c: number }).c;
+}

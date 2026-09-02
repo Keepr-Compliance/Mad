@@ -668,6 +668,126 @@ for (const [id, verb, call] of [
 }
 
 // ---------------------------------------------------------------------------
+// C17 — node-sqlite3 is enumerated by RECEIVER PROVENANCE, and NOT by verb name.
+//
+// BACKLOG-3059. `.all` / `.get` / `.run` are node-sqlite3's verbs, and they
+// collide with `Map.get`, `Promise.all` and better-sqlite3's own
+// `statement.get`. A verb-name matcher would enumerate all of those; since
+// UNRESOLVABLE is CI-blocking, that reds the gate on unrelated code. This is
+// how BACKLOG-3044's census reached 114-by-name against 103-by-binding.
+//
+// Both halves are asserted. The negative half is the one that matters: a
+// control that only proved the SQL is caught would pass a matcher that also
+// catches every `Map.get` in the tree.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    "electron/services/db/readOnlySqlite.ts":
+      "export async function openSqliteReadOnly(p: string, who: string): Promise<any> { return {} as any; }\n",
+    "electron/handlers/appleReader.ts": [
+      'import { openSqliteReadOnly } from "../services/db/readOnlySqlite";',
+      'export async function read(p: string) {',
+      '  const db = await openSqliteReadOnly(p, "T");',
+      '  const rows = await db.all(`SELECT handle FROM chat`);',      // (i) SQL -> VIOLATION
+      '  const m = new Map<string, string>();',
+      '  const hit = m.get("k");',                                    // (ii) Map.get -> NOT a site
+      '  const settled = await Promise.all([1, 2]);',                 // (iii) Promise.all -> NOT a site
+      '  return { rows, hit, settled };',
+      '}',
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--explain"]);
+  const lines = r.all.split("\n");
+  const sql = lines.filter((l) => /appleReader\.ts:4\b/.test(l) && /VIOLATION/.test(l)).length;
+  const noise = lines.filter((l) => /appleReader\.ts:(6|7)\b/.test(l)).length;
+  record(
+    "C17",
+    "node-sqlite3 enumerated by receiver provenance; Map.get / Promise.all are NOT enumerated",
+    sql === 1 && noise === 0,
+    `sql=${sql} (want 1)  noise=${noise} (want 0)`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// C18 — the handle-binding CROSS-PRODUCT, all four corners.
+//
+// { declaration, assignment } x { direct openSqliteReadOnly, wrapper call }.
+// Every corner exists in the tree, and the hand-written census that preceded
+// this gate change was wrong four times running by patching them one at a time:
+// it found `const db = await openSqliteReadOnly(...)` and missed the other
+// three. A control that exercises one corner would have passed each of those
+// four broken versions.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    "electron/services/db/readOnlySqlite.ts":
+      "export async function openSqliteReadOnly(p: string, who: string): Promise<any> { return {} as any; }\n",
+    "electron/handlers/fourCorners.ts": [
+      'import { openSqliteReadOnly } from "../services/db/readOnlySqlite";',
+      'function wrap(p: string) { return openSqliteReadOnly(p, "T"); }',
+      'export async function f(p: string) {',
+      '  const a = await openSqliteReadOnly(p, "T");',                // corner 1
+      '  await a.all(`SELECT 1 FROM t`);',
+      '  let b: any; b = await openSqliteReadOnly(p, "T");',          // corner 2
+      '  await b.all(`SELECT 2 FROM t`);',
+      '  const c = await wrap(p);',                                    // corner 3
+      '  await c.all(`SELECT 3 FROM t`);',
+      '  let d: any; d = await wrap(p);',                              // corner 4
+      '  await d.all(`SELECT 4 FROM t`);',
+      '  const alias = a.all;',                                        // alias of a verb
+      '  await alias(`SELECT 5 FROM t`);',
+      '}',
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--explain"]);
+  const hits = r.all.split("\n").filter((l) => /fourCorners\.ts:\d+/.test(l) && /VIOLATION/.test(l)).length;
+  record(
+    "C18",
+    "all four handle-binding corners enumerate, plus a verb alias (5 sites)",
+    hits === 5,
+    `sites=${hits} (want 5 — decl/assign x direct/wrapper, + alias)`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// C19 — an alias records the verb it WRAPS, not a hardcoded one.
+//
+// A first revision of this feature labelled every alias site `all`, so a
+// `const dbGet = (sql) => db.get(sql)` site was keyed under the wrong verb.
+// The baseline key is `file :: verb :: match`, so a wrong verb writes a wrong
+// key — stable, and stably wrong.
+// ---------------------------------------------------------------------------
+{
+  const dir = mkTree({
+    "electron/services/db/readOnlySqlite.ts":
+      "export async function openSqliteReadOnly(p: string, who: string): Promise<any> { return {} as any; }\n",
+    "electron/handlers/verbLabel.ts": [
+      'import { openSqliteReadOnly } from "../services/db/readOnlySqlite";',
+      'export async function f(p: string) {',
+      '  const db = await openSqliteReadOnly(p, "T");',
+      '  const dbGet = (sql: string) => db.get(sql);',
+      '  const dbAll = db.all;',
+      '  await dbGet(`SELECT 1 FROM t`);',
+      '  await dbAll(`SELECT 2 FROM t`);',
+      '}',
+      "",
+    ].join("\n"),
+  });
+  const r = seedAndRun(dir, ["--explain"]);
+  const lines = r.all.split("\n").filter((l) => /verbLabel\.ts:(6|7)\b/.test(l));
+  const asGet = lines.filter((l) => /\bget\b/.test(l)).length;
+  const asAll = lines.filter((l) => /\ball\b/.test(l)).length;
+  record(
+    "C19",
+    "an alias is keyed under the verb it wraps (dbGet -> get, dbAll -> all)",
+    asGet === 1 && asAll === 1,
+    `get=${asGet} all=${asAll} (want 1/1)`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // VSUM — a tree of KNOWN contents. Asserts the absolute call-site count and the
 // COMPLIANT reason census by name.
 //

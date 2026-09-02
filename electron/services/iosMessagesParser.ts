@@ -31,6 +31,18 @@ import {
   RawChatRow,
   RawHandleRow,
 } from "../types/iosMessages";
+import {
+  ALL_CHATS_SQL,
+  AUDIO_TRANSCRIPT_COLUMN_PROBE_SQL,
+  CHAT_BY_ROWID_SQL,
+  CHAT_LAST_MESSAGE_DATE_SQL,
+  CHAT_MESSAGE_COUNT_SQL,
+  CHAT_PARTICIPANT_HANDLES_SQL,
+  HANDLE_ID_BY_ROWID_SQL,
+  MESSAGE_ATTACHMENTS_SQL,
+  searchMessagesByText,
+  selectChatMessages,
+} from "./db/appleSmsDbSql";
 
 /**
  * Convert Apple Cocoa Core Data timestamp to JavaScript Date
@@ -196,7 +208,7 @@ export class iOSMessagesParser {
 
     try {
       const info = this.db!.prepare(
-        "SELECT name FROM pragma_table_info('message') WHERE name = 'audio_transcript'"
+        AUDIO_TRANSCRIPT_COLUMN_PROBE_SQL
       ).get() as { name: string } | undefined;
       this.hasAudioTranscriptColumn = !!info;
     } catch {
@@ -210,30 +222,7 @@ export class iOSMessagesParser {
     return this.hasAudioTranscriptColumn;
   }
 
-  /**
-   * Build the SELECT query for messages, including optional columns based on schema
-   */
-  private buildMessageSelectColumns(): string {
-    const hasAudioTranscript = this.checkAudioTranscriptColumn();
-
-    const columns = [
-      "message.ROWID",
-      "message.guid",
-      "message.text",
-      "message.attributedBody",
-      ...(hasAudioTranscript ? ["message.audio_transcript"] : []),
-      "message.handle_id",
-      "message.is_from_me",
-      "message.date",
-      "message.date_read",
-      "message.date_delivered",
-      "message.service",
-    ];
-
-    return columns.join(",\n      ");
-  }
-
-  /**
+    /**
    * Get a handle (contact identifier) by ID
    */
   private getHandle(handleId: number): string {
@@ -241,9 +230,7 @@ export class iOSMessagesParser {
 
     try {
       const row = this.db!.prepare(
-        `
-        SELECT id FROM handle WHERE ROWID = ?
-      `,
+        HANDLE_ID_BY_ROWID_SQL,
       ).get(handleId) as RawHandleRow | undefined;
 
       return row?.id || "";
@@ -265,15 +252,7 @@ export class iOSMessagesParser {
 
     try {
       const chats = this.db!.prepare(
-        `
-        SELECT
-          chat.ROWID,
-          chat.guid,
-          chat.chat_identifier,
-          chat.display_name
-        FROM chat
-        ORDER BY chat.ROWID
-      `,
+        ALL_CHATS_SQL,
       ).all() as RawChatRow[];
 
       const conversations: iOSConversation[] = [];
@@ -285,12 +264,7 @@ export class iOSMessagesParser {
 
           // Get last message date
           const lastMessageRow = this.db!.prepare(
-            `
-            SELECT MAX(message.date) as last_date
-            FROM message
-            JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-            WHERE chat_message_join.chat_id = ?
-          `,
+            CHAT_LAST_MESSAGE_DATE_SQL,
           ).get(chat.ROWID) as { last_date: number | null } | undefined;
 
           const lastMessageDate = convertAppleTimestamp(
@@ -354,15 +328,7 @@ export class iOSMessagesParser {
 
     try {
       const chats = this.db!.prepare(
-        `
-        SELECT
-          chat.ROWID,
-          chat.guid,
-          chat.chat_identifier,
-          chat.display_name
-        FROM chat
-        ORDER BY chat.ROWID
-      `,
+        ALL_CHATS_SQL,
       ).all() as RawChatRow[];
 
       log.info(`iOSMessagesParser: Processing ${chats.length} chats async`);
@@ -378,12 +344,7 @@ export class iOSMessagesParser {
 
           // Get last message date
           const lastMessageRow = this.db!.prepare(
-            `
-            SELECT MAX(message.date) as last_date
-            FROM message
-            JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-            WHERE chat_message_join.chat_id = ?
-          `,
+            CHAT_LAST_MESSAGE_DATE_SQL,
           ).get(chat.ROWID) as { last_date: number | null } | undefined;
 
           const lastMessageDate = convertAppleTimestamp(
@@ -456,12 +417,7 @@ export class iOSMessagesParser {
 
     try {
       const rows = this.db!.prepare(
-        `
-        SELECT DISTINCT handle.id
-        FROM chat_handle_join
-        JOIN handle ON chat_handle_join.handle_id = handle.ROWID
-        WHERE chat_handle_join.chat_id = ?
-      `,
+        CHAT_PARTICIPANT_HANDLES_SQL,
       ).all(chatId) as Array<{ id: string }>;
 
       return rows.map((row) => row.id);
@@ -486,23 +442,14 @@ export class iOSMessagesParser {
     this.ensureOpen();
 
     try {
-      let query = `
-        SELECT
-          ${this.buildMessageSelectColumns()}
-        FROM message
-        JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-        WHERE chat_message_join.chat_id = ?
-        ORDER BY message.date ASC
-      `;
-
-      if (limit !== undefined) {
-        query += ` LIMIT ${Math.max(1, Math.floor(limit))}`;
-        if (offset !== undefined) {
-          query += ` OFFSET ${Math.max(0, Math.floor(offset))}`;
-        }
-      }
-
-      const rows = this.db!.prepare(query).all(chatId) as RawMessageRow[];
+      // Page bounds BIND as clamped integers; the clamp and the bind are
+      // computed together in db/ so they cannot drift apart.
+      const rows = selectChatMessages<RawMessageRow>(
+        this.db!,
+        this.checkAudioTranscriptColumn(),
+        chatId,
+        { limit, offset },
+      );
 
       return rows.map((row) => this.mapMessage(row));
     } catch (error) {
@@ -532,23 +479,14 @@ export class iOSMessagesParser {
     this.ensureOpen();
 
     try {
-      let query = `
-        SELECT
-          ${this.buildMessageSelectColumns()}
-        FROM message
-        JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-        WHERE chat_message_join.chat_id = ?
-        ORDER BY message.date ASC
-      `;
-
-      if (limit !== undefined) {
-        query += ` LIMIT ${Math.max(1, Math.floor(limit))}`;
-        if (offset !== undefined) {
-          query += ` OFFSET ${Math.max(0, Math.floor(offset))}`;
-        }
-      }
-
-      const rows = this.db!.prepare(query).all(chatId) as RawMessageRow[];
+      // Page bounds BIND as clamped integers; the clamp and the bind are
+      // computed together in db/ so they cannot drift apart.
+      const rows = selectChatMessages<RawMessageRow>(
+        this.db!,
+        this.checkAudioTranscriptColumn(),
+        chatId,
+        { limit, offset },
+      );
 
       const messages: iOSMessage[] = [];
 
@@ -628,17 +566,7 @@ export class iOSMessagesParser {
 
     try {
       const rows = this.db!.prepare(
-        `
-        SELECT
-          attachment.ROWID,
-          attachment.guid,
-          attachment.filename,
-          attachment.mime_type,
-          attachment.transfer_name
-        FROM attachment
-        JOIN message_attachment_join ON attachment.ROWID = message_attachment_join.attachment_id
-        WHERE message_attachment_join.message_id = ?
-      `,
+        MESSAGE_ATTACHMENTS_SQL,
       ).all(messageId) as RawAttachmentRow[];
 
       return rows.map((row) => ({
@@ -671,20 +599,13 @@ export class iOSMessagesParser {
     }
 
     try {
-      let sql = `
-        SELECT
-          ${this.buildMessageSelectColumns()}
-        FROM message
-        WHERE message.text LIKE ?
-        ORDER BY message.date DESC
-      `;
-
-      if (limit !== undefined && limit > 0) {
-        sql += ` LIMIT ${Math.floor(limit)}`;
-      }
-
       const searchPattern = `%${query}%`;
-      const rows = this.db!.prepare(sql).all(searchPattern) as RawMessageRow[];
+      const rows = searchMessagesByText<RawMessageRow>(
+        this.db!,
+        this.checkAudioTranscriptColumn(),
+        searchPattern,
+        limit,
+      );
 
       return rows.map((row) => this.mapMessage(row));
     } catch (error) {
@@ -703,12 +624,7 @@ export class iOSMessagesParser {
 
     try {
       const row = this.db!.prepare(
-        `
-        SELECT COUNT(*) as count
-        FROM message
-        JOIN chat_message_join ON message.ROWID = chat_message_join.message_id
-        WHERE chat_message_join.chat_id = ?
-      `,
+        CHAT_MESSAGE_COUNT_SQL,
       ).get(chatId) as { count: number } | undefined;
 
       return row?.count || 0;
@@ -733,15 +649,7 @@ export class iOSMessagesParser {
 
     try {
       const chat = this.db!.prepare(
-        `
-        SELECT
-          chat.ROWID,
-          chat.guid,
-          chat.chat_identifier,
-          chat.display_name
-        FROM chat
-        WHERE chat.ROWID = ?
-      `,
+        CHAT_BY_ROWID_SQL,
       ).get(chatId) as RawChatRow | undefined;
 
       if (!chat) {

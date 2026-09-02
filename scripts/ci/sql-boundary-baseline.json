@@ -2,10 +2,34 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "87b827871b1ff4191a3ae7f9fe5301b7ddfcaf44",
-  "totalSites": 118,
-  "entryCount": 99,
+  "measuredAt": "e7601d1a870652bc6f451ffce2d5ffccce89137a",
+  "totalSites": 68,
+  "entryCount": 53,
   "entries": [
+    {
+      "file": "electron/handlers/conversationHandlers.ts",
+      "verb": "all",
+      "match": "text:75b9cf492c6b",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
+    {
+      "file": "electron/handlers/conversationHandlers.ts",
+      "verb": "all",
+      "match": "text:93168f45a827",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
+    {
+      "file": "electron/handlers/conversationHandlers.ts",
+      "verb": "all",
+      "match": "text:c03ad31232e5",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
     {
       "file": "electron/handlers/sessionHandlers.ts",
       "verb": "prepare",
@@ -37,6 +61,30 @@
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2765"
+    },
+    {
+      "file": "electron/services/contactsService.ts",
+      "verb": "all",
+      "match": "text:099b7b2187fe",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
+    {
+      "file": "electron/services/contactsService.ts",
+      "verb": "all",
+      "match": "text:e6c64b744d5d",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
+    },
+    {
+      "file": "electron/services/contactsService.ts",
+      "verb": "all",
+      "match": "text:f33c88684ad2",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3059"
     },
     {
       "file": "electron/services/databaseService.ts",
@@ -311,468 +359,52 @@
       "owner": "BACKLOG-2991"
     },
     {
-      "file": "electron/services/iosContactsParser.ts",
-      "verb": "prepare",
-      "match": "text:71149b2e37ed",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosContactsParser.ts",
-      "verb": "prepare",
-      "match": "text:c0c9b4dd0600",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosContactsParser.ts",
-      "verb": "prepare",
-      "match": "text:e6fa34a34292",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosContactsParser.ts",
-      "verb": "prepare",
-      "match": "text:efa52c822298",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosContactsParser.ts",
-      "verb": "prepare",
-      "match": "text:f07cf208408f",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:09fbd8dc7937",
-      "bucket": "VIOLATION",
-      "count": 2,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:11707995df47",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:15d1539e0c8d",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:28401b59de2d",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:49d8ddaa6101",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:51195f0cdf7b",
-      "bucket": "VIOLATION",
-      "count": 2,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:95de39509dc8",
-      "bucket": "VIOLATION",
-      "count": 2,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:dfb3511d1162",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:f01f8883f65e",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/iosMessagesParser.ts",
-      "verb": "prepare",
-      "match": "text:f149ba6a18bf",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "exec",
-      "match": "expr:2394cf8691a7",
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "expr:4ec7c53222c8",
       "bucket": "UNRESOLVABLE",
       "count": 1,
-      "owner": "BACKLOG-2990"
+      "owner": "BACKLOG-3062"
     },
     {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "exec",
-      "match": "expr:60ed10f7d55c",
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:1181d2d81366",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3062"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:1cc9212929f9",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3062"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "all",
+      "match": "text:61cd0a2df1af",
+      "bucket": "VIOLATION",
+      "count": 1,
+      "owner": "BACKLOG-3062"
+    },
+    {
+      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
+      "verb": "get",
+      "match": "expr:4ec7c53222c8",
       "bucket": "UNRESOLVABLE",
       "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "exec",
-      "match": "text:0b00275cdaa6",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "exec",
-      "match": "text:4e3ed1422277",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "exec",
-      "match": "text:77369d6bfdd8",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:13a9b4986e6c",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:31e74ff051b1",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:40e82adfb98f",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:5f6605ce5943",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:748ed647e002",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:8ef915c78f05",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:914755e56d0b",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:92d9e0d3c72e",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:d972d8f978b2",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/forceStaging.ts",
-      "verb": "prepare",
-      "match": "text:ed4ad5d94f9f",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/importHelpers.ts",
-      "verb": "prepare",
-      "match": "text:4cd24570da4c",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/importHelpers.ts",
-      "verb": "prepare",
-      "match": "text:ab0f0a80877a",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/importHelpers.ts",
-      "verb": "prepare",
-      "match": "text:d0b18b56b3cf",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/importHelpers.ts",
-      "verb": "prepare",
-      "match": "text:ece08a520a0d",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
+      "owner": "BACKLOG-3062"
     },
     {
       "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:06a2bcd43cce",
+      "verb": "get",
+      "match": "text:5908cab70a8d",
       "bucket": "VIOLATION",
       "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:0d3a2ef3d9a5",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:2415ceda83e5",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:245f8dfb84a8",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:2d9b8df130ab",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:39dfb8fff374",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:3bd2ab1255be",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:3e770567523d",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:4154df3018e2",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:4557fbcead09",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:4dc3ad6f50c2",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:579ccd089cbf",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:63016d6f16dc",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:914755e56d0b",
-      "bucket": "VIOLATION",
-      "count": 2,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:9d46be22fa00",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:a69f63dfc469",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:a6b04053a23d",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:afd73ed89175",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:b520cae7bbfc",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:baef18928013",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:bbfb074c570d",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:c1a0124ba601",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:f22c35527a52",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
-    },
-    {
-      "file": "electron/services/macOSMessagesImportService/macOSMessagesImportService.ts",
-      "verb": "prepare",
-      "match": "text:fc929ef58a82",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2990"
+      "owner": "BACKLOG-3062"
     },
     {
       "file": "electron/workers/contactQueryWorker.ts",
