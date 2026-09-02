@@ -24,12 +24,12 @@ import { normalizePhoneNumber } from "./phoneNormalization";
 import {
   readPaged,
   DEFAULT_PROVIDER_READ_BUDGET,
+  MAX_PROVIDER_READ_PAGES,
   PROVIDER_READ_PAGE_SIZE,
   type ProviderPageResult,
   type ProviderReadError,
   type ProviderReadErrorReason,
   type ProviderReadResult,
-  MAX_PROVIDER_READ_PAGES,
 } from "./providerRead";
 
 /** Raw SMS record from react-native-get-sms-android */

@@ -143,18 +143,22 @@ export type MmsReadResult = ProviderReadResult<RawMmsRecord>;
 export const KEEPR_MMS_MODULE_NAME = "KeeprMms";
 
 /**
- * Rows to request from the provider in a SINGLE native call — mirrors
- * `SMS_READ_PAGE_SIZE`. Bounds the size of any one payload crossing the bridge
- * while the surrounding loop keeps pulling until the backlog is exhausted or the
- * budget is reached. Exported so tests can reason about page counts without
- * hard-coding it.
+ * Rows to request from the provider in a SINGLE native call.
+ *
+ * The SAME constant the SMS reader uses, not a copy kept in step by hand —
+ * both alias `PROVIDER_READ_PAGE_SIZE`. Bounds the size of any one payload
+ * crossing the bridge while the shared loop keeps pulling until the backlog is
+ * exhausted or the budget is reached. Re-exported under an MMS name so tests
+ * can reason about page counts without hard-coding the number.
  */
 export const MMS_READ_PAGE_SIZE = PROVIDER_READ_PAGE_SIZE;
 
 /**
- * Absolute safety cap on native page reads per cycle (anti-loop). Mirrors
- * `MAX_PAGES_PER_BOX`. The loop normally ends by exhausting the backlog or
- * reaching the budget; this guarantees it is bounded regardless.
+ * Absolute safety cap on native page reads per cycle (anti-loop).
+ *
+ * Again the SAME constant as the SMS reader's cap, not a parallel value. The
+ * loop normally ends by exhausting the backlog or reaching the budget; this
+ * guarantees it is bounded regardless.
  */
 const MAX_PAGES = MAX_PROVIDER_READ_PAGES;
 
