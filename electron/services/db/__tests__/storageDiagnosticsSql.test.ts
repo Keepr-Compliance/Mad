@@ -86,7 +86,11 @@ function seedUnequalCounts(): void {
   const p = db.prepare(
     `INSERT INTO contact_phones (id, contact_id, phone_e164) VALUES (?, ?, ?)`,
   );
-  for (let i = 0; i < 3; i++) p.run(`p${i}`, "c0", `+1206555000${i}`);
+  // 555-0100..555-0199 is the reserved fictional range. NB: the guard cannot
+  // see this one — the digits are assembled from a template, so a text scan
+  // finds no contiguous number. It is corrected because it is wrong, not
+  // because a check caught it.
+  for (let i = 0; i < 3; i++) p.run(`p${i}`, "c0", `+1555555013${i}`);
 
   const e = db.prepare(
     `INSERT INTO contact_emails (id, contact_id, email) VALUES (?, ?, ?)`,
@@ -276,9 +280,9 @@ describe("the static constants still select what the diagnostics block reports",
     const p = db.prepare(
       `INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized) VALUES (?, 'c0', ?, ?)`,
     );
-    p.run("p1", "+12065550001", "+12065550001");
-    p.run("p2", "+12065550002", null);
-    p.run("p3", "+12065550003", ""); // stored, not absent
+    p.run("p1", "+15555550140", "+15555550140");
+    p.run("p2", "+15555550141", null);
+    p.run("p3", "+15555550142", ""); // stored, not absent
 
     // Ticket 94: the gap between this and the raw count IS the bug report, so
     // counting an empty string as normalized would understate the gap.
