@@ -342,6 +342,12 @@ export async function readMmsMessages(
 
   if (!getMmsNativeModule()) {
     // BACKLOG-1448/2206: a missing native module is a FAILURE, not "0 messages".
+    //
+    // Fully REDUNDANT with the identical check inside `readMmsPage`: removing it
+    // changes nothing observable, so no test can be written that goes red for
+    // its absence. Kept because it fails before the log line above claims a read
+    // is starting. Noted so nobody later adds an assertion promising it can fail
+    // (SR review, non-blocking item 4).
     return {
       ok: false,
       error: {
@@ -437,7 +443,15 @@ async function readMmsPage(
       // branch; recorded rather than left silent because an assertion that
       // cannot fail is the defect this codebase keeps filing.
       throw new Error(
-        `Native payload is not { rawCount, rows }: ${json.slice(0, 120)}`
+        // Describe the payload; never quote it. A byte slice of the JSON was
+        // safe only by arithmetic — with today's projection 120 characters stop
+        // a dozen or so short of `parts[0].text`, so adding one column or
+        // reordering the keys would put message CONTENT into an error string.
+        // A diagnostic is not worth a latent PII path (SR review, non-blocking
+        // item 3). Keys and length are enough to identify a shape problem.
+        `Native payload is not { rawCount, rows }: ` +
+          `${json.length} chars, top-level keys ` +
+          `[${payload && typeof payload === "object" ? Object.keys(payload).join(", ") : typeof payload}]`
       );
     }
 

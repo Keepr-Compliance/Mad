@@ -725,6 +725,32 @@ describe('readSmsMessages — pagination (BACKLOG-2207)', () => {
     expect(maxInboxOffset).toBeLessThan(budget);
   });
 
+  // The shared loop's own docblock says `rawCount` is deliberately distinct from
+  // `messages.length` and that conflating them "makes the walk skip rows".
+  // Nothing could observe that: keying exhaustion OR the offset advance on
+  // `messages.length` left both suites 78/78 green. This is the control for it,
+  // written by SR review.
+  //
+  // Only the SMS suite CAN cover it. `readBoxPage` drops rows with no address or
+  // no body (carrier alerts, voicemail notifications), so `messages.length <
+  // rawCount` happens on real devices — `smsReader.ts` line 456,
+  // `.filter((r) => r.address && r.body)`. The MMS reader drops nothing, so its
+  // pages always have `messages.length === rawCount` and the bug is invisible
+  // there.
+  //
+  // What the offset mutation does to a real user: a 200-row page holding 30
+  // carrier alerts advances by 170 instead of 200, so the next page re-reads
+  // rows 170-199. With a run of 200 consecutive alerts `messages.length` is 0,
+  // the offset never advances, and the walk burns all 500 pages on one window.
+  it('a page containing DROPPED rows still advances the walk by RAW rows', async () => {
+    const rows = makeRows(5);                 // ids 1..5, ascending by date
+    rows[1] = { ...rows[1], body: '' };       // readBoxPage drops body-less rows
+    installPagingSms({ inbox: rows });
+    const result = await readSmsMessages(0, 3);
+    if (!result.ok) throw new Error('expected a successful read');
+    expect(idsOf(result.messages)).toEqual(['1', '3', '4']);
+  });
+
   it('respects minDate while paging (only messages at/after the cursor are read)', async () => {
     const base = 1_700_000_000_000;
     // 300 rows; cursor sits so only the newest 220 (>= cursor) are eligible.
