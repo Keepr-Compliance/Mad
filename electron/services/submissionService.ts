@@ -39,6 +39,7 @@ import logService from "./logService";
 import emailAttachmentService from "./emailAttachmentService";
 import gmailFetchService from "./gmailFetchService";
 import outlookFetchService from "./outlookFetchService";
+import { TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL } from "./db/submissionEmailSql";
 // BACKLOG-2758 finding 3: party names come from the SAME resolver the exported
 // PDF uses, not from a second read of the macOS AddressBook. The AddressBook is
 // still consulted — as tier 3 inside that resolver — so no name previously
@@ -947,16 +948,9 @@ class SubmissionService {
       const db = databaseService.getRawDatabase();
 
       // Find emails linked to this transaction that have attachments but no records
-      const emailsMissing = db.prepare(`
-        SELECT DISTINCT e.id, e.external_id, e.source, e.user_id
-        FROM emails e
-        INNER JOIN communications c ON c.email_id = e.id
-        WHERE c.transaction_id = ?
-          AND e.has_attachments = 1
-          AND e.external_id IS NOT NULL
-          AND e.source IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM attachments a WHERE a.email_id = e.id)
-      `).all(transactionId) as { id: string; external_id: string; source: string; user_id: string }[];
+      const emailsMissing = db
+        .prepare(TRANSACTION_EMAILS_MISSING_ATTACHMENTS_SQL)
+        .all(transactionId) as { id: string; external_id: string; source: string; user_id: string }[];
 
       if (emailsMissing.length === 0) return;
 
