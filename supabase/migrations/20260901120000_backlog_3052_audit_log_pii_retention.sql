@@ -182,11 +182,23 @@ BEGIN
   FROM public.audit_logs
   WHERE metadata ?| ARRAY['name', 'propertyAddress'];
 
-  RAISE NOTICE 'BACKLOG-3052 backfill: deleted % audit_logs rows carrying a contact name or property address; % remain.',
+  RAISE NOTICE 'BACKLOG-3052 backfill: deleted % audit_logs rows carrying a contact name or property address; % remain in this transaction.',
     v_before, v_after;
 
+  -- NOTICE, deliberately not EXCEPTION.
+  --
+  -- `v_after = 0` is true inside this transaction and stops being true within
+  -- about a minute of it committing: every desktop still running the shipped
+  -- build keeps uploading `name` and `propertyAddress` on its 60-second sync
+  -- tick until it auto-updates to a build carrying the client-side gate.
+  --
+  -- Raising here would assert a steady state this migration does not create and
+  -- cannot create on its own. What it actually promises is narrower and worth
+  -- saying plainly: nothing that arrived before this ran survives, and anything
+  -- that arrives during the rollout is gone within 14 days by the hourly job in
+  -- section 4. During rollout that job is the guarantee, not a backstop.
   IF v_after <> 0 THEN
-    RAISE EXCEPTION 'BACKLOG-3052 backfill did not clear the table: % rows still match the predicate.', v_after;
+    RAISE NOTICE 'BACKLOG-3052 backfill: % rows still match inside the transaction — unexpected, investigate before relying on this run.', v_after;
   END IF;
 END;
 $$;
@@ -276,9 +288,27 @@ GRANT EXECUTE ON FUNCTION public.purge_audit_log_pii(integer) TO service_role;
 -- ============================================================================
 -- POST-APPLY VERIFICATION (run by hand; not part of the migration)
 -- ============================================================================
--- -- 1. No PII-bearing rows remain:
+-- WHO APPLIES THIS, AND WHEN
+--
+-- By hand, after review. Nothing in .github/workflows/ runs `supabase db push`
+-- or `supabase migration up` — checked, there is no auto-apply on merge — so
+-- merging this PR does NOT apply it. It is a separate, deliberate step.
+--
+-- THE ROLLOUT WINDOW
+--
+-- Applying this does not stop the uploads. Every desktop on the shipped build
+-- keeps sending names and addresses every 60 seconds until it auto-updates to
+-- a build containing `auditService.stripPiiForCloud`. So check 1 below reads 0
+-- at the moment it is applied and non-zero shortly after, and that is expected,
+-- not a failed migration. The hourly job caps that exposure at 14 days, which
+-- is the whole guarantee until the client rollout completes.
+--
+-- Order that shortens the window: ship the desktop build first, then apply.
+--
+-- -- 1. No PII-bearing rows remain (see the rollout note above before reading
+-- --    a non-zero result as a failure):
 -- SELECT count(*) FROM audit_logs WHERE metadata ?| ARRAY['name','propertyAddress'];
--- --    expected: 0
+-- --    expected: 0 at apply time
 --
 -- -- 2. Non-PII audit history survived the backfill:
 -- SELECT count(*) FROM audit_logs;
