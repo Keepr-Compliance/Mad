@@ -16,6 +16,19 @@ Use this template for ALL agent handoffs during sprint task execution.
 **Current Step:** X (of 15)
 **Phase:** [A: Setup | B: Planning | C: Implementation | D: Merge & Cleanup]
 
+### Summary — the only five lines a human reads
+
+```
+SUMMARY
+1. Changed: <what the app now does differently, in the founder's words — not file names>
+2. State: <branch / PR #, CI green|red|not run>
+3. Control: <what you reverted and what went red> | <"none run — reason">
+4. Issues: <one line> | <"none">
+5. Decision needed: <one concrete ask> | <"nothing needed">
+```
+
+Relay these five lines verbatim. **Do not re-summarise the sections below** — they are this summary's evidence, and they stay in Supabase at full length.
+
 ### Status
 [Choose one]
 - [ ] Approved - Ready for next phase
