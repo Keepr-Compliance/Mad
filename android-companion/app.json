@@ -17,7 +17,7 @@
     },
     "android": {
       "package": "com.keepr.companion",
-      "versionCode": 12,
+      "versionCode": 13,
       "adaptiveIcon": {
         "backgroundColor": "#574CE8",
         "foregroundImage": "./assets/android-icon-foreground.png",
