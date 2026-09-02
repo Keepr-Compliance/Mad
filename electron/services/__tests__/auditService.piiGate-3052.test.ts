@@ -325,6 +325,54 @@ describe("auditService — third-party PII is gated on support access (BACKLOG-3
   });
 
   // -----------------------------------------------------------------------
+  // The gate has to cover every route to `batchInsertAuditLogs`. There is
+  // exactly one, which is not obvious from reading `syncToCloud`.
+  //
+  // It reads as two routes — the in-memory queue, and a fallback to
+  // `getUnsyncedAuditLogs()` for rows written on an earlier run. The fallback
+  // is DEAD. `syncToCloud` opens with
+  //
+  //     if (this.syncInProgress || this.pendingSyncQueue.length === 0) return;
+  //
+  // so by the time control reaches `if (this.pendingSyncQueue.length > 0)` that
+  // condition is always true and the `else` never runs. Measured, not read: the
+  // assertions below are what a queue-only gate would have missed if the branch
+  // were live, and they came from writing the test for the fallback and finding
+  // no upload at all.
+  //
+  // Left as it is. This item removes data from the upload; making the fallback
+  // live would ADD rows nobody asked to have uploaded, in a PR about not
+  // uploading things. Filed on BACKLOG-3052 as a separate finding.
+  //
+  // Pinned here so that whoever does revive it is sent back to the gate: this
+  // test goes red the moment the early return stops swallowing that path.
+  // -----------------------------------------------------------------------
+  describe("the database fallback in syncToCloud", () => {
+    it("is unreachable, so the queue is the only route the gate must cover", async () => {
+      mockDatabaseService.getUnsyncedAuditLogs.mockResolvedValue([
+        {
+          id: "audit-recovered-1",
+          timestamp: new Date(T0),
+          userId: "user-1",
+          action: "CONTACT_CREATE" as AuditAction,
+          resourceType: "CONTACT" as ResourceType,
+          resourceId: "contact-9",
+          metadata: { name: CONTACT_NAME, source: "manual" },
+          success: true,
+        } satisfies AuditLogEntry,
+      ]);
+
+      // Nothing queued — the only state in which the fallback could ever run.
+      expect(auditService.getPendingSyncCount()).toBe(0);
+
+      await auditService.syncToCloud();
+
+      expect(mockDatabaseService.getUnsyncedAuditLogs).not.toHaveBeenCalled();
+      expect(mockSupabaseService.batchInsertAuditLogs).not.toHaveBeenCalled();
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Fails closed, in both directions.
   // -----------------------------------------------------------------------
   describe("when the gate cannot answer", () => {

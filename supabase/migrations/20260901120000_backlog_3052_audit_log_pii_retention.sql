@@ -225,6 +225,55 @@ REVOKE EXECUTE ON FUNCTION public.purge_audit_log_pii(integer) FROM authenticate
 GRANT EXECUTE ON FUNCTION public.purge_audit_log_pii(integer) TO service_role;
 
 -- ============================================================================
+-- PRE-APPLY REHEARSAL (2026-09-01, live schema, BEGIN ... ROLLBACK)
+-- ============================================================================
+-- Every statement in this file was executed against the production schema
+-- inside a transaction that was rolled back. Nothing below is a prediction.
+--
+-- Boundary, swept rather than sampled. Seven synthetic rows straddling the
+-- cutoff were inserted alongside the real data and the function was run at
+-- p_retention_days = 14:
+--
+--   probe                          created_at            outcome
+--   ---------------------------------------------------------------
+--   A  name                        now() - 13d           SURVIVED
+--   E  name                        now() - 14d + 1 min   SURVIVED
+--   F  name                        now() - 14d - 1 min   DELETED
+--   B  name                        now() - 15d           DELETED
+--   C  propertyAddress             now() - 15d           DELETED
+--   D  {"provider":"google"}       now() - 400d          SURVIVED
+--   G  {"updatedFields":[...]}     now() - 400d          SURVIVED
+--
+--   real PII rows, all ages       818   (matches the item's measurement)
+--   real PII rows older than 14d  778
+--   function reported deleted     781   (778 real + probes B, C, F)
+--
+-- D and G are the ones that matter for "it is still an audit log": a row with
+-- no PII survives at 400 days, and `updatedFields: ["name","property_address"]`
+-- is a list of COLUMN NAMES, correctly not treated as a name.
+--
+-- Mutations, each run the same way. A green predicate proves nothing until it
+-- has been made to fail:
+--
+--   created_at -> timestamp     all 7 survived. PII kept forever: the probes'
+--                               `timestamp` is now(). This is why the column
+--                               choice above is load-bearing and not stylistic.
+--   14d -> 16d                  all 7 survived. Boundary too loose.
+--   14d -> 12d                  A and E deleted. Boundary too tight.
+--   drop the `?|` predicate     D and G deleted. Non-PII rows lose their
+--                               protection — this is the control for section 3
+--                               of the item, and for "it is still an audit log".
+--
+-- Grants, same method:
+--   omitting `REVOKE ... FROM PUBLIC` and keeping only the role-level revokes
+--   leaves has_function_privilege('anon', ...) = TRUE. With the line present it
+--   is FALSE. The ordering in section 5 is load-bearing (BACKLOG-2436).
+--
+-- Clamp: p_retention_days 0 -> 1, 9999 -> 90.
+-- Schedule: registers as '23 * * * *', active.
+-- ============================================================================
+
+-- ============================================================================
 -- POST-APPLY VERIFICATION (run by hand; not part of the migration)
 -- ============================================================================
 -- -- 1. No PII-bearing rows remain:
