@@ -20,13 +20,36 @@
  * that found six SQL-producing templates in this file where a line-oriented
  * matcher reported four.
  *
- * ## This is a floor, not a proof
+ * ## WHAT THIS GUARD DOES NOT CATCH — read this before trusting it
  *
- * A file could still author SQL by concatenation through three variables, or by
- * returning a string built somewhere else. The durable fix is BACKLOG-3064 — a
- * branded SQL value that only `db/` can mint, which makes the property a
- * compile-time one instead of a heuristic. This guard holds the line until then,
- * and its limit is stated rather than implied.
+ * MEASURED, not estimated. Each row below was run through the detector:
+ *
+ *     FIRES    `AND message.date > ${n}`                            uppercase, qualified
+ *     FIRES    `and message.date > ${n}`                            LOWERCASE, qualified
+ *     FIRES    `SELECT ... FROM message WHERE ... ${clause}`         statement keyword
+ *     silent   `Imported ${n} messages from ${x} where ${y} chose`   prose
+ *     silent   `select external_id from messages limit ${n}`         <-- THE GAP
+ *
+ * **The gap is lowercase STATEMENT keywords with no qualified-column
+ * comparison.** `QUALIFIED_COMPARISON` carries `/i`, so lowercase alone does not
+ * defeat the guard — only lowercase SQL that also never compares a `table.column`
+ * gets through. That is narrower than "lowercase SQL is missed", and the
+ * narrower statement is the true one. An overstated limit invites the next
+ * reader to skip the guard, which costs more than the gap does.
+ *
+ * Also uncaught: SQL assembled by concatenation through several variables, or a
+ * string built in another file and returned.
+ *
+ * ## THIS GUARD DOES NOT CLOSE ITS CLASS, AND MUST NOT BE CITED AS DOING SO
+ *
+ * It is a floor over one file. The class — "SQL authored where no database verb
+ * is called, so the boundary gate cannot see it" — is closed by **BACKLOG-3064**:
+ * a branded SQL value only `db/` can mint, which makes the property a
+ * compile-time one instead of a heuristic, and closes BACKLOG-3044 by
+ * construction as well.
+ *
+ * If you are reading this because you want to claim the class is handled: it is
+ * not. Check 3064.
  */
 
 import fs from "fs";
@@ -142,14 +165,39 @@ describe("importHelpers.ts authors no SQL (BACKLOG-3062)", () => {
     it("ignores a dotted path that is not a comparison", () => {
       expect(sqlProducingTemplates("const p = `${plan.cutoffNano} messages`;")).toEqual([]);
     });
+
+    it("DOCUMENTED GAP, asserted so the header cannot drift from the behaviour", () => {
+      // Lowercase statement keywords with no qualified-column comparison get
+      // through. Asserted rather than described: if a future tightening closes
+      // this, THIS TEST GOES RED and the header must be corrected with it.
+      expect(
+        sqlProducingTemplates("const q = `select external_id from messages limit ${n}`;"),
+      ).toEqual([]);
+    });
+
+    it("lowercase does NOT defeat the qualified-column half", () => {
+      // The gap is narrower than "lowercase is missed" — this is the evidence.
+      const found = sqlProducingTemplates("const c = `and message.date > ${n}`;");
+      expect(found).toHaveLength(1);
+      expect(found[0].reason).toBe("qualified-column comparison");
+    });
   });
 
   it("importHelpers.ts contains ZERO SQL-producing interpolating templates", () => {
     const found = sqlProducingTemplates(fs.readFileSync(TARGET, "utf8"), TARGET);
     // Exact list, not a count — a count cannot tell a new violation from a
     // different one that replaced it.
-    expect(
-      found.map((f) => `:${f.line}  ${f.reason}  ${f.statics}`),
-    ).toEqual([]);
+    //
+    // The limit travels with the failure, not only with the header: whoever sees
+    // this go red is the person most likely to conclude the file is now clean.
+    const offenders = found.map((f) => `:${f.line}  ${f.reason}  ${f.statics}`);
+    expect(offenders).toEqual([]);
+
+    // A GREEN RESULT HERE IS A FLOOR, NOT A CLEARANCE.
+    // Uncaught: lowercase statement keywords with no `table.column` comparison
+    // (`select id from t limit ${n}`), SQL concatenated through several
+    // variables, and SQL built in another file and returned.
+    // The class is closed by BACKLOG-3064's branded SQL value, not by this test.
+    expect(offenders).toHaveLength(0);
   });
 });
