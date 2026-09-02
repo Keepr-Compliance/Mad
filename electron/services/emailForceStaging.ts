@@ -64,7 +64,12 @@
 
 import type { Database as DatabaseType } from "better-sqlite3";
 import * as crypto from "crypto";
-import { forceReadView } from "./macOSMessagesImportService/forceStaging";
+import {
+  assertRebuildableProviders,
+  deleteLiveForceSet as dbDeleteLiveForceSet,
+  emailForceReadView as dbEmailForceReadView,
+  type EmailForceSet,
+} from "./db/emailForceSetSql";
 import {
   deriveStagingIndexDdl,
   deriveStagingTableDdl,
@@ -124,50 +129,27 @@ const ALLOWED_PROVIDERS: readonly EmailForceProvider[] = ["gmail", "outlook"];
  * checked against `ALLOWED_PROVIDERS` first, and a value that fails that check
  * throws rather than reaching the SQL.
  */
-export interface EmailForceSetPredicate {
-  /** The predicate SQL, with one `?` for userId and one for the cache-window floor. */
-  readonly sql: string;
-  /** `NOT (sql)`, NULL-safe — the rows the force set leaves in place. */
-  readonly survivingSql: string;
-  /** Positional bindings for either predicate, in order of appearance. */
-  readonly params: readonly string[];
-}
+export type { EmailForceSet } from "./db/emailForceSetSql";
 
+/**
+ * Build a force set.
+ *
+ * BACKLOG-2989 commit A2: this used to return an `EmailForceSetPredicate`
+ * carrying `sql`, `survivingSql` and `params` — so a predicate built here
+ * travelled as TEXT into a read view, a DELETE and a UNION source, three files
+ * away from the guard that made it safe. It now returns DATA, and every
+ * statement is built in `db/emailForceSetSql` from that data.
+ *
+ * The provider allow-list moved with the construction it protects.
+ */
 export function buildEmailForceSet(params: {
   userId: string;
   providers: readonly EmailForceProvider[];
   cacheSinceIso: string;
-}): EmailForceSetPredicate {
+}): EmailForceSet {
   const { userId, providers, cacheSinceIso } = params;
-
-  for (const provider of providers) {
-    if (!ALLOWED_PROVIDERS.includes(provider)) {
-      throw new Error(`Refusing to build an email force set for unknown source "${provider}"`);
-    }
-  }
-  if (providers.length === 0) {
-    throw new Error("Refusing to build an email force set with no rebuildable provider");
-  }
-
-  const sourceList = providers.map((p) => `'${p}'`).join(", ");
-  const sql =
-    `user_id = ? AND external_id IS NOT NULL ` +
-    `AND source IN (${sourceList}) ` +
-    `AND sent_at >= ?`;
-
-  return {
-    sql,
-    // NULL-safe by hand, exactly as `SURVIVING_MESSAGES` is. `source` is nullable
-    // past its CHECK constraint and `sent_at` is nullable outright, so the force
-    // predicate CAN evaluate to NULL. For such a row a plain `NOT (…)` is NULL —
-    // the row would survive the DELETE (correct: a DELETE removes a row only
-    // when its WHERE is TRUE) and then drop out of the rebuild's survivor read
-    // (wrong), which is exactly how a surviving row stops being deduplicated
-    // against and gets staged a second time. COALESCE spells out what "survived"
-    // means: the force set was not TRUE.
-    survivingSql: `COALESCE(${sql}, 0) = 0`,
-    params: [userId, cacheSinceIso],
-  };
+  assertRebuildableProviders(providers);
+  return { userId, providers, cacheSinceIso };
 }
 
 /**
@@ -246,7 +228,7 @@ export interface EmailForceStaging {
    * set (every connected provider) so the rebuild's dedup reads treat those rows
    * as "about to be replaced" and stage their re-fetched copies.
    */
-  forceSet: EmailForceSetPredicate;
+  forceSet: EmailForceSet;
   /**
    * Resurrection remaps (BACKLOG-1769) that target rows in the REAL `emails`
    * table rather than in staging — i.e. SURVIVORS, since a force-set row is no
@@ -295,7 +277,7 @@ export const emailForceStagingLifecycle = {
    */
   create(
     db: DatabaseType,
-    args: { userId: string; forceSet: EmailForceSetPredicate },
+    args: { userId: string; forceSet: EmailForceSet },
   ): EmailForceStaging {
     const token = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
     // Checked at CONSTRUCTION, not at use: the branded type then travels with
@@ -392,10 +374,11 @@ export function emailForceReadView(
   staging: EmailForceStaging,
   columns: string,
 ): { sql: string; params: readonly string[] } {
-  return {
-    sql: forceReadView("emails", staging.emailsTable, staging.forceSet.survivingSql, columns),
-    params: staging.forceSet.params,
-  };
+  // The surviving predicate is built inside db/ from the force SET, so it never
+  // travels as text. `forceReadView` is left alone here: BACKLOG-2990's
+  // macOSMessagesImportService calls it in three places, and its signature is
+  // that item's to change.
+  return dbEmailForceReadView(staging.forceSet, staging.emailsTable, columns);
 }
 
 /**
@@ -427,7 +410,7 @@ export function restrictForceSetToRebuiltProviders(
   staging: EmailForceStaging,
   rebuiltProviders: readonly EmailForceProvider[],
   cacheSinceIso: string,
-): EmailForceSetPredicate | null {
+): EmailForceSet | null {
   if (rebuiltProviders.length === 0) return null;
 
   const dropped = ALLOWED_PROVIDERS.filter((p) => !rebuiltProviders.includes(p));
@@ -488,9 +471,7 @@ export const emailForceSwapSteps = {
    * confirmation dialog has to say so before the run starts.
    */
   deleteLiveForceSet(db: DatabaseType, staging: EmailForceStaging): number {
-    return db
-      .prepare(`DELETE FROM emails WHERE ${staging.forceSet.sql}`)
-      .run(...staging.forceSet.params).changes;
+    return dbDeleteLiveForceSet(db, staging.forceSet);
   },
 
   /**
