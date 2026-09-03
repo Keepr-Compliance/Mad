@@ -511,13 +511,21 @@ jobs:
     runs-on: ubuntu-latest
     # BACKLOG-3051: left at 15, having measured rather than guessed.
     #
-    # Adding the Kotlin compile below took this job from 67s to 5m01s (run
-    # 33712966598, job 100516186527). The compile step itself is 3m46s of that,
-    # and it is fully cold every time — "45 actionable tasks: 45 executed", with
-    # the Gradle 9.0.0 distribution downloaded on each run. There is no cache to
-    # miss, so 3m46s is the steady-state cost, not a first-run penalty.
+    # Adding the Kotlin compile below took this job from 67s to 5m11s. Three cold
+    # measurements: 5m01s (job 100516186527), 5m04s (100516984179), 5m11s
+    # (100517522851). Every one executes 45/45 tasks, so cold-runner cost is
+    # already inside the number rather than being a first-run penalty later runs
+    # would avoid.
     #
-    # 15 minutes is ~3x the measured cold job. This value was briefly raised to
+    # This job caches nothing under ~/.gradle today, but do NOT read that as
+    # "there is nothing to cache" — an earlier version of this comment said so
+    # and it was wrong. SR review of PR #2475 segmented job 100517522851: the
+    # distribution download is only 4.2s of the 234s, while ~140s is Gradle
+    # plugin compilation and dependency resolution, both of which live in
+    # ~/.gradle and are exactly what a cache restores. Whether caching pays
+    # needs its own measurement; it is filed, not done here.
+    #
+    # 15 minutes is ~2.9x the measured cold job. This value was briefly raised to
     # 25 before the number existed; the number says the raise was not needed.
     timeout-minutes: 15
     defaults:
@@ -572,6 +580,18 @@ jobs:
       # constants as source text, but a text assertion cannot see a broken parse,
       # a projection naming a column the provider lacks, or a type error — those
       # need the compiler, which is this step.
+      #
+      # WHAT THIS STEP DOES AND DOES NOT DO. It turns a broken parse into a
+      # visible RED check on the PR. It does NOT block the merge: read from the
+      # API on 2026-09-02, develop's required contexts are exactly "Test & Lint
+      # (macos-latest, 20.x)", "Test & Lint (windows-latest, 20.x)", "Security
+      # Audit" and "Fixture PII Scan" (strict: true), and int/android-mms has no
+      # branch protection at all (/protection -> 404).
+      # "Android Companion" is not a required context, so a red compile step
+      # shows an X and merges anyway. The android-companion-skip mirror below
+      # exists to make this check REQUIREABLE; making it required is a
+      # repository-settings change and is filed separately. Commit 3ae139e60's
+      # subject line overstates this — the mechanism is a red check, not a gate.
       #
       # PREBUILD IS NOT OPTIONAL. android-companion/ is a MANAGED Expo project:
       # `/android/` is gitignored (see its .gitignore) and `git ls-files

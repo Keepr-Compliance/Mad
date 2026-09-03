@@ -14,6 +14,26 @@
  * added alongside this file) and, for the provider semantics, a device. This
  * test is the cheap floor beneath both, not a substitute for either.
  *
+ * ## DECLARATION IS NOT USE
+ *
+ * The first version of this file asserted only that the two constants were
+ * DECLARED with the right values, and called the magnitude-agnostic selection
+ * "covered". It was not. SR review of PR #2475 wrote the mutation that proves
+ * it: rewrite `buildSelection` to a naive milliseconds-only compare,
+ *
+ *     return Pair("$COL_DATE >= ?", arrayOf(minDateMs.toString()))
+ *
+ * leaving both `const val` lines untouched. `MILLIS_MAGNITUDE_THRESHOLD` goes
+ * from 3 occurrences in the file to 1 - declared, and dead. Measured: jest
+ * 3 passed / 3 total, and `./gradlew :keepr-mms:compileDebugKotlin`
+ * BUILD SUCCESSFUL, exit 0. Both layers walked straight past the defect that
+ * returns ZERO messages forever while looking healthy (BACKLOG-1448).
+ *
+ * An unused `const val` in a companion object is not even a Kotlin warning, so
+ * the compiler was never going to catch it. Hence the last test below, which
+ * asserts the constant's USE inside `buildSelection` rather than its
+ * declaration.
+ *
  * ## WHY IT EXISTS
  *
  * `mmsReader.ts` calls `list(minDate, indexFrom, maxCount)`. There is no
@@ -55,6 +75,27 @@ function readSource(): string {
   return fs.readFileSync(SOURCE_PATH, 'utf8').replace(/\r\n/g, '\n');
 }
 
+/**
+ * The body of `buildSelection`, from its signature to its closing brace.
+ *
+ * Scoped deliberately. The function's own KDoc sits directly above it and spells
+ * the two-branch predicate out in prose, so assertions run against the whole
+ * file would be satisfied by the COMMENT describing the logic rather than the
+ * logic - the same way `toContain('date ASC')` is satisfied by the class KDoc.
+ * Slicing from `private fun` excludes every comment above it.
+ */
+function buildSelectionBody(source: string): string {
+  const start = source.indexOf('  private fun buildSelection(');
+  if (start === -1) {
+    throw new Error('buildSelection() not found in KeeprMmsModule.kt');
+  }
+  const end = source.indexOf('\n  }\n', start);
+  if (end === -1) {
+    throw new Error('could not find the end of buildSelection() in KeeprMmsModule.kt');
+  }
+  return source.slice(start, end);
+}
+
 /** Every `const val <name>` declaration line, whatever its value. */
 function declarationsOf(name: string, source: string): string[] {
   const re = new RegExp(String.raw`^[ \t]*const val ${name}\b.*$`, 'gm');
@@ -88,5 +129,38 @@ describe('KeeprMmsModule.kt source invariants (BACKLOG-3051)', () => {
     expect(source).toMatch(
       /^[ \t]*const val MILLIS_MAGNITUDE_THRESHOLD = 100000000000L$/m
     );
+  });
+
+  it('keeps buildSelection magnitude-agnostic: both branches, and a seconds floor', () => {
+    const body = buildSelectionBody(readSource());
+
+    // Invariant #2 of BACKLOG-3051, and the one the declaration assertions above
+    // cannot reach. Three claims:
+    //
+    //   1. the second-magnitude branch exists
+    //   2. the millisecond-magnitude branch exists
+    //   3. the seconds floor is DERIVED from the millisecond cursor
+    //
+    // Why three and not one. The obvious minimal form - "MILLIS_MAGNITUDE_
+    // THRESHOLD appears at least once outside its declaration" - is a count, and
+    // a count cannot see the worst of these mutations. Measured, as occurrences
+    // OUTSIDE the const val line:
+    //
+    //   naive ms-only compare                    -> 0   a count catches this
+    //   second-magnitude branch deleted          -> 1   a count sees nothing
+    //   millisecond-magnitude branch deleted     -> 1   a count sees nothing
+    //   both branches bound to the ms cursor     -> 2   a count sees nothing
+    //
+    // The last one is the dangerous shape: both branches still there, the
+    // constant still referenced twice, and second-magnitude rows filtered by a
+    // millisecond floor - so the read matches nothing and returns zero rows
+    // forever while looking healthy. Only claim 3 catches it.
+    //
+    // All four go red against the three claims together; which single claim
+    // fires first for each is not asserted here, because jest stops at the first
+    // failing expect and that ordering was never measured.
+    expect(body).toContain('$COL_DATE < $MILLIS_MAGNITUDE_THRESHOLD');
+    expect(body).toContain('$COL_DATE >= $MILLIS_MAGNITUDE_THRESHOLD');
+    expect(body).toMatch(/minDateMs \/ 1000L?\b/);
   });
 });
