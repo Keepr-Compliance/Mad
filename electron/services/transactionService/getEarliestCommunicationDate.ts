@@ -5,6 +5,7 @@
  */
 
 import { dbGet, dbAll } from "../db/core/dbConnection";
+import { unsafeSql } from "../db/core/sqlText";
 import { reactionExclusion } from "../db/reactionExclusion";
 
 /**
@@ -26,13 +27,13 @@ export function getEarliestCommunicationDate(
   // Get email addresses for the contacts
   const emailPlaceholders = contactIds.map(() => "?").join(", ");
   const contactEmails = dbAll<{ email: string }>(
-    `SELECT DISTINCT LOWER(email) as email FROM contact_emails WHERE contact_id IN (${emailPlaceholders})`,
+    unsafeSql(`SELECT DISTINCT LOWER(email) as email FROM contact_emails WHERE contact_id IN (${emailPlaceholders})`),
     contactIds,
   );
 
   // Get phone numbers for the contacts
   const contactPhones = dbAll<{ phone_e164: string }>(
-    `SELECT DISTINCT phone_e164 FROM contact_phones WHERE contact_id IN (${emailPlaceholders})`,
+    unsafeSql(`SELECT DISTINCT phone_e164 FROM contact_phones WHERE contact_id IN (${emailPlaceholders})`),
     contactIds,
   );
 
@@ -52,12 +53,12 @@ export function getEarliestCommunicationDate(
     ];
 
     const emailResult = dbGet<{ earliest: string | null }>(
-      `SELECT MIN(e.sent_at) as earliest
+      unsafeSql(`SELECT MIN(e.sent_at) as earliest
        FROM email_participants ep
        JOIN emails e ON e.id = ep.email_id
        WHERE e.user_id = ?
          AND ep.email_address IN (${placeholders})
-         AND e.sent_at IS NOT NULL`,
+         AND e.sent_at IS NOT NULL`),
       emailParams,
     );
 
@@ -79,14 +80,14 @@ export function getEarliestCommunicationDate(
         .join(" OR ");
 
       const messageResult = dbGet<{ earliest: string | null }>(
-        `SELECT MIN(m.sent_at) as earliest
+        unsafeSql(`SELECT MIN(m.sent_at) as earliest
          FROM messages m
          WHERE m.user_id = ?
            AND m.channel IN ('sms', 'imessage')
            AND m.duplicate_of IS NULL
            AND ${reactionExclusion("m")}
            AND (${phoneConditions})
-           AND m.sent_at IS NOT NULL`,
+           AND m.sent_at IS NOT NULL`),
         [userId, ...normalizedPhones],
       );
 

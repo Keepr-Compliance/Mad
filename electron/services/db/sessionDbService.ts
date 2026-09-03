@@ -6,6 +6,7 @@
 import crypto from "crypto";
 import type { Session, User } from "../../types";
 import { dbGet, dbRun } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import logService from "../logService";
 
 /**
@@ -24,7 +25,7 @@ export async function createSession(userId: string): Promise<string> {
     VALUES (?, ?, ?, ?)
   `;
 
-  dbRun(sql, [id, userId, sessionToken, expiresAt.toISOString()]);
+  dbRun(unsafeSql(sql), [id, userId, sessionToken, expiresAt.toISOString()]);
   return sessionToken;
 }
 
@@ -63,7 +64,7 @@ export async function validateSession(
       session_created_at: string;
       session_last_accessed_at: string;
     }
-  >(sql, [sessionToken]);
+  >(unsafeSql(sql), [sessionToken]);
 
   if (!row) {
     return null;
@@ -78,7 +79,7 @@ export async function validateSession(
 
   // Update last accessed time
   dbRun(
-    "UPDATE sessions SET last_accessed_at = CURRENT_TIMESTAMP WHERE session_token = ?",
+    unsafeSql("UPDATE sessions SET last_accessed_at = CURRENT_TIMESTAMP WHERE session_token = ?"),
     [sessionToken],
   );
 
@@ -105,7 +106,7 @@ export async function validateSession(
  */
 export async function deleteSession(sessionToken: string): Promise<void> {
   const sql = "DELETE FROM sessions WHERE session_token = ?";
-  dbRun(sql, [sessionToken]);
+  dbRun(unsafeSql(sql), [sessionToken]);
 }
 
 /**
@@ -113,7 +114,7 @@ export async function deleteSession(sessionToken: string): Promise<void> {
  */
 export async function deleteAllUserSessions(userId: string): Promise<void> {
   const sql = "DELETE FROM sessions WHERE user_id = ?";
-  dbRun(sql, [userId]);
+  dbRun(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -122,6 +123,6 @@ export async function deleteAllUserSessions(userId: string): Promise<void> {
  */
 export async function clearAllSessions(): Promise<void> {
   const sql = "DELETE FROM sessions";
-  dbRun(sql, []);
+  dbRun(unsafeSql(sql), []);
   logService.info("[SessionDbService] Cleared all sessions for session-only OAuth", "SessionDbService");
 }

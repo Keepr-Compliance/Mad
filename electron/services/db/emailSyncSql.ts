@@ -38,6 +38,7 @@
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
 
 import { dbAll, dbGet, dbRun } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import { emailForceReadView, type EmailForceSet } from "./emailForceSetSql";
 import type { StagingTableName } from "./stagingDdlSql";
 
@@ -165,7 +166,7 @@ export function selectExistingExternalIds(
   const src = readSource(source, "external_id, user_id");
   const placeholders = externalIds.map(() => "?").join(",");
   return dbAll<{ external_id: string }>(
-    `SELECT external_id FROM ${src.sql} WHERE user_id = ? AND external_id IN (${placeholders})`,
+    unsafeSql(`SELECT external_id FROM ${src.sql} WHERE user_id = ? AND external_id IN (${placeholders})`),
     [...src.params, userId, ...externalIds],
   );
 }
@@ -184,7 +185,7 @@ export function selectExistingByMessageIdHeader(
   const src = readSource(source, "id, external_id, message_id_header, user_id");
   const placeholders = headers.map(() => "?").join(",");
   return dbAll(
-    `SELECT id, external_id, message_id_header FROM ${src.sql} WHERE user_id = ? AND message_id_header IN (${placeholders})`,
+    unsafeSql(`SELECT id, external_id, message_id_header FROM ${src.sql} WHERE user_id = ? AND message_id_header IN (${placeholders})`),
     [...src.params, userId, ...headers],
   );
 }
@@ -220,14 +221,14 @@ export function selectLegacyCandidatesBySubject(
   );
   const placeholders = normalisedSubjects.map(() => "?").join(",");
   return dbAll(
-    `SELECT id, external_id, subject, sender, sent_at
+    unsafeSql(`SELECT id, external_id, subject, sender, sent_at
            FROM ${src.sql}
            WHERE user_id = ?
              AND message_id_header IS NULL
              AND sent_at IS NOT NULL
              AND sender IS NOT NULL
              AND subject IS NOT NULL
-             AND LOWER(TRIM(subject)) IN (${placeholders})`,
+             AND LOWER(TRIM(subject)) IN (${placeholders})`),
     [...src.params, userId, ...normalisedSubjects],
   );
 }
@@ -246,18 +247,18 @@ export function selectEarliestByParticipants(
   if (addresses.length === 0) return undefined;
   const placeholders = addresses.map(() => "?").join(", ");
   return dbGet<{ earliest: string | null; total: number }>(
-    `
+    unsafeSql(`
   SELECT MIN(e.sent_at) as earliest, COUNT(DISTINCT e.id) as total
   FROM email_participants ep
   JOIN emails e ON e.id = ep.email_id
   WHERE e.user_id = ?
     AND ep.email_address IN (${placeholders})
-`,
+`),
     [userId, ...addresses],
   );
 }
 
 /** Reset the provider cursor so the next run starts from the beginning. */
 export function clearSyncCursor(userId: string): void {
-  dbRun(CLEAR_SYNC_CURSOR_SQL, [userId]);
+  dbRun(unsafeSql(CLEAR_SYNC_CURSOR_SQL), [userId]);
 }

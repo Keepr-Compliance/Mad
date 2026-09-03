@@ -85,6 +85,7 @@
  */
 
 import { dbAll, dbGet } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import logService from "./logService";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import {
@@ -339,11 +340,11 @@ function readContactEndpoint(userId: string, contactId: string): EndpointValues 
   // there is deliberately no redirect to whichever contact absorbed it —
   // reporting a survivor here would answer a question nobody asked.
   const row = dbGet<{ display_name: string | null; is_active: number }>(
-    `SELECT display_name,
+    unsafeSql(`SELECT display_name,
             CASE WHEN EXISTS (
               SELECT 1 FROM contacts WHERE id = @id${ACTIVE_CONTACTS_CLAUSE_UNALIASED}
             ) THEN 1 ELSE 0 END AS is_active
-       FROM contacts WHERE id = @id AND user_id = @userId`,
+       FROM contacts WHERE id = @id AND user_id = @userId`),
     [{ id: contactId, userId }],
   );
 
@@ -361,7 +362,7 @@ function readContactEndpoint(userId: string, contactId: string): EndpointValues 
   }
 
   const emails = dbAll<{ email: string | null }>(
-    `SELECT email FROM contact_emails WHERE contact_id = ?`,
+    unsafeSql(`SELECT email FROM contact_emails WHERE contact_id = ?`),
     [contactId],
   )
     .map((r) => r.email)
@@ -383,14 +384,14 @@ function readContactEndpoint(userId: string, contactId: string): EndpointValues 
   // change is the reported `unkeyableCount`, which is the honest fact: this
   // contact holds a number that may not be used to propose a match.
   const phones = dbAll<{ phone_e164: string | null }>(
-    `SELECT phone_e164 FROM contact_phones WHERE contact_id = ?`,
+    unsafeSql(`SELECT phone_e164 FROM contact_phones WHERE contact_id = ?`),
     [contactId],
   )
     .map((r) => r.phone_e164)
     .filter((p): p is string => typeof p === "string");
 
   const recency = dbGet<{ last_communication_at: string | null }>(
-    `SELECT ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL} FROM contacts c WHERE c.id = ?`,
+    unsafeSql(`SELECT ${IMPORTED_CONTACT_LAST_COMMUNICATION_SQL} FROM contacts c WHERE c.id = ?`),
     [contactId],
   );
 
@@ -417,11 +418,11 @@ function readRecordEndpoint(
     phones_json: string | null;
     last_message_at: string | null;
   }>(
-    `SELECT name, emails_json, phones_json,
+    unsafeSql(`SELECT name, emails_json, phones_json,
             ${EXTERNAL_CONTACT_LAST_MESSAGE_EXPR} AS last_message_at
        FROM external_contacts
       WHERE user_id = ? AND source = ? AND external_record_id = ?
-      LIMIT 1`,
+      LIMIT 1`),
     [userId, sourceType, sourceRecordId],
   );
 

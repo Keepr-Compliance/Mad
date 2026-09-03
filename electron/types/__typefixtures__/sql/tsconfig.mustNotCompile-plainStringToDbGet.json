@@ -1,0 +1,5 @@
+{
+  "//": "BACKLOG-3064 — one fixture, one tsc invocation, one exit code.",
+  "extends": "./tsconfig.base.json",
+  "files": ["./mustNotCompile-plainStringToDbGet.ts"]
+}

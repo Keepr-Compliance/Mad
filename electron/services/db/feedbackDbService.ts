@@ -12,6 +12,7 @@ import crypto from "crypto";
 import type { UserFeedback } from "../../types";
 import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 
 /**
  * Save user feedback on classified data
@@ -45,10 +46,10 @@ export async function saveFeedback(
     feedbackData.reason || null,
   ];
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
 
   const feedback = dbGet<UserFeedback>(
-    "SELECT * FROM classification_feedback WHERE id = ?",
+    unsafeSql("SELECT * FROM classification_feedback WHERE id = ?"),
     [id],
   );
   if (!feedback) {
@@ -70,7 +71,7 @@ export async function getFeedbackByTransaction(
     ORDER BY created_at DESC
   `;
 
-  return dbAll<UserFeedback>(sql, [transactionId]);
+  return dbAll<UserFeedback>(unsafeSql(sql), [transactionId]);
 }
 
 /**
@@ -88,7 +89,7 @@ export async function getFeedbackByField(
     LIMIT ?
   `;
 
-  return dbAll<UserFeedback>(sql, [userId, fieldName, limit]);
+  return dbAll<UserFeedback>(unsafeSql(sql), [userId, fieldName, limit]);
 }
 
 /**
@@ -105,7 +106,7 @@ export async function getFeedbackByUser(
     LIMIT ?
   `;
 
-  return dbAll<UserFeedback>(sql, [userId, limit]);
+  return dbAll<UserFeedback>(unsafeSql(sql), [userId, limit]);
 }
 
 /**
@@ -115,7 +116,7 @@ export async function getFeedbackById(
   feedbackId: string,
 ): Promise<UserFeedback | null> {
   const sql = "SELECT * FROM classification_feedback WHERE id = ?";
-  const feedback = dbGet<UserFeedback>(sql, [feedbackId]);
+  const feedback = dbGet<UserFeedback>(unsafeSql(sql), [feedbackId]);
   return feedback || null;
 }
 
@@ -124,5 +125,5 @@ export async function getFeedbackById(
  */
 export async function deleteFeedback(feedbackId: string): Promise<void> {
   const sql = "DELETE FROM classification_feedback WHERE id = ?";
-  dbRun(sql, [feedbackId]);
+  dbRun(unsafeSql(sql), [feedbackId]);
 }

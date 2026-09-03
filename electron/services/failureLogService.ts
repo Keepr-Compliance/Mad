@@ -14,6 +14,7 @@
  */
 
 import { dbRun, dbAll, dbGet, dbExec } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import logService from "./logService";
 // BACKLOG-2393: a no-op unless a user has granted a support window. Imported
 // from the weightless trace seam rather than the support-access bundle, because
@@ -50,7 +51,7 @@ class FailureLogService {
     try {
       const metadataJson = metadata ? JSON.stringify(metadata) : null;
       dbRun(
-        `INSERT INTO failure_log (operation, error_message, metadata) VALUES (?, ?, ?)`,
+        unsafeSql(`INSERT INTO failure_log (operation, error_message, metadata) VALUES (?, ?, ?)`),
         [operation, error, metadataJson]
       );
       await logService.debug(
@@ -91,7 +92,7 @@ class FailureLogService {
     try {
       const metadataJson = metadata ? JSON.stringify(metadata) : null;
       dbRun(
-        `INSERT INTO failure_log (operation, error_message, metadata) VALUES (?, ?, ?)`,
+        unsafeSql(`INSERT INTO failure_log (operation, error_message, metadata) VALUES (?, ?, ?)`),
         [operation, "(event)", metadataJson]
       );
       await logService.debug(
@@ -114,7 +115,7 @@ class FailureLogService {
    */
   async getRecentFailures(limit: number = 50): Promise<FailureLogEntry[]> {
     return dbAll<FailureLogEntry>(
-      `SELECT * FROM failure_log ORDER BY timestamp DESC LIMIT ?`,
+      unsafeSql(`SELECT * FROM failure_log ORDER BY timestamp DESC LIMIT ?`),
       [limit]
     );
   }
@@ -125,7 +126,7 @@ class FailureLogService {
    */
   async getFailuresSince(timestamp: string): Promise<FailureLogEntry[]> {
     return dbAll<FailureLogEntry>(
-      `SELECT * FROM failure_log WHERE timestamp >= ? ORDER BY timestamp DESC`,
+      unsafeSql(`SELECT * FROM failure_log WHERE timestamp >= ? ORDER BY timestamp DESC`),
       [timestamp]
     );
   }
@@ -135,7 +136,7 @@ class FailureLogService {
    */
   async getFailureCount(): Promise<number> {
     const row = dbGet<{ count: number }>(
-      `SELECT COUNT(*) as count FROM failure_log WHERE acknowledged = 0`
+      unsafeSql(`SELECT COUNT(*) as count FROM failure_log WHERE acknowledged = 0`)
     );
     return row?.count ?? 0;
   }
@@ -144,14 +145,14 @@ class FailureLogService {
    * Mark all failures as acknowledged.
    */
   async acknowledgeAll(): Promise<void> {
-    dbRun(`UPDATE failure_log SET acknowledged = 1 WHERE acknowledged = 0`);
+    dbRun(unsafeSql(`UPDATE failure_log SET acknowledged = 1 WHERE acknowledged = 0`));
   }
 
   /**
    * Clear the entire failure log.
    */
   async clearLog(): Promise<void> {
-    dbRun(`DELETE FROM failure_log`);
+    dbRun(unsafeSql(`DELETE FROM failure_log`));
     await logService.info("[FailureLog] Log cleared", "FailureLogService");
   }
 
@@ -166,13 +167,13 @@ class FailureLogService {
     try {
       // 1. Delete entries older than 30 days
       const ageResult = dbRun(
-        `DELETE FROM failure_log WHERE timestamp < datetime('now', ?)`,
+        unsafeSql(`DELETE FROM failure_log WHERE timestamp < datetime('now', ?)`),
         [`-${MAX_AGE_DAYS} days`]
       );
 
       // 2. Cap at MAX_ENTRIES (keep newest)
       const countRow = dbGet<{ count: number }>(
-        `SELECT COUNT(*) as count FROM failure_log`
+        unsafeSql(`SELECT COUNT(*) as count FROM failure_log`)
       );
       const totalCount = countRow?.count ?? 0;
 
@@ -180,9 +181,9 @@ class FailureLogService {
       if (totalCount > MAX_ENTRIES) {
         const excess = totalCount - MAX_ENTRIES;
         const result = dbRun(
-          `DELETE FROM failure_log WHERE id IN (
+          unsafeSql(`DELETE FROM failure_log WHERE id IN (
             SELECT id FROM failure_log ORDER BY timestamp ASC LIMIT ?
-          )`,
+          )`),
           [excess]
         );
         capDeleted = result.changes;
@@ -212,7 +213,7 @@ class FailureLogService {
     try {
       // The table is created by the migration, but we ensure it exists
       // for safety (e.g., if migration hasn't run yet on this version)
-      dbExec(`
+      dbExec(unsafeSql(`
         CREATE TABLE IF NOT EXISTS failure_log (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           timestamp TEXT NOT NULL DEFAULT (datetime('now')),
@@ -221,7 +222,7 @@ class FailureLogService {
           metadata TEXT,
           acknowledged INTEGER NOT NULL DEFAULT 0
         )
-      `);
+      `));
       await this.pruneOldEntries();
       await logService.debug(
         "[FailureLog] Service initialized",

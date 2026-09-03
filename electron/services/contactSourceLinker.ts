@@ -134,6 +134,7 @@
  */
 
 import { dbAll, dbGet } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import { createLink, getLinksForContactBySource } from "./db/contactSourceLinkDbService";
 import {
@@ -309,8 +310,8 @@ function sourceRecordCarriesIdentifier(
   values: string[],
 ): boolean {
   const row = dbGet<{ emails_json: string | null; phones_json: string | null }>(
-    `SELECT emails_json, phones_json FROM external_contacts
-      WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`,
+    unsafeSql(`SELECT emails_json, phones_json FROM external_contacts
+      WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`),
     [userId, sourceType, sourceRecordId],
   );
   if (!row) return false;
@@ -420,7 +421,7 @@ function sourceRecordIsCurrent(
   sourceRecordId: string,
 ): boolean {
   const row = dbGet<{ hit: number }>(
-    `SELECT 1 AS hit FROM external_contacts ec
+    unsafeSql(`SELECT 1 AS hit FROM external_contacts ec
       WHERE ec.user_id = ? AND ec.source = ? AND ec.external_record_id = ?
         AND (
           ec.synced_at IS NULL
@@ -429,7 +430,7 @@ function sourceRecordIsCurrent(
              WHERE w.user_id = ec.user_id AND w.source = ec.source
           )
         )
-      LIMIT 1`,
+      LIMIT 1`),
     [userId, sourceType, sourceRecordId],
   );
   return row !== undefined && row !== null;
@@ -516,7 +517,7 @@ function recordProposal(args: {
  */
 function savedContactName(contactId: string): string | null {
   const row = dbGet<{ display_name: string | null }>(
-    `SELECT display_name FROM contacts WHERE id = ?`,
+    unsafeSql(`SELECT display_name FROM contacts WHERE id = ?`),
     [contactId],
   );
   return row?.display_name ?? null;
@@ -930,10 +931,10 @@ export function linkExternalContactsForUser(userId: string): LinkRunSummary {
     external_uuid: string | null;
   }>(
     // BACKLOG-2619 added `name`, for the veto only. It is never matched on.
-    `SELECT external_record_id, source, name, emails_json, phones_json, external_uuid
+    unsafeSql(`SELECT external_record_id, source, name, emails_json, phones_json, external_uuid
        FROM external_contacts
       WHERE user_id = ? AND external_record_id IS NOT NULL
-      ORDER BY source, external_record_id`,
+      ORDER BY source, external_record_id`),
     [userId],
   );
 

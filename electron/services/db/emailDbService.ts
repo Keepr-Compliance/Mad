@@ -12,6 +12,7 @@
 import crypto from "crypto";
 import * as Sentry from "@sentry/electron/main";
 import { dbGet, dbAll, dbRun, getRawDatabase } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import { DatabaseError } from "../../types";
 import type { ParsedParticipant } from "../../types/models";
 // BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
@@ -218,7 +219,7 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
      VALUES (?, ?, ?, ?, ?, ?)`
   );
   const runTx = rawDb.transaction(() => {
-    dbRun(sql, params);
+    dbRun(unsafeSql(sql), params);
     for (const p of resolvedParticipants) {
       insertParticipantStmt.run(
         id,
@@ -292,7 +293,7 @@ export async function getEmailById(emailId: string): Promise<EmailRow | null> {
   // back from THIS query is an email, so its id is an `EmailId` — the read is the
   // evidence. The parameter stays `string`: a lookup given the wrong kind of id
   // returns null and harms nothing.
-  const email = dbGet<EmailRow>(sql, [emailId]);
+  const email = dbGet<EmailRow>(unsafeSql(sql), [emailId]);
   return email || null;
 }
 
@@ -305,7 +306,7 @@ export async function getEmailByExternalId(
   externalId: string
 ): Promise<Email | null> {
   const sql = `SELECT ${EMAIL_COLUMNS_LIGHT} FROM emails WHERE user_id = ? AND external_id = ?`;
-  const email = dbGet<Email>(sql, [userId, externalId]);
+  const email = dbGet<Email>(unsafeSql(sql), [userId, externalId]);
   return email || null;
 }
 
@@ -318,7 +319,7 @@ export async function getEmailByMessageIdHeader(
   messageIdHeader: string
 ): Promise<Email | null> {
   const sql = `SELECT ${EMAIL_COLUMNS_LIGHT} FROM emails WHERE user_id = ? AND message_id_header = ?`;
-  const email = dbGet<Email>(sql, [userId, messageIdHeader]);
+  const email = dbGet<Email>(unsafeSql(sql), [userId, messageIdHeader]);
   return email || null;
 }
 
@@ -331,7 +332,7 @@ export async function getEmailsByUser(userId: string): Promise<Email[]> {
     WHERE user_id = ?
     ORDER BY sent_at DESC
   `;
-  return dbAll<Email>(sql, [userId]);
+  return dbAll<Email>(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -392,7 +393,7 @@ export async function getCachedEmails(
     LIMIT ?
   `;
   params.push(limit);
-  return dbAll<Email>(sql, params);
+  return dbAll<Email>(unsafeSql(sql), params);
 }
 
 /**
@@ -407,7 +408,7 @@ export async function getEmailsByThread(
     WHERE user_id = ? AND thread_id = ?
     ORDER BY sent_at ASC
   `;
-  return dbAll<Email>(sql, [userId, threadId]);
+  return dbAll<Email>(unsafeSql(sql), [userId, threadId]);
 }
 
 /**
@@ -417,7 +418,7 @@ export async function getEmailsByThread(
  */
 export async function deleteEmail(emailId: string): Promise<void> {
   const sql = "DELETE FROM emails WHERE id = ?";
-  dbRun(sql, [emailId]);
+  dbRun(unsafeSql(sql), [emailId]);
 }
 
 /**
@@ -428,7 +429,7 @@ export async function deleteEmailByExternalId(
   externalId: string
 ): Promise<void> {
   const sql = "DELETE FROM emails WHERE user_id = ? AND external_id = ?";
-  dbRun(sql, [userId, externalId]);
+  dbRun(unsafeSql(sql), [userId, externalId]);
 }
 
 // ============================================
@@ -462,6 +463,6 @@ export async function emailExists(
  */
 export async function countEmailsByUser(userId: string): Promise<number> {
   const sql = "SELECT COUNT(*) as count FROM emails WHERE user_id = ?";
-  const result = dbGet<{ count: number }>(sql, [userId]);
+  const result = dbGet<{ count: number }>(unsafeSql(sql), [userId]);
   return result?.count || 0;
 }

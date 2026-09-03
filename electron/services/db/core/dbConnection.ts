@@ -16,6 +16,7 @@ import path from "path";
 import fs from "fs";
 import { app } from "electron";
 import { DatabaseError, QueryResult } from "../../../types";
+import type { SafeSql } from "./sqlText";
 import { databaseEncryptionService } from "../../databaseEncryptionService";
 import logService from "../../logService";
 
@@ -206,7 +207,7 @@ export async function vacuumDb(): Promise<void> {
  * Uses better-sqlite3's synchronous API
  */
 export function dbGet<T = unknown>(
-  sql: string,
+  sql: SafeSql,
   params: unknown[] = [],
 ): T | undefined {
   const database = ensureDb();
@@ -218,7 +219,7 @@ export function dbGet<T = unknown>(
  * Helper: Run a query that returns multiple rows
  * Uses better-sqlite3's synchronous API
  */
-export function dbAll<T = unknown>(sql: string, params: unknown[] = []): T[] {
+export function dbAll<T = unknown>(sql: SafeSql, params: unknown[] = []): T[] {
   const database = ensureDb();
   const stmt = database.prepare(sql);
   return stmt.all(...params) as T[];
@@ -228,7 +229,7 @@ export function dbAll<T = unknown>(sql: string, params: unknown[] = []): T[] {
  * Helper: Run a query that modifies data (INSERT, UPDATE, DELETE)
  * Uses better-sqlite3's synchronous API
  */
-export function dbRun(sql: string, params: unknown[] = []): QueryResult {
+export function dbRun(sql: SafeSql, params: unknown[] = []): QueryResult {
   const database = ensureDb();
   const stmt = database.prepare(sql);
   const result = stmt.run(...params);
@@ -241,7 +242,7 @@ export function dbRun(sql: string, params: unknown[] = []): QueryResult {
 /**
  * Helper: Execute raw SQL (for migrations, schema changes)
  */
-export function dbExec(sql: string): void {
+export function dbExec(sql: SafeSql): void {
   const database = ensureDb();
   database.exec(sql);
 }

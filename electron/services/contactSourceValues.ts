@@ -83,6 +83,7 @@
  */
 
 import { dbAll, dbRun } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import {
   backfillContactEmailsSync,
   backfillContactPhonesSync,
@@ -158,14 +159,14 @@ function linkedSourceValues(
     emails_json: string | null;
     phones_json: string | null;
   }>(
-    `SELECT ec.source, ec.external_record_id, ec.emails_json, ec.phones_json
+    unsafeSql(`SELECT ec.source, ec.external_record_id, ec.emails_json, ec.phones_json
        FROM contact_source_links csl
        JOIN external_contacts ec
          ON ec.user_id = csl.user_id
         AND ec.source = csl.source_type
         AND ec.external_record_id = csl.source_record_id
       WHERE csl.user_id = ? AND csl.contact_id = ?
-      ORDER BY ec.source, ec.external_record_id`,
+      ORDER BY ec.source, ec.external_record_id`),
     [userId, contactId],
   );
 
@@ -199,8 +200,8 @@ function sourceRecordValues(
   sourceRecordId: string,
 ): SourceValues | null {
   const rows = dbAll<{ emails_json: string | null; phones_json: string | null }>(
-    `SELECT emails_json, phones_json FROM external_contacts
-      WHERE user_id = ? AND source = ? AND external_record_id = ?`,
+    unsafeSql(`SELECT emails_json, phones_json FROM external_contacts
+      WHERE user_id = ? AND source = ? AND external_record_id = ?`),
     [userId, sourceType, sourceRecordId],
   );
   if (rows.length === 0) return null;
@@ -334,8 +335,8 @@ export function removeUnlinkedSourceValues(
       // LOWER(TRIM(...)) mirrors how the backfill stored it and how
       // `getContactEmailsForTransaction` reads it back.
       removedEmails += dbRun(
-        `DELETE FROM contact_emails
-          WHERE contact_id = ? AND LOWER(TRIM(email)) = ? AND source = 'import'`,
+        unsafeSql(`DELETE FROM contact_emails
+          WHERE contact_id = ? AND LOWER(TRIM(email)) = ? AND source = 'import'`),
         [contactId, key],
       ).changes;
     }
@@ -346,10 +347,10 @@ export function removeUnlinkedSourceValues(
       // hold "+14085550101" while the source record says "(408) 555-0101".
       // COALESCE covers rows written before `phone_normalized` was populated.
       removedPhones += dbRun(
-        `DELETE FROM contact_phones
+        unsafeSql(`DELETE FROM contact_phones
           WHERE contact_id = ?
             AND COALESCE(NULLIF(phone_normalized, ''), phone_e164) = ?
-            AND source = 'import'`,
+            AND source = 'import'`),
         [contactId, key],
       ).changes;
     }

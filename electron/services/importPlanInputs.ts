@@ -25,6 +25,7 @@
 import logService from "./logService";
 import supabaseService from "./supabaseService";
 import { dbAll } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 import {
   resolveImportPlan,
@@ -70,9 +71,9 @@ export interface TransactionDateRow {
  */
 export function readNonRejectedTransactions(userId: string): TransactionDateRow[] {
   return dbAll<TransactionDateRow>(
-    `SELECT started_at, created_at, closed_at
+    unsafeSql(`SELECT started_at, created_at, closed_at
        FROM transactions
-      WHERE user_id = ? AND ${LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED}`,
+      WHERE user_id = ? AND ${LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED}`),
     [userId]
   );
 }

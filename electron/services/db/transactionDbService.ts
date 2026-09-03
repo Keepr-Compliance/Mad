@@ -15,6 +15,7 @@ import { DatabaseError } from "../../types";
 // BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
 import type { TransactionRow } from "../../types/ids";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import {
   countLinkedEmailsByTransaction,
   type ScopedEmailRow,
@@ -597,7 +598,7 @@ export function createTransactionSync(
     VALUES (${columns.map(() => "?").join(", ")})
   `;
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
   const transaction = getTransactionByIdSync(id);
   if (!transaction) {
     throw new DatabaseError("Failed to create transaction");
@@ -612,7 +613,7 @@ export function createTransactionSync(
  */
 export function getPendingTransactionCount(userId: string): number {
   const result = dbGet<{ count: number }>(
-    "SELECT COUNT(*) as count FROM transactions WHERE user_id = ? AND detection_status = 'pending'",
+    unsafeSql("SELECT COUNT(*) as count FROM transactions WHERE user_id = ? AND detection_status = 'pending'"),
     [userId],
   );
   return result?.count ?? 0;
@@ -646,7 +647,7 @@ function fetchScopedEmailRows(
   params: unknown[],
 ): ScopedEmailRow[] {
   return dbAll<ScopedEmailRow>(
-    `SELECT c.transaction_id  as transaction_id,
+    unsafeSql(`SELECT c.transaction_id  as transaction_id,
             c.email_id       as email_id,
             c.match_reason   as match_reason,
             e.thread_id      as thread_id,
@@ -655,7 +656,7 @@ function fetchScopedEmailRows(
        INNER JOIN emails e ON e.id = c.email_id
       WHERE c.email_id IS NOT NULL
         AND c.transaction_id IN (${transactionScope})
-      ORDER BY e.sent_at DESC`,
+      ORDER BY e.sent_at DESC`),
     params,
   );
 }
@@ -717,7 +718,7 @@ export async function getTransactions(
              (SELECT COUNT(*) FROM communications c WHERE c.transaction_id = t.id) as total_communications_count
              FROM transactions t${whereClause} ORDER BY t.created_at DESC`;
 
-  const transactions = dbAll<Transaction>(sql, params);
+  const transactions = dbAll<Transaction>(unsafeSql(sql), params);
   if (transactions.length === 0) return transactions;
 
   // The SAME predicate the rows above were selected by, re-used as a subselect
@@ -800,7 +801,7 @@ export function getTransactionByIdSync(
   // `TransactionId`, so `linkCommunicationToTransaction` and anything else that
   // demands one can be called from here without a cast (control 3).
   const transaction = dbGet<TransactionRow>(
-    "SELECT t.* FROM transactions t WHERE t.id = ?",
+    unsafeSql("SELECT t.* FROM transactions t WHERE t.id = ?"),
     [transactionId],
   );
   if (!transaction) return null;
@@ -985,7 +986,7 @@ export async function updateTransaction(
   if (attemptedFrozen.length > 0 && !hasUnfreezeOverride) {
     const selectCols = ["first_exported_at", ...FROZEN_IDENTITY_FIELDS].join(", ");
     const current = dbGet<Record<string, unknown>>(
-      `SELECT ${selectCols} FROM transactions WHERE id = ?`,
+      unsafeSql(`SELECT ${selectCols} FROM transactions WHERE id = ?`),
       [transactionId],
     );
     if (isTransactionFrozen((current as { first_exported_at: string | null } | undefined) ?? undefined)) {
@@ -1076,7 +1077,7 @@ export async function updateTransaction(
   values.push(transactionId);
 
   const sql = `UPDATE transactions SET ${fields.join(", ")} WHERE id = ?`;
-  const result = dbRun(sql, values);
+  const result = dbRun(unsafeSql(sql), values);
 
   logService.debug("Transaction update result", "TransactionDbService", {
     transactionId,
@@ -1108,7 +1109,7 @@ export function stampFirstExportedAt(
   timestamp: string,
 ): boolean {
   const result = dbRun(
-    "UPDATE transactions SET first_exported_at = ? WHERE id = ? AND first_exported_at IS NULL",
+    unsafeSql("UPDATE transactions SET first_exported_at = ? WHERE id = ? AND first_exported_at IS NULL"),
     [timestamp, transactionId],
   );
   return result.changes === 1;
@@ -1119,7 +1120,7 @@ export function stampFirstExportedAt(
  */
 export async function deleteTransaction(transactionId: string): Promise<void> {
   const sql = "DELETE FROM transactions WHERE id = ?";
-  dbRun(sql, [transactionId]);
+  dbRun(unsafeSql(sql), [transactionId]);
 }
 
 /**
@@ -1153,7 +1154,7 @@ export async function findExistingTransactionsByAddresses(
   `;
 
   const params = [userId, ...normalizedAddresses];
-  const results = dbAll<{ id: string; property_address: string }>(sql, params);
+  const results = dbAll<{ id: string; property_address: string }>(unsafeSql(sql), params);
 
   // Build map of normalized address -> transaction ID
   const addressMap = new Map<string, string>();

@@ -10,6 +10,7 @@
 
 import * as Sentry from "@sentry/electron/main";
 import { dbAll, dbGet, dbRun } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import logService from "./logService";
 import { normalizePhone, createCommunicationReference } from "./messageMatchingService";
 import { linkMessageToTransaction } from "./db/messageDbService";
@@ -148,7 +149,7 @@ interface TransactionInfo {
 async function getContactInfo(contactId: string): Promise<ContactInfo | null> {
   // Get contact to verify it exists
   const contactSql = "SELECT id FROM contacts WHERE id = ?";
-  const contact = dbGet<{ id: string }>(contactSql, [contactId]);
+  const contact = dbGet<{ id: string }>(unsafeSql(contactSql), [contactId]);
 
   if (!contact) {
     return null;
@@ -159,7 +160,7 @@ async function getContactInfo(contactId: string): Promise<ContactInfo | null> {
     SELECT email FROM contact_emails
     WHERE contact_id = ?
   `;
-  const emailRows = dbAll<{ email: string }>(emailsSql, [contactId]);
+  const emailRows = dbAll<{ email: string }>(unsafeSql(emailsSql), [contactId]);
   const emails = emailRows.map((r) => r.email.toLowerCase().trim());
 
   // Get all phone numbers for this contact
@@ -167,7 +168,7 @@ async function getContactInfo(contactId: string): Promise<ContactInfo | null> {
     SELECT phone_e164 FROM contact_phones
     WHERE contact_id = ?
   `;
-  const phoneRows = dbAll<{ phone_e164: string }>(phonesSql, [contactId]);
+  const phoneRows = dbAll<{ phone_e164: string }>(unsafeSql(phonesSql), [contactId]);
   const phoneNumbers = phoneRows
     .map((r) => normalizePhone(r.phone_e164))
     .filter((p): p is string => p !== null);
@@ -221,7 +222,7 @@ async function getTransactionInfo(
     property_address: string | null;
     property_street: string | null;
     skip_address_filter: number | null;
-  }>(sql, [transactionId]);
+  }>(unsafeSql(sql), [transactionId]);
 
   if (!transaction) {
     return null;
@@ -293,7 +294,7 @@ async function findCandidateEmailsWithMatch(
 
   // Get the user's email to exclude it from contact matching
   const userSql = "SELECT email FROM users_local WHERE id = ?";
-  const userResult = dbGet<{ email: string | null }>(userSql, [userId]);
+  const userResult = dbGet<{ email: string | null }>(unsafeSql(userSql), [userId]);
   const userEmail = userResult?.email?.toLowerCase().trim();
 
   // Filter out user's own email from contact emails
@@ -360,7 +361,7 @@ async function findCandidateEmailsWithMatch(
   ];
 
   const results = dbAll<{ id: string; subject: string | null; body_plain: string | null }>(
-    sql,
+    unsafeSql(sql),
     sqlParams
   );
 
@@ -409,7 +410,7 @@ export function countContactCandidateTransactions(userId: string, contactId: str
       AND ${LIVE_TRANSACTION_SQL_PREDICATE}
       AND tc.removed_at IS NULL
   `;
-  const row = dbGet<{ cnt: number }>(sql, [contactId, userId]);
+  const row = dbGet<{ cnt: number }>(unsafeSql(sql), [contactId, userId]);
   return row?.cnt ?? 0;
 }
 
@@ -440,7 +441,7 @@ export function getOtherCandidateTransactionAddresses(
       AND tc.removed_at IS NULL
       AND COALESCE(t.property_address, t.property_street) IS NOT NULL
   `;
-  return dbAll<{ address: string }>(sql, [contactId, userId, transactionId])
+  return dbAll<{ address: string }>(unsafeSql(sql), [contactId, userId, transactionId])
     .map((r) => r.address)
     .filter((a): a is string => !!a);
 }
@@ -527,7 +528,7 @@ async function findMessagesByContactPhones(
     ORDER BY MAX(m.sent_at) DESC
   `;
 
-  const results = dbAll<MessageWithThread>(sql, params);
+  const results = dbAll<MessageWithThread>(unsafeSql(sql), params);
   return results;
 }
 
@@ -556,7 +557,7 @@ export async function linkEmailToTransaction(
     SELECT id, transaction_id FROM communications
     WHERE email_id = ? AND transaction_id = ?
   `;
-  const existing = dbGet<{ id: string; transaction_id: string }>(checkSql, [emailId, transactionId]);
+  const existing = dbGet<{ id: string; transaction_id: string }>(unsafeSql(checkSql), [emailId, transactionId]);
 
   if (existing) {
     // Already linked to this transaction. BACKLOG-2319: intentionally leave the
@@ -613,7 +614,7 @@ export async function linkEmailToTransaction(
   // BACKLOG-1718 (R3): thread_id must be propagated so unlinkCommunication can
   // expand the deletion to all sibling emails sharing the same thread.
   const emailRow = dbGet<{ user_id: string; thread_id: string | null }>(
-    "SELECT user_id, thread_id FROM emails WHERE id = ?",
+    unsafeSql("SELECT user_id, thread_id FROM emails WHERE id = ?"),
     [emailId]
   );
 
@@ -633,7 +634,7 @@ export async function linkEmailToTransaction(
     INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source, link_confidence, match_reason, linked_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `;
-  dbRun(insertSql, [
+  dbRun(unsafeSql(insertSql), [
     uuidv4(),
     emailRow.user_id,
     transactionId,
@@ -1287,7 +1288,7 @@ export async function autoLinkNewMessagesForUser(
       ORDER BY tc.transaction_id
     `;
 
-    const pairs = dbAll<{ contact_id: string; transaction_id: string }>(sql, [userId]);
+    const pairs = dbAll<{ contact_id: string; transaction_id: string }>(unsafeSql(sql), [userId]);
 
     if (pairs.length === 0) {
       await logService.debug(
@@ -1600,7 +1601,7 @@ export async function expandAttachedThreadsForUser(
         AND m.thread_id IS NOT NULL
         AND m.thread_id != ''
     `;
-    const pairs = dbAll<{ transaction_id: string; thread_id: string }>(pairSql, [userId]);
+    const pairs = dbAll<{ transaction_id: string; thread_id: string }>(unsafeSql(pairSql), [userId]);
     result.pairsExamined = pairs.length;
 
     if (pairs.length === 0) {
@@ -1632,13 +1633,13 @@ export async function expandAttachedThreadsForUser(
       direction: string | null;
       participants: string | null;
     }>(
-      `SELECT thread_id, direction, participants
+      unsafeSql(`SELECT thread_id, direction, participants
          FROM messages
         WHERE user_id = ?
           AND channel IN ('sms', 'imessage')
           AND duplicate_of IS NULL
           AND thread_id IS NOT NULL
-          AND thread_id != ''`,
+          AND thread_id != ''`),
       [userId],
     );
     const rowsByThread = new Map<
@@ -1702,7 +1703,7 @@ export async function expandAttachedThreadsForUser(
             AND m.duplicate_of IS NULL
             AND ${reactionExclusion("m")}
         `;
-        const siblings = dbAll<{ id: string; thread_id: string | null }>(siblingSql, [
+        const siblings = dbAll<{ id: string; thread_id: string | null }>(unsafeSql(siblingSql), [
           userId,
           threadId,
         ]);
@@ -1753,7 +1754,7 @@ export async function expandAttachedThreadsForUser(
               AND m.duplicate_of IS NULL
               AND ${reactionExclusion("m")}
           `;
-          const crossMsgs = dbAll<{ id: string; thread_id: string | null }>(crossSql, [
+          const crossMsgs = dbAll<{ id: string; thread_id: string | null }>(unsafeSql(crossSql), [
             userId,
             ...tids,
           ]);

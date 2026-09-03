@@ -51,6 +51,7 @@
  */
 
 import { dbAll, dbGet, dbTransaction } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import {
   deleteLinkById,
@@ -142,7 +143,7 @@ export function getContactProvenance(
     synced_at: string | null;
     present: number | null;
   }>(
-    `SELECT l.id, l.source_type, l.source_record_id, l.match_method, l.matched_at,
+    unsafeSql(`SELECT l.id, l.source_type, l.source_record_id, l.match_method, l.matched_at,
             ec.name AS source_name, ec.synced_at, ec.id IS NOT NULL AS present
        FROM contact_source_links l
        LEFT JOIN external_contacts ec
@@ -151,7 +152,7 @@ export function getContactProvenance(
         AND ec.external_record_id = l.source_record_id
       WHERE l.user_id = ? AND l.contact_id = ?
         AND l.match_method <> ?
-      ORDER BY l.source_type, l.source_record_id`,
+      ORDER BY l.source_type, l.source_record_id`),
     [userId, contactId, ORIGIN_MATCH_METHOD],
   );
 
@@ -214,8 +215,8 @@ export function unlinkContactSource(
     source_record_id: string;
     match_method: ContactMatchMethod;
   }>(
-    `SELECT id, user_id, contact_id, source_type, source_record_id, match_method
-       FROM contact_source_links WHERE id = ?`,
+    unsafeSql(`SELECT id, user_id, contact_id, source_type, source_record_id, match_method
+       FROM contact_source_links WHERE id = ?`),
     [linkId],
   );
 

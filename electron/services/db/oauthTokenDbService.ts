@@ -7,6 +7,7 @@ import crypto from "crypto";
 import type { OAuthToken, OAuthProvider, OAuthPurpose } from "../../types";
 import { DatabaseError } from "../../types";
 import { dbGet, dbRun } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import {
   validateFields,
   type ColumnOf,
@@ -57,7 +58,7 @@ export async function saveOAuthToken(
     tokenData.permissions_granted_at || new Date().toISOString(),
   ];
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
   return id;
 }
 
@@ -73,7 +74,7 @@ export async function getOAuthToken(
     SELECT * FROM oauth_tokens
     WHERE user_id = ? AND provider = ? AND purpose = ? AND is_active = 1
   `;
-  const token = dbGet<OAuthToken & { scopes_granted?: string }>(sql, [
+  const token = dbGet<OAuthToken & { scopes_granted?: string }>(unsafeSql(sql), [
     userId,
     provider,
     purpose,
@@ -142,7 +143,7 @@ export async function updateOAuthToken(
   values.push(tokenId);
 
   const sql = `UPDATE oauth_tokens SET ${fields.join(", ")} WHERE id = ?`;
-  dbRun(sql, values);
+  dbRun(unsafeSql(sql), values);
 }
 
 /**
@@ -155,7 +156,7 @@ export async function deleteOAuthToken(
 ): Promise<void> {
   const sql =
     "DELETE FROM oauth_tokens WHERE user_id = ? AND provider = ? AND purpose = ?";
-  dbRun(sql, [userId, provider, purpose]);
+  dbRun(unsafeSql(sql), [userId, provider, purpose]);
 }
 
 /**
@@ -164,7 +165,7 @@ export async function deleteOAuthToken(
  */
 export async function clearAllOAuthTokens(): Promise<void> {
   const sql = "DELETE FROM oauth_tokens";
-  dbRun(sql, []);
+  dbRun(unsafeSql(sql), []);
   logService.info("[OAuthTokenDbService] Cleared all OAuth tokens for session-only OAuth", "OAuthTokenDbService");
 }
 
@@ -183,7 +184,7 @@ export async function getOAuthTokenSyncTime(
     SELECT last_sync_at FROM oauth_tokens
     WHERE user_id = ? AND provider = ? AND purpose = 'mailbox' AND is_active = 1
   `;
-  const row = dbGet<{ last_sync_at?: string }>(sql, [userId, provider]);
+  const row = dbGet<{ last_sync_at?: string }>(unsafeSql(sql), [userId, provider]);
 
   if (row?.last_sync_at) {
     return new Date(row.last_sync_at);
@@ -208,7 +209,7 @@ export async function updateOAuthTokenSyncTime(
     SET last_sync_at = ?
     WHERE user_id = ? AND provider = ? AND purpose = 'mailbox' AND is_active = 1
   `;
-  dbRun(sql, [syncTime.toISOString(), userId, provider]);
+  dbRun(unsafeSql(sql), [syncTime.toISOString(), userId, provider]);
   logService.info(
     `[OAuthTokenDbService] Updated last_sync_at for ${provider} to ${syncTime.toISOString()}`,
     "OAuthTokenDbService",

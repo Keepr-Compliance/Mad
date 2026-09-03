@@ -13,6 +13,7 @@
 
 import crypto from "crypto";
 import { dbAll, dbRun, dbGet } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import logService from "./logService";
 import { normalizeAddress, contentContainsAddress, type NormalizedAddress } from "../utils/addressNormalization";
 import {
@@ -112,7 +113,7 @@ export async function getTransactionContactPhones(
     WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
   `;
 
-  const results = dbAll<{ contactId: string; phone: string }>(sql, [transactionId]);
+  const results = dbAll<{ contactId: string; phone: string }>(unsafeSql(sql), [transactionId]);
   return results;
 }
 
@@ -215,7 +216,7 @@ export async function findTextMessagesByPhones(
     participants_flat: string | null;
     direction: string | null;
     channel: string;
-  }>(sql, params);
+  }>(unsafeSql(sql), params);
 
   const matches: MessageMatch[] = [];
 
@@ -308,7 +309,7 @@ export async function createCommunicationReference(
     SELECT id FROM communications
     WHERE message_id = ? AND transaction_id = ?
   `;
-  const existing = dbGet<{ id: string }>(existingCheck, [messageId, transactionId]);
+  const existing = dbGet<{ id: string }>(unsafeSql(existingCheck), [messageId, transactionId]);
 
   if (existing) {
     return null; // Already linked
@@ -316,7 +317,7 @@ export async function createCommunicationReference(
 
   // Verify message exists before linking
   const msgExists = dbGet<{ id: string }>(
-    "SELECT id FROM messages WHERE id = ?",
+    unsafeSql("SELECT id FROM messages WHERE id = ?"),
     [messageId]
   );
 
@@ -348,7 +349,7 @@ export async function createCommunicationReference(
   ];
 
   try {
-    dbRun(sql, params);
+    dbRun(unsafeSql(sql), params);
     return id;
   } catch (error) {
     // Handle unique constraint violation gracefully
@@ -386,7 +387,7 @@ async function filterEmailMatchesByAddress(
       FROM messages
       WHERE id IN (${placeholders})
     `;
-    const rows = dbAll<{ id: string; subject: string | null; body_text: string | null }>(sql, batch);
+    const rows = dbAll<{ id: string; subject: string | null; body_text: string | null }>(unsafeSql(sql), batch);
 
     for (const row of rows) {
       // Combine subject and body for matching; contentContainsAddress checks
@@ -425,7 +426,7 @@ export async function autoLinkTextsToTransaction(
     // 1. Get the transaction to verify it exists, get user_id and date range
     // TASK-2087: Address filtering removed from text messages — only applies to emails.
     const txnSql = "SELECT user_id, started_at, closed_at FROM transactions WHERE id = ?";
-    const transaction = dbGet<{ user_id: string; started_at: string | null; closed_at: string | null }>(txnSql, [transactionId]);
+    const transaction = dbGet<{ user_id: string; started_at: string | null; closed_at: string | null }>(unsafeSql(txnSql), [transactionId]);
 
     if (!transaction) {
       result.errors.push(`Transaction ${transactionId} not found`);
@@ -482,7 +483,7 @@ export async function autoLinkTextsToTransaction(
         // BACKLOG-1560: Check per-message suppression first (for messages with no/empty thread_id)
         if (ignoredCommIds.has(match.messageId)) return false;
         const msg = dbGet<{ thread_id: string | null }>(
-          "SELECT thread_id FROM messages WHERE id = ?",
+          unsafeSql("SELECT thread_id FROM messages WHERE id = ?"),
           [match.messageId]
         );
         // BACKLOG-1560: Treat empty string thread_id as no thread_id
@@ -548,7 +549,7 @@ export async function autoLinkTextsToTransaction(
         SET transaction_id = ?, transaction_link_source = 'pattern', transaction_link_confidence = 0.9
         WHERE id IN (${placeholders}) AND transaction_id IS NULL
       `;
-      dbRun(updateSql, [transactionId, ...linkedMessageIds]);
+      dbRun(unsafeSql(updateSql), [transactionId, ...linkedMessageIds]);
     }
 
     logService.info(
@@ -586,7 +587,7 @@ export async function getTransactionContactEmails(
     WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
   `;
 
-  const results = dbAll<{ contactId: string; email: string }>(sql, [transactionId]);
+  const results = dbAll<{ contactId: string; email: string }>(unsafeSql(sql), [transactionId]);
   return results;
 }
 
@@ -648,7 +649,7 @@ export async function findEmailsByAddresses(
     recipients: string | null;
     direction: string | null;
     channel: string;
-  }>(sql, [userId, transactionId, transactionId]);
+  }>(unsafeSql(sql), [userId, transactionId, transactionId]);
 
   const matches: MessageMatch[] = [];
 
@@ -719,7 +720,7 @@ export async function autoLinkEmailsToTransaction(
     // TASK-2087: Also fetch property_address and property_street for address filtering
     // BACKLOG-1364: Also fetch skip_address_filter for per-transaction toggle
     const txnSql = "SELECT user_id, property_address, property_street, skip_address_filter FROM transactions WHERE id = ?";
-    const transaction = dbGet<{ user_id: string; property_address: string | null; property_street: string | null; skip_address_filter: number | null }>(txnSql, [transactionId]);
+    const transaction = dbGet<{ user_id: string; property_address: string | null; property_street: string | null; skip_address_filter: number | null }>(unsafeSql(txnSql), [transactionId]);
 
     if (!transaction) {
       result.errors.push(`Transaction ${transactionId} not found`);
@@ -807,13 +808,13 @@ export async function autoLinkEmailsToTransaction(
       filteredEmailMatches = matches.filter((match) => {
         // Look up the message's external_id and check if a corresponding email is ignored
         const msg = dbGet<{ external_id: string | null }>(
-          "SELECT external_id FROM messages WHERE id = ?",
+          unsafeSql("SELECT external_id FROM messages WHERE id = ?"),
           [match.messageId]
         );
         if (msg?.external_id) {
           const email = dbGet<{ id: string }>(
-            "SELECT id FROM emails WHERE external_id = ? AND id IN (" +
-            Array.from(ignoredEmailIds).map(() => "?").join(",") + ")",
+            unsafeSql("SELECT id FROM emails WHERE external_id = ? AND id IN (" +
+            Array.from(ignoredEmailIds).map(() => "?").join(",") + ")"),
             [msg.external_id, ...Array.from(ignoredEmailIds)]
           );
           if (email) return false; // This email was previously ignored
@@ -877,7 +878,7 @@ export async function autoLinkEmailsToTransaction(
         SET transaction_id = ?, transaction_link_source = 'pattern', transaction_link_confidence = 0.85
         WHERE id IN (${placeholders}) AND transaction_id IS NULL
       `;
-      dbRun(updateSql, [transactionId, ...linkedMessageIds]);
+      dbRun(unsafeSql(updateSql), [transactionId, ...linkedMessageIds]);
     }
 
     logService.info(

@@ -156,6 +156,7 @@
  */
 
 import { dbGet } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import logService from "./logService";
 
 /**
@@ -191,7 +192,7 @@ export type ContactAutoLinkMode = "off" | "suggest" | "auto";
  */
 function hasAiAddon(userId: string): boolean {
   const row = dbGet<{ ai_detection_enabled: number | null }>(
-    `SELECT ai_detection_enabled FROM users_local WHERE id = ?`,
+    unsafeSql(`SELECT ai_detection_enabled FROM users_local WHERE id = ?`),
     [userId],
   );
   // No row is not "no add-on" — it is "we do not know", and unknown is `off`.

@@ -25,6 +25,7 @@
  */
 
 import { dbAll, dbGet, dbTransaction } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import {
   getContactEmailEntries,
   getContactPhoneEntries,
@@ -397,12 +398,12 @@ function loadCommunications(
       received_at: string | null;
       addr: string;
     }>(
-      `SELECT e.id, e.subject, e.sent_at, e.received_at,
+      unsafeSql(`SELECT e.id, e.subject, e.sent_at, e.received_at,
               LOWER(TRIM(ep.email_address)) AS addr
          FROM email_participants ep
          JOIN emails e ON e.id = ep.email_id
         WHERE e.user_id = ?
-          AND LOWER(TRIM(ep.email_address)) IN (${placeholders})`,
+          AND LOWER(TRIM(ep.email_address)) IN (${placeholders})`),
       [userId, ...allEmailKeys],
     );
     rows.forEach((r) => {
@@ -442,12 +443,12 @@ function loadCommunications(
       received_at: string | null;
       associated_message_type: number | null;
     }>(
-      `SELECT m.id, m.subject, m.body_text, m.participants_flat, m.sent_at,
+      unsafeSql(`SELECT m.id, m.subject, m.body_text, m.participants_flat, m.sent_at,
               m.received_at, m.associated_message_type
          FROM messages m
         WHERE m.user_id = ?
           AND m.channel IN ('sms', 'imessage')
-          AND m.duplicate_of IS NULL`,
+          AND m.duplicate_of IS NULL`),
       [userId],
     );
     rows.forEach((r) => {
@@ -636,7 +637,7 @@ export async function getContactCompareColumns(
     company: string | null;
     removed_at: string | null;
   }>(
-    `SELECT user_id, display_name, company, removed_at FROM contacts WHERE id = ?`,
+    unsafeSql(`SELECT user_id, display_name, company, removed_at FROM contacts WHERE id = ?`),
     [contactId],
   );
   // The tombstone guard is stated HERE rather than inherited. `getContactById`
@@ -648,7 +649,7 @@ export async function getContactCompareColumns(
   // `getContactProvenance`'s query, minus the origin exclusion, plus the value
   // columns the columns need. LEFT JOIN for the same reason it uses one.
   const links = dbAll<LinkRow>(
-    `SELECT l.id, l.source_type, l.source_record_id, l.match_method, l.matched_at,
+    unsafeSql(`SELECT l.id, l.source_type, l.source_record_id, l.match_method, l.matched_at,
             ec.id AS ec_id, ec.name AS ec_name, ec.emails_json AS ec_emails_json,
             ec.phones_json AS ec_phones_json, ec.company AS ec_company
        FROM contact_source_links l
@@ -657,7 +658,7 @@ export async function getContactCompareColumns(
         AND ec.source = l.source_type
         AND ec.external_record_id = l.source_record_id
       WHERE l.user_id = ? AND l.contact_id = ?
-      ORDER BY l.source_type, l.source_record_id`,
+      ORDER BY l.source_type, l.source_record_id`),
     [userId, contactId],
   );
 
@@ -729,9 +730,9 @@ export async function getContactCompareColumns(
         phones_json: string | null;
         company: string | null;
       }>(
-        `SELECT name, emails_json, phones_json, company
+        unsafeSql(`SELECT name, emails_json, phones_json, company
            FROM external_contacts
-          WHERE user_id = ? AND source = ? AND external_record_id = ?`,
+          WHERE user_id = ? AND source = ? AND external_record_id = ?`),
         [userId, proposedSource.sourceType, proposedSource.sourceRecordId],
       ) ?? null
     : null;
@@ -1148,7 +1149,7 @@ export function confirmContactSources(
   contactId: string,
 ): ConfirmSourcesOutcome {
   const contact = dbGet<{ user_id: string; removed_at: string | null }>(
-    `SELECT user_id, removed_at FROM contacts WHERE id = ?`,
+    unsafeSql(`SELECT user_id, removed_at FROM contacts WHERE id = ?`),
     [contactId],
   );
   // Stated here, not inherited from the reader. A writer that trusts a sibling's
@@ -1168,10 +1169,10 @@ export function confirmContactSources(
     source_record_id: string;
     match_method: ContactMatchMethod;
   }>(
-    `SELECT source_type, source_record_id, match_method
+    unsafeSql(`SELECT source_type, source_record_id, match_method
        FROM contact_source_links
       WHERE user_id = ? AND contact_id = ? AND match_method <> ?
-      ORDER BY source_type, source_record_id`,
+      ORDER BY source_type, source_record_id`),
     [userId, contactId, ORIGIN_MATCH_METHOD],
   );
 
