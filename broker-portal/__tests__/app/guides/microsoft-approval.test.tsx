@@ -201,6 +201,12 @@ describe('BACKLOG-3092 — /guides/microsoft-approval', () => {
       // The sentence on the Microsoft screen that alarms people.
       expect(text).toMatch(/all users in your organization/i);
       expect(text).toMatch(/delegated/i);
+      // What an admin's users actually experience after a revoke. Traced to
+      // microsoftAuthService.refreshToken (invalid_grant is preserved) ->
+      // emailSyncService.classifyProviderError, which returns
+      // "Your email connection has expired. Please reconnect in Settings."
+      expect(text).toMatch(/no longer\s+refresh/i);
+      expect(text).toMatch(/reconnect\s+in Settings/i);
     });
 
     it('does not restate the permission list', () => {

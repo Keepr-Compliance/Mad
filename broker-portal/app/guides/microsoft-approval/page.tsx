@@ -30,8 +30,9 @@ import { AlertBanner } from '@keepr/ui';
  *   - consent recorded only with state ... app/setup/consent/callback/route.ts
  *   - delegated, read-only scope set ..... electron/services/microsoftAuthService.ts
  *   - token in OS credential store ....... electron/services/tokenEncryptionService.ts
- *   - submissions upload message bodies .. electron/services/submissionService.ts
- *   - audit log sync to cloud ............ electron/services/supabaseService.ts
+ *   - "reconnect in Settings" on a dead
+ *     refresh token (invalid_grant) ...... microsoftAuthService.refreshToken ->
+ *                                          emailSyncService.classifyProviderError
  *
  * Deliberately makes NO claim about SSO, JIT or SCIM (asserted by the test).
  */
@@ -279,8 +280,9 @@ export default function MicrosoftApprovalGuidePage() {
                 </p>
                 <p className="mt-2 text-sm text-gray-700">
                   Revoking stops Microsoft issuing new tokens. A token already in hand keeps working
-                  until it expires, which is about an hour; after that the desktop app cannot
-                  refresh it and the person has to reconnect.
+                  until it expires, which is about an hour. Once the desktop app can no longer
+                  refresh, it tells that person their email connection has expired and to reconnect
+                  in Settings.
                 </p>
                 <p className="mt-2 text-sm text-gray-600">
                   Keepr&apos;s Settings card records when consent was granted; it is not a live read
