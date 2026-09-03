@@ -24,6 +24,8 @@
  * gate's own content hashes (`e37e12ba8b64`, `ae88b2ae96f2`).
  */
 
+import { sql } from "./core/sqlText";
+
 /** The local user's id. No bound parameters; returns `{ id }` or nothing. */
 export const LOCAL_USER_ID_SQL = "SELECT id FROM users_local LIMIT 1";
 
@@ -35,3 +37,19 @@ export const LOCAL_USER_ID_SQL = "SELECT id FROM users_local LIMIT 1";
  * rows that reference it — rather than the discovery path.
  */
 export const LOCAL_USER_BY_ID_SQL = "SELECT id FROM users_local WHERE id = ?";
+
+/**
+ * The local user's id AND email — BACKLOG-2991, moved out of
+ * `databaseService.runMigrations`, which reads it to attribute Sentry events
+ * and breadcrumbs to a user before a migration runs.
+ *
+ * Deliberately a THIRD constant rather than a widening of `LOCAL_USER_ID_SQL`.
+ * That constant's text is `SELECT id FROM users_local LIMIT 1`
+ * (`f344b52a0ef5ca7e`); this one is `SELECT id, email FROM users_local LIMIT 1`
+ * (`3b9b4568067d61f8`). They are not the same sentence, and the move that
+ * brought this one into the layer had to keep its text byte-identical — so
+ * bending either toward the other to save a constant would have been a
+ * behaviour change disguised as a tidy-up. Its four callers do not want the
+ * email; this caller does.
+ */
+export const LOCAL_USER_ID_AND_EMAIL_SQL = sql`SELECT id, email FROM users_local LIMIT 1`;

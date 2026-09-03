@@ -2,9 +2,9 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "4a32c44792f671ff8f6fac1404ca137563da2c72",
-  "totalSites": 62,
-  "entryCount": 47,
+  "measuredAt": "9be6dd4d5d3298bc081cc9432285f9ca989b03f6",
+  "totalSites": 52,
+  "entryCount": 40,
   "entries": [
     {
       "file": "electron/handlers/conversationHandlers.ts",
@@ -249,22 +249,6 @@
     {
       "file": "electron/services/databaseService.ts",
       "verb": "prepare",
-      "match": "text:00b445d23efa",
-      "bucket": "VIOLATION",
-      "count": 4,
-      "owner": "BACKLOG-2991"
-    },
-    {
-      "file": "electron/services/databaseService.ts",
-      "verb": "prepare",
-      "match": "text:1828558d046a",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2991"
-    },
-    {
-      "file": "electron/services/databaseService.ts",
-      "verb": "prepare",
       "match": "text:3ec048032a5a",
       "bucket": "VIOLATION",
       "count": 1,
@@ -282,22 +266,6 @@
       "file": "electron/services/databaseService.ts",
       "verb": "prepare",
       "match": "text:6d902201ed9e",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2991"
-    },
-    {
-      "file": "electron/services/databaseService.ts",
-      "verb": "prepare",
-      "match": "text:7769905c56b6",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2991"
-    },
-    {
-      "file": "electron/services/databaseService.ts",
-      "verb": "prepare",
-      "match": "text:80043b7e1ac3",
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2991"
@@ -357,30 +325,6 @@
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-2991"
-    },
-    {
-      "file": "electron/workers/contactQueryWorker.ts",
-      "verb": "prepare",
-      "match": "text:722ee263cdc2",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-3043"
-    },
-    {
-      "file": "electron/workers/contactQueryWorker.ts",
-      "verb": "prepare",
-      "match": "text:7d68d5f04274",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-3043"
-    },
-    {
-      "file": "electron/workers/contactQueryWorker.ts",
-      "verb": "prepare",
-      "match": "text:f5e0321e2623",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-3043"
     }
   ]
 }

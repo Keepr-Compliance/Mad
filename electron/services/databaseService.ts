@@ -32,6 +32,12 @@ import {
   closeDb,
   vacuumDb,
 } from "./db/core/dbConnection";
+import { SCHEMA_VERSION_SQL } from "./db/storageDiagnosticsSql";
+import {
+  SCHEMA_VERSION_UPDATE_SQL,
+  CONNECTIVITY_PROBE_SQL,
+} from "./db/databaseLifecycleSql";
+import { LOCAL_USER_ID_AND_EMAIL_SQL } from "./db/localUserSql";
 
 // Import types
 import type {
@@ -658,7 +664,7 @@ class DatabaseService implements IDatabaseService {
           "This database has user tables but no schema_version table — it predates " +
           `the schema baseline (version ${baseline}) and cannot be upgraded.`;
       } else {
-        const row = db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as
+        const row = db.prepare(SCHEMA_VERSION_SQL).get() as
           | { version: unknown }
           | undefined;
         const version = row?.version;
@@ -992,7 +998,7 @@ class DatabaseService implements IDatabaseService {
       setEncryptionKey(this.encryptionKey);
 
       try {
-        const probe = newDb.prepare("SELECT 1 AS ok").get() as { ok: number } | undefined;
+        const probe = newDb.prepare(CONNECTIVITY_PROBE_SQL).get() as { ok: number } | undefined;
         if (!probe || probe.ok !== 1) {
           throw new Error("Post-restore connectivity check returned unexpected result");
         }
@@ -1048,7 +1054,7 @@ class DatabaseService implements IDatabaseService {
     try {
       const tables = currentDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users_local'").all();
       if (tables.length > 0) {
-        const user = currentDb.prepare("SELECT id, email FROM users_local LIMIT 1").get() as { id: string; email?: string } | undefined;
+        const user = currentDb.prepare(LOCAL_USER_ID_AND_EMAIL_SQL).get() as { id: string; email?: string } | undefined;
         if (user?.id) {
           Sentry.setUser({ id: user.id, email: user.email || undefined });
           Sentry.addBreadcrumb({
@@ -1089,7 +1095,7 @@ class DatabaseService implements IDatabaseService {
         if (svTableRow) {
           const dbVersion = (
             currentDb
-              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .prepare(SCHEMA_VERSION_SQL)
               .get() as { version: number } | undefined
           )?.version ?? 0;
           willRunMigration = dbVersion < latestMigrationVersion;
@@ -1136,7 +1142,7 @@ class DatabaseService implements IDatabaseService {
         if (svTableRow) {
           const dbVersion = (
             currentDb
-              .prepare("SELECT version FROM schema_version WHERE id = 1")
+              .prepare(SCHEMA_VERSION_SQL)
               .get() as { version: number } | undefined
           )?.version ?? 0;
           if (dbVersion < 41) {
@@ -1318,7 +1324,7 @@ class DatabaseService implements IDatabaseService {
     this._ensureSchemaVersionTable(currentDb);
 
     const currentVersion = (
-      currentDb.prepare("SELECT version FROM schema_version WHERE id = 1").get() as
+      currentDb.prepare(SCHEMA_VERSION_SQL).get() as
         { version: number } | undefined
     )?.version || 0;
 
@@ -1390,7 +1396,7 @@ class DatabaseService implements IDatabaseService {
           const runInTransaction = currentDb.transaction(() => {
             m.migrate(currentDb);
             currentDb.prepare(
-              "UPDATE schema_version SET version = ?, updated_at = CURRENT_TIMESTAMP, migrated_at = datetime('now') WHERE id = 1"
+              SCHEMA_VERSION_UPDATE_SQL
             ).run(m.version);
           });
           runInTransaction();
