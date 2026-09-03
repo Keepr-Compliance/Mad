@@ -1,15 +1,24 @@
 /**
  * BACKLOG-2975 — who an MMS is with.
  *
- * Every fixture below is TRANSCRIBED from rows read off a live API 36 emulator
- * (AVD `keepr_vc_check`) with `adb shell content query`, not invented. The
- * device row each block came from is named in its describe title. All numbers
- * are the reserved `+1 206 555-01xx` range.
+ * ## Fixture provenance — read this before trusting a fixture
  *
- * The one thing the device corpus could NOT provide is a group with a
- * duplicated number in two spellings — the provider stores what it is given
- * and the seed was written in one format. That fixture is marked as
- * constructed where it appears.
+ * **The five named constants below are TRANSCRIBED** from rows read off a live
+ * API 36 emulator (AVD `keepr_vc_check`) with `adb shell content query`. Each
+ * one names the `content://mms/{id}/addr` it came from. What is transcribed is
+ * the `address` and `type` of each row and their ORDER — the `addr()` helper
+ * stamps a placeholder `_id: "1"` on every row, so the `_id`s here are NOT the
+ * device's and nothing asserts on them.
+ *
+ * **Every fixture written inline inside a test is CONSTRUCTED** — cc/bcc roles,
+ * the From-in-the-middle row, all of the self-token rows, the alphanumeric and
+ * short-code senders, the null address, the unmodelled type code, the padded
+ * `" 137 "`. The provider stores what it is given and the seed was written in
+ * one format, so the device corpus cannot exercise any of them. They are
+ * shapes the provider's column types permit, not shapes it was observed to
+ * produce.
+ *
+ * All numbers are the reserved `+1 206 555-01xx` range.
  */
 
 import type { RawMmsAddress } from "../mmsReader";
@@ -266,10 +275,11 @@ describe("BACKLOG-2975 — deriveMmsParticipants", () => {
   // Mutation: bypass `normalizePhoneNumber`.
   // -------------------------------------------------------------------------
   describe("addresses are normalised through the existing normaliser", () => {
-    it("three spellings of ONE number collapse to one participant (constructed fixture)", () => {
-      // Constructed, not transcribed: the emulator seed was written in a single
-      // format, so the device corpus cannot exercise this. The shapes are the
-      // ones `phoneNormalization` documents as reaching the SMS path.
+    it("three spellings of ONE number collapse to one participant", () => {
+      // Constructed, like every inline fixture here — the emulator seed was
+      // written in a single format, so the device corpus cannot exercise this.
+      // The shapes are the ones `phoneNormalization` documents as reaching the
+      // SMS path.
       const rows = [
         addr("+12065550100", MMS_ADDR_TYPE_FROM),
         addr("(206) 555-0101", MMS_ADDR_TYPE_TO),
