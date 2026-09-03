@@ -164,6 +164,113 @@ describe('DisclosureScreen — affirmative consent (BACKLOG-2956)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// BACKLOG-3045 — the three retired claims, and what replaced them.
+//
+// This screen is the Play prominent disclosure: `READ_SMS` is permitted here
+// only by the "Cross-device synchronization of SMS" exception, which is subject
+// to Play review and requires the disclosure to describe what the app actually
+// does. Three claims did not, and all three had already shipped:
+//
+//   1. Title: "Your texts go to your own computer — and nowhere else."
+//   2. "It is not sent to Keepr's servers. Your messages and contacts are
+//      stored on your computer, not in the cloud."
+//   3. "you can turn syncing off at any time in Settings"
+//
+// (1) and (2) are promises about a destination the PHONE does not control: the
+// desktop uploads message bodies to Supabase on submission
+// (electron/services/submissionService.ts sets body_text at :1216 and inserts
+// submission_messages at :1300). (3) was untrue on its own terms —
+// getBackgroundSyncEnabled() gates only expo-background-fetch registration, and
+// appStateCatchup.runCatchupSync() calls performSync() on every foreground, so
+// with the toggle OFF opening the app still reads texts and sends them.
+//
+// MUTATIONS THAT MUST GO RED — restore any retired sentence in disclosure.tsx
+// and its matching "no longer promises" case fails:
+//   · title back to "...— and nowhere else."          -> "nowhere else" case
+//   · bullet back to "It is not sent to Keepr's
+//     servers. ... not in the cloud."                 -> both server/cloud cases
+//   · footnote back to "turn syncing off at any
+//     time in Settings"                               -> the syncing-off case
+// Deleting a replacement sentence fails its "says instead" case. These are text
+// assertions, not a snapshot, so each one names the claim that broke.
+// ---------------------------------------------------------------------------
+describe('DisclosureScreen — retired claims stay retired (BACKLOG-3045)', () => {
+  beforeEach(() => {
+    mockReplace.mockClear();
+    mockSetOnboardingStep.mockClear();
+    mockRecordDisclosureConsent.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('no longer promises the texts go "nowhere else"', () => {
+    render(<DisclosureScreen />);
+    expect(screen.queryByText(/nowhere else/i)).toBeNull();
+  });
+
+  it('no longer promises the data is not sent to Keepr’s servers', () => {
+    render(<DisclosureScreen />);
+    expect(screen.queryByText(/not\s+sent to Keepr['’]s servers/i)).toBeNull();
+    // The unscoped form, in any phrasing that reaches the user.
+    expect(screen.queryByText(/sent to Keepr['’]s servers/i)).toBeNull();
+  });
+
+  it('no longer promises the data is stored on your computer, not in the cloud', () => {
+    render(<DisclosureScreen />);
+    expect(screen.queryByText(/not in the cloud/i)).toBeNull();
+    expect(screen.queryByText(/stored on your computer/i)).toBeNull();
+  });
+
+  it('no longer promises syncing can be turned off in Settings', () => {
+    render(<DisclosureScreen />);
+    expect(screen.queryByText(/turn syncing off at any time/i)).toBeNull();
+  });
+
+  // The replacements. Deleting the negative claims was not a licence to go
+  // vague: a disclosure that says nothing specific fails the same policy from
+  // the other direction, so the destination is still named concretely.
+  it('says instead what THIS PHONE sends, and where', () => {
+    render(<DisclosureScreen />);
+
+    // Destination, still concrete: encrypted, local network, the paired computer.
+    expect(screen.getByText(/encrypted on this phone/i)).toBeTruthy();
+    expect(screen.getByText(/sent over your local network/i)).toBeTruthy();
+
+    // Scoped to this app, which is the claim the phone can actually keep.
+    expect(
+      screen.getByText(/only.*place this app sends them/i),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/messages and contacts do not/i),
+    ).toBeTruthy();
+  });
+
+  it('hands the desktop’s behaviour to the desktop instead of promising it', () => {
+    render(<DisclosureScreen />);
+    expect(
+      screen.getByText(/done by the Keepr app there, not by this app/i),
+    ).toBeTruthy();
+    // Naming submission is the point: it is the path that made the old claim
+    // false, and the user is told it exists rather than told it does not.
+    expect(
+      screen.getByText(/submitting a transaction to\s+your brokerage/i),
+    ).toBeTruthy();
+  });
+
+  it('names the two Settings controls accurately: Background Sync vs Unpair', () => {
+    render(<DisclosureScreen />);
+    // "Background Sync turns off the scheduled sync" — the toggle gates the
+    // SCHEDULE only; foreground catch-up still syncs.
+    expect(
+      screen.getByText(/Background Sync turns off the scheduled sync/i),
+    ).toBeTruthy();
+    // Unpair is the control that actually stops everything: runSyncCycle returns
+    // at its loadPairingInfo() gate before the SMS read.
+    expect(
+      screen.getByText(/Unpair Device stops\s+syncing altogether/i),
+    ).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // BACKLOG-3027 — the sample preview is reachable from the disclosure screen.
 //
 // Deliberately hosted BELOW the consent action, so it competes with nothing
