@@ -39,13 +39,36 @@
  * inserts `submission_messages` at `:1300`). (3) was simply untrue — see below.
  * `app/onboarding/__tests__/disclosure.test.tsx` pins all three as absent.
  *
+ * ## A fourth defect, found in SR review — UNDER-statement (BACKLOG-3045)
+ *
+ * The contacts bullet said "Names and phone numbers from this phone's address
+ * book". `services/contactReader.ts:40-46` requests SIX fields — FirstName,
+ * LastName, PhoneNumbers, **Emails, Company, JobTitle** — `mapToSyncContact`
+ * (`:159-183`) maps `emails`, `company` and `title` into `SyncContact`
+ * (`types/contacts.ts`), and `syncService.sendContacts` puts the whole
+ * `SyncContact[]` on the wire with NO field filter (`:355`). The screen named
+ * two of the six.
+ *
+ * A disclosure that under-reports collection fails Play the same way a false one
+ * does — it is just the quieter direction, and it is exactly what a Data Safety
+ * mismatch looks like to a reviewer. Email address is its own Data Safety type.
+ * The replacement wording is the founder's, used verbatim, and BACKLOG-2966's
+ * input list was corrected in the same pass.
+ *
+ * The lesson worth keeping: this bullet was not rewritten in the first pass
+ * because it was INHERITED and assumed true. Every claim on this screen is
+ * load-bearing whether or not this task touched it.
+ *
  * Every factual claim below was verified against the code before it was written:
  *
  *  - "text messages (SMS)" and NOT MMS: `services/smsReader.ts` reads only
  *    `box: "inbox"` and `box: "sent"` through react-native-get-sms-android, and
- *    the repo contains no MMS reader at all. `app.json` declares READ_SMS,
- *    RECEIVE_SMS and READ_CONTACTS — no MMS permission. Saying "MMS" here would
- *    overstate collection and would contradict the Play Data Safety form.
+ *    the repo contains no MMS reader at all. That absence is the whole argument:
+ *    on Android MMS is read through the SAME `READ_SMS` grant and the SMS
+ *    content provider, so "we declare no MMS permission" would be support this
+ *    claim does not have — there is no separate MMS permission to declare.
+ *    Saying "MMS" here would overstate collection and contradict the Play Data
+ *    Safety form.
  *    Re-verified on this branch 2026-09-02: still no MMS reader, still no MMS
  *    permission. NOTE for whoever lands BACKLOG-2973/2974/2975 (MMS ingestion,
  *    in flight on other branches) — "It does not read picture or group messages
@@ -58,13 +81,35 @@
  *    `/ping` (`:536`) are that same desktop, NOT Supabase; an earlier version of
  *    this comment had `/register` as a Supabase call and was wrong.
  *  - "this app does not send your messages or contacts to Keepr": scoped to THIS
- *    APP on purpose. The phone's only Supabase traffic is authentication —
- *    `services/authService.ts` calls `auth.signInWithOAuth`, `auth.signInWithOtp`,
- *    `auth.setSession`, `auth.getSession`, `auth.signOut`, plus the
- *    `mark_companion_session` RPC — and there is no `.from()` call anywhere in
- *    `services/`. The screen no longer says "not sent to Keepr's servers"
- *    unscoped, because the desktop does upload bodies on submission (see the
- *    scope rule above). Do not widen this clause back out.
+ *    APP, and to messages/contacts, on purpose. The phone DOES talk to Keepr's
+ *    Supabase — three kinds of traffic, none of it message or contact content.
+ *    An earlier version of this comment said "authentication only" and "no
+ *    `.from()` call anywhere in `services/`". BOTH WERE FALSE; enumerated here
+ *    so the next reader does not inherit them:
+ *      1. Auth — `services/authService.ts`: `auth.signInWithOAuth`,
+ *         `auth.signInWithOtp`, `auth.setSession`, `auth.getSession`,
+ *         `auth.signOut`, plus the `mark_companion_session` RPC.
+ *      2. A preferences READ — `services/syncWindow.ts:366` is the one
+ *         `supabase.from()` in `services/`: `.from("user_preferences")
+ *         .select("preferences").eq("user_id", userId)`, resolving the sync
+ *         lookback window. Reachable, not dead: imported by
+ *         `backgroundSync.ts:28` and `deviceIdentity.ts:73`. It reads the
+ *         signed-in user's own row and sends no message or contact.
+ *      3. In-app support tickets — `components/ui/HelpModal.tsx` (outside
+ *         `services/`, which is why a `services/`-scoped grep missed it):
+ *         `supabase.rpc('support_create_ticket', …)` at `:281` sends subject,
+ *         description, requester name and email, and `uploadDiagnostics`
+ *         (`:188-207`) puts a `diagnostics.json` in the `support-attachments`
+ *         bucket with app version, device model, OS version, paired flag,
+ *         paired device name, last sync time and permission states. User-
+ *         initiated, and it carries no message or contact content.
+ *    So the USER-FACING sentence stands — none of the three sends a message
+ *    body, phone number or contact record. The screen still does not say "not
+ *    sent to Keepr's servers" unscoped, because the desktop uploads bodies on
+ *    submission (see the scope rule above). Do not widen this clause back out,
+ *    and do not re-narrow it to "authentication only".
+ *    BACKLOG-2966 must declare 2 and 3; they are collected data under Play's
+ *    definitions even though they are not messages.
  *  - "encrypted before it leaves this phone": `syncService` derives a transport
  *    key via `deriveTransportKeys(secret)` and sends `encrypt(...)` envelopes.
  *  - "in the background": `services/backgroundSync.ts` registers an
@@ -79,11 +124,19 @@
  *        registers or unregisters the expo-background-fetch task. `performSync`
  *        -> `runOnce` -> `runSyncUnderLock` -> `runSyncCycle` never consults it;
  *        its only gate is `loadPairingInfo()`.
+ *      · `getSyncInterval()` has the SAME single-reader shape — its only non-UI
+ *        reader is `backgroundSync.ts:1321`, also inside `startBackgroundSync()`
+ *        — so setting the interval to "Manual only" does not stop the foreground
+ *        catch-up either.
  *      · `appStateCatchup.runCatchupSync()` calls `performSync()` directly on
  *        every background -> active transition, armed in `app/_layout.tsx` on
- *        session + onboarded. So with the toggle OFF, opening the app still
- *        reads texts and sends them. "Background Sync" gates the SCHEDULE, which
- *        is exactly what its Settings label says, and the copy now says so too.
+ *        session + onboarded.
+ *      · NEITHER Settings sync control stops the app syncing. With Background
+ *        Sync OFF, or the interval on "Manual only", or both, opening the app
+ *        still reads texts and sends them. Both controls gate the SCHEDULE,
+ *        which is what their labels say, and the copy now says so too. That a
+ *        control a user reads as "off" does not exist short of unpairing is a
+ *        PRODUCT question, filed separately — not something copy can fix.
  *      · Unpair genuinely stops everything: `app/(main)/settings.tsx` removes
  *        `@keepr/pairing` (`:222`) after `stopBackgroundSync()` +
  *        `resetAllSyncData()`, and `runSyncCycle` then returns at its
@@ -172,9 +225,9 @@ export default function DisclosureScreen(): React.JSX.Element {
           </Text>
           <Text style={styles.bullet}>
             <Text style={styles.bulletLead}>Your contacts. </Text>
-            Names and phone numbers from this phone&apos;s address book, so
-            Keepr can tell you who each message is from instead of showing a
-            bare number.
+            Names, phone numbers, email addresses, and any company or job title
+            saved with them — so Keepr can tell you who each message is from
+            instead of showing a bare number.
           </Text>
         </View>
 
@@ -236,8 +289,9 @@ export default function DisclosureScreen(): React.JSX.Element {
 
         <Text style={styles.footnote}>
           You choose which computer to pair with in the next steps. In Settings,
-          Background Sync turns off the scheduled sync, and Unpair Device stops
-          syncing altogether.
+          Background Sync and Sync Interval control the scheduled sync — Keepr
+          Companion still syncs when you open it. Unpair Device stops syncing
+          altogether.
         </Text>
 
         {/* BACKLOG-3027: below the consent action on purpose — it must not

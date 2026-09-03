@@ -255,17 +255,96 @@ describe('DisclosureScreen — retired claims stay retired (BACKLOG-3045)', () =
     ).toBeTruthy();
   });
 
-  it('names the two Settings controls accurately: Background Sync vs Unpair', () => {
+  it('names BOTH Settings sync controls as schedule-only, and Unpair as the real off switch', () => {
     render(<DisclosureScreen />);
-    // "Background Sync turns off the scheduled sync" — the toggle gates the
-    // SCHEDULE only; foreground catch-up still syncs.
+    // NEITHER control stops syncing. getBackgroundSyncEnabled() and
+    // getSyncInterval() each have exactly one non-UI reader, both inside
+    // startBackgroundSync(), which only registers/unregisters the
+    // expo-background-fetch task. appStateCatchup.runCatchupSync() calls
+    // performSync() on every foreground transition regardless of either.
     expect(
-      screen.getByText(/Background Sync turns off the scheduled sync/i),
+      screen.getByText(
+        /Background Sync and Sync Interval control the scheduled sync/i,
+      ),
     ).toBeTruthy();
-    // Unpair is the control that actually stops everything: runSyncCycle returns
-    // at its loadPairingInfo() gate before the SMS read.
     expect(
-      screen.getByText(/Unpair Device stops\s+syncing altogether/i),
+      screen.getByText(/still syncs when you open it/i),
+    ).toBeTruthy();
+    // Unpair is the one that actually stops it: runSyncCycle returns at its
+    // loadPairingInfo() gate before the SMS read.
+    expect(
+      screen.getByText(/Unpair Device stops syncing\s+altogether/i),
+    ).toBeTruthy();
+  });
+
+  // -------------------------------------------------------------------------
+  // SR review, BACKLOG-3045 — B1. The bullet said "Names and phone numbers".
+  // contactReader.ts:40-46 requests SIX fields (FirstName, LastName,
+  // PhoneNumbers, Emails, Company, JobTitle); mapToSyncContact (:159-183) maps
+  // emails/company/title into SyncContact; syncService.sendContacts (:355) puts
+  // the whole array on the wire unfiltered. Under-reporting collection fails
+  // Play the same way over-promising does. Wording is the founder's, verbatim.
+  //
+  // MUTATION THAT MUST GO RED: drop any of the three added field names from the
+  // bullet in disclosure.tsx — this case fails on that name.
+  // -------------------------------------------------------------------------
+  it('does not understate contact collection: names emails, company and job title', () => {
+    render(<DisclosureScreen />);
+
+    expect(
+      screen.getByText(
+        /Names, phone numbers, email addresses, and any company or job title\s+saved with them/i,
+      ),
+    ).toBeTruthy();
+
+    // Each added field pinned on its own, so a partial deletion names itself
+    // instead of hiding inside the sentence matcher above.
+    expect(screen.getByText(/email addresses/i)).toBeTruthy();
+    expect(screen.getByText(/company or job title/i)).toBeTruthy();
+
+    // The retired under-statement must not come back.
+    expect(
+      screen.queryByText(/Names and phone numbers from this phone/i),
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SR review, BACKLOG-3045 — I1. The "What this app never does" card.
+//
+// SR proved by deletion that two of its three bullets were unpinned: removing
+// either left 16/16 green. Both are Play-load-bearing.
+//
+// "It never sends, forwards or replies to a text message" is what keeps this app
+// out of the "default SMS handler / messaging app" reading of the SMS policy —
+// arguably the most load-bearing sentence on the screen after the transmission
+// disclosure. There is no send path anywhere in android-companion/ and app.json
+// declares no SEND_SMS; the sentence is true, and it must not be silently
+// deletable.
+//
+// MUTATIONS THAT MUST GO RED — delete either bullet from disclosure.tsx and its
+// own case here fails.
+// ---------------------------------------------------------------------------
+describe('DisclosureScreen — "never does" claims are pinned (BACKLOG-3045 I1)', () => {
+  beforeEach(() => {
+    mockReplace.mockClear();
+    mockSetOnboardingStep.mockClear();
+    mockRecordDisclosureConsent.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('keeps the no-send claim, which is what keeps this out of "messaging app" territory', () => {
+    render(<DisclosureScreen />);
+    expect(
+      screen.getByText(/never sends, forwards or replies to a text message/i),
+    ).toBeTruthy();
+  });
+
+  it('keeps the no-sell-or-share claim', () => {
+    render(<DisclosureScreen />);
+    expect(
+      screen.getByText(
+        /does not sell or share your messages or contacts with anyone/i,
+      ),
     ).toBeTruthy();
   });
 });
