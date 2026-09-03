@@ -214,15 +214,66 @@ export function classifyRemoval(
 export type LifecycleFrom = CommunicationLifecycleState | "new";
 
 export type LifecycleTransitionId =
-  | "T1" | "T2" | "T3" | "T4" | "T5" | "T6" | "T7" | "T7b";
+  | "T1" | "T2" | "T3" | "T4" | "T4b" | "T5" | "T6" | "T7" | "T7b";
+
+/**
+ * The doors. Every way a user or the sync can cause a transition — the
+ * contract's Trigger column, named rather than described.
+ *
+ * PUBLISHED AS A UNION, NOT DERIVED FROM THE TABLE. Deriving it
+ * (`typeof LIFECYCLE_TRANSITIONS[number]["actions"][number]`) would make
+ * deleting an action from a row a COMPILE error, which sounds stronger but is
+ * weaker: the table would then be its own authority and the only control left
+ * would be a tsc control. Declared separately, an action deleted from a row is
+ * still a legal name, the test still compiles, and the set comparison in
+ * `communicationLifecycle-2818.test.ts` reds naming the door that was performed
+ * with no row claiming it.
+ *
+ *  "sync-confident-split"  the sync's confident half — an email naming the
+ *                          deal's address, or any text from a matching contact.
+ *  "sync-address-missing"  the sync's ambiguous half — an email whose address
+ *                          never names this deal.
+ *  "manual-attach"         the user attaches a communication by hand.
+ *  "review-confirm"        Confirm on a review card.
+ *  "review-trash"          trash on a review card.
+ *  "linked-card-trash"     trash on a card in the tab's LINKED list. Two rows
+ *                          claim it: T5 for an ordinary linked email, and T4b
+ *                          for a legacy address-missing email riding in the same
+ *                          thread — see the T4b row for why one click moves two
+ *                          emails out of two different source states.
+ *  "removed-card-restore"  Restore on a card under "Show removed".
+ */
+export type LifecycleActionId =
+  | "sync-confident-split"
+  | "sync-address-missing"
+  | "manual-attach"
+  | "review-confirm"
+  | "review-trash"
+  | "linked-card-trash"
+  | "removed-card-restore";
 
 export interface LifecycleTransition {
   /** The contract's row number, so a failure names the row a reader can look up. */
   readonly id: LifecycleTransitionId;
   readonly from: LifecycleFrom;
   readonly to: CommunicationLifecycleState;
-  /** What the user (or the sync) does to cause it — the contract's Trigger column. */
-  readonly actions: readonly string[];
+  /**
+   * What the user (or the sync) does to cause it — the contract's Trigger
+   * column, as machine-checked ids.
+   *
+   * ENFORCED (BACKLOG-2825). The field used to be free text and decorative:
+   * the SR proved it by deleting `"manual-attach"` from T1 and watching the
+   * whole suite stay green, so the published Trigger column could drift from
+   * the doors the app actually has without a single test noticing. The
+   * exhaustiveness suite now attributes every observed move to the action id
+   * that caused it and compares the action sets PER KEY in both directions: a
+   * door the code drives that no row claims is code drift, a door published on
+   * a row that nothing drives is contract drift.
+   *
+   * Aggregated per KEY, not per row — T4 and T4b share `suggested->removed`,
+   * so the check is against the union of their actions.
+   */
+  readonly actions: readonly LifecycleActionId[];
   /**
    * The removal flavour this row concerns.
    *
@@ -231,10 +282,29 @@ export interface LifecycleTransition {
    * T7b) share a source state and differ only here, and why
    * `lifecycleTransitionKey` folds it in for exactly those rows.
    *
-   * When `to` is "removed" it is DOCUMENTATION of the flavour the transition
-   * writes. It is deliberately NOT part of the key there: the contract qualifies
-   * only its From column, and a legacy item trashed from the tab is the same
-   * SUGGESTED -> REMOVED move as T4 while writing a different flavour.
+   * When `to` is "removed" it is the flavour the transition WRITES, and three
+   * things are true of it — stated separately because they are often confused:
+   *
+   *  1. It is deliberately NOT part of the key. The contract qualifies only its
+   *     From column, and a legacy item trashed from the tab is the same
+   *     SUGGESTED -> REMOVED move as T4 while writing a different flavour. That
+   *     is why T4 and T4b share a key and are told apart by their door instead.
+   *  2. It is NOT verified against what the operation actually writes. No test
+   *     reads back the suppression row a to-removed move created and compares it
+   *     to this field. Unchanged by BACKLOG-2825 and left that way on purpose:
+   *     the written flavour is enforced TRANSITIVELY, because the T6/T7/T7b
+   *     restore drives observe whatever T4/T4b/T5 really wrote.
+   *  3. It IS set-constrained (BACKLOG-2825). The completeness assertion in
+   *     `communicationLifecycle-2818.test.ts` requires every flavour some row
+   *     CONSUMES as a source to be a flavour some row WRITES, so this field can
+   *     no longer name a flavour that leaves a consumer stranded. Flipping T5's
+   *     from "ordinary" to anything else now reds — which it did not before.
+   *
+   * THE RESIDUAL, so nobody over-trusts (3): the constraint is on the SET, not
+   * on each row. Swapping T4's and T4b's flavours with each other still covers
+   * all three consumed flavours and stays green. Closing that would mean
+   * execution-checking the written flavour, which would also enforce (2) — a
+   * deliberate non-goal here, not an oversight.
    */
   readonly removalFlavor?: RemovalFlavor;
 }
@@ -275,6 +345,37 @@ export const LIFECYCLE_TRANSITIONS: readonly LifecycleTransition[] = [
     to: "removed",
     actions: ["review-trash"],
     removalFlavor: "review-rejection",
+  },
+  {
+    // BACKLOG-2825. WITHOUT THIS ROW THE TABLE CANNOT EXPLAIN ITSELF: T7b leaves
+    // REMOVED through the flavour `ordinary-address-missing`, and with eight
+    // rows nothing wrote that flavour — T4 documents `review-rejection`, T5
+    // documents `ordinary`. The removal that CREATES T7b's precondition was
+    // silently folded into T4, whose documented flavour is wrong for it, because
+    // both are the same `suggested->removed` key.
+    //
+    // HOW A LEGACY EMAIL REACHES A CARD IN THE TAB'S LINKED LIST, which is what
+    // makes this row's door `linked-card-trash` rather than a new one:
+    //   - `threadMatchReason` (EmailThreadCard.tsx:358) calls a thread
+    //     needs-review only when EVERY email in it is address-missing, so a
+    //     MIXED thread renders in the tab's Linked list;
+    //   - `getReviewState` counts per EMAIL, so the address-missing email inside
+    //     that thread is SUGGESTED by this contract while its siblings are
+    //     LINKED;
+    //   - the tab's trash calls `unlinkCommunication`, which expands across the
+    //     thread and writes `match_reason: sibling.match_reason`
+    //     (transactionService.ts:1664) — PER CONSTITUENT, so that email keeps
+    //     its own classification and its suppression row carries the legacy one.
+    // One click, two source states: T5 for the siblings, T4b for that email.
+    //
+    // The review card's trash is NOT this row — `rejectReviewItems` writes
+    // `reason: REVIEW_REJECTION_REASON` unconditionally, for both origins
+    // (reviewStateService.ts:879), so it is always T4.
+    id: "T4b",
+    from: "suggested",
+    to: "removed",
+    actions: ["linked-card-trash"],
+    removalFlavor: "ordinary-address-missing",
   },
   {
     id: "T5",
