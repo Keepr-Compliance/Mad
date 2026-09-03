@@ -309,7 +309,7 @@ class KeeprMmsModule : Module() {
     const val KEY_ROWS = "rows"
     const val KEY_PARTS = "parts"
     const val KEY_ADDRS = "addrs"
-  }
+
 }
 
 /**
