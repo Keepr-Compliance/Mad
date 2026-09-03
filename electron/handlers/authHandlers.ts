@@ -17,6 +17,7 @@ import databaseService from "../services/databaseService";
 import supabaseService from "../services/supabaseService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
+import { getSupportAccess } from "../services/supportAccess";
 
 // Import handler registrations
 import { registerGoogleAuthHandlers } from "./googleAuthHandlers";
@@ -42,6 +43,18 @@ export const initializeDatabase = async (): Promise<void> => {
 
     // Initialize audit service with dependencies
     auditService.initialize(databaseService, supabaseService);
+
+    // BACKLOG-3052: contact names and property addresses only leave this
+    // machine while a support-access window is open.
+    //
+    // Read lazily, inside the closure, for two reasons. It keeps
+    // `getSupportAccess()` — which builds a singleton over disk state — off
+    // the startup path; and a grant is a wall-clock window that opens and
+    // closes while the app runs, so a value captured here would be a snapshot
+    // of the moment the database came up. Every sync tick asks again.
+    auditService.setSupportAccessGate({
+      isActive: () => getSupportAccess().access.isActive(),
+    });
     await logService.debug("Audit service initialized", "AuthHandlers");
   } catch (error) {
     await logService.error("Failed to initialize database", "AuthHandlers", {

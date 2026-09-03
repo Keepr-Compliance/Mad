@@ -27,6 +27,12 @@ describe("authHandlers.initializeDatabase — startup opts into the terminal exi
   function setup() {
     const mockInitialize = jest.fn().mockResolvedValue(true);
     const mockAuditInitialize = jest.fn();
+    // BACKLOG-3052
+    const mockSetSupportAccessGate = jest.fn();
+    const mockIsActive = jest.fn(() => true);
+    const mockGetSupportAccess = jest.fn(() => ({
+      access: { isActive: mockIsActive },
+    }));
 
     jest.doMock("electron", () => ({
       ipcMain: { handle: jest.fn(), on: jest.fn() },
@@ -40,7 +46,13 @@ describe("authHandlers.initializeDatabase — startup opts into the terminal exi
     jest.doMock("../../services/supabaseService", () => ({ __esModule: true, default: {} }));
     jest.doMock("../../services/auditService", () => ({
       __esModule: true,
-      default: { initialize: mockAuditInitialize },
+      default: {
+        initialize: mockAuditInitialize,
+        setSupportAccessGate: mockSetSupportAccessGate,
+      },
+    }));
+    jest.doMock("../../services/supportAccess", () => ({
+      getSupportAccess: mockGetSupportAccess,
     }));
     jest.doMock("../../services/logService", () => ({
       __esModule: true,
@@ -57,7 +69,14 @@ describe("authHandlers.initializeDatabase — startup opts into the terminal exi
       initializeDatabase = require("../authHandlers").initializeDatabase;
     });
 
-    return { initializeDatabase, mockInitialize, mockAuditInitialize };
+    return {
+      initializeDatabase,
+      mockInitialize,
+      mockAuditInitialize,
+      mockSetSupportAccessGate,
+      mockGetSupportAccess,
+      mockIsActive,
+    };
   }
 
   it("passes quitOnUnrecoverableFailure: true — deleting this argument is otherwise silent", async () => {
@@ -77,6 +96,47 @@ describe("authHandlers.initializeDatabase — startup opts into the terminal exi
 
     // And nothing downstream of the failed init runs.
     expect(mockAuditInitialize).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-3052 — the support-access gate is wired here, and this is the only
+  // place that would notice if the line were deleted. Without it
+  // `supportAccessGate` stays null, `isSupportAccessActive()` reads false, and
+  // the app strips contact names from every upload forever — including during
+  // a live grant, which is support losing the detail they were granted.
+  // -------------------------------------------------------------------------
+  it("wires the support-access gate into the audit service (BACKLOG-3052)", async () => {
+    const { initializeDatabase, mockSetSupportAccessGate } = setup();
+
+    await initializeDatabase();
+
+    expect(mockSetSupportAccessGate).toHaveBeenCalledTimes(1);
+    const gate = mockSetSupportAccessGate.mock.calls[0][0];
+    expect(typeof gate.isActive).toBe("function");
+  });
+
+  it("reads the grant lazily, per call, not once at startup (BACKLOG-3052)", async () => {
+    const {
+      initializeDatabase,
+      mockSetSupportAccessGate,
+      mockGetSupportAccess,
+      mockIsActive,
+    } = setup();
+
+    await initializeDatabase();
+
+    // Wiring must not have touched the singleton — building it here would put
+    // disk and keychain state on the startup path.
+    expect(mockGetSupportAccess).not.toHaveBeenCalled();
+
+    const gate = mockSetSupportAccessGate.mock.calls[0][0];
+
+    // A grant is a wall-clock window that opens and closes while the app runs,
+    // so each call must ask again rather than reuse a startup snapshot.
+    expect(gate.isActive()).toBe(true);
+    mockIsActive.mockReturnValue(false);
+    expect(gate.isActive()).toBe(false);
+    expect(mockIsActive).toHaveBeenCalledTimes(2);
   });
 });
 

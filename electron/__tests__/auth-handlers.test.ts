@@ -159,7 +159,23 @@ jest.mock("../services/auditService", () => ({
   default: {
     initialize: jest.fn(),
     log: jest.fn().mockResolvedValue(undefined),
+    // BACKLOG-3052: initializeDatabase now wires the support-access gate as
+    // well as initializing the service. A mock that stops at `initialize`
+    // describes an auditService that no longer exists, and the handler dies
+    // on `setSupportAccessGate is not a function` before it reaches anything
+    // this suite is actually asserting.
+    setSupportAccessGate: jest.fn(),
   },
+}));
+
+// BACKLOG-3052: `authHandlers` imports the support-access barrel, which
+// reaches keychainGate, the encryption service and the diagnostics collector.
+// None of that belongs in a handler unit suite, and the gate closure is never
+// invoked here — only handed to the (mocked) audit service.
+jest.mock("../services/supportAccess", () => ({
+  getSupportAccess: jest.fn(() => ({
+    access: { isActive: jest.fn(() => false) },
+  })),
 }));
 
 jest.mock("../services/logService", () => ({
@@ -274,6 +290,13 @@ describe("Auth Handlers", () => {
         mockDatabaseService,
         mockSupabaseService,
       );
+      // BACKLOG-3052: initializing the audit service is only half the job —
+      // without the gate, `supportAccessGate` stays null, the service reads
+      // "no grant" forever, and contact names are stripped from every upload
+      // even during a live support window. The gate's own behaviour (lazy
+      // read, singleton untouched) is pinned in
+      // handlers/__tests__/authHandlers.initOptions-2999.test.ts.
+      expect(mockAuditService.setSupportAccessGate).toHaveBeenCalledTimes(1);
       expect(mockLogService.debug).toHaveBeenCalledWith(
         "Database initialized",
         "AuthHandlers",
