@@ -385,6 +385,35 @@ Step 7 exists because an engineer who plans in the open gets corrected before wr
 
 ---
 
+## The Human-Facing Summary (MANDATORY)
+
+**Every agent's final message ends with this block and nothing after it.** It is the only part a person reads. Everything else you wrote — checklists, review sections, issue entries, file lists, control evidence — goes to `pm_comments` on the backlog item, in full, **first**.
+
+This is an instantiation of `~/.claude/CLAUDE.md` → *Output style*, not a second ruleset. Shape adapted from the "i-have-adhd" skill (github.com/ayghri/i-have-adhd, MIT).
+
+Five slots. One sentence each. Never four, never six:
+
+```
+SUMMARY
+1. Changed: <what the app now does differently, in the founder's words — not file names>
+2. State: <branch / PR #, CI green|red|not run>
+3. Control: <what you reverted and what went red> | <"none run — reason">
+4. Issues: <one line> | <"none">
+5. Decision needed: <one concrete ask> | <"nothing needed">
+```
+
+**Rules:**
+
+- **Slot 5 is never omitted.** "Nothing needed" is an answer; silence is not. The founder should never have to ask *"what is the question here?"*
+- **Slot 1 names the behaviour, not the change set.** "Rejected deals no longer auto-link contacts" — not "refactored contactManualLink.ts".
+- **Slot 3 stays in the human summary on purpose.** An unstated control is an unrun control; burying it in Supabase makes the omission invisible at the moment a merge is decided. State the control here, put the evidence in `pm_comments`.
+- A slot needing a second sentence means the second sentence belongs in `pm_comments`. Cite it, do not inline it.
+- No preamble above the block. No recap below it.
+
+**This shortens what you write, never what you do.** `CLAUDE.md` → *Break it and watch it go red* is unchanged, and the Supabase record gets **larger** under this rule, not smaller.
+
+---
+
 ## Decision Trees
 
 ### At Step 7 (Plan Review)
@@ -423,6 +452,9 @@ Does implementation match the approved plan?
 ```
 Did CI pass?
 ├─ Yes, all checks green
+│   → Post the full review to pm_comments
+│   → Notify user with the SUMMARY block ONLY (see The Human-Facing Summary)
+│     Slot 5 reads: "Decision needed: test <one named screen/action>, then merge or report."
 │   → Notify user: PR ready for testing
 │   → DO NOT MERGE — wait for user approval (Step 12a)
 └─ No, checks failed

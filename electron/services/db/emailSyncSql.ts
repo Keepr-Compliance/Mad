@@ -142,10 +142,6 @@ export function prepareParticipantInsert(
  */
 export const UPDATE_EMAIL_IDENTITY_SQL = `UPDATE emails SET external_id = ?, message_id_header = COALESCE(message_id_header, ?) WHERE id = ?`;
 
-/** The newest mail this user has stored — the incremental sync's high-water mark. */
-export const LATEST_SENT_AT_SQL =
-  "SELECT MAX(sent_at) as latest FROM emails WHERE user_id = ?";
-
 /** Reset the provider cursor so the next run starts from the beginning. */
 export const CLEAR_SYNC_CURSOR_SQL = `UPDATE email_sync_state SET cursor = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`;
 
@@ -259,16 +255,6 @@ export function selectEarliestByParticipants(
 `,
     [userId, ...addresses],
   );
-}
-
-/**
- * The newest `sent_at` this user has stored — the incremental sync's
- * high-water mark. Executed here so the caller holds no SQL at all: passing
- * even a db/-owned constant through `dbGet` leaves the statement invisible to
- * the boundary gate, which is BACKLOG-3044's subject.
- */
-export function selectLatestSentAt(userId: string): { latest: string | null } | undefined {
-  return dbGet<{ latest: string | null }>(LATEST_SENT_AT_SQL, [userId]);
 }
 
 /** Reset the provider cursor so the next run starts from the beginning. */

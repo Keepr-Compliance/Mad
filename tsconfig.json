@@ -51,6 +51,11 @@
     "scripts/qa/harness/**/*"
   ],
   "exclude": [
+    // BACKLOG-3067: the type-level control fixtures. Two of them are SUPPOSED to fail
+    // to compile — electron/types/__tests__/brandedIds.typeControls.test.ts compiles them
+    // on purpose and asserts on tsc's exit code and diagnostics. Leaving them in this
+    // project would make a working control read as a broken build.
+    "electron/types/__typefixtures__/**",
     "node_modules",
     "dist",
     "build",

@@ -65,12 +65,15 @@ Document issues when:
 
 ## Where to Document Issues
 
-### 1. In Handoff Messages (Always)
-Every handoff message has an `**Issues/Blockers:**` field.
+### 1. In Handoff Messages (Always) — one line, never the full entry
 
-If no issues: `**Issues/Blockers:** None`
+The handoff's `Issues:` slot takes **one line**, whatever the issue count:
 
-If issues exist: Brief summary with reference to full log.
+- None: `4. Issues: none`
+- One: `4. Issues: Gmail rate limit forced throttling (+15 min) — full entry in pm_comments`
+- Several: `4. Issues: 3 (worst: FK constraint blocked contact delete) — full entries in pm_comments`
+
+**The full entry — every field, every issue, in the format above — goes to `pm_comments` first.** The one-liner is a pointer, not a replacement. **An issue that exists only as a one-liner has not been documented**, and that is a process violation.
 
 ### 2. In Supabase comments (Per-Task)
 Append a `pm_comments` entry tagged `issue` on the relevant backlog item:

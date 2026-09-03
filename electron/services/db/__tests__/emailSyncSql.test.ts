@@ -22,13 +22,13 @@ const RealDatabase = require(
 
 import {
   CLEAR_SYNC_CURSOR_SQL,
-  LATEST_SENT_AT_SQL,
   UPDATE_EMAIL_IDENTITY_SQL,
   prepareEmailInsert,
   prepareParticipantInsert,
   type EmailWriteTarget,
 } from "../emailSyncSql";
 import { STAGING_PREFIX, checkedStagingTable } from "../stagingDdlSql";
+import { CACHED_EMAIL_SENT_AT_BOUNDS_SQL } from "../emailCacheWindow";
 
 const SCHEMA = path.join(__dirname, "..", "..", "..", "database", "schema.sql");
 const USER = "user-2989-sync";
@@ -161,18 +161,40 @@ describe("the static statements", () => {
     });
   });
 
-  it("LATEST_SENT_AT_SQL is the user's high-water mark, not the whole table's", () => {
+  // BACKLOG-3056 / BACKLOG-2989 merge: `LATEST_SENT_AT_SQL` and its
+  // `selectLatestSentAt` wrapper were removed here — the MIN/MAX pair in
+  // `db/emailCacheWindow` subsumes the MAX half and is now the only reader.
+  // The control that came with them is NOT dropped: it is the sole assertion
+  // anywhere that this aggregate is scoped to ONE user, and the service suites
+  // mock `dbGet`, so without it the `WHERE user_id = ?` executes in no test at
+  // all. It moves onto the surviving statement, and now pins BOTH ends —
+  // dropping the predicate moves `oldest` and `newest` in opposite directions,
+  // so either bound alone would catch it.
+  it("CACHED_EMAIL_SENT_AT_BOUNDS_SQL bounds THIS user's mail, not the whole table's", () => {
     db.prepare(
       `INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES ('other', 'o@x.test', 'google', 'o')`,
     ).run();
-    prepareEmailInsert(db as never, LIVE).run(...emailRow("mine"));
-    const theirs = emailRow("theirs");
-    theirs[1] = "other";
-    theirs[16] = "2027-01-01T00:00:00Z";
-    prepareEmailInsert(db as never, LIVE).run(...theirs);
 
-    expect(db.prepare(LATEST_SENT_AT_SQL).get(USER)).toEqual({
-      latest: "2026-06-01T00:00:00Z",
+    // Mine: two rows, so MIN and MAX are genuinely different values.
+    const mineOld = emailRow("mine-old");
+    mineOld[16] = "2026-01-01T00:00:00Z";
+    prepareEmailInsert(db as never, LIVE).run(...mineOld);
+    prepareEmailInsert(db as never, LIVE).run(...emailRow("mine-new")); // 2026-06-01
+
+    // Theirs: STRADDLING mine on both sides. An unscoped MIN/MAX returns these.
+    for (const [id, sentAt] of [
+      ["theirs-older", "2020-01-01T00:00:00Z"],
+      ["theirs-newer", "2027-01-01T00:00:00Z"],
+    ] as const) {
+      const theirs = emailRow(id);
+      theirs[1] = "other";
+      theirs[16] = sentAt;
+      prepareEmailInsert(db as never, LIVE).run(...theirs);
+    }
+
+    expect(db.prepare(CACHED_EMAIL_SENT_AT_BOUNDS_SQL).get(USER)).toEqual({
+      oldest: "2026-01-01T00:00:00Z",
+      newest: "2026-06-01T00:00:00Z",
     });
   });
 
