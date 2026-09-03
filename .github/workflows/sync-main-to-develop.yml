@@ -1,0 +1,65 @@
+name: Sync main to develop
+
+# Open the back-merge PR from main into develop whenever a release bump lands
+# on main, so no human has to remember. (BACKLOG-3041)
+#
+# All decision logic lives in .github/scripts/sync-main-to-develop.sh -- this
+# file is trigger + permissions only. That split is deliberate: the script can
+# then be exercised verbatim (against throwaway probe branches, or locally)
+# without a release, so the behaviour that ships is the behaviour that was
+# observed.
+#
+# paths: [package.json] narrows the trigger to the common case. It is NOT the
+# guarantee -- GitHub skips path-filter evaluation for pushes over 1,000
+# commits and on diff timeouts, and a hotfix straight to main moves main ahead
+# without touching the version. The script re-checks `ahead_by` itself and
+# no-ops when there is nothing to sync.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'package.json'
+  # The documented manual re-trigger: lets a founder or SR run the sync without
+  # waiting for the next release (e.g. after enabling PR creation for Actions,
+  # or after a hotfix that did not touch package.json).
+  workflow_dispatch:
+
+# Least privilege. Note what is NOT needed: `contents: write`. Head is main
+# itself, so nothing is branched, committed or pushed -- only a PR is opened.
+permissions:
+  contents: read
+  pull-requests: write
+
+# Serialise, so two pushes in quick succession cannot both pass the
+# "is a PR already open?" check before either creates one.
+concurrency:
+  group: sync-main-to-develop
+  cancel-in-progress: false
+
+jobs:
+  open-sync-pr:
+    name: Open back-merge PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # Only the script is needed; every branch fact is read via the API.
+          fetch-depth: 1
+
+      - name: Open the sync PR
+        env:
+          # SYNC_PR_TOKEN (a PAT with pull-requests:write) is preferred when
+          # present; it also makes the PR trigger `pull_request` workflows,
+          # which a GITHUB_TOKEN-authored PR does not. It is optional because
+          # head=main already puts develop's required checks on the PR head SHA
+          # via ci.yml's `push: branches: [main]` run -- see the script header.
+          # If neither token can open a PR the script exits RED with the fix.
+          GH_TOKEN: ${{ secrets.SYNC_PR_TOKEN || secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_BRANCH: main
+          BASE_BRANCH: develop
+        run: bash .github/scripts/sync-main-to-develop.sh
