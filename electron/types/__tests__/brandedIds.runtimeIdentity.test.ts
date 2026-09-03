@@ -32,7 +32,12 @@ import {
  * hold for an ARBITRARY id rather than one hand-picked string — and `randomUUID`
  * is what `createCommunication` itself uses to mint a real one.
  */
-const RAW = randomUUID();
+// Annotated `string`, not inferred: `randomUUID()` returns the template-literal
+// type `\`\${string}-\${string}-...\``, which made `[RAW].includes(branded)` a type
+// error (TS2345) while jest stayed green — `npm run type-check` skips test files,
+// so only `type-check:tests` saw it. A branded id is a plain string, and that is
+// what these assertions are about.
+const RAW: string = randomUUID();
 
 describe("BACKLOG-3067 — a branded id IS the string it came from", () => {
   it("returns the same value, by reference", () => {
