@@ -45,6 +45,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { dbAll, dbGet, dbRun } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import type { ExternalContactSource } from "./externalContactDbService";
 
 /**
@@ -251,8 +252,8 @@ export function findContactIdBySourceRecord(
 ): string | null {
   if (!sourceRecordId) return null;
   const row = dbGet<{ contact_id: string }>(
-    `SELECT contact_id FROM contact_source_links
-      WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+    unsafeSql(`SELECT contact_id FROM contact_source_links
+      WHERE user_id = ? AND source_type = ? AND source_record_id = ?`),
     [userId, sourceType, sourceRecordId],
   );
   return row?.contact_id ?? null;
@@ -261,16 +262,16 @@ export function findContactIdBySourceRecord(
 /** Every source record this contact is known by, across all sources. */
 export function getLinksForContact(contactId: string): ContactSourceLink[] {
   return dbAll<ContactSourceLink>(
-    `SELECT ${LINK_COLUMNS} FROM contact_source_links
-      WHERE contact_id = ? ORDER BY source_type, source_record_id`,
+    unsafeSql(`SELECT ${LINK_COLUMNS} FROM contact_source_links
+      WHERE contact_id = ? ORDER BY source_type, source_record_id`),
     [contactId],
   );
 }
 
 export function getLinksForUser(userId: string): ContactSourceLink[] {
   return dbAll<ContactSourceLink>(
-    `SELECT ${LINK_COLUMNS} FROM contact_source_links
-      WHERE user_id = ? ORDER BY source_type, source_record_id`,
+    unsafeSql(`SELECT ${LINK_COLUMNS} FROM contact_source_links
+      WHERE user_id = ? ORDER BY source_type, source_record_id`),
     [userId],
   );
 }
@@ -284,7 +285,7 @@ export function getLinksForUser(userId: string): ContactSourceLink[] {
  */
 export function getLinkedSourceKeys(userId: string): Set<string> {
   const rows = dbAll<{ source_type: string; source_record_id: string }>(
-    `SELECT source_type, source_record_id FROM contact_source_links WHERE user_id = ?`,
+    unsafeSql(`SELECT source_type, source_record_id FROM contact_source_links WHERE user_id = ?`),
     [userId],
   );
   return new Set(rows.map((r) => sourceKey(r.source_type as ExternalContactSource, r.source_record_id)));
@@ -307,8 +308,8 @@ export function getLinksForContactBySource(
   sourceType: ExternalContactSource,
 ): ContactSourceLink[] {
   return dbAll<ContactSourceLink>(
-    `SELECT ${LINK_COLUMNS} FROM contact_source_links
-      WHERE contact_id = ? AND source_type = ? ORDER BY source_record_id`,
+    unsafeSql(`SELECT ${LINK_COLUMNS} FROM contact_source_links
+      WHERE contact_id = ? AND source_type = ? ORDER BY source_record_id`),
     [contactId, sourceType],
   );
 }
@@ -341,8 +342,8 @@ export function createLink(input: CreateLinkInput): { created: boolean; contactI
   }
 
   const existing = dbGet<{ id: string; contact_id: string; match_method: ContactMatchMethod }>(
-    `SELECT id, contact_id, match_method FROM contact_source_links
-      WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+    unsafeSql(`SELECT id, contact_id, match_method FROM contact_source_links
+      WHERE user_id = ? AND source_type = ? AND source_record_id = ?`),
     [userId, sourceType, sourceRecordId],
   );
   if (existing) {
@@ -375,11 +376,11 @@ export function createLink(input: CreateLinkInput): { created: boolean; contactI
       // cannot survive here — as a WHERE clause it would also veto the
       // match_method upgrade on any row that already carries a uuid.
       dbRun(
-        `UPDATE contact_source_links
+        unsafeSql(`UPDATE contact_source_links
             SET external_uuid = COALESCE(external_uuid, ?),
                 match_method = ?,
                 updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?`,
+          WHERE id = ?`),
         [externalUuid, upgrade ? matchMethod : existing.match_method, existing.id],
       );
     }
@@ -388,10 +389,10 @@ export function createLink(input: CreateLinkInput): { created: boolean; contactI
 
   const id = uuidv4();
   dbRun(
-    `INSERT INTO contact_source_links
+    unsafeSql(`INSERT INTO contact_source_links
        (id, user_id, contact_id, source_type, source_record_id,
         external_uuid, match_method, confidence, evidence_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     [id, userId, contactId, sourceType, sourceRecordId, externalUuid, matchMethod, confidence, evidenceRef],
   );
   return { created: true, contactId, id };
@@ -410,8 +411,8 @@ export function deleteLinkBySourceRecord(
   sourceRecordId: string,
 ): number {
   const result = dbRun(
-    `DELETE FROM contact_source_links
-      WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+    unsafeSql(`DELETE FROM contact_source_links
+      WHERE user_id = ? AND source_type = ? AND source_record_id = ?`),
     [userId, sourceType, sourceRecordId],
   );
   return result.changes;
@@ -424,12 +425,12 @@ export function deleteLinkBySourceRecord(
  * contact nor the source record is deleted.
  */
 export function deleteLinkById(id: string): number {
-  return dbRun(`DELETE FROM contact_source_links WHERE id = ?`, [id]).changes;
+  return dbRun(unsafeSql(`DELETE FROM contact_source_links WHERE id = ?`), [id]).changes;
 }
 
 export function countLinksForUser(userId: string): number {
   const row = dbGet<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM contact_source_links WHERE user_id = ?`,
+    unsafeSql(`SELECT COUNT(*) AS n FROM contact_source_links WHERE user_id = ?`),
     [userId],
   );
   return row?.n ?? 0;

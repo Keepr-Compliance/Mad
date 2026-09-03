@@ -13,6 +13,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { dbAll, dbRun, dbGet, dbTransaction, ensureDb } from './core/dbConnection';
+import { unsafeSql } from "./core/sqlText";
 import logService from '../logService';
 import { recordShadowSync } from '../contactIngestionFunnel';
 import { requestContactLinking } from '../contactLinkingScheduler';
@@ -401,7 +402,7 @@ export function getAllForUser(userId: string): ExternalContact[] {
   // (not NULL) and importing it does not change the value (no select-jump). This
   // query is kept byte-for-byte identical to the worker's runExternalQuery.
   // NULLS LAST: Sort NULL dates after non-NULL dates, then by name.
-  const rows = dbAll<ExternalContactRow>(EXTERNAL_CONTACTS_GET_ALL_SQL, [userId]);
+  const rows = dbAll<ExternalContactRow>(unsafeSql(EXTERNAL_CONTACTS_GET_ALL_SQL), [userId]);
 
   // BACKLOG-2391: the per-row `[DIAG-1270] Shadow READ` warn that used to sit
   // here printed the contact's NAME and every EMAIL ADDRESS, once per
@@ -445,7 +446,7 @@ export async function getAllForUserAsync(
  */
 export function getCount(userId: string): number {
   const result = dbGet<{ count: number }>(
-    'SELECT COUNT(*) as count FROM external_contacts WHERE user_id = ?',
+    unsafeSql('SELECT COUNT(*) as count FROM external_contacts WHERE user_id = ?'),
     [userId]
   );
   return result?.count || 0;
@@ -456,7 +457,7 @@ export function getCount(userId: string): number {
  */
 export function getLastSyncTime(userId: string): string | null {
   const result = dbGet<{ synced_at: string }>(
-    'SELECT MAX(synced_at) as synced_at FROM external_contacts WHERE user_id = ?',
+    unsafeSql('SELECT MAX(synced_at) as synced_at FROM external_contacts WHERE user_id = ?'),
     [userId]
   );
   return result?.synced_at || null;
@@ -482,7 +483,7 @@ export function isStale(userId: string, maxAgeHours: number = 24): boolean {
  */
 export function getContactSourceStats(userId: string): Record<string, number> {
   const rows = dbAll<{ source: string; count: number }>(
-    `SELECT source, COUNT(*) as count FROM external_contacts WHERE user_id = ? GROUP BY source`,
+    unsafeSql(`SELECT source, COUNT(*) as count FROM external_contacts WHERE user_id = ? GROUP BY source`),
     [userId]
   );
   const stats: Record<string, number> = { macos: 0, iphone: 0, outlook: 0, google_contacts: 0, android_sync: 0 };
@@ -539,7 +540,7 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
       if (emailsArr.length > 1) {
         multiEmailCount++;
       }
-      dbRun(stmt, [
+      dbRun(unsafeSql(stmt), [
         uuidv4(),
         userId,
         contact.name || null,
@@ -604,7 +605,7 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
 
   dbTransaction(() => {
     for (const contact of contacts) {
-      dbRun(stmt, [
+      dbRun(unsafeSql(stmt), [
         uuidv4(),
         userId,
         contact.name || null,
@@ -754,7 +755,7 @@ export function upsertExternalContacts(
 
   dbTransaction(() => {
     for (const contact of contacts) {
-      dbRun(stmt, [
+      dbRun(unsafeSql(stmt), [
         uuidv4(),
         userId,
         contact.name || null,
@@ -832,7 +833,7 @@ export function markSourceRecordsCurrent(
   syncedAt: string = new Date().toISOString(),
 ): number {
   const result = dbRun(
-    `UPDATE external_contacts SET synced_at = ? WHERE user_id = ? AND source = ?`,
+    unsafeSql(`UPDATE external_contacts SET synced_at = ? WHERE user_id = ? AND source = ?`),
     [syncedAt, userId, source],
   );
   return result.changes;
@@ -1071,22 +1072,22 @@ function deleteExternalContactsAndTheirLinks(
     // join against, which is exactly why the four unguarded paths could not
     // have cleaned up as an afterthought.
     const doomed = dbAll<{ source: string; external_record_id: string }>(
-      `SELECT source, external_record_id FROM external_contacts
-        WHERE ${whereSql} AND external_record_id IS NOT NULL`,
+      unsafeSql(`SELECT source, external_record_id FROM external_contacts
+        WHERE ${whereSql} AND external_record_id IS NOT NULL`),
       params,
     );
 
-    const result = dbRun(`DELETE FROM external_contacts WHERE ${whereSql}`, params);
+    const result = dbRun(unsafeSql(`DELETE FROM external_contacts WHERE ${whereSql}`), params);
 
     for (const row of doomed) {
       dbRun(
-        `DELETE FROM contact_source_links
-          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+        unsafeSql(`DELETE FROM contact_source_links
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`),
         [userId, row.source, row.external_record_id],
       );
       dbRun(
-        `DELETE FROM contact_link_proposals
-          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+        unsafeSql(`DELETE FROM contact_link_proposals
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`),
         [userId, row.source, row.external_record_id],
       );
     }
@@ -1347,9 +1348,9 @@ export function classifyMacOSSync(
   contacts: MacOSContact[]
 ): { inserted: number; updated: number; unchanged: number } {
   const rows = dbAll<MacOSContentSnapshot & { external_record_id: string }>(
-    `SELECT external_record_id, name, phones_json, phones_normalized_json, emails_json, company
+    unsafeSql(`SELECT external_record_id, name, phones_json, phones_normalized_json, emails_json, company
      FROM external_contacts
-     WHERE user_id = ? AND source = 'macos'`,
+     WHERE user_id = ? AND source = 'macos'`),
     [userId]
   );
 
@@ -1476,7 +1477,7 @@ export function search(userId: string, query: string, limit: number = 50): Exter
     LIMIT ?
   `;
 
-  const rows = dbAll<ExternalContactRow>(sql, [
+  const rows = dbAll<ExternalContactRow>(unsafeSql(sql), [
     userId,
     searchPattern,
     searchPattern,

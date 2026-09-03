@@ -29,6 +29,7 @@
  */
 
 import { dbAll, dbGet } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import type {
   ContactLinkSourceType,
@@ -284,7 +285,7 @@ export function relationshipPhrase(assessment: RelationshipAssessment): string {
 
 export function contactDisplayName(contactId: string): string {
   const row = dbGet<{ display_name: string | null }>(
-    `SELECT display_name FROM contacts WHERE id = ?`,
+    unsafeSql(`SELECT display_name FROM contacts WHERE id = ?`),
     [contactId],
   );
   const name = row?.display_name?.trim();
@@ -297,8 +298,8 @@ export function sourceRecordName(
   sourceRecordId: string,
 ): string | null {
   const row = dbGet<{ name: string | null }>(
-    `SELECT name FROM external_contacts
-      WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`,
+    unsafeSql(`SELECT name FROM external_contacts
+      WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`),
     [userId, sourceType, sourceRecordId],
   );
   const name = row?.name?.trim();
@@ -343,10 +344,10 @@ export function contactsShareTransaction(contactA: string, contactB: string): bo
       )
     )`;
   const row = dbGet<{ hit: number }>(
-    `SELECT 1 AS hit FROM transactions t
+    unsafeSql(`SELECT 1 AS hit FROM transactions t
       WHERE ${onTransaction.replace(/@c/g, "@a")}
         AND ${onTransaction.replace(/@c/g, "@b")}
-      LIMIT 1`,
+      LIMIT 1`),
     [{ a: contactA, b: contactB }],
   );
   return row !== undefined && row !== null;
@@ -387,11 +388,11 @@ export function sharedTransactionAddresses(contactA: string, contactB: string): 
       )
     )`;
   return dbAll<{ property_address: string | null }>(
-    `SELECT t.property_address FROM transactions t
+    unsafeSql(`SELECT t.property_address FROM transactions t
       WHERE ${onTransaction.replace(/@c/g, "@a")}
         AND ${onTransaction.replace(/@c/g, "@b")}
       ORDER BY t.property_address
-      LIMIT 3`,
+      LIMIT 3`),
     [{ a: contactA, b: contactB }],
   )
     .map((r) => r.property_address?.trim())

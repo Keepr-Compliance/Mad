@@ -7,6 +7,7 @@ import crypto from "crypto";
 import type { Contact, NewContact, ContactFilters, Message, Communication, ContactMessageThread } from "../../types";
 import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import logService from "../logService";
 import {
   validateFields,
@@ -115,7 +116,7 @@ export function namesThatAreTheirOwnIdentity(userId: string): Set<string> {
   const KNOWN_CONTACT = "(c.is_imported = 1 OR c.removed_at IS NOT NULL)";
   try {
     const rows = dbAll<{ name: string }>(
-      `SELECT LOWER(display_name) as name
+      unsafeSql(`SELECT LOWER(display_name) as name
          FROM contacts c
         WHERE c.user_id = ?
           AND ${KNOWN_CONTACT}
@@ -125,7 +126,7 @@ export function namesThatAreTheirOwnIdentity(userId: string): Set<string> {
               SELECT 1 FROM contact_source_links l
                WHERE l.contact_id = c.id AND l.user_id = c.user_id
             )
-          )`,
+          )`),
       [userId],
     );
     return new Set(rows.map((r) => r.name).filter(Boolean));
@@ -153,8 +154,8 @@ export function namesThatAreTheirOwnIdentity(userId: string): Set<string> {
       "ContactDbService",
     );
     const rows = dbAll<{ name: string }>(
-      `SELECT LOWER(display_name) as name FROM contacts c
-        WHERE c.user_id = ? AND ${KNOWN_CONTACT}`,
+      unsafeSql(`SELECT LOWER(display_name) as name FROM contacts c
+        WHERE c.user_id = ? AND ${KNOWN_CONTACT}`),
       [userId],
     );
     return new Set(rows.map((r) => r.name).filter(Boolean));
@@ -293,7 +294,7 @@ export function getMessageDerivedContacts(userId: string): MessageDerivedContact
     LIMIT 200
   `;
 
-  const results = dbAll<MessageDerivedContact>(sql, [userId]);
+  const results = dbAll<MessageDerivedContact>(unsafeSql(sql), [userId]);
 
   // BACKLOG-2618: ONE filter, and it is the one that can fire. The email and
   // phone branches that stood above it are deleted — see the note at the top of
@@ -383,7 +384,7 @@ export async function createContact(
         : 1,
     ];
 
-    dbRun(sql, params);
+    dbRun(unsafeSql(sql), params);
 
     // BACKLOG-2427: the VALUE-level provenance, translated from the contact-level
     // source. Both inserts below hard-coded 'import', which stamped every
@@ -424,7 +425,7 @@ export async function createContact(
           id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `;
-      dbRun(phoneSql, [phoneId, id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0, valueSource]);
+      dbRun(unsafeSql(phoneSql), [phoneId, id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0, valueSource]);
       isFirstPhone = false;
     }
 
@@ -461,7 +462,7 @@ export async function createContact(
           id, contact_id, email, is_primary, source, created_at
         ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `;
-      dbRun(emailSql, [emailId, id, normalizedEmail, isFirstEmail ? 1 : 0, valueSource]);
+      dbRun(unsafeSql(emailSql), [emailId, id, normalizedEmail, isFirstEmail ? 1 : 0, valueSource]);
       isFirstEmail = false;
     }
 
@@ -528,8 +529,8 @@ export function createContactsBatch(
 
       // Insert contact
       dbRun(
-        `INSERT INTO contacts (id, user_id, display_name, company, title, source, is_imported)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        unsafeSql(`INSERT INTO contacts (id, user_id, display_name, company, title, source, is_imported)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`),
         [
           id,
           contactData.user_id,
@@ -555,8 +556,8 @@ export function createContactsBatch(
         if (storedPhones.has(normalizedKey)) continue;
         storedPhones.add(normalizedKey);
         dbRun(
-          `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
+          unsafeSql(`INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`),
           [crypto.randomUUID(), id, phoneE164, phone, toLookupKey(phoneE164), isFirstPhone ? 1 : 0]
         );
         isFirstPhone = false;
@@ -578,8 +579,8 @@ export function createContactsBatch(
         if (storedEmails.has(normalizedEmail)) continue;
         storedEmails.add(normalizedEmail);
         dbRun(
-          `INSERT OR IGNORE INTO contact_emails (id, contact_id, email, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
+          unsafeSql(`INSERT OR IGNORE INTO contact_emails (id, contact_id, email, is_primary, source, created_at)
+           VALUES (?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`),
           [crypto.randomUUID(), id, normalizedEmail, isFirstEmail ? 1 : 0]
         );
         isFirstEmail = false;
@@ -632,7 +633,7 @@ export async function getContactById(contactId: string): Promise<Contact | null>
     FROM contacts c
     WHERE c.id = ?
   `;
-  const row = dbGet<Contact & { all_emails_json?: string; all_phones_json?: string }>(sql, [contactId]);
+  const row = dbGet<Contact & { all_emails_json?: string; all_phones_json?: string }>(unsafeSql(sql), [contactId]);
   if (!row) return null;
 
   // BACKLOG-2514: the same shared parse the list producers use.
@@ -701,7 +702,7 @@ export async function getContacts(filters?: ContactFilters): Promise<Contact[]> 
 
   sql += " ORDER BY display_name ASC";
 
-  return dbAll<Contact>(sql, params);
+  return dbAll<Contact>(unsafeSql(sql), params);
 }
 
 /**
@@ -792,7 +793,7 @@ export async function getImportedContactsByUserId(
   // copies required to stay byte-identical — they had not yet drifted, and now
   // they cannot.
   const sql = IMPORTED_CONTACTS_SELECT_SQL;
-  const importedContacts = dbAll<Contact & { all_emails_json?: string; all_phones_json?: string }>(sql, [userId]);
+  const importedContacts = dbAll<Contact & { all_emails_json?: string; all_phones_json?: string }>(unsafeSql(sql), [userId]);
 
   // BACKLOG-2514: one shared parse. The SQL is a shared constant now, so the
   // parse must not become the place the producers diverge instead.
@@ -907,7 +908,7 @@ export async function getUnimportedContactsByUserId(
     WHERE c.user_id = ? AND c.is_imported = 0${ACTIVE_CONTACTS_CLAUSE_C}
     ORDER BY c.display_name ASC
   `;
-  return dbAll<Contact>(sql, [userId]);
+  return dbAll<Contact>(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -920,11 +921,11 @@ export async function markContactAsImported(contactId: string, source?: string):
   if (source) {
     const sql =
       "UPDATE contacts SET is_imported = 1, source = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?";
-    dbRun(sql, [source, contactId]);
+    dbRun(unsafeSql(sql), [source, contactId]);
   } else {
     const sql =
       "UPDATE contacts SET is_imported = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?";
-    dbRun(sql, [contactId]);
+    dbRun(unsafeSql(sql), [contactId]);
   }
 }
 
@@ -975,7 +976,7 @@ export function backfillContactEmailsSync(
 
   // Get existing emails for this contact
   const existingSql = "SELECT LOWER(email) as email FROM contact_emails WHERE contact_id = ?";
-  const existingRows = dbAll<{ email: string }>(existingSql, [contactId]);
+  const existingRows = dbAll<{ email: string }>(unsafeSql(existingSql), [contactId]);
   logService.warn(`[DIAG-1270] Backfill emails for ${contactId}: input=${emails.length} emails [${emails.join(', ')}], existing=${existingRows.length}`, 'ContactDbService');
   for (const row of existingRows) {
     storedEmails.add(row.email);
@@ -996,7 +997,7 @@ export function backfillContactEmailsSync(
         id, contact_id, email, is_primary, source, created_at
       ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `;
-    const result = dbRun(emailSql, [emailId, contactId, normalizedEmail, isPrimary, source]);
+    const result = dbRun(unsafeSql(emailSql), [emailId, contactId, normalizedEmail, isPrimary, source]);
     // Only count as added if the insert actually happened (changes > 0)
     if (result.changes > 0) {
       added++;
@@ -1039,7 +1040,7 @@ export function backfillContactPhonesSync(
 
   // Get existing phones for this contact (normalized to last 10 digits)
   const existingSql = "SELECT phone_e164 FROM contact_phones WHERE contact_id = ?";
-  const existingRows = dbAll<{ phone_e164: string }>(existingSql, [contactId]);
+  const existingRows = dbAll<{ phone_e164: string }>(unsafeSql(existingSql), [contactId]);
   for (const row of existingRows) {
     const normalized = row.phone_e164.replace(/\D/g, '').slice(-10);
     storedPhones.add(normalized);
@@ -1062,7 +1063,7 @@ export function backfillContactPhonesSync(
         id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `;
-    const result = dbRun(phoneSql, [phoneId, contactId, phoneE164, phone, toLookupKey(phoneE164), isPrimary, source]);
+    const result = dbRun(unsafeSql(phoneSql), [phoneId, contactId, phoneE164, phone, toLookupKey(phoneE164), isPrimary, source]);
     // Only count as added if the insert actually happened (changes > 0)
     if (result.changes > 0) {
       added++;
@@ -1101,7 +1102,7 @@ export async function backfillContactCommunicationDates(userId: string): Promise
   `;
 
   const phoneMessages = dbAll<{ normalized_phone: string; contact_id: string; last_msg_date: string }>(
-    phoneMessagesSql,
+    unsafeSql(phoneMessagesSql),
     [userId, userId]
   );
 
@@ -1122,7 +1123,7 @@ export async function backfillContactCommunicationDates(userId: string): Promise
       SET last_inbound_at = ?
       WHERE id = ? AND (last_inbound_at IS NULL OR last_inbound_at < ?)
     `;
-    const result = dbRun(updateSql, [match.last_msg_date, match.contact_id, match.last_msg_date]);
+    const result = dbRun(unsafeSql(updateSql), [match.last_msg_date, match.contact_id, match.last_msg_date]);
     updatedCount += result.changes;
   }
 
@@ -1134,7 +1135,7 @@ export async function backfillContactCommunicationDates(userId: string): Promise
     ORDER BY c.last_inbound_at DESC NULLS LAST
     LIMIT 10
   `;
-  const debugContacts = dbAll<{ display_name: string; last_inbound_at: string | null }>(debugSql, [userId]);
+  const debugContacts = dbAll<{ display_name: string; last_inbound_at: string | null }>(unsafeSql(debugSql), [userId]);
 
   logService.info("Backfill complete", "ContactDbService", {
     userId,
@@ -1161,10 +1162,10 @@ export async function getContactsSortedByActivity(
   // the backfill and the list below actually operate on. Without this, a user
   // whose only dated contacts had all been removed would keep re-running the
   // backfill on every call.
-  const hasBackfilled = dbGet<{ count: number }>(`
+  const hasBackfilled = dbGet<{ count: number }>(unsafeSql(`
     SELECT COUNT(*) as count FROM contacts c
     WHERE c.user_id = ? AND c.is_imported = 1 AND c.last_inbound_at IS NOT NULL${ACTIVE_CONTACTS_CLAUSE_C}
-  `, [userId]);
+  `), [userId]);
 
   // Only run backfill once - if no contacts have dates yet
   if (!hasBackfilled || hasBackfilled.count === 0) {
@@ -1222,7 +1223,7 @@ ${IMPORTED_CONTACT_ADDRESSES_SQL},
     // gate stays green and the reported bug stays live on both transaction
     // screens.
     const importedContacts = parseContactAddressAggregates(
-      dbAll<ContactWithActivity & ContactAddressAggregates>(contactsSql, [userId]),
+      dbAll<ContactWithActivity & ContactAddressAggregates>(unsafeSql(contactsSql), [userId]),
     );
 
     // Get message-derived contacts (already have last_communication_at from their source)
@@ -1295,7 +1296,7 @@ export async function searchContacts(
     ORDER BY display_name ASC
   `;
   const searchPattern = `%${query}%`;
-  return dbAll<Contact>(sql, [userId, searchPattern, searchPattern]);
+  return dbAll<Contact>(unsafeSql(sql), [userId, searchPattern, searchPattern]);
 }
 
 /*
@@ -1392,7 +1393,7 @@ export function findContactByNormalizedPhone(
     LIMIT 1
   `;
 
-  const result = dbGet<{ id: string; display_name: string }>(sql, [userId, normalizedPhone]);
+  const result = dbGet<{ id: string; display_name: string }>(unsafeSql(sql), [userId, normalizedPhone]);
   return result || null;
 }
 
@@ -1419,7 +1420,7 @@ export function getEmailNameMap(userId: string): Record<string, string> {
       AND c.display_name IS NOT NULL AND TRIM(c.display_name) != ''
     ORDER BY c.is_imported DESC, ce.is_primary DESC
   `;
-  const rows = dbAll<{ email: string; display_name: string }>(sql, [userId]);
+  const rows = dbAll<{ email: string; display_name: string }>(unsafeSql(sql), [userId]);
 
   const map: Record<string, string> = {};
   for (const row of rows) {
@@ -1467,7 +1468,7 @@ export async function getContactNamesByPhones(
   `;
 
   const params = normalizedPhones.map(p => `%${p}`);
-  const rows = dbAll<{ display_name: string; phone: string }>(sql, params);
+  const rows = dbAll<{ display_name: string; phone: string }>(unsafeSql(sql), params);
 
   // Map results back to original phone format
   for (const row of rows) {
@@ -1633,7 +1634,7 @@ export function updateContactSync(
 
   values.push(contactId);
   const sql = `UPDATE contacts SET ${fields.join(", ")} WHERE id = ?`;
-  dbRun(sql, values);
+  dbRun(unsafeSql(sql), values);
 }
 
 /**
@@ -1687,7 +1688,7 @@ export async function getTransactionsByContact(
     transaction_type?: string | null;
     status: string;
     role: string;
-  }>(directQuery, [
+  }>(unsafeSql(directQuery), [
     contactId,
     contactId,
     contactId,
@@ -1741,7 +1742,7 @@ export async function getTransactionsByContact(
     status: string;
     specific_role?: string;
     role_category?: string;
-  }>(junctionQuery, [contactId]);
+  }>(unsafeSql(junctionQuery), [contactId]);
 
   junctionResults.forEach((txn) => {
     const role = txn.specific_role || txn.role_category || "Associated Contact";
@@ -1778,7 +1779,7 @@ export async function getTransactionsByContact(
       closing_deadline?: string | null;
       transaction_type?: string | null;
       status: string;
-    }>(jsonQuery, [contactId]);
+    }>(unsafeSql(jsonQuery), [contactId]);
 
     jsonResults.forEach((txn) => {
       if (!transactionMap.has(txn.id)) {
@@ -1814,7 +1815,7 @@ export async function getTransactionsByContact(
       transaction_type?: string | null;
       status: string;
       other_contacts?: string;
-    }>(fallbackQuery, [`%"${contactId}"%`]);
+    }>(unsafeSql(fallbackQuery), [`%"${contactId}"%`]);
 
     fallbackResults.forEach((txn) => {
       try {
@@ -1857,7 +1858,7 @@ export async function getTransactionsByContact(
  */
 function getContactUserId(contactId: string): string | null {
   const row = dbGet<{ user_id: string }>(
-    "SELECT user_id FROM contacts WHERE id = ?",
+    unsafeSql("SELECT user_id FROM contacts WHERE id = ?"),
     [contactId],
   );
   return row?.user_id ?? null;
@@ -1934,7 +1935,7 @@ export async function getEmailsForContact(
     ORDER BY e.sent_at DESC
   `;
 
-  const rows = dbAll<Communication>(sql, [userId, ...addresses]);
+  const rows = dbAll<Communication>(unsafeSql(sql), [userId, ...addresses]);
 
   // Dedup by emails.id — a contact can appear as multiple participants on the
   // same email, and multiple contact addresses can match the same email; the
@@ -2016,7 +2017,7 @@ export async function getMessagesForContact(
     ORDER BY m.sent_at ASC
   `;
 
-  const allTextMessages = dbAll<Message & { participants_flat?: string }>(sql, [userId]);
+  const allTextMessages = dbAll<Message & { participants_flat?: string }>(unsafeSql(sql), [userId]);
 
   // Filter to messages whose participants_flat contains any of the contact's
   // phones, using the pure phonesMatch helper on each comma-separated token.
@@ -2079,10 +2080,10 @@ export async function getMessagesForContact(
   for (const thread of threadMap.values()) {
     if (thread.transaction_id) continue;
     const link = dbGet<{ transaction_id: string | null }>(
-      `SELECT transaction_id FROM communications
+      unsafeSql(`SELECT transaction_id FROM communications
        WHERE transaction_id IS NOT NULL
          AND (thread_id = ? OR message_id IN (${thread.messages.map(() => "?").join(", ")}))
-       LIMIT 1`,
+       LIMIT 1`),
       [thread.thread_id, ...thread.messages.map((m) => m.id)],
     );
     if (link?.transaction_id) thread.transaction_id = link.transaction_id;
@@ -2141,10 +2142,10 @@ export async function deleteContact(
   reason: ContactRemovalReason = "user_deleted",
 ): Promise<void> {
   dbRun(
-    `UPDATE contacts
+    unsafeSql(`UPDATE contacts
         SET removed_at = datetime('now'),
             removed_reason = ?
-      WHERE id = ? AND removed_at IS NULL`,
+      WHERE id = ? AND removed_at IS NULL`),
     [reason, contactId],
   );
 }
@@ -2184,10 +2185,10 @@ export async function deleteContact(
  */
 export async function removeContact(contactId: string): Promise<void> {
   dbRun(
-    `UPDATE contacts
+    unsafeSql(`UPDATE contacts
         SET removed_at = datetime('now'),
             removed_reason = ?
-      WHERE id = ? AND removed_at IS NULL`,
+      WHERE id = ? AND removed_at IS NULL`),
     ["user_unimported" satisfies ContactRemovalReason, contactId],
   );
 }
@@ -2226,10 +2227,10 @@ export async function removeContact(contactId: string): Promise<void> {
  */
 export async function restoreContact(contactId: string): Promise<boolean> {
   const { changes } = dbRun(
-    `UPDATE contacts
+    unsafeSql(`UPDATE contacts
         SET removed_at = NULL,
             removed_reason = NULL
-      WHERE id = ? AND removed_at IS NOT NULL`,
+      WHERE id = ? AND removed_at IS NOT NULL`),
     [contactId],
   );
   return changes > 0;
@@ -2311,7 +2312,7 @@ export async function getRemovedContacts(
     WHERE c.user_id = ? AND c.removed_at IS NOT NULL
     ORDER BY c.removed_at DESC, c.display_name ASC
   `;
-  return dbAll<RemovedContactRow>(sql, [userId]);
+  return dbAll<RemovedContactRow>(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -2365,7 +2366,7 @@ export async function getRemovedContactIdentifiers(
     FROM contacts c
     WHERE c.user_id = ? AND c.removed_at IS NOT NULL
   `;
-  return dbAll(sql, [userId]);
+  return dbAll(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -2598,7 +2599,7 @@ export function searchContactsForSelection(
 
   try {
     // Execute imported contacts search
-    const importedResults = dbAll<ContactWithActivity>(importedSql, [
+    const importedResults = dbAll<ContactWithActivity>(unsafeSql(importedSql), [
       userId,
       searchPattern,
       searchPattern,
@@ -2612,7 +2613,7 @@ export function searchContactsForSelection(
     ]);
 
     // Execute message-derived contacts search
-    const messageResults = dbAll<ContactWithActivity>(messageSql, [
+    const messageResults = dbAll<ContactWithActivity>(unsafeSql(messageSql), [
       userId, // For user_id column
       userId, // For WHERE clause
       searchPattern,
@@ -2665,7 +2666,7 @@ export function getContactEmailEntries(contactId: string): { id: string; email: 
     WHERE contact_id = ?
     ORDER BY is_primary DESC, created_at ASC
   `;
-  const rows = dbAll<{ id: string; email: string; is_primary: number }>(sql, [contactId]);
+  const rows = dbAll<{ id: string; email: string; is_primary: number }>(unsafeSql(sql), [contactId]);
   logService.warn(`[DIAG-1270] getContactEmailEntries(${contactId}): ${rows.length} emails found`, 'ContactDbService');
   return rows.map(r => ({ id: r.id, email: r.email, is_primary: r.is_primary === 1 }));
 }
@@ -2680,7 +2681,7 @@ export function getContactPhoneEntries(contactId: string): { id: string; phone: 
     WHERE contact_id = ?
     ORDER BY is_primary DESC, created_at ASC
   `;
-  const rows = dbAll<{ id: string; phone: string; is_primary: number }>(sql, [contactId]);
+  const rows = dbAll<{ id: string; phone: string; is_primary: number }>(unsafeSql(sql), [contactId]);
   return rows.map(r => ({ id: r.id, phone: r.phone, is_primary: r.is_primary === 1 }));
 }
 
@@ -2733,7 +2734,7 @@ export function syncContactEmails(
   // Delete rows not in incoming
   for (const existing of existingEmails) {
     if (!incomingIds.has(existing.id)) {
-      dbRun("DELETE FROM contact_emails WHERE id = ?", [existing.id]);
+      dbRun(unsafeSql("DELETE FROM contact_emails WHERE id = ?"), [existing.id]);
     }
   }
 
@@ -2741,12 +2742,12 @@ export function syncContactEmails(
   for (const entry of incomingEmails) {
     if (entry.id && existingIds.has(entry.id)) {
       dbRun(
-        "UPDATE contact_emails SET email = ?, is_primary = ? WHERE id = ?",
+        unsafeSql("UPDATE contact_emails SET email = ?, is_primary = ? WHERE id = ?"),
         [entry.email, entry.is_primary ? 1 : 0, entry.id],
       );
     } else {
       dbRun(
-        "INSERT INTO contact_emails (id, contact_id, email, is_primary, source, created_at) VALUES (?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)",
+        unsafeSql("INSERT INTO contact_emails (id, contact_id, email, is_primary, source, created_at) VALUES (?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)"),
         [crypto.randomUUID(), contactId, entry.email, entry.is_primary ? 1 : 0],
       );
     }
@@ -2775,17 +2776,17 @@ export function setContactPrimaryEmail(
 
   const normalizedEmail = newEmail.toLowerCase();
   const targetExists = dbGet<{ id: string }>(
-    "SELECT id FROM contact_emails WHERE contact_id = ? AND LOWER(email) = LOWER(?)",
+    unsafeSql("SELECT id FROM contact_emails WHERE contact_id = ? AND LOWER(email) = LOWER(?)"),
     [contactId, normalizedEmail],
   );
 
   if (targetExists) {
-    dbRun("UPDATE contact_emails SET is_primary = 0 WHERE contact_id = ? AND id != ?", [contactId, targetExists.id]);
-    dbRun("UPDATE contact_emails SET is_primary = 1 WHERE id = ?", [targetExists.id]);
+    dbRun(unsafeSql("UPDATE contact_emails SET is_primary = 0 WHERE contact_id = ? AND id != ?"), [contactId, targetExists.id]);
+    dbRun(unsafeSql("UPDATE contact_emails SET is_primary = 1 WHERE id = ?"), [targetExists.id]);
   } else {
-    dbRun("DELETE FROM contact_emails WHERE contact_id = ?", [contactId]);
+    dbRun(unsafeSql("DELETE FROM contact_emails WHERE contact_id = ?"), [contactId]);
     dbRun(
-      "INSERT INTO contact_emails (id, contact_id, email, is_primary, source) VALUES (?, ?, ?, 1, 'manual')",
+      unsafeSql("INSERT INTO contact_emails (id, contact_id, email, is_primary, source) VALUES (?, ?, ?, 1, 'manual')"),
       [crypto.randomUUID(), contactId, normalizedEmail],
     );
   }
@@ -2829,7 +2830,7 @@ export function syncContactPhones(
   // Delete rows not in incoming
   for (const existing of existingPhones) {
     if (!incomingIds.has(existing.id)) {
-      dbRun("DELETE FROM contact_phones WHERE id = ?", [existing.id]);
+      dbRun(unsafeSql("DELETE FROM contact_phones WHERE id = ?"), [existing.id]);
     }
   }
 
@@ -2837,12 +2838,12 @@ export function syncContactPhones(
   for (const entry of incomingPhones) {
     if (entry.id && existingIds.has(entry.id)) {
       dbRun(
-        "UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = ? WHERE id = ?",
+        unsafeSql("UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = ? WHERE id = ?"),
         [entry.phone, toLookupKey(entry.phone), entry.is_primary ? 1 : 0, entry.id],
       );
     } else {
       dbRun(
-        "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source, created_at) VALUES (?, ?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)",
+        unsafeSql("INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source, created_at) VALUES (?, ?, ?, ?, ?, 'manual', CURRENT_TIMESTAMP)"),
         [crypto.randomUUID(), contactId, entry.phone, toLookupKey(entry.phone), entry.is_primary ? 1 : 0],
       );
     }
@@ -2873,23 +2874,23 @@ export function setContactPrimaryPhone(
   dbTransaction(() => {
 
   const targetPhoneExists = dbGet<{ id: string }>(
-    "SELECT id FROM contact_phones WHERE contact_id = ? AND phone_e164 = ?",
+    unsafeSql("SELECT id FROM contact_phones WHERE contact_id = ? AND phone_e164 = ?"),
     [contactId, newPhone],
   );
 
   if (targetPhoneExists) {
-    dbRun("UPDATE contact_phones SET is_primary = 0 WHERE contact_id = ? AND id != ?", [contactId, targetPhoneExists.id]);
-    dbRun("UPDATE contact_phones SET is_primary = 1 WHERE id = ?", [targetPhoneExists.id]);
+    dbRun(unsafeSql("UPDATE contact_phones SET is_primary = 0 WHERE contact_id = ? AND id != ?"), [contactId, targetPhoneExists.id]);
+    dbRun(unsafeSql("UPDATE contact_phones SET is_primary = 1 WHERE id = ?"), [targetPhoneExists.id]);
   } else {
     const existingPhone = dbGet<{ id: string }>(
-      "SELECT id FROM contact_phones WHERE contact_id = ? ORDER BY is_primary DESC LIMIT 1",
+      unsafeSql("SELECT id FROM contact_phones WHERE contact_id = ? ORDER BY is_primary DESC LIMIT 1"),
       [contactId],
     );
     if (existingPhone) {
-      dbRun("UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = 1 WHERE id = ?", [newPhone, toLookupKey(newPhone), existingPhone.id]);
+      dbRun(unsafeSql("UPDATE contact_phones SET phone_e164 = ?, phone_normalized = ?, is_primary = 1 WHERE id = ?"), [newPhone, toLookupKey(newPhone), existingPhone.id]);
     } else {
       dbRun(
-        "INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source) VALUES (?, ?, ?, ?, 1, 'manual')",
+        unsafeSql("INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized, is_primary, source) VALUES (?, ?, ?, ?, 1, 'manual')"),
         [crypto.randomUUID(), contactId, newPhone, toLookupKey(newPhone)],
       );
     }
@@ -2913,10 +2914,10 @@ export function getContactEmailsForTransaction(transactionId: string): string[] 
     // transaction_contacts removal is a tombstone, an unfiltered read would keep
     // pulling a removed party's new mail into the deal they were taken off —
     // the "removal is a negative signal" requirement. No-op until that PR lands.
-    `SELECT DISTINCT LOWER(ce.email) as email
+    unsafeSql(`SELECT DISTINCT LOWER(ce.email) as email
      FROM transaction_contacts tc
      JOIN contact_emails ce ON tc.contact_id = ce.contact_id
-     WHERE tc.transaction_id = ? AND tc.removed_at IS NULL`,
+     WHERE tc.transaction_id = ? AND tc.removed_at IS NULL`),
     [transactionId],
   );
   return rows.map((r) => r.email);
@@ -2928,7 +2929,7 @@ export function getContactEmailsForTransaction(transactionId: string): string[] 
  */
 export function getEmailsByContactId(contactId: string): string[] {
   const rows = dbAll<{ email: string }>(
-    "SELECT email FROM contact_emails WHERE contact_id = ?",
+    unsafeSql("SELECT email FROM contact_emails WHERE contact_id = ?"),
     [contactId],
   );
   return rows.map((r) => r.email);
@@ -2946,12 +2947,12 @@ export function resolveContactEmailsByQuery(userId: string, query: string): stri
   if (words.length <= 1) {
     // Single-word query: original behavior
     const rows = dbAll<{ email: string }>(
-      `SELECT DISTINCT LOWER(ce.email) as email
+      unsafeSql(`SELECT DISTINCT LOWER(ce.email) as email
        FROM contacts c
        JOIN contact_emails ce ON c.id = ce.contact_id
        WHERE c.user_id = ?${ACTIVE_CONTACTS_CLAUSE_C}
          AND (LOWER(c.display_name) LIKE ? OR LOWER(ce.email) LIKE ?
-              OR LOWER(c.company) LIKE ? OR LOWER(c.title) LIKE ?)`,
+              OR LOWER(c.company) LIKE ? OR LOWER(c.title) LIKE ?)`),
       [userId, `%${queryLower}%`, `%${queryLower}%`, `%${queryLower}%`, `%${queryLower}%`],
     );
     return rows.map((r) => r.email);
@@ -2969,11 +2970,11 @@ export function resolveContactEmailsByQuery(userId: string, query: string): stri
   }
 
   const rows = dbAll<{ email: string }>(
-    `SELECT DISTINCT LOWER(ce.email) as email
+    unsafeSql(`SELECT DISTINCT LOWER(ce.email) as email
      FROM contacts c
      JOIN contact_emails ce ON c.id = ce.contact_id
      WHERE c.user_id = ?${ACTIVE_CONTACTS_CLAUSE_C}
-       AND ${wordClauses.join("\n       AND ")}`,
+       AND ${wordClauses.join("\n       AND ")}`),
     params,
   );
   return rows.map((r) => r.email);
@@ -3018,15 +3019,15 @@ export function applyContactBackfillSync(plan: ContactBackfillPlanRow[]): number
       let touched = false;
 
       const hasEmail = dbGet<{ n: number }>(
-        `SELECT COUNT(*) as n FROM contact_emails WHERE contact_id = ?`,
+        unsafeSql(`SELECT COUNT(*) as n FROM contact_emails WHERE contact_id = ?`),
         [row.contactId],
       );
       let emailIsFirst = (hasEmail?.n ?? 0) === 0;
 
       for (const email of row.emails) {
         const result = dbRun(
-          `INSERT OR IGNORE INTO contact_emails (id, contact_id, email, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
+          unsafeSql(`INSERT OR IGNORE INTO contact_emails (id, contact_id, email, is_primary, source, created_at)
+           VALUES (?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`),
           [crypto.randomUUID(), row.contactId, email, emailIsFirst ? 1 : 0],
         );
         if (result.changes > 0) {
@@ -3036,7 +3037,7 @@ export function applyContactBackfillSync(plan: ContactBackfillPlanRow[]): number
       }
 
       const hasPhone = dbGet<{ n: number }>(
-        `SELECT COUNT(*) as n FROM contact_phones WHERE contact_id = ?`,
+        unsafeSql(`SELECT COUNT(*) as n FROM contact_phones WHERE contact_id = ?`),
         [row.contactId],
       );
       let phoneIsFirst = (hasPhone?.n ?? 0) === 0;
@@ -3050,8 +3051,8 @@ export function applyContactBackfillSync(plan: ContactBackfillPlanRow[]): number
         else phoneE164 = `+${digits}`;
 
         const result = dbRun(
-          `INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`,
+          unsafeSql(`INSERT OR IGNORE INTO contact_phones (id, contact_id, phone_e164, phone_display, phone_normalized, is_primary, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'import', CURRENT_TIMESTAMP)`),
           [
             crypto.randomUUID(),
             row.contactId,

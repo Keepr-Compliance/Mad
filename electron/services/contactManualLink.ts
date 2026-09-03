@@ -67,6 +67,7 @@
  */
 
 import { dbGet, dbTransaction } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import { ACTIVE_CONTACTS_CLAUSE_UNALIASED } from "./db/contactTombstoneSql";
 import {
   createLink,
@@ -297,12 +298,12 @@ export function linkSourceRecordToContact(
     // The review queue guards this with its own join; NEW CODE DOES NOT INHERIT
     // THAT, so the filter is spelled out here using the shared clause.
     const contact = dbGet<{ id: string }>(
-      `SELECT id FROM contacts WHERE id = ? AND user_id = ?${ACTIVE_CONTACTS_CLAUSE_UNALIASED}`,
+      unsafeSql(`SELECT id FROM contacts WHERE id = ? AND user_id = ?${ACTIVE_CONTACTS_CLAUSE_UNALIASED}`),
       [contactId, userId],
     );
     if (!contact) {
       const exists = dbGet<{ id: string }>(
-        `SELECT id FROM contacts WHERE id = ? AND user_id = ?`,
+        unsafeSql(`SELECT id FROM contacts WHERE id = ? AND user_id = ?`),
         [contactId, userId],
       );
       return { ok: false, reason: exists ? "contact_removed" : "contact_not_found" };
@@ -310,8 +311,8 @@ export function linkSourceRecordToContact(
 
     // ---- 2. The record exists -------------------------------------------
     const record = dbGet<{ id: string }>(
-      `SELECT id FROM external_contacts
-        WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`,
+      unsafeSql(`SELECT id FROM external_contacts
+        WHERE user_id = ? AND source = ? AND external_record_id = ? LIMIT 1`),
       [userId, source, sourceRecordId],
     );
     if (!record) {

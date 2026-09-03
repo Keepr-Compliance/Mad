@@ -100,6 +100,7 @@ import {
 } from "../services/contactCompare";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbRun } from "../services/db/core/dbConnection";
+import { unsafeSql } from "../services/db/core/sqlText";
 import type { Contact, Transaction, ContactSource, Communication } from "../types/models";
 
 // Import validation utilities
@@ -897,7 +898,7 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
     // lands. Contacts with no crosswalk row yet fall through to the SAME
     // email/phone matching used everywhere else — NEVER back to name.
     const importedContacts = dbAll<{ id: string }>(
-      `SELECT id FROM contacts WHERE user_id = ? AND is_imported = 1`,
+      unsafeSql(`SELECT id FROM contacts WHERE user_id = ? AND is_imported = 1`),
       [userId],
     );
 
@@ -906,7 +907,7 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
       // present in macOS AND Outlook contributes BOTH sets — backfill is
       // additive and dedupes, so reading them all is strictly more complete
       // than picking a winner, and the order is total so it is reproducible.
-      const externals = dbAll<ContactSourceRecordRow>(CONTACT_SOURCE_RECORDS_SQL, [
+      const externals = dbAll<ContactSourceRecordRow>(unsafeSql(CONTACT_SOURCE_RECORDS_SQL), [
         { userId, contactId: contact.id },
       ]);
       if (externals.length === 0) continue;
@@ -2768,7 +2769,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               "../services/reviewStateService"
             );
             const affected = dbAll<{ transaction_id: string }>(
-              "SELECT DISTINCT transaction_id FROM transaction_contacts WHERE contact_id = ?",
+              unsafeSql("SELECT DISTINCT transaction_id FROM transaction_contacts WHERE contact_id = ?"),
               [validatedContactId],
             );
             for (const row of affected) {
@@ -3767,7 +3768,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
 
         dbRun(
-          `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+          unsafeSql(`UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`),
           [validatedRole, validatedContactId]
         );
 

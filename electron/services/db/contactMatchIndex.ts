@@ -74,6 +74,7 @@
  */
 
 import { dbAll, dbGet } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import type { ExternalContactSource } from "./externalContactDbService";
 import { toMatchingKey } from "../../utils/phoneNormalization";
 
@@ -207,8 +208,8 @@ export function liveContactMatchIndex(): ContactMatchIndex {
     linkedRecord(userId, sourceType, sourceRecordId) {
       if (!sourceRecordId) return null;
       const row = dbGet<{ contact_id: string; external_uuid: string | null }>(
-        `SELECT contact_id, external_uuid FROM contact_source_links
-          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
+        unsafeSql(`SELECT contact_id, external_uuid FROM contact_source_links
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`),
         [userId, sourceType, sourceRecordId],
       );
       if (!row) return null;
@@ -219,7 +220,7 @@ export function liveContactMatchIndex(): ContactMatchIndex {
       const cleaned = emailProbeKeys(emails);
       if (cleaned.length === 0) return [];
       return dbAll<{ id: string }>(
-        LIVE_EMAIL_SQL.replace("%PLACEHOLDERS%", placeholders(cleaned.length)),
+        unsafeSql(LIVE_EMAIL_SQL.replace("%PLACEHOLDERS%", placeholders(cleaned.length))),
         [userId, ...cleaned],
       ).map((r) => r.id);
     },
@@ -228,7 +229,7 @@ export function liveContactMatchIndex(): ContactMatchIndex {
       const keys = phoneProbeKeys(phones);
       if (keys.length === 0) return [];
       return dbAll<{ id: string }>(
-        LIVE_PHONE_SQL.replace("%PLACEHOLDERS%", placeholders(keys.length)),
+        unsafeSql(LIVE_PHONE_SQL.replace("%PLACEHOLDERS%", placeholders(keys.length))),
         [userId, ...keys],
       ).map((r) => r.id);
     },
@@ -332,7 +333,7 @@ function removeFrom(map: Map<string, string[]>, key: string, contactId: string):
  */
 export function loadContactMatchIndex(userId: string): ContactMatchIndex {
   const order = new Map<string, number>();
-  dbAll<{ id: string }>(BATCH_ORDER_SQL, [userId]).forEach((r, i) => order.set(r.id, i));
+  dbAll<{ id: string }>(unsafeSql(BATCH_ORDER_SQL), [userId]).forEach((r, i) => order.set(r.id, i));
 
   const byEmail = new Map<string, string[]>();
   const byPhone = new Map<string, string[]>();
@@ -360,8 +361,8 @@ export function loadContactMatchIndex(userId: string): ContactMatchIndex {
     }
   }
 
-  index(dbAll<{ contact_id: string; k: string | null }>(BATCH_EMAIL_SQL, [userId]), byEmail, emailKeysOf);
-  index(dbAll<{ contact_id: string; k: string | null }>(BATCH_PHONE_SQL, [userId]), byPhone, phoneKeysOf);
+  index(dbAll<{ contact_id: string; k: string | null }>(unsafeSql(BATCH_EMAIL_SQL), [userId]), byEmail, emailKeysOf);
+  index(dbAll<{ contact_id: string; k: string | null }>(unsafeSql(BATCH_PHONE_SQL), [userId]), byPhone, phoneKeysOf);
 
   const links = new Map<string, LinkedRecordRow>();
   for (const row of dbAll<{
@@ -369,7 +370,7 @@ export function loadContactMatchIndex(userId: string): ContactMatchIndex {
     source_record_id: string;
     contact_id: string;
     external_uuid: string | null;
-  }>(BATCH_LINKS_SQL, [userId])) {
+  }>(unsafeSql(BATCH_LINKS_SQL), [userId])) {
     const key = crosswalkKey(row.source_type, row.source_record_id);
     // (user_id, source_type, source_record_id) is UNIQUE, so this never
     // overwrites a different row. `set` unconditionally would still be correct;
@@ -438,7 +439,7 @@ export function loadContactMatchIndex(userId: string): ContactMatchIndex {
       ] as Array<[Map<string, string[]>, Map<string, Set<string>>, string]>) {
         for (const key of keysOf.get(contactId) ?? []) removeFrom(map, key, contactId);
         keysOf.delete(contactId);
-        const fresh = dbAll<{ k: string | null }>(sql, [contactId]);
+        const fresh = dbAll<{ k: string | null }>(unsafeSql(sql), [contactId]);
         index(
           fresh.map((r) => ({ contact_id: contactId, k: r.k })),
           map,

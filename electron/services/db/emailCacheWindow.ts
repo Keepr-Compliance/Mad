@@ -30,6 +30,7 @@
 // ============================================
 
 import { dbGet } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 
 export interface CachedEmailBounds {
   /** ISO timestamp of the OLDEST cached email, or null when nothing is cached. */
@@ -61,7 +62,7 @@ export const CACHED_EMAIL_SENT_AT_BOUNDS_SQL =
  */
 export function getCachedEmailSentAtBounds(userId: string): CachedEmailBounds {
   const row = dbGet<{ oldest: string | null; newest: string | null }>(
-    CACHED_EMAIL_SENT_AT_BOUNDS_SQL,
+    unsafeSql(CACHED_EMAIL_SENT_AT_BOUNDS_SQL),
     [userId],
   );
   return { oldest: row?.oldest ?? null, newest: row?.newest ?? null };

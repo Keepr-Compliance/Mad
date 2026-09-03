@@ -10,13 +10,14 @@ import crypto from "crypto";
 import type { LLMSettings } from "../../types/models";
 import { DatabaseError } from "../../types";
 import { dbGet, dbRun } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 
 /**
  * Get LLM settings for a user
  */
 export function getLLMSettingsByUserId(userId: string): LLMSettings | null {
   const sql = `SELECT * FROM llm_settings WHERE user_id = ?`;
-  const row = dbGet<Record<string, unknown>>(sql, [userId]);
+  const row = dbGet<Record<string, unknown>>(unsafeSql(sql), [userId]);
   return row ? mapRowToLLMSettings(row) : null;
 }
 
@@ -31,7 +32,7 @@ export function createLLMSettings(userId: string): LLMSettings {
     VALUES (?, ?)
   `;
 
-  dbRun(sql, [id, userId]);
+  dbRun(unsafeSql(sql), [id, userId]);
 
   // Return the created settings
   const settings = getLLMSettingsByUserId(userId);
@@ -114,7 +115,7 @@ export function updateLLMSettings(
     WHERE user_id = ?
   `;
 
-  dbRun(sql, [...values, userId]);
+  dbRun(unsafeSql(sql), [...values, userId]);
 
   const settings = getLLMSettingsByUserId(userId);
   if (!settings) {
@@ -165,7 +166,7 @@ export function clearLLMSettingsField(
     WHERE user_id = ?
   `;
 
-  dbRun(sql, [userId]);
+  dbRun(unsafeSql(sql), [userId]);
 
   const settings = getLLMSettingsByUserId(userId);
   if (!settings) {
@@ -184,7 +185,7 @@ export function incrementTokenUsage(userId: string, tokens: number): void {
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
-  dbRun(sql, [tokens, userId]);
+  dbRun(unsafeSql(sql), [tokens, userId]);
 }
 
 /**
@@ -197,7 +198,7 @@ export function incrementPlatformAllowanceUsage(userId: string, tokens: number):
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
-  dbRun(sql, [tokens, userId]);
+  dbRun(unsafeSql(sql), [tokens, userId]);
 }
 
 /**
@@ -211,7 +212,7 @@ export function resetMonthlyUsage(userId: string): void {
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
-  dbRun(sql, [userId]);
+  dbRun(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -225,7 +226,7 @@ export function setLLMDataConsent(userId: string, consent: boolean): LLMSettings
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
-  dbRun(sql, [consent ? 1 : 0, userId]);
+  dbRun(unsafeSql(sql), [consent ? 1 : 0, userId]);
 
   const settings = getLLMSettingsByUserId(userId);
   if (!settings) {
@@ -239,7 +240,7 @@ export function setLLMDataConsent(userId: string, consent: boolean): LLMSettings
  */
 export function deleteLLMSettings(userId: string): void {
   const sql = `DELETE FROM llm_settings WHERE user_id = ?`;
-  dbRun(sql, [userId]);
+  dbRun(unsafeSql(sql), [userId]);
 }
 
 /**

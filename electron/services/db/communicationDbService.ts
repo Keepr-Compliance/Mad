@@ -20,6 +20,7 @@ import type {
   TransactionId,
 } from "../../types/ids";
 import { dbGet, dbAll, dbRun } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import {
   validateFields,
   type ColumnOf,
@@ -88,7 +89,7 @@ export async function createCommunication(
     communicationData.linked_at || null,
   ];
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
 
   // BACKLOG-1107: Return data from memory instead of INSERT-then-SELECT.
   const communication = {
@@ -121,7 +122,7 @@ export async function createCommunication(
   // Check if linked message is a text type
   if (communicationData.transaction_id && communicationData.message_id) {
     const message = dbGet<{ channel: string | null }>(
-      "SELECT channel FROM messages WHERE id = ?",
+      unsafeSql("SELECT channel FROM messages WHERE id = ?"),
       [communicationData.message_id]
     );
     if (message?.channel && isTextMessage({ channel: message.channel })) {
@@ -154,7 +155,7 @@ export async function getCommunicationById(
   // `stmt.get(...) as T`, an assertion that verifies nothing about the row, so
   // naming the row type `CommunicationRow` adds no unsoundness that was not
   // already there — and it makes a successful read the thing that earns the brand.
-  const communication = dbGet<CommunicationRow>(sql, [communicationId]);
+  const communication = dbGet<CommunicationRow>(unsafeSql(sql), [communicationId]);
   return communication || null;
 }
 
@@ -190,7 +191,7 @@ export async function getCommunications(
 
   sql += " ORDER BY created_at DESC";
 
-  return dbAll<Communication>(sql, params);
+  return dbAll<Communication>(unsafeSql(sql), params);
 }
 
 /**
@@ -210,7 +211,7 @@ export async function getCommunicationsByTransaction(
     WHERE transaction_id = ?
     ORDER BY created_at DESC
   `;
-  return dbAll<Communication>(sql, [transactionId]);
+  return dbAll<Communication>(unsafeSql(sql), [transactionId]);
 }
 
 /**
@@ -267,7 +268,7 @@ export async function updateCommunication(
   values.push(communicationId);
 
   const sql = `UPDATE communications SET ${fields.join(", ")} WHERE id = ?`;
-  dbRun(sql, values);
+  dbRun(unsafeSql(sql), values);
 }
 
 /**
@@ -294,7 +295,7 @@ export function confirmEmailLinksByEmailIds(
      WHERE transaction_id = ?
        AND email_id IN (${placeholders})
   `;
-  return dbRun(sql, [transactionId, ...ids]).changes ?? 0;
+  return dbRun(unsafeSql(sql), [transactionId, ...ids]).changes ?? 0;
 }
 
 /**
@@ -304,12 +305,12 @@ export async function deleteCommunication(communicationId: string): Promise<void
   // BACKLOG-506 (TASK-1307): Get the transaction ID and message_id before deleting.
   // We need to check if the linked message is a text type to update thread count.
   const comm = dbGet<{ transaction_id: string | null; message_id: string | null; thread_id: string | null }>(
-    "SELECT transaction_id, message_id, thread_id FROM communications WHERE id = ?",
+    unsafeSql("SELECT transaction_id, message_id, thread_id FROM communications WHERE id = ?"),
     [communicationId]
   );
 
   const sql = "DELETE FROM communications WHERE id = ?";
-  dbRun(sql, [communicationId]);
+  dbRun(unsafeSql(sql), [communicationId]);
 
   // BACKLOG-396: Update thread count if this was a text message linked to a transaction
   if (comm?.transaction_id) {
@@ -320,7 +321,7 @@ export async function deleteCommunication(communicationId: string): Promise<void
     // Message-based link - check if the message is a text type
     else if (comm.message_id) {
       const message = dbGet<{ channel: string | null }>(
-        "SELECT channel FROM messages WHERE id = ?",
+        unsafeSql("SELECT channel FROM messages WHERE id = ?"),
         [comm.message_id]
       );
       if (message?.channel && isTextMessage({ channel: message.channel })) {
@@ -338,17 +339,17 @@ export async function deleteCommunicationByMessageId(messageId: string): Promise
   // BACKLOG-506 (TASK-1307): Get the transaction ID before deleting.
   // Check if the message is a text type to update thread count.
   const comm = dbGet<{ transaction_id: string | null }>(
-    "SELECT transaction_id FROM communications WHERE message_id = ?",
+    unsafeSql("SELECT transaction_id FROM communications WHERE message_id = ?"),
     [messageId]
   );
 
   const sql = "DELETE FROM communications WHERE message_id = ?";
-  dbRun(sql, [messageId]);
+  dbRun(unsafeSql(sql), [messageId]);
 
   // BACKLOG-396: Update thread count if this was a text message linked to a transaction
   if (comm?.transaction_id) {
     const message = dbGet<{ channel: string | null }>(
-      "SELECT channel FROM messages WHERE id = ?",
+      unsafeSql("SELECT channel FROM messages WHERE id = ?"),
       [messageId]
     );
     if (message?.channel && isTextMessage({ channel: message.channel })) {
@@ -380,7 +381,7 @@ export async function linkCommunicationToTransaction(
   transactionId: TransactionId,
 ): Promise<void> {
   const sql = "UPDATE communications SET transaction_id = ? WHERE id = ?";
-  dbRun(sql, [transactionId, communicationId]);
+  dbRun(unsafeSql(sql), [transactionId, communicationId]);
 }
 
 // ============================================
@@ -431,7 +432,7 @@ export async function addIgnoredCommunication(
     ignoredAt,
   ];
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
 
   logService.debug("[BACKLOG-1560] addIgnoredCommunication SUCCESS", "CommunicationDbService", {
     id, transaction_id: data.transaction_id, thread_id: data.thread_id ?? 'NULL'
@@ -469,7 +470,7 @@ export async function getIgnoredCommunicationsByTransaction(
     WHERE transaction_id = ?
     ORDER BY ignored_at DESC
   `;
-  return dbAll<IgnoredCommunication>(sql, [transactionId]);
+  return dbAll<IgnoredCommunication>(unsafeSql(sql), [transactionId]);
 }
 
 /**
@@ -483,7 +484,7 @@ export async function getIgnoredCommunicationsByUser(
     WHERE user_id = ?
     ORDER BY ignored_at DESC
   `;
-  return dbAll<IgnoredCommunication>(sql, [userId]);
+  return dbAll<IgnoredCommunication>(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -537,7 +538,7 @@ export async function isEmailIgnoredForTransaction(
       AND email_sent_at IN (?, ?)
     LIMIT 1
   `;
-  const result = dbGet(sql, [
+  const result = dbGet(unsafeSql(sql), [
     transactionId,
     emailSender,
     emailSubject,
@@ -567,7 +568,7 @@ export async function isEmailIgnoredByUser(
       AND email_sent_at IN (?, ?)
     LIMIT 1
   `;
-  const result = dbGet(sql, [
+  const result = dbGet(unsafeSql(sql), [
     userId,
     emailSender,
     emailSubject,
@@ -582,7 +583,7 @@ export async function isEmailIgnoredByUser(
  */
 export async function removeIgnoredCommunication(ignoredCommId: string): Promise<void> {
   const sql = "DELETE FROM ignored_communications WHERE id = ?";
-  dbRun(sql, [ignoredCommId]);
+  dbRun(unsafeSql(sql), [ignoredCommId]);
 }
 
 /**
@@ -596,7 +597,7 @@ export function getIgnoredEmailIdsForTransaction(
     SELECT email_id FROM ignored_communications
     WHERE transaction_id = ? AND email_id IS NOT NULL
   `;
-  const rows = dbAll<{ email_id: string }>(sql, [transactionId]);
+  const rows = dbAll<{ email_id: string }>(unsafeSql(sql), [transactionId]);
   return new Set(rows.map((r) => r.email_id));
 }
 
@@ -611,7 +612,7 @@ export function getIgnoredThreadIdsForTransaction(
     SELECT thread_id FROM ignored_communications
     WHERE transaction_id = ? AND thread_id IS NOT NULL
   `;
-  const rows = dbAll<{ thread_id: string }>(sql, [transactionId]);
+  const rows = dbAll<{ thread_id: string }>(unsafeSql(sql), [transactionId]);
   const result = new Set(rows.map((r) => r.thread_id));
 
   logService.debug("[BACKLOG-1560] getIgnoredThreadIds", "CommunicationDbService", {
@@ -633,7 +634,7 @@ export function getIgnoredCommunicationIdsForTransaction(
     SELECT original_communication_id FROM ignored_communications
     WHERE transaction_id = ? AND original_communication_id IS NOT NULL
   `;
-  const rows = dbAll<{ original_communication_id: string }>(sql, [transactionId]);
+  const rows = dbAll<{ original_communication_id: string }>(unsafeSql(sql), [transactionId]);
   return new Set(rows.map((r) => r.original_communication_id));
 }
 
@@ -660,7 +661,7 @@ export async function saveExtractedData(
     ) VALUES (?, ?, ?, ?, ?, ?, ?)
   `;
 
-  dbRun(sql, [
+  dbRun(unsafeSql(sql), [
     id,
     transactionId,
     fieldName,
@@ -720,7 +721,7 @@ export async function createCommunicationReference(
     data.link_confidence || null,
   ];
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
 
   // BACKLOG-1107: Return data from memory instead of INSERT-then-SELECT.
   const communication = {
@@ -742,7 +743,7 @@ export async function createCommunicationReference(
 
   // BACKLOG-396: Check if the linked message is a text and update thread count
   const message = dbGet<{ channel: string | null }>(
-    "SELECT channel FROM messages WHERE id = ?",
+    unsafeSql("SELECT channel FROM messages WHERE id = ?"),
     [data.message_id]
   );
   if (message?.channel && isTextMessage({ channel: message.channel })) {
@@ -869,7 +870,7 @@ export async function getCommunicationsWithMessages(
     ${limit ? `LIMIT ${Number(limit)}` : ""}
   `;
 
-  const results = dbAll<Communication>(sql, [transactionId]);
+  const results = dbAll<Communication>(unsafeSql(sql), [transactionId]);
 
   // Deduplicate by message ID first
   const seenIds = new Set<string>();
@@ -928,7 +929,7 @@ export async function isMessageLinkedToTransaction(
     WHERE message_id = ? AND transaction_id = ?
     LIMIT 1
   `;
-  const result = dbGet(sql, [messageId, transactionId]);
+  const result = dbGet(unsafeSql(sql), [messageId, transactionId]);
   return !!result;
 }
 
@@ -945,7 +946,7 @@ export async function getTransactionsForMessage(
     SELECT transaction_id FROM communications
     WHERE message_id = ?
   `;
-  const results = dbAll<{ transaction_id: string }>(sql, [messageId]);
+  const results = dbAll<{ transaction_id: string }>(unsafeSql(sql), [messageId]);
   return results.map(r => r.transaction_id);
 }
 
@@ -994,7 +995,7 @@ export async function createThreadCommunicationReference(
     linkConfidence,
   ];
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
 
   // BACKLOG-396: Thread-based linking is always for text messages, update count
   updateTransactionThreadCount(transactionId);
@@ -1019,7 +1020,7 @@ export async function deleteCommunicationByThread(
     DELETE FROM communications
     WHERE thread_id = ? AND transaction_id = ?
   `;
-  dbRun(sql, [threadId, transactionId]);
+  dbRun(unsafeSql(sql), [threadId, transactionId]);
 
   // BACKLOG-396: Thread-based unlinking is always for text messages, update count
   updateTransactionThreadCount(transactionId);
@@ -1043,7 +1044,7 @@ export async function isThreadLinkedToTransaction(
     WHERE thread_id = ? AND transaction_id = ?
     LIMIT 1
   `;
-  const result = dbGet(sql, [threadId, transactionId]);
+  const result = dbGet(unsafeSql(sql), [threadId, transactionId]);
   return !!result;
 }
 
@@ -1141,7 +1142,7 @@ export function countTextThreadsForTransaction(transactionId: string): number {
   `;
 
   const messages = dbAll<{ id: string; thread_id: string | null; participants: string | null }>(
-    sql,
+    unsafeSql(sql),
     [transactionId]
   );
 
@@ -1165,7 +1166,7 @@ export function updateTransactionThreadCount(transactionId: string): void {
   const threadCount = countTextThreadsForTransaction(transactionId);
 
   const sql = `UPDATE transactions SET text_thread_count = ? WHERE id = ?`;
-  dbRun(sql, [threadCount, transactionId]);
+  dbRun(unsafeSql(sql), [threadCount, transactionId]);
 }
 
 /**
@@ -1189,14 +1190,14 @@ export function backfillAllTransactionThreadCounts(): { updated: number; errors:
     GROUP BY c.transaction_id
   `;
 
-  const threadCounts = dbAll<{ transaction_id: string; thread_count: number }>(threadCountsSql);
+  const threadCounts = dbAll<{ transaction_id: string; thread_count: number }>(unsafeSql(threadCountsSql));
 
   const countMap = new Map<string, number>();
   for (const row of threadCounts) {
     countMap.set(row.transaction_id, row.thread_count);
   }
 
-  const transactions = dbAll<{ id: string }>(`SELECT id FROM transactions`);
+  const transactions = dbAll<{ id: string }>(unsafeSql(`SELECT id FROM transactions`));
 
   let updated = 0;
   let errors = 0;
@@ -1204,7 +1205,7 @@ export function backfillAllTransactionThreadCounts(): { updated: number; errors:
   for (const tx of transactions) {
     try {
       const count = countMap.get(tx.id) || 0;
-      dbRun(`UPDATE transactions SET text_thread_count = ? WHERE id = ?`, [count, tx.id]);
+      dbRun(unsafeSql(`UPDATE transactions SET text_thread_count = ? WHERE id = ?`), [count, tx.id]);
       updated++;
     } catch {
       errors++;

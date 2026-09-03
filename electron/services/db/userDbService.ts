@@ -7,6 +7,7 @@ import crypto from "crypto";
 import type { User, NewUser, OAuthProvider } from "../../types";
 import { DatabaseError, NotFoundError } from "../../types";
 import { dbGet, dbRun, ensureDb } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 import {
   validateFields,
   type ColumnOf,
@@ -52,7 +53,7 @@ export async function createUser(userData: NewUser & { id?: string }): Promise<U
     userData.job_title || null,
   ];
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
   const user = await getUserById(id);
   if (!user) {
     throw new DatabaseError("Failed to create user");
@@ -65,7 +66,7 @@ export async function createUser(userData: NewUser & { id?: string }): Promise<U
  */
 export async function getUserById(userId: string): Promise<User | null> {
   const sql = "SELECT * FROM users_local WHERE id = ?";
-  const user = dbGet<User>(sql, [userId]);
+  const user = dbGet<User>(unsafeSql(sql), [userId]);
   if (!user) return null;
   return validateResponse(UserSchema, user, 'userDbService.getUserById') as User;
 }
@@ -75,7 +76,7 @@ export async function getUserById(userId: string): Promise<User | null> {
  */
 export async function getUserByEmail(email: string): Promise<User | null> {
   const sql = "SELECT * FROM users_local WHERE email = ?";
-  const user = dbGet<User>(sql, [email]);
+  const user = dbGet<User>(unsafeSql(sql), [email]);
   return user || null;
 }
 
@@ -88,7 +89,7 @@ export async function getUserByOAuthId(
 ): Promise<User | null> {
   const sql =
     "SELECT * FROM users_local WHERE oauth_provider = ? AND oauth_id = ?";
-  const user = dbGet<User>(sql, [provider, oauthId]);
+  const user = dbGet<User>(unsafeSql(sql), [provider, oauthId]);
   return user || null;
 }
 
@@ -157,7 +158,7 @@ export async function updateUser(
   values.push(userId);
 
   const sql = `UPDATE users_local SET ${fields.join(", ")} WHERE id = ?`;
-  dbRun(sql, values);
+  dbRun(unsafeSql(sql), values);
 }
 
 /**
@@ -165,7 +166,7 @@ export async function updateUser(
  */
 export async function deleteUser(userId: string): Promise<void> {
   const sql = "DELETE FROM users_local WHERE id = ?";
-  dbRun(sql, [userId]);
+  dbRun(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -177,7 +178,7 @@ export async function updateLastLogin(userId: string): Promise<void> {
     SET last_login_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `;
-  dbRun(sql, [userId]);
+  dbRun(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -196,7 +197,7 @@ export async function acceptTerms(
         privacy_policy_version_accepted = ?
     WHERE id = ?
   `;
-  dbRun(sql, [termsVersion, privacyVersion, userId]);
+  dbRun(unsafeSql(sql), [termsVersion, privacyVersion, userId]);
   const user = await getUserById(userId);
   if (!user) {
     throw new NotFoundError("User not found after accepting terms", "User", userId);
@@ -213,7 +214,7 @@ export async function completeEmailOnboarding(userId: string): Promise<void> {
     SET email_onboarding_completed_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `;
-  dbRun(sql, [userId]);
+  dbRun(unsafeSql(sql), [userId]);
 }
 
 /**
@@ -227,7 +228,7 @@ export async function hasCompletedEmailOnboarding(
     FROM users_local
     WHERE id = ?
   `;
-  const result = dbGet<{ email_onboarding_completed_at: string | null }>(sql, [
+  const result = dbGet<{ email_onboarding_completed_at: string | null }>(unsafeSql(sql), [
     userId,
   ]);
   return (

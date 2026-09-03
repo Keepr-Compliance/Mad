@@ -6,6 +6,7 @@
  */
 
 import { dbAll } from "../services/db/core/dbConnection";
+import { unsafeSql } from "../services/db/core/sqlText";
 import { normalizePhone as sharedNormalizePhone } from "../services/contactResolutionService";
 import logService from "../services/logService";
 import { joinAmbiguousNames } from "../services/folderExport/threadContactLabel";
@@ -199,7 +200,7 @@ export function getContactNamesByPhones(phones: string[]): Record<string, string
       phone_e164: string;
       phone_display: string;
       display_name: string;
-    }>(sql, [...normalizedPhones, ...normalizedPhones]);
+    }>(unsafeSql(sql), [...normalizedPhones, ...normalizedPhones]);
 
     const acc = new SyncHandleAccumulator();
     for (const row of rows) {
@@ -250,7 +251,7 @@ export function getContactNamesByEmails(emails: string[]): Record<string, string
     `;
 
     const rows = dbAll<{ contact_id: string; email: string; display_name: string }>(
-      sql,
+      unsafeSql(sql),
       lowerEmails
     );
 

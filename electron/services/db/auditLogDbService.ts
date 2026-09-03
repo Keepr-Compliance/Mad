@@ -13,6 +13,7 @@
 
 import type { AuditLogEntry, AuditLogDbRow } from "../auditService";
 import { dbAll, dbRun, ensureDb } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 
 /**
  * Insert an audit log entry (append-only)
@@ -41,7 +42,7 @@ export async function insertAuditLog(entry: AuditLogEntry): Promise<void> {
     entry.errorMessage || null,
   ];
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
 }
 
 /**
@@ -55,7 +56,7 @@ export async function getUnsyncedAuditLogs(limit: number = 100): Promise<AuditLo
     LIMIT ?
   `;
 
-  const rows = dbAll<AuditLogDbRow>(sql, [limit]);
+  const rows = dbAll<AuditLogDbRow>(unsafeSql(sql), [limit]);
   return rows.map(mapAuditLogRowToEntry);
 }
 
@@ -209,7 +210,7 @@ export async function getAuditLogs(filters: AuditLogFilters): Promise<AuditLogEn
     params.push(filters.offset);
   }
 
-  const rows = dbAll<AuditLogDbRow>(sql, params);
+  const rows = dbAll<AuditLogDbRow>(unsafeSql(sql), params);
   return rows.map(mapAuditLogRowToEntry);
 }
 

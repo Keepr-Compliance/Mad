@@ -97,6 +97,7 @@
 import crypto from "crypto";
 import type { Contact } from "../../types";
 import { dbGet, dbAll, dbRun, ensureDb, dbTransaction } from "./core/dbConnection";
+import { unsafeSql } from "./core/sqlText";
 
 // Transaction contact association data
 // Note: `role` now stores SPECIFIC_ROLES values (ContactRole) — normalized from specific_role on writes
@@ -240,12 +241,12 @@ export async function linkContactToTransaction(
       null,
     ];
 
-    dbRun(sql, params);
+    dbRun(unsafeSql(sql), params);
 
     // Auto-update contact default_role
     if (role) {
       dbRun(
-        `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        unsafeSql(`UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`),
         [role, contactId]
       );
     }
@@ -315,7 +316,7 @@ export function assignContactToTransactionSync(
     SELECT id FROM transaction_contacts
     WHERE transaction_id = ? AND contact_id = ?
   `;
-  const existing = dbGet<{ id: string }>(existingCheck, [
+  const existing = dbGet<{ id: string }>(unsafeSql(existingCheck), [
     transactionId,
     data.contact_id,
   ]);
@@ -334,7 +335,7 @@ export function assignContactToTransactionSync(
           removed_at = NULL, removed_reason = NULL, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `;
-    dbRun(updateSql, [
+    dbRun(unsafeSql(updateSql), [
       data.role || null,
       data.role_category || null,
       data.specific_role || null,
@@ -346,7 +347,7 @@ export function assignContactToTransactionSync(
     // Auto-update contact default_role
     if (data.specific_role) {
       dbRun(
-        `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        unsafeSql(`UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`),
         [data.specific_role, data.contact_id]
       );
     }
@@ -373,12 +374,12 @@ export function assignContactToTransactionSync(
     data.notes || null,
   ];
 
-  dbRun(sql, params);
+  dbRun(unsafeSql(sql), params);
 
   // Auto-update contact default_role
   if (data.specific_role) {
     dbRun(
-      `UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      unsafeSql(`UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`),
       [data.specific_role, data.contact_id]
     );
   }
@@ -401,7 +402,7 @@ export async function getTransactionContacts(
     ORDER BY tc.is_primary DESC, tc.created_at ASC
   `;
 
-  return dbAll<Contact>(sql, [transactionId]);
+  return dbAll<Contact>(unsafeSql(sql), [transactionId]);
 }
 
 /**
@@ -439,7 +440,7 @@ export async function getTransactionContactsWithRoles(
     ORDER BY tc.is_primary DESC, tc.created_at ASC
   `;
 
-  return dbAll<TransactionContactResult>(sql, [transactionId]);
+  return dbAll<TransactionContactResult>(unsafeSql(sql), [transactionId]);
 }
 
 /**
@@ -477,7 +478,7 @@ export async function getTransactionContactsByRole(
     ORDER BY tc.is_primary DESC
   `;
 
-  return dbAll<TransactionContactResult>(sql, [transactionId, role]);
+  return dbAll<TransactionContactResult>(unsafeSql(sql), [transactionId, role]);
 }
 
 /** Default when a caller removes a party without stating why. */
@@ -501,7 +502,7 @@ export async function unlinkContactFromTransaction(
     SET removed_at = CURRENT_TIMESTAMP, removed_reason = ?
     WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL
   `;
-  dbRun(sql, [reason || DEFAULT_REMOVAL_REASON, transactionId, contactId]);
+  dbRun(unsafeSql(sql), [reason || DEFAULT_REMOVAL_REASON, transactionId, contactId]);
 }
 
 /**
@@ -516,7 +517,7 @@ export async function isContactAssignedToTransaction(
 ): Promise<boolean> {
   const sql =
     "SELECT id FROM transaction_contacts WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NULL LIMIT 1";
-  const result = dbGet(sql, [transactionId, contactId]);
+  const result = dbGet(unsafeSql(sql), [transactionId, contactId]);
   return !!result;
 }
 
@@ -557,7 +558,7 @@ export async function getRemovedTransactionContacts(
     ORDER BY tc.removed_at DESC
   `;
 
-  return dbAll<TransactionContactResult>(sql, [transactionId]);
+  return dbAll<TransactionContactResult>(unsafeSql(sql), [transactionId]);
 }
 
 /**
@@ -606,7 +607,7 @@ export async function restoreContactToTransaction(
     SET removed_at = NULL, removed_reason = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE transaction_id = ? AND contact_id = ? AND removed_at IS NOT NULL
   `;
-  const { changes } = dbRun(sql, [transactionId, contactId]);
+  const { changes } = dbRun(unsafeSql(sql), [transactionId, contactId]);
   return changes > 0;
 }
 

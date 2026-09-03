@@ -24,6 +24,7 @@ import { getEmailsByUser } from "./db/emailDbService";
 import { getAuditLogs } from "./db/auditLogDbService";
 import { getAllForUser as getExternalContacts } from "./db/externalContactDbService";
 import { dbAll } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import logService from "./logService";
 
 // ============================================
@@ -152,7 +153,7 @@ export async function exportUserData(
 
   // 4. Electronic Activity (messages + emails)
   const messages = dbAll<unknown>(
-    "SELECT * FROM messages WHERE user_id = ? ORDER BY sent_at DESC",
+    unsafeSql("SELECT * FROM messages WHERE user_id = ? ORDER BY sent_at DESC"),
     [userId],
   );
   const emails = await getEmailsByUser(userId);
@@ -160,14 +161,14 @@ export async function exportUserData(
 
   // 5. Inferences (feedback + feedback_learning)
   const feedback = dbAll<unknown>(
-    "SELECT * FROM classification_feedback WHERE user_id = ?",
+    unsafeSql("SELECT * FROM classification_feedback WHERE user_id = ?"),
     [userId],
   );
   // feedback_learning table may not exist; wrap safely
   let feedbackLearningRecords: unknown[] = [];
   try {
     feedbackLearningRecords = dbAll<unknown>(
-      "SELECT * FROM feedback_learning WHERE user_id = ?",
+      unsafeSql("SELECT * FROM feedback_learning WHERE user_id = ?"),
       [userId],
     );
   } catch {
@@ -180,7 +181,7 @@ export async function exportUserData(
   let preferencesRecords: unknown[] = [];
   try {
     preferencesRecords = dbAll<unknown>(
-      "SELECT * FROM user_preferences WHERE user_id = ?",
+      unsafeSql("SELECT * FROM user_preferences WHERE user_id = ?"),
       [userId],
     );
   } catch {
@@ -196,7 +197,7 @@ export async function exportUserData(
   // 8. Authentication (OAuth tokens - EXCLUDE actual token values)
   const oauthTokens = sanitizeOAuthTokens(
     dbAll<Record<string, unknown>>(
-      "SELECT provider, purpose, scopes_granted, connected_email_address, permissions_granted_at, created_at FROM oauth_tokens WHERE user_id = ? AND is_active = 1",
+      unsafeSql("SELECT provider, purpose, scopes_granted, connected_email_address, permissions_granted_at, created_at FROM oauth_tokens WHERE user_id = ? AND is_active = 1"),
       [userId],
     ),
   );

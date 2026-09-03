@@ -129,6 +129,7 @@
  */
 
 import { dbAll } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import { createLink, findContactIdBySourceRecord } from "./db/contactSourceLinkDbService";
 import { hasCannotLink, type LinkProposalReason } from "./db/contactLinkReviewDbService";
@@ -674,16 +675,16 @@ export function collectNameGroups(userId: string): NameGroup[] {
     source: ExternalContactSource;
     name: string | null;
   }>(
-    `SELECT external_record_id, source, name FROM external_contacts
+    unsafeSql(`SELECT external_record_id, source, name FROM external_contacts
       WHERE user_id = ? AND external_record_id IS NOT NULL AND name IS NOT NULL
-      ORDER BY source, external_record_id`,
+      ORDER BY source, external_record_id`),
     [userId],
   );
 
   const contactRows = dbAll<{ id: string; display_name: string | null }>(
-    `SELECT id, display_name FROM contacts
+    unsafeSql(`SELECT id, display_name FROM contacts
       WHERE user_id = ? AND removed_at IS NULL AND display_name IS NOT NULL
-      ORDER BY id`,
+      ORDER BY id`),
     [userId],
   );
 

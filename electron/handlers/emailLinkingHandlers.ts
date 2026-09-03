@@ -12,6 +12,7 @@ import logService from "../services/logService";
 import { createEmail, getEmailById, getEmailByExternalId, getCachedEmails } from "../services/db/emailDbService";
 import { createCommunication, removeIgnoredCommunication, confirmEmailLinksByEmailIds } from "../services/db/communicationDbService";
 import { dbAll } from "../services/db/core/dbConnection";
+import { unsafeSql } from "../services/db/core/sqlText";
 import gmailFetchService from "../services/gmailFetchService";
 import outlookFetchService from "../services/outlookFetchService";
 import emailSyncService from "../services/emailSyncService";
@@ -660,7 +661,7 @@ export function registerEmailLinkingHandlers(): void {
         ORDER BY ic.ignored_at DESC, m.sent_at DESC
       `;
 
-      const rows = dbAll(sql, [validatedTransactionId]);
+      const rows = dbAll(unsafeSql(sql), [validatedTransactionId]);
 
       logService.info("Retrieved removed messages", "Transactions", {
         transactionId: validatedTransactionId,
@@ -722,7 +723,7 @@ export function registerEmailLinkingHandlers(): void {
         ORDER BY ic.ignored_at DESC
       `;
 
-      const rows = dbAll<RemovedEmailQueryRow>(sql, [validatedTransactionId]);
+      const rows = dbAll<RemovedEmailQueryRow>(unsafeSql(sql), [validatedTransactionId]);
 
       // BACKLOG-2831: one email, one entry.
       //

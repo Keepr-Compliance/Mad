@@ -23,6 +23,7 @@
 import os from "os";
 import * as Sentry from "@sentry/electron/main";
 import { dbGet, dbAll } from "./db/core/dbConnection";
+import { unsafeSql } from "./db/core/sqlText";
 import { reactionExclusion } from "./db/reactionExclusion";
 import { isExpansionStale, getDeepestImportStart } from "./db/messageImportStateService";
 import permissionService from "./permissionService";
@@ -50,13 +51,13 @@ import {
 export function getMessagesFloorISO(userId: string): string | null {
   try {
     const row = dbGet<{ floor: string | null }>(
-      `SELECT MIN(m.sent_at) AS floor
+      unsafeSql(`SELECT MIN(m.sent_at) AS floor
          FROM messages m
         WHERE m.user_id = ?
           AND m.channel IN ('sms', 'imessage')
           AND m.duplicate_of IS NULL
           AND ${reactionExclusion("m")}
-          AND m.sent_at IS NOT NULL`,
+          AND m.sent_at IS NOT NULL`),
       [userId],
     );
     return row?.floor ?? null;
@@ -87,7 +88,7 @@ interface EmailFloorInfo {
  */
 export function getEmailFloor(userId: string): EmailFloorInfo {
   const rows = dbAll<{ oldest_cached_at: string | null }>(
-    "SELECT oldest_cached_at FROM email_sync_state WHERE user_id = ? AND phase = 'active'",
+    unsafeSql("SELECT oldest_cached_at FROM email_sync_state WHERE user_id = ? AND phase = 'active'"),
     [userId],
   );
   if (rows.length === 0) {
@@ -193,7 +194,7 @@ export async function checkExportCompleteness(
       closed_at: string | null;
       status: string | null;
     }>(
-      "SELECT started_at, created_at, closed_at, status FROM transactions WHERE id = ? AND user_id = ?",
+      unsafeSql("SELECT started_at, created_at, closed_at, status FROM transactions WHERE id = ? AND user_id = ?"),
       [transactionId, userId],
     );
 
