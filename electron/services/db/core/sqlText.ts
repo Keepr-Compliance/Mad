@@ -76,6 +76,16 @@
  *   `__tests__/sqlText.escapeSet.test.ts`, which is a ratchet, not a prohibition —
  *   and that matcher compares a NAME against a set, which cannot be exhaustive over
  *   type identity. **BACKLOG-3072 owns that limit.**
+ * - **Routes that never name the brand at all** — the conduit's own signature being
+ *   widened, and unchecked declarations minting it — are held separately by
+ *   `__tests__/sqlText.conduitSeam.test.ts` (BACKLOG-3086), by symbol and type
+ *   identity rather than by name. Its header states what it covers and what it does
+ *   not, per file, with an owner for each residue.
+ * - **Switching the compiler off entirely still works.** `// @ts-expect-error` above
+ *   a conduit call compiles (measured, exit 0), avoids both of the seams above, and
+ *   names nothing. `@typescript-eslint/ban-ts-comment` is `warn` and therefore
+ *   blocks nothing — the same shape as the `any` route, and **BACKLOG-3073's**
+ *   family.
  */
 
 /**
@@ -84,8 +94,19 @@
  * A `unique symbol` is nominal: no other declaration anywhere can produce a type
  * that satisfies `{ readonly [SqlBrand]: true }`, because nothing else can NAME
  * `SqlBrand`. So a caller outside this module cannot re-declare `SafeSql`
- * structurally and mint its own — the only remaining way in is a cast that names
- * `SafeSql`, which is exactly the node kind the escape ratchet matches.
+ * structurally and mint its own.
+ *
+ * **That closes structural re-declaration. It does NOT mean every remaining forgery
+ * has to name `SafeSql`** — an earlier version of this sentence said exactly that
+ * and was wrong. BACKLOG-3086 compiled thirteen routes that reach a conduit
+ * parameter, and TWO WHOLE FAMILIES never mention the type in any spelling:
+ * widening the CONDUIT'S OWN SIGNATURE (`dbAll as (s: string) => unknown[]`, or an
+ * ordinary assignment into a method-syntax slot, where `strictFunctionTypes` does
+ * not apply), and stating `SafeSql` as the output of a declaration the compiler
+ * never checks against a body (an overload signature, an ambient `declare`, a type
+ * predicate). Both families are held by `__tests__/sqlText.conduitSeam.test.ts`,
+ * which resolves symbols and type identity through the checker instead of matching
+ * names, and which states its own residues in its header.
  *
  * (A string-literal brand — `{ readonly __brand: "SafeSql" }`, the shape
  * `electron/types/ids.ts` uses — would be structurally reproducible by anyone who
