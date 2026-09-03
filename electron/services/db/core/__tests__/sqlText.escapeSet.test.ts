@@ -67,10 +67,10 @@
  *
  * **What that does NOT mean — and this paragraph used to claim otherwise.** It said
  * "every remaining forgery has to NAME `SafeSql`, which is the node kind matched
- * here", and that was false. BACKLOG-3086 compiled two families of route that reach
- * a conduit parameter without mentioning the type in any spelling — so no matcher
- * over assertion nodes can see them BY CONSTRUCTION, however many spellings it
- * learns:
+ * here", and that was false. BACKLOG-3086 compiled 23 forms one at a time: 19
+ * reached a conduit parameter with an unbranded value, and two whole FAMILIES of
+ * them never mention the type in any spelling — so no matcher over assertion nodes
+ * can see those BY CONSTRUCTION, however many spellings it learns:
  *
  *   dbAll as (s: string, p?: unknown[]) => unknown[]         the CONDUIT is widened,
  *   const c: { all(s: string): unknown[] } = { all: dbAll }  not the argument cast

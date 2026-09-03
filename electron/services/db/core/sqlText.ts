@@ -98,8 +98,9 @@
  *
  * **That closes structural re-declaration. It does NOT mean every remaining forgery
  * has to name `SafeSql`** — an earlier version of this sentence said exactly that
- * and was wrong. BACKLOG-3086 compiled thirteen routes that reach a conduit
- * parameter, and TWO WHOLE FAMILIES never mention the type in any spelling:
+ * and was wrong. BACKLOG-3086 compiled 23 forms one at a time under the real
+ * settings: 19 reached a conduit parameter with an unbranded value and 4 were
+ * already refused. TWO WHOLE FAMILIES never mention the type in any spelling:
  * widening the CONDUIT'S OWN SIGNATURE (`dbAll as (s: string) => unknown[]`, or an
  * ordinary assignment into a method-syntax slot, where `strictFunctionTypes` does
  * not apply), and stating `SafeSql` as the output of a declaration the compiler
@@ -107,6 +108,13 @@
  * predicate). Both families are held by `__tests__/sqlText.conduitSeam.test.ts`,
  * which resolves symbols and type identity through the checker instead of matching
  * names, and which states its own residues in its header.
+ *
+ * One residue is worth naming here too, because it looks like it should be closed
+ * and is not: `const m = { make: (s: string) => s } as Maker`, where
+ * `interface Maker { make(s: string): SafeSql }`. The ASSERTION names no brand and
+ * the interface member is not an unchecked position — an object literal ANNOTATED
+ * `: Maker` is refused. **BACKLOG-3072 owns it**, since closing it means resolving
+ * the assertion's target through the checker.
  *
  * (A string-literal brand — `{ readonly __brand: "SafeSql" }`, the shape
  * `electron/types/ids.ts` uses — would be structurally reproducible by anyone who

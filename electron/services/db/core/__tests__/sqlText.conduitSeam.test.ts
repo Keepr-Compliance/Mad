@@ -48,7 +48,11 @@
  *
  *   - conduit verbs are resolved to SYMBOLS (`getExportsOfModule`, then
  *     `getAliasedSymbol` at each use), so `import { dbAll as q }` and the
- *     `electron/services/db/index.ts` re-export chain are the same symbol;
+ *     `electron/services/db/index.ts` re-export chain are the same symbol —
+ *     `A6_importAlias.ts` and `A8_barrelNamedImport.ts` are those two cases, and
+ *     both were written because the claim was made before it was tested;
+ *   - modules are resolved the same way, by what they EXPORT rather than by path,
+ *     so the barrel is not a way around the namespace ban (`A7_barrelNamespace.ts`);
  *   - the brand is resolved to the PROPERTY SYMBOL declared in `sqlText.ts`, so an
  *     import alias behind a type alias resolves to it. `B4_aliasedOverload.ts` is
  *     that case, kept live below.
@@ -62,13 +66,18 @@
  *   Seam A  a conduit verb (`dbGet`/`dbAll`/`dbRun`/`dbExec`) referenced anywhere
  *           other than callee position — asserted, assigned, passed, aliased,
  *           spread into a bivariant method slot, or erased to `Function`
- *   Seam A(ii)  `dbConnection` imported by anything but a named import. The
- *           namespace object routes around the symbol walk (a destructuring
- *           annotation retypes the binding, and the identifier's symbol is then the
- *           ANNOTATION's member, not the export), so banning the namespace import is
- *           what makes the symbol walk sufficient rather than merely suggestive.
- *   Seam B  a bodiless signature, an ambient declaration, or a type predicate
- *           outside `sqlText.ts` whose output type carries the brand, resolved by
+ *   Seam A(ii)  a NAMESPACE or DYNAMIC import of any module that hands out a conduit
+ *           verb — resolved by asking the module what it exports, so the
+ *           `electron/services/db` barrel is covered as well as `dbConnection.ts`
+ *           itself, and so is a barrel added later. The namespace object routes
+ *           around the symbol walk (a destructuring annotation retypes the binding,
+ *           and the identifier's symbol is then the ANNOTATION's member, not the
+ *           export), so this ban is what makes the symbol walk sufficient rather
+ *           than merely suggestive. Named re-exports are RECORDED, not banned: a
+ *           named re-export cannot widen a signature.
+ *   Seam B  outside `sqlText.ts`, an output type carrying the brand on a bodiless
+ *           FUNCTION / METHOD / CONSTRUCTOR / ACCESSOR declaration, an ambient
+ *           variable or property declaration, or a type predicate — resolved by
  *           type identity
  *
  * ## WHAT THIS DOES NOT COVER — stated, with an owner for each
@@ -80,6 +89,18 @@
  *   - **`require(".../dbConnection")`** yields `any`. **BACKLOG-3073.**
  *   - **Casts that name the brand.** Counted by `sqlText.escapeSet.test.ts`, whose
  *     name-set limit is **BACKLOG-3072**.
+ *   - **An assertion whose TARGET merely contains the brand.** Measured, compiles:
+ *
+ *         interface Maker { make(s: string): SafeSql }
+ *         const m = { make: (s: string) => s } as Maker;   // exit 0
+ *         dbAll(m.make(hw), []);
+ *
+ *     `as Maker` names no brand, so the ratchet is blind; `MethodSignature` is not an
+ *     unchecked-output position (an object literal ANNOTATED `: Maker` is refused —
+ *     TS2322 — which is why it is absent from Seam B), so this guard is blind too.
+ *     Closing it needs the assertion TARGET resolved through the checker and
+ *     descended into its call signatures — which is **BACKLOG-3072's** stated fix
+ *     shape, one level deeper. **3072 owns it.**
  *   - **The corpus is `tsconfig.electron.json`**, which excludes every `.test.ts`
  *     file, `electron/preload`, and everything outside `electron/`. Verified by grep that
  *     no file under `src/` or `scripts/` imports the conduit. Test files DO hold the
@@ -94,7 +115,7 @@
  *
  * ## The fixtures are the non-vacuity control, and they run every time
  *
- * `electron/types/__typefixtures__/conduitSeam/` holds THIRTEEN live launders. They are
+ * `electron/types/__typefixtures__/conduitSeam/` holds FIFTEEN live launders. They are
  * added to this guard's program and each one is asserted DETECTED, by file, by seam.
  * A planted control proves the guard worked on the day someone planted it; these
  * prove it on every CI run. The same directory is compiled by `tsconfig.all.json` and
@@ -146,6 +167,8 @@ const EXPECTED_FIXTURE_DETECTION: Record<string, "A" | "A(ii)" | "B"> = {
   "A4_functionType.ts": "A",
   "A5_namespaceImport.ts": "A(ii)",
   "A6_importAlias.ts": "A",
+  "A7_barrelNamespace.ts": "A(ii)",
+  "A8_barrelNamedImport.ts": "A",
   "B1_overloadLaunder.ts": "B",
   "B2_ambientDeclare.ts": "B",
   "B3_classMethodOverload.ts": "B",
@@ -314,6 +337,35 @@ function measureSeams(): Seams {
     return symbol;
   };
 
+  /**
+   * Does this module specifier lead to a module that HANDS OUT a conduit verb —
+   * directly, or through any barrel that re-exports one?
+   *
+   * Resolved by symbol identity, and that is not a detail. The first version asked
+   * `relOf(targetFile) === CONDUIT_MODULE`, which is a PATH match, and
+   * `electron/services/db/index.ts` re-exports all four verbs — so
+   * `import * as db from "../db"` walked straight past the namespace ban and handed
+   * out exactly the object `A5_namespaceImport.ts` retypes. Measured: no production
+   * file does it today, but the header's claim that banning the namespace import
+   * makes the symbol walk sufficient was FALSE AS WRITTEN. Asking the module what it
+   * exports closes every barrel that exists and every one added later, with one rule
+   * instead of a list of paths. `A7_barrelNamespace.ts` keeps it honest.
+   */
+  const reachesConduitCache = new Map<ts.Symbol, boolean>();
+  const reachesConduit = (spec: ts.StringLiteral): boolean => {
+    const moduleSymbol = checker.getSymbolAtLocation(spec);
+    if (!moduleSymbol) return false;
+    const cached = reachesConduitCache.get(moduleSymbol);
+    if (cached !== undefined) return cached;
+    const hit = checker.getExportsOfModule(moduleSymbol).some((exported) => {
+      const resolved =
+        exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
+      return conduitSymbols.has(resolved);
+    });
+    reachesConduitCache.set(moduleSymbol, hit);
+    return hit;
+  };
+
   /** Output positions TypeScript states but never checks against a body. */
   const uncheckedOutputType = (node: ts.Node): ts.TypeNode | undefined => {
     if (ts.isTypePredicateNode(node)) return node.type;
@@ -392,9 +444,7 @@ function measureSeams(): Seams {
       if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
         const spec = node.moduleSpecifier;
         if (spec && ts.isStringLiteral(spec)) {
-          const target = checker.getSymbolAtLocation(spec);
-          const targetFile = target?.declarations?.[0];
-          if (targetFile && ts.isSourceFile(targetFile) && relOf(targetFile) === CONDUIT_MODULE) {
+          if (reachesConduit(spec)) {
             if (ts.isExportDeclaration(node)) reExports.push(rel);
             else if (
               node.importClause?.namedBindings &&
@@ -410,7 +460,7 @@ function measureSeams(): Seams {
         node.expression.kind === ts.SyntaxKind.ImportKeyword &&
         node.arguments[0] &&
         ts.isStringLiteral(node.arguments[0]) &&
-        /dbConnection$/.test((node.arguments[0] as ts.StringLiteral).text)
+        reachesConduit(node.arguments[0] as ts.StringLiteral)
       ) {
         dynamicImports.push(rel);
       }
@@ -464,7 +514,7 @@ describe("BACKLOG-3086 — the guard is measuring something", () => {
    * settings — that is why they launder. If a compiler upgrade or a stricter option
    * makes one illegal, this goes red and that fixture can be retired ON EVIDENCE.
    */
-  it("compiles all thirteen launders with zero diagnostics — they really are legal", () => {
+  it("compiles all fifteen launders with zero diagnostics — they really are legal", () => {
     const result = spawnSync(
       process.execPath,
       [
@@ -497,11 +547,17 @@ describe("BACKLOG-3086 — Seam A: the conduit value never leaves callee positio
     // A5 reaches the conduit through the namespace object; Seam A(ii) owns it, and
     // whether the symbol walk ALSO sees it is not asserted here on purpose — the ban
     // is the thing that must hold.
-    expect(inFixtures(measured.seamA).filter((f) => f.startsWith("A") && f !== "A5_namespaceImport.ts")).toEqual(expected);
+    const ownedByTheBan = new Set(["A5_namespaceImport.ts", "A7_barrelNamespace.ts"]);
+    expect(
+      inFixtures(measured.seamA).filter((f) => f.startsWith("A") && !ownedByTheBan.has(f)),
+    ).toEqual(expected);
   });
 
   it("is reached only by named import — no namespace import, no dynamic import", () => {
-    expect(measured.namespaceImports).toEqual([`${FIXTURE_DIR}/A5_namespaceImport.ts`]);
+    expect(measured.namespaceImports).toEqual([
+      `${FIXTURE_DIR}/A5_namespaceImport.ts`,
+      `${FIXTURE_DIR}/A7_barrelNamespace.ts`,
+    ]);
     expect(measured.dynamicImports).toEqual([]);
     expect(measured.reExports).toEqual(EXPECTED_REEXPORTS);
   });
@@ -538,7 +594,7 @@ describe("BACKLOG-3086 — the fixture corpus is what the guard says it is", () 
       .filter((f) => f.endsWith(".ts"))
       .sort();
     expect(onDisk).toEqual(Object.keys(EXPECTED_FIXTURE_DETECTION).sort());
-    expect(onDisk).toHaveLength(13);
+    expect(onDisk).toHaveLength(15);
   });
 
   /** Every fixture is detected by SOME seam. None may go quiet. */
