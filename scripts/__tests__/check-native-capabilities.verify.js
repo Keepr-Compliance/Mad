@@ -29,6 +29,11 @@
  *   C15  a PORTABLE module importing only a TYPE             -> GREEN (R2 ignores type-only)
  *   C16  a PORTABLE module missing from the tree             -> RED   (stale list)
  *   C17  namespace import, .safeStorage never accessed       -> GREEN (a binding is not a reach)
+ *   C18  const { safeStorage } = await import("electron")     -> RED   (R1, dynamic import)
+ *   C19  (await import("electron")).safeStorage inline        -> RED   (R1, dynamic, unbound)
+ *   C20  PORTABLE module destructuring await import()         -> RED   (R2)
+ *   C21  PORTABLE module, bare dynamic import, no binding     -> RED   (R2)
+ *   C22  await import of a LOCAL module named similarly       -> GREEN
  *   CENSUS  the gate reports 2 of 2 portable modules checked -> the counter that
  *           caught a real defect in the gate during implementation, pinned so it
  *           cannot silently undercount again
@@ -195,6 +200,28 @@ control("C14", 'PORTABLE module importing { app } (no safeStorage) -> RED',
 control("C15", "PORTABLE module importing only a TYPE -> GREEN",
   "electron/services/keychainGate.ts",
   'import type { App } from "electron";\nexport type A = App;\nexport const gate = 1;\n',
+  false);
+
+control("C18", 'const { safeStorage } = await import("electron") -> RED', V,
+  'export async function f() {\n  const { safeStorage } = await import("electron");\n  return safeStorage.isEncryptionAvailable();\n}\n',
+  true, { rule: "R1" });
+
+control("C19", '(await import("electron")).safeStorage inline -> RED', V,
+  'export async function f() {\n  return (await import("electron")).safeStorage.isEncryptionAvailable();\n}\n',
+  true, { rule: "R1" });
+
+control("C20", 'PORTABLE module using await import("electron") -> RED',
+  "electron/services/keychainGate.ts",
+  'export async function gate() {\n  const { app } = await import("electron");\n  return app.getPath("userData");\n}\n',
+  true, { rule: "R2" });
+
+control("C21", 'PORTABLE module with a bare dynamic import, no binding -> RED',
+  "electron/services/keychainGate.ts",
+  'export async function gate() {\n  return (await import("electron")).app.getPath("userData");\n}\n',
+  true, { rule: "R2" });
+
+control("C22", 'await import of a DIFFERENT module named similarly -> GREEN', V,
+  'export async function f() {\n  const { safeStorage } = await import("./electron-shim");\n  return safeStorage.isEncryptionAvailable();\n}\n',
   false);
 
 control("C17", "namespace import whose .safeStorage is never accessed -> GREEN", V,

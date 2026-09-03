@@ -22,7 +22,10 @@
  * A gate built on the same instrument would inherit the same defect, so this
  * one resolves import bindings with the TypeScript compiler: a comment, a
  * string literal, a `import type`, or an identically-named import from some
- * other module cannot produce a finding. `scripts/__tests__/
+ * other module cannot produce a finding. Static, `require()` and dynamic
+ * `await import()` forms are all resolved, because a lazy reach couples a
+ * module exactly as firmly as an eager one — and this tree already uses lazy
+ * `require()` (`hybridExtractorService.ts`). `scripts/__tests__/
  * check-native-capabilities.verify.js` proves each of those, by planting.
  *
  * WHY THE WORKING TREE AND NOT `git ls-files`
@@ -92,6 +95,9 @@ function enumerateFiles() {
  * Returns { named: Map<localName, exportName>, namespaces: Set<localName> }.
  * Type-only imports are excluded: they are erased and cannot call anything.
  */
+/** Stands in for a dynamic `import("electron")` that binds no name. */
+const DYNAMIC_IMPORT_MARK = 'await import("electron")';
+
 function electronBindings(sourceFile) {
   const named = new Map();
   const namespaces = new Set();
@@ -130,8 +136,13 @@ function electronBindings(sourceFile) {
       namespaces.add(node.name.text);
     }
 
-    // const X = require("electron")  /  const { safeStorage: y } = require("electron")
-    if (ts.isVariableDeclaration(node) && node.initializer && isRequireElectron(node.initializer)) {
+    // const X = require("electron")            /  const { safeStorage: y } = require("electron")
+    // const X = await import("electron")        /  const { safeStorage: y } = await import("electron")
+    if (
+      ts.isVariableDeclaration(node) &&
+      node.initializer &&
+      (isRequireElectron(node.initializer) || isDynamicImportElectron(node.initializer))
+    ) {
       if (ts.isIdentifier(node.name)) {
         namespaces.add(node.name.text);
       } else if (ts.isObjectBindingPattern(node.name)) {
@@ -145,20 +156,67 @@ function electronBindings(sourceFile) {
       }
     }
 
+    // A dynamic import reached for its side effect or used inline, with no
+    // binding to name. R2 still has to see it: `(await import("electron")).app`
+    // couples the module just as firmly as a static import does.
+    if (isDynamicImportElectron(node) && !ts.isVariableDeclaration(node.parent)) {
+      namespaces.add(DYNAMIC_IMPORT_MARK);
+    }
+
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   return { named, namespaces };
 }
 
-function isRequireElectron(expr) {
+/**
+ * `x` with any number of `await`s, parentheses, `as`-casts and `!` peeled off.
+ *
+ * Parentheses are not cosmetic here: `(await import("electron")).safeStorage`
+ * parses as a PropertyAccessExpression on a ParenthesizedExpression, and a
+ * matcher that only peeled `await` missed that exact line. Harness control C19
+ * is that line, and it went red before this function grew.
+ */
+function unwrapExpr(expr) {
+  let e = expr;
+  for (;;) {
+    if (!e) return e;
+    if (ts.isAwaitExpression(e) || ts.isParenthesizedExpression(e)) e = e.expression;
+    else if (ts.isAsExpression(e) || ts.isNonNullExpression(e)) e = e.expression;
+    else return e;
+  }
+}
+
+/**
+ * `import("electron")` — the dynamic form.
+ *
+ * Live shape in this tree, not a hypothetical: `hybridExtractorService.ts`
+ * already reaches `tokenEncryptionService` through a lazy `require()`, and the
+ * ESM equivalent of that habit is `await import(...)`. A gate that only reads
+ * static imports would wave it through.
+ */
+function isDynamicImportElectron(expr) {
+  const e = unwrapExpr(expr);
   return (
-    ts.isCallExpression(expr) &&
-    ts.isIdentifier(expr.expression) &&
-    expr.expression.text === "require" &&
-    expr.arguments.length === 1 &&
-    ts.isStringLiteralLike(expr.arguments[0]) &&
-    expr.arguments[0].text === "electron"
+    e &&
+    ts.isCallExpression(e) &&
+    e.expression.kind === ts.SyntaxKind.ImportKeyword &&
+    e.arguments.length >= 1 &&
+    ts.isStringLiteralLike(e.arguments[0]) &&
+    e.arguments[0].text === "electron"
+  );
+}
+
+function isRequireElectron(expr) {
+  const e = unwrapExpr(expr);
+  return (
+    !!e &&
+    ts.isCallExpression(e) &&
+    ts.isIdentifier(e.expression) &&
+    e.expression.text === "require" &&
+    e.arguments.length === 1 &&
+    ts.isStringLiteralLike(e.arguments[0]) &&
+    e.arguments[0].text === "electron"
   );
 }
 
@@ -182,13 +240,16 @@ function safeStorageSites(sourceFile, bindings) {
     ) {
       sites.push({ line: at(node), form: `${node.expression.text}.safeStorage` });
     }
-    // require("electron").safeStorage
+    // require("electron").safeStorage  /  (await import("electron")).safeStorage
     if (
       ts.isPropertyAccessExpression(node) &&
       node.name.text === "safeStorage" &&
-      isRequireElectron(node.expression)
+      (isRequireElectron(node.expression) || isDynamicImportElectron(node.expression))
     ) {
-      sites.push({ line: at(node), form: `require("electron").safeStorage` });
+      const form = isRequireElectron(node.expression)
+        ? 'require("electron").safeStorage'
+        : '(await import("electron")).safeStorage';
+      sites.push({ line: at(node), form });
     }
     ts.forEachChild(node, visit);
   };
