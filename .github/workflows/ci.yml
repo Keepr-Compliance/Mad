@@ -509,11 +509,17 @@ jobs:
     needs: check-changes
     if: needs.check-changes.outputs.android-changed == 'true'
     runs-on: ubuntu-latest
-    # BACKLOG-3051: 15 -> 25. The Kotlin compile below is the only step here that
-    # downloads an SDK and runs a compiler; measured cold in CI it is the largest
-    # single cost in the job. 25 leaves headroom for a cold Gradle distribution
-    # download without being so loose that a hung build burns half an hour.
-    timeout-minutes: 25
+    # BACKLOG-3051: left at 15, having measured rather than guessed.
+    #
+    # Adding the Kotlin compile below took this job from 67s to 5m01s (run
+    # 33712966598, job 100516186527). The compile step itself is 3m46s of that,
+    # and it is fully cold every time — "45 actionable tasks: 45 executed", with
+    # the Gradle 9.0.0 distribution downloaded on each run. There is no cache to
+    # miss, so 3m46s is the steady-state cost, not a first-run penalty.
+    #
+    # 15 minutes is ~3x the measured cold job. This value was briefly raised to
+    # 25 before the number existed; the number says the raise was not needed.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: android-companion
@@ -585,11 +591,15 @@ jobs:
       # `--no-daemon` because a one-shot CI container gains nothing from a daemon
       # it immediately discards. `--console=plain` keeps the log greppable.
       #
-      # Verified locally (macOS, JDK 17, warm Gradle cache) that this task really
-      # compiles the file rather than skipping it: it emits
-      # modules/keepr-mms/android/build/tmp/kotlin-classes/debug/expo/modules/keeprmms/KeeprMmsModule*.class,
-      # and deleting one closing brace fails it with
-      # "e: ... KeeprMmsModule.kt:331:2 Syntax error: Missing '}" and exit 1.
+      # Verified this task really compiles the file rather than reporting a
+      # vacuous success:
+      #   - locally (macOS, JDK 17) it emits modules/keepr-mms/android/build/tmp/
+      #     kotlin-classes/debug/expo/modules/keeprmms/KeeprMmsModule*.class
+      #   - in CI (job 100516186527) the log carries a bare
+      #     "> Task :keepr-mms:compileDebugKotlin" with no UP-TO-DATE or
+      #     FROM-CACHE suffix, and "45 actionable tasks: 45 executed"
+      #   - deleting one closing brace fails it with
+      #     "e: ... KeeprMmsModule.kt:331:2 Syntax error: Missing '}" and exit 1
       - name: Compile the keepr-mms Kotlin module
         working-directory: android-companion/android
         run: ./gradlew :keepr-mms:compileDebugKotlin --no-daemon --console=plain
