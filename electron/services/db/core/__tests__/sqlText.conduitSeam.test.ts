@@ -31,9 +31,17 @@
  * Measured, one `tsc` project per probe, under the real settings:
  *
  *     interface Maker { make(s: string): SafeSql }   with a CHECKED impl -> TS2322 REJECTED
+ *     class C implements Maker { make(s: string): string }               -> TS2416 REJECTED
  *     function launder(s: string): SafeSql;          overload, no body   -> exit 0 LAUNDERS
  *     declare function launder(s: string): SafeSql;  ambient, no body    -> exit 0 LAUNDERS
  *     function isSql(s: string): s is SafeSql        predicate, unchecked-> exit 0 LAUNDERS
+ *
+ * The class row is the stronger half and was missing from the first version of this
+ * paragraph. RETURN position stays COVARIANT even under method syntax — method
+ * bivariance is a rule about PARAMETERS — so a class implementing the interface with a
+ * `string` return is refused as well, not just an object literal. The interface is not
+ * the hole; an AMBIENT declaration of one is, because then there is no implementation
+ * anywhere for the compiler to check.
  *
  * An implementation the compiler actually checks CANNOT lie. So a legitimate Phase B
  * fragment helper — `function activeClause(): SafeSql { return sql`...`; }`, which has
@@ -78,7 +86,10 @@
  *   Seam B  outside `sqlText.ts`, an output type carrying the brand on a bodiless
  *           FUNCTION / METHOD / CONSTRUCTOR / ACCESSOR declaration, an ambient
  *           variable or property declaration, or a type predicate — resolved by
- *           type identity
+ *           type identity, and reached along every axis a type holds another type on:
+ *           union and intersection constituents, type arguments, CALL and CONSTRUCT
+ *           SIGNATURE RETURNS, INDEX INFOS (which is also what a mapped type over an
+ *           open key set resolves to), and properties.
  *
  * ## WHAT THIS DOES NOT COVER — stated, with an owner for each
  *
@@ -107,15 +118,30 @@
  *     conduit in value position — `jest.MockedFunction<typeof dbAll>`,
  *     `import * as dbConnection` — which is legitimate mocking, and is out of corpus
  *     on purpose rather than by oversight. **This item owns that residue.**
- *   - **`carriesBrand()` descends type structure to a bounded depth** (unions,
- *     intersections, type arguments, one hop through properties). Deeper nesting is
- *     unowned residue. **This item owns it.**
+ *   - **A brand in a PARAMETER of a bodiless declaration.** Measured, compiles:
+ *
+ *         declare function withSql(cb: (s: SafeSql) => void): void;
+ *         withSql((s) => { dbAll(s, []); });        // `s` is branded, unproven
+ *
+ *     Only OUTPUT positions are visited, and this is an input one — a question about
+ *     VARIANCE, not about depth or axes, and deliberately out of this item's scope.
+ *     **It is UNOWNED. No item covers it today**, and it is written here rather than
+ *     left for the next reader to rediscover.
+ *   - **`carriesBrand()` descends to a bounded DEPTH of 4.** Note what this sentence
+ *     does and does not say. An earlier version disclosed a depth limit and nothing
+ *     else, while three whole AXES went unvisited — call-signature returns, index
+ *     infos, and mapped members — so `declare const m: Maker`,
+ *     `declare const bag: { [k: string]: SafeSql }` and
+ *     `declare const t: Record<string, SafeSql>` all walked past a guard whose header
+ *     said only "bounded depth". **Depth and axes are different failures, and
+ *     disclosing one does not cover the other.** The axes are now closed; what is
+ *     bounded is genuinely only depth. **This item owns the depth bound.**
  *   - **`getRawDatabase()`** hands out the raw driver handle and bypasses the module
  *     entirely. Phase B, as `sqlText.ts` already says.
  *
  * ## The fixtures are the non-vacuity control, and they run every time
  *
- * `electron/types/__typefixtures__/conduitSeam/` holds FIFTEEN live launders. They are
+ * `electron/types/__typefixtures__/conduitSeam/` holds EIGHTEEN live launders and one must-not-fire control. They are
  * added to this guard's program and each one is asserted DETECTED, by file, by seam.
  * A planted control proves the guard worked on the day someone planted it; these
  * prove it on every CI run. The same directory is compiled by `tsconfig.all.json` and
@@ -159,8 +185,15 @@ const EXPECTED_SEAM_B: Record<string, number> = {};
  */
 const EXPECTED_REEXPORTS = ["electron/services/db/index.ts"];
 
-/** Every fixture, and the seam that must report it. Nothing here may go quiet. */
-const EXPECTED_FIXTURE_DETECTION: Record<string, "A" | "A(ii)" | "B"> = {
+/**
+ * Every fixture, and the seam that must report it. Nothing here may go quiet.
+ *
+ * `"none"` is not a gap — it is the OTHER assertion. `OK1_bodiedFragmentHelper.ts` is
+ * the legitimate Phase B shape and must stay invisible to both seams; a guard that
+ * fires on the correct path gets switched off within a week, so must-not-fire is
+ * asserted here on every run rather than remembered from one review.
+ */
+const EXPECTED_FIXTURE_DETECTION: Record<string, "A" | "A(ii)" | "B" | "none"> = {
   "A1_widenConduitCast.ts": "A",
   "A2_methodBivariance.ts": "A",
   "A3_reflectApply.ts": "A",
@@ -176,6 +209,10 @@ const EXPECTED_FIXTURE_DETECTION: Record<string, "A" | "A(ii)" | "B"> = {
   "B5_typePredicate.ts": "B",
   "B6_assertsPredicate.ts": "B",
   "B7_ambientConst.ts": "B",
+  "B8_interfaceMethodReturn.ts": "B",
+  "B9_indexSignature.ts": "B",
+  "B10_mappedRecord.ts": "B",
+  "OK1_bodiedFragmentHelper.ts": "none",
 };
 
 /** Building one program over the electron project measures ~5s. */
@@ -252,7 +289,7 @@ function measureSeams(): Seams {
     .find((p) => p.declarations?.some((d) => d.getSourceFile() === brandFile));
   if (!brandProp) throw new Error("brand carrier property not resolved from SafeSql");
 
-  const MAX_DEPTH = 3;
+  const MAX_DEPTH = 4;
   /**
    * Does this type carry the brand? Compared by SYMBOL IDENTITY against the property
    * declared in `sqlText.ts` — never by name, which is the whole reason this guard
@@ -264,6 +301,29 @@ function measureSeams(): Seams {
    * `__@SqlBrand@12` is looked up as `___@SqlBrand@12` and never found. That returned
    * a silent, permanent `false` — a detector that measured nothing and passed. The
    * launder fixtures caught it on their first run, which is exactly what they are for.
+   *
+   * ## The AXES, and why the depth limit never covered them
+   *
+   * A type holds other types along several axes, and this walk originally visited
+   * only three: union/intersection constituents, type arguments, and properties. Three
+   * shapes therefore walked past it, each of them a real mint:
+   *
+   *     declare const m: Maker                         // Maker.make RETURNS the brand
+   *     declare const bag: { [k: string]: SafeSql }    // an INDEX signature
+   *     declare const t: Record<string, SafeSql>       // a MAPPED type
+   *
+   * All three compiled and all three left the guard 9/9 green, with a positive control
+   * in the same file going red — so the greens were readable, and the miss was real.
+   *
+   * The header used to disclose a *depth* limit and nothing else. **Depth and axes are
+   * different failures**: no depth budget reaches a call-signature return if the walk
+   * never asks a type for its call signatures. Disclosing the first does not cover the
+   * second, and saying "bounded depth" while an entire axis went unvisited is the same
+   * false-completeness shape this whole item exists to delete.
+   *
+   * So the fix is the axis, not the three examples: call and construct signature
+   * RETURN types, and index infos (which is also what a mapped type over an open key
+   * set resolves to). What remains bounded is now genuinely only depth.
    */
   const carriesBrand = (type: ts.Type, depth = 0, seen = new Set<ts.Type>()): boolean => {
     if (depth > MAX_DEPTH || seen.has(type)) return false;
@@ -276,6 +336,21 @@ function measureSeams(): Seams {
     if (type.flags & ts.TypeFlags.Object && objectFlags & ts.ObjectFlags.Reference) {
       const args = checker.getTypeArguments(type as ts.TypeReference);
       if (args.some((t) => carriesBrand(t, depth + 1, seen))) return true;
+    }
+    // What a call RETURNS is an output position like any other, and `Maker.make` is
+    // reached only through this axis: the property descent below lands on the function
+    // type, whose own property list is empty.
+    const signatures = [...type.getCallSignatures(), ...type.getConstructSignatures()];
+    if (signatures.some((sig) => carriesBrand(sig.getReturnType(), depth + 1, seen))) {
+      return true;
+    }
+    // Index signatures, and mapped types over an open key set — `Record<string, SafeSql>`
+    // has no properties to descend, so without this it is invisible however deep the
+    // walk goes.
+    if (
+      checker.getIndexInfosOfType(type).some((info) => carriesBrand(info.type, depth + 1, seen))
+    ) {
+      return true;
     }
     // One hop through members, for `(): { s: SafeSql }`. Object types only — walking
     // `string`'s method table would cost a great deal and can never find the brand.
@@ -514,7 +589,7 @@ describe("BACKLOG-3086 — the guard is measuring something", () => {
    * settings — that is why they launder. If a compiler upgrade or a stricter option
    * makes one illegal, this goes red and that fixture can be retired ON EVIDENCE.
    */
-  it("compiles all fifteen launders with zero diagnostics — they really are legal", () => {
+  it("compiles all nineteen fixtures with zero diagnostics — they really are legal", () => {
     const result = spawnSync(
       process.execPath,
       [
@@ -594,16 +669,38 @@ describe("BACKLOG-3086 — the fixture corpus is what the guard says it is", () 
       .filter((f) => f.endsWith(".ts"))
       .sort();
     expect(onDisk).toEqual(Object.keys(EXPECTED_FIXTURE_DETECTION).sort());
-    expect(onDisk).toHaveLength(15);
+    expect(onDisk).toHaveLength(19);
   });
 
-  /** Every fixture is detected by SOME seam. None may go quiet. */
-  it("leaves no fixture undetected", () => {
+  /** Every LAUNDER is detected by some seam. None may go quiet. */
+  it("leaves no launder fixture undetected", () => {
     const detected = new Set([
       ...inFixtures(measured.seamA),
       ...inFixtures(measured.seamB),
       ...measured.namespaceImports.map((f) => path.basename(f)),
     ]);
-    expect([...detected].sort()).toEqual(Object.keys(EXPECTED_FIXTURE_DETECTION).sort());
+    const launders = Object.entries(EXPECTED_FIXTURE_DETECTION)
+      .filter(([, seam]) => seam !== "none")
+      .map(([file]) => file)
+      .sort();
+    expect([...detected].sort()).toEqual(launders);
+  });
+
+  /**
+   * MUST NOT FIRE. The legitimate Phase B shape — a bodied fragment helper composed
+   * with the tag and handed to a conduit verb — is invisible to both seams. If this
+   * ever goes red the guard has started taxing correct code, and that is the failure
+   * that gets a guard deleted rather than fixed.
+   */
+  it("does not fire on the legitimate bodied-producer path", () => {
+    const silent = Object.entries(EXPECTED_FIXTURE_DETECTION)
+      .filter(([, seam]) => seam === "none")
+      .map(([file]) => file);
+    expect(silent).toHaveLength(1);
+    for (const file of silent) {
+      expect(inFixtures(measured.seamA)).not.toContain(file);
+      expect(inFixtures(measured.seamB)).not.toContain(file);
+      expect(measured.namespaceImports.map((f) => path.basename(f))).not.toContain(file);
+    }
   });
 });

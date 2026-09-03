@@ -67,6 +67,13 @@
  *   `better-sqlite3` handle, whose `prepare` takes `string`. Anything holding that
  *   handle bypasses this module completely. It is a second, independent choke
  *   point and it is **Phase B**; commit 1 would be unreviewable with both.
+ * - **`ensureDb()` is a SECOND exported raw-handle exit, and this list used to name
+ *   only the first.** `dbConnection.ts` exports it, and it returns the same
+ *   `better-sqlite3` handle. Measured: two production consumers, of which exactly one
+ *   is outside `db/` — `sqliteBackupService.ts:101`, which calls only `.pragma`, not
+ *   `.prepare`. So nothing exploits it today; it is recorded here so Phase B inherits
+ *   an accurate list of exits rather than a short one. (Found in SR review of
+ *   PR #2488, BACKLOG-3086.)
  * - **The `sql` tag has ZERO production call sites in this commit.** Phase A wraps
  *   every existing site in the counted escape so the compiler can enumerate them;
  *   Phase B converts them to the tag, each item removing its own escapes. The tag
@@ -77,10 +84,13 @@
  *   and that matcher compares a NAME against a set, which cannot be exhaustive over
  *   type identity. **BACKLOG-3072 owns that limit.**
  * - **Routes that never name the brand at all** — the conduit's own signature being
- *   widened, and unchecked declarations minting it — are held separately by
+ *   widened, and unchecked declarations minting it — are held by
  *   `__tests__/sqlText.conduitSeam.test.ts` (BACKLOG-3086), by symbol and type
  *   identity rather than by name. Its header states what it covers and what it does
- *   not, per file, with an owner for each residue.
+ *   not. **Not every residue there has an owner**: a brand in the PARAMETER of a
+ *   bodiless declaration (`declare function withSql(cb: (s: SafeSql) => void): void`)
+ *   is unowned by any item today. Saying "with an owner for each" was easier to write
+ *   than to check, and it was false.
  * - **Switching the compiler off entirely still works.** `// @ts-expect-error` above
  *   a conduit call compiles (measured, exit 0), avoids both of the seams above, and
  *   names nothing. `@typescript-eslint/ban-ts-comment` is `warn` and therefore
@@ -105,16 +115,23 @@
  * ordinary assignment into a method-syntax slot, where `strictFunctionTypes` does
  * not apply), and stating `SafeSql` as the output of a declaration the compiler
  * never checks against a body (an overload signature, an ambient `declare`, a type
- * predicate). Both families are held by `__tests__/sqlText.conduitSeam.test.ts`,
- * which resolves symbols and type identity through the checker instead of matching
- * names, and which states its own residues in its header.
+ * predicate). `__tests__/sqlText.conduitSeam.test.ts` watches both families, resolving
+ * symbols and type identity through the checker instead of matching names.
  *
- * One residue is worth naming here too, because it looks like it should be closed
- * and is not: `const m = { make: (s: string) => s } as Maker`, where
- * `interface Maker { make(s: string): SafeSql }`. The ASSERTION names no brand and
- * the interface member is not an unchecked position — an object literal ANNOTATED
- * `: Maker` is refused. **BACKLOG-3072 owns it**, since closing it means resolving
- * the assertion's target through the checker.
+ * **It does not hold them completely, and this paragraph used to say it did.** Three
+ * shapes were found walking past it AFTER it shipped — an interface method's return
+ * reached through an ambient const, an index signature, and a mapped type — because
+ * the walk visited only some of the axes a type holds another type on. Those are now
+ * closed. What is knowingly still open, and stated rather than implied:
+ *
+ * - `const m = { make: (s: string) => s } as Maker`, where
+ *   `interface Maker { make(s: string): SafeSql }`. The ASSERTION names no brand, and
+ *   the interface member is not an unchecked position — both an object literal
+ *   ANNOTATED `: Maker` and a CLASS implementing it are refused (TS2322, TS2416).
+ *   **BACKLOG-3072 owns it**: closing it means resolving the assertion's TARGET
+ *   through the checker.
+ * - A brand in a PARAMETER of a bodiless declaration. **Unowned.**
+ * - `// @ts-expect-error`. **BACKLOG-3073's family.**
  *
  * (A string-literal brand — `{ readonly __brand: "SafeSql" }`, the shape
  * `electron/types/ids.ts` uses — would be structurally reproducible by anyone who
