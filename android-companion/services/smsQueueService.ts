@@ -114,6 +114,150 @@ const DEFAULT_STATS: SyncStats = {
 };
 
 // ============================================
+// QUEUE READ FAILURE (BACKLOG-3070)
+// ============================================
+
+/**
+ * Why reading the queue FAILED — as distinct from a queue that is genuinely
+ * empty.
+ *
+ * ## Why this type has to exist
+ *
+ * Until BACKLOG-3070 the read was `try { ... } catch { return []; }`, so ANY
+ * failure became "the queue is empty". `enqueueMessages` then computed
+ * `current = []` and wrote `[...[], ...toAppend]` straight over the stored
+ * value: the un-synced backlog was destroyed, nothing surfaced, and the SMS
+ * cursor kept advancing past messages that were never delivered. That is
+ * exactly the drop-oldest behaviour BACKLOG-2199 removed, reintroduced through
+ * a swallowed exception instead of a trim — 2199's no-drop guarantee rested
+ * entirely on the assumption that this one read could never throw.
+ *
+ * It can. The queue is one JSON string under one AsyncStorage key, and
+ * `@react-native-async-storage/async-storage` reads it through the framework
+ * `SQLiteDatabase` -> `SQLiteCursor` -> `CursorWindow`, which throws
+ * `SQLiteBlobTooBigException` for a row that will not fit the window
+ * (`config_cursorWindowSize`, AOSP default 2048 KB, OEM-overridable). The
+ * legacy write path is a bare `@Insert` with no read-back, so an oversized
+ * value writes fine and only fails on the NEXT read. At ~100 KB for the
+ * 500-message cap today's text-only queue is nowhere near that ceiling — which
+ * is why this has never fired — but the ceiling is inherited, not measured, and
+ * anything larger than text in the queue walks straight into it.
+ *
+ * This mirrors `ProviderReadErrorReason` in `providerRead.ts`, which exists for
+ * the same reason on the content-provider side (BACKLOG-1448 / 2206): a failed
+ * read is not an empty read, and collapsing the two hid a zero-message release
+ * for weeks.
+ */
+export type QueueReadErrorReason =
+  /** AsyncStorage itself rejected — the underlying SQLite read failed. */
+  | "storage_failed"
+  /** Bytes came back but are not a JSON array of messages. */
+  | "parse_failed";
+
+export interface QueueReadError {
+  reason: QueueReadErrorReason;
+  /** Diagnostic detail (the underlying exception message). */
+  message: string;
+}
+
+/**
+ * Outcome of a queue read. A discriminated union so callers MUST distinguish an
+ * explicit empty-but-successful read (`{ ok: true, messages: [] }`) from a read
+ * FAILURE (`{ ok: false, error }`). The empty array is reachable ONLY when the
+ * storage key is genuinely absent.
+ */
+export type QueueReadResult =
+  | { ok: true; messages: SyncMessage[] }
+  | { ok: false; error: QueueReadError };
+
+/**
+ * Thrown by every queue operation that cannot safely proceed on an unreadable
+ * queue (BACKLOG-3070).
+ *
+ * Throwing — rather than returning a benign empty/zero value — is the whole
+ * point: a caller that forgets to check cannot silently destroy the backlog,
+ * and the sync cycle already treats a throw as a FAILED cycle. Inside
+ * `runSyncCycle`'s step-1 try (`getRemainingQueueCapacity`, `enqueueMessages`)
+ * it becomes a `readError`, so the cycle is not counted as a healthy reach and
+ * the SMS cursor is held; outside it, the run rejects and is reported by the
+ * background task's Sentry capture or the manual-sync "Sync Failed" alert.
+ * Either way the failure is loud and the stored bytes are untouched.
+ */
+export class QueueUnreadableError extends Error {
+  readonly reason: QueueReadErrorReason;
+
+  constructor(error: QueueReadError, refusedOperation: string) {
+    super(
+      `Sync queue is unreadable (${error.reason}); ${refusedOperation} refused ` +
+        `so the stored queue is not overwritten: ${error.message}`
+    );
+    this.name = "QueueUnreadableError";
+    this.reason = error.reason;
+  }
+}
+
+/**
+ * Read the queue, reporting a failure as a failure (BACKLOG-3070).
+ *
+ * The ONE path that yields an empty queue is a genuinely absent storage key.
+ * Every other outcome — AsyncStorage rejecting, unparseable bytes, bytes that
+ * parse to something that is not an array — is a failure the caller must handle
+ * WITHOUT writing over what it could not read.
+ */
+export async function readQueue(): Promise<QueueReadResult> {
+  let stored: string | null;
+  try {
+    stored = await AsyncStorage.getItem(QUEUE_STORAGE_KEY);
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        reason: "storage_failed",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unknown AsyncStorage read failure",
+      },
+    };
+  }
+
+  // Genuinely absent: never written, or cleared by `clearQueue` (removeItem).
+  // Nothing failed, so there is nothing to preserve. Deliberately `== null`
+  // rather than falsy: an empty string under this key is CORRUPTION, not an
+  // empty queue — `JSON.stringify([])` is `"[]"`, never `""` — and the old
+  // `if (!stored)` test called it empty.
+  if (stored == null) return { ok: true, messages: [] };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored);
+  } catch (error) {
+    return {
+      ok: false,
+      error: {
+        reason: "parse_failed",
+        message:
+          error instanceof Error ? error.message : "Unparseable stored queue",
+      },
+    };
+  }
+
+  if (!Array.isArray(parsed)) {
+    return {
+      ok: false,
+      error: {
+        reason: "parse_failed",
+        message: `Stored queue is ${
+          parsed === null ? "null" : typeof parsed
+        }, not an array`,
+      },
+    };
+  }
+
+  return { ok: true, messages: parsed as SyncMessage[] };
+}
+
+// ============================================
 // MESSAGE IDENTITY (BACKLOG-2199)
 // ============================================
 
@@ -157,7 +301,17 @@ export async function enqueueMessages(
 ): Promise<number> {
   if (messages.length === 0) return 0;
 
-  const current = await getQueue();
+  // BACKLOG-3070: the append is a read-modify-WRITE over one storage key, so it
+  // must never run on a read it could not trust. Branching on the union here —
+  // rather than relying on `getQueue()` throwing — keeps this guard independent
+  // of the read's honesty: if the read ever swallows a failure again, THIS is
+  // what stops `[...[], ...toAppend]` being written over the backlog.
+  const read = await readQueue();
+  if (!read.ok) {
+    throw new QueueUnreadableError(read.error, "the enqueue append");
+  }
+
+  const current = read.messages;
   const seen = new Set(current.map(messageIdentity));
 
   const toAppend: SyncMessage[] = [];
@@ -183,7 +337,15 @@ export async function enqueueMessages(
  * @returns Array of up to MAX_BATCH_SIZE messages
  */
 export async function dequeueBatch(): Promise<SyncMessage[]> {
-  const current = await getQueue();
+  // BACKLOG-3070: an unreadable queue must not be reported as a drained one.
+  // This path does not overwrite (it returns early on empty), but reporting an
+  // empty batch makes the cycle look healthy while the backlog sits unread.
+  const read = await readQueue();
+  if (!read.ok) {
+    throw new QueueUnreadableError(read.error, "the dequeue");
+  }
+
+  const current = read.messages;
   if (current.length === 0) return [];
 
   const batch = current.slice(0, MAX_BATCH_SIZE);
@@ -209,7 +371,16 @@ export async function requeueMessages(
 ): Promise<void> {
   if (messages.length === 0) return;
 
-  const current = await getQueue();
+  // BACKLOG-3070: the SAME defect as the enqueue path, and not named in the
+  // item — on a swallowed read failure this wrote `[...prependable]` over the
+  // stored value, so returning ONE failed batch to the queue destroyed every
+  // other un-synced message. Guarded identically and for the same reason.
+  const read = await readQueue();
+  if (!read.ok) {
+    throw new QueueUnreadableError(read.error, "the requeue prepend");
+  }
+
+  const current = read.messages;
   const currentIds = new Set(current.map(messageIdentity));
 
   // Keep only batch messages not already back in the queue (dedupe), preserving order.
@@ -234,13 +405,15 @@ export async function requeueMessages(
  * @returns Array of queued SyncMessage objects
  */
 export async function getQueue(): Promise<SyncMessage[]> {
-  try {
-    const stored = await AsyncStorage.getItem(QUEUE_STORAGE_KEY);
-    if (!stored) return [];
-    return JSON.parse(stored) as SyncMessage[];
-  } catch {
-    return [];
+  const read = await readQueue();
+  if (!read.ok) {
+    // BACKLOG-3070: was `return []`. An unreadable queue reported as an empty
+    // one is what let the append path overwrite the un-synced backlog, and what
+    // let `getQueueSize`/`getRemainingQueueCapacity` (below) report full
+    // capacity so the cycle read more SMS and advanced the cursor over it.
+    throw new QueueUnreadableError(read.error, "reading the queue");
   }
+  return read.messages;
 }
 
 /**
