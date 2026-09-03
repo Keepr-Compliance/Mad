@@ -105,11 +105,33 @@ import {
   countTextThreadsForTransaction,
 } from "../communicationDbService";
 import type { NewCommunication } from "../../../types";
+// BACKLOG-3067: `linkCommunicationToTransaction` now demands branded ids. These are
+// test-local literals with no database behind them, so the brand is minted at the
+// two call sites that demand it rather than at the declarations.
+//
+// Minting at the declaration was tried first and produced real collateral, worth
+// recording: with `transaction_id: TransactionId` in them, the four
+// `{ ... } as NewCommunication` object literals below stopped compiling (TS2352,
+// "neither type sufficiently overlaps"). A brand adds a required `__brand` property,
+// so the loose type is no longer COMPARABLE to the branded one in either direction,
+// and a pre-existing wide `as` cast over an object containing a branded field breaks.
+// The literals are genuinely plain strings here; branding them bought nothing.
+import { asTransactionId } from "../../../types/ids";
 
 const USER = "user-2565";
 const TX_OLD = "tx-old-2565";
 const TX_NEW = "tx-new-2565";
+// NOT minted anywhere — deliberately. This constant exists to be the WRONG kind of
+// id (see the FACT 2 case below); asserting it into a CommunicationId would state
+// the very thing this suite was written to disprove.
 const EMAIL = "email-2565";
+/**
+ * BACKLOG-3067: the fiction is introduced ONCE, here, and reused. Three separate
+ * `asTransactionId(TX_NEW)` call sites said the same unverifiable thing three
+ * times; one named constant says it once and is one thing to delete when these
+ * literals are replaced by a real row.
+ */
+const TX_NEW_ID = asTransactionId(TX_NEW);
 const TEXT_MESSAGE = "message-2565";
 
 /** TRANSCRIBED from electron/database/schema.sql — see the linkSource-2565 suite. */
@@ -201,7 +223,10 @@ describe("linkCommunicationToTransaction — characterization (BACKLOG-2565)", (
       email_id: EMAIL,
     } as NewCommunication);
 
-    await linkCommunicationToTransaction(comm.id, TX_NEW);
+    // BACKLOG-3067: `comm.id` needs no cast — `createCommunication` returns a
+    // `CommunicationRow`, so the id arrives branded. Only the fabricated
+    // transaction literal has to be minted.
+    await linkCommunicationToTransaction(comm.id, TX_NEW_ID);
 
     const after = await getCommunicationById(comm.id);
     expect(after?.transaction_id).toBe(TX_NEW);
@@ -226,7 +251,7 @@ describe("linkCommunicationToTransaction — characterization (BACKLOG-2565)", (
     expect(storedThreadCount(TX_OLD)).toBe(1);
     expect(storedThreadCount(TX_NEW)).toBe(0);
 
-    await linkCommunicationToTransaction(comm.id, TX_NEW);
+    await linkCommunicationToTransaction(comm.id, TX_NEW_ID);
 
     // The junction row really moved...
     expect((await getCommunicationById(comm.id))?.transaction_id).toBe(TX_NEW);
@@ -256,8 +281,19 @@ describe("linkCommunicationToTransaction — characterization (BACKLOG-2565)", (
     } as NewCommunication);
 
     // The id the sole caller actually passes.
+    //
+    // BACKLOG-3067: this line is now a TYPE ERROR, and the directive below is the
+    // compiler being told to hold that thought — the suite's whole purpose is to
+    // execute the wrong call and record what it does. `asCommunicationId(EMAIL)`
+    // would have compiled too, and would have been a lie: it asserts the email id
+    // IS a communication id, which is the false claim these assertions disprove.
+    //
+    // The directive self-removes. When BACKLOG-2829 is fixed and this call is no
+    // longer wrong, TypeScript reports TS2578 ("unused '@ts-expect-error'") and CI
+    // stays red until it is deleted — so the escape cannot outlive the defect.
     await expect(
-      linkCommunicationToTransaction(EMAIL, TX_NEW),
+      // @ts-expect-error BACKLOG-2829: an email id is passed where a communication id belongs.
+      linkCommunicationToTransaction(EMAIL, TX_NEW_ID),
     ).resolves.toBeUndefined();
 
     // The row the caller believed it re-parented did not move.

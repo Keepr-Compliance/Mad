@@ -12,6 +12,13 @@ import type {
   NewIgnoredCommunication,
 } from "../../types";
 import { DatabaseError } from "../../types";
+// BACKLOG-3067: row ids are distinct types. Lookups take `string` and MINT a brand;
+// mutations DEMAND one. See electron/types/ids.ts for why that split is the design.
+import type {
+  CommunicationId,
+  CommunicationRow,
+  TransactionId,
+} from "../../types/ids";
 import { dbGet, dbAll, dbRun } from "./core/dbConnection";
 import {
   validateFields,
@@ -40,7 +47,7 @@ import logService from "../logService";
  */
 export async function createCommunication(
   communicationData: NewCommunication,
-): Promise<Communication> {
+): Promise<CommunicationRow> {
   const id = crypto.randomUUID();
 
   // BACKLOG-506: Pure junction table.
@@ -103,7 +110,12 @@ export async function createCommunication(
     has_attachments: false,
     is_false_positive: false,
     created_at: new Date().toISOString(),
-  } as unknown as Communication;
+    // BACKLOG-3067: `CommunicationRow`, not `Communication`. This is where a
+    // CommunicationId is BORN — `id` above is this function's own `randomUUID()`,
+    // so no value has better provenance. The cast is not new: the object is
+    // assembled in memory instead of being re-SELECTed (BACKLOG-1107), so it was
+    // already being asserted into shape. Retargeting it costs nothing.
+  } as unknown as CommunicationRow;
 
   // BACKLOG-396: Update thread count if this is a text message linked to a transaction
   // Check if linked message is a text type
@@ -129,13 +141,20 @@ export async function createCommunication(
  */
 export async function getCommunicationById(
   communicationId: string,
-): Promise<Communication | null> {
+): Promise<CommunicationRow | null> {
   // BACKLOG-1107: Explicit column list instead of SELECT *
   // BACKLOG-2319: include match_reason so unlink can carry it onto the ignored row.
   const sql = `SELECT id, user_id, transaction_id, message_id, email_id, thread_id,
     link_source, link_confidence, match_reason, linked_at, created_at
     FROM communications WHERE id = ?`;
-  const communication = dbGet<Communication>(sql, [communicationId]);
+  // BACKLOG-3067: the parameter stays `string` DELIBERATELY. Handing a lookup the
+  // wrong kind of id returns null — it cannot corrupt anything — so protecting it
+  // would buy nothing and would push the brand out across every caller, turning a
+  // ratchet into a sweep. Instead this is a MINT: `dbGet<T>` already ends in
+  // `stmt.get(...) as T`, an assertion that verifies nothing about the row, so
+  // naming the row type `CommunicationRow` adds no unsoundness that was not
+  // already there — and it makes a successful read the thing that earns the brand.
+  const communication = dbGet<CommunicationRow>(sql, [communicationId]);
   return communication || null;
 }
 
@@ -340,10 +359,25 @@ export async function deleteCommunicationByMessageId(messageId: string): Promise
 
 /**
  * Link communication to transaction
+ *
+ * BACKLOG-3067: both parameters are BRANDED, and this is the signature the whole
+ * item exists for. Until now they were two `string`s, so this function accepted an
+ * email id (BACKLOG-2829 — the live defect: the predicate matches zero rows and
+ * the caller logs success) and would equally have accepted the two arguments in
+ * the wrong ORDER. Neither is expressible now.
+ *
+ * To call this, read the row first. `getCommunicationById` and `createCommunication`
+ * hand back a `CommunicationRow` whose `id` is already branded, so the ordinary
+ * path needs no cast and no ceremony — that is control 3, and it is the reason the
+ * brand does not simply get cast away by the next person in a hurry.
+ *
+ * NOT FIXED HERE: the predicate itself. BACKLOG-2829 has a specified fix (correct
+ * the predicate AND update both transactions' stored thread counts, pinned
+ * together) which must ship as specified. This item stops the NEXT one.
  */
 export async function linkCommunicationToTransaction(
-  communicationId: string,
-  transactionId: string,
+  communicationId: CommunicationId,
+  transactionId: TransactionId,
 ): Promise<void> {
   const sql = "UPDATE communications SET transaction_id = ? WHERE id = ?";
   dbRun(sql, [transactionId, communicationId]);
@@ -667,7 +701,7 @@ export interface CreateCommunicationReferenceData {
  */
 export async function createCommunicationReference(
   data: CreateCommunicationReferenceData,
-): Promise<Communication> {
+): Promise<CommunicationRow> {
   const id = crypto.randomUUID();
 
   const sql = `
@@ -702,7 +736,9 @@ export async function createCommunicationReference(
     has_attachments: false,
     is_false_positive: false,
     created_at: new Date().toISOString(),
-  } as unknown as Communication;
+    // BACKLOG-3067: the second `randomUUID()` birth point for a CommunicationId,
+    // branded for the same reason as `createCommunication` above.
+  } as unknown as CommunicationRow;
 
   // BACKLOG-396: Check if the linked message is a text and update thread count
   const message = dbGet<{ channel: string | null }>(

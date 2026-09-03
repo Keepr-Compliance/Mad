@@ -357,8 +357,14 @@ export class HybridExtractorService {
     transactionId: string
   ): Promise<string[]> {
     // Lazy import to avoid circular dependencies
+    //
+    // BACKLOG-3067: `as typeof import(...)`. A bare `require()` returns `any`, so
+    // EVERY call made through it was unchecked — which is why nothing in the
+    // toolchain ever saw BACKLOG-2829 sitting four lines below its twin. This is a
+    // type-only annotation: the `require` still happens lazily at call time, so the
+    // circular-dependency workaround above is intact and the runtime is unchanged.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getCommunicationById } = require('../db/communicationDbService');
+    const { getCommunicationById } = require('../db/communicationDbService') as typeof import('../db/communicationDbService');
 
     const safeIds: string[] = [];
 
@@ -391,11 +397,36 @@ export class HybridExtractorService {
     transactionId: string
   ): Promise<void> {
     // Lazy import to avoid circular dependencies
+    //
+    // BACKLOG-3067: typed, for the reason given in `filterAlreadyLinked` above —
+    // without the annotation the call below is made on `any` and no brand can
+    // reach it.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { linkCommunicationToTransaction } = require('../db/communicationDbService');
+    const { linkCommunicationToTransaction } = require('../db/communicationDbService') as typeof import('../db/communicationDbService');
 
     for (const emailId of emailIds) {
       try {
+        // BACKLOG-2829 — KNOWN LIVE DEFECT, deliberately NOT fixed here.
+        //
+        // `emailId` is an id from the `emails` table. The parameter wants a
+        // `communications.id`. The UPDATE therefore matches zero rows and the
+        // `logService.debug('Linked email to transaction')` below fires anyway.
+        // Before BACKLOG-3067 branded these ids, both were `string` and nothing
+        // in the toolchain could say so; this directive is the compiler finally
+        // saying it, and being told to hold that thought.
+        //
+        // Why `@ts-expect-error` and not `asCommunicationId(emailId)`: the helper
+        // would ASSERT that this email id is a communication id, which is false —
+        // and false is the exact claim this line exists to record. This directive
+        // also SELF-REMOVES: when 2829 is fixed and the types line up, TypeScript
+        // reports TS2578 "unused '@ts-expect-error'" and CI stays red until the
+        // comment is deleted. The ratchet is in the language, not in anyone's memory.
+        //
+        // 2829's fix is specified and must ship as specified: correct the predicate
+        // AND update both transactions' stored thread counts, pinned together —
+        // this is the one write path that calls neither `updateTransactionThreadCount`,
+        // and correcting the predicate alone turns that latent drift live.
+        // @ts-expect-error BACKLOG-2829: an email id is passed where a communication id belongs.
         await linkCommunicationToTransaction(emailId, transactionId);
         logService.debug('Linked email to transaction', 'HybridExtractor', {
           emailId,
