@@ -914,14 +914,5 @@ describe("macOSMessagesImportService Core Functions", () => {
       const percent = Math.round((current / total) * 100);
       expect(percent).toBe(0);
     });
-
-    it("should have correct phase values", () => {
-      type Phase = "deleting" | "importing" | "attachments";
-      const phases: Phase[] = ["deleting", "importing", "attachments"];
-
-      expect(phases).toContain("deleting");
-      expect(phases).toContain("importing");
-      expect(phases).toContain("attachments");
-    });
   });
 });

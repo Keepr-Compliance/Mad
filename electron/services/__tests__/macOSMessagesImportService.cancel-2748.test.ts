@@ -86,6 +86,21 @@ let auditSyncInFlight = false;
 /** The same, for the submission poll — it has its own in-flight guard now. */
 let submissionSyncInFlight = false;
 
+// BACKLOG-2793 removed `suspendPeriodicSync` / `resumePeriodicSync` /
+// `isSyncInFlight` from auditService and submissionSyncService, and stripped the
+// equivalent factories from the three sibling force-path suites. THESE TWO STAY.
+//
+// They are not shape declarations here — they are the instrument of the
+// `writerEvents` assertions below (":suspends nothing, on any force path"). The
+// subject does not import either module today, so nothing pushes to
+// `writerEvents`; if a future change reintroduces the quiesce, the subject
+// starts importing them, jest serves THESE factories, and the assertions go red.
+// That is the whole point of the row.
+//
+// MEASURED, not assumed: re-adding a `suspendPeriodicSync()` call to the force
+// path turns 3 tests in this file red. Delete these factories and that tripwire
+// is silently disarmed — the assertions stay green forever and stop meaning
+// anything.
 jest.mock("../auditService", () => ({
   __esModule: true,
   default: {
@@ -289,7 +304,7 @@ function storedAttachmentIdentities(): Array<{ id: string; external_message_id: 
  * inside the progress callback the first time `phase` reports `current >= at`.
  */
 async function forceImportCancellingAt(
-  phase: "deleting" | "importing" | "attachments",
+  phase: "importing" | "attachments",
   at: number,
 ): Promise<MacOSImportResult> {
   let cancelSent = false;

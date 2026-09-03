@@ -23,7 +23,7 @@ import {
  * Enhanced with querying phase, elapsed time tracking for ETA calculation
  */
 export interface ImportProgress {
-  phase: "querying" | "deleting" | "importing" | "attachments";
+  phase: "querying" | "importing" | "attachments";
   current: number;
   total: number;
   percent: number;

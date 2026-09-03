@@ -208,41 +208,6 @@ class AuditService {
   }
 
   /**
-   * BACKLOG-2775: stop the periodic cloud sync and report whether it had been
-   * running, so the caller can restart exactly what it stopped.
-   *
-   * The macOS Messages force re-import holds a write transaction on the SHARED
-   * database connection for the whole run. `markAuditLogsSynced` writes on that
-   * same connection (DROP TRIGGER + UPDATE audit_logs + CREATE TRIGGER), so a
-   * sync tick landing inside that window is rolled back with it when the user
-   * cancels — and rollback is the NORMAL path for that feature. The rows would
-   * lose their `synced_at` marks locally while their cloud copies exist, and
-   * re-upload on the next tick.
-   */
-  suspendPeriodicSync(): boolean {
-    const wasRunning = this.syncIntervalId !== null;
-    this.stopSyncInterval();
-    return wasRunning;
-  }
-
-  /** BACKLOG-2775: restart the periodic cloud sync after a suspend. */
-  resumePeriodicSync(): void {
-    this.startSyncInterval();
-  }
-
-  /**
-   * BACKLOG-2775: true while a sync tick is mid-flight.
-   *
-   * Stopping the interval prevents NEW ticks; it cannot cancel one that is
-   * already awaiting its network round trip and has yet to reach
-   * `markAuditLogsSynced`. A caller that needs the connection quiet must wait
-   * for this to clear as well.
-   */
-  isSyncInFlight(): boolean {
-    return this.syncInProgress;
-  }
-
-  /**
    * Log an audit event - this is append-only
    * @param entry - Audit entry data (id and timestamp will be auto-generated)
    */

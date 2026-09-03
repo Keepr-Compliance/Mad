@@ -180,7 +180,7 @@ export interface MacOSImportResult {
  * Progress callback for import operations
  */
 export type ImportProgressCallback = (progress: {
-  phase: "querying" | "deleting" | "importing" | "attachments";
+  phase: "querying" | "importing" | "attachments";
   current: number;
   total: number;
   percent: number;

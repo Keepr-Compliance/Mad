@@ -576,20 +576,12 @@ class SyncOrchestratorServiceClass {
         }
 
         // Phase order and weighted progress calculation
-        // Dynamically detect if 'deleting' phase is present (forceReimport mode)
-        let hasDeletePhase = false;
-
         // IPC listener OWNED here - not in consumers
         const cleanup = window.api.messages.onImportProgress((data) => {
-          // Detect if we're in forceReimport mode (has deleting phase)
-          if (data.phase === 'deleting') {
-            hasDeletePhase = true;
-          }
-
-          // Use 4 phases if deleting is present, otherwise 3
-          const phases = hasDeletePhase
-            ? ['querying', 'deleting', 'importing', 'attachments']
-            : ['querying', 'importing', 'attachments'];
+          // BACKLOG-2793: the force path used to emit a fourth `deleting` phase
+          // and this divisor switched 3<->4 to match. Stage-and-swap (BACKLOG-2790)
+          // removed that phase, so the phase list is fixed at three.
+          const phases = ['querying', 'importing', 'attachments'];
           const n = phases.length;
 
           // Calculate weighted progress: step_index * (100/n) + ipc_progress / n

@@ -258,9 +258,14 @@ describe('BACKLOG-2776 — the reported progress freezes when the user asks to c
     // uninterruptible 35-second delete. The work genuinely continues until the
     // run can stop; reporting it as progress is what made the cancel look
     // ignored.
+    //
+    // BACKLOG-2793: these emissions used to name the `deleting` phase. That
+    // phase no longer exists, and an unknown phase takes the `indexOf` === -1
+    // fallback — which would have left this suite green while exercising none
+    // of the weighting. Driven with a phase the importer actually emits.
     const { finish } = await startPausedRun();
 
-    await emit('deleting', 34);
+    await emit('querying', 34);
     const atCancel = messagesProgress();
     expect(atCancel).toBeGreaterThan(0);
 
@@ -270,7 +275,7 @@ describe('BACKLOG-2776 — the reported progress freezes when the user asks to c
     ).toBe(true);
 
     // The import keeps running and keeps reporting. The UI must not.
-    await emit('deleting', 99);
+    await emit('querying', 99);
     await emit('importing', 50);
 
     expect(messagesProgress()).toBe(atCancel);
@@ -284,10 +289,10 @@ describe('BACKLOG-2776 — the reported progress freezes when the user asks to c
     // for a reason that has nothing to do with cancelling.
     const { finish } = await startPausedRun();
 
-    await emit('deleting', 34);
+    await emit('querying', 34);
     const first = messagesProgress();
 
-    await emit('deleting', 99);
+    await emit('querying', 99);
     await emit('importing', 50);
 
     expect(messagesProgress()).not.toBe(first);
@@ -314,5 +319,30 @@ describe('BACKLOG-2776 — the reported progress freezes when the user asks to c
     expect(
       syncOrchestrator.getState().queue.find((item) => item.type === 'messages')
     ).toBeUndefined();
+  });
+
+  it('BACKLOG-2793: weights each phase against a FIXED three-phase divisor', async () => {
+    // Until BACKLOG-2793 this divisor switched between 3 and 4 at runtime,
+    // latching to 4 the first time a `deleting` event arrived. Stage-and-swap
+    // removed that phase, so the branch was dead and the divisor is now a
+    // constant — but nothing asserted the constant, and a deletion that quietly
+    // shifts the progress math is exactly the failure this item must not ship.
+    //
+    // EXACT values, not ranges: with the old n=4 the same inputs give 25 and 75
+    // rather than 33 and 66, so leaving the divisor at 4 turns this red. Ranges
+    // or `toBeGreaterThan` would not distinguish them, and the test would be
+    // green for a reason unrelated to what it claims.
+    const { finish } = await startPausedRun();
+
+    await emit('querying', 99);
+    expect(messagesProgress()).toBe(33); // n=4 would give 25
+
+    await emit('importing', 99);
+    expect(messagesProgress()).toBe(66); // n=4 would give 75
+
+    await emit('attachments', 99);
+    expect(messagesProgress()).toBe(100);
+
+    await finish();
   });
 });

@@ -95,7 +95,7 @@ export function stripStaleCapClause(
 
 /** Import progress state for inline display */
 interface ImportProgressState {
-  phase: "deleting" | "attachments" | "importing";
+  phase: "attachments" | "importing";
   current: number;
   total: number;
   percent: number;
@@ -1911,22 +1911,18 @@ export function MacOSMessagesImportSettings({
             <>
               <div className="flex justify-between text-xs text-gray-600 mb-1">
                 <span>
-                  {importProgress.phase === "deleting"
-                    ? "Clearing existing messages..."
-                    : importProgress.phase === "attachments"
-                      ? "Processing attachments..."
-                      : "Importing messages..."}
+                  {importProgress.phase === "attachments"
+                    ? "Processing attachments..."
+                    : "Importing messages..."}
                 </span>
                 <span>{importProgress.percent}%</span>
               </div>
               <div className="w-full bg-gray-200 rounded-full h-2">
                 <div
                   className={`h-2 rounded-full transition-all duration-300 ${
-                    importProgress.phase === "deleting"
-                      ? "bg-orange-500"
-                      : importProgress.phase === "attachments"
-                        ? "bg-green-500"
-                        : "bg-blue-500"
+                    importProgress.phase === "attachments"
+                      ? "bg-green-500"
+                      : "bg-blue-500"
                   }`}
                   style={{ width: `${importProgress.percent}%` }}
                 />
@@ -1934,11 +1930,9 @@ export function MacOSMessagesImportSettings({
               <p className="text-xs text-gray-500 mt-1">
                 {importProgress.current.toLocaleString()} /{" "}
                 {importProgress.total.toLocaleString()}
-                {importProgress.phase === "deleting"
-                  ? " cleared"
-                  : importProgress.phase === "attachments"
-                    ? " attachments"
-                    : " messages"}
+                {importProgress.phase === "attachments"
+                  ? " attachments"
+                  : " messages"}
               </p>
             </>
           ) : (
