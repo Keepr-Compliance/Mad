@@ -39,6 +39,23 @@ const SELF = path.join("electron", "types", "__tests__", "brandedIds.escapeSet.t
 const MINT_HELPERS = new Set(["asCommunicationId", "asEmailId", "asTransactionId"]);
 
 /**
+ * The named helpers are not the only way to brand a string: `x as CommunicationId`
+ * does the same thing invisibly, and a guard that counts only CALL EXPRESSIONS
+ * cannot see it. That gap was live in this file's first version — the exact-set
+ * assertions were green while `brandedIds.runtimeIdentity.test.ts` held an inline
+ * `RAW as CommunicationId`, which is exactly the drift this suite exists to stop.
+ * Both forms are counted now.
+ */
+const BRAND_TYPES = new Set([
+  "CommunicationId",
+  "EmailId",
+  "TransactionId",
+  "CommunicationRow",
+  "EmailRow",
+  "TransactionRow",
+]);
+
+/**
  * PRE-REGISTERED, and the reason for each.
  *
  * CATEGORY 1 — known-defect escapes. `@ts-expect-error` citing BACKLOG-2829, at the
@@ -55,6 +72,29 @@ const EXPECTED_DEFECT_ESCAPES: Record<string, number> = {
   "electron/services/extraction/hybridExtractorService.ts": 1,
   // The characterization suite that executes that call and pins what it does.
   "electron/services/db/__tests__/communicationDbService.relinkGaps-2565.test.ts": 1,
+};
+
+/**
+ * CATEGORY 3 — inline `as <brand>` assertions, the form the named helpers exist to
+ * replace. Listed rather than banned outright, because three of them ARE the
+ * mechanism and two predate this item:
+ *
+ *   - `ids.ts` — the three helper bodies. A brand has to be conjured somewhere.
+ *   - `communicationDbService.ts` — two `as unknown as CommunicationRow`. NOT new:
+ *     both were already `as unknown as Communication`, because those objects are
+ *     assembled in memory instead of being re-SELECTed (BACKLOG-1107). Retargeting
+ *     an existing assertion adds nothing; pinning them here means a THIRD one
+ *     cannot appear quietly.
+ *   - `brandedIds.runtimeIdentity.test.ts` — one, in control 4, looking a `Map` up
+ *     with a differently-typed handle to prove the two are the same runtime key.
+ *
+ * Production code adds no new inline brand cast, and this assertion is what makes
+ * that a measured claim rather than a sentence in a PR body.
+ */
+const EXPECTED_INLINE_BRAND_CASTS: Record<string, number> = {
+  "electron/types/ids.ts": 3,
+  "electron/services/db/communicationDbService.ts": 2,
+  "electron/types/__tests__/brandedIds.runtimeIdentity.test.ts": 1,
 };
 
 /**
@@ -105,12 +145,31 @@ function sourceFiles(): string[] {
 
 /** Mint call sites, matched as AST call expressions — never as text. */
 function countMints(relPath: string, text: string): number {
+  return countNodes(relPath, text, (node) =>
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    MINT_HELPERS.has(node.expression.text),
+  );
+}
+
+/** Inline `expr as CommunicationId` — an AsExpression naming a branded type. */
+function countInlineBrandCasts(relPath: string, text: string): number {
+  return countNodes(
+    relPath,
+    text,
+    (node) =>
+      ts.isAsExpression(node) &&
+      ts.isTypeReferenceNode(node.type) &&
+      ts.isIdentifier(node.type.typeName) &&
+      BRAND_TYPES.has(node.type.typeName.text),
+  );
+}
+
+function countNodes(relPath: string, text: string, match: (node: ts.Node) => boolean): number {
   const source = ts.createSourceFile(relPath, text, ts.ScriptTarget.ES2020, true);
   let count = 0;
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && MINT_HELPERS.has(node.expression.text)) {
-      count += 1;
-    }
+    if (match(node)) count += 1;
     ts.forEachChild(node, visit);
   };
   ts.forEachChild(source, visit);
@@ -192,6 +251,18 @@ describe("BACKLOG-3067 — the escape set is exactly what the PR says it is", ()
     const escapeText = fs.readFileSync(path.join(REPO_ROOT, escapeFile), "utf8");
     expect(escapeText.split("@ts-expect-error").length - 1).toBeGreaterThan(1);
     expect(countDefectEscapes(escapeText)).toBe(1);
+  });
+
+  it("brands inline in exactly the places the PR names, and nowhere new in production", () => {
+    const measured = measure(countInlineBrandCasts);
+    expect(measured).toEqual(EXPECTED_INLINE_BRAND_CASTS);
+
+    // The two in `communicationDbService.ts` are the retargeted BACKLOG-1107
+    // assertions, and they are the ONLY inline brand casts in production code.
+    const production = Object.keys(measured).filter(
+      (f) => !f.includes("__tests__") && !/\.test\.tsx?$/.test(f) && f !== BRAND_MODULE.split(path.sep).join("/"),
+    );
+    expect(production).toEqual(["electron/services/db/communicationDbService.ts"]);
   });
 
   /**
