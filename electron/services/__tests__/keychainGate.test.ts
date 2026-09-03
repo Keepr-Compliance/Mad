@@ -7,13 +7,22 @@ const mockIsEncryptionAvailable = jest.fn().mockReturnValue(true);
 const mockEncryptString = jest.fn().mockReturnValue(Buffer.from("encrypted"));
 const mockDecryptString = jest.fn().mockReturnValue("decrypted");
 
-jest.mock("electron", () => ({
-  safeStorage: {
-    isEncryptionAvailable: () => mockIsEncryptionAvailable(),
-    encryptString: (s: string) => mockEncryptString(s),
-    decryptString: (b: Buffer) => mockDecryptString(b),
-  },
-}));
+// BACKLOG-2962: keychainGate no longer imports Electron. It is handed a
+// SecretStore, so this suite hands it one directly — no `jest.mock("electron")`
+// and no keychain anywhere. `installFakeSecretStore()` is called after every
+// `jest.resetModules()`, because a reset discards the provider along with it.
+const fakeSecretStore = {
+  isEncryptionAvailable: () => mockIsEncryptionAvailable(),
+  encryptString: (s: string) => mockEncryptString(s),
+  decryptString: (b: Buffer) => mockDecryptString(b),
+};
+
+async function installFakeSecretStore(): Promise<void> {
+  const { installSecretStore } = await import(
+    "../../capabilities/secretStoreProvider"
+  );
+  installSecretStore(fakeSecretStore);
+}
 
 jest.mock("../logService", () => ({
   __esModule: true,
@@ -43,6 +52,7 @@ describe("KeychainGateService", () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     jest.resetModules();
+    await installFakeSecretStore();
 
     // Re-import to get fresh singleton
     const mod = await import("../keychainGate");
@@ -197,6 +207,7 @@ describe("KeychainGateService", () => {
       // because the service reads process.platform at construction time.
       mockPlatform("darwin");
       jest.resetModules();
+      await installFakeSecretStore();
       const mod = await import("../keychainGate");
       const darwinGate = mod.default;
 
@@ -206,6 +217,7 @@ describe("KeychainGateService", () => {
     it("should return false on win32 (Windows)", async () => {
       mockPlatform("win32");
       jest.resetModules();
+      await installFakeSecretStore();
       const mod = await import("../keychainGate");
       const winGate = mod.default;
 
@@ -218,6 +230,7 @@ describe("KeychainGateService", () => {
       // Mock platform as darwin BEFORE constructing the service instance
       mockPlatform("darwin");
       jest.resetModules();
+      await installFakeSecretStore();
       const mod = await import("../keychainGate");
       const darwinGate = mod.default;
 
@@ -229,6 +242,7 @@ describe("KeychainGateService", () => {
     it("should auto-unlock on win32 (silent platform)", async () => {
       mockPlatform("win32");
       jest.resetModules();
+      await installFakeSecretStore();
       const mod = await import("../keychainGate");
       const winGate = mod.default;
 

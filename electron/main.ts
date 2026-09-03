@@ -4,6 +4,12 @@
 // a log path on first write. tsconfig.electron.json emits CommonJS, which
 // preserves statement order, so import position IS execution position here.
 import "./bootstrap/installAppDataPaths";
+// BACKLOG-2962: the Electron shell's composition root for native capabilities.
+// Core services depend on the SecretStore *interface*; this is the one place
+// that says the implementation is Electron's safeStorage. It must run before
+// anything calls the store. Nothing calls it during module construction today,
+// but installing first is what keeps that cheap to stay true.
+import "./bootstrap/installNativeCapabilities";
 import {
   app,
   BrowserWindow,

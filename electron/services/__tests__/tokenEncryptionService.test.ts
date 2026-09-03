@@ -53,6 +53,11 @@ describe("TokenEncryptionService", () => {
     // Clear all mock calls and implementations
     jest.clearAllMocks();
 
+    // BACKLOG-2962: this suite is the host, so it installs the secret store the
+    // service will be handed — the same mocked `safeStorage` object it configures
+    // below, so every existing expectation still points at the right mock.
+    require("../../../tests/helpers/installTestSecretStore").installTestSecretStore();
+
     // Reset the service's internal state between tests
     tokenEncryptionService._resetState();
 

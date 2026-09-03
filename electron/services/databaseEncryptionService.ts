@@ -4,7 +4,9 @@
  * Keys are stored securely in the OS keychain (macOS Keychain, Windows DPAPI, Linux Secret Service)
  */
 
-import { safeStorage, app } from "electron";
+import { app } from "electron";
+import type { SecretStore } from "../capabilities/secretStore";
+import { hostSecretStore } from "../capabilities/secretStoreProvider";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -33,11 +35,20 @@ interface KeyStore {
  * Database Encryption Service Class
  * Handles encryption key generation, storage, and retrieval for database encryption
  */
-class DatabaseEncryptionService {
+export class DatabaseEncryptionService {
   private readonly KEY_STORE_FILENAME = "db-key-store.json";
   private readonly KEY_VERSION = 1;
   private keyStorePath: string | null = null;
   private cachedKey: string | null = null;
+  private readonly secrets: SecretStore;
+
+  /**
+   * @param secrets - The host shell's secret store (BACKLOG-2962). Injected so
+   *   the key-store paths can be exercised without Electron.
+   */
+  constructor(secrets: SecretStore) {
+    this.secrets = secrets;
+  }
 
   /**
    * Initialize the encryption service
@@ -70,7 +81,7 @@ class DatabaseEncryptionService {
    */
   isEncryptionAvailable(): boolean {
     try {
-      return safeStorage.isEncryptionAvailable();
+      return this.secrets.isEncryptionAvailable();
     } catch (error) {
       logService.error(
         "Error checking encryption availability",
@@ -186,7 +197,7 @@ class DatabaseEncryptionService {
 
       // Decrypt the key using OS keychain
       const encryptedBuffer = Buffer.from(keyStore.encryptedKey, "base64");
-      const decryptedKey = safeStorage.decryptString(encryptedBuffer);
+      const decryptedKey = this.secrets.decryptString(encryptedBuffer);
 
       await logService.debug(
         "Retrieved encryption key from store",
@@ -219,7 +230,7 @@ class DatabaseEncryptionService {
 
     try {
       // Encrypt the key using OS keychain
-      const encryptedBuffer = safeStorage.encryptString(key);
+      const encryptedBuffer = this.secrets.encryptString(key);
       const encryptedBase64 = encryptedBuffer.toString("base64");
 
       const keyStore: KeyStore = {
@@ -325,7 +336,7 @@ class DatabaseEncryptionService {
     const newKey = newKeyBuffer.toString("hex");
 
     // Update key store with new key and rotation timestamp
-    const encryptedBuffer = safeStorage.encryptString(newKey);
+    const encryptedBuffer = this.secrets.encryptString(newKey);
     const encryptedBase64 = encryptedBuffer.toString("base64");
 
     const keyStore: KeyStore = {
@@ -413,5 +424,5 @@ class DatabaseEncryptionService {
 }
 
 // Export singleton instance
-export const databaseEncryptionService = new DatabaseEncryptionService();
+export const databaseEncryptionService = new DatabaseEncryptionService(hostSecretStore);
 export default databaseEncryptionService;
