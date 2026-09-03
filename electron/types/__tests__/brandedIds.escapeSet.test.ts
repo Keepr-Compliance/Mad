@@ -25,7 +25,7 @@
  * false completeness claim is worse than an unclaimed limit: an unclaimed limit
  * leaves the next reader looking, and a false claim stops them.
  *
- * COVERED — every syntactic way to assert a value INTO a branded type:
+ * COVERED — DIRECT SYNTACTIC ASSERTIONS THAT NAME THE BRAND. Not "every way":
  *
  *   asCommunicationId(raw)                 the named helper (CallExpression)
  *   raw as CommunicationId                 AsExpression
@@ -36,33 +36,34 @@
  *   raw as CommunicationId & { z?: 1 }     IntersectionType, any member
  *   raw as CommunicationId[]               ArrayType, resolved to its element
  *
- * All EIGHT were PLANTED one at a time in production code
+ * All eight were PLANTED one at a time in production code
  * (`communicationDbService.ts`) and each was observed to take this suite red, then
  * removed and observed green, against a green baseline. A matcher whose coverage
- * has never been made to fail is a list of hopes; the previous version of this
- * comment was exactly that, and four of its claims were false.
+ * has never been made to fail is a list of hopes.
  *
- * NOT COVERED, deliberately:
+ * NOT COVERED — AND THIS IS A PROPERTY OF THE APPROACH, NOT A GAP TO PATCH.
  *
- *   const x: CommunicationId = raw as any
+ * `namesABrand()` descends through type-node wrappers and then compares a NAME
+ * against a hard-coded set. **TypeScript can name one type in unboundedly many
+ * ways, so no name-set matcher can be exhaustive over type identity**, however
+ * deep it descends. Four indirections walk past this one today — an alias
+ * declaration, an import alias, a utility type, and an indexed access:
  *
- * This launders through `any`; it never names a brand, so no assertion-shaped
- * matcher can see it. **This belongs to a lint rule, not to this ratchet**, for a
- * reason that is not convenience: `as any` makes no claim about the brand — it
- * switches type checking off wholesale. Counting it here would merge "someone
- * asserted a brand without evidence" with "someone disabled the compiler", and
- * only the first is this item's subject. The right instrument already exists and
- * is named: `@typescript-eslint/no-explicit-any`, currently `warn` in
- * `eslint.config.js` and therefore non-blocking. Raising it to `error` is a
- * repo-wide policy change with an existing baseline behind it (721 warnings today,
- * 3 of them `as any` in `databaseService.test.ts`, which imports this brand module)
- * — a separate item, and deliberately not smuggled into this PR.
+ *   raw as CommunicationRow["id"]          // same type, different name
  *
- * Also not covered, and correctly so: `raw satisfies CommunicationId` launders
- * nothing, because `satisfies` CHECKS assignability rather than asserting it.
- * Executed rather than assumed — that expression is `TS1360: Type 'string' does
- * not satisfy the expected type 'CommunicationId'`, so it cannot reach a call site
- * in the first place.
+ * Closing that needs the type CHECKER (resolve each node to its type and compare
+ * identity), not a longer list of spellings. **BACKLOG-3072 owns it.**
+ *
+ * Separately, `const x: CommunicationId = raw as any` launders through `any`: it
+ * names no brand and makes no claim about one — it switches checking off wholesale.
+ * That is a lint rule's job, not this ratchet's. The named owner,
+ * `@typescript-eslint/no-explicit-any`, is `warn` today and therefore blocks
+ * nothing; **BACKLOG-3073 owns that.**
+ *
+ * Not covered and correctly so: `raw satisfies CommunicationId` launders nothing,
+ * because `satisfies` CHECKS assignability rather than asserting it. Executed
+ * rather than assumed — that expression is `TS1360: Type 'string' does not satisfy
+ * the expected type 'CommunicationId'`, so it cannot reach a call site at all.
  *
  * ## The diagnosis, recorded because this is the fifth instance
  *
