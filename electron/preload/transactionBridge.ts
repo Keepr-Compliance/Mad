@@ -513,11 +513,13 @@ export const transactionBridge = {
   /**
    * BACKLOG-1362: Pre-cache emails from connected providers.
    * Bulk-fetches ALL emails within the user's configured cache window
-   * into the local database. Incremental -- only fetches newer than
-   * what is already cached.
+   * into the local database. Incremental -- fetches mail newer than what is
+   * already cached, and (BACKLOG-3056) the older span a widened cache window
+   * has opened up behind it. Nothing is deleted and no link is broken.
    * @param userId - User ID to pre-cache emails for
    * @param force - BACKLOG-2856: re-download the ENTIRE cache window and replace
-   *   what is stored, rather than only fetching newer mail. Cascade-deletes every
+   *   what is stored, rather than running the incremental fetch above.
+   *   Cascade-deletes every
    *   email<->transaction link (parity with the messages Force Re-import), so it
    *   must never be passed without an explicit user confirmation.
    * @returns Results with counts of fetched and stored emails
