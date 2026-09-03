@@ -13,11 +13,67 @@
  * printed, and whoever did it has to say so in the PR.
  *
  * The sets are derived by EXECUTION, not by grep and not by memory: files are
- * walked, parsed with the TypeScript compiler, and call sites are matched as AST
- * nodes. A token grep finds the name, not the property — it counts mentions in
- * comments and strings as call sites (this very file's own prose would inflate
- * the number, and so would the long explanatory comment beside the escape in
+ * walked, parsed with the TypeScript compiler, and matched as AST nodes. A token
+ * grep finds the name, not the property — it counts mentions in comments and
+ * strings as real code (this very file's own prose would inflate the number, and
+ * so would the long explanatory comment beside the escape in
  * `hybridExtractorService.ts`).
+ *
+ * ## WHAT THIS MATCHER COVERS, AND WHAT IT DOES NOT
+ *
+ * Stated because the previous version implied completeness it did not have, and a
+ * false completeness claim is worse than an unclaimed limit: an unclaimed limit
+ * leaves the next reader looking, and a false claim stops them.
+ *
+ * COVERED — every syntactic way to assert a value INTO a branded type:
+ *
+ *   asCommunicationId(raw)                 the named helper (CallExpression)
+ *   raw as CommunicationId                 AsExpression
+ *   <CommunicationId>raw                   TypeAssertionExpression
+ *   raw as ids.CommunicationId             QualifiedName, resolved rightmost
+ *   raw as (CommunicationId)               ParenthesizedType, resolved through
+ *   raw as CommunicationId | undefined     UnionType, any member
+ *   raw as CommunicationId & { z?: 1 }     IntersectionType, any member
+ *   raw as CommunicationId[]               ArrayType, resolved to its element
+ *
+ * All EIGHT were PLANTED one at a time in production code
+ * (`communicationDbService.ts`) and each was observed to take this suite red, then
+ * removed and observed green, against a green baseline. A matcher whose coverage
+ * has never been made to fail is a list of hopes; the previous version of this
+ * comment was exactly that, and four of its claims were false.
+ *
+ * NOT COVERED, deliberately:
+ *
+ *   const x: CommunicationId = raw as any
+ *
+ * This launders through `any`; it never names a brand, so no assertion-shaped
+ * matcher can see it. **This belongs to a lint rule, not to this ratchet**, for a
+ * reason that is not convenience: `as any` makes no claim about the brand — it
+ * switches type checking off wholesale. Counting it here would merge "someone
+ * asserted a brand without evidence" with "someone disabled the compiler", and
+ * only the first is this item's subject. The right instrument already exists and
+ * is named: `@typescript-eslint/no-explicit-any`, currently `warn` in
+ * `eslint.config.js` and therefore non-blocking. Raising it to `error` is a
+ * repo-wide policy change with an existing baseline behind it (721 warnings today,
+ * 3 of them `as any` in `databaseService.test.ts`, which imports this brand module)
+ * — a separate item, and deliberately not smuggled into this PR.
+ *
+ * Also not covered, and correctly so: `raw satisfies CommunicationId` launders
+ * nothing, because `satisfies` CHECKS assignability rather than asserting it.
+ * Executed rather than assumed — that expression is `TS1360: Type 'string' does
+ * not satisfy the expected type 'CommunicationId'`, so it cannot reach a call site
+ * in the first place.
+ *
+ * ## The diagnosis, recorded because this is the fifth instance
+ *
+ * Both holes found in this guard were the same defect: MATCHING THE WRONG NODE
+ * KIND. First it matched only CallExpressions, so every inline `as` was invisible.
+ * Then it matched AsExpression with a bare TypeReference, so four wrappers —
+ * angle-bracket syntax, a namespace qualifier, parentheses, a union — walked
+ * through. Neither was "a missing pattern to add"; both were a matcher that
+ * stopped descending too early. The fix both times was to match the right node
+ * kinds and RESOLVE THROUGH the wrappers, never to enumerate spellings — an
+ * enumeration is only ever as long as the last person's imagination.
  */
 import fs from "fs";
 import path from "path";
@@ -39,12 +95,10 @@ const SELF = path.join("electron", "types", "__tests__", "brandedIds.escapeSet.t
 const MINT_HELPERS = new Set(["asCommunicationId", "asEmailId", "asTransactionId"]);
 
 /**
- * The named helpers are not the only way to brand a string: `x as CommunicationId`
- * does the same thing invisibly, and a guard that counts only CALL EXPRESSIONS
- * cannot see it. That gap was live in this file's first version — the exact-set
- * assertions were green while `brandedIds.runtimeIdentity.test.ts` held an inline
- * `RAW as CommunicationId`, which is exactly the drift this suite exists to stop.
- * Both forms are counted now.
+ * The named helpers are not the only way to brand a string — an inline type
+ * assertion does the same thing invisibly. See the file header for exactly which
+ * assertion forms are matched, which one is not, and why that one belongs to a
+ * lint rule instead.
  */
 const BRAND_TYPES = new Set([
   "CommunicationId",
@@ -152,16 +206,52 @@ function countMints(relPath: string, text: string): number {
   );
 }
 
-/** Inline `expr as CommunicationId` — an AsExpression naming a branded type. */
+/**
+ * The rightmost identifier of an entity name: `CommunicationId` for a bare
+ * reference, and also for `ids.CommunicationId` or `a.b.CommunicationId`. A
+ * qualified name is the same assertion wearing a namespace import.
+ */
+function rightmostName(name: ts.EntityName): string {
+  return ts.isIdentifier(name) ? name.text : name.right.text;
+}
+
+/**
+ * Does this type node NAME a brand, at any depth a type-assertion can wrap one in?
+ *
+ * Recursive on purpose. The first version of this guard tested
+ * `ts.isTypeReferenceNode(node.type)` directly, so `raw as (CommunicationId)`,
+ * `raw as CommunicationId | undefined` and `raw as ids.CommunicationId` all
+ * slipped past — each is a wrapper the matcher did not descend through, not a
+ * different kind of escape.
+ */
+function namesABrand(type: ts.TypeNode | undefined): boolean {
+  if (!type) return false;
+  if (ts.isParenthesizedTypeNode(type)) return namesABrand(type.type);
+  if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type)) {
+    return type.types.some(namesABrand);
+  }
+  if (ts.isArrayTypeNode(type)) return namesABrand(type.elementType);
+  if (ts.isTypeReferenceNode(type)) return BRAND_TYPES.has(rightmostName(type.typeName));
+  return false;
+}
+
+/**
+ * Inline type assertions that claim a value is branded, in BOTH of TypeScript's
+ * assertion syntaxes: `expr as T` (`AsExpression`) and `<T>expr`
+ * (`TypeAssertionExpression`).
+ *
+ * `<T>expr` is unavailable in `.tsx` — TypeScript parses it as JSX — and this is
+ * handled for free rather than special-cased: `ts.createSourceFile` derives the
+ * script kind from the file name it is given, so a `.tsx` file in the corpus is
+ * parsed with JSX rules and cannot produce a `TypeAssertionExpression` at all.
+ */
 function countInlineBrandCasts(relPath: string, text: string): number {
   return countNodes(
     relPath,
     text,
     (node) =>
-      ts.isAsExpression(node) &&
-      ts.isTypeReferenceNode(node.type) &&
-      ts.isIdentifier(node.type.typeName) &&
-      BRAND_TYPES.has(node.type.typeName.text),
+      (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) &&
+      namesABrand(node.type),
   );
 }
 
