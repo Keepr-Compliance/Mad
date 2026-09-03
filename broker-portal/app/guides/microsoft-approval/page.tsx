@@ -68,12 +68,12 @@ const PERMISSIONS = [
   },
   {
     icon: Share2,
-    label: 'Read shared mail',
+    label: 'Read user and shared mail',
     detail: 'Read mailboxes that person has already been given access to in Exchange — no others.',
   },
   {
     icon: Share2,
-    label: 'Read shared contacts',
+    label: 'Read user and shared contacts',
     detail: 'The same rule for shared contact folders they already have access to.',
   },
   {
@@ -336,10 +336,11 @@ export default function MicrosoftApprovalGuidePage() {
                 person submitting, and it is the point of the product.
               </li>
               <li>
-                <strong>Audit and diagnostic logs.</strong> The desktop app syncs a log of its own
-                actions &mdash; what was imported, linked, or exported, and when. Some of those
-                entries currently carry names and property addresses from the transaction they
-                describe. Narrowing that is work in progress.
+                <strong>Audit logs.</strong> The desktop app syncs a log of its own actions
+                &mdash; sign-ins, transaction and contact changes, exports, submissions, and
+                mailbox connections, with a timestamp for each. Some of those entries currently
+                carry names and property addresses from the transaction they describe. Narrowing
+                that is work in progress.
               </li>
             </ul>
             <p className="mt-3 text-gray-700">
@@ -413,8 +414,9 @@ export default function MicrosoftApprovalGuidePage() {
                   , go to <strong>Enterprise applications</strong>, open the Keepr desktop
                   application, and look at <strong>Permissions</strong>. Every permission granted
                   is listed there, and you can revoke them there at any time without involving us.
-                  Revoking takes effect in Microsoft immediately; the desktop app then asks its
-                  users to reconnect.
+                  Revoking stops Microsoft issuing new tokens. An access token already in hand
+                  keeps working until it expires, which is about an hour; after that the desktop
+                  app cannot refresh it and the person has to reconnect.
                 </p>
                 <p className="mt-2 text-sm text-gray-600">
                   Keepr&apos;s own Settings card records <em>when consent was granted</em>; it is

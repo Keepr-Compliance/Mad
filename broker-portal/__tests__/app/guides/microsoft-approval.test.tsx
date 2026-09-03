@@ -178,8 +178,8 @@ describe('BACKLOG-3092 — /guides/microsoft-approval', () => {
       expect(text).toContain('Sign in and read user profile');
       expect(text).toContain('Read user mail');
       expect(text).toContain('Read user contacts');
-      expect(text).toContain('Read shared mail');
-      expect(text).toContain('Read shared contacts');
+      expect(text).toContain('Read user and shared mail');
+      expect(text).toContain('Read user and shared contacts');
       expect(text).toContain('Maintain access to data you have given it access to');
       expect(text).toMatch(/read-only/i);
       // The sentence on the Microsoft screen that alarms people.
@@ -194,7 +194,7 @@ describe('BACKLOG-3092 — /guides/microsoft-approval', () => {
       // Transaction submissions upload message content by design and audit-log
       // metadata syncs today (BACKLOG-3052). The page has to say so.
       expect(text).toMatch(/submits a completed\s+transaction for review/i);
-      expect(text).toMatch(/audit and diagnostic logs/i);
+      expect(text).toMatch(/audit logs\./i);
       expect(text).not.toMatch(/never leaves (your|the|their) (computer|device|machine)/i);
       expect(text).not.toMatch(/nothing (is sent|reaches|leaves)/i);
     });
