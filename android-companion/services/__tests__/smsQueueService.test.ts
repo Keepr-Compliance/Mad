@@ -60,6 +60,9 @@ import {
   dequeueBatch,
   requeueMessages,
   getQueue,
+  readQueue,
+  clearQueue,
+  QueueUnreadableError,
   getQueueSize,
   getLastSyncTimestamp,
   setLastSyncTimestamp,
@@ -101,6 +104,60 @@ function idSet(messages: SyncMessage[]): Set<string> {
 function makeMany(n: number, start = 0): SyncMessage[] {
   return Array.from({ length: n }, (_, i) => msg(start + i));
 }
+
+/**
+ * The one storage key the queue lives under. The module keeps it private, so
+ * this is a transcription — and it is self-checking: if it ever stopped
+ * matching, `withUnreadableQueue` below would inject no failure at all and the
+ * BACKLOG-3070 controls would fail rather than pass vacuously. Pinned directly
+ * in `a genuinely absent key ...` too.
+ */
+const QUEUE_KEY = '@keepr/sms-queue';
+
+/**
+ * Run `fn` with the QUEUE's storage read failing, then restore the working
+ * store so the surviving bytes can be read back and asserted.
+ *
+ * Two distinct real failure paths, both of which reached the same swallowed
+ * `catch` before BACKLOG-3070:
+ *   - an `Error` -> `AsyncStorage.getItem` REJECTS (the device shape is
+ *     `SQLiteBlobTooBigException: Row too big to fit into CursorWindow`);
+ *   - a `string` -> bytes come back but `JSON.parse` cannot use them.
+ *
+ * Only the queue key is affected; every other key passes through to the real
+ * in-memory store, so nothing else in the call is disturbed.
+ */
+async function withUnreadableQueue<T>(
+  failure: Error | string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const getItem = AsyncStorage.getItem as jest.Mock;
+  const working = getItem.getMockImplementation() as (
+    k: string,
+  ) => Promise<string | null>;
+  getItem.mockImplementation(async (k: string) => {
+    if (k === QUEUE_KEY) {
+      if (failure instanceof Error) throw failure;
+      return failure;
+    }
+    return working(k);
+  });
+  try {
+    return await fn();
+  } finally {
+    getItem.mockImplementation(working);
+  }
+}
+
+/** The stored queue as it actually sits on disk, read back after a failure. */
+async function storedQueue(): Promise<SyncMessage[]> {
+  const raw = await AsyncStorage.getItem(QUEUE_KEY);
+  return JSON.parse(raw as string) as SyncMessage[];
+}
+
+/** The device's own words for the read that BACKLOG-3070 exists for. */
+const cursorWindowFailure = (): Error =>
+  new Error('Row too big to fit into CursorWindow');
 
 beforeEach(() => {
   resetStore();
@@ -425,5 +482,164 @@ describe('sync stats: connection-health failure streak (BACKLOG-2203)', () => {
     const stats = await getSyncStats();
     expect(stats.consecutiveFailures).toBe(0);
     expect(stats.firstFailureTime).toBeNull();
+  });
+});
+
+// ===========================================================================
+// 7. A failed queue read is NEVER an empty queue (BACKLOG-3070)
+//
+//    `getQueue` was `try { ... } catch { return []; }`, so any read failure
+//    became "the queue is empty" — and `enqueueMessages` then wrote
+//    `[...[], ...toAppend]` over the stored value, destroying the un-synced
+//    backlog while the SMS cursor kept advancing past messages that were never
+//    delivered. The same drop-oldest loss BACKLOG-2199 removed, reintroduced
+//    through a swallowed exception instead of a trim.
+//
+//    These assert IDENTITY (exact ID-SETs) like the rest of this file: a
+//    surviving COUNT is satisfied by the wrong messages surviving.
+// ===========================================================================
+describe('a failed queue read is never mistaken for an empty queue', () => {
+  it('a storage read failure does NOT let an append overwrite the un-synced backlog', async () => {
+    const seeded = makeMany(10); // ids 0..9, un-synced
+    await enqueueMessages(seeded);
+
+    const setItem = AsyncStorage.setItem as jest.Mock;
+    setItem.mockClear();
+
+    await withUnreadableQueue(cursorWindowFailure(), async () => {
+      // The CALL's outcome is pinned separately below, so this control fails on
+      // the data being destroyed rather than on a missing throw.
+      await enqueueMessages([msg(999)]).catch(() => undefined);
+    });
+
+    const stored = await storedQueue();
+    // Pre-fix this set is exactly {999}: the ten un-synced messages are gone.
+    expect(idSet(stored)).toEqual(idSet(seeded));
+    expect(stored.some((m) => m.smsId === '999')).toBe(false);
+
+    // Nothing was written over bytes we failed to read.
+    expect(
+      setItem.mock.calls.filter((c: unknown[]) => c[0] === QUEUE_KEY),
+    ).toHaveLength(0);
+  });
+
+  it('unparseable stored bytes do NOT let an append overwrite the backlog either', async () => {
+    const seeded = makeMany(6);
+    await enqueueMessages(seeded);
+
+    await withUnreadableQueue('[{"smsId":"0","sen', async () => {
+      await enqueueMessages([msg(999)]).catch(() => undefined);
+    });
+
+    expect(idSet(await storedQueue())).toEqual(idSet(seeded));
+  });
+
+  it('enqueue REJECTS instead of reporting a successful append', async () => {
+    await enqueueMessages(makeMany(3));
+
+    await withUnreadableQueue(cursorWindowFailure(), async () => {
+      // Pre-fix this RESOLVES with 1 — the caller is told the message is safely
+      // queued at the moment the queue is destroyed.
+      await expect(enqueueMessages([msg(999)])).rejects.toBeInstanceOf(
+        QueueUnreadableError,
+      );
+    });
+  });
+
+  it('readQueue reports WHY it failed rather than returning an empty queue', async () => {
+    await enqueueMessages(makeMany(3));
+
+    const rejected = await withUnreadableQueue(cursorWindowFailure(), () =>
+      readQueue(),
+    );
+    if (rejected.ok) throw new Error('expected the storage read to fail');
+    expect(rejected.error.reason).toBe('storage_failed');
+    expect(rejected.error.message).toContain('CursorWindow');
+
+    const corrupt = await withUnreadableQueue('[{"smsId":"0","sen', () =>
+      readQueue(),
+    );
+    if (corrupt.ok) throw new Error('expected the parse to fail');
+    expect(corrupt.error.reason).toBe('parse_failed');
+
+    // CLASSIFICATION only, not a destruction control: a value that parses to a
+    // non-array threw a TypeError downstream even before the fix, so it never
+    // reached the overwrite.
+    const notArray = await withUnreadableQueue('{"queue":[]}', () =>
+      readQueue(),
+    );
+    if (notArray.ok) throw new Error('expected a non-array to be rejected');
+    expect(notArray.error.reason).toBe('parse_failed');
+  });
+
+  it('getQueue rejects rather than returning [] when the read fails', async () => {
+    await enqueueMessages(makeMany(3));
+
+    await withUnreadableQueue(cursorWindowFailure(), async () => {
+      await expect(getQueue()).rejects.toBeInstanceOf(QueueUnreadableError);
+    });
+  });
+
+  it('requeue does not write ONE failed batch over a backlog it could not read', async () => {
+    // Not named in the item: `requeueMessages` has the identical overwrite —
+    // on a swallowed read it wrote `[...prependable]` over the stored value, so
+    // returning one failed batch destroyed every other un-synced message.
+    const seeded = makeMany(10);
+    await enqueueMessages(seeded);
+    const failedBatch = makeMany(3, 900); // ids 900..902, disjoint
+
+    await withUnreadableQueue(cursorWindowFailure(), async () => {
+      await requeueMessages(failedBatch).catch(() => undefined);
+    });
+
+    expect(idSet(await storedQueue())).toEqual(idSet(seeded));
+  });
+
+  it('dequeue reports the failure instead of a healthy-looking empty batch', async () => {
+    const seeded = makeMany(4);
+    await enqueueMessages(seeded);
+
+    await withUnreadableQueue(cursorWindowFailure(), async () => {
+      await expect(dequeueBatch()).rejects.toBeInstanceOf(QueueUnreadableError);
+    });
+
+    expect(idSet(await storedQueue())).toEqual(idSet(seeded));
+  });
+
+  it('an unreadable queue never reports empty capacity (the cursor-advance link)', async () => {
+    // This is how a swallowed read reached the cursor: size 0 -> full remaining
+    // capacity -> performSync reads a fresh batch of SMS -> enqueue overwrites
+    // -> setLastSyncTimestamp advances past messages that were never delivered.
+    await enqueueMessages(makeMany(MAX_QUEUE_SIZE));
+
+    await withUnreadableQueue(cursorWindowFailure(), async () => {
+      await expect(getQueueSize()).rejects.toBeInstanceOf(QueueUnreadableError);
+      await expect(getRemainingQueueCapacity()).rejects.toBeInstanceOf(
+        QueueUnreadableError,
+      );
+      await expect(isQueueAtCapacity()).rejects.toBeInstanceOf(
+        QueueUnreadableError,
+      );
+    });
+  });
+
+  it('a genuinely absent key is still an empty queue, and a good read still round-trips', async () => {
+    // Never written: nothing failed, so there is nothing to preserve.
+    expect(await readQueue()).toEqual({ ok: true, messages: [] });
+    expect(await getQueue()).toEqual([]);
+    expect(await getQueueSize()).toBe(0);
+
+    const seeded = makeMany(5);
+    await enqueueMessages(seeded);
+    // Pins QUEUE_KEY against the module: the seed must land under this key.
+    expect(await AsyncStorage.getItem(QUEUE_KEY)).not.toBeNull();
+
+    const read = await readQueue();
+    if (!read.ok) throw new Error('a healthy read must succeed');
+    expect(idSet(read.messages)).toEqual(idSet(seeded));
+
+    // Cleared (removeItem) is empty again, and still not a failure.
+    await clearQueue();
+    expect(await readQueue()).toEqual({ ok: true, messages: [] });
   });
 });
