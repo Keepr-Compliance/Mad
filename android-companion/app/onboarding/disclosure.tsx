@@ -136,7 +136,7 @@
  *        still reads texts and sends them. Both controls gate the SCHEDULE,
  *        which is what their labels say, and the copy now says so too. That a
  *        control a user reads as "off" does not exist short of unpairing is a
- *        PRODUCT question, filed separately — not something copy can fix.
+ *        PRODUCT defect, not something copy can fix: filed as BACKLOG-3084.
  *      · Unpair genuinely stops everything: `app/(main)/settings.tsx` removes
  *        `@keepr/pairing` (`:222`) after `stopBackgroundSync()` +
  *        `resetAllSyncData()`, and `runSyncCycle` then returns at its
