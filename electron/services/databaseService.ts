@@ -72,6 +72,13 @@ import {
 // imports lived here for the deleted migration chain (v57..v69). The identity
 // DDL's single definition (BACKLOG-2410) now reaches production through the
 // generated schema.sql; the modules remain for their other consumers.
+// BACKLOG-3067: branded row ids — see electron/types/ids.ts.
+import type {
+  CommunicationId,
+  CommunicationRow,
+  TransactionId,
+  TransactionRow,
+} from "../types/ids";
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { initializationBroadcaster } from "./initializationBroadcaster";
 import type { AuditLogEntry } from "./auditService";
@@ -1700,7 +1707,7 @@ class DatabaseService implements IDatabaseService {
     return transactionDb.getPendingTransactionCount(userId);
   }
 
-  async getTransactionById(transactionId: string): Promise<Transaction | null> {
+  async getTransactionById(transactionId: string): Promise<TransactionRow | null> {
     return transactionDb.getTransactionById(transactionId);
   }
 
@@ -1735,11 +1742,11 @@ class DatabaseService implements IDatabaseService {
   // COMMUNICATION OPERATIONS (Delegate to communicationDbService)
   // ============================================
 
-  async createCommunication(communicationData: NewCommunication): Promise<Communication> {
+  async createCommunication(communicationData: NewCommunication): Promise<CommunicationRow> {
     return communicationDb.createCommunication(communicationData);
   }
 
-  async getCommunicationById(communicationId: string): Promise<Communication | null> {
+  async getCommunicationById(communicationId: string): Promise<CommunicationRow | null> {
     return communicationDb.getCommunicationById(communicationId);
   }
 
@@ -1794,7 +1801,11 @@ class DatabaseService implements IDatabaseService {
     return communicationDb.removeIgnoredCommunication(ignoredCommId);
   }
 
-  async linkCommunicationToTransaction(communicationId: string, transactionId: string): Promise<void> {
+  /**
+   * BACKLOG-3067: branded, because a facade that widens its parameters back to
+   * `string` erases the whole guarantee for every caller that goes through it.
+   */
+  async linkCommunicationToTransaction(communicationId: CommunicationId, transactionId: TransactionId): Promise<void> {
     return communicationDb.linkCommunicationToTransaction(communicationId, transactionId);
   }
 

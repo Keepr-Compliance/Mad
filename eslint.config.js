@@ -41,6 +41,11 @@ module.exports = [
       'node_modules/**',
       'dist/**',
       'build/**',
+      // BACKLOG-3067: the type-level control fixtures. Two of them are supposed to
+      // fail `tsc` on purpose, and they are excluded from tsconfig.json — so the
+      // type-aware config below (project: './tsconfig.json') would reject them with
+      // "file not found in project" rather than any lint finding.
+      'electron/types/__typefixtures__/**',
       // BACKLOG-2787 finding 3 (folded into this PR because eslint.config.js is
       // already in its diff): the `.js`-only pattern stopped matching the moment
       // the base block started covering `.mjs`/`.cjs`, so a minified ES-module

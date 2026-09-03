@@ -1,0 +1,6 @@
+{
+  "//": "BACKLOG-3067 — one fixture, one tsc invocation, one exit code. Compiling the",
+  "//2": "fixtures together would let a failure in one mask a pass in another.",
+  "extends": "./tsconfig.base.json",
+  "files": ["./mustNotCompile-emailIdForCommunicationId.ts"]
+}

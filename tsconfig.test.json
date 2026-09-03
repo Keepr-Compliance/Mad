@@ -22,5 +22,6 @@
     "tests/**/*",
     "scripts/qa/harness/**/*"
   ],
-  "exclude": ["node_modules", "dist", "build"]
+  "//exclude": "BACKLOG-3067: this config redeclares `exclude` in full (see the BACKLOG-2414 note above — inheriting the base one would re-open the *.test.* hole), so the type-fixture directory has to be named here SEPARATELY. Omitting it takes `npm run type-check:tests` red on fixtures that are failing to compile by design.",
+  "exclude": ["node_modules", "dist", "build", "electron/types/__typefixtures__/**"]
 }

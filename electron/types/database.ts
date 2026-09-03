@@ -18,6 +18,9 @@ import type {
   ContactFilters,
   ContactUpdateFields,
 } from "./models";
+// BACKLOG-3067: the interface has to agree with the implementation, or the brand
+// is erased the moment anything goes through `IDatabaseService`.
+import type { CommunicationRow, TransactionRow } from "./ids";
 import type { ContactOrigin } from "../services/db/contactOriginLink";
 
 // ============================================
@@ -125,7 +128,7 @@ export interface IDatabaseService {
 
   // Transaction operations
   createTransaction(transactionData: NewTransaction): Promise<Transaction>;
-  getTransactionById(transactionId: string): Promise<Transaction | null>;
+  getTransactionById(transactionId: string): Promise<TransactionRow | null>;
   getTransactions(filters?: TransactionFilters): Promise<Transaction[]>;
   getTransactionWithContacts(
     transactionId: string,
@@ -143,8 +146,8 @@ export interface IDatabaseService {
   // Communication operations
   createCommunication(
     communicationData: NewCommunication,
-  ): Promise<Communication>;
-  getCommunicationById(communicationId: string): Promise<Communication | null>;
+  ): Promise<CommunicationRow>;
+  getCommunicationById(communicationId: string): Promise<CommunicationRow | null>;
   getCommunications(filters?: CommunicationFilters): Promise<Communication[]>;
   getCommunicationsByTransaction(
     transactionId: string,
