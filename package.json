@@ -68,6 +68,8 @@
     "check:hooks": "node scripts/ci/check-hooks-tracking.mjs",
     "check:sql-boundary": "node scripts/ci/check-sql-boundary.mjs",
     "verify:sql-boundary": "node scripts/__tests__/check-sql-boundary.verify.js",
+    "check:native-capabilities": "node scripts/ci/check-native-capabilities.mjs",
+    "verify:native-capabilities": "node scripts/__tests__/check-native-capabilities.verify.js",
     "check:text-sources": "node scripts/ci/check-text-sources.mjs",
     "check:test-drift": "node scripts/ci/check-test-drift.mjs",
     "check:android-version": "node scripts/ci/check-android-version-bump.mjs",
