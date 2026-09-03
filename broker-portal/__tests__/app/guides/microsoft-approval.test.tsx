@@ -146,6 +146,16 @@ describe('BACKLOG-3092 — /guides/microsoft-approval', () => {
       expect(resolveRoute(href)).not.toBeNull();
     });
 
+    it('the support link is absolute and points at the public ticket form', () => {
+      // Absolute on purpose: this page's text gets pasted into email, where a
+      // relative href is dead. That puts it outside internalHrefs, so the route
+      // behind it is asserted here instead — and /support/new must resolve,
+      // because the reader filing a ticket has no Keepr account.
+      expect(guideSource).toContain('href="https://app.keeprcompliance.com/support/new"');
+      expect(resolveRoute('/support/new')).not.toBeNull();
+      expect(guideSource).not.toContain('mailto:');
+    });
+
     it('does not link to a route that was removed or never existed', () => {
       for (const dead of ['/guides/scim-provisioning', '/guides/admin-consent', '/guides']) {
         expect(resolveRoute(dead)).toBeNull();
@@ -173,30 +183,62 @@ describe('BACKLOG-3092 — /guides/microsoft-approval', () => {
       const text = container.textContent ?? '';
 
       expect(text).toContain('Approving Keepr for Microsoft Outlook');
+      // Both routes, /setup first: most readers arrive from the outreach email,
+      // which sends them to /setup, so the first section matches the path they
+      // are already on.
+      expect(text.indexOf('If you don')).toBeGreaterThan(-1);
+      expect(text.indexOf('If you already have')).toBeGreaterThan(-1);
+      expect(text.indexOf('If you don')).toBeLessThan(text.indexOf('If you already have'));
       expect(text).toContain('Desktop App Permissions');
-      // All six permissions from the live consent screen.
-      expect(text).toContain('Sign in and read user profile');
-      expect(text).toContain('Read user mail');
-      expect(text).toContain('Read user contacts');
-      expect(text).toContain('Read user and shared mail');
-      expect(text).toContain('Read user and shared contacts');
-      expect(text).toContain('Maintain access to data you have given it access to');
-      expect(text).toMatch(/read-only/i);
+      // The roles that can consent.
+      expect(text).toContain('Privileged Role Administrator');
+      expect(text).toContain('Cloud Application Administrator');
+      expect(text).toContain('Application Administrator');
+      // The shape of the grant, which is what replaces the enumeration.
+      expect(text).toMatch(/every permission is read-only/i);
+      expect(text).toMatch(/no application-level permission/i);
+      expect(text).toMatch(/credential store/i);
       // The sentence on the Microsoft screen that alarms people.
       expect(text).toMatch(/all users in your organization/i);
       expect(text).toMatch(/delegated/i);
     });
 
-    it('does not claim that nothing reaches Keepr’s servers', () => {
+    it('does not restate the permission list', () => {
+      // Microsoft's consent screen is the authority on WHAT is granted. A
+      // hand-written copy of that list is what let the app registration drift
+      // out of sync with what customers were told, so the page claims the SHAPE
+      // of the grant instead and cannot go stale when a permission is renamed.
       const { container } = render(<MicrosoftApprovalGuidePage />);
       const text = container.textContent ?? '';
 
-      // Transaction submissions upload message content by design and audit-log
-      // metadata syncs today (BACKLOG-3052). The page has to say so.
-      expect(text).toMatch(/submits a completed\s+transaction for review/i);
-      expect(text).toMatch(/audit logs\./i);
+      for (const displayString of [
+        'Sign in and read user profile',
+        'Read user mail',
+        'Read user contacts',
+        'Read user and shared mail',
+        'Read user and shared contacts',
+        'Maintain access to data you have given it access to',
+      ]) {
+        expect(text).not.toContain(displayString);
+      }
+    });
+
+    it('makes no reassuring claim about where data goes', () => {
+      const { container } = render(<MicrosoftApprovalGuidePage />);
+      const text = container.textContent ?? '';
+
+      // The data-flow section was cut deliberately: an approval guide is the
+      // wrong place for it, and the honest version needs more room than this
+      // page should give it. Saying NOTHING is the decision, so the guard is
+      // that the page never gains a partial or false reassurance instead.
+      // Transaction submissions upload message content by design, and audit-log
+      // entries carry names and property addresses today (BACKLOG-3052) — every
+      // phrase below would therefore be a lie on a public page.
       expect(text).not.toMatch(/never leaves (your|the|their) (computer|device|machine)/i);
-      expect(text).not.toMatch(/nothing (is sent|reaches|leaves)/i);
+      expect(text).not.toMatch(/nothing (is sent|reaches|leaves|is uploaded)/i);
+      expect(text).not.toMatch(/no data (is sent|reaches|leaves|is uploaded)/i);
+      expect(text).not.toMatch(/stays? (entirely |only )?on (your|their|the employee)/i);
+      expect(text).not.toMatch(/we (never|do not) (see|store|upload|receive)/i);
     });
   });
 
