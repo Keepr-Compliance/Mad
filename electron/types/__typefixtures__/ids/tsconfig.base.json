@@ -1,0 +1,32 @@
+{
+  "//": "BACKLOG-3067 — the type-level controls' compiler. These fixtures are compiled by",
+  "//2": "electron/types/__tests__/brandedIds.typeControls.test.ts, which asserts on tsc's EXIT",
+  "//3": "CODE and DIAGNOSTICS. Two of the three fixtures are SUPPOSED to fail to compile, so this",
+  "//4": "directory is excluded from every root tsconfig and from eslint — otherwise `type-check`,",
+  "//5": "`type-check:tests` and `build:electron` would all go red on files that are working.",
+  "//6": "",
+  "//7": "This config deliberately does NOT `extends` the root tsconfig.json: the root's `exclude`",
+  "//8": "now names this directory, and inheriting it would exclude these fixtures from their own",
+  "//9": "compiler. The load-bearing compilerOptions are therefore duplicated, and",
+  "//10": "brandedIds.typeControls.test.ts asserts they still MATCH the root's — a fixture compiled",
+  "//11": "under weaker settings than the real code proves nothing about the real code.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowSyntheticDefaultImports": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "//include": "Deliberately absent. Each fixture gets a thin config that `extends` this one and names exactly ONE file, so every fixture has its OWN tsc exit code. Compiling them together would let one fixture failure mask another fixture passing."
+}

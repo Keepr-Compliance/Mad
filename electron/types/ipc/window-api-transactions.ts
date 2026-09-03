@@ -766,7 +766,9 @@ export interface WindowApiTransactions {
    * BACKLOG-1362: Pre-cache emails from connected providers.
    *
    * BACKLOG-2856: `force` re-downloads the whole cache window and REPLACES what
-   * is stored, instead of fetching only mail newer than the newest cached row.
+   * is stored, instead of the incremental fetch — which takes mail newer than
+   * the newest cached row and, since BACKLOG-3056, also backfills the older
+   * span a widened cache window opens up.
    * Parity with the macOS messages Force Re-import: it cascade-deletes every
    * email↔transaction link, so the caller must confirm that with the user first.
    */
