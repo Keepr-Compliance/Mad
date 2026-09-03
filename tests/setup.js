@@ -463,3 +463,18 @@ afterAll(() => {
     // Already using real timers, ignore
   }
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2962: install the native-capability implementations for this shell.
+//
+// The jest harness IS a shell — it runs the Electron main-process code against
+// `tests/__mocks__/electron.js`. So it installs the real `ElectronSecretStore`,
+// which forwards to that mocked `safeStorage`. Suites written before the seam
+// existed keep exercising exactly the code path they always did, and a break in
+// `ElectronSecretStore` still shows up in them.
+//
+// A suite that calls `jest.resetModules()` gets a FRESH provider module with
+// nothing installed, and must re-install. `tests/helpers/installTestSecretStore`
+// exists for that; see its own file for why it is not done automatically.
+// ---------------------------------------------------------------------------
+require('./helpers/installTestSecretStore').installTestSecretStore();

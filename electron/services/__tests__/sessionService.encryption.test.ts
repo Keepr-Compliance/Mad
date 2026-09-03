@@ -103,6 +103,9 @@ describe("SessionService - Encryption (TASK-2017)", () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     jest.resetModules();
+    // BACKLOG-2962: resetModules gave us a fresh capability provider with nothing
+    // installed. Re-install, or the first secret-store call throws.
+    require("../../../tests/helpers/installTestSecretStore").installTestSecretStore();
 
     // Reset mock implementations to defaults
     mockFs.writeFile.mockResolvedValue(undefined);

@@ -75,6 +75,12 @@ import {
 describe("startupHealthCheck", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // BACKLOG-2962: this suite is the host, so it installs the secret store the
+    // service will be handed — the same mocked `safeStorage` object it configures
+    // below, so every existing expectation still points at the right mock.
+    require("../../../tests/helpers/installTestSecretStore").installTestSecretStore();
+
     // Reset defaults
     mockIsEncryptionAvailable.mockReturnValue(true);
     mockGetPath.mockReturnValue("/mock/user/data");
