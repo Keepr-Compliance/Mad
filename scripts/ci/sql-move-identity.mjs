@@ -290,10 +290,33 @@ if (args[0] === "--compare") {
   const where = (rows, h) =>
     rows.filter((r) => r.hash === h).map((r) => `${r.file}:${r.line}`).join(", ");
 
+  // Synthetic rows are NOT statement text. `unfollowed:` / `unreadable:` are the
+  // markers this extractor emits for an escape whose argument it cannot read — an
+  // identifier imported from another module, or an expression that is not literal
+  // text. They exist so such an escape is visible rather than silently dropped.
+  //
+  // One of them DISAPPEARING is the intended outcome of resolving that escape, not a
+  // lost statement. BACKLOG-3044 PR 3 hit this: branding an already-in-layer constant
+  // removed `unfollowed:CONTACT_SOURCE_RECORDS_SQL`, and the comparator reported a
+  // byte-identity FAILURE for a statement whose text never moved and never changed.
+  //
+  // They are reported in their own section instead of being dropped from the corpus.
+  // A spurious FAIL is not a harmless conservatism: a control that cries wolf is one
+  // people learn to wave through, which is how a real difference gets waved through
+  // with it.
+  const synthetic = (h) => h.startsWith("unfollowed:") || h.startsWith("unreadable:");
+
+  const syntheticGone = Object.keys(beforeCount).filter(
+    (h) => synthetic(h) && !(h in afterCount),
+  );
+  const syntheticNew = Object.keys(afterCount).filter(
+    (h) => synthetic(h) && !(h in beforeCount),
+  );
+
   // THE ASSERTION — every distinct text authored before is still authored after.
   // A statement that changed by one whitespace byte hashes differently and lands
   // here. This is the byte-identity property, and it is what exits 1.
-  const gone = Object.keys(beforeCount).filter((h) => !(h in afterCount));
+  const gone = Object.keys(beforeCount).filter((h) => !synthetic(h) && !(h in afterCount));
 
   // REPORTED, NOT ASSERTED — a text authored N times before and fewer times after.
   //
@@ -308,7 +331,7 @@ if (args[0] === "--compare") {
   // the conduit call-site census below, plus the behavioural suites. Naming the limit
   // here rather than implying the multiset check covers it.
   const reduced = Object.keys(beforeCount)
-    .filter((h) => h in afterCount && afterCount[h] < beforeCount[h])
+    .filter((h) => !synthetic(h) && h in afterCount && afterCount[h] < beforeCount[h])
     .map((h) => ({ hash: h, before: beforeCount[h], after: afterCount[h],
       preview: before.find((r) => r.hash === h).preview, at: where(before, h) }));
 
@@ -320,6 +343,20 @@ if (args[0] === "--compare") {
     for (const m of reduced) {
       console.log(`  ${m.hash}  ${m.before} -> ${m.after}   was at ${m.at}`);
       console.log(`      ${m.preview}`);
+    }
+  }
+
+  if (syntheticGone.length || syntheticNew.length) {
+    console.log("\nUNREADABLE-ESCAPE MARKERS changed (reported, not a failure):");
+    for (const h of syntheticGone) {
+      console.log(`  RESOLVED  ${h}`);
+      console.log(`      was at ${where(before, h)}`);
+      console.log("      an escape this extractor could not read is gone — check the PR says why");
+    }
+    for (const h of syntheticNew) {
+      console.log(`  NEW       ${h}`);
+      console.log(`      now at ${where(after, h)}`);
+      console.log("      a NEW unreadable escape appeared; that is a surface this tool cannot control");
     }
   }
 
