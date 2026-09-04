@@ -1,34 +1,68 @@
 import Link from 'next/link';
-import { ChevronLeft } from 'lucide-react';
-import { AlertBanner } from '@keepr/ui';
 
 /**
- * Public Microsoft approval guide (BACKLOG-3092).
+ * Public Microsoft approval guide (BACKLOG-3092, trimmed and retitled by
+ * BACKLOG-3097).
+ *
+ * TITLED AFTER THE SYSTEM BEING CONNECTED — the convention 1Password uses for
+ * its connector pages. The former title, "Approving Keepr for Microsoft
+ * Outlook", was wrong twice: the consent is granted on the app registration in
+ * Entra ID at tenant level, not in Outlook, and it covers contacts as well as
+ * mail.
+ *
+ * THE ROUTE DOES NOT FOLLOW THE TITLE. `/guides/microsoft-approval` has already
+ * been emailed to a prospect. Renaming the directory or adding a redirect
+ * breaks a live link — the title changed, the path did not.
+ *
+ * NO DIRECT admin-consent LINK, AND IT MUST NOT COME BACK. The page used to
+ * offer the raw `login.microsoftonline.com/organizations/adminconsent` URL as a
+ * last resort. That route grants consent at Microsoft WITHOUT passing through
+ * `/setup/consent/callback` with a `state`, and the record branch there is
+ * `adminConsent === 'True' && state` — so `graph_admin_consent_granted` is
+ * never written. The tenant ends up approved while Keepr's Settings card still
+ * reads "Not granted": a split state that neither screen can explain. Settings
+ * is the only path that records the grant, so it is the only path the page
+ * offers. A test asserts the URL stays off.
+ *
+ * NO BREADCRUMB, DELIBERATELY. There was a "Back to Help" link above the title;
+ * it is gone and must not come back. Readers reach this page from a link in an
+ * email forwarded to their IT team — they have never been to /help, so "back"
+ * points at a page they did not come from and implies history they do not have.
+ * The page stands alone. The test asserts /help is not linked from here.
  *
  * Written to be sent to a prospective customer's IT department on its own, so
  * it MUST render fully without a Keepr session. It lives outside the
  * middleware's protected prefix (`/dashboard`) — see
  * `__tests__/app/guides/microsoft-approval.test.tsx`, which asserts that.
  *
- * OPERATIONAL, NOT PERSUASIVE. The reader is following a guide, not being sold
- * to — the selling happened in the email that sent them here. Prefer a step, a
- * heading or a short list over a paragraph, and cut any sentence that explains
- * motivation rather than saying what to do or what is true.
+ * OPERATIONAL, NOT EXPLANATORY. The reader is following a guide. Keep four
+ * things and nothing else:
  *
- * It also deliberately does NOT enumerate the granted permissions. Microsoft's
- * consent screen is the authority on WHAT is granted; a hand-written copy of
- * that list is what let the app registration drift out of sync with what we
- * told people. The page makes a claim about the SHAPE of the grant (read-only,
- * delegated, no application permission) instead, which does not go stale when a
- * permission is added or renamed. A test asserts the list stays out.
+ *   - what to click
+ *   - what to expect
+ *   - what to do when it fails
+ *   - what is true of the grant
+ *
+ * Cut anything that explains how Keepr works internally, who can see what, or
+ * why something behaves as it does. BACKLOG-3097 applied that test across the
+ * whole page in one pass. A troubleshooting entry in particular is symptom then
+ * action, never a paragraph of consequence with the action buried at the end.
+ *
+ * Prerequisites come FIRST because they are the gate — a reader without one of
+ * those roles stops there instead of reaching step 4 and failing.
+ *
+ * IT DOES ENUMERATE THE GRANTED PERMISSIONS, which reverses BACKLOG-3092. That
+ * cut was made because a hand-written copy of the consent screen is what let
+ * the app registration drift out of sync with what customers were told. The
+ * reason it is safe now is GRANTED_SCOPES below: one pinned list, verified
+ * against the live screen, asserted as an exact ordered set by the test — so a
+ * silent drift fails CI instead of reaching a customer. An IT reviewer can then
+ * evaluate the grant without clicking through to a consent screen.
  *
  * Every claim is checked against the code that implements it:
  *   - Settings card + Grant button ....... app/dashboard/settings/page.tsx
- *   - admin/it_admin gate on the card .... lib/actions/scim.ts getConsentStatus
- *   - /setup provisioning + redirect ..... app/auth/setup/callback/route.ts
- *   - join-existing-org on tenant match .. rpc auto_provision_it_admin
- *   - consent recorded only with state ... app/setup/consent/callback/route.ts
- *   - delegated, read-only scope set ..... electron/services/microsoftAuthService.ts
+ *   - /setup sign-in lands on consent .... app/auth/setup/callback/route.ts
+ *   - read-only, delegated scope set ..... electron/services/microsoftAuthService.ts
  *   - token in OS credential store ....... electron/services/tokenEncryptionService.ts
  *   - "reconnect in Settings" on a dead
  *     refresh token (invalid_grant) ...... microsoftAuthService.refreshToken ->
@@ -38,27 +72,47 @@ import { AlertBanner } from '@keepr/ui';
  */
 
 /**
- * Ours, and public by design — Microsoft puts it in the address bar of every
- * consent screen it renders, and the portal already ships it to the browser as
- * NEXT_PUBLIC_DESKTOP_CLIENT_ID. It is an application identifier, not a record
- * id: it names no customer, tenant, organization or person.
+ * The four roles that can grant this, Global Administrator first — it is the
+ * role most admins hold and recognise.
+ *
+ * Verified 2026-09-04 against the app registration: after Mail.Send
+ * (Application) was removed, every remaining permission is delegated and none
+ * carries "Admin consent required: Yes", so all four of these roles suffice.
+ * DO NOT add or drop a role here without re-checking the registration.
  */
-// pii-allow-uuid: Keepr's own OAuth application (client) id, public by design — not a record id, names no customer or tenant
-const DESKTOP_CLIENT_ID = '3a6c341a-17ab-4739-977d-a7d71b27f945';
-
 /**
- * Generic `organizations` tenant so one URL serves every customer, and the
- * production portal origin as a literal so the redirect matches the app
- * registration (the portal generates this same URI at runtime; confirmed
- * against the deployed Vercel domain, not a code default).
+ * The exact six lines Microsoft's consent screen renders, verified against the
+ * live screen on 2026-09-03 after Mail.Send (Application) was removed from the
+ * app registration. The left column is the scope name as it appears in Entra.
+ *
+ * THE PAGE AND THE SCREEN MUST AGREE — them disagreeing is what caused this
+ * cleanup. Do not add, drop or reword an entry without re-reading the
+ * registration.
  */
-const FALLBACK_CONSENT_URL =
-  `https://login.microsoftonline.com/organizations/adminconsent` +
-  `?client_id=${DESKTOP_CLIENT_ID}` +
-  `&redirect_uri=${encodeURIComponent('https://app.keeprcompliance.com/setup/consent/callback')}`;
+const GRANTED_SCOPES: ReadonlyArray<{ scope: string; allows: string }> = [
+  { scope: 'User.Read', allows: "Sign in and read the user's own profile" },
+  { scope: 'offline_access', allows: 'Keep the connection active without prompting again' },
+  { scope: 'Mail.Read', allows: "Read the signed-in user's mail, to build the audit trail" },
+  { scope: 'Mail.Read.Shared', allows: 'Read shared mailboxes that user already has access to' },
+  {
+    scope: 'Contacts.Read',
+    allows: "Read the signed-in user's contacts, to identify transaction participants",
+  },
+  {
+    scope: 'Contacts.Read.Shared',
+    allows: 'Read shared contacts that user already has access to',
+  },
+];
+
+const APPROVER_ROLES = [
+  'Global Administrator',
+  'Privileged Role Administrator',
+  'Cloud Application Administrator',
+  'Application Administrator',
+];
 
 export const metadata = {
-  title: 'Approving Keepr for Microsoft Outlook - Keepr',
+  title: 'Connecting Keepr to Entra ID (Microsoft 365) - Keepr',
   description:
     'How an administrator approves the Keepr desktop app for read-only access to Microsoft Outlook mail and contacts, and how to verify or revoke it.',
 };
@@ -69,20 +123,9 @@ export default function MicrosoftApprovalGuidePage() {
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-3xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-          <Link
-            href="/help"
-            className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Back to Help
-          </Link>
-          <h1 className="mt-4 text-3xl font-bold text-gray-900">
-            Approving Keepr for Microsoft Outlook
+          <h1 className="text-3xl font-bold text-gray-900">
+            Connecting Keepr to Entra ID (Microsoft 365)
           </h1>
-          <p className="mt-2 text-gray-500">
-            A one-time administrator approval that lets the Keepr desktop app read a
-            person&apos;s own Outlook mail and contacts, read-only, for transaction auditing.
-          </p>
         </div>
       </div>
 
@@ -90,46 +133,33 @@ export default function MicrosoftApprovalGuidePage() {
       <div className="max-w-3xl mx-auto px-4 py-10 sm:px-6 lg:px-8">
         <div className="max-w-none">
 
-          {/* Route 1 — no account yet. First, because the outreach email sends
-              IT admins straight to /setup, so this is the path most readers of
-              this page are already on. */}
+          {/* Prerequisites — first, because it is the gate. A reader without
+              one of these roles stops here rather than at step 4. */}
           <section className="mb-10">
-            <h2 className="text-xl font-semibold text-gray-900">
-              If you don&apos;t have a Keepr account yet
-            </h2>
+            <h2 className="text-xl font-semibold text-gray-900">Prerequisites</h2>
+            <p className="mt-3 text-gray-700">
+              To complete this, one of the following admin roles is required:
+            </p>
+            <ul className="mt-3 space-y-1 text-gray-700 list-disc list-inside">
+              {APPROVER_ROLES.map((role) => (
+                <li key={role}>{role}</li>
+              ))}
+            </ul>
+          </section>
+
+          {/* One section, one flow: the setup link, with Settings as the
+              fallback inside it. Not two parallel routes with two headings. */}
+          <section className="mb-10">
+            <h2 className="text-xl font-semibold text-gray-900">Approving Keepr</h2>
             <p className="mt-3 text-gray-700">
               Go to{' '}
               <Link href="/setup" className="text-primary-600 hover:underline font-medium">/setup</Link>{' '}
-              and sign in with your work Microsoft account. That one flow:
+              and sign in with your work Microsoft account. Review Microsoft&apos;s approval screen
+              and select <strong>Accept</strong>.
             </p>
-            <ul className="mt-3 space-y-2 text-gray-700 list-disc list-inside">
-              <li>Creates your Keepr account and makes it an administrator.</li>
-              <li>
-                Attaches it to your brokerage&apos;s organization in Keepr &mdash; joining the one
-                already registered for your Microsoft tenant if there is one, and otherwise
-                creating one from your email domain.
-              </li>
-              <li>Takes you to the Microsoft approval screen. Review it and select <strong>Accept</strong>.</li>
-            </ul>
-            <p className="mt-3 text-gray-700">
-              You can sign back in later to check the approval, grant it again, or manage your
-              team.
-            </p>
-            <AlertBanner variant="warning" className="mt-4">
-              <strong>Use a work or school account.</strong> Personal Microsoft accounts
-              (Outlook.com, Hotmail, Live) are rejected at this step.
-            </AlertBanner>
-          </section>
 
-          {/* Route 2 — existing account. Also the only route that can grant
-              again after a revoke or a skipped prompt. */}
-          <section className="mb-10">
-            <h2 className="text-xl font-semibold text-gray-900">
-              If you already have a Keepr account
-            </h2>
-            <p className="mt-3 text-gray-700">
-              Use this route to grant again after a revoke, or after someone skipped the prompt
-              during setup.
+            <p className="mt-4 text-gray-700">
+              If that does not work, do it manually from Settings:
             </p>
 
             <ol className="mt-4 space-y-3">
@@ -170,54 +200,55 @@ export default function MicrosoftApprovalGuidePage() {
                 </p>
               </li>
             </ol>
-
-            <AlertBanner variant="info" className="mt-4">
-              The Desktop App Permissions card is shown only to a Keepr account that is an
-              administrator of its organization.
-            </AlertBanner>
           </section>
 
-          {/* Who can approve */}
+          {/* Every scope, in a table with a plain-English column, so an IT
+              reviewer can evaluate the grant without clicking through to a
+              consent screen. BACKLOG-3092 had removed this list on the grounds
+              that a hand-written copy goes stale; BACKLOG-3097 restores it with
+              GRANTED_SCOPES pinned to the registration and asserted by the
+              test, which is the answer to that objection. */}
           <section className="mb-10">
-            <h2 className="text-xl font-semibold text-gray-900">Who can approve</h2>
+            <h2 className="text-xl font-semibold text-gray-900">What is granted</h2>
             <p className="mt-3 text-gray-700">
-              Any Microsoft Entra role that can consent on the organization&apos;s behalf:
+              <strong>Read permissions only.</strong> There is no send, write, or delete permission,
+              and no application-level permission &mdash; Keepr cannot reach a mailbox unless that
+              person is signed in on their own computer.
             </p>
-            <ul className="mt-3 space-y-1 text-gray-700 list-disc list-inside">
-              <li>Privileged Role Administrator</li>
-              <li>Cloud Application Administrator</li>
-              <li>Application Administrator</li>
-            </ul>
-            <p className="mt-3 text-gray-700">
-              Global Administrator also works, but is not required &mdash; Keepr requests no
-              Microsoft Graph application permission. Anyone else sees{' '}
-              <strong>&quot;Need admin approval&quot;</strong> and cannot proceed.
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-full text-sm text-left border border-gray-200 rounded-lg bg-white">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th scope="col" className="px-4 py-2 font-semibold text-gray-900">
+                      Permission
+                    </th>
+                    <th scope="col" className="px-4 py-2 font-semibold text-gray-900">
+                      What it allows
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {GRANTED_SCOPES.map(({ scope, allows }) => (
+                    <tr key={scope} className="border-b border-gray-200 last:border-b-0">
+                      <td className="px-4 py-2 whitespace-nowrap font-mono text-xs text-gray-900">
+                        {scope}
+                      </td>
+                      <td className="px-4 py-2 text-gray-700">{allows}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <p className="mt-4 text-gray-700">
+              The Microsoft token is stored on that person&apos;s own computer, encrypted by the
+              operating system&apos;s credential store. Access can be revoked at any time in Entra
+              ID &rarr; Enterprise applications.
             </p>
           </section>
 
-          {/* Shape of the grant — deliberately NOT an enumeration of it. */}
-          <section className="mb-10">
-            <h2 className="text-xl font-semibold text-gray-900">What the approval allows</h2>
-            <p className="mt-3 text-gray-700">
-              Every permission is read-only. There is no send, write, or delete permission, and no
-              application-level permission &mdash; Keepr cannot reach a mailbox unless that person
-              is signed in on their own computer. The Microsoft token is stored on that
-              person&apos;s own computer, encrypted by the operating system&apos;s credential store.
-            </p>
-            <p className="mt-3 text-gray-700">
-              Microsoft&apos;s screen says the approval applies to all users in your organization.
-              That means nobody is prompted individually. It does not mean Keepr can read
-              everyone&apos;s mail: every permission is <strong>delegated</strong>, so each employee
-              still connects their own mailbox in the desktop app and Keepr reads that mailbox and
-              no other.
-            </p>
-            <p className="mt-3 text-gray-700">
-              Shared mailboxes and shared contact folders follow the same rule &mdash; only the ones
-              the signed-in person has already been given access to in Exchange.
-            </p>
-          </section>
-
-          {/* Troubleshooting */}
+          {/* Troubleshooting. Each entry is symptom, then action. Nothing else. */}
           <section className="border-t border-gray-200 pt-8 mt-12">
             <h2 className="text-xl font-semibold text-gray-900">Troubleshooting</h2>
 
@@ -227,9 +258,8 @@ export default function MicrosoftApprovalGuidePage() {
                   The wrong Microsoft account is signed in
                 </h3>
                 <p className="mt-1 text-sm text-gray-700">
-                  Microsoft reuses whichever account the browser is already signed in to. Open the
-                  approval in a private or incognito window and sign in with the administrator
-                  account, or sign out of the other account first.
+                  Open the approval in a private or incognito window and sign in with the
+                  administrator account, or sign out of the other account first.
                 </p>
               </div>
 
@@ -238,25 +268,7 @@ export default function MicrosoftApprovalGuidePage() {
                   &quot;Need admin approval&quot;
                 </h3>
                 <p className="mt-1 text-sm text-gray-700">
-                  The signed-in account does not hold a role that can consent for the organization.
-                  Hand it to a Privileged Role Administrator, Cloud Application Administrator, or
-                  Application Administrator.
-                </p>
-              </div>
-
-              <div>
-                <h3 className="text-base font-medium text-gray-900">
-                  Someone clicked &quot;Skip for now&quot; during setup
-                </h3>
-                <p className="mt-1 text-sm text-gray-700">
-                  Until an administrator grants the approval, every employee is prompted
-                  individually the first time they connect Outlook &mdash; and if your tenant has
-                  user consent turned off, they are blocked with &quot;Need admin approval&quot;.
-                  Finish it through{' '}
-                  <Link href="/dashboard/settings" className="text-primary-600 hover:underline">
-                    Settings
-                  </Link>{' '}
-                  &rarr; <strong>Desktop App Permissions</strong>.
+                  Hand the approval to someone holding one of the roles listed under Prerequisites.
                 </p>
               </div>
 
@@ -280,37 +292,15 @@ export default function MicrosoftApprovalGuidePage() {
                 </p>
                 <p className="mt-2 text-sm text-gray-700">
                   Revoking stops Microsoft issuing new tokens. A token already in hand keeps working
-                  until it expires, which is about an hour. Once the desktop app can no longer
-                  refresh, it tells that person their email connection has expired and to reconnect
-                  in Settings.
+                  for about an hour, after which that person is told their email connection has
+                  expired and to reconnect in Settings.
                 </p>
                 <p className="mt-2 text-sm text-gray-600">
-                  Keepr&apos;s Settings card records when consent was granted; it is not a live read
-                  of Microsoft. After a revoke in Entra it still shows the earlier grant, so treat
-                  Entra as the source of truth.
+                  After a revoke in Entra, Keepr&apos;s Settings card still shows the earlier grant.
+                  Entra is the source of truth.
                 </p>
               </div>
 
-              <div>
-                <h3 className="text-base font-medium text-gray-900">
-                  Last resort: approving without signing in to Keepr
-                </h3>
-                <p className="mt-1 text-sm text-gray-700">
-                  This link opens the same Microsoft approval screen directly, for any tenant &mdash;
-                  Microsoft applies it to the tenant of whichever account signs in.
-                </p>
-                <p className="mt-2 break-all rounded-md bg-gray-50 border border-gray-200 p-3 text-xs text-gray-700 font-mono">
-                  {FALLBACK_CONSENT_URL}
-                </p>
-                <p className="mt-2 text-sm text-gray-700">
-                  <strong>Use the Settings route instead where you can.</strong> This link grants
-                  the approval in Microsoft, but cannot record it against your organization in
-                  Keepr &mdash; the button inside the portal is what identifies which organization
-                  to record it against. Your users are unblocked either way; the Settings card will
-                  still read <strong>Not granted</strong> until an administrator grants it once from
-                  Settings.
-                </p>
-              </div>
             </div>
           </section>
 
@@ -329,8 +319,7 @@ export default function MicrosoftApprovalGuidePage() {
                 className="text-primary-600 hover:underline"
               >
                 Contact support
-              </a>{' '}
-              &mdash; we would rather answer them than have you guess.
+              </a>
             </p>
           </section>
         </div>
