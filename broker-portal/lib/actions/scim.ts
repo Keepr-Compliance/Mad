@@ -3,36 +3,46 @@
 import { createClient } from '@/lib/supabase/server';
 import { randomBytes, createHash } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
+import { requireScimAccess, isScimProvisioningEnabled } from '@/lib/scim-access';
+
+/**
+ * BACKLOG-3087: the four SCIM-specific actions below (generateScimToken,
+ * revokeScimToken, listScimTokens, listScimSyncLogs) no longer do their own
+ * auth. They call requireScimAccess(), which adds a FAIL-CLOSED
+ * scim_provisioning feature check on top of the identity + role checks they
+ * used to perform inline. Hiding the link is not a gate — a caller who knows
+ * the action name must be refused too.
+ *
+ * The retention / consent / JIT actions in this file are NOT SCIM surfaces
+ * (they back the main settings page) and keep their own admin checks.
+ */
+
+/**
+ * Is the SCIM surface available to the caller? For rendering decisions only.
+ *
+ * Never throws: an unauthenticated or errored caller gets { enabled: false },
+ * so a client component that forgets a catch still hides the card.
+ */
+export async function getScimFeatureStatus(): Promise<{ enabled: boolean }> {
+  return { enabled: await isScimProvisioningEnabled() };
+}
 
 export async function generateScimToken(description: string) {
   // Block during impersonation (read-only session)
   const blocked = await blockWriteDuringImpersonation();
   if (blocked) throw new Error(blocked.error);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
-
-  // Verify admin or IT admin role
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('organization_id, role')
-    .eq('user_id', user.id)
-    .in('role', ['admin', 'it_admin'])
-    .single();
-
-  if (!membership) throw new Error('Not authorized');
+  // Authenticated + admin/it_admin + scim_provisioning enabled (fail-closed).
+  const { supabase, userId, organizationId } = await requireScimAccess();
 
   const plainToken = randomBytes(32).toString('hex');
   const tokenHash = createHash('sha256').update(plainToken).digest('hex');
 
   const { error } = await supabase.from('scim_tokens').insert({
-    organization_id: membership.organization_id,
+    organization_id: organizationId,
     token_hash: tokenHash,
     description: description || 'SCIM Token',
-    created_by: user.id,
+    created_by: userId,
   });
 
   if (error) throw new Error('Failed to create token');
@@ -44,53 +54,29 @@ export async function revokeScimToken(tokenId: string) {
   const blocked = await blockWriteDuringImpersonation();
   if (blocked) throw new Error(blocked.error);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
-
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('organization_id')
-    .eq('user_id', user.id)
-    .in('role', ['admin', 'it_admin'])
-    .single();
-
-  if (!membership) throw new Error('Not authorized');
+  // Authenticated + admin/it_admin + scim_provisioning enabled (fail-closed).
+  const { supabase, organizationId } = await requireScimAccess();
 
   const { error } = await supabase
     .from('scim_tokens')
     .update({ revoked_at: new Date().toISOString() })
     .eq('id', tokenId)
-    .eq('organization_id', membership.organization_id);
+    .eq('organization_id', organizationId);
 
   if (error) throw new Error('Failed to revoke token');
   return { success: true };
 }
 
 export async function listScimTokens() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
-
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('organization_id')
-    .eq('user_id', user.id)
-    .in('role', ['admin', 'it_admin'])
-    .single();
-
-  if (!membership) throw new Error('Not authorized');
+  // Authenticated + admin/it_admin + scim_provisioning enabled (fail-closed).
+  const { supabase, organizationId } = await requireScimAccess();
 
   const { data: tokens } = await supabase
     .from('scim_tokens')
     .select(
       'id, description, created_at, expires_at, revoked_at, last_used_at, request_count'
     )
-    .eq('organization_id', membership.organization_id)
+    .eq('organization_id', organizationId)
     .order('created_at', { ascending: false });
 
   return tokens || [];
@@ -243,27 +229,15 @@ export async function updateJitStatus(enabled: boolean) {
 }
 
 export async function listScimSyncLogs(limit = 50) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
-
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('organization_id')
-    .eq('user_id', user.id)
-    .in('role', ['admin', 'it_admin'])
-    .single();
-
-  if (!membership) throw new Error('Not authorized');
+  // Authenticated + admin/it_admin + scim_provisioning enabled (fail-closed).
+  const { supabase, organizationId } = await requireScimAccess();
 
   const { data: logs } = await supabase
     .from('scim_sync_log')
     .select(
       'id, operation, resource_type, external_id, response_status, error_message, created_at'
     )
-    .eq('organization_id', membership.organization_id)
+    .eq('organization_id', organizationId)
     .order('created_at', { ascending: false })
     .limit(limit);
 
