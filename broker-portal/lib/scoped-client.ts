@@ -8,7 +8,8 @@
  * the scoped client ensures queries only return data for the target user's org.
  *
  * Security guarantees:
- * 1. All SELECT queries on org-scoped tables auto-filter by organization_id
+ * 1. All SELECT queries on scoped tables auto-filter to the target user or
+ *    their organization
  * 2. All write operations (.insert/.update/.delete/.upsert) throw errors
  * 3. The underlying service-role client is never exposed directly
  */
@@ -29,14 +30,35 @@ const ORG_SCOPED_TABLES = new Set([
  */
 const USER_SCOPED_TABLES = new Set([
   'organization_members',
+  // BACKLOG-3079: one row per user, keyed by user_id. It carries NO
+  // organization_id, which is why it is scoped here and not by org.
+  'user_preferences',
 ]);
 
 /**
  * Tables that are scoped by their own primary key (id = user_id).
  * Queries to these tables will automatically include .in('id', [targetUserId]).
+ *
+ * BACKLOG-3079 adds `users`: /dashboard/account reads the target person's name,
+ * email and auth provider straight from it. /dashboard/users never needed this
+ * because it reaches user rows through an embedded `user:users!…` selector on
+ * organization_members, which PostgREST resolves as part of that query and
+ * never routes through .from('users') at all.
  */
 const ID_SCOPED_TABLES = new Set([
   'profiles',
+  'users',
+]);
+
+/**
+ * Tables scoped by their own id matching the TARGET USER'S ORGANIZATION.
+ * Queries will automatically include .eq('id', organizationId).
+ *
+ * Distinct from ORG_SCOPED_TABLES, which filters an `organization_id` COLUMN.
+ * `organizations` has no such column — its own `id` is the organization.
+ */
+const ORG_ID_SCOPED_TABLES = new Set([
+  'organizations',
 ]);
 
 /**
@@ -52,6 +74,13 @@ const ALLOWED_TABLES = new Set([
   'profiles',
   'submission_messages',
   'submission_attachments',
+  // BACKLOG-3079: /dashboard/account. A table missing from this set does not
+  // read as empty during impersonation — createBlockedQueryBuilder THROWS on
+  // every method, so the page 500s for the support session it exists to serve.
+  // That failure is invisible to any test that mocks getDataClient.
+  'users',
+  'user_preferences',
+  'organizations',
 ]);
 
 /**
@@ -142,9 +171,14 @@ function createScopedQueryBuilder(
             result = result.eq('user_id', targetUserId);
           }
 
-          // Auto-inject id-based scoping (profiles)
+          // Auto-inject id-based scoping (profiles, users)
           if (ID_SCOPED_TABLES.has(table)) {
             result = result.in('id', [targetUserId]);
+          }
+
+          // Auto-inject organization identity scoping (organizations)
+          if (ORG_ID_SCOPED_TABLES.has(table)) {
+            result = result.eq('id', organizationId);
           }
 
           // Submission child tables (submission_messages, submission_attachments):
