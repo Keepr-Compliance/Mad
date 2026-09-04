@@ -30,7 +30,6 @@ import {
   validateFields,
   isValidField,
   TABLE_FIELDS,
-  type FieldExpression,
   type TransactionColumn,
 } from "../../utils/sqlFieldWhitelist";
 import {

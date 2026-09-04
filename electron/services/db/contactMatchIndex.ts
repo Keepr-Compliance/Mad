@@ -148,7 +148,13 @@ export interface ContactMatchIndex {
  * at the call site — SQL assembled by a runtime string operation, which the `sql`
  * tag refuses. They are now functions OF the placeholder fragment, so the width and
  * the text are produced together and the same characters reach SQLite.
- * `contactMatchIndex.brand.test.ts` asserts that, against the pre-conversion text.
+ *
+ * The surrounding statement text is unchanged raw text — only `%PLACEHOLDERS%` became
+ * `${marks}` — and the fragment that fills the hole is covered by
+ * `core/__tests__/sqlFragments.test.ts:58-61`, which pins `placeholderList` against
+ * the `map/join` idiom it replaced and against BOTH separators. An earlier revision
+ * of this comment cited `contactMatchIndex.brand.test.ts`, WHICH DOES NOT EXIST: a
+ * sentence asserting coverage that was never checked against the file it names.
  */
 const liveEmailSql = (marks: SafeSql): SafeSql => sql`SELECT DISTINCT c.id FROM contacts c
        JOIN contact_emails ce ON ce.contact_id = c.id

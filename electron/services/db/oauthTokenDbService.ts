@@ -8,11 +8,7 @@ import type { OAuthToken, OAuthProvider, OAuthPurpose } from "../../types";
 import { DatabaseError } from "../../types";
 import { dbGet, dbRun } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
-import {
-  validateFields,
-  type ColumnOf,
-  type FieldExpression,
-} from "../../utils/sqlFieldWhitelist";
+import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import logService from "../logService";
 import { assignmentList } from "./core/columnSql";
 

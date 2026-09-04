@@ -7,13 +7,9 @@ import crypto from "crypto";
 import type { Contact, NewContact, ContactFilters, Message, Communication, ContactMessageThread } from "../../types";
 import { DatabaseError } from "../../types";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
-import { sql, unsafeSql } from "./core/sqlText";
+import { sql } from "./core/sqlText";
 import logService from "../logService";
-import {
-  validateFields,
-  type ColumnOf,
-  type FieldExpression,
-} from "../../utils/sqlFieldWhitelist";
+import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import { toLookupKey, toE164, looksLikePhoneQuery, legacyDigitKey } from "../../utils/phoneNormalization";
 import { contactInfoSourceFor } from "../../utils/contactValueProvenance";
 import type { ContactInfoSource, ContactUpdateFields } from "../../types/models";

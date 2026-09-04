@@ -8,11 +8,7 @@ import type { User, NewUser, OAuthProvider } from "../../types";
 import { DatabaseError, NotFoundError } from "../../types";
 import { dbGet, dbRun, ensureDb } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
-import {
-  validateFields,
-  type ColumnOf,
-  type FieldExpression,
-} from "../../utils/sqlFieldWhitelist";
+import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import { UserSchema, validateResponse } from "../../schemas";
 import logService from "../logService";
 import { assignmentList } from "./core/columnSql";

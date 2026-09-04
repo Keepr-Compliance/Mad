@@ -21,11 +21,7 @@ import type {
 } from "../../types/ids";
 import { dbGet, dbAll, dbRun } from "./core/dbConnection";
 import { sql, unsafeSql } from "./core/sqlText";
-import {
-  validateFields,
-  type ColumnOf,
-  type FieldExpression,
-} from "../../utils/sqlFieldWhitelist";
+import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import { isTextMessage } from "../../utils/channelHelpers";
 import { dbTimestampNow } from "../../utils/dbTimestamp";
 import logService from "../logService";

@@ -13,7 +13,7 @@
 
 import type { AuditLogEntry, AuditLogDbRow } from "../auditService";
 import { dbAll, dbRun, ensureDb } from "./core/dbConnection";
-import { sql, unsafeSql } from "./core/sqlText";
+import { sql } from "./core/sqlText";
 
 /**
  * Insert an audit log entry (append-only)
