@@ -74,11 +74,28 @@ export const SUBMISSION_FEATURE_KEY = 'broker_submission';
  * failure) is a refusal, not an error reported as "probably fine". Same shape
  * as isScimProvisioningEnabled() in lib/scim-access.ts.
  *
- * The check runs on the SESSION's own client, which during a support session is
- * the support admin's. That is deliberate and correct: broker_get_org_features
- * is SECURITY DEFINER, takes the org id as a parameter and requires only that
- * the caller be authenticated (no membership check, BACKLOG-933), so it answers
- * for the TARGET's org, not the admin's.
+ * ---------------------------------------------------------------------------
+ * A SUPPORT SESSION THEREFORE DOES NOT SEE THIS CARD. STATED, NOT ASSUMED.
+ * ---------------------------------------------------------------------------
+ * Impersonation on this portal carries NO Supabase auth session. The admin
+ * portal mints a token, /auth/impersonate validates it with the SERVICE client
+ * ("no user session needed") and sets a signed cookie, and middleware.ts lets
+ * /dashboard/* through on that cookie alone without ever calling getUser. So
+ * during a support session createClient() yields a client whose auth.uid() is
+ * NULL, broker_get_org_features takes its first early return, and the RPC's
+ * own 200-with-error payload resolves this check to false.
+ *
+ * The consequence is real and is the fail-closed one: support sees the account
+ * page WITHOUT the retention card, on every org, including an enterprise
+ * customer whose members can submit. That is a visibility gap, not a wrong
+ * statement — and the alternative is worse. Resolving broker_submission for a
+ * support session would need a SECOND implementation of "may this org submit",
+ * reading organization_plans/plan_features directly, and two implementations of
+ * one entitlement eventually disagree. lib/org-settings-access.ts hit the same
+ * wall and answered it differently (impersonationFeatureView() renders
+ * retention unconditionally there, because on THAT page the value is the org's
+ * own policy and no relevance question is being asked). Filed on BACKLOG-3079
+ * rather than papered over here.
  */
 async function orgCanSubmit(organizationId: string): Promise<boolean> {
   try {

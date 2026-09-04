@@ -34,26 +34,32 @@ jest.mock('@/lib/supabase/server', () => ({
 
 import { getAccountView } from '@/lib/account/getAccountView';
 import { FULL_PREFERENCES, OTHER_USER_ID } from '../../../fixtures/account';
-import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../../fixtures/orgFeatures';
-
-/** DERIVED from the transcribed no-plan base: the same org, able to submit. */
-const CAN_SUBMIT_FEATURES = withFeature(
-  ORG_WITHOUT_PLAN_FEATURES,
-  'broker_submission',
-  true,
-  'Broker Submission'
-);
+import { NOT_AUTHENTICATED_PAYLOAD } from '../../../fixtures/orgFeatures';
 
 /**
- * The SUPPORT ADMIN's own session client. Since the retention gate it is built
- * during a support session — for broker_get_org_features and nothing else. It
- * carries getUser purely so the test can assert getUser is never called.
+ * The session client a support session actually has — WHICH IS NOT AN
+ * AUTHENTICATED ONE.
+ *
+ * Traced, not assumed: the admin portal mints a token, /auth/impersonate
+ * validates it with the SERVICE client ("no user session needed") and sets a
+ * signed cookie in a NEW TAB on this origin, and middleware.ts lets /dashboard/*
+ * through on that cookie alone without ever calling getUser. Nothing in that
+ * flow establishes a Supabase session on this portal.
+ *
+ * So the retention gate's createClient().rpc() call runs with auth.uid() NULL,
+ * and broker_get_org_features takes its first early return. That is why the
+ * default here is the TRANSCRIBED not-authenticated payload and not a
+ * hand-composed feature map: a fixture saying "this support session can read
+ * features" describes a state the code cannot emit, and every assertion built
+ * on it would be measuring nothing.
  */
-function sessionClientStub(opts: { rpc?: { data?: unknown; error?: unknown }; throws?: boolean } = {}) {
-  const getUser = jest.fn(async () => ({ data: { user: { id: 'support-admin' } } }));
+function sessionClientStub(
+  opts: { rpc?: { data?: unknown; error?: unknown }; throws?: boolean } = {}
+) {
+  const getUser = jest.fn(async () => ({ data: { user: null } }));
   const rpc = jest.fn(async () => {
     if (opts.throws) throw new Error('rpc transport failure');
-    return opts.rpc ?? { data: CAN_SUBMIT_FEATURES, error: null };
+    return opts.rpc ?? { data: NOT_AUTHENTICATED_PAYLOAD, error: null };
   });
   return { client: { auth: { getUser }, rpc }, getUser, rpc };
 }
@@ -127,32 +133,45 @@ describe('getAccountView through the real scoped impersonation client', () => {
     expect(view?.preferences).not.toBeNull();
   });
 
-  it('reads the target organization, including its retention policy', async () => {
+  it('reads the target organization, and still names it', async () => {
+    // The organizations table is reachable through the scoped client — the
+    // property this file exists for. The retention VALUE is a separate
+    // question, asserted below.
     const stub = serviceClientStub();
     mockCreateServiceClient.mockReturnValue(stub.client);
-    const session = sessionClientStub({ rpc: { data: CAN_SUBMIT_FEATURES, error: null } });
-    mockCreateClient.mockResolvedValue(session.client);
     const view = await getAccountView();
     expect(view?.identity.organizationName).toBe('Northwind Realty');
-    expect(view?.orgRetentionYears).toBe(5);
-    // Asked about the TARGET's org, not the support admin's.
+  });
+
+  it('asks about the TARGET organization, not the support admin\'s', async () => {
+    const stub = serviceClientStub();
+    mockCreateServiceClient.mockReturnValue(stub.client);
+    const session = sessionClientStub();
+    mockCreateClient.mockResolvedValue(session.client);
+    await getAccountView();
     expect(session.rpc).toHaveBeenCalledWith('broker_get_org_features', {
       p_org_id: TARGET_ORG_ID,
     });
   });
 
-  it('suppresses the retention policy when the target org cannot submit', async () => {
-    // Support sees what the customer sees. A card the customer is not shown
-    // must not appear for support either, or the two disagree about what the
-    // customer's account says.
+  it('shows NO retention card to support, because the gate cannot resolve', async () => {
+    // The stated consequence of the fail-closed gate, asserted rather than
+    // discovered later. A support session has no authenticated user, so
+    // broker_get_org_features returns its not_authenticated payload and the
+    // check refuses — for every org, including an enterprise customer whose
+    // members can submit. The row is 5 in the fixture and is still suppressed.
+    //
+    // This is a visibility gap, not a false statement, and the alternative is a
+    // SECOND implementation of "may this org submit" reading
+    // organization_plans directly. Filed on BACKLOG-3079.
     const stub = serviceClientStub();
     mockCreateServiceClient.mockReturnValue(stub.client);
-    mockCreateClient.mockResolvedValue(
-      sessionClientStub({ rpc: { data: ORG_WITHOUT_PLAN_FEATURES, error: null } }).client
-    );
+    mockCreateClient.mockResolvedValue(sessionClientStub().client);
     const view = await getAccountView();
     expect(view?.orgRetentionYears).toBeNull();
+    // Everything else about the page is unaffected.
     expect(view?.identity.organizationName).toBe('Northwind Realty');
+    expect(view?.preferences).toEqual(FULL_PREFERENCES);
   });
 
   it('suppresses it, and still renders a page, when the session client cannot be built', async () => {
@@ -206,5 +225,18 @@ describe('getAccountView through the real scoped impersonation client', () => {
     expect(session.rpc.mock.calls.map((c: unknown[]) => c[0])).toEqual([
       'broker_get_org_features',
     ]);
+  });
+
+  it('the session client it builds has no authenticated user, by construction', async () => {
+    // Pins the premise the suppression rests on. If impersonation ever gains a
+    // real Supabase session, this goes red and the card's absence has to be
+    // re-decided rather than silently becoming a presence.
+    const stub = serviceClientStub();
+    mockCreateServiceClient.mockReturnValue(stub.client);
+    const session = sessionClientStub();
+    mockCreateClient.mockResolvedValue(session.client);
+    await getAccountView();
+    const rpcResult = await session.rpc.mock.results[0].value;
+    expect((rpcResult as { data: { error?: string } }).data.error).toBe('not_authenticated');
   });
 });
