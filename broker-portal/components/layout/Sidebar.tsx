@@ -11,6 +11,12 @@
  *   Support) is shown so the admin sees what the target user sees.
  * - Users/Settings appear for admin and it_admin only, never during
  *   impersonation. it_admin sees ONLY Users/Settings.
+ *
+ * BACKLOG-3078 adds a third bucket. My Account is personal, not org policy, so
+ * it shows for EVERY role and during impersonation — support reads a customer's
+ * account page through that flow. It could not be added to either existing
+ * bucket: it_admin never sees memberNavItems, and a broker never sees
+ * adminNavItems, so either home would hide it from somebody who owns the data.
  */
 
 import Link from 'next/link';
@@ -23,6 +29,7 @@ import {
   LayoutDashboard,
   LogOut,
   Settings,
+  UserCircle,
   Users,
 } from 'lucide-react';
 import { AppMark, Wordmark } from '@keepr/ui';
@@ -43,6 +50,11 @@ const memberNavItems: NavItem[] = [
 const adminNavItems: NavItem[] = [
   { label: 'Users', href: '/dashboard/users', icon: Users },
   { label: 'Settings', href: '/dashboard/settings', icon: Settings },
+];
+
+/** Personal, not org policy. Shown to every role, impersonation included. */
+const personalNavItems: NavItem[] = [
+  { label: 'My Account', href: '/dashboard/account', icon: UserCircle },
 ];
 
 function formatRole(role?: string): string {
@@ -145,6 +157,7 @@ export function Sidebar({
       <nav className={`flex-1 py-4 space-y-1 overflow-y-auto scrollbar-hide ${collapsed ? 'px-2' : 'px-3'}`}>
         {showMemberNav && memberNavItems.map(renderNavItem)}
         {showAdminNav && adminNavItems.map(renderNavItem)}
+        {personalNavItems.map(renderNavItem)}
       </nav>
 
       {/* User info + Sign Out */}

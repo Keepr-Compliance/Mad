@@ -120,6 +120,58 @@ export const SCIM_ENABLED_FEATURES: OrgFeatures = {
 /** pii-allow-uuid: invented, not from any live row. */
 export const TEST_USER_ID = '00000000-3087-4000-8000-000000000002';
 
+/**
+ * DERIVED (not transcribed) — BACKLOG-3078.
+ *
+ * Set one key to a known state on top of the transcribed base. Used for the
+ * gray-vs-hide rule, which needs three different orgs: a plan without
+ * custom_retention (grayed), a plan with it (enabled), and the unbuilt keys in
+ * both states.
+ *
+ * Writes the SAME shape jsonb_build_object emits — name/value/source/enabled/
+ * value_type — so a gate reading any of those fields sees a producible row.
+ */
+export function withFeature(
+  base: OrgFeatures,
+  key: string,
+  enabled: boolean,
+  name = key
+): OrgFeatures {
+  return {
+    ...base,
+    features: {
+      ...base.features,
+      [key]: {
+        name,
+        value: enabled ? 'true' : 'false',
+        source: 'default',
+        enabled,
+        value_type: 'boolean',
+      },
+    },
+  };
+}
+
+/** DERIVED: a team-plan org — custom_retention off, both unbuilt keys seeded off. */
+export const TEAM_PLAN_FEATURES: OrgFeatures = withFeature(
+  withFeature(
+    withFeature(ORG_WITHOUT_PLAN_FEATURES, 'custom_retention', false, 'Custom Retention Period'),
+    'scim_provisioning',
+    false,
+    'SCIM Provisioning'
+  ),
+  'jit_provisioning',
+  false,
+  'Just-in-Time Provisioning'
+);
+
+/** DERIVED: an enterprise org — custom_retention on, unbuilt keys still off. */
+export const ENTERPRISE_PLAN_FEATURES: OrgFeatures = {
+  ...withFeature(TEAM_PLAN_FEATURES, 'custom_retention', true, 'Custom Retention Period'),
+  plan_name: 'Enterprise',
+  plan_tier: 'enterprise',
+};
+
 // ---------------------------------------------------------------------------
 // A Supabase server-client stand-in.
 // ---------------------------------------------------------------------------
