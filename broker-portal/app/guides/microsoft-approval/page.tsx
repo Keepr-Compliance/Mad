@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { ChevronLeft } from 'lucide-react';
 
 /**
  * Public Microsoft approval guide (BACKLOG-3092, trimmed and retitled by
@@ -14,6 +13,12 @@ import { ChevronLeft } from 'lucide-react';
  * THE ROUTE DOES NOT FOLLOW THE TITLE. `/guides/microsoft-approval` has already
  * been emailed to a prospect. Renaming the directory or adding a redirect
  * breaks a live link — the title changed, the path did not.
+ *
+ * NO BREADCRUMB, DELIBERATELY. There was a "Back to Help" link above the title;
+ * it is gone and must not come back. Readers reach this page from a link in an
+ * email forwarded to their IT team — they have never been to /help, so "back"
+ * points at a page they did not come from and implies history they do not have.
+ * The page stands alone. The test asserts /help is not linked from here.
  *
  * Written to be sent to a prospective customer's IT department on its own, so
  * it MUST render fully without a Keepr session. It lives outside the
@@ -145,14 +150,7 @@ export default function MicrosoftApprovalGuidePage() {
       {/* Header */}
       <div className="bg-white border-b border-gray-200">
         <div className="max-w-3xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-          <Link
-            href="/help"
-            className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            Back to Help
-          </Link>
-          <h1 className="mt-4 text-3xl font-bold text-gray-900">
+          <h1 className="text-3xl font-bold text-gray-900">
             Connecting Keepr to Entra ID (Microsoft 365)
           </h1>
           <p className="mt-2 text-sm text-gray-500">{`Last updated ${LAST_UPDATED}`}</p>

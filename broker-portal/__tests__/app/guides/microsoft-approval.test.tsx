@@ -114,7 +114,7 @@ describe('/guides/microsoft-approval — BACKLOG-3092, trimmed by BACKLOG-3097',
 
     it('finds the links it is supposed to be checking', () => {
       // Pre-registered so a regex that silently matches nothing cannot pass.
-      expect(hrefs.sort()).toEqual(['/dashboard/settings', '/help', '/login', '/setup']);
+      expect(hrefs.sort()).toEqual(['/dashboard/settings', '/login', '/setup']);
     });
 
     it.each(hrefs)('%s resolves to a route file', (href) => {
@@ -129,6 +129,20 @@ describe('/guides/microsoft-approval — BACKLOG-3092, trimmed by BACKLOG-3097',
       expect(guideSource).toContain('href="https://app.keeprcompliance.com/support/new"');
       expect(resolveRoute('/support/new')).not.toBeNull();
       expect(guideSource).not.toContain('mailto:');
+    });
+
+    it('offers no way "back" to a page the reader never came from', () => {
+      // BACKLOG-3097: a "Back to Help" breadcrumb sat above the title. Readers
+      // reach this page from a link in an email forwarded to their IT team, so
+      // "back" pointed at a page they had never visited and implied history
+      // they did not have. The page stands alone.
+      const { container } = render(<MicrosoftApprovalGuidePage />);
+
+      expect(container.textContent ?? '').not.toContain('Back to Help');
+      expect(hrefs).not.toContain('/help');
+      expect(
+        [...container.querySelectorAll('a[href]')].map((a) => a.getAttribute('href'))
+      ).not.toContain('/help');
     });
 
     it('does not link to a route that was removed or never existed', () => {
@@ -353,7 +367,7 @@ describe('/guides/microsoft-approval — BACKLOG-3092, trimmed by BACKLOG-3097',
     // re-pinned. If you are reading this because the test went red: update
     // LAST_UPDATED in the page if the change is user-visible, then paste the
     // fingerprint the failure prints below.
-    const PINNED_FINGERPRINT = '371735669ae138e6';
+    const PINNED_FINGERPRINT = 'c617e615e5e0a311';
     const PINNED_DATE = 'September 4, 2026';
 
     it('renders the date directly under the title', () => {
