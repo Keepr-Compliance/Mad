@@ -138,3 +138,90 @@ export function canAssignRole(assignerRole: Role, targetRole: Role): boolean {
   const assignableRoles = getAssignableRoles(assignerRole);
   return assignableRoles.includes(targetRole);
 }
+
+// ============================================================================
+// Viewer Identity — who the app chrome names (BACKLOG-3077)
+// ============================================================================
+
+/** Auth user shape the portal reads a name/email off. `user_metadata` is
+ *  untrusted JSON, so its fields are `unknown` and narrowed before use. */
+export interface ViewerUser {
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+}
+
+/** The fields of an impersonation session that identify the target user. */
+export interface ViewerImpersonation {
+  target_name?: string | null;
+  target_email?: string | null;
+}
+
+/** Name + email of the person the sidebar and dashboard header should name. */
+export interface ViewerIdentity {
+  displayName?: string;
+  displayEmail: string;
+}
+
+/** First argument that is a non-empty string once trimmed, else ''. */
+function firstNonEmptyString(...candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return '';
+}
+
+/**
+ * Resolve whose name the chrome shows.
+ *
+ * During impersonation this is the IMPERSONATED user, never the admin driving
+ * the session: the admin is meant to see what the target user sees, and the
+ * impersonation cookie is the only identity that describes them.
+ */
+export function resolveViewerIdentity(
+  impersonation: ViewerImpersonation | null | undefined,
+  user: ViewerUser | null | undefined
+): ViewerIdentity {
+  if (impersonation) {
+    const name = firstNonEmptyString(impersonation.target_name);
+    return {
+      displayName: name || undefined,
+      displayEmail: firstNonEmptyString(impersonation.target_email),
+    };
+  }
+
+  const meta = user?.user_metadata ?? {};
+  const name = firstNonEmptyString(meta.full_name, meta.name);
+  return {
+    displayName: name || undefined,
+    displayEmail: firstNonEmptyString(user?.email),
+  };
+}
+
+/**
+ * The label for a viewer: their display name, else the local part of their
+ * email. Returns '' when neither is usable — callers decide the fallback
+ * (the sidebar shows 'User'; the dashboard header shows 'Dashboard').
+ *
+ * BACKLOG-3077: single resolution shared by the sidebar and the dashboard
+ * header so the two can never name the same person differently.
+ */
+export function resolveViewerName(identity: ViewerIdentity): string {
+  const name = firstNonEmptyString(identity.displayName);
+  if (name) return name;
+  return firstNonEmptyString(identity.displayEmail.split('@')[0]);
+}
+
+/**
+ * The dashboard <h1>: "Welcome back, <first name>", falling back to the
+ * generic "Dashboard" when no name is available. Never renders a greeting
+ * with an empty name.
+ *
+ * "First name" is the first whitespace-separated token of the resolved name;
+ * an email local part has no name structure, so it is used whole.
+ */
+export function getDashboardHeading(identity: ViewerIdentity): string {
+  const firstName = resolveViewerName(identity).split(/\s+/)[0] ?? '';
+  return firstName ? `Welcome back, ${firstName}` : 'Dashboard';
+}

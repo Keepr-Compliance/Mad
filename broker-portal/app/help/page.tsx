@@ -5,84 +5,57 @@ import Link from 'next/link';
 import { FileSearch, Mail } from 'lucide-react';
 import { SearchInput } from '@keepr/design-system';
 
+// BACKLOG-3092: entries pointing at /guides/sso-setup are deliberately absent.
+// That page is still served, but it asserts JIT auto-join and SCIM sync that do
+// not work today, so it stays unlinked from navigation until those claims are
+// true. `__tests__/app/guides/microsoft-approval.test.tsx` asserts that nothing
+// under app/ or components/ links to it.
+//
+// BACKLOG-3097: seven entries removed, leaving the two that get a reader
+// somewhere useful. The removed ones fell into two shapes:
+//
+//   404s — four SCIM articles pointing at /guides/scim-provisioning and an
+//   "IT Admin Guides Overview" pointing at /guides. Neither route has ever
+//   existed. Not replaced: SCIM articles come back with BACKLOG-2241, which
+//   builds the feature, and one guide does not need an index.
+//
+//   Application screens dressed as documentation — "Set Up Your Organization"
+//   (/setup) and "Managing User Roles" (/dashboard/users). Both return a live
+//   response, so no status check catches them, and both are dead ends for this
+//   audience. /setup's callback (app/auth/setup/callback/route.ts) looks up
+//   organization_members first and sends a user who already has a membership
+//   straight to /dashboard; /dashboard/users is the Users screen itself, with
+//   no instructions on it. The approval guide already sends an administrator
+//   to /setup at the point where that is the right move.
+//
+// `__tests__/app/help/page.test.tsx` derives this page's links from the
+// rendered DOM, not from the array below, so a dead link added in JSX cannot
+// slip past it.
 const articles = [
   {
-    href: '/guides/sso-setup',
-    title: 'Single Sign-On (SSO) Setup',
-    description: 'Enable your team to sign in with their existing Microsoft or Google accounts.',
-    tags: ['sso', 'microsoft', 'google', 'login', 'entra', 'azure', 'authentication'],
-  },
-  {
-    href: '/guides/scim-provisioning',
-    title: 'Automatic User Provisioning (SCIM)',
-    description: 'Automatically create, update, and deactivate users when changes are made in Microsoft Entra ID.',
-    tags: ['scim', 'provisioning', 'azure', 'entra', 'users', 'sync', 'automatic'],
-  },
-  {
-    href: '/guides/admin-consent',
-    title: 'Desktop App Permissions (Admin Consent)',
-    description: 'Grant organization-wide permissions so team members can connect their email and contacts.',
-    tags: ['permissions', 'consent', 'admin', 'desktop', 'email', 'contacts', 'graph'],
-  },
-  {
-    href: '/setup',
-    title: 'Set Up Your Organization',
-    description: 'Register your organization with Keepr and link your Microsoft tenant.',
-    tags: ['setup', 'organization', 'tenant', 'onboarding', 'getting started'],
+    href: '/guides/microsoft-approval',
+    title: 'Connecting Keepr to Entra ID (Microsoft 365)',
+    description:
+      'How an administrator approves the desktop app for read-only access to Outlook mail and contacts, what is granted, and how to verify or revoke it.',
+    tags: [
+      'permissions',
+      'consent',
+      'admin',
+      'approval',
+      'desktop',
+      'outlook',
+      'email',
+      'contacts',
+      'graph',
+      'microsoft',
+      'entra',
+    ],
   },
   {
     href: '/download',
     title: 'Download the Desktop App',
     description: 'Get the Keepr desktop app for macOS or Windows.',
     tags: ['download', 'install', 'desktop', 'mac', 'windows', 'app'],
-  },
-  {
-    href: '/guides',
-    title: 'IT Admin Guides Overview',
-    description: 'Everything you need to set up Keepr for your organization.',
-    tags: ['guides', 'admin', 'it', 'overview', 'setup'],
-  },
-  {
-    href: '/guides/sso-setup',
-    title: 'How to Configure SSO for Your Organization',
-    description:
-      'Walk through the /setup flow, the Microsoft consent prompt, and granting admin consent for the desktop app.',
-    tags: ['sso', 'configure', 'setup', 'consent', 'microsoft', 'entra', 'how to'],
-  },
-  {
-    href: '/guides/scim-provisioning',
-    title: 'How to Configure SCIM for Your Organization',
-    description:
-      'End-to-end guide: generate a token in Settings, copy the endpoint URL, create an enterprise app in Azure, configure provisioning, and assign users.',
-    tags: ['scim', 'configure', 'token', 'azure', 'enterprise app', 'provisioning', 'how to'],
-  },
-  {
-    href: '/guides/scim-provisioning',
-    title: 'How to Generate a SCIM Token',
-    description:
-      'Step-by-step instructions for creating a SCIM bearer token from Settings > SCIM and copying the endpoint URL.',
-    tags: ['scim', 'token', 'bearer', 'settings', 'endpoint', 'generate', 'how to'],
-  },
-  {
-    href: '/dashboard/users',
-    title: 'Managing User Roles',
-    description:
-      'How to change user roles (agent, broker, admin, IT admin) from the Users page.',
-    tags: ['roles', 'users', 'agent', 'broker', 'admin', 'it_admin', 'permissions'],
-  },
-  {
-    href: '/guides/scim-provisioning',
-    title: 'How SCIM User Provisioning Works',
-    description:
-      'What happens when Azure AD creates or deactivates users via SCIM, and how changes sync to Keepr.',
-    tags: ['scim', 'provisioning', 'azure', 'sync', 'create', 'deactivate', 'users'],
-  },
-  {
-    href: '/guides/sso-setup',
-    title: 'Troubleshooting: "Organization Not Set Up" Error',
-    description:
-      'Why this error appears and what to do — your IT admin needs to visit /setup first, or you can sign up for an individual account.',
-    tags: ['error', 'organization', 'not set up', 'troubleshooting', 'setup', 'individual'],
   },
 ];
 
@@ -153,9 +126,9 @@ export default function HelpPage() {
             <p className="mt-4 text-gray-500">No articles found for &quot;{query}&quot;</p>
             <p className="mt-1 text-sm text-gray-400">
               Try a different search term or{' '}
-              <a href="mailto:support@keeprcompliance.com" className="text-primary-600 hover:underline">
+              <Link href="/support/new" className="text-primary-600 hover:underline">
                 contact support
-              </a>
+              </Link>
             </p>
           </div>
         )}
@@ -165,13 +138,13 @@ export default function HelpPage() {
           <p className="text-sm text-gray-500">
             Can&apos;t find what you&apos;re looking for?
           </p>
-          <a
-            href="mailto:support@keeprcompliance.com"
+          <Link
+            href="/support/new"
             className="mt-2 inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700"
           >
             <Mail className="h-4 w-4" />
             Contact Support
-          </a>
+          </Link>
         </div>
       </div>
     </div>
