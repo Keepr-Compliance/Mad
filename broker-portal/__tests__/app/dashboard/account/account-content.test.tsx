@@ -312,9 +312,29 @@ describe('AccountClient — saved settings', () => {
 
   it('groups them under the desktop section headings', () => {
     render(<AccountClient account={makeAccount()} />);
-    for (const heading of ['General', 'Messages', 'iPhone Sync', 'Contacts', 'Setup']) {
+    for (const heading of ['General', 'Messages', 'iPhone Sync', 'Contacts']) {
       expect(screen.getByText(heading)).toBeInTheDocument();
     }
+  });
+
+  it('shows no Setup section and no onboarding restart markers', () => {
+    // The founder's report was about RENDERED TEXT, so it is asserted here on
+    // the rendered page and not only on the resolver. FULL_PREFERENCES stores
+    // both markers, with resumeStep null — the "Not set" row that was seen.
+    render(<AccountClient account={makeAccount()} />);
+    expect(screen.queryByText('Setup')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Onboarding/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('Onboarding resume point')).not.toBeInTheDocument();
+    expect(screen.queryByText('Onboarding resume saved')).not.toBeInTheDocument();
+    // And not one heading lower, either.
+    expect(screen.queryByText('Other settings')).not.toBeInTheDocument();
+  });
+
+  it('keeps the phone answer, under Contacts', () => {
+    render(<AccountClient account={makeAccount()} />);
+    expect(screen.getByText('Phone')).toBeInTheDocument();
+    expect(screen.getByText('Android')).toBeInTheDocument();
+    expect(screen.getByText('Contacts')).toBeInTheDocument();
   });
 
   it('says where they are changed', () => {

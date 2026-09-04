@@ -49,6 +49,32 @@ export interface ResolvedPreference {
 /** Where a key with no recorded label goes. Never dropped, never raw JSON. */
 export const UNMAPPED_GROUP = 'Other settings';
 
+/**
+ * Paths that are never shown to anyone.
+ *
+ * These are not settings. They are internal restart markers the MAIN PROCESS
+ * writes into the same blob during the macOS Full Disk Access relaunch, so a
+ * person reading their own settings saw a "Setup" section reading "Onboarding
+ * resume point / Not set" — a machine's bookmark, presented as if it were a
+ * choice they had made (founder, 2026-09-04: "we dont need this Setup").
+ *
+ * DROPPING THE LABEL IS NOT ENOUGH, AND IS WHY THIS SET EXISTS. An unlabelled
+ * path is not dropped by this file — by design, so a new desktop setting can
+ * never vanish silently — it falls into UNMAPPED_GROUP and reappears under
+ * "Other settings" with a humanised name. Deleting the two entries from
+ * PREFERENCE_LABELS would therefore have moved the founder's complaint one
+ * heading down, not removed it. Hiding has to be said explicitly, once, here.
+ *
+ * Consulted by path in resolvePreferences(), NOT by value: `resumeStep` is null
+ * whenever onboarding finished normally, so a filter keyed on the value would
+ * leave the null rows rendering as "Not set" — exactly the row that was
+ * reported.
+ */
+export const HIDDEN_PREFERENCES: ReadonlySet<string> = new Set([
+  'onboarding.resumeStep',
+  'onboarding.resumeSavedAt',
+]);
+
 /** Section order, mirroring the desktop's Settings tab strip. */
 export const GROUP_ORDER = [
   'General',
@@ -56,7 +82,6 @@ export const GROUP_ORDER = [
   'Messages',
   'iPhone Sync',
   'Contacts',
-  'Setup',
   UNMAPPED_GROUP,
 ] as const;
 
@@ -223,25 +248,18 @@ export const PREFERENCE_LABELS: Readonly<Record<string, PreferenceEntry>> = {
     format: onOff,
   },
 
-  // --- Setup ---------------------------------------------------------------
   // Not a Settings control: asked once during onboarding ("What phone do you
-  // use?") and read afterwards to decide which contact toggles appear.
+  // use?"). It sits under Contacts because that is what it decides — which
+  // contact toggles the desktop offers — and it is a real answer the person
+  // gave, so it keeps its row. Only its heading moved.
   phone_type: {
-    group: 'Setup',
+    group: 'Contacts',
     label: 'Phone',
     format: options({ iphone: 'iPhone', android: 'Android' }),
   },
-  // Internal restart markers written by the main process during the macOS Full
-  // Disk Access relaunch. Labelled rather than hidden: a person reading their
-  // own stored settings should see everything that is stored, and an unlabelled
-  // key would land in "Other settings" and look like a defect.
-  'onboarding.resumeStep': { group: 'Setup', label: 'Onboarding resume point' },
-  'onboarding.resumeSavedAt': {
-    group: 'Setup',
-    label: 'Onboarding resume saved',
-    format: (v) =>
-      typeof v === 'number' ? new Date(v).toLocaleString('en-US') : formatScalar(v),
-  },
+  // onboarding.resumeStep / onboarding.resumeSavedAt are NOT here. They are in
+  // HIDDEN_PREFERENCES above; see the note there for why removing a label is
+  // not the same as hiding a path.
   // Read by src/hooks/audit/useAuditAddressForm.ts; no rendered control.
   'audit.startDateDefault': {
     group: 'General',
@@ -301,25 +319,30 @@ export function humanizePath(path: string): string {
 /**
  * Resolve one person's whole blob for display, in group order then path order.
  *
- * Nothing is dropped. A path with no entry in PREFERENCE_LABELS is reported
- * with `mapped: false` and a humanised label, and the caller puts it under
- * "Other settings" — visible, readable, and obviously not yet designed for.
+ * Nothing is dropped EXCEPT the paths named in HIDDEN_PREFERENCES, and those
+ * are dropped here — before grouping — so they cannot resurface anywhere,
+ * least of all under "Other settings". Every other path with no entry in
+ * PREFERENCE_LABELS is reported with `mapped: false` and a humanised label, and
+ * the caller puts it under "Other settings" — visible, readable, and obviously
+ * not yet designed for.
  */
 export function resolvePreferences(preferences: unknown): ResolvedPreference[] {
   const groupRank = new Map<string, number>(
     GROUP_ORDER.map((g, i) => [g, i] as const)
   );
 
-  const rows = flattenPreferences(preferences).map(({ path, value }) => {
-    const entry = PREFERENCE_LABELS[path];
-    return {
-      path,
-      group: entry?.group ?? UNMAPPED_GROUP,
-      label: entry?.label ?? humanizePath(path),
-      display: entry?.format ? entry.format(value) : formatScalar(value),
-      mapped: Boolean(entry),
-    };
-  });
+  const rows = flattenPreferences(preferences)
+    .filter(({ path }) => !HIDDEN_PREFERENCES.has(path))
+    .map(({ path, value }) => {
+      const entry = PREFERENCE_LABELS[path];
+      return {
+        path,
+        group: entry?.group ?? UNMAPPED_GROUP,
+        label: entry?.label ?? humanizePath(path),
+        display: entry?.format ? entry.format(value) : formatScalar(value),
+        mapped: Boolean(entry),
+      };
+    });
 
   return rows.sort((a, b) => {
     const ga = groupRank.get(a.group) ?? GROUP_ORDER.length;
