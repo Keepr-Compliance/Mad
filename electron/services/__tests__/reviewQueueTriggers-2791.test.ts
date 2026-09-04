@@ -170,10 +170,16 @@ describe("BACKLOG-2791 CONTROL 5 — every link writer is enumerated and classif
     expect(src.slice(src.indexOf('if (reason === "open") {'))).toContain(
       "TOUCH_LAST_PENDING_SCAN_SQL",
     );
-    // And the constant it names really is that statement, so this cannot drift into
-    // asserting on a name that no longer writes the watermark.
+    // And the constant it names really is that statement.
+    //
+    // This pins the CONSTANT, not the file. The first version of this line asserted
+    // only that reviewStateSql.ts contained the watermark text SOMEWHERE, and SR
+    // falsified it: drift TOUCH_LAST_PENDING_SCAN_SQL to a different statement, add any
+    // second constant carrying the original text, and the guard went 10/10 green while
+    // the watermark write was broken. Naming the binding closes that — the text has to
+    // be on THIS constant, not merely in the same file.
     expect(read("electron/services/db/reviewStateSql.ts")).toContain(
-      "UPDATE transactions SET last_pending_scan_at",
+      "TOUCH_LAST_PENDING_SCAN_SQL = sql`UPDATE transactions SET last_pending_scan_at",
     );
   });
 

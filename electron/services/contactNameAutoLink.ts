@@ -129,7 +129,10 @@
  */
 
 import { dbAll } from "./db/core/dbConnection";
-import { unsafeSql } from "./db/core/sqlText";
+import {
+  NAMED_EXTERNAL_RECORDS_SQL,
+  NAMED_LIVE_CONTACTS_SQL,
+} from "./db/contactNameAutoLinkSql";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import { createLink, findContactIdBySourceRecord } from "./db/contactSourceLinkDbService";
 import { hasCannotLink, type LinkProposalReason } from "./db/contactLinkReviewDbService";
@@ -675,16 +678,12 @@ export function collectNameGroups(userId: string): NameGroup[] {
     source: ExternalContactSource;
     name: string | null;
   }>(
-    unsafeSql(`SELECT external_record_id, source, name FROM external_contacts
-      WHERE user_id = ? AND external_record_id IS NOT NULL AND name IS NOT NULL
-      ORDER BY source, external_record_id`),
+    NAMED_EXTERNAL_RECORDS_SQL,
     [userId],
   );
 
   const contactRows = dbAll<{ id: string; display_name: string | null }>(
-    unsafeSql(`SELECT id, display_name FROM contacts
-      WHERE user_id = ? AND removed_at IS NULL AND display_name IS NOT NULL
-      ORDER BY id`),
+    NAMED_LIVE_CONTACTS_SQL,
     [userId],
   );
 

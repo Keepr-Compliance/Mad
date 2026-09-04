@@ -44,7 +44,10 @@
  */
 
 import { dbAll, dbGet, dbTransaction } from "./db/core/dbConnection";
-import { unsafeSql } from "./db/core/sqlText";
+import {
+  COUNT_REVIEW_QUEUE_SQL,
+  REVIEW_QUEUE_SQL,
+} from "./db/contactLinkReviewSql";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import { createLink } from "./db/contactSourceLinkDbService";
 import {
@@ -151,16 +154,6 @@ export interface ReviewQueueCluster {
  * predicate. "Review 12 possible duplicates" opening onto 9 is the kind of small
  * lie that costs a feature its credibility.
  */
-const PENDING_JOIN = `
-    FROM contact_link_proposals p
-    JOIN contacts c
-      ON c.id = p.contact_id AND c.removed_at IS NULL
-    JOIN external_contacts ec
-      ON ec.user_id = p.user_id
-     AND ec.source = p.source_type
-     AND ec.external_record_id = p.source_record_id
-   WHERE p.user_id = ? AND p.status = 'pending'
-`;
 
 /**
  * `emails_json` / `phones_json` off an `external_contacts` row.
@@ -184,7 +177,7 @@ function parseValueArray(raw: string | null): string[] {
 }
 
 export function countReviewQueue(userId: string): number {
-  const row = dbGet<{ n: number }>(unsafeSql(`SELECT COUNT(*) AS n ${PENDING_JOIN}`), [userId]);
+  const row = dbGet<{ n: number }>(COUNT_REVIEW_QUEUE_SQL, [userId]);
   return row?.n ?? 0;
 }
 
@@ -199,15 +192,7 @@ export function getReviewQueue(userId: string): ReviewQueueCluster[] {
       contact_company: string | null;
     }
   >(
-    unsafeSql(`SELECT p.id, p.user_id, p.contact_id, p.source_type, p.source_record_id, p.status,
-            p.reason, p.matched_on, p.identity_assessment, p.relationship_assessment,
-            p.cluster_key, p.evidence_json, p.created_at, p.resolved_at,
-            ec.name AS source_name, ec.company AS source_company,
-            ec.emails_json AS source_emails_json,
-            ec.phones_json AS source_phones_json,
-            c.display_name AS contact_name, c.company AS contact_company
-       ${PENDING_JOIN}
-      ORDER BY p.cluster_key, p.created_at, p.id`),
+    REVIEW_QUEUE_SQL,
     [userId],
   );
 
