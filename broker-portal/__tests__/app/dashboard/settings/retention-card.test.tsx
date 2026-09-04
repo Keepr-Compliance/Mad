@@ -101,13 +101,19 @@ describe('Email Retention Policy — team plan (grayed)', () => {
     expect(mockUpdateRetentionPolicy).not.toHaveBeenCalled();
   });
 
-  it('does not tell members their desktop setting is locked', async () => {
-    // The org policy is not in force, so the desktop setting is theirs.
+  it('says only that the policy is not in force', async () => {
+    // Two claims are wrong here, not one. It must not say members' desktop
+    // setting is LOCKED (the policy is not in force), and it must not say they
+    // KEEP a retention period they chose in the desktop app either — no desktop
+    // code reads organizations.retention_years and there is no such desktop
+    // setting to keep. See BACKLOG-3079's finding.
     render(<OrgSettingsClient features={view(TEAM)} />);
     await screen.findByText(HEADING);
     expect(
       screen.queryByText(/see this setting locked in their desktop app/i)
     ).not.toBeInTheDocument();
+    expect(screen.queryByText(/keep the retention period/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Not in force for this organization.')).toBeInTheDocument();
   });
 });
 

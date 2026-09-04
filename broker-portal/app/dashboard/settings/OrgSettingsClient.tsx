@@ -339,7 +339,7 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
             </div>
             <p className="mt-3 text-xs text-gray-400">
               {retentionLocked
-                ? 'Team members keep the retention period they choose in the desktop app.'
+                ? 'Not in force for this organization.'
                 : 'Team members will see this setting locked in their desktop app and cannot change it.'}
             </p>
           </CardContent>
