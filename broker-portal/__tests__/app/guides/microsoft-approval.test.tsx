@@ -157,7 +157,17 @@ describe('/guides/microsoft-approval — BACKLOG-3092, trimmed by BACKLOG-3097',
       const { container } = render(<MicrosoftApprovalGuidePage />);
       const text = container.textContent ?? '';
 
-      expect(text.length).toBeGreaterThan(2000);
+      // A floor against an EMPTY render, not against brevity. Every assertion
+      // below is a not.toMatch, and all of them pass trivially on an empty
+      // string, so something has to prove the page rendered at all.
+      //
+      // Lowered from 2000 by BACKLOG-3097. The page has been cut seven times
+      // and now renders 2518 characters — a 20% margin, close enough that the
+      // next trim would have turned this into a red that says "too short" when
+      // nothing about shortness is wrong, and the obvious fix would have been
+      // to lower the number without asking what it was for. 500 is still an
+      // order of magnitude above anything a broken render produces.
+      expect(text.length).toBeGreaterThan(500);
       expect(text).not.toMatch(/\bSSO\b/i);
       expect(text).not.toMatch(/single sign-?on/i);
       expect(text).not.toMatch(/\bSCIM\b/i);
