@@ -35,6 +35,18 @@
  * in one file and appears in the second form in another. Restricting either side by
  * directory would make a moved statement look deleted.
  *
+ * ## This is a ONE-SHOT MOVE CONTROL. It is not wired into CI.
+ *
+ * Despite living under `scripts/ci/`, nothing runs this automatically: it is in neither
+ * `.github/workflows/` nor `package.json`. It is run by hand on both sides of a move
+ * and its result reported in the PR. That is correct for what it does — it compares two
+ * TREES, so it has no meaning on a single checkout — but the directory implies
+ * otherwise, so it is said here rather than left to be assumed.
+ *
+ * The standing gates for this epic are `sqlText.escapeSet.test.ts` (the escape ratchet),
+ * `sqlText.conduitSeam.test.ts` (the brand-launder guard) and
+ * `scripts/ci/check-sql-boundary.mjs` (the boundary gate). Those do run on every PR.
+ *
  * ## Usage
  *
  *     node scripts/ci/sql-move-identity.mjs --out before.json
