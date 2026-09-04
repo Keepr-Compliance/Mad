@@ -38,9 +38,10 @@
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
 
 import { dbAll, dbGet, dbRun } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
+import { sql, unsafeSql } from "./core/sqlText";
 import { emailForceReadView, type EmailForceSet } from "./emailForceSetSql";
 import type { StagingTableName } from "./stagingDdlSql";
+import { placeholderList } from "./core/sqlFragments";
 
 /** Where a sync run WRITES: live tables, or this run's staging pair. */
 export type EmailWriteTarget =
@@ -144,7 +145,7 @@ export function prepareParticipantInsert(
 export const UPDATE_EMAIL_IDENTITY_SQL = `UPDATE emails SET external_id = ?, message_id_header = COALESCE(message_id_header, ?) WHERE id = ?`;
 
 /** Reset the provider cursor so the next run starts from the beginning. */
-export const CLEAR_SYNC_CURSOR_SQL = `UPDATE email_sync_state SET cursor = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`;
+export const CLEAR_SYNC_CURSOR_SQL = sql`UPDATE email_sync_state SET cursor = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`;
 
 /**
  * Which external ids among `externalIds` are already stored.
@@ -164,8 +165,12 @@ export function selectExistingExternalIds(
 ): Array<{ external_id: string }> {
   if (externalIds.length === 0) return [];
   const src = readSource(source, "external_id, user_id");
-  const placeholders = externalIds.map(() => "?").join(",");
+  const placeholders = placeholderList(externalIds.length, sql`,`);
   return dbAll<{ external_id: string }>(
+    // BACKLOG-3102 — NOT CONVERTED. `src.sql` comes from `emailForceReadView`,
+    // whose predicate splices provider VALUES into SQL text as quoted literals
+    // (`source IN ('gmail', 'outlook')`, `emailForceSetSql.ts:92`). The tag
+    // refuses it, correctly. Filed rather than escaped past.
     unsafeSql(`SELECT external_id FROM ${src.sql} WHERE user_id = ? AND external_id IN (${placeholders})`),
     [...src.params, userId, ...externalIds],
   );
@@ -185,6 +190,8 @@ export function selectExistingByMessageIdHeader(
   const src = readSource(source, "id, external_id, message_id_header, user_id");
   const placeholders = headers.map(() => "?").join(",");
   return dbAll(
+    // BACKLOG-3102 — NOT CONVERTED, same reason as above: `src.sql` splices
+    // provider VALUES into SQL text.
     unsafeSql(`SELECT id, external_id, message_id_header FROM ${src.sql} WHERE user_id = ? AND message_id_header IN (${placeholders})`),
     [...src.params, userId, ...headers],
   );
@@ -221,6 +228,8 @@ export function selectLegacyCandidatesBySubject(
   );
   const placeholders = normalisedSubjects.map(() => "?").join(",");
   return dbAll(
+    // BACKLOG-3102 — NOT CONVERTED, same reason as above: `src.sql` splices
+    // provider VALUES into SQL text.
     unsafeSql(`SELECT id, external_id, subject, sender, sent_at
            FROM ${src.sql}
            WHERE user_id = ?
@@ -245,20 +254,20 @@ export function selectEarliestByParticipants(
   addresses: readonly string[],
 ): { earliest: string | null; total: number } | undefined {
   if (addresses.length === 0) return undefined;
-  const placeholders = addresses.map(() => "?").join(", ");
+  const placeholders = placeholderList(addresses.length);
   return dbGet<{ earliest: string | null; total: number }>(
-    unsafeSql(`
+    sql`
   SELECT MIN(e.sent_at) as earliest, COUNT(DISTINCT e.id) as total
   FROM email_participants ep
   JOIN emails e ON e.id = ep.email_id
   WHERE e.user_id = ?
     AND ep.email_address IN (${placeholders})
-`),
+`,
     [userId, ...addresses],
   );
 }
 
 /** Reset the provider cursor so the next run starts from the beginning. */
 export function clearSyncCursor(userId: string): void {
-  dbRun(unsafeSql(CLEAR_SYNC_CURSOR_SQL), [userId]);
+  dbRun(CLEAR_SYNC_CURSOR_SQL, [userId]);
 }

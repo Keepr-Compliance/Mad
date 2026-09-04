@@ -30,7 +30,7 @@
 // ============================================
 
 import { dbGet } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
+import { sql } from "./core/sqlText";
 
 export interface CachedEmailBounds {
   /** ISO timestamp of the OLDEST cached email, or null when nothing is cached. */
@@ -50,7 +50,7 @@ export interface CachedEmailBounds {
  * before BACKLOG-3056 subsumed it into this MIN/MAX pair.
  */
 export const CACHED_EMAIL_SENT_AT_BOUNDS_SQL =
-  "SELECT MIN(sent_at) as oldest, MAX(sent_at) as newest FROM emails WHERE user_id = ?";
+  sql`SELECT MIN(sent_at) as oldest, MAX(sent_at) as newest FROM emails WHERE user_id = ?`;
 
 /**
  * The oldest and newest `sent_at` across a user's cached emails.
@@ -62,7 +62,7 @@ export const CACHED_EMAIL_SENT_AT_BOUNDS_SQL =
  */
 export function getCachedEmailSentAtBounds(userId: string): CachedEmailBounds {
   const row = dbGet<{ oldest: string | null; newest: string | null }>(
-    unsafeSql(CACHED_EMAIL_SENT_AT_BOUNDS_SQL),
+    CACHED_EMAIL_SENT_AT_BOUNDS_SQL,
     [userId],
   );
   return { oldest: row?.oldest ?? null, newest: row?.newest ?? null };

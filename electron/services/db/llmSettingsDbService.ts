@@ -10,14 +10,46 @@ import crypto from "crypto";
 import type { LLMSettings } from "../../types/models";
 import { DatabaseError } from "../../types";
 import { dbGet, dbRun } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
+import { sql } from "./core/sqlText";
+import { joinFragments } from "./core/sqlFragments";
+
+/**
+ * The `llm_settings` columns this module writes, as SQL text — BACKLOG-3085.
+ *
+ * `llm_settings` is not one of `sqlFieldWhitelist`'s tables, so it enumerates its
+ * own writable columns here. This object is now the SINGLE definition: the runtime
+ * allow-list, the literal union, and the SQL text are all read off it, so a column
+ * can no longer be accepted by one and missing from another — which is the same
+ * shape `CLEARABLE_LLM_SETTINGS_COLUMNS` below already uses, and the reason a
+ * column name can be spliced into a statement without the tag having to trust it.
+ */
+const LLM_SETTINGS_COLUMN_SQL = {
+  openai_api_key_encrypted: sql`openai_api_key_encrypted`,
+  anthropic_api_key_encrypted: sql`anthropic_api_key_encrypted`,
+  preferred_provider: sql`preferred_provider`,
+  openai_model: sql`openai_model`,
+  anthropic_model: sql`anthropic_model`,
+  tokens_used_this_month: sql`tokens_used_this_month`,
+  budget_limit_tokens: sql`budget_limit_tokens`,
+  budget_reset_date: sql`budget_reset_date`,
+  platform_allowance_tokens: sql`platform_allowance_tokens`,
+  platform_allowance_used: sql`platform_allowance_used`,
+  use_platform_allowance: sql`use_platform_allowance`,
+  enable_auto_detect: sql`enable_auto_detect`,
+  enable_role_extraction: sql`enable_role_extraction`,
+  llm_data_consent: sql`llm_data_consent`,
+  llm_data_consent_at: sql`llm_data_consent_at`,
+};
+
+type LLMSettingsColumn = keyof typeof LLM_SETTINGS_COLUMN_SQL;
+
 
 /**
  * Get LLM settings for a user
  */
 export function getLLMSettingsByUserId(userId: string): LLMSettings | null {
-  const sql = `SELECT * FROM llm_settings WHERE user_id = ?`;
-  const row = dbGet<Record<string, unknown>>(unsafeSql(sql), [userId]);
+  const statement = sql`SELECT * FROM llm_settings WHERE user_id = ?`;
+  const row = dbGet<Record<string, unknown>>(statement, [userId]);
   return row ? mapRowToLLMSettings(row) : null;
 }
 
@@ -27,12 +59,12 @@ export function getLLMSettingsByUserId(userId: string): LLMSettings | null {
 export function createLLMSettings(userId: string): LLMSettings {
   const id = crypto.randomUUID();
 
-  const sql = `
+  const statement = sql`
     INSERT INTO llm_settings (id, user_id)
     VALUES (?, ?)
   `;
 
-  dbRun(unsafeSql(sql), [id, userId]);
+  dbRun(statement, [id, userId]);
 
   // Return the created settings
   const settings = getLLMSettingsByUserId(userId);
@@ -60,27 +92,11 @@ export function updateLLMSettings(
   userId: string,
   updates: Partial<Omit<LLMSettings, 'id' | 'user_id' | 'created_at' | 'updated_at'>>
 ): LLMSettings {
-  const allowedFields = [
-    'openai_api_key_encrypted',
-    'anthropic_api_key_encrypted',
-    'preferred_provider',
-    'openai_model',
-    'anthropic_model',
-    'tokens_used_this_month',
-    'budget_limit_tokens',
-    'budget_reset_date',
-    'platform_allowance_tokens',
-    'platform_allowance_used',
-    'use_platform_allowance',
-    'enable_auto_detect',
-    'enable_role_extraction',
-    'llm_data_consent',
-    'llm_data_consent_at',
-  ];
+  const allowedFields = Object.keys(LLM_SETTINGS_COLUMN_SQL) as LLMSettingsColumn[];
 
   // Filter to only allowed fields that are present in updates
-  const fieldsToUpdate = Object.keys(updates).filter(
-    (key) => allowedFields.includes(key) && updates[key as keyof typeof updates] !== undefined
+  const fieldsToUpdate = allowedFields.filter(
+    (key) => key in updates && updates[key as keyof typeof updates] !== undefined
   );
 
   // BACKLOG-2560: this used to return the CURRENT settings as a success value
@@ -107,15 +123,18 @@ export function updateLLMSettings(
     return value;
   });
 
-  const setClause = fieldsToUpdate.map((f) => `${f} = ?`).join(', ');
+  const setClause = joinFragments(
+    fieldsToUpdate.map((f) => sql`${LLM_SETTINGS_COLUMN_SQL[f]} = ?`),
+    sql`, `,
+  );
 
-  const sql = `
+  const statement = sql`
     UPDATE llm_settings
     SET ${setClause}, updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
 
-  dbRun(unsafeSql(sql), [...values, userId]);
+  dbRun(statement, [...values, userId]);
 
   const settings = getLLMSettingsByUserId(userId);
   if (!settings) {
@@ -160,13 +179,13 @@ export function clearLLMSettingsField(
     throw new DatabaseError(`Column is not clearable: ${column}`);
   }
 
-  const sql = `
+  const statement = sql`
     UPDATE llm_settings
-    SET ${column} = NULL, updated_at = CURRENT_TIMESTAMP
+    SET ${LLM_SETTINGS_COLUMN_SQL[column]} = NULL, updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
 
-  dbRun(unsafeSql(sql), [userId]);
+  dbRun(statement, [userId]);
 
   const settings = getLLMSettingsByUserId(userId);
   if (!settings) {
@@ -179,54 +198,54 @@ export function clearLLMSettingsField(
  * Increment token usage for a user
  */
 export function incrementTokenUsage(userId: string, tokens: number): void {
-  const sql = `
+  const statement = sql`
     UPDATE llm_settings
     SET tokens_used_this_month = tokens_used_this_month + ?,
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
-  dbRun(unsafeSql(sql), [tokens, userId]);
+  dbRun(statement, [tokens, userId]);
 }
 
 /**
  * Increment platform allowance usage for a user
  */
 export function incrementPlatformAllowanceUsage(userId: string, tokens: number): void {
-  const sql = `
+  const statement = sql`
     UPDATE llm_settings
     SET platform_allowance_used = platform_allowance_used + ?,
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
-  dbRun(unsafeSql(sql), [tokens, userId]);
+  dbRun(statement, [tokens, userId]);
 }
 
 /**
  * Reset monthly token usage for a user
  */
 export function resetMonthlyUsage(userId: string): void {
-  const sql = `
+  const statement = sql`
     UPDATE llm_settings
     SET tokens_used_this_month = 0,
         budget_reset_date = DATE('now'),
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
-  dbRun(unsafeSql(sql), [userId]);
+  dbRun(statement, [userId]);
 }
 
 /**
  * Set LLM data consent for a user
  */
 export function setLLMDataConsent(userId: string, consent: boolean): LLMSettings {
-  const sql = `
+  const statement = sql`
     UPDATE llm_settings
     SET llm_data_consent = ?,
-        llm_data_consent_at = ${consent ? "CURRENT_TIMESTAMP" : "NULL"},
+        llm_data_consent_at = ${consent ? sql`CURRENT_TIMESTAMP` : sql`NULL`},
         updated_at = CURRENT_TIMESTAMP
     WHERE user_id = ?
   `;
-  dbRun(unsafeSql(sql), [consent ? 1 : 0, userId]);
+  dbRun(statement, [consent ? 1 : 0, userId]);
 
   const settings = getLLMSettingsByUserId(userId);
   if (!settings) {
@@ -239,8 +258,8 @@ export function setLLMDataConsent(userId: string, consent: boolean): LLMSettings
  * Delete LLM settings for a user
  */
 export function deleteLLMSettings(userId: string): void {
-  const sql = `DELETE FROM llm_settings WHERE user_id = ?`;
-  dbRun(unsafeSql(sql), [userId]);
+  const statement = sql`DELETE FROM llm_settings WHERE user_id = ?`;
+  dbRun(statement, [userId]);
 }
 
 /**

@@ -89,7 +89,7 @@ import {
   type MigrationHarness,
 } from "../../__tests__/helpers/migrationTestHarness";
 import { dbGet } from "../core/dbConnection";
-import { unsafeSql } from "../core/sqlText";
+import { sql } from "../core/sqlText";
 import { getTransactions, getTransactionByIdSync } from "../transactionDbService";
 import { getCommunicationsWithMessages } from "../communicationDbService";
 import { linkEmailToTransaction } from "../../autoLinkService";
@@ -211,8 +211,8 @@ async function cardCount(txn: string): Promise<number> {
 function rawEmailCount(txn: string): number {
   return (
     dbGet<{ n: number }>(
-      unsafeSql(`SELECT COUNT(DISTINCT c.email_id) as n FROM communications c
-        WHERE c.transaction_id = ? AND c.email_id IS NOT NULL`),
+      sql`SELECT COUNT(DISTINCT c.email_id) as n FROM communications c
+        WHERE c.transaction_id = ? AND c.email_id IS NOT NULL`,
       [txn],
     )?.n ?? -1
   );
@@ -346,9 +346,9 @@ describe("BACKLOG-2865 — the card counts what the Emails tab describes", () =>
       // The per-email shortcut would return 1 here (only M-1a is not
       // address_missing) and would pass every other case in this file.
       const notMissing = dbGet<{ n: number }>(
-        unsafeSql(`SELECT COUNT(*) as n FROM communications
+        sql`SELECT COUNT(*) as n FROM communications
           WHERE transaction_id = ? AND email_id IS NOT NULL
-            AND COALESCE(match_reason, 'address_found') != 'address_missing'`),
+            AND COALESCE(match_reason, 'address_found') != 'address_missing'`,
         [T_MIXED],
       )?.n;
       expect(notMissing).toBe(1);

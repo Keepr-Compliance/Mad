@@ -12,13 +12,14 @@
 import crypto from "crypto";
 import * as Sentry from "@sentry/electron/main";
 import { dbGet, dbAll, dbRun, getRawDatabase } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
+import { sql } from "./core/sqlText";
 import { DatabaseError } from "../../types";
 import type { ParsedParticipant } from "../../types/models";
 // BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
 import type { EmailRow } from "../../types/ids";
 import { computeParticipantHash, parseEmailAddressList } from "../../utils/emailAddress";
 import { CURRENT_DERIVATION_VERSION } from "../../utils/derivationVersion";
+import { joinFragments } from "./core/sqlFragments";
 
 // ============================================
 // TYPE DEFINITIONS
@@ -96,12 +97,12 @@ export interface NewEmail {
 }
 
 // BACKLOG-1107: Explicit column lists for SELECT queries instead of SELECT *.
-const EMAIL_COLUMNS = `id, user_id, external_id, source, account_id, direction,
+const EMAIL_COLUMNS = sql`id, user_id, external_id, source, account_id, direction,
   subject, body_plain, body_html, sender, recipients, cc, bcc,
   thread_id, in_reply_to, references_header, sent_at, received_at,
   has_attachments, attachment_count, message_id_header, content_hash, labels, created_at`;
 
-const EMAIL_COLUMNS_LIGHT = `id, user_id, external_id, source, account_id, direction,
+const EMAIL_COLUMNS_LIGHT = sql`id, user_id, external_id, source, account_id, direction,
   subject, sender, recipients, cc, bcc, thread_id, in_reply_to, references_header,
   sent_at, received_at, has_attachments, attachment_count, message_id_header,
   content_hash, labels, created_at`;
@@ -122,7 +123,7 @@ const EMAIL_COLUMNS_LIGHT = `id, user_id, external_id, source, account_id, direc
 export async function createEmail(emailData: NewEmail): Promise<Email> {
   const id = crypto.randomUUID();
 
-  const sql = `
+  const statement = sql`
     INSERT INTO emails (
       id, user_id, external_id, source, account_id, direction,
       subject, body_plain, body_html,
@@ -219,7 +220,7 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
      VALUES (?, ?, ?, ?, ?, ?)`
   );
   const runTx = rawDb.transaction(() => {
-    dbRun(unsafeSql(sql), params);
+    dbRun(statement, params);
     for (const p of resolvedParticipants) {
       insertParticipantStmt.run(
         id,
@@ -287,13 +288,13 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
  * Get an email by ID
  */
 export async function getEmailById(emailId: string): Promise<EmailRow | null> {
-  const sql = `SELECT ${EMAIL_COLUMNS} FROM emails WHERE id = ?`;
+  const statement = sql`SELECT ${EMAIL_COLUMNS} FROM emails WHERE id = ?`;
   // BACKLOG-3067: MINT. `emails.id` and `communications.id` are both uuids and both
   // `string`, and confusing them is the live BACKLOG-2829 defect. A row that came
   // back from THIS query is an email, so its id is an `EmailId` — the read is the
   // evidence. The parameter stays `string`: a lookup given the wrong kind of id
   // returns null and harms nothing.
-  const email = dbGet<EmailRow>(unsafeSql(sql), [emailId]);
+  const email = dbGet<EmailRow>(statement, [emailId]);
   return email || null;
 }
 
@@ -305,8 +306,8 @@ export async function getEmailByExternalId(
   userId: string,
   externalId: string
 ): Promise<Email | null> {
-  const sql = `SELECT ${EMAIL_COLUMNS_LIGHT} FROM emails WHERE user_id = ? AND external_id = ?`;
-  const email = dbGet<Email>(unsafeSql(sql), [userId, externalId]);
+  const statement = sql`SELECT ${EMAIL_COLUMNS_LIGHT} FROM emails WHERE user_id = ? AND external_id = ?`;
+  const email = dbGet<Email>(statement, [userId, externalId]);
   return email || null;
 }
 
@@ -318,8 +319,8 @@ export async function getEmailByMessageIdHeader(
   userId: string,
   messageIdHeader: string
 ): Promise<Email | null> {
-  const sql = `SELECT ${EMAIL_COLUMNS_LIGHT} FROM emails WHERE user_id = ? AND message_id_header = ?`;
-  const email = dbGet<Email>(unsafeSql(sql), [userId, messageIdHeader]);
+  const statement = sql`SELECT ${EMAIL_COLUMNS_LIGHT} FROM emails WHERE user_id = ? AND message_id_header = ?`;
+  const email = dbGet<Email>(statement, [userId, messageIdHeader]);
   return email || null;
 }
 
@@ -327,12 +328,12 @@ export async function getEmailByMessageIdHeader(
  * Get all emails for a user
  */
 export async function getEmailsByUser(userId: string): Promise<Email[]> {
-  const sql = `
+  const statement = sql`
     SELECT ${EMAIL_COLUMNS} FROM emails
     WHERE user_id = ?
     ORDER BY sent_at DESC
   `;
-  return dbAll<Email>(unsafeSql(sql), [userId]);
+  return dbAll<Email>(statement, [userId]);
 }
 
 /**
@@ -343,15 +344,15 @@ export async function getCachedEmails(
   userId: string,
   options?: { query?: string; after?: Date | null; before?: Date | null; maxResults?: number }
 ): Promise<Email[]> {
-  const conditions = ["user_id = ?"];
+  const conditions = [sql`user_id = ?`];
   const params: (string | number)[] = [userId];
 
   if (options?.after) {
-    conditions.push("sent_at >= ?");
+    conditions.push(sql`sent_at >= ?`);
     params.push(options.after.toISOString());
   }
   if (options?.before) {
-    conditions.push("sent_at <= ?");
+    conditions.push(sql`sent_at <= ?`);
     params.push(options.before.toISOString());
   }
   if (options?.query) {
@@ -361,7 +362,7 @@ export async function getCachedEmails(
     // exact email addresses — so the junction lookup would be a behavior
     // regression. Subject is the most useful field here and isn't in the
     // junction at all.
-    conditions.push("(subject LIKE ? OR sender LIKE ? OR recipients LIKE ?)");
+    conditions.push(sql`(subject LIKE ? OR sender LIKE ? OR recipients LIKE ?)`);
     const q = `%${options.query}%`;
     params.push(q, q, q);
   }
@@ -376,7 +377,7 @@ export async function getCachedEmails(
   // The list is bounded by `LIMIT` (default 500) so the extra payload is
   // bounded too; the user already sees this data once attached, so there
   // is no privacy delta.
-  const sql = `
+  const statement = sql`
     SELECT
       e.id,
       e.user_id, e.external_id, e.source, e.account_id, e.direction,
@@ -388,12 +389,12 @@ export async function getCachedEmails(
       e.has_attachments, e.attachment_count, e.message_id_header,
       e.content_hash, e.labels, e.created_at
     FROM emails e
-    WHERE ${conditions.join(" AND ")}
+    WHERE ${joinFragments(conditions, sql` AND `)}
     ORDER BY sent_at DESC
     LIMIT ?
   `;
   params.push(limit);
-  return dbAll<Email>(unsafeSql(sql), params);
+  return dbAll<Email>(statement, params);
 }
 
 /**
@@ -403,12 +404,12 @@ export async function getEmailsByThread(
   userId: string,
   threadId: string
 ): Promise<Email[]> {
-  const sql = `
+  const statement = sql`
     SELECT ${EMAIL_COLUMNS} FROM emails
     WHERE user_id = ? AND thread_id = ?
     ORDER BY sent_at ASC
   `;
-  return dbAll<Email>(unsafeSql(sql), [userId, threadId]);
+  return dbAll<Email>(statement, [userId, threadId]);
 }
 
 /**
@@ -417,8 +418,8 @@ export async function getEmailsByThread(
  * via the ON DELETE CASCADE foreign key constraint.
  */
 export async function deleteEmail(emailId: string): Promise<void> {
-  const sql = "DELETE FROM emails WHERE id = ?";
-  dbRun(unsafeSql(sql), [emailId]);
+  const statement = sql`DELETE FROM emails WHERE id = ?`;
+  dbRun(statement, [emailId]);
 }
 
 /**
@@ -428,8 +429,8 @@ export async function deleteEmailByExternalId(
   userId: string,
   externalId: string
 ): Promise<void> {
-  const sql = "DELETE FROM emails WHERE user_id = ? AND external_id = ?";
-  dbRun(unsafeSql(sql), [userId, externalId]);
+  const statement = sql`DELETE FROM emails WHERE user_id = ? AND external_id = ?`;
+  dbRun(statement, [userId, externalId]);
 }
 
 // ============================================
@@ -462,7 +463,7 @@ export async function emailExists(
  * Count emails for a user
  */
 export async function countEmailsByUser(userId: string): Promise<number> {
-  const sql = "SELECT COUNT(*) as count FROM emails WHERE user_id = ?";
-  const result = dbGet<{ count: number }>(unsafeSql(sql), [userId]);
+  const statement = sql`SELECT COUNT(*) as count FROM emails WHERE user_id = ?`;
+  const result = dbGet<{ count: number }>(statement, [userId]);
   return result?.count || 0;
 }

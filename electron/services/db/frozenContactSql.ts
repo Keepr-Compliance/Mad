@@ -69,7 +69,9 @@
  * A complete boolean expression, so it composes under `NOT` without needing
  * parentheses added at the call site.
  */
-export const FROZEN_CONTACT_EXISTS_SQL = `EXISTS (
+import { sql } from "./core/sqlText";
+
+export const FROZEN_CONTACT_EXISTS_SQL = sql`EXISTS (
     SELECT 1 FROM transactions t
      WHERE t.first_exported_at IS NOT NULL
        AND (

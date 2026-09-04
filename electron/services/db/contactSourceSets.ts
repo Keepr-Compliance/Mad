@@ -50,7 +50,7 @@
 import type { Contact, ContactReviewState, ContactSource } from "../../types/models";
 import { toPersistedContactSource } from "../../utils/contactSourceVocabulary";
 import { dbAll, dbGet } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
+import { sql } from "./core/sqlText";
 import { ORIGIN_MATCH_METHOD } from "./contactIdentitySchemaSql";
 
 /**
@@ -66,7 +66,7 @@ import { ORIGIN_MATCH_METHOD } from "./contactIdentitySchemaSql";
  */
 function crosswalkExists(): boolean {
   const row = dbGet<{ name: string }>(
-    unsafeSql(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'contact_source_links'`),
+    sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'contact_source_links'`,
   );
   return !!row;
 }
@@ -84,9 +84,9 @@ export function getLiveSourcesByContact(userId: string): Map<string, ContactSour
   if (!crosswalkExists()) return new Map();
 
   const rows = dbAll<{ contact_id: string; source_type: string }>(
-    unsafeSql(`SELECT DISTINCT contact_id, source_type
+    sql`SELECT DISTINCT contact_id, source_type
        FROM contact_source_links
-      WHERE user_id = ?`),
+      WHERE user_id = ?`,
     [userId],
   );
 
@@ -125,7 +125,7 @@ export function getLiveSourcesByContact(userId: string): Map<string, ContactSour
 export function getLiveSourcesForContact(contactId: string): ContactSource[] {
   if (!crosswalkExists()) return [];
   const rows = dbAll<{ source_type: string }>(
-    unsafeSql(`SELECT DISTINCT source_type FROM contact_source_links WHERE contact_id = ?`),
+    sql`SELECT DISTINCT source_type FROM contact_source_links WHERE contact_id = ?`,
     [contactId],
   );
   const sources = new Set(rows.map((r) => toPersistedContactSource(r.source_type)));
@@ -169,7 +169,7 @@ export function attachLiveSources<T extends Contact>(userId: string, contacts: T
 
 function verdictsExist(): boolean {
   const row = dbGet<{ name: string }>(
-    unsafeSql(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'contact_link_verdicts'`),
+    sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'contact_link_verdicts'`,
   );
   return !!row;
 }
@@ -177,7 +177,7 @@ function verdictsExist(): boolean {
 /** Same guard, same reason, for the table the `Suggestion` badge reads. */
 function proposalsExist(): boolean {
   const row = dbGet<{ name: string }>(
-    unsafeSql(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'contact_link_proposals'`),
+    sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'contact_link_proposals'`,
   );
   return !!row;
 }
@@ -207,7 +207,7 @@ function getOpenQuestionsByContact(userId: string): Map<string, number> {
   if (!proposalsExist()) return new Map();
 
   const rows = dbAll<{ contact_id: string; open_questions: number }>(
-    unsafeSql(`SELECT p.contact_id AS contact_id, COUNT(*) AS open_questions
+    sql`SELECT p.contact_id AS contact_id, COUNT(*) AS open_questions
        FROM contact_link_proposals p
        JOIN contacts c
          ON c.id = p.contact_id AND c.removed_at IS NULL
@@ -216,7 +216,7 @@ function getOpenQuestionsByContact(userId: string): Map<string, number> {
         AND ec.source = p.source_type
         AND ec.external_record_id = p.source_record_id
       WHERE p.user_id = ? AND p.status = 'pending'
-      GROUP BY p.contact_id`),
+      GROUP BY p.contact_id`,
     [userId],
   );
 
@@ -439,7 +439,7 @@ function readCrosswalkAggregate(userId: string): Array<{
     source_id_count: number;
     unconfirmed: number;
   }>(
-    unsafeSql(`SELECT l.contact_id                                              AS contact_id,
+    sql`SELECT l.contact_id                                              AS contact_id,
             COUNT(*)                                                  AS link_count,
             SUM(CASE WHEN l.match_method = 'source_id' THEN 1 ELSE 0 END) AS source_id_count,
             SUM(CASE WHEN v.identity_verdict = 'same_person' THEN 0 ELSE 1 END)
@@ -460,7 +460,7 @@ function readCrosswalkAggregate(userId: string): Array<{
           AND v.source_record_id = l.source_record_id
       WHERE l.user_id = ? AND l.match_method <> ?
       GROUP BY l.contact_id
-     HAVING COUNT(*) > 1 OR MIN(l.match_method) <> 'source_id'`),
+     HAVING COUNT(*) > 1 OR MIN(l.match_method) <> 'source_id'`,
     [userId, userId, ORIGIN_MATCH_METHOD],
   );
 }
