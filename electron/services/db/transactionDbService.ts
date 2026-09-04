@@ -12,6 +12,8 @@ import type {
   TransactionStatus,
 } from "../../types";
 import { DatabaseError } from "../../types";
+// BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
+import type { TransactionRow } from "../../types/ids";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import {
   countLinkedEmailsByTransaction,
@@ -739,7 +741,7 @@ export async function getTransactions(
  */
 export async function getTransactionById(
   transactionId: string,
-): Promise<Transaction | null> {
+): Promise<TransactionRow | null> {
   return getTransactionByIdSync(transactionId);
 }
 
@@ -784,7 +786,7 @@ export function createTransactionWithContactsSync(
  */
 export function getTransactionByIdSync(
   transactionId: string,
-): Transaction | null {
+): TransactionRow | null {
   // BACKLOG-446: Include email_count so list view and detail view agree.
   //
   // BACKLOG-2865: THIS producer is not optional to fix, and fixing only
@@ -794,7 +796,10 @@ export function getTransactionByIdSync(
   // `email_count` from `getOverview` after every auto-sync (BACKLOG-2838). A card
   // scoped in one producer and not the other shows the scoped number on load and
   // flips to the unscoped one the moment anything refreshes behind the modal.
-  const transaction = dbGet<Transaction>(
+  // BACKLOG-3067: MINT. A row that came back from `transactions` carries a
+  // `TransactionId`, so `linkCommunicationToTransaction` and anything else that
+  // demands one can be called from here without a cast (control 3).
+  const transaction = dbGet<TransactionRow>(
     "SELECT t.* FROM transactions t WHERE t.id = ?",
     [transactionId],
   );

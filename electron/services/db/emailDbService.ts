@@ -14,6 +14,8 @@ import * as Sentry from "@sentry/electron/main";
 import { dbGet, dbAll, dbRun, getRawDatabase } from "./core/dbConnection";
 import { DatabaseError } from "../../types";
 import type { ParsedParticipant } from "../../types/models";
+// BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
+import type { EmailRow } from "../../types/ids";
 import { computeParticipantHash, parseEmailAddressList } from "../../utils/emailAddress";
 import { CURRENT_DERIVATION_VERSION } from "../../utils/derivationVersion";
 
@@ -283,9 +285,14 @@ export async function createEmail(emailData: NewEmail): Promise<Email> {
 /**
  * Get an email by ID
  */
-export async function getEmailById(emailId: string): Promise<Email | null> {
+export async function getEmailById(emailId: string): Promise<EmailRow | null> {
   const sql = `SELECT ${EMAIL_COLUMNS} FROM emails WHERE id = ?`;
-  const email = dbGet<Email>(sql, [emailId]);
+  // BACKLOG-3067: MINT. `emails.id` and `communications.id` are both uuids and both
+  // `string`, and confusing them is the live BACKLOG-2829 defect. A row that came
+  // back from THIS query is an email, so its id is an `EmailId` — the read is the
+  // evidence. The parameter stays `string`: a lookup given the wrong kind of id
+  // returns null and harms nothing.
+  const email = dbGet<EmailRow>(sql, [emailId]);
   return email || null;
 }
 

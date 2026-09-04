@@ -218,6 +218,8 @@ import type {
   Transaction,
   UserFeedback,
 } from "../../types/models";
+// BACKLOG-3067: branded row ids — the facade demands them.
+import { asCommunicationId, asTransactionId } from "../../types/ids";
 
 describe("DatabaseService", () => {
   let databaseService: typeof import("../databaseService").default;
@@ -957,9 +959,11 @@ describe("DatabaseService", () => {
 
     describe("linkCommunicationToTransaction", () => {
       it("should update communication with transaction_id", async () => {
+        // BACKLOG-3067: minted at the literal. These are fabricated ids with no
+        // database behind them, so there is no read to earn the brand from.
         await databaseService.linkCommunicationToTransaction(
-          "comm-123",
-          "txn-456",
+          asCommunicationId("comm-123"),
+          asTransactionId("txn-456"),
         );
 
         expect(mockStatement.run).toHaveBeenCalledWith("txn-456", "comm-123");

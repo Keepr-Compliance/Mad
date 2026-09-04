@@ -26,6 +26,7 @@ import {
   Users,
 } from 'lucide-react';
 import { AppMark, Wordmark } from '@keepr/ui';
+import { resolveViewerName } from '@/lib/utils/userDisplay';
 
 interface NavItem {
   label: string;
@@ -76,7 +77,8 @@ export function Sidebar({
   const showMemberNav = isImpersonating || role !== 'it_admin';
   const showAdminNav = !isImpersonating && (role === 'admin' || role === 'it_admin');
 
-  const name = displayName || displayEmail.split('@')[0] || 'User';
+  // BACKLOG-3077: shared resolution — the dashboard header names the same person.
+  const name = resolveViewerName({ displayName, displayEmail }) || 'User';
   const initial = name.charAt(0).toUpperCase();
 
   /** '/dashboard' is a prefix of every route, so it matches exactly only. */
