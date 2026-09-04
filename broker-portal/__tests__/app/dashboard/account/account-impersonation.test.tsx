@@ -59,12 +59,16 @@ const CAN_SUBMIT_FEATURES = withFeature(
  * through on that cookie alone without ever calling getUser. Nothing in that
  * flow establishes a Supabase session on this portal.
  *
- * So the retention gate's createClient().rpc() call runs with auth.uid() NULL,
- * and broker_get_org_features takes its first early return. That is why the
- * default here is the TRANSCRIBED not-authenticated payload and not a
- * hand-composed feature map: a fixture saying "this support session can read
- * features" describes a state the code cannot emit, and every assertion built
- * on it would be measuring nothing.
+ * This stub therefore exists to prove a NEGATIVE. getAccountView short-circuits
+ * the entitlement check during impersonation — it takes org settings' decision
+ * via impersonationFeatureView() — so the session client is never built and
+ * this rpc is never called. The tests below assert exactly that.
+ *
+ * Its default stays the TRANSCRIBED not-authenticated payload anyway, and that
+ * is deliberate: if the short-circuit is ever removed, the test fails against a
+ * state production can actually emit rather than a convenient one. A fixture
+ * saying "this support session can read features" would describe a state the
+ * code cannot reach, and every assertion built on it would measure nothing.
  */
 function sessionClientStub(
   opts: { rpc?: { data?: unknown; error?: unknown }; throws?: boolean } = {}
