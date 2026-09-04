@@ -53,3 +53,30 @@ export const LOCAL_USER_BY_ID_SQL = "SELECT id FROM users_local WHERE id = ?";
  * email; this caller does.
  */
 export const LOCAL_USER_ID_AND_EMAIL_SQL = sql`SELECT id, email FROM users_local LIMIT 1`;
+
+/**
+ * Turn AI detection on or off for the local user — BACKLOG-3044, moved out of
+ * `electron/handlers/licenseHandlers.ts`. Two bound parameters: the flag, then the
+ * user id.
+ *
+ * Deliberately separate from `SET_LOCAL_USER_LICENSE_TYPE_SQL` below, and the reason
+ * is a product rule rather than a style preference: entitlement here is PER FEATURE,
+ * never inferred from a plan name. `ai_detection_enabled` works on any plan, so the
+ * statement that sets it must not be reachable only through the one that sets the
+ * plan.
+ */
+export const SET_LOCAL_USER_AI_DETECTION_SQL = sql`UPDATE users_local SET ai_detection_enabled = ? WHERE id = ?`;
+
+/**
+ * Set the local user's plan — BACKLOG-3044, moved out of
+ * `electron/handlers/licenseHandlers.ts`. Two bound parameters: the license type,
+ * then the user id.
+ */
+export const SET_LOCAL_USER_LICENSE_TYPE_SQL = sql`UPDATE users_local SET license_type = ? WHERE id = ?`;
+
+/**
+ * Read the AI-detection entitlement — BACKLOG-3044, moved out of
+ * `electron/services/contactAutoLinkPolicy.ts`, which gates automatic contact
+ * linking on it. One bound parameter: the user id.
+ */
+export const LOCAL_USER_AI_DETECTION_SQL = sql`SELECT ai_detection_enabled FROM users_local WHERE id = ?`;

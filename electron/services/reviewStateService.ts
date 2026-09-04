@@ -69,7 +69,30 @@
 import crypto from "crypto";
 import { BrowserWindow } from "electron";
 import { dbGet, dbAll, dbRun } from "./db/core/dbConnection";
-import { unsafeSql } from "./db/core/sqlText";
+import {
+  ADDRESS_MISSING_COMMUNICATIONS_BY_TRANSACTION_SQL,
+  ADDRESS_MISSING_COMMUNICATION_BY_ID_SQL,
+  DELETE_ADDRESS_MISSING_COMMUNICATION_SQL,
+  DELETE_COMMUNICATION_SQL,
+  DELETE_IGNORED_COMMUNICATION_SQL,
+  DELETE_PENDING_REVIEW_SQL,
+  EMAIL_PREVIEW_SQL,
+  IGNORED_COMMUNICATION_BY_EMAIL_SQL,
+  IGNORED_COMMUNICATION_BY_ID_SQL,
+  IGNORED_SIBLINGS_IN_THREAD_SQL,
+  INSERT_PENDING_REVIEW_EMAIL_SQL,
+  INSERT_PENDING_REVIEW_WITH_THREAD_SQL,
+  PENDING_REVIEW_BY_EMAIL_SQL,
+  PENDING_REVIEW_BY_ID_SQL,
+  PENDING_REVIEW_BY_TRANSACTION_SQL,
+  PENDING_REVIEW_COUNT_SINCE_SQL,
+  PENDING_REVIEW_COUNT_SQL,
+  THREAD_MESSAGES_SQL,
+  THREAD_MESSAGE_SUMMARY_SQL,
+  TOUCH_LAST_PENDING_SCAN_SQL,
+  TRANSACTION_CONTACT_IDS_SQL,
+  TRANSACTION_SCAN_WINDOW_SQL,
+} from "./db/reviewStateSql";
 import {
   createThreadCommunicationReference,
   addIgnoredCommunication,
@@ -304,9 +327,7 @@ export function getReviewState(transactionId: string): ReviewState {
     thread_id: string | null;
     found_at: string;
   }>(
-    unsafeSql(`SELECT id, transaction_id, email_id, thread_id, found_at
-       FROM pending_review_communications
-      WHERE transaction_id = ?`),
+    PENDING_REVIEW_BY_TRANSACTION_SQL,
     [transactionId],
   ).map<ReviewItem>((r) => ({
     id: encodeId("pending", r.id),
@@ -330,11 +351,7 @@ export function getReviewState(transactionId: string): ReviewState {
     thread_id: string | null;
     linked_at: string;
   }>(
-    unsafeSql(`SELECT id, transaction_id, email_id, thread_id, linked_at
-       FROM communications
-      WHERE transaction_id = ?
-        AND email_id IS NOT NULL
-        AND match_reason = 'address_missing'`),
+    ADDRESS_MISSING_COMMUNICATIONS_BY_TRANSACTION_SQL,
     [transactionId],
   ).map<ReviewItem>((r) => ({
     id: encodeId("legacy", r.id),
@@ -429,8 +446,7 @@ function emailDisplay(emailId: string | null): ReviewItemDisplay {
     has_attachments: number | null;
     thread_id: string | null;
   }>(
-    unsafeSql(`SELECT subject, sender, recipients, cc, body_plain, body_html, sent_at, has_attachments, thread_id
-       FROM emails WHERE id = ?`),
+    EMAIL_PREVIEW_SQL,
     [emailId],
   );
   if (!row) return EMPTY_DISPLAY;
@@ -463,12 +479,7 @@ function threadDisplay(threadId: string | null): ReviewItemDisplay {
     body_text: string | null;
     sent_at: string | null;
   }>(
-    unsafeSql(`SELECT COUNT(*) AS n,
-            MAX(m.participants_flat) AS participants,
-            MAX(m.body_text) AS body_text,
-            MAX(m.sent_at) AS sent_at
-       FROM messages m
-      WHERE m.thread_id = ?`),
+    THREAD_MESSAGE_SUMMARY_SQL,
     [threadId],
   );
   if (!row) return EMPTY_DISPLAY;
@@ -493,16 +504,7 @@ function threadDisplay(threadId: string | null): ReviewItemDisplay {
     channel: string | null;
     thread_display_name: string | null;
   }>(
-    unsafeSql(`SELECT m.id, m.thread_id, m.body_text, m.sent_at, m.direction,
-            m.participants, m.participants_flat, m.channel,
-            tn.display_name AS thread_display_name
-       FROM messages m
-       -- (user_id, thread_id) is the PK; thread_id alone would cross users.
-       LEFT JOIN message_thread_names tn ON (
-         tn.thread_id = m.thread_id AND tn.user_id = m.user_id
-       )
-      WHERE m.thread_id = ? AND m.duplicate_of IS NULL
-      ORDER BY m.sent_at ASC`),
+    THREAD_MESSAGES_SQL,
     [threadId],
   );
   const handles = (row.participants ?? "")
@@ -544,8 +546,7 @@ export function countReviewItems(transactionId: string): number {
 
 function getTransactionRow(transactionId: string): TxnRow | undefined {
   return dbGet<TxnRow>(
-    unsafeSql(`SELECT id, user_id, started_at, created_at, closed_at, last_pending_scan_at
-       FROM transactions WHERE id = ?`),
+    TRANSACTION_SCAN_WINDOW_SQL,
     [transactionId],
   );
 }
@@ -664,15 +665,13 @@ export async function queueEmailForReview(
   // A previously REJECTED email must not be re-queued; the suppression row is
   // the same one every discovery path already filters on.
   const rejected = dbGet<{ id: string }>(
-    unsafeSql("SELECT id FROM ignored_communications WHERE transaction_id = ? AND email_id = ?"),
+    IGNORED_COMMUNICATION_BY_EMAIL_SQL,
     [transactionId, emailId],
   );
   if (rejected) return false;
 
   const res = dbRun(
-    unsafeSql(`INSERT OR IGNORE INTO pending_review_communications
-       (id, user_id, transaction_id, email_id, thread_id, found_at)
-     VALUES (?, ?, ?, ?, NULL, CURRENT_TIMESTAMP)`),
+    INSERT_PENDING_REVIEW_EMAIL_SQL,
     [crypto.randomUUID(), userId, transactionId, emailId],
   );
   return (res.changes ?? 0) > 0;
@@ -704,7 +703,7 @@ export function isEmailAwaitingReview(transactionId: string, emailId: string): b
   // red at once.
   return Boolean(
     dbGet<{ id: string }>(
-      unsafeSql("SELECT id FROM pending_review_communications WHERE transaction_id = ? AND email_id = ?"),
+      PENDING_REVIEW_BY_EMAIL_SQL,
       [transactionId, emailId],
     ),
   );
@@ -748,7 +747,7 @@ export async function syncReviewQueueForTransaction(opts: {
     contactIds && contactIds.length > 0
       ? contactIds
       : dbAll<{ contact_id: string }>(
-          unsafeSql("SELECT contact_id FROM transaction_contacts WHERE transaction_id = ?"),
+          TRANSACTION_CONTACT_IDS_SQL,
           [transactionId],
         ).map((r) => r.contact_id);
 
@@ -781,11 +780,11 @@ export async function syncReviewQueueForTransaction(opts: {
   if (reason === "open") {
     const row = previousWatermark
       ? dbGet<{ n: number }>(
-          unsafeSql("SELECT COUNT(*) AS n FROM pending_review_communications WHERE transaction_id = ? AND found_at > ?"),
+          PENDING_REVIEW_COUNT_SINCE_SQL,
           [transactionId, previousWatermark],
         )
       : dbGet<{ n: number }>(
-          unsafeSql("SELECT COUNT(*) AS n FROM pending_review_communications WHERE transaction_id = ?"),
+          PENDING_REVIEW_COUNT_SQL,
           [transactionId],
         );
     added = row?.n ?? added;
@@ -793,7 +792,7 @@ export async function syncReviewQueueForTransaction(opts: {
     // Only the open path advances. A background or contact-change run scanned a
     // narrower slice than the watermark claims to cover, so advancing there
     // would declare records scanned that never were.
-    dbRun(unsafeSql("UPDATE transactions SET last_pending_scan_at = CURRENT_TIMESTAMP WHERE id = ?"), [
+    dbRun(TOUCH_LAST_PENDING_SCAN_SQL, [
       transactionId,
     ]);
   }
@@ -859,8 +858,7 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<num
     match_reason: string | null;
     reason: string | null;
   }>(
-    unsafeSql(`SELECT id, user_id, transaction_id, email_id, thread_id, match_reason, reason
-       FROM ignored_communications WHERE id = ?`),
+    IGNORED_COMMUNICATION_BY_ID_SQL,
     [ignoredCommId],
   );
   if (!row) return 0;
@@ -884,13 +882,7 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<num
   // thread_id, which is NULL for a queued email (the queue keys emails by id).
   const siblings = row.email_id
     ? dbAll<{ id: string; email_id: string | null; thread_id: string | null }>(
-        unsafeSql(`SELECT ic.id, ic.email_id, ic.thread_id
-           FROM ignored_communications ic
-           JOIN emails e ON e.id = ic.email_id
-          WHERE ic.transaction_id = ?
-            AND ic.reason = ?
-            AND e.thread_id IS NOT NULL
-            AND e.thread_id = (SELECT thread_id FROM emails WHERE id = ?)`),
+        IGNORED_SIBLINGS_IN_THREAD_SQL,
         // BACKLOG-2818: BOUND, not interpolated. The sibling sweep has to agree
         // with the single-row check four lines up; when both were spelled out as
         // literals they could disagree, and a card would restore one email and
@@ -905,12 +897,10 @@ export async function restoreRejectedToQueue(ignoredCommId: string): Promise<num
 
   for (const item of toRestore) {
     dbRun(
-      unsafeSql(`INSERT OR IGNORE INTO pending_review_communications
-         (id, user_id, transaction_id, email_id, thread_id, found_at)
-       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`),
+      INSERT_PENDING_REVIEW_WITH_THREAD_SQL,
       [crypto.randomUUID(), row.user_id, row.transaction_id, item.email_id, item.thread_id],
     );
-    dbRun(unsafeSql("DELETE FROM ignored_communications WHERE id = ?"), [item.id]);
+    dbRun(DELETE_IGNORED_COMMUNICATION_SQL, [item.id]);
   }
 
   await logService.debug("Restored a rejected item to the review queue", MODULE, {
@@ -938,8 +928,7 @@ function loadItem(id: string): ReviewItem | undefined {
       thread_id: string | null;
       found_at: string;
     }>(
-      unsafeSql(`SELECT id, transaction_id, email_id, thread_id, found_at
-         FROM pending_review_communications WHERE id = ?`),
+      PENDING_REVIEW_BY_ID_SQL,
       [decoded.rowId],
     );
     if (!r) return undefined;
@@ -963,8 +952,7 @@ function loadItem(id: string): ReviewItem | undefined {
     thread_id: string | null;
     linked_at: string;
   }>(
-    unsafeSql(`SELECT id, transaction_id, email_id, thread_id, linked_at
-       FROM communications WHERE id = ? AND match_reason = 'address_missing'`),
+    ADDRESS_MISSING_COMMUNICATION_BY_ID_SQL,
     [decoded.rowId],
   );
   if (!r) return undefined;
@@ -1017,8 +1005,7 @@ function resolveLegacyTwins(
     return;
   }
   dbRun(
-    unsafeSql(`DELETE FROM communications
-      WHERE transaction_id = ? AND email_id = ? AND match_reason = 'address_missing'`),
+    DELETE_ADDRESS_MISSING_COMMUNICATION_SQL,
     [transactionId, emailId],
   );
 }
@@ -1068,7 +1055,7 @@ export async function approveReviewItems(itemIds: string[]): Promise<{ approved:
         0.95,
       );
     }
-    dbRun(unsafeSql("DELETE FROM pending_review_communications WHERE id = ?"), [item.rowId]);
+    dbRun(DELETE_PENDING_REVIEW_SQL, [item.rowId]);
     approved++;
   }
   if (approved > 0 && touched) notifyReviewStateChanged(touched);
@@ -1114,9 +1101,9 @@ export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: 
     });
 
     if (item.origin === "legacy") {
-      dbRun(unsafeSql("DELETE FROM communications WHERE id = ?"), [item.rowId]);
+      dbRun(DELETE_COMMUNICATION_SQL, [item.rowId]);
     } else {
-      dbRun(unsafeSql("DELETE FROM pending_review_communications WHERE id = ?"), [item.rowId]);
+      dbRun(DELETE_PENDING_REVIEW_SQL, [item.rowId]);
       // BACKLOG-2831: a rejected pending email may ALSO hold an address_missing
       // link row, written by a sweep that linked instead of queueing. Rejecting
       // means "not part of this deal", so that link goes too — otherwise the

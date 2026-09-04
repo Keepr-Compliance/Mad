@@ -156,9 +156,23 @@ describe("BACKLOG-2791 CONTROL 5 — every link writer is enumerated and classif
   });
 
   it("ONLY the open path advances the watermark", () => {
+    // BACKLOG-3044 moved the statement's TEXT into `db/reviewStateSql.ts`, so this
+    // guard now names the constant instead of the SQL. The invariant is unchanged and
+    // so is its strength: the watermark write must appear exactly once in the service,
+    // and only after the `reason === "open"` branch opens. A second write, or one
+    // moved above the branch, still fails here.
+    //
+    // Asserting on the SQL text would now pass VACUOUSLY — the text is not in this
+    // file any more, so `match(...)` would return null on a service that had lost the
+    // write entirely.
     const src = read("electron/services/reviewStateService.ts");
-    expect(src.match(/UPDATE transactions SET last_pending_scan_at/g) ?? []).toHaveLength(1);
+    expect(src.match(/TOUCH_LAST_PENDING_SCAN_SQL/g) ?? []).toHaveLength(2); // import + call
     expect(src.slice(src.indexOf('if (reason === "open") {'))).toContain(
+      "TOUCH_LAST_PENDING_SCAN_SQL",
+    );
+    // And the constant it names really is that statement, so this cannot drift into
+    // asserting on a name that no longer writes the watermark.
+    expect(read("electron/services/db/reviewStateSql.ts")).toContain(
       "UPDATE transactions SET last_pending_scan_at",
     );
   });
