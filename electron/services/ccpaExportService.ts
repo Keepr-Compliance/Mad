@@ -24,7 +24,13 @@ import { getEmailsByUser } from "./db/emailDbService";
 import { getAuditLogs } from "./db/auditLogDbService";
 import { getAllForUser as getExternalContacts } from "./db/externalContactDbService";
 import { dbAll } from "./db/core/dbConnection";
-import { unsafeSql } from "./db/core/sqlText";
+import {
+  CCPA_CLASSIFICATION_FEEDBACK_SQL,
+  CCPA_FEEDBACK_LEARNING_SQL,
+  CCPA_MESSAGES_SQL,
+  CCPA_OAUTH_TOKENS_SQL,
+  CCPA_USER_PREFERENCES_SQL,
+} from "./db/ccpaExportSql";
 import logService from "./logService";
 
 // ============================================
@@ -153,7 +159,7 @@ export async function exportUserData(
 
   // 4. Electronic Activity (messages + emails)
   const messages = dbAll<unknown>(
-    unsafeSql("SELECT * FROM messages WHERE user_id = ? ORDER BY sent_at DESC"),
+    CCPA_MESSAGES_SQL,
     [userId],
   );
   const emails = await getEmailsByUser(userId);
@@ -161,14 +167,14 @@ export async function exportUserData(
 
   // 5. Inferences (feedback + feedback_learning)
   const feedback = dbAll<unknown>(
-    unsafeSql("SELECT * FROM classification_feedback WHERE user_id = ?"),
+    CCPA_CLASSIFICATION_FEEDBACK_SQL,
     [userId],
   );
   // feedback_learning table may not exist; wrap safely
   let feedbackLearningRecords: unknown[] = [];
   try {
     feedbackLearningRecords = dbAll<unknown>(
-      unsafeSql("SELECT * FROM feedback_learning WHERE user_id = ?"),
+      CCPA_FEEDBACK_LEARNING_SQL,
       [userId],
     );
   } catch {
@@ -181,7 +187,7 @@ export async function exportUserData(
   let preferencesRecords: unknown[] = [];
   try {
     preferencesRecords = dbAll<unknown>(
-      unsafeSql("SELECT * FROM user_preferences WHERE user_id = ?"),
+      CCPA_USER_PREFERENCES_SQL,
       [userId],
     );
   } catch {
@@ -197,7 +203,7 @@ export async function exportUserData(
   // 8. Authentication (OAuth tokens - EXCLUDE actual token values)
   const oauthTokens = sanitizeOAuthTokens(
     dbAll<Record<string, unknown>>(
-      unsafeSql("SELECT provider, purpose, scopes_granted, connected_email_address, permissions_granted_at, created_at FROM oauth_tokens WHERE user_id = ? AND is_active = 1"),
+      CCPA_OAUTH_TOKENS_SQL,
       [userId],
     ),
   );
