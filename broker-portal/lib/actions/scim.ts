@@ -4,6 +4,9 @@ import { createClient } from '@/lib/supabase/server';
 import { randomBytes, createHash } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireScimAccess, isScimProvisioningEnabled } from '@/lib/scim-access';
+import { requireJitAccess, isJitProvisioningEnabled } from '@/lib/jit-access';
+import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
+import { RETENTION_FEATURE_KEY } from '@/lib/org-settings-access';
 
 /**
  * BACKLOG-3087: the four SCIM-specific actions below (generateScimToken,
@@ -13,8 +16,16 @@ import { requireScimAccess, isScimProvisioningEnabled } from '@/lib/scim-access'
  * used to perform inline. Hiding the link is not a gate — a caller who knows
  * the action name must be refused too.
  *
- * The retention / consent / JIT actions in this file are NOT SCIM surfaces
- * (they back the main settings page) and keep their own admin checks.
+ * BACKLOG-3078/3094 extended the same shape to the other two gated cards:
+ *   - getJitStatus / updateJitStatus route through requireJitAccess(), which
+ *     adds a FAIL-CLOSED jit_provisioning check on top of the role check.
+ *   - updateRetentionPolicy adds a FAIL-CLOSED custom_retention check. It had
+ *     NONE before: the card was simply always rendered, so a team-plan admin
+ *     could call the action directly and the write landed. Graying the control
+ *     without this would have been theatre.
+ *
+ * The consent actions are not feature-gated — admin consent is how a tenant is
+ * connected at all — and keep their own admin checks.
  */
 
 /**
@@ -133,6 +144,16 @@ export async function updateRetentionPolicy(retentionYears: number) {
     throw new Error('Retention must be between 1 and 10 years');
   }
 
+  // BACKLOG-3078: a grayed control is not a gate. The card renders disabled for
+  // a plan without custom_retention, and this is what stops a caller who knows
+  // the action name from writing anyway. Fail-closed: an RPC error or a missing
+  // feature row refuses rather than allowing the write.
+  const retentionAllowed = await isFeatureEnabledFailClosed(
+    membership.organization_id,
+    RETENTION_FEATURE_KEY
+  );
+  if (!retentionAllowed) throw new Error('Not authorized');
+
   const { error } = await supabase
     .from('organizations')
     .update({ retention_years: retentionYears })
@@ -172,26 +193,24 @@ export async function getConsentStatus() {
   };
 }
 
+/**
+ * Is the JIT surface available to the caller? For rendering decisions only.
+ *
+ * Never throws — mirrors getScimFeatureStatus, so a client that forgets a catch
+ * still hides the card.
+ */
+export async function getJitFeatureStatus(): Promise<{ enabled: boolean }> {
+  return { enabled: await isJitProvisioningEnabled() };
+}
+
 export async function getJitStatus() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
-
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('organization_id, role')
-    .eq('user_id', user.id)
-    .in('role', ['admin', 'it_admin'])
-    .single();
-
-  if (!membership) throw new Error('Not authorized');
+  // Authenticated + admin/it_admin + jit_provisioning enabled (fail-closed).
+  const { supabase, organizationId } = await requireJitAccess();
 
   const { data: org } = await supabase
     .from('organizations')
     .select('jit_provisioning_enabled')
-    .eq('id', membership.organization_id)
+    .eq('id', organizationId)
     .single();
 
   return {
@@ -204,25 +223,13 @@ export async function updateJitStatus(enabled: boolean) {
   const blocked = await blockWriteDuringImpersonation();
   if (blocked) throw new Error(blocked.error);
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
-
-  const { data: membership } = await supabase
-    .from('organization_members')
-    .select('organization_id, role')
-    .eq('user_id', user.id)
-    .in('role', ['admin', 'it_admin'])
-    .single();
-
-  if (!membership) throw new Error('Not authorized');
+  // Authenticated + admin/it_admin + jit_provisioning enabled (fail-closed).
+  const { supabase, organizationId } = await requireJitAccess();
 
   const { error } = await supabase
     .from('organizations')
     .update({ jit_provisioning_enabled: enabled })
-    .eq('id', membership.organization_id);
+    .eq('id', organizationId);
 
   if (error) throw new Error('Failed to update JIT provisioning setting');
   return { success: true };

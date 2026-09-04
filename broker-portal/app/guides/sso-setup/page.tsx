@@ -229,9 +229,9 @@ export default function SSOSetupGuidePage() {
           <section className="mt-12 pt-6 border-t border-gray-200">
             <p className="text-sm text-gray-500">
               Still need help?{' '}
-              <a href="mailto:support@keeprcompliance.com" className="text-primary-600 hover:underline">
+              <Link href="/support/new" className="text-primary-600 hover:underline">
                 Contact support
-              </a>
+              </Link>
             </p>
           </section>
         </div>
