@@ -76,9 +76,10 @@
 
 import { randomUUID } from "crypto";
 import { dbAll, dbRun } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
+import { sql } from "./core/sqlText";
 import { ORIGIN_MATCH_METHOD } from "./contactIdentitySchemaSql";
 import logService from "../logService";
+import { placeholderList } from "./core/sqlFragments";
 
 /**
  * One external address-book record a contact is being created FROM.
@@ -258,11 +259,11 @@ export function findClaimedSourceRecordIds(
   try {
     for (let i = 0; i < sourceRecordIds.length; i += CHUNK) {
       const chunk = sourceRecordIds.slice(i, i + CHUNK);
-      const placeholders = chunk.map(() => "?").join(",");
+      const placeholders = placeholderList(chunk.length, sql`,`);
       const rows = dbAll<{ source_record_id: string }>(
-        unsafeSql(`SELECT source_record_id FROM contact_source_links
+        sql`SELECT source_record_id FROM contact_source_links
           WHERE user_id = ? AND source_type = ?
-            AND source_record_id IN (${placeholders})`),
+            AND source_record_id IN (${placeholders})`,
         [userId, sourceType, ...chunk],
       );
       for (const row of rows) claimed.add(row.source_record_id);
@@ -339,10 +340,10 @@ function insertOriginRow(
   }
 
   const result = dbRun(
-    unsafeSql(`INSERT OR IGNORE INTO contact_source_links
+    sql`INSERT OR IGNORE INTO contact_source_links
        (id, user_id, contact_id, source_type, source_record_id, external_uuid,
         match_method, confidence, evidence_ref)
-     VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`),
+     VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL)`,
     [
       randomUUID(),
       userId,
@@ -408,10 +409,10 @@ export function writeContactOriginInTransaction(
       );
     }
     dbRun(
-      unsafeSql(`INSERT OR IGNORE INTO contact_source_links
+      sql`INSERT OR IGNORE INTO contact_source_links
          (id, user_id, contact_id, source_type, source_record_id, external_uuid,
           match_method, confidence, evidence_ref)
-       VALUES (?, ?, ?, ?, ?, ?, 'source_id', NULL, NULL)`),
+       VALUES (?, ?, ?, ?, ?, ?, 'source_id', NULL, NULL)`,
       [
         randomUUID(),
         userId,

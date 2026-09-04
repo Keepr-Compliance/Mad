@@ -7,13 +7,10 @@ import crypto from "crypto";
 import type { OAuthToken, OAuthProvider, OAuthPurpose } from "../../types";
 import { DatabaseError } from "../../types";
 import { dbGet, dbRun } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
-import {
-  validateFields,
-  type ColumnOf,
-  type FieldExpression,
-} from "../../utils/sqlFieldWhitelist";
+import { sql } from "./core/sqlText";
+import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import logService from "../logService";
+import { assignmentList } from "./core/columnSql";
 
 /**
  * Save OAuth token (encrypted)
@@ -26,7 +23,7 @@ export async function saveOAuthToken(
 ): Promise<string> {
   const id = crypto.randomUUID();
 
-  const sql = `
+  const statement = sql`
     INSERT INTO oauth_tokens (
       id, user_id, provider, purpose,
       access_token, refresh_token, token_expires_at, scopes_granted,
@@ -58,7 +55,7 @@ export async function saveOAuthToken(
     tokenData.permissions_granted_at || new Date().toISOString(),
   ];
 
-  dbRun(unsafeSql(sql), params);
+  dbRun(statement, params);
   return id;
 }
 
@@ -70,11 +67,11 @@ export async function getOAuthToken(
   provider: OAuthProvider,
   purpose: OAuthPurpose,
 ): Promise<OAuthToken | null> {
-  const sql = `
+  const statement = sql`
     SELECT * FROM oauth_tokens
     WHERE user_id = ? AND provider = ? AND purpose = ? AND is_active = 1
   `;
-  const token = dbGet<OAuthToken & { scopes_granted?: string }>(unsafeSql(sql), [
+  const token = dbGet<OAuthToken & { scopes_granted?: string }>(statement, [
     userId,
     provider,
     purpose,
@@ -94,7 +91,7 @@ export async function updateOAuthToken(
   tokenId: string,
   updates: Partial<OAuthToken>,
 ): Promise<void> {
-  const allowedFields = [
+  const allowedFields: readonly ColumnOf<"oauth_tokens">[] = [
     "access_token",
     "refresh_token",
     "token_expires_at",
@@ -108,42 +105,39 @@ export async function updateOAuthToken(
     "is_active",
   ];
 
-  const fields: string[] = [];
+  const columns: ColumnOf<"oauth_tokens">[] = [];
   const values: unknown[] = [];
 
   Object.keys(updates).forEach((key) => {
-    if (allowedFields.includes(key)) {
+    const column = allowedFields.find((allowed) => allowed === key);
+    if (column) {
       let value = (updates as Record<string, unknown>)[key];
-      if (key === "scopes_granted" && Array.isArray(value)) {
+      if (column === "scopes_granted" && Array.isArray(value)) {
         value = JSON.stringify(value);
       }
-      fields.push(`${key} = ?`);
+      columns.push(column);
       values.push(value);
     }
   });
 
-  if (fields.length === 0) {
+  if (columns.length === 0) {
     throw new DatabaseError("No valid fields to update");
   }
 
-  // Validate fields against whitelist before SQL construction.
+  // Validate column names against the whitelist before SQL construction.
   //
-  // BACKLOG-2739 PHASE 1 SEAM — the cast is the finding, not the fix.
-  // `fields` is built above as `${column} = ?` from plain strings, so it is
-  // `string[]` and cannot satisfy the column union `validateFields` now takes.
-  // The cast keeps the build green WITHOUT touching this writer's field list,
-  // which is deliberately Phase 2 (BACKLOG-2738): the writer must declare an
-  // exhaustive `Record<Column, Decision>` so an OMITTED column is a build
-  // error. Until then a wrong name here is still only caught at runtime.
-  validateFields(
-    "oauth_tokens",
-    fields as ReadonlyArray<FieldExpression<ColumnOf<"oauth_tokens">>>,
-  );
+  // BACKLOG-3085 retires the BACKLOG-2739 Phase 1 seam cast that used to sit
+  // here. `columns` is now the column UNION rather than `string[]`, because the
+  // SET clause is built by `assignmentList` from the enumerated column
+  // fragments — so there is nothing left to cast. The runtime check stays: it
+  // is for names that arrive from outside the type system, which the types
+  // cannot see. See `sqlFieldWhitelist.ts`'s own header.
+  validateFields("oauth_tokens", columns);
 
   values.push(tokenId);
 
-  const sql = `UPDATE oauth_tokens SET ${fields.join(", ")} WHERE id = ?`;
-  dbRun(unsafeSql(sql), values);
+  const statement = sql`UPDATE oauth_tokens SET ${assignmentList(columns)} WHERE id = ?`;
+  dbRun(statement, values);
 }
 
 /**
@@ -154,9 +148,9 @@ export async function deleteOAuthToken(
   provider: OAuthProvider,
   purpose: OAuthPurpose,
 ): Promise<void> {
-  const sql =
-    "DELETE FROM oauth_tokens WHERE user_id = ? AND provider = ? AND purpose = ?";
-  dbRun(unsafeSql(sql), [userId, provider, purpose]);
+  const statement =
+    sql`DELETE FROM oauth_tokens WHERE user_id = ? AND provider = ? AND purpose = ?`;
+  dbRun(statement, [userId, provider, purpose]);
 }
 
 /**
@@ -164,8 +158,8 @@ export async function deleteOAuthToken(
  * This forces all users to re-authenticate each app launch
  */
 export async function clearAllOAuthTokens(): Promise<void> {
-  const sql = "DELETE FROM oauth_tokens";
-  dbRun(unsafeSql(sql), []);
+  const statement = sql`DELETE FROM oauth_tokens`;
+  dbRun(statement, []);
   logService.info("[OAuthTokenDbService] Cleared all OAuth tokens for session-only OAuth", "OAuthTokenDbService");
 }
 
@@ -180,11 +174,11 @@ export async function getOAuthTokenSyncTime(
   userId: string,
   provider: OAuthProvider,
 ): Promise<Date | null> {
-  const sql = `
+  const statement = sql`
     SELECT last_sync_at FROM oauth_tokens
     WHERE user_id = ? AND provider = ? AND purpose = 'mailbox' AND is_active = 1
   `;
-  const row = dbGet<{ last_sync_at?: string }>(unsafeSql(sql), [userId, provider]);
+  const row = dbGet<{ last_sync_at?: string }>(statement, [userId, provider]);
 
   if (row?.last_sync_at) {
     return new Date(row.last_sync_at);
@@ -204,12 +198,12 @@ export async function updateOAuthTokenSyncTime(
   provider: OAuthProvider,
   syncTime: Date,
 ): Promise<void> {
-  const sql = `
+  const statement = sql`
     UPDATE oauth_tokens
     SET last_sync_at = ?
     WHERE user_id = ? AND provider = ? AND purpose = 'mailbox' AND is_active = 1
   `;
-  dbRun(unsafeSql(sql), [syncTime.toISOString(), userId, provider]);
+  dbRun(statement, [syncTime.toISOString(), userId, provider]);
   logService.info(
     `[OAuthTokenDbService] Updated last_sync_at for ${provider} to ${syncTime.toISOString()}`,
     "OAuthTokenDbService",

@@ -13,7 +13,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import { dbAll, dbRun, dbGet, dbTransaction, ensureDb } from './core/dbConnection';
-import { unsafeSql } from "./core/sqlText";
+import { sql, type SafeSql } from "./core/sqlText";
 import logService from '../logService';
 import { recordShadowSync } from '../contactIngestionFunnel';
 import { requestContactLinking } from '../contactLinkingScheduler';
@@ -25,6 +25,7 @@ import {
   EXTERNAL_CONTACT_LAST_MESSAGE_EXPR,
   EXTERNAL_CONTACT_RECENCY_UPDATE_SQL,
 } from './contactRecencySql';
+import { placeholderList } from "./core/sqlFragments";
 
 /**
  * BACKLOG-1727: Build the JSON array of lookup keys to store alongside phones_json.
@@ -402,7 +403,7 @@ export function getAllForUser(userId: string): ExternalContact[] {
   // (not NULL) and importing it does not change the value (no select-jump). This
   // query is kept byte-for-byte identical to the worker's runExternalQuery.
   // NULLS LAST: Sort NULL dates after non-NULL dates, then by name.
-  const rows = dbAll<ExternalContactRow>(unsafeSql(EXTERNAL_CONTACTS_GET_ALL_SQL), [userId]);
+  const rows = dbAll<ExternalContactRow>(EXTERNAL_CONTACTS_GET_ALL_SQL, [userId]);
 
   // BACKLOG-2391: the per-row `[DIAG-1270] Shadow READ` warn that used to sit
   // here printed the contact's NAME and every EMAIL ADDRESS, once per
@@ -446,7 +447,7 @@ export async function getAllForUserAsync(
  */
 export function getCount(userId: string): number {
   const result = dbGet<{ count: number }>(
-    unsafeSql('SELECT COUNT(*) as count FROM external_contacts WHERE user_id = ?'),
+    sql`SELECT COUNT(*) as count FROM external_contacts WHERE user_id = ?`,
     [userId]
   );
   return result?.count || 0;
@@ -457,7 +458,7 @@ export function getCount(userId: string): number {
  */
 export function getLastSyncTime(userId: string): string | null {
   const result = dbGet<{ synced_at: string }>(
-    unsafeSql('SELECT MAX(synced_at) as synced_at FROM external_contacts WHERE user_id = ?'),
+    sql`SELECT MAX(synced_at) as synced_at FROM external_contacts WHERE user_id = ?`,
     [userId]
   );
   return result?.synced_at || null;
@@ -483,7 +484,7 @@ export function isStale(userId: string, maxAgeHours: number = 24): boolean {
  */
 export function getContactSourceStats(userId: string): Record<string, number> {
   const rows = dbAll<{ source: string; count: number }>(
-    unsafeSql(`SELECT source, COUNT(*) as count FROM external_contacts WHERE user_id = ? GROUP BY source`),
+    sql`SELECT source, COUNT(*) as count FROM external_contacts WHERE user_id = ? GROUP BY source`,
     [userId]
   );
   const stats: Record<string, number> = { macos: 0, iphone: 0, outlook: 0, google_contacts: 0, android_sync: 0 };
@@ -513,7 +514,7 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
   //
   // COALESCE on update rather than plain `excluded.external_uuid`: a sync that
   // cannot supply the value must never ERASE one already captured.
-  const stmt = `
+  const stmt = sql`
     INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, external_record_id, source, synced_at, external_uuid)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'macos', ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
@@ -540,7 +541,7 @@ export function upsertFromMacOS(userId: string, contacts: MacOSContact[]): numbe
       if (emailsArr.length > 1) {
         multiEmailCount++;
       }
-      dbRun(unsafeSql(stmt), [
+      dbRun(stmt, [
         uuidv4(),
         userId,
         contact.name || null,
@@ -587,7 +588,7 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
   // column the backup's ABPerson lacks, so a user who re-imports from an OLDER
   // backup after a newer one would otherwise ERASE identifiers already captured
   // — the exact values that cannot be re-read once the device is gone.
-  const stmt = `
+  const stmt = sql`
     INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at, sync_session_id, external_uuid, source_identity_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, 'iphone', ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
@@ -605,7 +606,7 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
 
   dbTransaction(() => {
     for (const contact of contacts) {
-      dbRun(unsafeSql(stmt), [
+      dbRun(stmt, [
         uuidv4(),
         userId,
         contact.name || null,
@@ -673,7 +674,7 @@ export function deleteBySessionId(userId: string, sessionId: string): number {
   const result = {
     changes: deleteExternalContactsAndTheirLinks(
       userId,
-      `user_id = ? AND sync_session_id = ?`,
+      sql`user_id = ? AND sync_session_id = ?`,
       [userId, sessionId],
     ),
   };
@@ -738,7 +739,7 @@ export function upsertExternalContacts(
   // BACKLOG-2407: `source_identity_json` is written here and read nowhere.
   // COALESCE so a source that supplies nothing (outlook, google_contacts) can
   // never erase what another sync captured for the same record.
-  const stmt = `
+  const stmt = sql`
     INSERT INTO external_contacts (id, user_id, name, phones_json, phones_normalized_json, emails_json, company, source, external_record_id, synced_at, source_identity_json)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id, source, external_record_id) DO UPDATE SET
@@ -755,7 +756,7 @@ export function upsertExternalContacts(
 
   dbTransaction(() => {
     for (const contact of contacts) {
-      dbRun(unsafeSql(stmt), [
+      dbRun(stmt, [
         uuidv4(),
         userId,
         contact.name || null,
@@ -833,7 +834,7 @@ export function markSourceRecordsCurrent(
   syncedAt: string = new Date().toISOString(),
 ): number {
   const result = dbRun(
-    unsafeSql(`UPDATE external_contacts SET synced_at = ? WHERE user_id = ? AND source = ?`),
+    sql`UPDATE external_contacts SET synced_at = ? WHERE user_id = ? AND source = ?`,
     [syncedAt, userId, source],
   );
   return result.changes;
@@ -1064,7 +1065,7 @@ export function updateLastMessageAtForPhone(userId: string, normalizedPhone: str
  */
 function deleteExternalContactsAndTheirLinks(
   userId: string,
-  whereSql: string,
+  whereSql: SafeSql,
   params: unknown[],
 ): number {
   return dbTransaction(() => {
@@ -1072,22 +1073,22 @@ function deleteExternalContactsAndTheirLinks(
     // join against, which is exactly why the four unguarded paths could not
     // have cleaned up as an afterthought.
     const doomed = dbAll<{ source: string; external_record_id: string }>(
-      unsafeSql(`SELECT source, external_record_id FROM external_contacts
-        WHERE ${whereSql} AND external_record_id IS NOT NULL`),
+      sql`SELECT source, external_record_id FROM external_contacts
+        WHERE ${whereSql} AND external_record_id IS NOT NULL`,
       params,
     );
 
-    const result = dbRun(unsafeSql(`DELETE FROM external_contacts WHERE ${whereSql}`), params);
+    const result = dbRun(sql`DELETE FROM external_contacts WHERE ${whereSql}`, params);
 
     for (const row of doomed) {
       dbRun(
-        unsafeSql(`DELETE FROM contact_source_links
-          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`),
+        sql`DELETE FROM contact_source_links
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
         [userId, row.source, row.external_record_id],
       );
       dbRun(
-        unsafeSql(`DELETE FROM contact_link_proposals
-          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`),
+        sql`DELETE FROM contact_link_proposals
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
         [userId, row.source, row.external_record_id],
       );
     }
@@ -1099,7 +1100,7 @@ function deleteExternalContactsAndTheirLinks(
 export function deleteStaleContactsBySource(userId: string, source: ExternalContactSource, currentSyncTime: string): number {
   const changes = deleteExternalContactsAndTheirLinks(
     userId,
-    `user_id = ? AND source = ? AND synced_at < ?`,
+    sql`user_id = ? AND source = ? AND synced_at < ?`,
     [userId, source, currentSyncTime],
   );
 
@@ -1124,7 +1125,7 @@ export function deleteStaleIPhoneContacts(userId: string, currentSyncTime: strin
 export function deleteByMacOSRecordId(userId: string, recordId: string): void {
   deleteExternalContactsAndTheirLinks(
     userId,
-    'user_id = ? AND source = ? AND external_record_id = ?',
+    sql`user_id = ? AND source = ? AND external_record_id = ?`,
     [userId, 'macos', recordId],
   );
 }
@@ -1142,7 +1143,7 @@ export function deleteByMacOSRecordId(userId: string, recordId: string): void {
 export function deleteBySource(userId: string, source: ExternalContactSource): number {
   const changes = deleteExternalContactsAndTheirLinks(
     userId,
-    'user_id = ? AND source = ?',
+    sql`user_id = ? AND source = ?`,
     [userId, source],
   );
   logService.info(`Deleted ${changes} external contacts with source '${source}'`, 'ExternalContactDbService', { userId });
@@ -1226,11 +1227,11 @@ export function clearRefetchableSourcesForUser(
     return 0;
   }
 
-  const placeholders = sources.map(() => '?').join(', ');
+  const placeholders = placeholderList(sources.length);
 
   const changes = deleteExternalContactsAndTheirLinks(
     userId,
-    `user_id = ? AND source IN (${placeholders})`,
+    sql`user_id = ? AND source IN (${placeholders})`,
     [userId, ...sources],
   );
 
@@ -1348,9 +1349,9 @@ export function classifyMacOSSync(
   contacts: MacOSContact[]
 ): { inserted: number; updated: number; unchanged: number } {
   const rows = dbAll<MacOSContentSnapshot & { external_record_id: string }>(
-    unsafeSql(`SELECT external_record_id, name, phones_json, phones_normalized_json, emails_json, company
+    sql`SELECT external_record_id, name, phones_json, phones_normalized_json, emails_json, company
      FROM external_contacts
-     WHERE user_id = ? AND source = 'macos'`),
+     WHERE user_id = ? AND source = 'macos'`,
     [userId]
   );
 
@@ -1459,7 +1460,7 @@ export function search(userId: string, query: string, limit: number = 50): Exter
   // BACKLOG-2355: recency computed inline (phone + email) via the shared
   // expression, wrapped in a subquery so the ORDER BY resolves to the computed
   // result column (see EXTERNAL_CONTACTS_GET_ALL_SQL for the alias-safety note).
-  const sql = `
+  const statement = sql`
     SELECT * FROM (
       SELECT id, user_id, name, phones_json, emails_json, company,
              ${EXTERNAL_CONTACT_LAST_MESSAGE_EXPR} as last_message_at,
@@ -1477,7 +1478,7 @@ export function search(userId: string, query: string, limit: number = 50): Exter
     LIMIT ?
   `;
 
-  const rows = dbAll<ExternalContactRow>(unsafeSql(sql), [
+  const rows = dbAll<ExternalContactRow>(statement, [
     userId,
     searchPattern,
     searchPattern,

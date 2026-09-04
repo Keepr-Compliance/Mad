@@ -74,7 +74,8 @@
  */
 
 import { dbAll, dbGet } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
+import { sql, type SafeSql } from "./core/sqlText";
+import { placeholderList } from "./core/sqlFragments";
 import type { ExternalContactSource } from "./externalContactDbService";
 import { toMatchingKey } from "../../utils/phoneNormalization";
 
@@ -142,15 +143,28 @@ export interface ContactMatchIndex {
  * The batch loader below deliberately does NOT carry the `+`, for the opposite
  * reason — see its own note.
  */
-const LIVE_EMAIL_SQL = `SELECT DISTINCT c.id FROM contacts c
+/**
+ * BACKLOG-3085: these were `%PLACEHOLDERS%` constants finished by `String.replace`
+ * at the call site — SQL assembled by a runtime string operation, which the `sql`
+ * tag refuses. They are now functions OF the placeholder fragment, so the width and
+ * the text are produced together and the same characters reach SQLite.
+ *
+ * The surrounding statement text is unchanged raw text — only `%PLACEHOLDERS%` became
+ * `${marks}` — and the fragment that fills the hole is covered by
+ * `core/__tests__/sqlFragments.test.ts:58-61`, which pins `placeholderList` against
+ * the `map/join` idiom it replaced and against BOTH separators. An earlier revision
+ * of this comment cited `contactMatchIndex.brand.test.ts`, WHICH DOES NOT EXIST: a
+ * sentence asserting coverage that was never checked against the file it names.
+ */
+const liveEmailSql = (marks: SafeSql): SafeSql => sql`SELECT DISTINCT c.id FROM contacts c
        JOIN contact_emails ce ON ce.contact_id = c.id
-      WHERE +c.user_id = ? AND LOWER(ce.email) IN (%PLACEHOLDERS%)
+      WHERE +c.user_id = ? AND LOWER(ce.email) IN (${marks})
       ORDER BY c.id`;
 
-const LIVE_PHONE_SQL = `SELECT DISTINCT c.id FROM contacts c
+const livePhoneSql = (marks: SafeSql): SafeSql => sql`SELECT DISTINCT c.id FROM contacts c
        JOIN contact_phones cp ON cp.contact_id = c.id
       WHERE +c.user_id = ?
-        AND cp.phone_normalized IN (%PLACEHOLDERS%)
+        AND cp.phone_normalized IN (${marks})
       ORDER BY c.id`;
 
 /**
@@ -195,8 +209,8 @@ export function phoneProbeKeys(phones: string[]): string[] {
   return phones.map((p) => toMatchingKey(p)).filter((k) => k.length > 0);
 }
 
-function placeholders(n: number): string {
-  return new Array(n).fill("?").join(", ");
+function placeholders(n: number): SafeSql {
+  return placeholderList(n);
 }
 
 /**
@@ -208,8 +222,8 @@ export function liveContactMatchIndex(): ContactMatchIndex {
     linkedRecord(userId, sourceType, sourceRecordId) {
       if (!sourceRecordId) return null;
       const row = dbGet<{ contact_id: string; external_uuid: string | null }>(
-        unsafeSql(`SELECT contact_id, external_uuid FROM contact_source_links
-          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`),
+        sql`SELECT contact_id, external_uuid FROM contact_source_links
+          WHERE user_id = ? AND source_type = ? AND source_record_id = ?`,
         [userId, sourceType, sourceRecordId],
       );
       if (!row) return null;
@@ -220,7 +234,7 @@ export function liveContactMatchIndex(): ContactMatchIndex {
       const cleaned = emailProbeKeys(emails);
       if (cleaned.length === 0) return [];
       return dbAll<{ id: string }>(
-        unsafeSql(LIVE_EMAIL_SQL.replace("%PLACEHOLDERS%", placeholders(cleaned.length))),
+        liveEmailSql(placeholders(cleaned.length)),
         [userId, ...cleaned],
       ).map((r) => r.id);
     },
@@ -229,7 +243,7 @@ export function liveContactMatchIndex(): ContactMatchIndex {
       const keys = phoneProbeKeys(phones);
       if (keys.length === 0) return [];
       return dbAll<{ id: string }>(
-        unsafeSql(LIVE_PHONE_SQL.replace("%PLACEHOLDERS%", placeholders(keys.length))),
+        livePhoneSql(placeholders(keys.length)),
         [userId, ...keys],
       ).map((r) => r.id);
     },
@@ -259,13 +273,13 @@ export function liveContactMatchIndex(): ContactMatchIndex {
  * `resolveSourceRecord` reads `matches[0]` from when two contacts share one
  * identifier.
  */
-const BATCH_EMAIL_SQL = `SELECT c.id AS contact_id, LOWER(ce.email) AS k
+const BATCH_EMAIL_SQL = sql`SELECT c.id AS contact_id, LOWER(ce.email) AS k
        FROM contacts c
        JOIN contact_emails ce ON ce.contact_id = c.id
       WHERE c.user_id = ?
       ORDER BY c.id`;
 
-const BATCH_PHONE_SQL = `SELECT c.id AS contact_id, cp.phone_normalized AS k
+const BATCH_PHONE_SQL = sql`SELECT c.id AS contact_id, cp.phone_normalized AS k
        FROM contacts c
        JOIN contact_phones cp ON cp.contact_id = c.id
       WHERE c.user_id = ?
@@ -279,9 +293,9 @@ const BATCH_PHONE_SQL = `SELECT c.id AS contact_id, cp.phone_normalized AS k
  * collation in JavaScript is a guess that happens to be right for ASCII ids —
  * asking the database is not a guess. It also costs one statement per pass.
  */
-const BATCH_ORDER_SQL = `SELECT id FROM contacts WHERE user_id = ? ORDER BY id`;
+const BATCH_ORDER_SQL = sql`SELECT id FROM contacts WHERE user_id = ? ORDER BY id`;
 
-const BATCH_LINKS_SQL = `SELECT source_type, source_record_id, contact_id, external_uuid
+const BATCH_LINKS_SQL = sql`SELECT source_type, source_record_id, contact_id, external_uuid
        FROM contact_source_links
       WHERE user_id = ?`;
 
@@ -333,7 +347,7 @@ function removeFrom(map: Map<string, string[]>, key: string, contactId: string):
  */
 export function loadContactMatchIndex(userId: string): ContactMatchIndex {
   const order = new Map<string, number>();
-  dbAll<{ id: string }>(unsafeSql(BATCH_ORDER_SQL), [userId]).forEach((r, i) => order.set(r.id, i));
+  dbAll<{ id: string }>(BATCH_ORDER_SQL, [userId]).forEach((r, i) => order.set(r.id, i));
 
   const byEmail = new Map<string, string[]>();
   const byPhone = new Map<string, string[]>();
@@ -361,8 +375,8 @@ export function loadContactMatchIndex(userId: string): ContactMatchIndex {
     }
   }
 
-  index(dbAll<{ contact_id: string; k: string | null }>(unsafeSql(BATCH_EMAIL_SQL), [userId]), byEmail, emailKeysOf);
-  index(dbAll<{ contact_id: string; k: string | null }>(unsafeSql(BATCH_PHONE_SQL), [userId]), byPhone, phoneKeysOf);
+  index(dbAll<{ contact_id: string; k: string | null }>(BATCH_EMAIL_SQL, [userId]), byEmail, emailKeysOf);
+  index(dbAll<{ contact_id: string; k: string | null }>(BATCH_PHONE_SQL, [userId]), byPhone, phoneKeysOf);
 
   const links = new Map<string, LinkedRecordRow>();
   for (const row of dbAll<{
@@ -370,7 +384,7 @@ export function loadContactMatchIndex(userId: string): ContactMatchIndex {
     source_record_id: string;
     contact_id: string;
     external_uuid: string | null;
-  }>(unsafeSql(BATCH_LINKS_SQL), [userId])) {
+  }>(BATCH_LINKS_SQL, [userId])) {
     const key = crosswalkKey(row.source_type, row.source_record_id);
     // (user_id, source_type, source_record_id) is UNIQUE, so this never
     // overwrites a different row. `set` unconditionally would still be correct;
@@ -433,13 +447,13 @@ export function loadContactMatchIndex(userId: string): ContactMatchIndex {
      * bug this module exists to close, and the cost is identical.
      */
     noteContactValuesChanged(contactId: string) {
-      for (const [map, keysOf, sql] of [
-        [byEmail, emailKeysOf, `SELECT LOWER(email) AS k FROM contact_emails WHERE contact_id = ?`],
-        [byPhone, phoneKeysOf, `SELECT phone_normalized AS k FROM contact_phones WHERE contact_id = ?`],
-      ] as Array<[Map<string, string[]>, Map<string, Set<string>>, string]>) {
+      for (const [map, keysOf, statement] of [
+        [byEmail, emailKeysOf, sql`SELECT LOWER(email) AS k FROM contact_emails WHERE contact_id = ?`],
+        [byPhone, phoneKeysOf, sql`SELECT phone_normalized AS k FROM contact_phones WHERE contact_id = ?`],
+      ] as Array<[Map<string, string[]>, Map<string, Set<string>>, SafeSql]>) {
         for (const key of keysOf.get(contactId) ?? []) removeFrom(map, key, contactId);
         keysOf.delete(contactId);
-        const fresh = dbAll<{ k: string | null }>(unsafeSql(sql), [contactId]);
+        const fresh = dbAll<{ k: string | null }>(statement, [contactId]);
         index(
           fresh.map((r) => ({ contact_id: contactId, k: r.k })),
           map,

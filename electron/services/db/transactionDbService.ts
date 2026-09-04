@@ -15,7 +15,7 @@ import { DatabaseError } from "../../types";
 // BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
 import type { TransactionRow } from "../../types/ids";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
+import { sql, type SafeSql } from "./core/sqlText";
 import {
   countLinkedEmailsByTransaction,
   type ScopedEmailRow,
@@ -30,7 +30,6 @@ import {
   validateFields,
   isValidField,
   TABLE_FIELDS,
-  type FieldExpression,
   type TransactionColumn,
 } from "../../utils/sqlFieldWhitelist";
 import {
@@ -39,6 +38,9 @@ import {
   TransactionFrozenError,
   FROZEN_IDENTITY_FIELDS,
 } from "../transactionFreezePolicy";
+import { assignmentList, columnList } from "./core/columnSql";
+import { placeholderList } from "./core/sqlFragments";
+import { joinFragments } from "./core/sqlFragments";
 
 /**
  * BACKLOG-2013: sentinel key callers may set on the `updates` object to bypass
@@ -593,12 +595,12 @@ export function createTransactionSync(
   // everything that is not this file (see sqlFieldWhitelist's own header).
   validateFields("transactions", columns);
 
-  const sql = `
-    INSERT INTO transactions (${columns.join(", ")})
-    VALUES (${columns.map(() => "?").join(", ")})
+  const statement = sql`
+    INSERT INTO transactions (${columnList(columns)})
+    VALUES (${placeholderList(columns.length)})
   `;
 
-  dbRun(unsafeSql(sql), params);
+  dbRun(statement, params);
   const transaction = getTransactionByIdSync(id);
   if (!transaction) {
     throw new DatabaseError("Failed to create transaction");
@@ -613,7 +615,7 @@ export function createTransactionSync(
  */
 export function getPendingTransactionCount(userId: string): number {
   const result = dbGet<{ count: number }>(
-    unsafeSql("SELECT COUNT(*) as count FROM transactions WHERE user_id = ? AND detection_status = 'pending'"),
+    sql`SELECT COUNT(*) as count FROM transactions WHERE user_id = ? AND detection_status = 'pending'`,
     [userId],
   );
   return result?.count ?? 0;
@@ -643,11 +645,11 @@ export function getPendingTransactionCount(userId: string): number {
  *    basis. Changing the order here silently changes which duplicate wins.
  */
 function fetchScopedEmailRows(
-  transactionScope: string,
+  transactionScope: SafeSql,
   params: unknown[],
 ): ScopedEmailRow[] {
   return dbAll<ScopedEmailRow>(
-    unsafeSql(`SELECT c.transaction_id  as transaction_id,
+    sql`SELECT c.transaction_id  as transaction_id,
             c.email_id       as email_id,
             c.match_reason   as match_reason,
             e.thread_id      as thread_id,
@@ -656,7 +658,7 @@ function fetchScopedEmailRows(
        INNER JOIN emails e ON e.id = c.email_id
       WHERE c.email_id IS NOT NULL
         AND c.transaction_id IN (${transactionScope})
-      ORDER BY e.sent_at DESC`),
+      ORDER BY e.sent_at DESC`,
     params,
   );
 }
@@ -676,49 +678,49 @@ export async function getTransactions(
   // the tab, on the same deal. It is now derived below from the rules the tab
   // classifies with. Do not reintroduce a SQL count here: two producers of one
   // number is the shape this item exists to remove.
-  let whereClause = " WHERE 1=1";
+  let whereClause = sql` WHERE 1=1`;
   const params: unknown[] = [];
 
   if (filters?.user_id) {
-    whereClause += " AND t.user_id = ?";
+    whereClause = sql`${whereClause} AND t.user_id = ?`;
     params.push(filters.user_id);
   }
 
   if (filters?.transaction_type) {
-    whereClause += " AND t.transaction_type = ?";
+    whereClause = sql`${whereClause} AND t.transaction_type = ?`;
     params.push(filters.transaction_type);
   }
 
   if (filters?.status) {
-    whereClause += " AND t.status = ?";
+    whereClause = sql`${whereClause} AND t.status = ?`;
     params.push(filters.status);
   }
 
   if (filters?.export_status) {
-    whereClause += " AND t.export_status = ?";
+    whereClause = sql`${whereClause} AND t.export_status = ?`;
     params.push(filters.export_status);
   }
 
   if (filters?.start_date) {
-    whereClause += " AND t.closing_deadline >= ?";
+    whereClause = sql`${whereClause} AND t.closing_deadline >= ?`;
     params.push(filters.start_date);
   }
 
   if (filters?.end_date) {
-    whereClause += " AND t.closing_deadline <= ?";
+    whereClause = sql`${whereClause} AND t.closing_deadline <= ?`;
     params.push(filters.end_date);
   }
 
   if (filters?.property_address) {
-    whereClause += " AND t.property_address LIKE ?";
+    whereClause = sql`${whereClause} AND t.property_address LIKE ?`;
     params.push(`%${filters.property_address}%`);
   }
 
-  const sql = `SELECT t.*,
+  const statement = sql`SELECT t.*,
              (SELECT COUNT(*) FROM communications c WHERE c.transaction_id = t.id) as total_communications_count
              FROM transactions t${whereClause} ORDER BY t.created_at DESC`;
 
-  const transactions = dbAll<Transaction>(unsafeSql(sql), params);
+  const transactions = dbAll<Transaction>(statement, params);
   if (transactions.length === 0) return transactions;
 
   // The SAME predicate the rows above were selected by, re-used as a subselect
@@ -726,7 +728,7 @@ export async function getTransactions(
   // SQLite's bound-variable limit, and re-deriving the filter by hand is how
   // the two halves drift apart.
   const counts = countLinkedEmailsByTransaction(
-    fetchScopedEmailRows(`SELECT t.id FROM transactions t${whereClause}`, [
+    fetchScopedEmailRows(sql`SELECT t.id FROM transactions t${whereClause}`, [
       ...params,
     ]),
   );
@@ -801,13 +803,13 @@ export function getTransactionByIdSync(
   // `TransactionId`, so `linkCommunicationToTransaction` and anything else that
   // demands one can be called from here without a cast (control 3).
   const transaction = dbGet<TransactionRow>(
-    unsafeSql("SELECT t.* FROM transactions t WHERE t.id = ?"),
+    sql`SELECT t.* FROM transactions t WHERE t.id = ?`,
     [transactionId],
   );
   if (!transaction) return null;
 
   const counts = countLinkedEmailsByTransaction(
-    fetchScopedEmailRows("SELECT ?", [transactionId]),
+    fetchScopedEmailRows(sql`SELECT ?`, [transactionId]),
   );
   transaction.email_count = counts.get(transactionId) ?? 0;
   return transaction;
@@ -984,9 +986,9 @@ export async function updateTransaction(
   // NOT be blocked — only a genuine change to a frozen field's value throws.
   const attemptedFrozen = frozenFieldsInUpdate(Object.keys(updatesRecord));
   if (attemptedFrozen.length > 0 && !hasUnfreezeOverride) {
-    const selectCols = ["first_exported_at", ...FROZEN_IDENTITY_FIELDS].join(", ");
+    const selectCols = columnList(["first_exported_at", ...FROZEN_IDENTITY_FIELDS]);
     const current = dbGet<Record<string, unknown>>(
-      unsafeSql(`SELECT ${selectCols} FROM transactions WHERE id = ?`),
+      sql`SELECT ${selectCols} FROM transactions WHERE id = ?`,
       [transactionId],
     );
     if (isTransactionFrozen((current as { first_exported_at: string | null } | undefined) ?? undefined)) {
@@ -1015,7 +1017,7 @@ export async function updateTransaction(
     }
   }
 
-  const fields: FieldExpression<TransactionColumn>[] = [];
+  const columns: TransactionColumn[] = [];
   const values: unknown[] = [];
   /** Keys that will NOT be written, and the recorded reason. */
   const dropped: Array<{ key: string; reason: string }> = [];
@@ -1036,7 +1038,7 @@ export async function updateTransaction(
       continue;
     }
 
-    fields.push(`${key} = ?`);
+    columns.push(key);
     values.push(bindValue(key, updatesRecord[key], "update"));
   }
 
@@ -1044,9 +1046,9 @@ export async function updateTransaction(
   // built. BACKLOG-2558: this call used to run AFTER the local filter had
   // already discarded the drifted keys and after the empty-set throw, so the
   // one check the codebase relies on to catch drift could never see it.
-  validateFields("transactions", fields);
+  validateFields("transactions", columns);
 
-  if (fields.length === 0) {
+  if (columns.length === 0) {
     // BACKLOG-2558: the error now carries the evidence. The old message named
     // nothing, so a caller whose entire payload had been discarded — which is
     // exactly what happened to Reject — was told only that "no valid fields"
@@ -1076,19 +1078,19 @@ export async function updateTransaction(
 
   values.push(transactionId);
 
-  const sql = `UPDATE transactions SET ${fields.join(", ")} WHERE id = ?`;
-  const result = dbRun(unsafeSql(sql), values);
+  const statement = sql`UPDATE transactions SET ${assignmentList(columns)} WHERE id = ?`;
+  const result = dbRun(statement, values);
 
   logService.debug("Transaction update result", "TransactionDbService", {
     transactionId,
-    fields,
+    columns,
     rowsChanged: result.changes,
   });
 
   if (result.changes === 0) {
     logService.warn("Transaction update changed 0 rows", "TransactionDbService", {
       transactionId,
-      fields,
+      columns,
     });
   }
 }
@@ -1109,7 +1111,7 @@ export function stampFirstExportedAt(
   timestamp: string,
 ): boolean {
   const result = dbRun(
-    unsafeSql("UPDATE transactions SET first_exported_at = ? WHERE id = ? AND first_exported_at IS NULL"),
+    sql`UPDATE transactions SET first_exported_at = ? WHERE id = ? AND first_exported_at IS NULL`,
     [timestamp, transactionId],
   );
   return result.changes === 1;
@@ -1119,8 +1121,8 @@ export function stampFirstExportedAt(
  * Delete transaction
  */
 export async function deleteTransaction(transactionId: string): Promise<void> {
-  const sql = "DELETE FROM transactions WHERE id = ?";
-  dbRun(unsafeSql(sql), [transactionId]);
+  const statement = sql`DELETE FROM transactions WHERE id = ?`;
+  dbRun(statement, [transactionId]);
 }
 
 /**
@@ -1146,15 +1148,18 @@ export async function findExistingTransactionsByAddresses(
   );
 
   // Build SQL with placeholders for all addresses
-  const placeholders = normalizedAddresses.map(() => "LOWER(TRIM(property_address)) = ?").join(" OR ");
-  const sql = `
+  const placeholders = joinFragments(
+    normalizedAddresses.map(() => sql`LOWER(TRIM(property_address)) = ?`),
+    sql` OR `,
+  );
+  const statement = sql`
     SELECT id, property_address
     FROM transactions
     WHERE user_id = ? AND (${placeholders})
   `;
 
   const params = [userId, ...normalizedAddresses];
-  const results = dbAll<{ id: string; property_address: string }>(unsafeSql(sql), params);
+  const results = dbAll<{ id: string; property_address: string }>(statement, params);
 
   // Build map of normalized address -> transaction ID
   const addressMap = new Map<string, string>();

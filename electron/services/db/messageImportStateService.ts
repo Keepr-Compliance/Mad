@@ -19,7 +19,7 @@
 // ============================================
 
 import { dbGet, dbRun } from "./core/dbConnection";
-import { unsafeSql } from "./core/sqlText";
+import { sql } from "./core/sqlText";
 
 export interface MessageImportStateRow {
   user_id: string;
@@ -33,7 +33,7 @@ export interface MessageImportStateRow {
 /** Read the per-user message-import state row, if it exists. */
 export function getState(userId: string): MessageImportStateRow | undefined {
   return dbGet<MessageImportStateRow>(
-    unsafeSql("SELECT * FROM message_import_state WHERE user_id = ?"),
+    sql`SELECT * FROM message_import_state WHERE user_id = ?`,
     [userId],
   );
 }
@@ -59,12 +59,12 @@ export function recordImport(userId: string, reachedStartISO: string | null): vo
     }
   }
   dbRun(
-    unsafeSql(`INSERT INTO message_import_state (user_id, last_import_at, deepest_import_start, updated_at)
+    sql`INSERT INTO message_import_state (user_id, last_import_at, deepest_import_start, updated_at)
      VALUES (?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(user_id) DO UPDATE SET
        last_import_at = CURRENT_TIMESTAMP,
        deepest_import_start = ?,
-       updated_at = CURRENT_TIMESTAMP`),
+       updated_at = CURRENT_TIMESTAMP`,
     [userId, deepest, deepest],
   );
 }
@@ -80,11 +80,11 @@ export function recordImport(userId: string, reachedStartISO: string | null): vo
  */
 export function recordExpansionRun(userId: string): void {
   dbRun(
-    unsafeSql(`INSERT INTO message_import_state (user_id, last_expansion_at, updated_at)
+    sql`INSERT INTO message_import_state (user_id, last_expansion_at, updated_at)
      VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
      ON CONFLICT(user_id) DO UPDATE SET
        last_expansion_at = CURRENT_TIMESTAMP,
-       updated_at = CURRENT_TIMESTAMP`),
+       updated_at = CURRENT_TIMESTAMP`,
     [userId],
   );
 }

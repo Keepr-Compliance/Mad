@@ -47,6 +47,21 @@
  *    construction rather than by filter.
  */
 
+import { sql, type SafeSql } from "./core/sqlText";
+
+/**
+ * The table aliases this predicate is written for. A CLOSED set, not a `string`.
+ *
+ * BACKLOG-3085: an alias is an IDENTIFIER, so SQLite cannot bind it and the `sql`
+ * tag correctly refuses to splice it. Enumerating the aliases rather than escaping
+ * the splice is what keeps this a checked producer — a query wanting a new alias has
+ * to add it here AND to `ALIAS_PREFIX`, and the compiler makes that mandatory rather
+ * than remembered.
+ */
+export type ContactsAlias = "c";
+
+const ALIAS_PREFIX: Record<ContactsAlias, SafeSql> = { c: sql`c` };
+
 /**
  * Tombstone filter for a query that aliases `contacts` (conventionally `c`).
  * Emitted with a leading space so it appends cleanly onto an existing WHERE.
@@ -54,14 +69,14 @@
  * @example
  *   WHERE c.user_id = ? AND c.is_imported = 1${activeContactsClause("c")}
  */
-export function activeContactsClause(alias: string): string {
-  return ` AND ${alias}.removed_at IS NULL`;
+export function activeContactsClause(alias: ContactsAlias): SafeSql {
+  return sql` AND ${ALIAS_PREFIX[alias]}.removed_at IS NULL`;
 }
 
 /**
  * Tombstone filter for a query with no table alias (bare `FROM contacts`).
  */
-export const ACTIVE_CONTACTS_CLAUSE_UNALIASED = " AND removed_at IS NULL";
+export const ACTIVE_CONTACTS_CLAUSE_UNALIASED = sql` AND removed_at IS NULL`;
 
 /**
  * Aliased form for the overwhelmingly common `c` alias, pre-rendered so call
