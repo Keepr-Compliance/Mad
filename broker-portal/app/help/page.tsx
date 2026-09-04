@@ -5,13 +5,12 @@ import Link from 'next/link';
 import { FileSearch, Mail } from 'lucide-react';
 import { SearchInput } from '@keepr/design-system';
 
+// BACKLOG-3092: entries pointing at /guides/sso-setup are deliberately absent.
+// That page is still served, but it asserts JIT auto-join and SCIM sync that do
+// not work today, so it stays unlinked from navigation until those claims are
+// true. `__tests__/app/guides/microsoft-approval.test.tsx` asserts that nothing
+// under app/ or components/ links to it.
 const articles = [
-  {
-    href: '/guides/sso-setup',
-    title: 'Single Sign-On (SSO) Setup',
-    description: 'Enable your team to sign in with their existing Microsoft or Google accounts.',
-    tags: ['sso', 'microsoft', 'google', 'login', 'entra', 'azure', 'authentication'],
-  },
   {
     href: '/guides/scim-provisioning',
     title: 'Automatic User Provisioning (SCIM)',
@@ -19,10 +18,23 @@ const articles = [
     tags: ['scim', 'provisioning', 'azure', 'entra', 'users', 'sync', 'automatic'],
   },
   {
-    href: '/guides/admin-consent',
-    title: 'Desktop App Permissions (Admin Consent)',
-    description: 'Grant organization-wide permissions so team members can connect their email and contacts.',
-    tags: ['permissions', 'consent', 'admin', 'desktop', 'email', 'contacts', 'graph'],
+    href: '/guides/microsoft-approval',
+    title: 'Approving Keepr for Microsoft Outlook',
+    description:
+      'How an administrator approves the desktop app for read-only access to Outlook mail and contacts, what is granted, and how to verify or revoke it.',
+    tags: [
+      'permissions',
+      'consent',
+      'admin',
+      'approval',
+      'desktop',
+      'outlook',
+      'email',
+      'contacts',
+      'graph',
+      'microsoft',
+      'entra',
+    ],
   },
   {
     href: '/setup',
@@ -41,13 +53,6 @@ const articles = [
     title: 'IT Admin Guides Overview',
     description: 'Everything you need to set up Keepr for your organization.',
     tags: ['guides', 'admin', 'it', 'overview', 'setup'],
-  },
-  {
-    href: '/guides/sso-setup',
-    title: 'How to Configure SSO for Your Organization',
-    description:
-      'Walk through the /setup flow, the Microsoft consent prompt, and granting admin consent for the desktop app.',
-    tags: ['sso', 'configure', 'setup', 'consent', 'microsoft', 'entra', 'how to'],
   },
   {
     href: '/guides/scim-provisioning',
@@ -76,13 +81,6 @@ const articles = [
     description:
       'What happens when Azure AD creates or deactivates users via SCIM, and how changes sync to Keepr.',
     tags: ['scim', 'provisioning', 'azure', 'sync', 'create', 'deactivate', 'users'],
-  },
-  {
-    href: '/guides/sso-setup',
-    title: 'Troubleshooting: "Organization Not Set Up" Error',
-    description:
-      'Why this error appears and what to do — your IT admin needs to visit /setup first, or you can sign up for an individual account.',
-    tags: ['error', 'organization', 'not set up', 'troubleshooting', 'setup', 'individual'],
   },
 ];
 

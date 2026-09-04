@@ -77,9 +77,10 @@ export default function SSOSetupGuidePage() {
                 <p className="mt-2 text-sm text-gray-600">
                   Sync users automatically from Microsoft Entra ID. Assign or remove them in Azure and changes flow to Keepr.
                 </p>
-                <p className="mt-2 text-xs text-gray-500">
-                  <Link href="/guides/scim-provisioning" className="text-primary-600 hover:underline">Learn how to set up SCIM</Link>
-                </p>
+                {/* BACKLOG-3092: the "Learn how to set up SCIM" link pointed at
+                    /guides/scim-provisioning, which has never existed and 404s.
+                    Removed rather than repointed — there is no SCIM guide to
+                    point at yet. */}
               </div>
 
               <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-5 text-center">

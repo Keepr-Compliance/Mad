@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { ChevronRight } from 'lucide-react';
-import { getConsentStatus, getRetentionPolicy, updateRetentionPolicy, getJitStatus, updateJitStatus } from '@/lib/actions/scim';
+import { getConsentStatus, getRetentionPolicy, updateRetentionPolicy, getJitStatus, updateJitStatus, getScimFeatureStatus } from '@/lib/actions/scim';
 import { SignOutAllButton } from '@/components/SignOutAllButton';
 import { ActiveSessionsList } from '@/components/ActiveSessionsList';
 import { useImpersonation } from '@/components/providers/ImpersonationProvider';
@@ -45,11 +45,24 @@ export default function SettingsPage() {
   const [retentionSaved, setRetentionSaved] = useState(false);
   const [jitEnabled, setJitEnabled] = useState(true);
   const [savingJit, setSavingJit] = useState(false);
+  // BACKLOG-3087: the SCIM card is hidden until the server says otherwise.
+  // Starts false and stays false on any error — the server action already
+  // fails closed, and this default means a network failure hides the card
+  // rather than showing a link to an endpoint that 404s.
+  const [scimEnabled, setScimEnabled] = useState(false);
 
   const desktopClientId = process.env.NEXT_PUBLIC_DESKTOP_CLIENT_ID || '';
 
   useEffect(() => {
     async function load() {
+      // Fetched on its own, deliberately outside the try below: a throw from
+      // getConsentStatus (e.g. the caller is not an admin) must not be what
+      // decides whether the SCIM card renders, and a SCIM refusal must not
+      // blank the rest of the page.
+      getScimFeatureStatus()
+        .then((status) => setScimEnabled(status.enabled === true))
+        .catch(() => setScimEnabled(false));
+
       try {
         const [consentData, retentionData, jitData] = await Promise.all([
           getConsentStatus(),
@@ -294,23 +307,27 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* SCIM Provisioning Link */}
-      <Link
-        href="/dashboard/settings/scim"
-        className="block bg-white rounded-lg shadow-sm border border-gray-200 hover:shadow-md hover:border-gray-300 transition-all"
-      >
-        <div className="px-6 py-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">
-              SCIM Provisioning
-            </h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Configure SCIM to automatically sync users from your identity provider
-            </p>
+      {/* SCIM Provisioning Link — BACKLOG-3087: gated on scim_provisioning.
+          The route itself refuses server-side too; this only stops us inviting
+          an IT admin to configure an endpoint that returns 404. */}
+      {scimEnabled && (
+        <Link
+          href="/dashboard/settings/scim"
+          className="block bg-white rounded-lg shadow-sm border border-gray-200 hover:shadow-md hover:border-gray-300 transition-all"
+        >
+          <div className="px-6 py-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">
+                SCIM Provisioning
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Configure SCIM to automatically sync users from your identity provider
+              </p>
+            </div>
+            <ChevronRight className="h-5 w-5 text-gray-400" />
           </div>
-          <ChevronRight className="h-5 w-5 text-gray-400" />
-        </div>
-      </Link>
+        </Link>
+      )}
     </div>
   );
 }

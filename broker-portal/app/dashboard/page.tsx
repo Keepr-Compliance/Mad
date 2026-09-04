@@ -12,6 +12,11 @@ import {
 } from '@keepr/design-system';
 import { formatRelativeTime, getStatusColor, formatStatus } from '@/lib/utils';
 import { getDataClient, getTargetOrganizationId } from '@/lib/impersonation-guards';
+import {
+  getDashboardHeading,
+  resolveViewerIdentity,
+  type ViewerUser,
+} from '@/lib/utils/userDisplay';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 interface SubmissionStats {
@@ -84,11 +89,16 @@ async function getRecentSubmissions(client: SupabaseClient, orgId?: string) {
 export default async function DashboardPage() {
   const { client, impersonation, organizationId } = await getDataClient();
 
+  // BACKLOG-3077: the signed-in user, kept for the header greeting. Null during
+  // impersonation, where the session names the target user instead.
+  let authUser: ViewerUser | null = null;
+
   // IT admins only manage users — redirect to Users page (skip during impersonation)
   if (!impersonation) {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
+      authUser = user;
       const { data: membership } = await supabase
         .from('organization_members')
         .select('role')
@@ -100,6 +110,10 @@ export default async function DashboardPage() {
     }
   }
 
+  // BACKLOG-3077: greet the person by first name; falls back to "Dashboard"
+  // when neither a name nor an email local part is available.
+  const headerTitle = getDashboardHeading(resolveViewerIdentity(impersonation, authUser));
+
   // BACKLOG-908: Use deduped helper for org ID resolution
   const orgId = getTargetOrganizationId(organizationId);
 
@@ -110,7 +124,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="max-w-7xl mx-auto">
-      <PageHeader title="Dashboard" subtitle="Overview of transaction submissions" />
+      <PageHeader title={headerTitle} subtitle="Overview of transaction submissions" />
 
       <div className="space-y-6">
         {/* Stats Grid */}
