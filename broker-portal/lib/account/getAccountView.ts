@@ -25,6 +25,7 @@
 import { createClient } from '@/lib/supabase/server';
 import { getDataClient } from '@/lib/impersonation-guards';
 import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
+import { impersonationFeatureView } from '@/lib/org-settings-access';
 
 /**
  * The types and the pure provider-name helper live in ./accountView so a CLIENT
@@ -75,27 +76,29 @@ export const SUBMISSION_FEATURE_KEY = 'broker_submission';
  * as isScimProvisioningEnabled() in lib/scim-access.ts.
  *
  * ---------------------------------------------------------------------------
- * A SUPPORT SESSION THEREFORE DOES NOT SEE THIS CARD. STATED, NOT ASSUMED.
+ * A SUPPORT SESSION DOES NOT GO THROUGH THIS CHECK AT ALL.
  * ---------------------------------------------------------------------------
  * Impersonation on this portal carries NO Supabase auth session. The admin
  * portal mints a token, /auth/impersonate validates it with the SERVICE client
  * ("no user session needed") and sets a signed cookie, and middleware.ts lets
- * /dashboard/* through on that cookie alone without ever calling getUser. So
- * during a support session createClient() yields a client whose auth.uid() is
- * NULL, broker_get_org_features takes its first early return, and the RPC's
- * own 200-with-error payload resolves this check to false.
+ * /dashboard/* through on that cookie alone without ever calling getUser. So a
+ * fail-closed feature check during impersonation cannot succeed: auth.uid() is
+ * NULL, broker_get_org_features takes its first early return, and every key
+ * refuses.
  *
- * The consequence is real and is the fail-closed one: support sees the account
- * page WITHOUT the retention card, on every org, including an enterprise
- * customer whose members can submit. That is a visibility gap, not a wrong
- * statement — and the alternative is worse. Resolving broker_submission for a
- * support session would need a SECOND implementation of "may this org submit",
- * reading organization_plans/plan_features directly, and two implementations of
- * one entitlement eventually disagree. lib/org-settings-access.ts hit the same
- * wall and answered it differently (impersonationFeatureView() renders
- * retention unconditionally there, because on THAT page the value is the org's
- * own policy and no relevance question is being asked). Filed on BACKLOG-3079
- * rather than papered over here.
+ * What support should see in that situation was decided BEFORE this page
+ * existed, in lib/org-settings-access.ts (see impersonationFeatureView and the
+ * comment above it at ~line 129): render the retention card normally and say
+ * NOTHING about plans, because a refused custom_retention check would print
+ * "Available on Enterprise" beside an enterprise customer's own setting, which
+ * is a false statement about their plan. The page is already read-only in this
+ * mode.
+ *
+ * So the impersonation case is routed to that existing decision rather than
+ * re-answered here. Founder, 2026-09-04, on matching it: "yeah match that".
+ * There is exactly ONE place that says what a read-only support session sees;
+ * a second one on this page would have made My Account and Org Settings
+ * disagree about the same organization.
  */
 async function orgCanSubmit(organizationId: string): Promise<boolean> {
   try {
@@ -171,20 +174,27 @@ export async function getAccountView(): Promise<AccountView | null> {
   let organizationName: string | null = null;
   let orgRetentionYears: number | null = null;
   if (membership?.organization_id) {
-    const [orgResult, canSubmit] = await Promise.all([
+    // A support session takes the decision org settings already made; everyone
+    // else takes the fail-closed entitlement check. Two branches, but still one
+    // answer each — and NOT two answers to "what does support see", which is
+    // what reading impersonationFeatureView() rather than hardcoding `true`
+    // here buys: change that function and this page follows.
+    const [orgResult, showRetention] = await Promise.all([
       client
         .from('organizations')
         .select('name, retention_years')
         .eq('id', membership.organization_id)
         .maybeSingle(),
-      orgCanSubmit(membership.organization_id),
+      impersonation
+        ? Promise.resolve(impersonationFeatureView().retention.policy === 'enabled')
+        : orgCanSubmit(membership.organization_id),
     ]);
     const org = orgResult.data;
     organizationName = (org as { name?: string | null } | null)?.name ?? null;
     // Suppressed HERE, at the source, rather than as a second condition in the
     // client. One decision cannot disagree with itself; two can, and the way
     // they disagree is a card that renders from stale props.
-    orgRetentionYears = canSubmit
+    orgRetentionYears = showRetention
       ? ((org as { retention_years?: number | null } | null)?.retention_years ?? null)
       : null;
   }

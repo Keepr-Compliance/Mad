@@ -205,40 +205,20 @@ describe('getAccountView — subject derivation', () => {
 
   it('does not consult auth.getUser during a support session', async () => {
     // A support session has no authenticated user; reading one would either
-    // throw or silently substitute the admin's own account.
-    //
-    // Asserted on getUser itself, not on createClient. Since the retention
-    // gate, the session client IS built during a support session — to ask
-    // broker_get_org_features about the TARGET's org, which is SECURITY
-    // DEFINER, parameterised by org id and membership-free (BACKLOG-933). What
-    // must never happen is the SUBJECT coming from the admin's session, and
-    // that is exactly what this now says.
+    // throw or silently substitute the admin's own account. Asserted on the
+    // whole session client, not just getUser — the retention gate briefly
+    // built one here and routing impersonation to impersonationFeatureView()
+    // removed it again, so the strong form is true and is what is asserted.
     const rec = stubFetch({
       authUserId: ACCOUNT_USER_ID,
       impersonating: true,
       targetUserId: OTHER_USER_ID,
     });
     const view = await getAccountView();
+    expect(mockCreateClient).not.toHaveBeenCalled();
     expect(rec.getUser).not.toHaveBeenCalled();
+    expect(rec.rpc).not.toHaveBeenCalled();
     expect(view?.identity.userId).toBe(OTHER_USER_ID);
-  });
-
-  it('uses the session client for the feature RPC and NOTHING else', async () => {
-    // Enumerated, so widening the session client's job during a support
-    // session is a red test rather than a quiet change. Every table read still
-    // goes through the scoped impersonation client.
-    const rec = stubFetch({
-      authUserId: ACCOUNT_USER_ID,
-      impersonating: true,
-      targetUserId: OTHER_USER_ID,
-    });
-    await getAccountView();
-    const sessionClient = await mockCreateClient.mock.results[0].value;
-    expect(Object.keys(sessionClient).sort()).toEqual(['auth', 'rpc']);
-    expect(rec.rpc.mock.calls.map((c: unknown[]) => c[0])).toEqual([
-      'broker_get_org_features',
-    ]);
-    expect(rec.getUser).not.toHaveBeenCalled();
   });
 });
 
@@ -407,6 +387,22 @@ describe('orgRetentionYears is gated on broker_submission', () => {
   // account-impersonation.test.tsx. In THIS (non-impersonation) path the
   // identity read calls createClient() first, so a createClient failure never
   // reaches the gate — asserting it here would prove nothing about the gate.
+
+  it('does not consult the entitlement at all during a support session', async () => {
+    // The impersonation branch short-circuits BEFORE the check. If it ever
+    // stops doing so, a support session starts resolving a feature that cannot
+    // resolve, and the card disappears for support — which is the behaviour
+    // the founder rejected.
+    const rec = stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      impersonating: true,
+      targetUserId: OTHER_USER_ID,
+      organization: ORG_WITH_POLICY,
+    });
+    const view = await getAccountView();
+    expect(rec.rpc).not.toHaveBeenCalled();
+    expect(view?.orgRetentionYears).toBe(7);
+  });
 
   it('asks about the right org, with the right feature key', async () => {
     const rec = stubFetch({
@@ -595,6 +591,11 @@ describe('AccountClient — the brokerage retention policy', () => {
   it('names the org value when one is set', () => {
     render(<AccountClient account={makeAccount({ orgRetentionYears: 7 })} />);
     expect(screen.getByText('Email Retention Policy')).toBeInTheDocument();
+    // No plan claim anywhere near it. On org settings a refused check prints
+    // "Available on Enterprise"; this page states the brokerage's value and
+    // says nothing about what unlocks it, which is what makes it safe to show
+    // during a support session where no plan can be resolved.
+    expect(screen.queryByText(/Available on|Enterprise|upgrade|plan/i)).not.toBeInTheDocument();
     expect(screen.getByText('Set by your brokerage')).toBeInTheDocument();
     expect(retentionRow().textContent).toContain('7 years');
   });
