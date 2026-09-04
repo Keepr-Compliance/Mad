@@ -22,6 +22,14 @@ jest.mock('@/lib/impersonation', () => ({
   getImpersonationSession: () => mockGetImpersonationSession(),
 }));
 
+// getAccountView reaches for a scoped service client during impersonation.
+// Stubbed here so this file stays about ACCESS; what it returns is exercised in
+// account-content.test.tsx.
+const mockGetDataClient = jest.fn();
+jest.mock('@/lib/impersonation-guards', () => ({
+  getDataClient: () => mockGetDataClient(),
+}));
+
 const REDIRECTED = 'NEXT_REDIRECT';
 const redirectTargets: string[] = [];
 jest.mock('next/navigation', () => ({
@@ -59,6 +67,7 @@ import AccountPage from '@/app/dashboard/account/page';
 import AccountClient from '@/app/dashboard/account/AccountClient';
 import OrgSettingsClient from '@/app/dashboard/settings/OrgSettingsClient';
 import { TEST_ORG_ID, TEST_USER_ID, makeSupabaseStub } from '../../../fixtures/orgFeatures';
+import { OTHER_USER_ID, makeAccount } from '../../../fixtures/account';
 
 const SESSION_HEADING = 'Session Management';
 const SIGN_OUT_ALL = 'Sign Out All Devices';
@@ -69,6 +78,12 @@ function signedInAs(role: string | null) {
     membership: role ? { organization_id: TEST_ORG_ID, role } : null,
   });
   mockCreateClient.mockResolvedValue(stub.client);
+  mockGetDataClient.mockResolvedValue({
+    client: stub.client,
+    impersonation: null,
+    targetUserId: null,
+    organizationId: null,
+  });
   return stub;
 }
 
@@ -77,6 +92,7 @@ beforeEach(() => {
   mockCreateClient.mockReset();
   mockGetImpersonationSession.mockReset();
   mockGetImpersonationSession.mockResolvedValue(null);
+  mockGetDataClient.mockReset();
   mockIsImpersonating.mockReturnValue(false);
 });
 
@@ -106,7 +122,14 @@ describe('/dashboard/account access', () => {
     // RLS on user_preferences is own-rows plus service_role with no
     // internal-role read policy, so impersonation is the ONLY way support sees
     // this page (BACKLOG-3079).
-    mockGetImpersonationSession.mockResolvedValue({ target_user_id: 'target-1' });
+    const stub = makeSupabaseStub({ user: { id: TEST_USER_ID } });
+    mockGetImpersonationSession.mockResolvedValue({ target_user_id: OTHER_USER_ID });
+    mockGetDataClient.mockResolvedValue({
+      client: stub.client,
+      impersonation: { target_user_id: OTHER_USER_ID },
+      targetUserId: OTHER_USER_ID,
+      organizationId: TEST_ORG_ID,
+    });
     const element = await AccountPage();
     expect(element.type).toBe(AccountClient);
   });
@@ -114,6 +137,12 @@ describe('/dashboard/account access', () => {
   it('sends an unauthenticated caller to login', async () => {
     const stub = makeSupabaseStub({ user: null });
     mockCreateClient.mockResolvedValue(stub.client);
+    mockGetDataClient.mockResolvedValue({
+      client: stub.client,
+      impersonation: null,
+      targetUserId: null,
+      organizationId: null,
+    });
     await expect(AccountPage()).rejects.toThrow(REDIRECTED);
     expect(redirectTargets).toEqual(['/login']);
   });
@@ -133,19 +162,19 @@ describe('/dashboard/account access', () => {
 
 describe('Session Management placement', () => {
   it('renders on the account page', async () => {
-    render(<AccountClient />);
+    render(<AccountClient account={makeAccount()} />);
     expect(await screen.findByText(SESSION_HEADING)).toBeInTheDocument();
   });
 
   it('offers Sign Out All Devices on the account page', async () => {
-    render(<AccountClient />);
+    render(<AccountClient account={makeAccount()} />);
     expect(await screen.findByRole('button', { name: SIGN_OUT_ALL })).toBeInTheDocument();
   });
 
   it('hides Sign Out All Devices during a support session', async () => {
     // A support agent must never be able to sign the customer out everywhere.
     mockIsImpersonating.mockReturnValue(true);
-    render(<AccountClient />);
+    render(<AccountClient account={makeAccount()} />);
     await screen.findByText(SESSION_HEADING);
     expect(screen.queryByRole('button', { name: SIGN_OUT_ALL })).not.toBeInTheDocument();
   });
