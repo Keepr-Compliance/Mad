@@ -42,6 +42,7 @@ jest.mock('@/lib/actions/signOutAllDevices', () => ({
 
 import AccountClient from '@/app/dashboard/account/AccountClient';
 import {
+  SUBMISSION_FEATURE_KEY,
   getAccountView,
   providerDisplayName,
 } from '@/lib/account/getAccountView';
@@ -52,7 +53,21 @@ import {
   SPARSE_PREFERENCES,
   makeAccount,
 } from '../../../fixtures/account';
-import { makeQuery, type TableResult } from '../../../fixtures/orgFeatures';
+import {
+  NOT_AUTHENTICATED_PAYLOAD,
+  ORG_WITHOUT_PLAN_FEATURES,
+  makeQuery,
+  withFeature,
+  type TableResult,
+} from '../../../fixtures/orgFeatures';
+
+/** DERIVED from the transcribed no-plan base: the same org, able to submit. */
+const CAN_SUBMIT_FEATURES = withFeature(
+  ORG_WITHOUT_PLAN_FEATURES,
+  'broker_submission',
+  true,
+  'Broker Submission'
+);
 
 // ---------------------------------------------------------------------------
 // A client that records which table was queried with which filter.
@@ -91,6 +106,10 @@ function stubFetch(opts: {
   preferences?: TableResult;
   membership?: TableResult;
   organization?: TableResult;
+  /** What broker_get_org_features resolves to. Defaults to "can submit". */
+  rpc?: { data?: unknown; error?: unknown };
+  /** The RPC call rejects (transport failure). */
+  rpcThrows?: boolean;
 }) {
   const rec = recordingClient({
     users: { data: USER_ROW, error: null },
@@ -115,15 +134,18 @@ function stubFetch(opts: {
     organizationId: opts.impersonating ? 'org-1' : null,
   });
 
-  mockCreateClient.mockResolvedValue({
-    auth: {
-      getUser: jest.fn(async () => ({
-        data: { user: opts.authUserId === null ? null : { id: opts.authUserId ?? ACCOUNT_USER_ID } },
-      })),
-    },
+  const rpc = jest.fn(async () => {
+    if (opts.rpcThrows) throw new Error('rpc transport failure');
+    return opts.rpc ?? { data: CAN_SUBMIT_FEATURES, error: null };
   });
 
-  return rec;
+  const getUser = jest.fn(async () => ({
+    data: { user: opts.authUserId === null ? null : { id: opts.authUserId ?? ACCOUNT_USER_ID } },
+  }));
+
+  mockCreateClient.mockResolvedValue({ auth: { getUser }, rpc });
+
+  return { ...rec, rpc, getUser };
 }
 
 beforeEach(() => {
@@ -184,9 +206,39 @@ describe('getAccountView — subject derivation', () => {
   it('does not consult auth.getUser during a support session', async () => {
     // A support session has no authenticated user; reading one would either
     // throw or silently substitute the admin's own account.
-    stubFetch({ authUserId: ACCOUNT_USER_ID, impersonating: true, targetUserId: OTHER_USER_ID });
+    //
+    // Asserted on getUser itself, not on createClient. Since the retention
+    // gate, the session client IS built during a support session — to ask
+    // broker_get_org_features about the TARGET's org, which is SECURITY
+    // DEFINER, parameterised by org id and membership-free (BACKLOG-933). What
+    // must never happen is the SUBJECT coming from the admin's session, and
+    // that is exactly what this now says.
+    const rec = stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      impersonating: true,
+      targetUserId: OTHER_USER_ID,
+    });
+    const view = await getAccountView();
+    expect(rec.getUser).not.toHaveBeenCalled();
+    expect(view?.identity.userId).toBe(OTHER_USER_ID);
+  });
+
+  it('uses the session client for the feature RPC and NOTHING else', async () => {
+    // Enumerated, so widening the session client's job during a support
+    // session is a red test rather than a quiet change. Every table read still
+    // goes through the scoped impersonation client.
+    const rec = stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      impersonating: true,
+      targetUserId: OTHER_USER_ID,
+    });
     await getAccountView();
-    expect(mockCreateClient).not.toHaveBeenCalled();
+    const sessionClient = await mockCreateClient.mock.results[0].value;
+    expect(Object.keys(sessionClient).sort()).toEqual(['auth', 'rpc']);
+    expect(rec.rpc.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+      'broker_get_org_features',
+    ]);
+    expect(rec.getUser).not.toHaveBeenCalled();
   });
 });
 
@@ -228,6 +280,143 @@ describe('getAccountView — the three preference states the item names', () => 
     expect(view?.identity.role).toBeNull();
     expect(view?.identity.organizationName).toBeNull();
     expect(view?.orgRetentionYears).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The retention policy is only stated to an org that can actually submit
+// ---------------------------------------------------------------------------
+// organizations.retention_years governs how long SUBMITTED email is kept. For
+// an org of individual desktop accounts nothing is ever submitted, so the card
+// stated a policy that governs nothing (founder, 2026-09-04).
+//
+// The gate is FAIL-CLOSED and is asserted that way, because a fail-open gate
+// passes every happy-path test here and still shows the card the moment the
+// feature RPC hiccups. Every uncertainty below must resolve to "hidden".
+
+describe('orgRetentionYears is gated on broker_submission', () => {
+  const ORG_WITH_POLICY: TableResult = {
+    data: { name: 'Northwind Realty', retention_years: 7 },
+    error: null,
+  };
+
+  /** DERIVED: a plan-bearing org that simply does not include submission. */
+  const CANNOT_SUBMIT_FEATURES = withFeature(
+    { ...ORG_WITHOUT_PLAN_FEATURES, plan_name: 'Individual', plan_tier: 'individual' },
+    'broker_submission',
+    false,
+    'Broker Submission'
+  );
+
+  it('states the policy when the org can submit', async () => {
+    stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpc: { data: CAN_SUBMIT_FEATURES, error: null },
+    });
+    expect((await getAccountView())?.orgRetentionYears).toBe(7);
+  });
+
+  it('suppresses it when the org cannot submit, even though the column holds a value', async () => {
+    // The column still reads 7. The page must not repeat it.
+    stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpc: { data: CANNOT_SUBMIT_FEATURES, error: null },
+    });
+    expect((await getAccountView())?.orgRetentionYears).toBeNull();
+  });
+
+  it('suppresses ONLY the policy — the organization is still named', async () => {
+    // Proves the suppression is targeted rather than the whole org read being
+    // skipped, which would pass the assertion above for the wrong reason.
+    stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpc: { data: CANNOT_SUBMIT_FEATURES, error: null },
+    });
+    const view = await getAccountView();
+    expect(view?.identity.organizationName).toBe('Northwind Realty');
+    expect(view?.orgRetentionYears).toBeNull();
+  });
+
+  it('suppresses it for an org with NO organization_plans row', async () => {
+    // The transcribed prod case: 1 of 10 orgs has no plan row, so every key
+    // resolves from feature_definitions.default_value — broker_submission
+    // false. This is the org the founder's ruling is about.
+    stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpc: { data: ORG_WITHOUT_PLAN_FEATURES, error: null },
+    });
+    expect((await getAccountView())?.orgRetentionYears).toBeNull();
+  });
+
+  it('suppresses it when the feature RPC throws', async () => {
+    // THE CONTROL THAT MATTERS. A fail-open helper returns an empty feature
+    // map here, which reads as "allow", and this test is the only one that
+    // can tell the two implementations apart.
+    stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpcThrows: true,
+    });
+    expect((await getAccountView())?.orgRetentionYears).toBeNull();
+  });
+
+  it('suppresses it when the RPC reports a supabase-level error', async () => {
+    stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpc: { data: null, error: { message: 'permission denied' } },
+    });
+    expect((await getAccountView())?.orgRetentionYears).toBeNull();
+  });
+
+  it('suppresses it for the RPC\'s 200-with-error payload', async () => {
+    // Transcribed output: the function reports its own errors as DATA with an
+    // HTTP 200, so a check on `error` alone would read this as success.
+    stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpc: { data: NOT_AUTHENTICATED_PAYLOAD, error: null },
+    });
+    expect((await getAccountView())?.orgRetentionYears).toBeNull();
+  });
+
+  it('suppresses it when the payload is malformed', async () => {
+    stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpc: { data: { org_id: 'x', features: null }, error: null },
+    });
+    expect((await getAccountView())?.orgRetentionYears).toBeNull();
+  });
+
+  it('suppresses it when the feature key is absent entirely', async () => {
+    const { broker_submission: _omitted, ...rest } = ORG_WITHOUT_PLAN_FEATURES.features;
+    stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpc: { data: { ...ORG_WITHOUT_PLAN_FEATURES, features: rest }, error: null },
+    });
+    expect((await getAccountView())?.orgRetentionYears).toBeNull();
+  });
+
+  // "the server client itself cannot be built" is exercised in
+  // account-impersonation.test.tsx. In THIS (non-impersonation) path the
+  // identity read calls createClient() first, so a createClient failure never
+  // reaches the gate — asserting it here would prove nothing about the gate.
+
+  it('asks about the right org, with the right feature key', async () => {
+    const rec = stubFetch({
+      authUserId: ACCOUNT_USER_ID,
+      organization: ORG_WITH_POLICY,
+      rpc: { data: CAN_SUBMIT_FEATURES, error: null },
+    });
+    await getAccountView();
+    expect(rec.rpc).toHaveBeenCalledWith('broker_get_org_features', { p_org_id: 'org-1' });
+    expect(SUBMISSION_FEATURE_KEY).toBe('broker_submission');
   });
 });
 

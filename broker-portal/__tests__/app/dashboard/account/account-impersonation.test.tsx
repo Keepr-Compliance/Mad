@@ -34,6 +34,29 @@ jest.mock('@/lib/supabase/server', () => ({
 
 import { getAccountView } from '@/lib/account/getAccountView';
 import { FULL_PREFERENCES, OTHER_USER_ID } from '../../../fixtures/account';
+import { ORG_WITHOUT_PLAN_FEATURES, withFeature } from '../../../fixtures/orgFeatures';
+
+/** DERIVED from the transcribed no-plan base: the same org, able to submit. */
+const CAN_SUBMIT_FEATURES = withFeature(
+  ORG_WITHOUT_PLAN_FEATURES,
+  'broker_submission',
+  true,
+  'Broker Submission'
+);
+
+/**
+ * The SUPPORT ADMIN's own session client. Since the retention gate it is built
+ * during a support session — for broker_get_org_features and nothing else. It
+ * carries getUser purely so the test can assert getUser is never called.
+ */
+function sessionClientStub(opts: { rpc?: { data?: unknown; error?: unknown }; throws?: boolean } = {}) {
+  const getUser = jest.fn(async () => ({ data: { user: { id: 'support-admin' } } }));
+  const rpc = jest.fn(async () => {
+    if (opts.throws) throw new Error('rpc transport failure');
+    return opts.rpc ?? { data: CAN_SUBMIT_FEATURES, error: null };
+  });
+  return { client: { auth: { getUser }, rpc }, getUser, rpc };
+}
 
 /** pii-allow-uuid: invented, not from any live row. */
 const TARGET_ORG_ID = '00000000-3079-4000-8000-000000000009';
@@ -74,6 +97,7 @@ beforeEach(() => {
   mockCreateServiceClient.mockReset();
   mockCreateClient.mockReset();
   mockGetImpersonationSession.mockResolvedValue({ target_user_id: OTHER_USER_ID });
+  mockCreateClient.mockResolvedValue(sessionClientStub().client);
 });
 
 describe('getAccountView through the real scoped impersonation client', () => {
@@ -106,9 +130,53 @@ describe('getAccountView through the real scoped impersonation client', () => {
   it('reads the target organization, including its retention policy', async () => {
     const stub = serviceClientStub();
     mockCreateServiceClient.mockReturnValue(stub.client);
+    const session = sessionClientStub({ rpc: { data: CAN_SUBMIT_FEATURES, error: null } });
+    mockCreateClient.mockResolvedValue(session.client);
     const view = await getAccountView();
     expect(view?.identity.organizationName).toBe('Northwind Realty');
     expect(view?.orgRetentionYears).toBe(5);
+    // Asked about the TARGET's org, not the support admin's.
+    expect(session.rpc).toHaveBeenCalledWith('broker_get_org_features', {
+      p_org_id: TARGET_ORG_ID,
+    });
+  });
+
+  it('suppresses the retention policy when the target org cannot submit', async () => {
+    // Support sees what the customer sees. A card the customer is not shown
+    // must not appear for support either, or the two disagree about what the
+    // customer's account says.
+    const stub = serviceClientStub();
+    mockCreateServiceClient.mockReturnValue(stub.client);
+    mockCreateClient.mockResolvedValue(
+      sessionClientStub({ rpc: { data: ORG_WITHOUT_PLAN_FEATURES, error: null } }).client
+    );
+    const view = await getAccountView();
+    expect(view?.orgRetentionYears).toBeNull();
+    expect(view?.identity.organizationName).toBe('Northwind Realty');
+  });
+
+  it('suppresses it, and still renders a page, when the session client cannot be built', async () => {
+    // THIS is where the try/catch earns its place. In a support session the
+    // subject comes from the impersonation cookie, so createClient() is called
+    // only by the feature gate — an unguarded throw here would 500 the whole
+    // page for support, and a fail-open catch would state a policy nobody can
+    // vouch for. Neither: the page renders, without the card.
+    const stub = serviceClientStub();
+    mockCreateServiceClient.mockReturnValue(stub.client);
+    mockCreateClient.mockRejectedValue(new Error('no session'));
+    const view = await getAccountView();
+    expect(view).not.toBeNull();
+    expect(view?.identity.userId).toBe(OTHER_USER_ID);
+    expect(view?.orgRetentionYears).toBeNull();
+  });
+
+  it('suppresses it when the feature RPC throws', async () => {
+    const stub = serviceClientStub();
+    mockCreateServiceClient.mockReturnValue(stub.client);
+    mockCreateClient.mockResolvedValue(sessionClientStub({ throws: true }).client);
+    const view = await getAccountView();
+    expect(view).not.toBeNull();
+    expect(view?.orgRetentionYears).toBeNull();
   });
 
   it('touches exactly the four tables the page needs', async () => {
@@ -122,10 +190,21 @@ describe('getAccountView through the real scoped impersonation client', () => {
     );
   });
 
-  it('never asks for an authenticated session', async () => {
+  it('never derives the subject from an authenticated session', async () => {
+    // Was `expect(mockCreateClient).not.toHaveBeenCalled()`. The session client
+    // IS now built during a support session — for broker_get_org_features and
+    // nothing else. The property that mattered was never "no session client":
+    // it was "the subject is the impersonation target, not the admin", and
+    // auth.getUser is the only thing that could break it.
     const stub = serviceClientStub();
     mockCreateServiceClient.mockReturnValue(stub.client);
-    await getAccountView();
-    expect(mockCreateClient).not.toHaveBeenCalled();
+    const session = sessionClientStub();
+    mockCreateClient.mockResolvedValue(session.client);
+    const view = await getAccountView();
+    expect(session.getUser).not.toHaveBeenCalled();
+    expect(view?.identity.userId).toBe(OTHER_USER_ID);
+    expect(session.rpc.mock.calls.map((c: unknown[]) => c[0])).toEqual([
+      'broker_get_org_features',
+    ]);
   });
 });

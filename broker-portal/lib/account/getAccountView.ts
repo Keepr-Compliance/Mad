@@ -24,6 +24,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { getDataClient } from '@/lib/impersonation-guards';
+import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
 
 /**
  * The types and the pure provider-name helper live in ./accountView so a CLIENT
@@ -36,6 +37,56 @@ export type { AccountIdentity, AccountView } from './accountView';
 export { providerDisplayName } from './accountView';
 
 import type { AccountView } from './accountView';
+
+/**
+ * feature_definitions.key. Enterprise and Team enabled, Individual disabled —
+ * verified against plan_features on 2026-09-04.
+ */
+export const SUBMISSION_FEATURE_KEY = 'broker_submission';
+
+/**
+ * May this organization submit email to a brokerage at all?
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE RETENTION CARD ASKS THIS
+ * ---------------------------------------------------------------------------
+ * organizations.retention_years describes how long SUBMITTED email is kept. An
+ * org whose members cannot submit has nothing being retained, so the card was
+ * stating a policy that governs nothing — founder, 2026-09-04: "for an org with
+ * only individual desktop accounts the retention policy on the new my account
+ * shouldn't show since it's not relevant for desktop users on orgs that don't
+ * have the option to submit."
+ *
+ * ---------------------------------------------------------------------------
+ * FAIL-CLOSED, AND WHY THAT IS NOT THE DEFAULT HELPER
+ * ---------------------------------------------------------------------------
+ * `isFeatureEnabled` / `getOrgFeatures` in lib/feature-gate.ts are FAIL-OPEN by
+ * documented design: an unknown key returns true and a failed RPC yields an
+ * empty feature map that reads as "allow". Either would show this card to an
+ * org that cannot submit the moment the RPC hiccups, and would look identical
+ * to a working gate in every happy-path test. `isFeatureEnabledFailClosed` is
+ * the strict sibling: RPC error, the RPC's own 200-with-error payload, a
+ * malformed payload, a missing key and an explicitly disabled key all resolve
+ * to false. An org with NO organization_plans row — which exists in production
+ * — resolves broker_submission from the feature default, which is false.
+ *
+ * The try/catch is the last uncertainty: a throw (no session, transport
+ * failure) is a refusal, not an error reported as "probably fine". Same shape
+ * as isScimProvisioningEnabled() in lib/scim-access.ts.
+ *
+ * The check runs on the SESSION's own client, which during a support session is
+ * the support admin's. That is deliberate and correct: broker_get_org_features
+ * is SECURITY DEFINER, takes the org id as a parameter and requires only that
+ * the caller be authenticated (no membership check, BACKLOG-933), so it answers
+ * for the TARGET's org, not the admin's.
+ */
+async function orgCanSubmit(organizationId: string): Promise<boolean> {
+  try {
+    return await isFeatureEnabledFailClosed(organizationId, SUBMISSION_FEATURE_KEY);
+  } catch {
+    return false;
+  }
+}
 
 interface UserRow {
   id: string;
@@ -103,14 +154,22 @@ export async function getAccountView(): Promise<AccountView | null> {
   let organizationName: string | null = null;
   let orgRetentionYears: number | null = null;
   if (membership?.organization_id) {
-    const { data: org } = await client
-      .from('organizations')
-      .select('name, retention_years')
-      .eq('id', membership.organization_id)
-      .maybeSingle();
+    const [orgResult, canSubmit] = await Promise.all([
+      client
+        .from('organizations')
+        .select('name, retention_years')
+        .eq('id', membership.organization_id)
+        .maybeSingle(),
+      orgCanSubmit(membership.organization_id),
+    ]);
+    const org = orgResult.data;
     organizationName = (org as { name?: string | null } | null)?.name ?? null;
-    orgRetentionYears =
-      (org as { retention_years?: number | null } | null)?.retention_years ?? null;
+    // Suppressed HERE, at the source, rather than as a second condition in the
+    // client. One decision cannot disagree with itself; two can, and the way
+    // they disagree is a card that renders from stale props.
+    orgRetentionYears = canSubmit
+      ? ((org as { retention_years?: number | null } | null)?.retention_years ?? null)
+      : null;
   }
 
   const prefsRow = (preferencesResult.data as
