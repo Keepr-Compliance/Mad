@@ -289,8 +289,25 @@ describe('/guides/microsoft-approval — BACKLOG-3092, trimmed by BACKLOG-3097',
 
       expect(scopes.length).toBe(6);
       for (const scope of scopes) {
+        // The allow-list. Anchored at both ends, so it is the assertion that
+        // actually decides what may appear.
         expect(scope).toMatch(/^(User\.Read|offline_access|(Mail|Contacts)\.Read(\.Shared)?)$/);
-        expect(scope).not.toMatch(/Send|Write|ReadWrite|\.All$/);
+
+        // Deliberately redundant with the allow-list above, and kept anyway: a
+        // second guard shaped differently is worth having on the one page that
+        // tells a customer's IT department what Keepr can do to their mailbox.
+        // A future edit that loosens the allow-list — a `.*` for a new scope
+        // family, say — would not loosen these.
+        //
+        // SPLIT INTO TWO, and it must stay split. As one expression this read
+        // `/Send|Write|ReadWrite|\.All$/`, where precedence anchors ONLY the
+        // final alternative: it is `(Send)|(Write)|(ReadWrite)|(\.All$)`, not
+        // the whole thing anchored. It behaved correctly, but it reads as a
+        // stronger claim than it makes, which is how an assertion quietly stops
+        // checking what its author intended. CodeQL flags the shape
+        // (js/regex/missing-regexp-anchor); the fix is for the reader.
+        expect(scope).not.toMatch(/Send|Write|ReadWrite/);
+        expect(scope).not.toMatch(/\.All$/);
       }
     });
 
