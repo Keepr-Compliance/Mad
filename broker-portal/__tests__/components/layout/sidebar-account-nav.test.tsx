@@ -20,6 +20,8 @@ import { Sidebar } from '@/components/layout/Sidebar';
 const ROLES = ['agent', 'broker', 'admin', 'it_admin'] as const;
 const ACCOUNT = 'My Account';
 const ACCOUNT_HREF = '/dashboard/account';
+const ORG_SETTINGS = 'Org Settings';
+const ORG_SETTINGS_HREF = '/dashboard/settings';
 
 function renderSidebar(props: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
   return render(
@@ -53,19 +55,39 @@ describe('Sidebar — My Account', () => {
   });
 });
 
-describe('Sidebar — Settings stays admin-only', () => {
+describe('Sidebar — Org Settings stays admin-only', () => {
   it.each(['admin', 'it_admin'] as const)('is present for %s', (role) => {
     renderSidebar({ role, displayRole: role });
-    expect(screen.getByRole('link', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: ORG_SETTINGS })).toHaveAttribute(
+      'href',
+      ORG_SETTINGS_HREF
+    );
   });
 
   it.each(['agent', 'broker'] as const)('is absent for %s', (role) => {
     renderSidebar({ role, displayRole: role });
-    expect(screen.queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: ORG_SETTINGS })).not.toBeInTheDocument();
   });
 
   it('is absent during a support session even for an admin', () => {
     renderSidebar({ role: 'admin', isImpersonating: true });
+    expect(screen.queryByRole('link', { name: ORG_SETTINGS })).not.toBeInTheDocument();
+  });
+
+  it('is labelled "Org Settings", and no link is labelled bare "Settings"', () => {
+    // The rename is the point, and it is asserted in both directions: without
+    // the negative, every "is absent for ..." case above would pass simply
+    // because nothing in the nav is called 'Settings' any more.
+    renderSidebar({ role: 'admin', displayRole: 'admin' });
+    expect(screen.getByRole('link', { name: ORG_SETTINGS })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the href, so no route or redirect target moved', () => {
+    renderSidebar({ role: 'it_admin', displayRole: 'it_admin' });
+    expect(screen.getByRole('link', { name: ORG_SETTINGS })).toHaveAttribute(
+      'href',
+      '/dashboard/settings'
+    );
   });
 });

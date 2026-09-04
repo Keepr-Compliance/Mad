@@ -49,7 +49,11 @@ const memberNavItems: NavItem[] = [
 
 const adminNavItems: NavItem[] = [
   { label: 'Users', href: '/dashboard/users', icon: Users },
-  { label: 'Settings', href: '/dashboard/settings', icon: Settings },
+  // Founder, 2026-09-04: the tab named setting should say Org Settings.
+  // Since BACKLOG-3078 this route holds ONLY org policy — a person's own
+  // settings live at /dashboard/account — so the bare word named the wrong
+  // half of the split. Label only; the href is unchanged.
+  { label: 'Org Settings', href: '/dashboard/settings', icon: Settings },
 ];
 
 /** Personal, not org policy. Shown to every role, impersonation included. */
