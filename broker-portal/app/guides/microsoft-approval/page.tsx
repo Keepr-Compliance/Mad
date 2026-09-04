@@ -14,6 +14,16 @@ import Link from 'next/link';
  * been emailed to a prospect. Renaming the directory or adding a redirect
  * breaks a live link — the title changed, the path did not.
  *
+ * NO DIRECT admin-consent LINK, AND IT MUST NOT COME BACK. The page used to
+ * offer the raw `login.microsoftonline.com/organizations/adminconsent` URL as a
+ * last resort. That route grants consent at Microsoft WITHOUT passing through
+ * `/setup/consent/callback` with a `state`, and the record branch there is
+ * `adminConsent === 'True' && state` — so `graph_admin_consent_granted` is
+ * never written. The tenant ends up approved while Keepr's Settings card still
+ * reads "Not granted": a split state that neither screen can explain. Settings
+ * is the only path that records the grant, so it is the only path the page
+ * offers. A test asserts the URL stays off.
+ *
  * NO BREADCRUMB, DELIBERATELY. There was a "Back to Help" link above the title;
  * it is gone and must not come back. Readers reach this page from a link in an
  * email forwarded to their IT team — they have never been to /help, so "back"
@@ -52,7 +62,6 @@ import Link from 'next/link';
  * Every claim is checked against the code that implements it:
  *   - Settings card + Grant button ....... app/dashboard/settings/page.tsx
  *   - /setup sign-in lands on consent .... app/auth/setup/callback/route.ts
- *   - consent recorded only with state ... app/setup/consent/callback/route.ts
  *   - read-only, delegated scope set ..... electron/services/microsoftAuthService.ts
  *   - token in OS credential store ....... electron/services/tokenEncryptionService.ts
  *   - "reconnect in Settings" on a dead
@@ -71,22 +80,6 @@ import Link from 'next/link';
  * carries "Admin consent required: Yes", so all four of these roles suffice.
  * DO NOT add or drop a role here without re-checking the registration.
  */
-/**
- * HARDCODED, AND IT HAS TO BE MAINTAINED BY HAND.
- *
- * Deriving this from the file's last git commit would be better, and it is not
- * available here: `next build` on Vercel runs against a shallow clone and the
- * deployed runtime has no `.git` at all, so a `git log` at render time returns
- * nothing and a `git log` at build time returns nothing for any file that was
- * not touched in the fetched depth. Either way the page would silently claim a
- * wrong date, which on a security page is worse than claiming none.
- *
- * Instead the staleness guard lives in the test: it pins a fingerprint of this
- * file, so ANY edit here fails the suite until the date below is reviewed and
- * the fingerprint re-pinned. Change one, change the other.
- */
-const LAST_UPDATED = 'September 4, 2026';
-
 /**
  * The exact six lines Microsoft's consent screen renders, verified against the
  * live screen on 2026-09-03 after Mail.Send (Application) was removed from the
@@ -118,26 +111,6 @@ const APPROVER_ROLES = [
   'Application Administrator',
 ];
 
-/**
- * Ours, and public by design — Microsoft puts it in the address bar of every
- * consent screen it renders, and the portal already ships it to the browser as
- * NEXT_PUBLIC_DESKTOP_CLIENT_ID. It is an application identifier, not a record
- * id: it names no customer, tenant, organization or person.
- */
-// pii-allow-uuid: Keepr's own OAuth application (client) id, public by design — not a record id, names no customer or tenant
-const DESKTOP_CLIENT_ID = '3a6c341a-17ab-4739-977d-a7d71b27f945';
-
-/**
- * Generic `organizations` tenant so one URL serves every customer, and the
- * production portal origin as a literal so the redirect matches the app
- * registration (the portal generates this same URI at runtime; confirmed
- * against the deployed Vercel domain, not a code default).
- */
-const FALLBACK_CONSENT_URL =
-  `https://login.microsoftonline.com/organizations/adminconsent` +
-  `?client_id=${DESKTOP_CLIENT_ID}` +
-  `&redirect_uri=${encodeURIComponent('https://app.keeprcompliance.com/setup/consent/callback')}`;
-
 export const metadata = {
   title: 'Connecting Keepr to Entra ID (Microsoft 365) - Keepr',
   description:
@@ -153,7 +126,6 @@ export default function MicrosoftApprovalGuidePage() {
           <h1 className="text-3xl font-bold text-gray-900">
             Connecting Keepr to Entra ID (Microsoft 365)
           </h1>
-          <p className="mt-2 text-sm text-gray-500">{`Last updated ${LAST_UPDATED}`}</p>
         </div>
       </div>
 
@@ -329,24 +301,6 @@ export default function MicrosoftApprovalGuidePage() {
                 </p>
               </div>
 
-              <div>
-                <h3 className="text-base font-medium text-gray-900">
-                  Last resort: approving without signing in to Keepr
-                </h3>
-                <p className="mt-1 text-sm text-gray-700">
-                  This link opens the Microsoft approval screen directly. It applies to the tenant
-                  of whichever account signs in.
-                </p>
-                <p className="mt-2 break-all rounded-md bg-gray-50 border border-gray-200 p-3 text-xs text-gray-700 font-mono">
-                  {FALLBACK_CONSENT_URL}
-                </p>
-                <p className="mt-2 text-sm text-gray-700">
-                  <strong>Use the Settings route instead where you can.</strong> This link grants
-                  the approval in Microsoft but does not record it in Keepr. Your users are
-                  unblocked either way; the Settings card will still read{' '}
-                  <strong>Not granted</strong> until an administrator grants it once from Settings.
-                </p>
-              </div>
             </div>
           </section>
 

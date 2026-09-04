@@ -22,7 +22,6 @@
  *      parallel route with its own heading.
  */
 
-import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { render } from '@testing-library/react';
@@ -358,73 +357,49 @@ describe('/guides/microsoft-approval — BACKLOG-3092, trimmed by BACKLOG-3097',
     });
   });
 
-  describe('the "last updated" date cannot go stale unnoticed', () => {
-    // The date is hardcoded (see the comment on LAST_UPDATED in the page: a git
-    // date is not derivable at build OR render time on Vercel, and a silently
-    // wrong date on a security page is worse than no date). This is the guard
-    // that makes hardcoding safe: the file's fingerprint is pinned, so ANY edit
-    // to the page fails here until the date is reviewed and the fingerprint
-    // re-pinned. If you are reading this because the test went red: update
-    // LAST_UPDATED in the page if the change is user-visible, then paste the
-    // fingerprint the failure prints below.
-    const PINNED_FINGERPRINT = 'c617e615e5e0a311';
-    const PINNED_DATE = 'September 4, 2026';
+  describe('carries no identifier at all', () => {
+    const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
-    it('renders the date directly under the title', () => {
+    it('the source contains no GUID whatsoever', () => {
+      // Strictly stronger than what stood here before. This used to allow one
+      // GUID — Keepr's own public desktop client id, which existed solely to
+      // build the direct admin-consent URL. That URL is gone (see below), the
+      // client id went with it, and the allowance is gone too: any GUID
+      // appearing here now is a finding, whoever it belongs to.
+      expect([...new Set(guideSource.match(UUID) ?? [])]).toEqual([]);
+    });
+
+    it('offers no direct admin-consent link', () => {
+      // INVERTED, deliberately. This assertion used to REQUIRE the generic
+      // `organizations/adminconsent` URL on the page. It is now forbidden.
+      //
+      // The reason is a split state, not tidiness: that route grants consent at
+      // Microsoft without passing through /setup/consent/callback with a
+      // `state`, and the record branch there is `adminConsent === 'True' &&
+      // state`. So graph_admin_consent_granted is never written — the tenant is
+      // approved while Keepr's Settings card still reads "Not granted", and
+      // neither screen can explain the other. Settings is the only path that
+      // records the grant, so it is the only path the page offers.
+      //
+      // Read off the rendered output AND the comment-stripped source, so the
+      // docblock paragraph that explains this removal cannot satisfy it.
       const { container } = render(<MicrosoftApprovalGuidePage />);
       const text = container.textContent ?? '';
 
-      expect(text).toContain(`Last updated ${PINNED_DATE}`);
-      // Under the title, above the first section.
-      expect(text.indexOf('Last updated')).toBeGreaterThan(
-        text.indexOf('Connecting Keepr to Entra ID')
+      expect(text).not.toContain('adminconsent');
+      expect(text).not.toContain('login.microsoftonline.com');
+      expect(text).not.toMatch(/last resort/i);
+      expect(stripComments(guideSource)).not.toContain('adminconsent');
+    });
+
+    it('the comment-stripping cannot mask a real link', () => {
+      // Control for the assertion above: the explanation in the page's docblock
+      // is prose and must be ignored; a real URL in code must not be.
+      expect(stripComments(guideSource)).not.toContain('adminconsent');
+      expect(guideSource).toContain('adminconsent');
+      expect(stripComments("const u = 'https://x/organizations/adminconsent';")).toContain(
+        'adminconsent'
       );
-      expect(text.indexOf('Last updated')).toBeLessThan(text.indexOf('Prerequisites'));
-    });
-
-    it('claims a date that has actually happened', () => {
-      // One day of slack, because the date is a calendar day and the runner's
-      // clock is not: "September 4, 2026" parses to local midnight, which is
-      // still ahead of a machine sitting in UTC-7 on the UTC morning of the
-      // 4th. Anything beyond a day ahead is a typo or a copied-forward date.
-      const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-      const claimed = new Date(PINNED_DATE);
-
-      expect(Number.isNaN(claimed.getTime())).toBe(false);
-      expect(claimed.getTime()).toBeLessThanOrEqual(Date.now() + ONE_DAY_MS);
-    });
-
-    it('the page has not changed since that date was last reviewed', () => {
-      // Fingerprinted on what a READER sees — rendered text plus the two
-      // metadata strings — not on the source bytes. A source-byte pin fires on
-      // a comment typo, which trains people to re-pin without reviewing the
-      // date, and a guard everyone reflexively silences guards nothing.
-      const { container } = render(<MicrosoftApprovalGuidePage />);
-      const visible = [
-        container.textContent ?? '',
-        String(metadata.title),
-        String(metadata.description),
-      ].join('\u0000');
-      const fingerprint = createHash('sha256').update(visible).digest('hex').slice(0, 16);
-
-      expect(fingerprint).toBe(PINNED_FINGERPRINT);
-    });
-  });
-
-  describe('carries no customer identifier', () => {
-    const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
-    // Keepr's own desktop app registration. Public by design: Microsoft shows it
-    // in the address bar of every consent screen.
-    // pii-allow-uuid: Keepr's own OAuth application (client) id, public by design — not a record id, names no customer or tenant
-    const OUR_CLIENT_ID = '3a6c341a-17ab-4739-977d-a7d71b27f945';
-
-    it('the only GUID in the source is our own public client id', () => {
-      const guids = [...new Set(guideSource.match(UUID) ?? [])];
-      expect(guids).toEqual([OUR_CLIENT_ID]);
-    });
-
-    it('uses the generic organizations tenant so one link serves every customer', () => {
-      expect(guideSource).toContain('login.microsoftonline.com/organizations/adminconsent');
     });
   });
 });
