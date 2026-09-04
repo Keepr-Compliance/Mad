@@ -62,9 +62,25 @@
  * `SafeSql` is carried by a `unique symbol` that `sqlText.ts` does not export, so
  * unlike a string-literal brand it **cannot be re-declared structurally** by
  * someone who types the same literal in their own file. Nothing outside the module
- * can name the symbol. That does not make the matcher exhaustive — the limits above
- * still stand — but it does mean every remaining forgery has to NAME `SafeSql`,
- * which is the node kind matched here. Control 3 proves it by planting.
+ * can name the symbol. Control 3 proves this matcher can see a violation, by
+ * planting one in three files and three syntaxes.
+ *
+ * **What that does NOT mean — and this paragraph used to claim otherwise.** It said
+ * "every remaining forgery has to NAME `SafeSql`, which is the node kind matched
+ * here", and that was false. BACKLOG-3086 compiled 23 forms one at a time: 19
+ * reached a conduit parameter with an unbranded value, and two whole FAMILIES of
+ * them never mention the type in any spelling — so no matcher over assertion nodes
+ * can see those BY CONSTRUCTION, however many spellings it learns:
+ *
+ *   dbAll as (s: string, p?: unknown[]) => unknown[]         the CONDUIT is widened,
+ *   const c: { all(s: string): unknown[] } = { all: dbAll }  not the argument cast
+ *
+ *   function launder(s: string): SafeSql;                    an overload signature
+ *   function launder(s: string): string { return s; }        with no checked body
+ *
+ * Both families are held by `sqlText.conduitSeam.test.ts`, which resolves symbols and
+ * type identity through the checker. THIS matcher is unchanged by that item: what was
+ * wrong was the completeness claim, not the counts below.
  */
 import fs from "fs";
 import path from "path";
