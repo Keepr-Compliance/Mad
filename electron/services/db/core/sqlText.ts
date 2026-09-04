@@ -74,11 +74,22 @@
  *   `.prepare`. So nothing exploits it today; it is recorded here so Phase B inherits
  *   an accurate list of exits rather than a short one. (Found in SR review of
  *   PR #2488, BACKLOG-3086.)
- * - **The `sql` tag has ZERO production call sites in this commit.** Phase A wraps
- *   every existing site in the counted escape so the compiler can enumerate them;
- *   Phase B converts them to the tag, each item removing its own escapes. The tag
- *   is exercised here by the type fixtures and by
- *   `__tests__/sqlText.runtimeIdentity.test.ts`, not by production code.
+ * - ~~**The `sql` tag has ZERO production call sites in this commit.**~~ **No longer
+ *   true, and the sentence is corrected rather than deleted so the reader can see
+ *   what changed.** That was Phase A. **BACKLOG-3085 (Phase B) converted 258 of the
+ *   262 in-layer escapes**, so the tag is now the ordinary way a statement is
+ *   written inside `db/**` and the escape is what it was named as. The counted
+ *   escape stands at **135**: 131 outside the layer (BACKLOG-3044, unchanged) and 4
+ *   inside it that CANNOT use the tag because they splice a value into SQL text
+ *   (BACKLOG-3102).
+ * - **Fragments are branded by BODIED helpers, not by escapes.** `core/sqlFragments.ts`
+ *   (placeholder lists, fragment joins) and `core/columnSql.ts` (every whitelisted
+ *   column name, enumerated under a `satisfies`) are the shape
+ *   `electron/types/__typefixtures__/conduitSeam/OK1_bodiedFragmentHelper.ts` pins as
+ *   legitimate: the compiler checks the return, so nothing is taken on trust. They
+ *   are NOT exported from here — `__tests__/sqlText.escapeSet.test.ts` asserts this
+ *   module exports exactly three names, because the producible surface is the thing
+ *   under guard and it does not grow to hold conveniences.
  * - **A cast that names `SafeSql` still compiles.** It is counted by
  *   `__tests__/sqlText.escapeSet.test.ts`, which is a ratchet, not a prohibition —
  *   and that matcher compares a NAME against a set, which cannot be exhaustive over

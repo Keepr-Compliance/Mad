@@ -121,20 +121,42 @@ const SELF = "electron/services/db/core/__tests__/sqlText.escapeSet.test.ts";
  * PRE-REGISTERED — declared in Supabase (`pm_comments`) BEFORE the first production
  * edit, and reproduced here.
  *
- * Every entry was inserted mechanically by commit 1, which wrapped each existing
- * conduit call site's SQL argument and changed nothing else. The SQL text reaching
- * SQLite is byte-identical: all 393 arg0 slices hash to the same aggregate before
- * and after (`ba18ad1f9788de6847a388cede0dd95a587bf624b14c7044f13e4ac0aedcb513`).
+ * Every entry was inserted mechanically by BACKLOG-3064 commit 1, which wrapped each
+ * existing conduit call site's SQL argument and changed nothing else. The SQL text
+ * reaching SQLite was byte-identical: all 393 arg0 slices hashed to the same
+ * aggregate before and after
+ * (`ba18ad1f9788de6847a388cede0dd95a587bf624b14c7044f13e4ac0aedcb513`).
+ *
+ * ## 2026-09-04 — BACKLOG-3085 removed the in-layer half. 393 -> 135.
+ *
+ * 258 of the 262 rows owned by `BACKLOG-3064` were removed BY CONVERSION: the
+ * statement now goes through the `sql` tag. No row was deleted, none left by
+ * `--allow-growth`, and no baseline was regenerated — this map is compared against a
+ * measurement, so a row can only leave when its escape actually leaves.
+ *
+ * **Four did not convert, and they are still here rather than gone.** In each, the
+ * tag refuses a splice because a VALUE is pasted into SQL text: a row limit
+ * (`LIMIT ${Number(limit)}`) and, three times, a provider list hand-quoted into a
+ * predicate by `emailForceReadView`. Fixing either CHANGES the statement, so neither
+ * belongs inside a byte-identical conversion. They are re-owned to **BACKLOG-3102**,
+ * which is what the owner column is for.
+ *
+ * ## A count correction, found by re-deriving rather than by reading
+ *
+ * The `BACKLOG-3064` note below used to read *"22 files, plus 2 test files"*.
+ * Measured: **23 production files plus 1 test file**
+ * (`db/__tests__/transactionDbService.cardScope-2865.test.ts`, which held both of the
+ * 2 test escapes). The total of 24 was right; the split was not.
  *
  * OWNERS, and what each one means:
  *
  *   BACKLOG-3044 — the statement is authored OUTSIDE `electron/services/db/**`.
- *     The escape goes away when the statement MOVES into the layer. 23 files.
+ *     The escape goes away when the statement MOVES into the layer. 131 in 23 files,
+ *     untouched by BACKLOG-3085 — including the ones a newly-branded constant made
+ *     redundant, because this map pins them and they are not that item's work.
  *
- *   BACKLOG-3064 — the statement is already inside the layer, where authoring SQL
- *     is allowed. The escape goes away when the text is rewritten with the `sql`
- *     tag, which is byte-identical work. 22 files, plus 2 test files that execute
- *     real statements against the real driver.
+ *   BACKLOG-3102 — the statement is inside the layer and CANNOT use the tag, because
+ *     it splices a value into SQL text. 4 in 2 files.
  *
  * Phase B items re-own these rows as they are filed; the owner column is what makes
  * "who is going to remove this" a fact in CI rather than a memory.
@@ -144,6 +166,8 @@ const EXPECTED_ESCAPES: Record<string, { count: number; owner: string }> = {
   "electron/handlers/emailLinkingHandlers.ts": { count: 2, owner: "BACKLOG-3044" },
   "electron/handlers/licenseHandlers.ts": { count: 2, owner: "BACKLOG-3044" },
   "electron/services/auditCoverageService.ts": { count: 3, owner: "BACKLOG-3044" },
+  "electron/services/db/communicationDbService.ts": { count: 1, owner: "BACKLOG-3102" },
+  "electron/services/db/emailSyncSql.ts": { count: 3, owner: "BACKLOG-3102" },
   "electron/services/autoLinkService.ts": { count: 17, owner: "BACKLOG-3044" },
   "electron/services/ccpaExportService.ts": { count: 5, owner: "BACKLOG-3044" },
   "electron/services/contactAutoLinkPolicy.ts": { count: 1, owner: "BACKLOG-3044" },
@@ -156,30 +180,6 @@ const EXPECTED_ESCAPES: Record<string, { count: number; owner: string }> = {
   "electron/services/contactProvenance.ts": { count: 2, owner: "BACKLOG-3044" },
   "electron/services/contactSourceLinker.ts": { count: 4, owner: "BACKLOG-3044" },
   "electron/services/contactSourceValues.ts": { count: 4, owner: "BACKLOG-3044" },
-  "electron/services/db/__tests__/transactionDbService.cardScope-2865.test.ts": { count: 2, owner: "BACKLOG-3064" },
-  "electron/services/db/auditLogDbService.ts": { count: 3, owner: "BACKLOG-3064" },
-  "electron/services/db/communicationDbService.ts": { count: 37, owner: "BACKLOG-3064" },
-  "electron/services/db/contactDbService.ts": { count: 71, owner: "BACKLOG-3064" },
-  "electron/services/db/contactLinkReviewDbService.ts": { count: 11, owner: "BACKLOG-3064" },
-  "electron/services/db/contactMatchIndex.ts": { count: 8, owner: "BACKLOG-3064" },
-  "electron/services/db/contactOriginLink.ts": { count: 3, owner: "BACKLOG-3064" },
-  "electron/services/db/contactSourceLinkDbService.ts": { count: 11, owner: "BACKLOG-3064" },
-  "electron/services/db/contactSourceSets.ts": { count: 7, owner: "BACKLOG-3064" },
-  "electron/services/db/emailCacheWindow.ts": { count: 1, owner: "BACKLOG-3064" },
-  "electron/services/db/emailDbService.ts": { count: 10, owner: "BACKLOG-3064" },
-  "electron/services/db/emailSyncSql.ts": { count: 5, owner: "BACKLOG-3064" },
-  "electron/services/db/emailSyncStateService.ts": { count: 8, owner: "BACKLOG-3064" },
-  "electron/services/db/externalContactDbService.ts": { count: 14, owner: "BACKLOG-3064" },
-  "electron/services/db/feedbackDbService.ts": { count: 7, owner: "BACKLOG-3064" },
-  "electron/services/db/frozenContactDbService.ts": { count: 1, owner: "BACKLOG-3064" },
-  "electron/services/db/llmSettingsDbService.ts": { count: 9, owner: "BACKLOG-3064" },
-  "electron/services/db/messageImportStateService.ts": { count: 3, owner: "BACKLOG-3064" },
-  "electron/services/db/oauthTokenDbService.ts": { count: 7, owner: "BACKLOG-3064" },
-  "electron/services/db/sessionDbService.ts": { count: 6, owner: "BACKLOG-3064" },
-  "electron/services/db/transactionContactDbService.ts": { count: 14, owner: "BACKLOG-3064" },
-  "electron/services/db/transactionDbService.ts": { count: 10, owner: "BACKLOG-3064" },
-  "electron/services/db/unlockCacheDbService.ts": { count: 4, owner: "BACKLOG-3064" },
-  "electron/services/db/userDbService.ts": { count: 10, owner: "BACKLOG-3064" },
   "electron/services/failureLogService.ts": { count: 11, owner: "BACKLOG-3044" },
   "electron/services/importPlanInputs.ts": { count: 1, owner: "BACKLOG-3044" },
   "electron/services/messageMatchingService.ts": { count: 15, owner: "BACKLOG-3044" },
@@ -348,7 +348,7 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
     expect(measure(countEscapes)).toEqual({ ...expectedCounts, ...EXPECTED_CONTROL_CALLS });
   });
 
-  it("totals 393 ESCAPES in 47 files — the number the compiler produced", () => {
+  it("totals 135 ESCAPES in 25 files — 262 converted by BACKLOG-3085", () => {
     const measured = measure(countEscapes);
     const escapes = Object.fromEntries(
       Object.entries(measured).filter(([f]) => !(f in EXPECTED_CONTROL_CALLS)),
@@ -356,8 +356,8 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
 
     expect(escapes).toEqual(expectedCounts);
     expect(Object.values(escapes).reduce((a, b) => a + b, 0)).toBe(EXPECTED_TOTAL);
-    expect(EXPECTED_TOTAL).toBe(393);
-    expect(Object.keys(escapes)).toHaveLength(47);
+    expect(EXPECTED_TOTAL).toBe(135);
+    expect(Object.keys(escapes)).toHaveLength(25);
   });
 
   /** Every escape carries an owner. No default, no fall-through, no blanks. */
@@ -371,7 +371,7 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
     for (const entry of Object.values(EXPECTED_ESCAPES)) {
       byOwner[entry.owner] = (byOwner[entry.owner] ?? 0) + entry.count;
     }
-    expect(byOwner).toEqual({ "BACKLOG-3044": 131, "BACKLOG-3064": 262 });
+    expect(byOwner).toEqual({ "BACKLOG-3044": 131, "BACKLOG-3102": 4 });
   });
 
   /**
