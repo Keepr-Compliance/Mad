@@ -348,7 +348,7 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
     expect(measure(countEscapes)).toEqual({ ...expectedCounts, ...EXPECTED_CONTROL_CALLS });
   });
 
-  it("totals 135 ESCAPES in 25 files — 262 converted by BACKLOG-3085", () => {
+  it("totals 135 ESCAPES in 25 files — 258 converted, 4 re-owned to BACKLOG-3102", () => {
     const measured = measure(countEscapes);
     const escapes = Object.fromEntries(
       Object.entries(measured).filter(([f]) => !(f in EXPECTED_CONTROL_CALLS)),
