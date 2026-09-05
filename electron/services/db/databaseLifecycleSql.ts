@@ -39,8 +39,15 @@
  * one non-blocking finding on PR #2484. A class boundary that separates a
  * statement from its own guard is not a boundary worth keeping.
  *
- * The other twelve reflection prepares in `databaseService.ts` guard nothing that
- * moved, and stay with their class.
+ * The other NINE prepare sites in `databaseService.ts` guard nothing that moved and
+ * stay with their class — seven static `sqlite_master` reflections and the two
+ * interpolated backup/restore column-list statements.
+ *
+ * Nine, not twelve. SR's #2484 review counted "13 reflection prepares" INCLUDING
+ * this probe's four sites; 13 - 4 = 9. Subtracting the probe's one baseline KEY
+ * instead of its four SITES gives 12, and 12 does not add up: the remainder is
+ * 22 pragma + 9 prepare + 7 exec = 38, enumerated with
+ * `check-sql-boundary.mjs --explain`, not derived from the review's prose.
  *
  * ## The schema_version READ is deliberately not here
  *

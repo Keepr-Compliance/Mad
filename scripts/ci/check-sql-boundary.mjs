@@ -245,10 +245,13 @@ const OWNERS = {
   // 2991 moved everything it should: the seven sites of PR #2484 plus the
   // `schema_version` table probe (4 sites, key `text:a73cb4792d87`) that SR
   // found half-moved — it was the guard for a statement already living in
-  // `db/`. What remains is homogeneous and is item 5's class, not 2991's:
-  // 21 connection/maintenance PRAGMAs, 1 interpolated `table_info` reflection,
-  // 12 reflection prepares, and 7 `exec` of which 4 replay text the database
-  // itself produced and so have no authored text to move. BACKLOG-2992 is
+  // `db/`. What remains is homogeneous and is item 5's class, not 2991's, and it
+  // is 38 sites in 29 keys, enumerated with `--explain` rather than described:
+  // 22 pragma (21 connection/maintenance + the interpolated `table_info`
+  // reflection), 9 prepare (7 static `sqlite_master` reflections + the two
+  // interpolated backup/restore column-list statements), and 7 `exec` of which 4
+  // replay text the database itself produced and so have no authored text to
+  // move. 22 + 9 + 7 = 38. BACKLOG-2992 is
   // `deferred` behind BACKLOG-2834/2836, and a deferred item is a legal
   // baseline owner — its own body already specifies exactly this model
   // ("visible, ratcheted, not silently excepted").
