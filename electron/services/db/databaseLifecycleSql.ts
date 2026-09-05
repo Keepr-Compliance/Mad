@@ -11,11 +11,20 @@
  *   - **restore verification** — proving a restored file answers at all
  *
  * That distinction is why they are separated from the larger set that STAYS in
- * `databaseService.ts`. Of that file's 49 gate sites, **38** are
- * connection-configuration and maintenance PRAGMAs, `sqlite_master` reflection,
- * bootstrap DDL, and four `exec` sites that replay text the database itself
- * produced — none of which is query text a `db/` module can own. The full
- * classification, with per-site evidence, is on BACKLOG-2991.
+ * `databaseService.ts`: **38** of that file's 49 gate sites — 22 pragma, 9 prepare,
+ * 7 exec. The full classification, with per-site evidence, is on BACKLOG-2991.
+ *
+ * **Why those 38 stay is scope and ownership, NOT impossibility.** An earlier draft
+ * of this header said "none of which is query text a `db/` module can own", and SR
+ * rejected exactly that framing in the PR #2484 review: *"it inspects the schema is
+ * not on its own a licence to author SQL outside the layer"*. Seven of the nine
+ * prepares are static text that could move as one-line constants today. Four of the
+ * seven execs genuinely have nothing to move — they replay DDL the database itself
+ * produced — and the pragmas are better-sqlite3's connection-configuration API
+ * rather than a query channel. The rest stay because they are BACKLOG-2992's, and
+ * because BACKLOG-2834/2836 are rewriting that path. A boundary someone else drew,
+ * honoured — which is a different sentence from "unmovable", and the difference
+ * matters to whoever picks 2992 up.
  *
  * **This header said 42 until the probe below moved.** Those 38 are now owned by
  * BACKLOG-2992, the deferred item whose scope is exactly that class — recorded in
@@ -40,8 +49,10 @@
  * statement from its own guard is not a boundary worth keeping.
  *
  * The other NINE prepare sites in `databaseService.ts` guard nothing that moved and
- * stay with their class — seven static `sqlite_master` reflections and the two
- * interpolated backup/restore column-list statements.
+ * stay: six static `sqlite_master` reflections (`:655 :796 :800 :804 :824 :1054`),
+ * one static `PRAGMA table_info(schema_version)` prepared rather than pragma'd
+ * (`:1302` — reflection, but not via `sqlite_master`), and the two interpolated
+ * backup/restore column-list statements (`:859 :867`).
  *
  * Nine, not twelve. SR's #2484 review counted "13 reflection prepares" INCLUDING
  * this probe's four sites; 13 - 4 = 9. Subtracting the probe's one baseline KEY
