@@ -127,6 +127,12 @@ const PHOTO_41_HASH = "11585deee46bd30b154446f13cf39490bc6ca18a7b619b8915bc5958d
 const PHOTO_42_HASH = "ce61c56f53a9d5e5be97385796a546d65a557b5124b6f18572cbd7b21d32d2ce";
 /** What BOTH photos hash to if the body is folded to `""` — the defect. */
 const COLLIDED_HASH = "56e46822639c298c6e31350b0b4c949abf78fba57a717a4649bc3671e7e002b0";
+/**
+ * What a body-less message hashes to if a wire-legal `smsId: null` reaches the
+ * template string — `sha256("+12065550101|1757000000000|null")`. The same
+ * collision as COLLIDED_HASH, arriving through a value the compiler cannot see.
+ */
+const NULL_LITERAL_HASH = "052b66ebe4fd8e70295c99c02b2900eda3e221de4990153e4873f217ce6e9304";
 
 function captionlessPhoto(smsId: string): SyncMessage {
   return {
@@ -301,6 +307,33 @@ describe("(g) a message with nothing safe to hash is skipped, not folded", () =>
     // reported to the operator as a duplicate — it was never stored at all.
     expect(result.skippedMessages).toBe(1);
     expect(result.stored).toBe(1);
+  });
+
+  it('skips a wire-legal `smsId: null` instead of hashing the literal "null"', () => {
+    // `smsId` is typed `string | undefined`, so the compiler believes this
+    // cannot happen — but the value is JSON from another process and
+    // `{"smsId": null}` is wire-legal. `null ?? null` is `null`, so a
+    // `=== undefined` test lets it through and the hash input becomes the
+    // STRING "null": every body-less message from this sender in this
+    // millisecond collides again, which is exactly the defect this item exists
+    // to remove. Nothing ships this today; BACKLOG-3109 populates this field.
+    const nulledSmsId = (): SyncMessage =>
+      ({
+        sender: BROKER_CONTACT,
+        body: null,
+        timestamp: SAME_MS,
+        direction: "inbound",
+        smsId: null,
+      }) as unknown as SyncMessage;
+
+    const result = storeMessages(USER, DEVICE, [nulledSmsId(), nulledSmsId()]);
+
+    expect(result.stored).toBe(0);
+    expect(result.skippedMessages).toBe(2);
+    // Not two collapsed into one — no row at all, because there is nothing
+    // safe to hash and inventing an identity is what the ruling forbade.
+    expect(lastRows()).toHaveLength(0);
+    expect(lastRows().map((r) => r.externalId)).not.toContain(NULL_LITERAL_HASH);
   });
 
   it("keeps a skipped message out of the attachment path entirely", () => {
