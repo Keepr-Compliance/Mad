@@ -1,0 +1,20 @@
+# npm audit report
+
+ansi-regex  4.0.0 - 4.1.0
+Severity: high
+Inefficient Regular Expression Complexity in chalk/ansi-regex - https://github.com/advisories/GHSA-93q8-gq69-wqmw
+fix available via `npm audit fix --force`
+Will install ansi-regex@4.1.1, which is outside the stated dependency range
+node_modules/ansi-regex
+
+braces  <3.0.3
+Severity: high
+Uncontrolled resource consumption in braces - https://github.com/advisories/GHSA-grv7-fg5c-xmjg
+fix available via `npm audit fix --force`
+Will install braces@3.0.3, which is outside the stated dependency range
+node_modules/braces
+
+2 high severity vulnerabilities
+
+To address all issues, run:
+  npm audit fix --force

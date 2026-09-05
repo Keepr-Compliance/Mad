@@ -672,18 +672,25 @@ jobs:
         # audit-level=critical: 72 known high/moderate vulnerabilities from transitive
         # dependencies (minimatch, ajv, tar, qs, next) tracked in BACKLOG-723.
         # None are critical. Will lower to --audit-level=high once dependencies are updated.
-        # BACKLOG-2265: npm is retiring the audits/quick endpoint (400 "endpoint is being
-        # retired"), which was hard-failing this required check repo-wide. Tolerate ONLY that
-        # class of registry/endpoint infra error; a real critical vulnerability still fails.
+        #
+        # BACKLOG-2265 made this step survive npm registry infra errors, using a grep list of
+        # the specific failures visible that day (400 "endpoint is being retired", ECONNRESET,
+        # ETIMEDOUT, ...). BACKLOG-3101: on 2026-09-04 the registry answered 503 three times.
+        # A 5xx is the registry REPLYING, so no connection error fired and it was not a 400 --
+        # the list matched nothing, and this REQUIRED check went red on develop with no
+        # advisory involved. The list enumerated instances of a class.
+        #
+        # The decision now lives in scripts/ci/audit-guard.mjs, which keys on npm's own
+        # "audit endpoint returned an error" line -- printed for every failure of that class
+        # and never by an advisory report. It is a script rather than an inline block so it
+        # can be fed canned transcripts: scripts/__tests__/auditGuard.test.ts runs it against
+        # the real 503 and 400 logs and a real critical-advisory report. A real critical
+        # vulnerability still fails this step.
         run: |
           set +e
           OUT=$(npm audit --audit-level=critical 2>&1); CODE=$?
           echo "$OUT"
-          if echo "$OUT" | grep -qiE "endpoint is being retired|Invalid package tree|400 Bad Request|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up"; then
-            echo "::warning::npm audit hit a registry/endpoint infra error (BACKLOG-2265) — treating as non-fatal. Real critical vulnerabilities still fail this step."
-            exit 0
-          fi
-          exit $CODE
+          printf '%s\n' "$OUT" | node scripts/ci/audit-guard.mjs --npm-exit-code "$CODE"
 
       - name: Check for outdated dependencies
         run: npm outdated
