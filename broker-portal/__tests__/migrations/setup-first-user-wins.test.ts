@@ -115,6 +115,22 @@ describe('20260905_backlog_3096_setup_first_user_wins.sql', () => {
     expect(code.match(/'admin'/g) ?? []).toHaveLength(1);
   });
 
+  it('returns the role it wrote, so the callback need not re-query', () => {
+    // BACKLOG-3096: the /setup callback branches on this key. Two reads — one
+    // in the function, one in the route — could disagree; one read cannot.
+    // Additive: the three original keys stay, so existing consumers are
+    // unaffected.
+    const successReturn = code.slice(code.lastIndexOf('RETURN jsonb_build_object('));
+    expect(successReturn).toMatch(/'success', true/);
+    expect(successReturn).toMatch(/'organization_id', v_org_id/);
+    expect(successReturn).toMatch(/'user_id', v_user_id/);
+    expect(successReturn).toMatch(/'role', v_role/);
+
+    // The already-a-member path must populate v_role too, or a repeat caller
+    // gets a null role back and the route fails them closed to /download.
+    expect(code).toMatch(/SELECT role\s+INTO v_role\s+FROM organization_members/);
+  });
+
   it('carries the rest of the live body over unchanged', () => {
     // The email fallback chain for tenants where Microsoft leaves
     // auth.users.email empty.

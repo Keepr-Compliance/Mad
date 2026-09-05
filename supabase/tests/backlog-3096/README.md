@@ -22,9 +22,23 @@ Plus a row lock (`SELECT … FROM organizations WHERE id = … FOR UPDATE`) take
 before the count, so two employees opening `/setup` in the same second cannot
 both observe "zero claimed members".
 
+And a third change, which is why this is not a migration-only PR: the RPC now
+**returns** the role it wrote, and `broker-portal/app/auth/setup/callback/route.ts`
+branches on it. Control 7 owns the returned `role` key on its own, rather than
+that assertion being bolted onto every control: mutant 01 has no `role` key at
+all, so a returned-role check inside controls 1–6 would red every one of them
+for a reason unrelated to the role logic — including 1 and 3, which are meant to
+stay green under it. One finding, one red. Before first-user-wins every caller was an admin, so sending
+every fresh provision to `/setup/consent` was always right. It is not any more —
+a plain agent cannot complete a tenant-wide Microsoft admin-consent grant, so
+that page is a dead end for them. Non-admins now go to `/download`, which is
+where `middleware.ts` already sends an agent who touches a protected route. The
+route reads the returned value rather than re-querying, so the callback and the
+database cannot disagree about which branch was taken.
+
 ---
 
-## The six controls
+## The seven controls
 
 | # | File | Fixture | Expected |
 |---|------|---------|----------|
@@ -34,6 +48,7 @@ both observe "zero claimed members".
 | 4 | `control-4-existing-admin-new-caller-gets-default-role.sql` | org with a claimed admin, `default_member_role='broker'` | newcomer → `broker`; admin's row byte-identical |
 | 5 | `control-5-*.sql` + `control-5-run.sh` | pre-created empty org, **two concurrent sessions** | A → `admin`, B → `agent`, and B waits ~5s |
 | 6 | `control-6-claimed-agent-no-admin-new-caller-is-agent.sql` | one claimed `agent`, **no admin**, `default_member_role` NULL | newcomer → `agent`, not `admin` |
+| 7 | `control-7-rpc-returns-the-role-it-wrote.sql` | insert path, **repeat call**, and second caller | returned `role` == stored role, every time |
 
 Every assertion is on the **exact role of a named user id**. None is on a count
 of admins — "one admin" is also satisfied by a run in which the wrong person got
@@ -54,10 +69,10 @@ the first claimed member. Each control therefore needs its own failing input.
 
 | Mutant | Change | Reds | Stays green |
 |---|---|---|---|
-| `mutants/01-old-live-body.sql` | the production definition, verbatim (hard-coded `'admin'`, no lock) | **2, 4, 5, 6** | 1, 3 |
-| `mutants/02-no-claimed-rows-filter.sql` | shipped body minus `AND user_id IS NOT NULL` | **3** | 1, 2, 4, 5, 6 |
-| `mutants/03-no-row-lock.sql` | shipped body minus `FOR UPDATE` | **5** — and only two-session | 1, 2, 3, 4, 6 |
-| `mutants/04-never-admin.sql` | shipped body with `v_role := v_default_role` unconditionally | **1, 3, 5** | 2, 4, 6 |
+| `mutants/01-old-live-body.sql` | the production definition, verbatim (hard-coded `'admin'`, no lock, no `role` key) | **2, 4, 5, 6, 7** | 1, 3 |
+| `mutants/02-no-claimed-rows-filter.sql` | shipped body minus `AND user_id IS NOT NULL` | **3** | 1, 2, 4, 5, 6, 7 |
+| `mutants/03-no-row-lock.sql` | shipped body minus `FOR UPDATE` | **5** — and only two-session | 1, 2, 3, 4, 6, 7 |
+| `mutants/04-never-admin.sql` | shipped body with `v_role := v_default_role` unconditionally | **1, 3, 5** | 2, 4, 6, 7 |
 
 Every control has at least one mutant that reds it, and every mutant reds at
 least one control.
@@ -94,12 +109,27 @@ was run, and the file restored:
 
 | Applied over the migration | Reds | Which assertion |
 |---|---|---|
-| `mutants/01-old-live-body.sql` | 3 of 7 | claimed-members count · hard-coded `'admin'` · row lock |
-| `mutants/02-no-claimed-rows-filter.sql` | 1 of 7 | claimed-members count |
-| `mutants/03-no-row-lock.sql` | 1 of 7 | row lock |
-| `mutants/04-never-admin.sql` | 2 of 7 | claimed-members count · the "`'admin'` appears exactly once" assertion, which sees zero |
-| ad-hoc: `'admin'` put back into the membership `VALUES` | 1 of 7 | hard-coded `'admin'` |
-| shipped migration restored | **0** — 7 passed | — |
+| `mutants/01-old-live-body.sql` | 4 of 8 | claimed-members count · hard-coded `'admin'` · row lock · returns-the-role-it-wrote |
+| `mutants/02-no-claimed-rows-filter.sql` | 1 of 8 | claimed-members count |
+| `mutants/03-no-row-lock.sql` | 1 of 8 | row lock |
+| `mutants/04-never-admin.sql` | 2 of 8 | claimed-members count · the "`'admin'` appears exactly once" assertion, which sees zero |
+| ad-hoc: `'admin'` put back into the membership `VALUES` | 1 of 8 | hard-coded `'admin'` |
+| ad-hoc: `'role'` dropped from the return | 1 of 8 | returns-the-role-it-wrote |
+| shipped migration restored | **0** — 8 passed | — |
+
+Re-measured after the return shape changed; mutants 02–04 were re-derived from
+the updated body first, so no count here is taken against a stale fixture.
+
+The route's own branch is covered by
+`broker-portal/__tests__/app/auth/setup/callback/route.test.ts` (6 assertions),
+made to fail the same way:
+
+| Mutation of `route.ts` | Reds | Which assertion |
+|---|---|---|
+| delete the `/download` branch — i.e. the pre-fix route | 3 of 6 | agent → `/download` · broker → `/download` · missing role fails closed |
+| invert the branch (admin → `/download`) | 4 of 6 | the three above, plus admin → consent |
+| narrow `canGrantAdminConsent` to drop `it_admin` | 1 of 6 | an existing `it_admin` still reaches the consent page |
+| restored | **0** — 6 passed | — |
 
 Counts were measured with `--bail=0`, so they are exact rather than truncated.
 The 04 red on the `'admin'` assertion fires on the count-is-zero branch, not on
@@ -119,8 +149,8 @@ export DATABASE_URL='postgresql://…'   # direct connection, not the pooler
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
   -f supabase/migrations/20260905_backlog_3096_setup_first_user_wins.sql
 
-# controls 1-4 and 6
-for f in supabase/tests/backlog-3096/control-[12346]-*.sql; do
+# controls 1-4, 6 and 7
+for f in supabase/tests/backlog-3096/control-[123467]-*.sql; do
   echo "== $f"; psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
 done
 

@@ -108,11 +108,16 @@ BEGIN
   VALUES (v_user_id, v_user_email, 'azure', v_oauth_id)
   ON CONFLICT (id) DO NOTHING;
 
-  -- Check if membership already exists
-  IF NOT EXISTS (
-    SELECT 1 FROM organization_members
-    WHERE user_id = v_user_id AND organization_id = v_org_id
-  ) THEN
+  -- Check if membership already exists. Reading the role rather than testing
+  -- for existence is the same guard -- organization_members.role is NOT NULL,
+  -- so v_role IS NULL means "no row" and nothing else -- and it leaves the
+  -- caller's ACTUAL role in v_role on the already-a-member path too, which the
+  -- return value below needs.
+  SELECT role INTO v_role
+  FROM organization_members
+  WHERE user_id = v_user_id AND organization_id = v_org_id;
+
+  IF v_role IS NULL THEN
     -- BACKLOG-3096: first user wins. 'admin' only when this org has no CLAIMED
     -- member yet. user_id IS NOT NULL is load-bearing: pre-created white-glove
     -- orgs carry unclaimed invite rows (user_id IS NULL) and counting those
@@ -129,10 +134,19 @@ BEGIN
     VALUES (v_org_id, v_user_id, v_role, NOW(), 'active', 'jit');
   END IF;
 
+  -- BACKLOG-3096: 'role' is new, and additive -- existing consumers read
+  -- success/organization_id/user_id and are unaffected.
+  --
+  -- The /setup callback branches on it: only an admin can complete tenant-wide
+  -- Microsoft consent, so only an admin continues to /setup/consent. Returning
+  -- the role the function ACTUALLY wrote, rather than having the route re-query
+  -- for it, means the callback and the database cannot disagree about which
+  -- branch was taken -- there is one read, not two.
   RETURN jsonb_build_object(
     'success', true,
     'organization_id', v_org_id,
-    'user_id', v_user_id
+    'user_id', v_user_id,
+    'role', v_role
   );
 END;
 $function$;

@@ -13,6 +13,20 @@ import { extractEmail, orgNameFromEmail } from '@/lib/auth/helpers';
 // Microsoft consumer tenant ID (personal Outlook/Hotmail accounts)
 const CONSUMER_TENANT_ID = '9188040d-6c67-4c5b-b112-36a304b66dad';
 
+/**
+ * Roles that can complete a tenant-wide Microsoft admin-consent grant.
+ *
+ * One definition for the whole file: the existing-membership branch below and
+ * the fresh-provision branch must not drift into disagreeing about who the
+ * consent page is for. `auto_provision_it_admin` only ever writes 'admin' on
+ * that branch; 'it_admin' is here because the membership branch has always
+ * accepted it, and a role check that silently narrowed would be a regression
+ * for anyone already holding it.
+ */
+function canGrantAdminConsent(role: string | null | undefined): boolean {
+  return role === 'admin' || role === 'it_admin';
+}
+
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
@@ -76,7 +90,7 @@ export async function GET(request: Request) {
 
   if (membership) {
     // If IT admin and consent not yet granted, redirect to consent page
-    if (membership.role === 'it_admin' || membership.role === 'admin') {
+    if (canGrantAdminConsent(membership.role)) {
       const { data: org } = await supabase
         .from('organizations')
         .select('graph_admin_consent_granted, microsoft_tenant_id')
@@ -120,11 +134,28 @@ export async function GET(request: Request) {
   }
 
   if (process.env.NODE_ENV === 'development') {
-    console.log(`Setup complete: org=${data.organization_id}, user=${data.user_id}`);
+    console.log(
+      `Setup complete: org=${data.organization_id}, user=${data.user_id}, role=${data.role}`
+    );
   }
 
-  // After successful provisioning, redirect to admin consent page
-  // so IT admin can pre-approve Graph API permissions for all tenant users
+  // BACKLOG-3096. Until first-user-wins landed, auto_provision_it_admin made
+  // EVERY caller an admin, so sending every fresh provision to the consent page
+  // was always right. It is not any more: the second employee through /setup
+  // now joins as the org's default role, and a plain agent cannot complete a
+  // tenant-wide Microsoft admin-consent grant. Sending them there is a dead end.
+  //
+  // Branch on the role the RPC actually wrote — not a re-query — so the
+  // callback and the database cannot disagree about which branch was taken.
+  if (!canGrantAdminConsent(data.role)) {
+    // /download is where middleware.ts already sends an agent who touches a
+    // protected route, so this is that role's existing destination rather than
+    // a new one. BACKLOG-3080 owns changing where agents land; this must not
+    // pre-empt it by inventing a third destination.
+    return NextResponse.redirect(`${origin}/download`);
+  }
+
+  // An admin can pre-approve Graph API permissions for all tenant users.
   return NextResponse.redirect(
     `${origin}/setup/consent?tenant=${encodeURIComponent(tenantId)}&org=${encodeURIComponent(data.organization_id)}`
   );
