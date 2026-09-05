@@ -233,7 +233,30 @@ const DECLARED_EXCEPTIONS = [
  * and the gate rejects a baseline containing one.
  */
 const OWNERS = {
-  "electron/services/databaseService.ts": "BACKLOG-2991",
+  // BACKLOG-2992, re-owned FROM BACKLOG-2991 — the commit that makes the work
+  // someone else's is the commit that moves the ownership. SR's D2, review
+  // addendum on BACKLOG-2991, accepted by the PM.
+  //
+  // This line is what `--update-baseline` reads. Leaving it at 2991 while the
+  // 29 JSON rows say 2992 would let the next regeneration by anyone silently
+  // re-own all 38 sites back to a closed item, and the JSON edit would read as
+  // the thing that had been undone.
+  //
+  // 2991 moved everything it should: the seven sites of PR #2484 plus the
+  // `schema_version` table probe (4 sites, key `text:a73cb4792d87`) that SR
+  // found half-moved — it was the guard for a statement already living in
+  // `db/`. What remains is homogeneous and is item 5's class, not 2991's:
+  // 21 connection/maintenance PRAGMAs, 1 interpolated `table_info` reflection,
+  // 12 reflection prepares, and 7 `exec` of which 4 replay text the database
+  // itself produced and so have no authored text to move. BACKLOG-2992 is
+  // `deferred` behind BACKLOG-2834/2836, and a deferred item is a legal
+  // baseline owner — its own body already specifies exactly this model
+  // ("visible, ratcheted, not silently excepted").
+  //
+  // File-granular is the right granularity HERE because the file is now
+  // homogeneous by owner. Per-entry ownership stays the right general fix and
+  // is not needed for these 29 keys.
+  "electron/services/databaseService.ts": "BACKLOG-2992",
   // BACKLOG-3062, re-owned by BACKLOG-2990 chunk 5 — the commit that made the
   // work someone else's is the commit that moves the ownership.
   //
