@@ -58,7 +58,7 @@ describe("UnavailableSecretStore", () => {
   it("never returns the plaintext it was given", () => {
     // The failure mode worth naming: a stub that "helpfully" passed the value
     // through would look like a working secret store and store secrets in clear.
-    let returned: unknown = "unset";
+    let returned: unknown;
     try {
       returned = stub.encryptString("a-real-secret");
     } catch {
