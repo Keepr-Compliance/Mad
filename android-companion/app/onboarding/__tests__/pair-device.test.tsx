@@ -9,6 +9,8 @@
 import React from 'react';
 import { Alert } from 'react-native';
 import { render, fireEvent, act, waitFor } from '@testing-library/react-native';
+import { DEMO_BANNER_TEXT } from '../../../components/demo/DemoPreview';
+import { DEMO_CONVERSATIONS } from '../../../components/demo/sampleConversations';
 
 // --- expo-camera: capture the onBarcodeScanned prop so the test can fire a scan.
 let capturedOnBarcodeScanned: ((r: { data: string }) => void) | null = null;
@@ -444,3 +446,38 @@ describe('pair-device LAN address guard (BACKLOG-2956)', () => {
     },
   );
 });
+
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3027 — the sample preview is reachable from the pairing screen, which is the screen BACKLOG-3027 names.
+//
+// Someone here has no Keepr desktop on this network. Before the preview
+// existed the only honest answer this screen could give a Play reviewer was
+// "find a computer" — the permission was requested and its justification was
+// never observable.
+//
+// MUTATION THAT MUST GO RED: delete `<DemoPreview />` from app/onboarding/__tests__/pair-device.test.tsx — the link
+// disappears, the tap has nothing to press, and both tests below fail.
+// ---------------------------------------------------------------------------
+describe('pair-device — sample preview entry point (BACKLOG-3027)', () => {{
+  it('offers the sample, and does not show it unasked', () => {{
+    const screen = render(<PairDeviceScreen />);
+
+    expect(screen.getByText(/See how Keepr works/i)).toBeTruthy();
+    // Closed until tapped: a real user never lands in sample data by accident.
+    expect(screen.queryByText(DEMO_BANNER_TEXT)).toBeNull();
+  }});
+
+  it('shows real sample content when tapped', () => {{
+    const screen = render(<PairDeviceScreen />);
+
+    fireEvent.press(screen.getByText(/See how Keepr works/i));
+
+    // Labelled as a sample, and carrying actual example content — not an empty
+    // shell that would pass a "did not read anything" check vacuously.
+    expect(screen.getByText(DEMO_BANNER_TEXT)).toBeTruthy();
+    expect(
+      screen.getByText(DEMO_CONVERSATIONS[0].messages[0].body),
+    ).toBeTruthy();
+  }});
+}});

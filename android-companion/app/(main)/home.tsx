@@ -80,6 +80,7 @@ import {
   CardRow,
   Button,
 } from '../../components/ui';
+import DemoPreview from '../../components/demo/DemoPreview';
 
 /** Data encoded in the QR code from the desktop app */
 interface PairingData {
@@ -839,6 +840,12 @@ export default function HomeScreen(): React.JSX.Element {
             onPress={handleStartScanning}
             size="lg"
           />
+          {/* BACKLOG-3027: this empty state is where BACKLOG-2956's "Continue
+              without a computer" escape hatch actually deposits someone with no
+              Keepr desktop — a Play reviewer included. 2956 removed the wall;
+              what it escapes TO said nothing about what the app is for. Confined
+              to the unpaired branch: a paired user never renders this. */}
+          <DemoPreview />
         </View>
         <NavBarFooter />
         <SupportButton />
