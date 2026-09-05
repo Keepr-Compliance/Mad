@@ -35,6 +35,7 @@ import {
 import { SCHEMA_VERSION_SQL } from "./db/storageDiagnosticsSql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
+  SCHEMA_VERSION_TABLE_EXISTS_SQL,
   CONNECTIVITY_PROBE_SQL,
 } from "./db/databaseLifecycleSql";
 import { LOCAL_USER_ID_AND_EMAIL_SQL } from "./db/localUserSql";
@@ -648,9 +649,7 @@ class DatabaseService implements IDatabaseService {
     let foundVersion: number | undefined;
 
     try {
-      const svTable = db
-        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
-        .get();
+      const svTable = db.prepare(SCHEMA_VERSION_TABLE_EXISTS_SQL).get();
       if (!svTable) {
         const userObjects = (
           db
@@ -1089,9 +1088,7 @@ class DatabaseService implements IDatabaseService {
     let willRunMigration = true;
     if (this.dbPath && fs.existsSync(this.dbPath)) {
       try {
-        const svTableRow = currentDb
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
-          .get();
+        const svTableRow = currentDb.prepare(SCHEMA_VERSION_TABLE_EXISTS_SQL).get();
         if (svTableRow) {
           const dbVersion = (
             currentDb
@@ -1136,9 +1133,7 @@ class DatabaseService implements IDatabaseService {
     // pre-migration state (covers mid-migration crash + retry).
     if (this.dbPath && fs.existsSync(this.dbPath)) {
       try {
-        const svTableRow = currentDb
-          .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
-          .get();
+        const svTableRow = currentDb.prepare(SCHEMA_VERSION_TABLE_EXISTS_SQL).get();
         if (svTableRow) {
           const dbVersion = (
             currentDb
@@ -1291,9 +1286,7 @@ class DatabaseService implements IDatabaseService {
   }
 
   _ensureSchemaVersionTable(currentDb: DatabaseType): void {
-    const schemaVersionExists = currentDb.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
-    ).get();
+    const schemaVersionExists = currentDb.prepare(SCHEMA_VERSION_TABLE_EXISTS_SQL).get();
 
     if (!schemaVersionExists) {
       currentDb.exec(`

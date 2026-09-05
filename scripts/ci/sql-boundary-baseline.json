@@ -3,8 +3,8 @@
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
   "measuredAt": "9be6dd4d5d3298bc081cc9432285f9ca989b03f6",
-  "totalSites": 52,
-  "entryCount": 40,
+  "totalSites": 48,
+  "entryCount": 39,
   "entries": [
     {
       "file": "electron/handlers/conversationHandlers.ts",
@@ -276,14 +276,6 @@
       "match": "text:978057dda398",
       "bucket": "VIOLATION",
       "count": 1,
-      "owner": "BACKLOG-2991"
-    },
-    {
-      "file": "electron/services/databaseService.ts",
-      "verb": "prepare",
-      "match": "text:a73cb4792d87",
-      "bucket": "VIOLATION",
-      "count": 4,
       "owner": "BACKLOG-2991"
     },
     {
