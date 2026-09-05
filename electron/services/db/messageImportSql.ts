@@ -29,6 +29,7 @@
  */
 
 import type { Database as DatabaseType } from "better-sqlite3";
+import { sql } from "./core/sqlText";
 
 // ---------------------------------------------------------------------------
 // Attachment reads
@@ -78,7 +79,7 @@ export const ATTACHMENT_COUNT_SQL = `SELECT COUNT(*) as count FROM attachments`;
 // ---------------------------------------------------------------------------
 
 /** One message's external (Apple GUID) id, by internal id. */
-export const MESSAGE_EXTERNAL_ID_BY_ID_SQL = `SELECT external_id FROM messages WHERE id = ?`;
+export const MESSAGE_EXTERNAL_ID_BY_ID_SQL = sql`SELECT external_id FROM messages WHERE id = ?`;
 
 /** Every message that carries an external id, for building the repair map. */
 export const ALL_MESSAGE_EXTERNAL_IDS_SQL = `SELECT id, external_id FROM messages WHERE external_id IS NOT NULL`;
