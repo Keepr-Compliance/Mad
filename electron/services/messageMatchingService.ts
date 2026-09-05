@@ -13,7 +13,23 @@
 
 import crypto from "crypto";
 import { dbAll, dbRun, dbGet } from "./db/core/dbConnection";
-import { unsafeSql } from "./db/core/sqlText";
+import {
+  EMAIL_CHANNEL_CANDIDATES_SQL,
+  EXISTING_COMMUNICATION_SQL,
+  INSERT_COMMUNICATION_SQL,
+  MESSAGE_ID_EXISTS_SQL,
+  MESSAGE_THREAD_ID_SQL,
+  TRANSACTION_ADDRESS_SQL,
+  TRANSACTION_CONTACT_EMAILS_SQL,
+  TRANSACTION_CONTACT_PHONES_SQL,
+  TRANSACTION_TEXT_WINDOW_SQL,
+  claimMessagesForTransactionSql085,
+  claimMessagesForTransactionSql09,
+  ignoredEmailsByExternalIdSql,
+  messageBodiesSql,
+  messagesForPhoneMatchingSql,
+} from "./db/messageMatchingSql";
+import { MESSAGE_EXTERNAL_ID_BY_ID_SQL } from "./db/messageImportSql";
 import logService from "./logService";
 import { normalizeAddress, contentContainsAddress, type NormalizedAddress } from "../utils/addressNormalization";
 import {
@@ -104,16 +120,8 @@ export function phonesMatch(
 export async function getTransactionContactPhones(
   transactionId: string
 ): Promise<Array<{ contactId: string; phone: string }>> {
-  const sql = `
-    SELECT
-      tc.contact_id as contactId,
-      cp.phone_e164 as phone
-    FROM transaction_contacts tc
-    JOIN contact_phones cp ON tc.contact_id = cp.contact_id
-    WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
-  `;
 
-  const results = dbAll<{ contactId: string; phone: string }>(unsafeSql(sql), [transactionId]);
+  const results = dbAll<{ contactId: string; phone: string }>(TRANSACTION_CONTACT_PHONES_SQL, [transactionId]);
   return results;
 }
 
@@ -150,13 +158,20 @@ export async function findTextMessagesByPhones(
     return [];
   }
 
-  // Build date filter clause if dates are provided
-  let dateFilter = "";
+  // BACKLOG-3044: the date clause TEXT lives in db/messageMatchingSql.ts; what stays
+  // here is the params array, because the clause and its bound value are one contract
+  // and the ORDER is the contract. `hasStart` and `hasEnd` select the clause; the
+  // pushes below bind the values in the same order the builder emits them. Splitting
+  // those two halves across files is the mistake BACKLOG-3103's body describes — a
+  // fragment carrying its own parameter, composed at the wrong position, silently
+  // shifts every later `?`.
+  let hasStart = false;
+  let hasEnd = false;
   // BACKLOG-1560: Extra params for ignored_communications SQL-level suppression
   const params: (string | null)[] = [userId, transactionId, transactionId, transactionId, transactionId];
 
   if (options?.startDate) {
-    dateFilter += " AND m.sent_at >= ?";
+    hasStart = true;
     params.push(options.startDate);
   }
   if (options?.endDate) {
@@ -171,7 +186,7 @@ export async function findTextMessagesByPhones(
     // silently rather than failing.
     const end = auditWindowEnd(options.endDate);
     if (end) {
-      dateFilter += " AND m.sent_at <= ?";
+      hasEnd = true;
       params.push(end.toISOString());
     }
   }
@@ -181,34 +196,6 @@ export async function findTextMessagesByPhones(
   // BACKLOG-1560: SQL-level suppression against ignored_communications (belt-and-suspenders).
   // Checks both thread_id suppression and per-message original_communication_id suppression.
   // The JS-level filter after this query is the backup layer.
-  const sql = `
-    SELECT
-      m.id,
-      m.participants,
-      m.participants_flat,
-      m.direction,
-      m.channel
-    FROM messages m
-    WHERE m.user_id = ?
-      AND m.channel IN ('sms', 'imessage')
-      AND m.duplicate_of IS NULL
-      AND (
-        m.transaction_id IS NULL
-        OR m.transaction_id != ?
-      )
-      AND m.id NOT IN (
-        SELECT message_id FROM communications
-        WHERE transaction_id = ? AND message_id IS NOT NULL
-      )
-      AND m.id NOT IN (
-        SELECT ic.original_communication_id FROM ignored_communications ic
-        WHERE ic.transaction_id = ? AND ic.original_communication_id IS NOT NULL
-      )
-      AND (m.thread_id IS NULL OR m.thread_id = '' OR m.thread_id NOT IN (
-        SELECT ic.thread_id FROM ignored_communications ic
-        WHERE ic.transaction_id = ? AND ic.thread_id IS NOT NULL
-      ))${dateFilter}
-  `;
 
   const messages = dbAll<{
     id: string;
@@ -216,7 +203,7 @@ export async function findTextMessagesByPhones(
     participants_flat: string | null;
     direction: string | null;
     channel: string;
-  }>(unsafeSql(sql), params);
+  }>(messagesForPhoneMatchingSql({ hasStart, hasEnd }), params);
 
   const matches: MessageMatch[] = [];
 
@@ -305,11 +292,7 @@ export async function createCommunicationReference(
   const id = crypto.randomUUID();
 
   // First check if this link already exists
-  const existingCheck = `
-    SELECT id FROM communications
-    WHERE message_id = ? AND transaction_id = ?
-  `;
-  const existing = dbGet<{ id: string }>(unsafeSql(existingCheck), [messageId, transactionId]);
+  const existing = dbGet<{ id: string }>(EXISTING_COMMUNICATION_SQL, [messageId, transactionId]);
 
   if (existing) {
     return null; // Already linked
@@ -317,7 +300,7 @@ export async function createCommunicationReference(
 
   // Verify message exists before linking
   const msgExists = dbGet<{ id: string }>(
-    unsafeSql("SELECT id FROM messages WHERE id = ?"),
+    MESSAGE_ID_EXISTS_SQL,
     [messageId]
   );
 
@@ -332,12 +315,6 @@ export async function createCommunicationReference(
   // BACKLOG-506: Communications is now a pure junction table
   // Content data (sender, recipients, body, etc.) lives in the messages table
   // and is joined via message_id foreign key
-  const sql = `
-    INSERT INTO communications (
-      id, user_id, transaction_id, message_id,
-      link_source, link_confidence, linked_at
-    ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-  `;
 
   const params = [
     id,
@@ -349,7 +326,7 @@ export async function createCommunicationReference(
   ];
 
   try {
-    dbRun(unsafeSql(sql), params);
+    dbRun(INSERT_COMMUNICATION_SQL, params);
     return id;
   } catch (error) {
     // Handle unique constraint violation gracefully
@@ -381,13 +358,7 @@ async function filterEmailMatchesByAddress(
   const batchSize = 100;
   for (let i = 0; i < messageIds.length; i += batchSize) {
     const batch = messageIds.slice(i, i + batchSize);
-    const placeholders = batch.map(() => '?').join(',');
-    const sql = `
-      SELECT id, subject, body_text
-      FROM messages
-      WHERE id IN (${placeholders})
-    `;
-    const rows = dbAll<{ id: string; subject: string | null; body_text: string | null }>(unsafeSql(sql), batch);
+    const rows = dbAll<{ id: string; subject: string | null; body_text: string | null }>(messageBodiesSql(batch.length), batch);
 
     for (const row of rows) {
       // Combine subject and body for matching; contentContainsAddress checks
@@ -425,8 +396,7 @@ export async function autoLinkTextsToTransaction(
   try {
     // 1. Get the transaction to verify it exists, get user_id and date range
     // TASK-2087: Address filtering removed from text messages — only applies to emails.
-    const txnSql = "SELECT user_id, started_at, closed_at FROM transactions WHERE id = ?";
-    const transaction = dbGet<{ user_id: string; started_at: string | null; closed_at: string | null }>(unsafeSql(txnSql), [transactionId]);
+    const transaction = dbGet<{ user_id: string; started_at: string | null; closed_at: string | null }>(TRANSACTION_TEXT_WINDOW_SQL, [transactionId]);
 
     if (!transaction) {
       result.errors.push(`Transaction ${transactionId} not found`);
@@ -483,7 +453,7 @@ export async function autoLinkTextsToTransaction(
         // BACKLOG-1560: Check per-message suppression first (for messages with no/empty thread_id)
         if (ignoredCommIds.has(match.messageId)) return false;
         const msg = dbGet<{ thread_id: string | null }>(
-          unsafeSql("SELECT thread_id FROM messages WHERE id = ?"),
+          MESSAGE_THREAD_ID_SQL,
           [match.messageId]
         );
         // BACKLOG-1560: Treat empty string thread_id as no thread_id
@@ -543,13 +513,7 @@ export async function autoLinkTextsToTransaction(
         .map((m) => m.messageId);
 
       // Update messages table to set transaction_id
-      const placeholders = linkedMessageIds.map(() => "?").join(",");
-      const updateSql = `
-        UPDATE messages
-        SET transaction_id = ?, transaction_link_source = 'pattern', transaction_link_confidence = 0.9
-        WHERE id IN (${placeholders}) AND transaction_id IS NULL
-      `;
-      dbRun(unsafeSql(updateSql), [transactionId, ...linkedMessageIds]);
+      dbRun(claimMessagesForTransactionSql09(linkedMessageIds.length), [transactionId, ...linkedMessageIds]);
     }
 
     logService.info(
@@ -578,16 +542,8 @@ export async function autoLinkTextsToTransaction(
 export async function getTransactionContactEmails(
   transactionId: string
 ): Promise<Array<{ contactId: string; email: string }>> {
-  const sql = `
-    SELECT
-      tc.contact_id as contactId,
-      ce.email as email
-    FROM transaction_contacts tc
-    JOIN contact_emails ce ON tc.contact_id = ce.contact_id
-    WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
-  `;
 
-  const results = dbAll<{ contactId: string; email: string }>(unsafeSql(sql), [transactionId]);
+  const results = dbAll<{ contactId: string; email: string }>(TRANSACTION_CONTACT_EMAILS_SQL, [transactionId]);
   return results;
 }
 
@@ -622,26 +578,6 @@ export async function findEmailsByAddresses(
   }
 
   // Query all email messages for this user that aren't already linked to this transaction
-  const sql = `
-    SELECT
-      m.id,
-      m.sender,
-      m.recipients,
-      m.direction,
-      m.channel
-    FROM messages m
-    WHERE m.user_id = ?
-      AND m.channel = 'email'
-      AND m.duplicate_of IS NULL
-      AND (
-        m.transaction_id IS NULL
-        OR m.transaction_id != ?
-      )
-      AND m.id NOT IN (
-        SELECT message_id FROM communications
-        WHERE transaction_id = ? AND message_id IS NOT NULL
-      )
-  `;
 
   const messages = dbAll<{
     id: string;
@@ -649,7 +585,7 @@ export async function findEmailsByAddresses(
     recipients: string | null;
     direction: string | null;
     channel: string;
-  }>(unsafeSql(sql), [userId, transactionId, transactionId]);
+  }>(EMAIL_CHANNEL_CANDIDATES_SQL, [userId, transactionId, transactionId]);
 
   const matches: MessageMatch[] = [];
 
@@ -719,8 +655,7 @@ export async function autoLinkEmailsToTransaction(
     // 1. Get the transaction to verify it exists, get user_id and address
     // TASK-2087: Also fetch property_address and property_street for address filtering
     // BACKLOG-1364: Also fetch skip_address_filter for per-transaction toggle
-    const txnSql = "SELECT user_id, property_address, property_street, skip_address_filter FROM transactions WHERE id = ?";
-    const transaction = dbGet<{ user_id: string; property_address: string | null; property_street: string | null; skip_address_filter: number | null }>(unsafeSql(txnSql), [transactionId]);
+    const transaction = dbGet<{ user_id: string; property_address: string | null; property_street: string | null; skip_address_filter: number | null }>(TRANSACTION_ADDRESS_SQL, [transactionId]);
 
     if (!transaction) {
       result.errors.push(`Transaction ${transactionId} not found`);
@@ -808,13 +743,12 @@ export async function autoLinkEmailsToTransaction(
       filteredEmailMatches = matches.filter((match) => {
         // Look up the message's external_id and check if a corresponding email is ignored
         const msg = dbGet<{ external_id: string | null }>(
-          unsafeSql("SELECT external_id FROM messages WHERE id = ?"),
+          MESSAGE_EXTERNAL_ID_BY_ID_SQL,
           [match.messageId]
         );
         if (msg?.external_id) {
           const email = dbGet<{ id: string }>(
-            unsafeSql("SELECT id FROM emails WHERE external_id = ? AND id IN (" +
-            Array.from(ignoredEmailIds).map(() => "?").join(",") + ")"),
+            ignoredEmailsByExternalIdSql(ignoredEmailIds.size),
             [msg.external_id, ...Array.from(ignoredEmailIds)]
           );
           if (email) return false; // This email was previously ignored
@@ -872,13 +806,7 @@ export async function autoLinkEmailsToTransaction(
         .map((m) => m.messageId);
 
       // Update messages table to set transaction_id
-      const placeholders = linkedMessageIds.map(() => "?").join(",");
-      const updateSql = `
-        UPDATE messages
-        SET transaction_id = ?, transaction_link_source = 'pattern', transaction_link_confidence = 0.85
-        WHERE id IN (${placeholders}) AND transaction_id IS NULL
-      `;
-      dbRun(unsafeSql(updateSql), [transactionId, ...linkedMessageIds]);
+      dbRun(claimMessagesForTransactionSql085(linkedMessageIds.length), [transactionId, ...linkedMessageIds]);
     }
 
     logService.info(

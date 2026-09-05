@@ -225,11 +225,34 @@ const SELF = "electron/services/db/core/__tests__/sqlText.escapeSet.test.ts";
  * REFUSE — `LIVE_TRANSACTION_SQL_PREDICATE` hand-quotes a status VALUE into SQL text —
  * and belong to **BACKLOG-3103**, not to trying harder.
  *
+ * ## 2026-09-04 — BACKLOG-3044 PR 4 took the matching and export block. 53 -> 30.
+ *
+ * Four more files left by MOVING, 23 statements:
+ *
+ *   electron/services/messageMatchingService.ts                     15
+ *   electron/services/transactionService/getEarliestCommunicationDate.ts  4
+ *   electron/utils/exportUtils.ts                                    2
+ *   electron/handlers/emailLinkingHandlers.ts                        2
+ *
+ * One of the 23 was assembled from a CONDITIONAL fragment — an optional date window
+ * accumulated in the caller beside its `params.push` calls. It moved as a builder taking
+ * two BOOLEANS, so the params array stays with the caller in its existing order; clause
+ * and bound value are one contract and splitting them across files is BACKLOG-3103's
+ * described hazard. All FOUR branches are pinned byte-identical by
+ * `db/__tests__/messageMatchingSql.dateFilter.test.ts`, because a builder is
+ * byte-identical only if every branch is.
+ *
+ * 26 escapes remain for this owner, in 3 files — `autoLinkService` (17),
+ * `transactionService` (8), `importPlanInputs` (1) — as **PR 5**, which is gated on
+ * **BACKLOG-3103**: four of those 26 splice `LIVE_TRANSACTION_SQL_PREDICATE`, which
+ * hand-quotes a status VALUE into SQL text.
+ *
  * ## 2026-09-04 — BACKLOG-3103 bound the status. The four that "will REFUSE" no longer do.
  *
- * Three sections above say four of BACKLOG-3044's remaining escapes CANNOT convert,
- * because they splice `LIVE_TRANSACTION_SQL_PREDICATE` and that fragment hand-quoted a
- * status VALUE into SQL text. **That was true when written and is now false**, and the
+ * FOUR sections above — PR 1, PR 2, PR 3 and the PR 4 note directly above this one —
+ * say four of BACKLOG-3044's remaining escapes CANNOT convert, because they splice
+ * `LIVE_TRANSACTION_SQL_PREDICATE` and that fragment hand-quoted a status VALUE into
+ * SQL text. **That was true when written and is now false**, and the
  * sentences are left standing with this correction under them rather than edited away,
  * so the reader can see what changed and when.
  *
@@ -242,8 +265,9 @@ const SELF = "electron/services/db/core/__tests__/sqlText.escapeSet.test.ts";
  * **This map does not move.** Binding a value is not moving a statement: all four
  * statements are still authored outside the layer, so all four escapes are still here
  * and still owned by BACKLOG-3044. `autoLinkService.ts` stays at 17 and
- * `importPlanInputs.ts` stays at 1. They leave when PR 5 moves them, which is what
- * BACKLOG-3103 unblocked and deliberately did not do itself.
+ * `importPlanInputs.ts` stays at 1, so PR 4's count of 26 remaining in 3 files is
+ * unchanged by this item. They leave when PR 5 moves them — which is what BACKLOG-3103
+ * unblocked and deliberately did not do itself.
  *
  * OWNERS, and what each one means:
  *
@@ -259,15 +283,11 @@ const SELF = "electron/services/db/core/__tests__/sqlText.escapeSet.test.ts";
  * "who is going to remove this" a fact in CI rather than a memory.
  */
 const EXPECTED_ESCAPES: Record<string, { count: number; owner: string }> = {
-  "electron/handlers/emailLinkingHandlers.ts": { count: 2, owner: "BACKLOG-3044" },
   "electron/services/db/communicationDbService.ts": { count: 1, owner: "BACKLOG-3102" },
   "electron/services/db/emailSyncSql.ts": { count: 3, owner: "BACKLOG-3102" },
   "electron/services/autoLinkService.ts": { count: 17, owner: "BACKLOG-3044" },
   "electron/services/importPlanInputs.ts": { count: 1, owner: "BACKLOG-3044" },
-  "electron/services/messageMatchingService.ts": { count: 15, owner: "BACKLOG-3044" },
-  "electron/services/transactionService/getEarliestCommunicationDate.ts": { count: 4, owner: "BACKLOG-3044" },
   "electron/services/transactionService/transactionService.ts": { count: 8, owner: "BACKLOG-3044" },
-  "electron/utils/exportUtils.ts": { count: 2, owner: "BACKLOG-3044" },
 };
 
 /**
@@ -429,7 +449,7 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
     expect(measure(countEscapes)).toEqual({ ...expectedCounts, ...EXPECTED_CONTROL_CALLS });
   });
 
-  it("totals 53 ESCAPES in 9 files — 82 removed from outside the layer by BACKLOG-3044", () => {
+  it("totals 30 ESCAPES in 5 files — 105 removed from outside the layer by BACKLOG-3044", () => {
     const measured = measure(countEscapes);
     const escapes = Object.fromEntries(
       Object.entries(measured).filter(([f]) => !(f in EXPECTED_CONTROL_CALLS)),
@@ -437,8 +457,8 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
 
     expect(escapes).toEqual(expectedCounts);
     expect(Object.values(escapes).reduce((a, b) => a + b, 0)).toBe(EXPECTED_TOTAL);
-    expect(EXPECTED_TOTAL).toBe(53);
-    expect(Object.keys(escapes)).toHaveLength(9);
+    expect(EXPECTED_TOTAL).toBe(30);
+    expect(Object.keys(escapes)).toHaveLength(5);
   });
 
   /** Every escape carries an owner. No default, no fall-through, no blanks. */
@@ -452,7 +472,7 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
     for (const entry of Object.values(EXPECTED_ESCAPES)) {
       byOwner[entry.owner] = (byOwner[entry.owner] ?? 0) + entry.count;
     }
-    expect(byOwner).toEqual({ "BACKLOG-3044": 49, "BACKLOG-3102": 4 });
+    expect(byOwner).toEqual({ "BACKLOG-3044": 26, "BACKLOG-3102": 4 });
   });
 
   /**

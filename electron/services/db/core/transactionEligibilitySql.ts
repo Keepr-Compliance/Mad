@@ -6,9 +6,11 @@
  * The rule itself is BACKLOG-2562's and still lives once, in
  * `electron/services/transactionEligibility.ts`: `REJECTED_TRANSACTION_STATUS`
  * is the value, `isLiveTransactionStatus` is the JS form. What moved is only the
- * SQL SPELLING of it, and it moved because of what it used to be:
+ * SQL SPELLING of it, and it moved because of what it used to be — this line, as
+ * it stood in `transactionEligibility.ts:59` before BACKLOG-3103:
  *
- *     export const LIVE_TRANSACTION_SQL_PREDICATE = sql`t.status != ?`;
+ *     export const LIVE_TRANSACTION_SQL_PREDICATE =
+ *       `t.status != '${REJECTED_TRANSACTION_STATUS}'`;   // <- the defect
  *
  * A status VALUE hand-quoted into SQL text, authored outside `db/**`. Not a live
  * injection hole — the constant is a module-level literal with no path from user

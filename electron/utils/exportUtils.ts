@@ -6,7 +6,10 @@
  */
 
 import { dbAll } from "../services/db/core/dbConnection";
-import { unsafeSql } from "../services/db/core/sqlText";
+import {
+  contactsByEmailSql,
+  contactsByPhoneSuffixSql,
+} from "../services/db/exportHandleSql";
 import { normalizePhone as sharedNormalizePhone } from "../services/contactResolutionService";
 import logService from "../services/logService";
 import { joinAmbiguousNames } from "../services/folderExport/threadContactLabel";
@@ -176,31 +179,18 @@ export function getContactNamesByPhones(phones: string[]): Record<string, string
     const normalizedPhones = phones.map((p) => sharedNormalizePhone(p));
 
     // Query contact_phones to find names
-    const placeholders = normalizedPhones.map(() => "?").join(",");
     // BACKLOG-2757: `ORDER BY` and `contact_id`. This is the SECOND copy of the
     // handle->name resolution (the async one lives in contactResolutionService);
     // it had the same last-row-wins collapse, so it gets the same rule. Leaving
     // one copy deterministic and the other a coin flip is how the two paths would
     // start naming the same thread differently.
-    const sql = `
-      SELECT
-        c.id AS contact_id,
-        cp.phone_e164,
-        cp.phone_display,
-        c.display_name
-      FROM contact_phones cp
-      JOIN contacts c ON cp.contact_id = c.id
-      WHERE substr(replace(replace(replace(cp.phone_e164, '+', ''), '-', ''), ' ', ''), -10) IN (${placeholders})
-         OR substr(replace(replace(replace(cp.phone_display, '+', ''), '-', ''), ' ', ''), -10) IN (${placeholders})
-      ORDER BY c.display_name COLLATE NOCASE, c.id
-    `;
 
     const rows = dbAll<{
       contact_id: string;
       phone_e164: string;
       phone_display: string;
       display_name: string;
-    }>(unsafeSql(sql), [...normalizedPhones, ...normalizedPhones]);
+    }>(contactsByPhoneSuffixSql(normalizedPhones.length), [...normalizedPhones, ...normalizedPhones]);
 
     const acc = new SyncHandleAccumulator();
     for (const row of rows) {
@@ -238,20 +228,9 @@ export function getContactNamesByEmails(emails: string[]): Record<string, string
 
   try {
     const lowerEmails = emails.map((e) => e.toLowerCase());
-    const placeholders = lowerEmails.map(() => "?").join(",");
-    const sql = `
-      SELECT
-        c.id AS contact_id,
-        LOWER(ce.email) as email,
-        c.display_name
-      FROM contact_emails ce
-      JOIN contacts c ON ce.contact_id = c.id
-      WHERE LOWER(ce.email) IN (${placeholders})
-      ORDER BY c.display_name COLLATE NOCASE, c.id
-    `;
 
     const rows = dbAll<{ contact_id: string; email: string; display_name: string }>(
-      unsafeSql(sql),
+      contactsByEmailSql(lowerEmails.length),
       lowerEmails
     );
 

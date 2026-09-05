@@ -38,8 +38,10 @@ import { reactionExclusion } from "./db/reactionExclusion";
 //
 // BACKLOG-3103: the status is now BOUND, not quoted into the text, so splicing
 // the fragment is only half of it — `withLiveTransactionParam` supplies the
-// value, and the fragment must be the LAST placeholder in the statement. That
-// is why the predicate sits at the end of every WHERE clause below.
+// value, and the fragment must be the LAST PLACEHOLDER in the statement. Note
+// that is the last `?`, NOT the last conjunct: two of the three queries below
+// carry `AND tc.removed_at IS NULL` after the predicate, which binds nothing
+// and so does not move it.
 import {
   LIVE_TRANSACTION_SQL_PREDICATE,
   withLiveTransactionParam,
