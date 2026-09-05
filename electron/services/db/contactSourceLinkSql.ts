@@ -11,6 +11,19 @@
  * Changing the rule in only one of them is how a fix becomes invisible in the
  * field, so it is expressed exactly once, here.
  *
+ * BACKLOG-3044 PR 3 added the ONE import this module has: the `sql` tag. That is
+ * compatible with the sentence above, and the difference matters — the constraint
+ * is that the worker cannot import the db SERVICE, which owns a native handle and
+ * the main process's connection. `core/sqlText.ts` is a dependency-free type brand
+ * with no runtime imports of its own, and the worker already imports the
+ * tag-using `contactRecencySql.ts` (`contactQueryWorker.ts:24`). Both facts were
+ * checked by execution before the import was added, not reasoned from the comment.
+ *
+ * The text is unchanged by the branding: `sql` returns the cooked template, so
+ * `.prepare(CONTACT_SOURCE_RECORDS_SQL)` in the worker and in six test files still
+ * receives exactly the bytes it did before — `SafeSql` is `string & {…}`, which is
+ * assignable to every `string` position.
+ *
  * ---------------------------------------------------------------------------
  * THE RULE: A RECORD CONTRIBUTES VALUES ONLY WHEN IT IS LINKED (BACKLOG-2669)
  * ---------------------------------------------------------------------------
@@ -137,6 +150,8 @@
  * "nothing happens and nobody is asked".
  */
 
+import { sql } from "./core/sqlText";
+
 /**
  * Params: @userId = user_id, @contactId = contact_id.
  * Columns: emails_json, phones_json, matched_by, pri, source_rank, external_record_id.
@@ -146,7 +161,7 @@
  * for both consumers, and a future priority — if one is ever justified — is
  * added to a query that already sorts.
  */
-export const CONTACT_SOURCE_RECORDS_SQL = `
+export const CONTACT_SOURCE_RECORDS_SQL = sql`
   SELECT emails_json, phones_json, matched_by, pri, source_rank, external_record_id FROM (
     SELECT
       ec.emails_json                AS emails_json,

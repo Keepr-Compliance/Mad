@@ -100,7 +100,11 @@ import {
 } from "../services/contactCompare";
 import { queryContacts, isPoolReady } from "../workers/contactWorkerPool";
 import { dbAll, dbRun } from "../services/db/core/dbConnection";
-import { unsafeSql } from "../services/db/core/sqlText";
+import { IMPORTED_CONTACT_IDS_SQL } from "../services/db/contactBackfillPlanSql";
+import {
+  SET_CONTACT_DEFAULT_ROLE_SQL,
+  TRANSACTION_IDS_FOR_CONTACT_SQL,
+} from "../services/db/contactHandlersSql";
 import type { Contact, Transaction, ContactSource, Communication } from "../types/models";
 
 // Import validation utilities
@@ -898,7 +902,7 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
     // lands. Contacts with no crosswalk row yet fall through to the SAME
     // email/phone matching used everywhere else — NEVER back to name.
     const importedContacts = dbAll<{ id: string }>(
-      unsafeSql(`SELECT id FROM contacts WHERE user_id = ? AND is_imported = 1`),
+      IMPORTED_CONTACT_IDS_SQL,
       [userId],
     );
 
@@ -907,7 +911,7 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
       // present in macOS AND Outlook contributes BOTH sets — backfill is
       // additive and dedupes, so reading them all is strictly more complete
       // than picking a winner, and the order is total so it is reproducible.
-      const externals = dbAll<ContactSourceRecordRow>(unsafeSql(CONTACT_SOURCE_RECORDS_SQL), [
+      const externals = dbAll<ContactSourceRecordRow>(CONTACT_SOURCE_RECORDS_SQL, [
         { userId, contactId: contact.id },
       ]);
       if (externals.length === 0) continue;
@@ -2769,7 +2773,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
               "../services/reviewStateService"
             );
             const affected = dbAll<{ transaction_id: string }>(
-              unsafeSql("SELECT DISTINCT transaction_id FROM transaction_contacts WHERE contact_id = ?"),
+              TRANSACTION_IDS_FOR_CONTACT_SQL,
               [validatedContactId],
             );
             for (const row of affected) {
@@ -3768,7 +3772,7 @@ export function registerContactHandlers(mainWindow: BrowserWindow): void {
         }
 
         dbRun(
-          unsafeSql(`UPDATE contacts SET default_role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`),
+          SET_CONTACT_DEFAULT_ROLE_SQL,
           [validatedRole, validatedContactId]
         );
 

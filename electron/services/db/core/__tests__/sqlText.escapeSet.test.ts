@@ -198,6 +198,33 @@ const SELF = "electron/services/db/core/__tests__/sqlText.escapeSet.test.ts";
  * will REFUSE — they splice `LIVE_TRANSACTION_SQL_PREDICATE`, which hand-quotes a status
  * VALUE into SQL text — and are **BACKLOG-3103**'s work, not a matter of trying harder.
  *
+ * ## 2026-09-04 — BACKLOG-3044 PR 3 took the crosswalk family. 65 -> 53.
+ *
+ * Three more files left, and ELEVEN of the twelve left by MOVING:
+ *
+ *   electron/handlers/contactHandlers.ts        3 moved  ->  db/contactHandlersSql.ts
+ *   electron/services/contactSourceLinker.ts    4 moved  ->  db/contactSourceLinkerSql.ts
+ *   electron/services/contactSourceValues.ts    4 moved  ->  db/contactSourceValuesSql.ts
+ *
+ * **The twelfth was not a move, and it is the first of its kind in this item.**
+ * `contactHandlers.ts:910` passed `CONTACT_SOURCE_RECORDS_SQL`, whose text was ALREADY
+ * at `db/contactSourceLinkSql.ts:149` — inside the layer, merely never branded. Its
+ * escape left by tagging that constant `sql`. Nothing relocated.
+ *
+ * That distinction is kept rather than folded into "12 moved" because the reconciliation
+ * only means something if each row's reason is true: 11 statements changed file, 1
+ * changed nothing but its tag. PR 1 pre-registered this row as its own class before
+ * anyone had looked at it, and it arrived exactly as described.
+ *
+ * The branding was checked against its NON-conduit consumers before being made — the
+ * worker thread and six test files call `.prepare(CONTACT_SOURCE_RECORDS_SQL)` on a raw
+ * handle. `SafeSql` is `string & {…}`, assignable to every `string` position, so they
+ * still receive the same bytes.
+ *
+ * 49 escapes remain for this owner, in 7 files, as two further PRs. Four of them will
+ * REFUSE — `LIVE_TRANSACTION_SQL_PREDICATE` hand-quotes a status VALUE into SQL text —
+ * and belong to **BACKLOG-3103**, not to trying harder.
+ *
  * OWNERS, and what each one means:
  *
  *   BACKLOG-3044 — the statement is authored OUTSIDE `electron/services/db/**`.
@@ -212,13 +239,10 @@ const SELF = "electron/services/db/core/__tests__/sqlText.escapeSet.test.ts";
  * "who is going to remove this" a fact in CI rather than a memory.
  */
 const EXPECTED_ESCAPES: Record<string, { count: number; owner: string }> = {
-  "electron/handlers/contactHandlers.ts": { count: 4, owner: "BACKLOG-3044" },
   "electron/handlers/emailLinkingHandlers.ts": { count: 2, owner: "BACKLOG-3044" },
   "electron/services/db/communicationDbService.ts": { count: 1, owner: "BACKLOG-3102" },
   "electron/services/db/emailSyncSql.ts": { count: 3, owner: "BACKLOG-3102" },
   "electron/services/autoLinkService.ts": { count: 17, owner: "BACKLOG-3044" },
-  "electron/services/contactSourceLinker.ts": { count: 4, owner: "BACKLOG-3044" },
-  "electron/services/contactSourceValues.ts": { count: 4, owner: "BACKLOG-3044" },
   "electron/services/importPlanInputs.ts": { count: 1, owner: "BACKLOG-3044" },
   "electron/services/messageMatchingService.ts": { count: 15, owner: "BACKLOG-3044" },
   "electron/services/transactionService/getEarliestCommunicationDate.ts": { count: 4, owner: "BACKLOG-3044" },
@@ -385,7 +409,7 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
     expect(measure(countEscapes)).toEqual({ ...expectedCounts, ...EXPECTED_CONTROL_CALLS });
   });
 
-  it("totals 65 ESCAPES in 12 files — 70 moved into the layer by BACKLOG-3044", () => {
+  it("totals 53 ESCAPES in 9 files — 82 removed from outside the layer by BACKLOG-3044", () => {
     const measured = measure(countEscapes);
     const escapes = Object.fromEntries(
       Object.entries(measured).filter(([f]) => !(f in EXPECTED_CONTROL_CALLS)),
@@ -393,8 +417,8 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
 
     expect(escapes).toEqual(expectedCounts);
     expect(Object.values(escapes).reduce((a, b) => a + b, 0)).toBe(EXPECTED_TOTAL);
-    expect(EXPECTED_TOTAL).toBe(65);
-    expect(Object.keys(escapes)).toHaveLength(12);
+    expect(EXPECTED_TOTAL).toBe(53);
+    expect(Object.keys(escapes)).toHaveLength(9);
   });
 
   /** Every escape carries an owner. No default, no fall-through, no blanks. */
@@ -408,7 +432,7 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
     for (const entry of Object.values(EXPECTED_ESCAPES)) {
       byOwner[entry.owner] = (byOwner[entry.owner] ?? 0) + entry.count;
     }
-    expect(byOwner).toEqual({ "BACKLOG-3044": 61, "BACKLOG-3102": 4 });
+    expect(byOwner).toEqual({ "BACKLOG-3044": 49, "BACKLOG-3102": 4 });
   });
 
   /**
