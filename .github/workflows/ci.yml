@@ -22,6 +22,8 @@ jobs:
       docs-only: ${{ steps.filter.outputs.docs-only }}
       os-matrix: ${{ steps.os.outputs.os-matrix }}
       android-changed: ${{ steps.android.outputs.android-changed }}
+      broker-portal-changed: ${{ steps.portals.outputs.broker-portal-changed }}
+      admin-portal-changed: ${{ steps.portals.outputs.admin-portal-changed }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -90,6 +92,39 @@ jobs:
 
           echo "android-changed=$ANDROID_CHANGED" >> $GITHUB_OUTPUT
           echo "Result: android-changed=$ANDROID_CHANGED"
+
+      # BACKLOG-3099: which portal(s) the change touches, so the two portal lint
+      # jobs below run only when they can say something. ONE step sets BOTH
+      # flags: two steps would be two more full diffs of the same range, and two
+      # copies of a filter are two chances for them to disagree.
+      - name: Check for portal changes
+        id: portals
+        run: |
+          # Same diff basis as the filters above (base already fetched)
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
+          fi
+
+          BROKER_CHANGED="false"
+          ADMIN_CHANGED="false"
+          while IFS= read -r file; do
+            if [ -n "$file" ]; then
+              case "$file" in
+                broker-portal/*)
+                  BROKER_CHANGED="true"
+                  ;;
+                admin-portal/*)
+                  ADMIN_CHANGED="true"
+                  ;;
+              esac
+            fi
+          done <<< "$CHANGED"
+
+          echo "broker-portal-changed=$BROKER_CHANGED" >> $GITHUB_OUTPUT
+          echo "admin-portal-changed=$ADMIN_CHANGED" >> $GITHUB_OUTPUT
+          echo "Result: broker-portal-changed=$BROKER_CHANGED admin-portal-changed=$ADMIN_CHANGED"
 
       - name: Determine OS matrix
         id: os
@@ -497,6 +532,116 @@ jobs:
 
       - name: Test (@keepr/ui)
         run: npm test -w @keepr/ui
+
+  # BACKLOG-3099: lint broker-portal/. Until this job existed, NOTHING linted
+  # either portal. `npm run lint` is `eslint electron src scripts .claude/scripts`;
+  # the only lint step in this file (job `test`, "Run linter") runs exactly that
+  # command, and the pre-push hook ran no lint at all. PR #2494 changed seven
+  # broker-portal/ files and no linter read one of them, in either place.
+  #
+  # NOT a step in `Test & Lint`: that job is the macOS + Windows desktop suite and
+  # BACKLOG-3093 exists to stop portal changes running it. Own job, single OS, no
+  # native modules -- the packages-ui shape above. ignore-scripts skips the
+  # electron/native postinstall a lint does not need.
+  #
+  # Gated on broker-portal-changed with the mirror-skip below, so a desktop-only
+  # change does not pay for it while the status-check name is still always
+  # reported (ready to be made a required check). Same idiom, same reason, as
+  # android-companion / android-companion-skip below.
+  #
+  # ERRORS fail this job; WARNINGS do not -- no --max-warnings=0, which is what
+  # `next lint` does on its own. Measured at 4be1c694f: broker-portal 0 errors /
+  # 23 warnings, admin-portal 0 errors / 6 warnings (counted as `line:col Warning:`
+  # findings -- `next lint` also prints one non-finding "inferred your workspace
+  # root" notice that a naive grep miscounts as a 24th). So this gate is green the
+  # day it lands. Making the 29 existing warnings fatal is a separate cleanup, and
+  # bundling it here would have made the gate un-landable -- which is how a gate
+  # ends up never being added at all. New errors of ANY rule still fail it (89
+  # rules sit at error severity in broker-portal, 26 in admin-portal).
+  #
+  # Runs `npm run portal:lint` -- the same string the pre-push hook and PR-SOP 5.2
+  # name -- rather than working-directory + `npm run lint`, so a green here and a
+  # green on an engineer's machine are the same statement.
+  broker-portal-lint:
+    name: Broker Portal Lint
+    needs: check-changes
+    if: needs.check-changes.outputs.broker-portal-changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Lint (broker-portal)
+        run: npm run portal:lint
+
+  # Mirror of broker-portal-lint for changes that do NOT touch broker-portal/**,
+  # so the "Broker Portal Lint" status check is always reported. Exactly one of
+  # the two runs.
+  broker-portal-lint-skip:
+    name: Broker Portal Lint
+    needs: check-changes
+    if: needs.check-changes.outputs.broker-portal-changed != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip (no broker-portal changes)
+        run: echo "Skipping broker-portal lint - no broker-portal/ changes detected"
+
+  # BACKLOG-3099: same gate for admin-portal/. Separate job rather than a second
+  # step on the broker job so one portal's failure cannot mask the other's, and
+  # so each is scoped to its own portal's diff.
+  #
+  # admin-portal resolves a DIFFERENT eslint than broker-portal: it pins
+  # eslint ^9 + eslint.config.mjs (flat config) in its own nested node_modules,
+  # while the root tree carries eslint 8 + .eslintrc.js. `npm install` here
+  # honours the lockfile and creates that nested install, so this job gets
+  # eslint 9. A git worktree that symlinks only the ROOT node_modules does not,
+  # and `next lint` there fails with "Invalid Options: Unknown options:
+  # useEslintrc" -- the pre-push hook names the repair for that case.
+  admin-portal-lint:
+    name: Admin Portal Lint
+    needs: check-changes
+    if: needs.check-changes.outputs.admin-portal-changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Lint (admin-portal)
+        run: npm run admin:lint
+
+  # Mirror of admin-portal-lint for changes that do NOT touch admin-portal/**.
+  admin-portal-lint-skip:
+    name: Admin Portal Lint
+    needs: check-changes
+    if: needs.check-changes.outputs.admin-portal-changed != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip (no admin-portal changes)
+        run: echo "Skipping admin-portal lint - no admin-portal/ changes detected"
 
   # BACKLOG-2221: gate the Expo/React Native companion (android-companion/). It has
   # its own package-lock + jest/eslint/tsc but no root CI job covered it, so SMS
