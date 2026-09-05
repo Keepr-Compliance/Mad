@@ -63,6 +63,12 @@ import { gatherIdentityEvidence, type EvidenceEndpoint } from "../contactIdentit
 import { recordVerdict } from "../db/contactLinkReviewDbService";
 import { createLink } from "../db/contactSourceLinkDbService";
 import { toLookupKey, toMatchingKey } from "../../utils/phoneNormalization";
+// BACKLOG-3104: the two readers of `CONTACTS_SHARE_TRANSACTION_SQL` and
+// `SHARED_TRANSACTION_ADDRESSES_SQL`. The gatherer already calls both — it
+// reports `shareTransaction`, and a COUNT of shared addresses — so section 9
+// reads them directly to assert the exact PAIRS and the exact ADDRESSES that a
+// count cannot tell apart from a wrong answer of the same size.
+import { contactsShareTransaction, sharedTransactionAddresses } from "../contactLinkEvidence";
 
 const USER = "user-2630-d2b";
 
@@ -142,6 +148,77 @@ function addTransaction(id: string, address: string, contactIds: string[]): void
       )
       .run(`${id}-tc${i}`, id, cid, i === 0 ? "buyer" : "seller");
   });
+}
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3104 — THE OTHER FIVE PLACEMENTS, IN THE SHAPES PRODUCTION WRITES
+// ---------------------------------------------------------------------------
+
+/** The four direct role columns a contact can occupy on a transaction. */
+type RoleColumn = "buyer_agent_id" | "seller_agent_id" | "escrow_officer_id" | "inspector_id";
+
+/**
+ * One literal `UPDATE` per column rather than a column name spliced into a
+ * string. `TRANSACTION_COLUMN_POLICY` marks all four `insert: "db-default"`,
+ * `update: "writable"` (`db/transactionDbService.ts:374-393`), so an UPDATE
+ * after creation is the path production actually takes to set them — and the
+ * value is a bare contact id, which is what
+ * `getTransactionsByContact`'s direct-FK query compares each column against
+ * (`db/contactDbService.ts:1658-1680`).
+ */
+const ROLE_COLUMN_UPDATE: Record<RoleColumn, string> = {
+  buyer_agent_id: "UPDATE transactions SET buyer_agent_id = ? WHERE id = ?",
+  seller_agent_id: "UPDATE transactions SET seller_agent_id = ? WHERE id = ?",
+  escrow_officer_id: "UPDATE transactions SET escrow_officer_id = ? WHERE id = ?",
+  inspector_id: "UPDATE transactions SET inspector_id = ? WHERE id = ?",
+};
+
+function placeInRoleColumn(transactionId: string, column: RoleColumn, contactId: string): void {
+  const res = mockDb!.prepare(ROLE_COLUMN_UPDATE[column]).run(contactId, transactionId);
+  // A placement that silently hit no row would make the case that depends on it
+  // green for the wrong reason — the branch would look covered while nothing was
+  // ever on the deal.
+  expect(res.changes).toBe(1);
+}
+
+/**
+ * The `other_contacts` array, written the way `bindValue` writes it:
+ * `TRANSACTION_COLUMN_POLICY.other_contacts` carries `json: true`, and
+ * `bindValue` turns any object into `JSON.stringify(value)`
+ * (`db/transactionDbService.ts:484-485`). So the stored text is a JSON array of
+ * bare contact ids — the shape `json_each(t.other_contacts) j WHERE j.value = ?`
+ * reads back in `getTransactionsByContact` (`db/contactDbService.ts:1771`).
+ */
+function placeInOtherContacts(transactionId: string, contactIds: string[]): void {
+  const res = mockDb!
+    .prepare("UPDATE transactions SET other_contacts = ? WHERE id = ?")
+    .run(JSON.stringify(contactIds), transactionId);
+  expect(res.changes).toBe(1);
+}
+
+/** A canonical key for an unordered pair, so the order ids were seeded in cannot matter. */
+function pairKey(a: string, b: string): string {
+  return [a, b].sort().join("|");
+}
+
+/**
+ * Every unordered pair among `contactIds` that the predicate reports as sharing
+ * a deal, sorted.
+ *
+ * This exists so the cases below can assert an EXACT SET. `expect(...).toBe(true)`
+ * on one pair is equally satisfied by a predicate that says yes to EVERY pair,
+ * and `toHaveLength(1)` is equally satisfied by the wrong pair. Enumerating every
+ * pair and naming the survivors distinguishes both.
+ */
+function sharingPairs(contactIds: string[]): string[] {
+  const ids = [...contactIds].sort();
+  const pairs: string[] = [];
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      if (contactsShareTransaction(ids[i], ids[j])) pairs.push(pairKey(ids[i], ids[j]));
+    }
+  }
+  return pairs.sort();
 }
 
 beforeEach(() => {
@@ -583,5 +660,162 @@ describe("the bundle keeps identity and relationship in separate branches", () =
     expect(facts.identity.emails.candidateKeys).toEqual([]);
     expect(facts.identity.name.candidate.normalizedKey).toBe("pat riverton");
     expect(facts.eligibility.candidateExists).toBe(true);
+  });
+});
+
+// ===========================================================================
+// 9. ALL SIX WAYS A CONTACT REACHES A DEAL — BACKLOG-3104
+// ===========================================================================
+/**
+ * `CONTACTS_SHARE_TRANSACTION_SQL` (`db/contactLinkEvidenceSql.ts:104`) asks
+ * whether two contacts appear on one transaction, and its `onTransactionFor`
+ * fragment answers yes down SIX independent branches: the four direct role
+ * columns, a `transaction_contacts` row, and a `json_each` membership test over
+ * the `other_contacts` array. Section 4 above exercised exactly ONE of them.
+ *
+ * That was measured, not assumed. Each branch was neutralised to `1 = 0` in
+ * turn: five were completely SILENT, and only `transaction_contacts` reddened
+ * anything — "populates relationship facts while every identity fact stays
+ * empty". Five sixths of the predicate could have been deleted with the suite
+ * still green at 23/23.
+ *
+ * ---------------------------------------------------------------------------
+ * BOTH DIRECTIONS, AND WHICH ONE IS THE IRREVERSIBLE ONE
+ * ---------------------------------------------------------------------------
+ * Two contacts on one deal is an ANTI-merge signal: you do not put one human on
+ * a deal twice, so appearing together is evidence they are DIFFERENT PEOPLE
+ * (BACKLOG-2366, and the reason this predicate deliberately ignores
+ * `removed_at`).
+ *
+ * UNDER-reporting — a branch that stops matching — loses that signal quietly and
+ * prints a sentence naming a deal the contact is not on. OVER-reporting is the
+ * dangerous one: a predicate that reports a shared deal where there is none
+ * FABRICATES the anti-merge signal, and a fabricated anti-merge signal is what
+ * a wrong merge looks like from the other side. The five positive cases guard
+ * the first direction. The negative case guards the second, and it is the only
+ * test here that reds when the predicate is LOOSENED rather than narrowed.
+ *
+ * ---------------------------------------------------------------------------
+ * EXACT PAIRS, NEVER COUNTS — AND WHY EVERY CASE SEEDS A DECOY
+ * ---------------------------------------------------------------------------
+ * `sharingPairs` enumerates every unordered pair among the seeded contacts that
+ * the predicate reports as sharing a deal. Every case seeds a THIRD contact on a
+ * DIFFERENT deal, so "exactly one pair" is a claim over three candidate pairs
+ * rather than a vacuous claim over one — and any over-link that drags the decoy
+ * in reds the case on the spot. The shared deal is then named by ADDRESS, not
+ * counted: `sharedTransactionAddressCount` is a number, and a number cannot tell
+ * the right deal from a different one of the same quantity.
+ *
+ * ---------------------------------------------------------------------------
+ * FIXTURES ARE TRANSCRIBED
+ * ---------------------------------------------------------------------------
+ * See `placeInRoleColumn` and `placeInOtherContacts` above: the role columns take
+ * a bare contact id by way of an UPDATE, which is the only path the column policy
+ * allows, and `other_contacts` takes `JSON.stringify` of an array of bare contact
+ * ids, which is literally what `bindValue` emits. Each placement asserts it
+ * changed a row, so a fixture that quietly hit nothing cannot leave a case green.
+ */
+
+describe("all four direct role columns put a contact on a deal", () => {
+  const ROLE_CASES: { column: RoleColumn; slug: string; address: string }[] = [
+    { column: "buyer_agent_id", slug: "buyer", address: "14 Aspen Court" },
+    { column: "seller_agent_id", slug: "seller", address: "27 Birch Row" },
+    { column: "escrow_officer_id", slug: "escrow", address: "41 Juniper Way" },
+    { column: "inspector_id", slug: "inspector", address: "58 Larch Close" },
+  ];
+
+  for (const { column, slug, address } of ROLE_CASES) {
+    it(`${column}: exactly the pair on that deal shares it, named by address`, () => {
+      const columnId = `c-3104-${slug}-column`;
+      const junctionId = `c-3104-${slug}-junction`;
+      const decoyId = `c-3104-${slug}-decoy`;
+
+      const subject = addContact(columnId, "Pat Riverton");
+      const candidate = addContact(junctionId, "Robin Marsh");
+      addContact(decoyId, "Chris Alvarez");
+
+      // The deal: one side sits in the role COLUMN under test, the other on the
+      // junction. The column is that side's ONLY route onto the transaction, so
+      // the case goes red the moment this branch stops matching.
+      addTransaction(`t-3104-${slug}`, address, [junctionId]);
+      placeInRoleColumn(`t-3104-${slug}`, column, columnId);
+      // A second deal, so the decoy is a contact with deals of its own rather
+      // than a contact with none — an over-link has something to grab.
+      addTransaction(`t-3104-${slug}-elsewhere`, "9 Sycamore Bend", [decoyId]);
+
+      // The EXACT set, out of the three pairs three contacts can form.
+      expect(sharingPairs([columnId, junctionId, decoyId])).toEqual([
+        pairKey(columnId, junctionId),
+      ]);
+
+      // And the gatherer — the real consumer, and the only one section 4 probes
+      // — reports it as a relationship fact.
+      const facts = gatherIdentityEvidence({ userId: USER, subject, candidate });
+      expect(facts.relationship.shareTransaction).toBe(true);
+
+      // WHICH deal, not how many.
+      expect(sharedTransactionAddresses(columnId, junctionId)).toEqual([address]);
+    });
+  }
+});
+
+describe("the other_contacts array puts a contact on a deal", () => {
+  it("other_contacts: both sides inside the JSON array share the deal", () => {
+    const aId = "c-3104-json-a";
+    const bId = "c-3104-json-b";
+    const decoyId = "c-3104-json-decoy";
+
+    const subject = addContact(aId, "Pat Riverton");
+    const candidate = addContact(bId, "Robin Marsh");
+    addContact(decoyId, "Chris Alvarez");
+
+    // Neither side is in a role column or on the junction. The JSON array is the
+    // ONLY route onto this transaction for EITHER of them, which is what makes
+    // this case a clean probe of that one branch and nothing else.
+    addTransaction("t-3104-json", "63 Willow Bank", []);
+    placeInOtherContacts("t-3104-json", [aId, bId]);
+    addTransaction("t-3104-json-elsewhere", "9 Sycamore Bend", [decoyId]);
+
+    expect(sharingPairs([aId, bId, decoyId])).toEqual([pairKey(aId, bId)]);
+
+    const facts = gatherIdentityEvidence({ userId: USER, subject, candidate });
+    expect(facts.relationship.shareTransaction).toBe(true);
+
+    expect(sharedTransactionAddresses(aId, bId)).toEqual(["63 Willow Bank"]);
+  });
+});
+
+describe("two contacts on different deals share nothing — the over-link guard", () => {
+  it("the sharing set is EXACTLY EMPTY for a pair with no deal in common", () => {
+    const soloAId = "c-3104-neg-a";
+    const soloBId = "c-3104-neg-b";
+    const witnessId = "c-3104-neg-witness";
+
+    const soloA = addContact(soloAId, "Pat Riverton");
+    const soloB = addContact(soloBId, "Robin Marsh");
+    addContact(witnessId, "Chris Alvarez");
+
+    // Deal one: soloA in a role column, the witness on the junction.
+    addTransaction("t-3104-neg-one", "72 Hawthorn Rise", [witnessId]);
+    placeInRoleColumn("t-3104-neg-one", "buyer_agent_id", soloAId);
+    // Deal two, a different property: soloB alone.
+    addTransaction("t-3104-neg-two", "85 Rowan Gate", []);
+    placeInRoleColumn("t-3104-neg-two", "seller_agent_id", soloBId);
+
+    // LIVENESS FIRST, and it is load-bearing. Without it the empty set below is
+    // equally satisfied by a fixture that seeded nothing — green because there
+    // was never anything to find, which proves nothing about the predicate.
+    expect(sharingPairs([soloAId, witnessId])).toEqual([pairKey(soloAId, witnessId)]);
+
+    // The claim: across all three, the ONLY pair sharing a deal is the pair that
+    // is genuinely on one. soloA|soloB is absent, and so is soloB|witness.
+    expect(sharingPairs([soloAId, soloBId, witnessId])).toEqual([
+      pairKey(soloAId, witnessId),
+    ]);
+
+    // And the same answer through the gatherer, in both of the shapes it reports.
+    const facts = gatherIdentityEvidence({ userId: USER, subject: soloA, candidate: soloB });
+    expect(facts.relationship.shareTransaction).toBe(false);
+    expect(sharedTransactionAddresses(soloAId, soloBId)).toEqual([]);
   });
 });
