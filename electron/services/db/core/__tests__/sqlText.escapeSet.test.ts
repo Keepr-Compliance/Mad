@@ -269,6 +269,25 @@ const SELF = "electron/services/db/core/__tests__/sqlText.escapeSet.test.ts";
  * unchanged by this item. They leave when PR 5 moves them — which is what BACKLOG-3103
  * unblocked and deliberately did not do itself.
  *
+ * ## 2026-09-04 — BACKLOG-3044 PR 5 took the last three files. 30 -> 4. **ZERO outside the layer.**
+ *
+ *   electron/services/autoLinkService.ts                            17  ->  db/autoLinkSql.ts
+ *   electron/services/transactionService/transactionService.ts       8  ->  db/transactionThreadSql.ts
+ *   electron/services/importPlanInputs.ts                            1  ->  db/importPlanSql.ts
+ *
+ * **`BACKLOG-3044` now owns no rows at all**, and the owner map below holds a single
+ * owner for the first time since the ratchet was created. 393 escapes at BACKLOG-3064
+ * commit 1; 4 now, and every one of those is in-layer.
+ *
+ * Four of the 26 could not have moved before 2026-09-04: they splice the eligibility
+ * predicate, which was `t.status != '<value>'` — a status VALUE in SQL text — until
+ * **BACKLOG-3103** bound it. The tag refused them, correctly, and that refusal is what
+ * made the defect visible instead of tolerable. They moved here unchanged.
+ *
+ * The residual 4 are BACKLOG-3102's, in-layer, and they are the same shape one level
+ * further in: a row limit and a provider list spliced as VALUES into statements that
+ * live in `db/` already.
+ *
  * OWNERS, and what each one means:
  *
  *   BACKLOG-3044 — the statement is authored OUTSIDE `electron/services/db/**`.
@@ -285,9 +304,6 @@ const SELF = "electron/services/db/core/__tests__/sqlText.escapeSet.test.ts";
 const EXPECTED_ESCAPES: Record<string, { count: number; owner: string }> = {
   "electron/services/db/communicationDbService.ts": { count: 1, owner: "BACKLOG-3102" },
   "electron/services/db/emailSyncSql.ts": { count: 3, owner: "BACKLOG-3102" },
-  "electron/services/autoLinkService.ts": { count: 17, owner: "BACKLOG-3044" },
-  "electron/services/importPlanInputs.ts": { count: 1, owner: "BACKLOG-3044" },
-  "electron/services/transactionService/transactionService.ts": { count: 8, owner: "BACKLOG-3044" },
 };
 
 /**
@@ -449,7 +465,7 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
     expect(measure(countEscapes)).toEqual({ ...expectedCounts, ...EXPECTED_CONTROL_CALLS });
   });
 
-  it("totals 30 ESCAPES in 5 files — 105 removed from outside the layer by BACKLOG-3044", () => {
+  it("totals 4 ESCAPES in 2 files — BACKLOG-3044 is DONE; only BACKLOG-3102 remains", () => {
     const measured = measure(countEscapes);
     const escapes = Object.fromEntries(
       Object.entries(measured).filter(([f]) => !(f in EXPECTED_CONTROL_CALLS)),
@@ -457,8 +473,8 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
 
     expect(escapes).toEqual(expectedCounts);
     expect(Object.values(escapes).reduce((a, b) => a + b, 0)).toBe(EXPECTED_TOTAL);
-    expect(EXPECTED_TOTAL).toBe(30);
-    expect(Object.keys(escapes)).toHaveLength(5);
+    expect(EXPECTED_TOTAL).toBe(4);
+    expect(Object.keys(escapes)).toHaveLength(2);
   });
 
   /** Every escape carries an owner. No default, no fall-through, no blanks. */
@@ -472,7 +488,7 @@ describe("BACKLOG-3064 — the escape set is exactly what the PR says it is", ()
     for (const entry of Object.values(EXPECTED_ESCAPES)) {
       byOwner[entry.owner] = (byOwner[entry.owner] ?? 0) + entry.count;
     }
-    expect(byOwner).toEqual({ "BACKLOG-3044": 26, "BACKLOG-3102": 4 });
+    expect(byOwner).toEqual({ "BACKLOG-3102": 4 });
   });
 
   /**

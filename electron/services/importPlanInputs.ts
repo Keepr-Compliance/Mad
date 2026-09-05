@@ -25,7 +25,7 @@
 import logService from "./logService";
 import supabaseService from "./supabaseService";
 import { dbAll } from "./db/core/dbConnection";
-import { unsafeSql } from "./db/core/sqlText";
+import { LIVE_TRANSACTION_WINDOWS_SQL } from "./db/importPlanSql";
 import { computeTransactionDateRange } from "../utils/emailDateRange";
 import {
   resolveImportPlan,
@@ -36,10 +36,7 @@ import {
   type StoredImportFilters,
 } from "./importPlan";
 
-import {
-  LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED,
-  withLiveTransactionParam,
-} from "./db/core/transactionEligibilitySql";
+import { withLiveTransactionParam } from "./db/core/transactionEligibilitySql";
 
 const SERVICE_NAME = "ImportPlanInputs";
 
@@ -74,9 +71,7 @@ export interface TransactionDateRow {
  */
 export function readNonRejectedTransactions(userId: string): TransactionDateRow[] {
   return dbAll<TransactionDateRow>(
-    unsafeSql(`SELECT started_at, created_at, closed_at
-       FROM transactions
-      WHERE user_id = ? AND ${LIVE_TRANSACTION_SQL_PREDICATE_UNALIASED}`),
+    LIVE_TRANSACTION_WINDOWS_SQL,
     withLiveTransactionParam([userId])
   );
 }
